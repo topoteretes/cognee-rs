@@ -129,22 +129,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   node-set refresh) wrote every column from the ingest pipeline's earlier
   read, rolling back a `token_count`, `last_accessed` or `pipeline_status`
   written in between by a concurrent cognify or search. The replacement is a
-  targeted `UPDATE` of the two columns plus `updated_at`, returning `()` and
-  `DatabaseError::NotFound` for a missing row. Implementors of `IngestDb`
+  targeted `UPDATE` of the two columns plus `updated_at`, returning the
+  `updated_at` it wrote (so the pipeline patches its snapshot instead of
+  reading the row back) and `DatabaseError::NotFound` for a missing row. Implementors of `IngestDb`
   outside this repository rename and narrow the method; the free function
   `ops::data::update_data` is unchanged. In the same change the ingest
   pipeline refuses a bad `node_set` *before* it resolves or creates the
   dataset (no orphan dataset or owner grant is left behind), decides "already
   carries this set" on parsed JSON (a Python-written `["a", "b"]` row is no
-  longer rewritten on every re-add), and `cognee::api::update` refuses a
-  bad `node_set` before it deletes the document it replaces. The new
+  longer rewritten on every re-add), serializes the re-add refresh per
+  `data_id` within the process (two concurrent re-adds of the same content no
+  longer merge into one stale snapshot; across processes the last writer still
+  wins), and surfaces `NotFound` when the row is deleted between its read and
+  the refresh instead of returning the stale row. `cognee::api::update` now
+  adds the replacement **before** it removes the old document, so any add
+  failure (a bad `node_set`, a missing backend, an unreadable file, a loader
+  or storage error) leaves the old data intact; a missing dataset or an item
+  the dataset does not hold is still refused before anything is written, and
+  a replacement with the old content keeps its row and has only its memory
+  dropped and rebuilt (`delete_result` is then a memory-only delete). The new
   `cognee_ingestion::validate_add_inputs` / `validate_node_set_names` /
   `validate_item_node_set` are public for callers that do irreversible work
-  before an add. `classify_documents` no longer falls back to the
-  `Data.node_set` column when `external_metadata` is present but not a JSON
-  object (Python's `update_node_set` returns early there); the fallback now
-  covers exactly the pre-#302 Rust rows — no metadata, or an object without
-  the `node_set` key. Known limitation, kept for Python parity: a re-add that
+  before an add. `classify_documents` falls back to the `Data.node_set` column
+  whenever `external_metadata` carries no `node_set` key — absent, not JSON,
+  not an object, or an object without the key — which covers every pre-#302
+  Rust row, including those whose `DataItem` metadata text was stored
+  verbatim (`"crm export"`, `"[1,2]"`); Python always writes the key inside a
+  dict, so parity is unaffected. Known limitation, kept for Python parity: a re-add that
   only changes the node set of content an earlier `cognify` already completed
   refreshes the row but not the graph — the completion marker stays, so an
   incremental `cognify` skips the item and its document and chunks keep the
