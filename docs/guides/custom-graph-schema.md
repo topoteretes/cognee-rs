@@ -86,7 +86,11 @@ one model, an optional model, a union of models, or a list of any of these;
 `null` list items are skipped. A union value is stored as the first declared
 model whose fields cover the object's keys and that validates. Other shapes that
 reach a model — a union mixing models with scalars, a dictionary of models, a
-nested list — are rejected rather than stored as opaque properties. External
+nested list — are rejected rather than stored as opaque properties. A `$defs`
+entry that is not a model — an `enum`, a `const` or a non-object scalar type —
+is a value, as Python generates an `Enum` or `RootModel` for it: a field that
+references one is a scalar property, an answer outside the enum is rejected, and
+the enum stays in the schema sent to the LLM. External
 references are rejected so the schema is self-contained and deterministic. The
 `metadata` property is consumed by the storage walk and removed from the schema
 sent to the LLM; descriptive JSON Schema annotations remain available to guide
@@ -104,9 +108,25 @@ Policy lives in the `metadata` property's default object:
 
 `identity_fields` determine the stable UUID, and `index_fields` select the
 scalar fields written to `{Model}_{field}` vector collections; a `null` or blank
-value is not indexed, as in Python. `transparent: true` makes a structural
+value is not indexed, as in Python. An `index_fields` name that is not a scalar
+field of the model is skipped with a warning, as Python's `index_data_points`
+skips it. The UUID is `uuid5(NAMESPACE_OID, "{Model}:{values}")` over each
+identity value as Python `str()`s it after Pydantic validation: a `number` is a
+float (`3` becomes `3.0`), an `integer` field accepts `3.0` as `3`, a
+`date-time` is a timezone-aware datetime (`2024-03-01 00:00:00+00:00`), an enum
+member prints as `Enum.member`, lists use Python `repr` quoting, and only plain
+strings are lower-cased with spaces turned into `_`. An omitted optional
+identity field contributes `None`; a name the model does not declare makes
+every node fall back to a random UUID, as in Python (a warning is logged).
+
+Within one storage batch (one data item's `chunks_per_batch` chunks, as Python's
+`add_data_points` call) a node id is claimed by its first occurrence: a later
+occurrence with the same id, in the same answer or another chunk's, contributes
+neither its properties nor its outgoing edges, though the edge leading to it is
+kept. `transparent: true` makes a structural
 container disappear during persistence so its DataPoint descendants take its
-place. Python's `GraphSchemaSpec` compiler never emits `transparent`, so it only
+place; a truthy scalar it carries is dropped with one warning per type and
+field. Python's `GraphSchemaSpec` compiler never emits `transparent`, so it only
 comes from a hand-written or `BaseModel` schema. For useful output, a
 transparent root must have at least one reachable non-transparent descendant;
 otherwise the custom graph intentionally stores no nodes.

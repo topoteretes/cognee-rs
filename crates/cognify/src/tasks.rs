@@ -60,6 +60,7 @@ use uuid::Uuid;
 use crate::config::{ChunkAttachment, CognifyConfig, ExtractionStrategy};
 use crate::dynamic_graph::{
     DynamicDataPoint, DynamicGraph, DynamicGraphSchema, StoredDynamicGraph,
+    store_dynamic_graph_batch,
 };
 use crate::error::CognifyError;
 use crate::fact_extraction::{FactExtractor, KnowledgeGraph};
@@ -2590,15 +2591,12 @@ pub async fn add_data_points(
 
     let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
 
-    // Runtime custom graphs: one storage walk per graph, shared by the ledger,
-    // the graph writes and the index pass. Raw node writes are needed because
-    // their concrete Rust types do not exist; nodes are deduplicated across
-    // chunks by their Python-compatible identity UUID.
-    let stored_dynamic: Vec<StoredDynamicGraph> = input
-        .dynamic_graphs
-        .iter()
-        .map(|attributed| attributed.graph.stored_graph())
-        .collect();
+    // Runtime custom graphs: one storage walk per Python `add_data_points`
+    // batch, shared by the ledger, the graph writes and the index pass. Raw
+    // node writes are needed because their concrete Rust types do not exist;
+    // within a batch a node id is claimed by its first occurrence, and nodes
+    // are deduplicated across batches by their Python-compatible identity UUID.
+    let stored_dynamic = store_dynamic_graphs(&input.dynamic_graphs, &input.chunks, config);
     let mut dynamic_nodes: BTreeMap<Uuid, &DynamicDataPoint> = BTreeMap::new();
     let mut seen_relationships = HashSet::new();
     let mut dynamic_edges: Vec<EdgeData> = Vec::new();
@@ -5527,6 +5525,62 @@ fn semantic_edge_provenance_rows(
     }
 
     rows
+}
+
+/// The storage walk of every runtime custom graph, in `graphs` order.
+///
+/// Python runs the pipeline once per data item and calls `add_data_points`
+/// once per `chunks_per_batch` chunks of it, sharing node and edge claims
+/// across that call only. The graphs are grouped the same way, by data item
+/// and by their chunk's position within it, and each group is walked with one
+/// shared claim set (see [`store_dynamic_graph_batch`]).
+fn store_dynamic_graphs(
+    graphs: &[AttributedDynamicGraph],
+    chunks: &[DocumentChunk],
+    config: &CognifyConfig,
+) -> Vec<StoredDynamicGraph> {
+    let chunks_per_batch = config.chunks_per_batch.max(1);
+    let mut positions: HashMap<Uuid, usize> = HashMap::new();
+    let chunk_batch: HashMap<Uuid, usize> = chunks
+        .iter()
+        .map(|chunk| {
+            let position = positions.entry(chunk.document_id).or_default();
+            let batch = *position / chunks_per_batch;
+            *position += 1;
+            (chunk.base.id, batch)
+        })
+        .collect();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut group_of: HashMap<(Uuid, usize), usize> = HashMap::new();
+    for (index, attributed) in graphs.iter().enumerate() {
+        let key = (
+            attributed.data_id,
+            chunk_batch.get(&attributed.chunk_id).copied().unwrap_or(0),
+        );
+        let group = *group_of.entry(key).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[group].push(index);
+    }
+    let attachment = config.chunk_attachment.unwrap_or(ChunkAttachment::Direct);
+    let mut stored = vec![
+        StoredDynamicGraph {
+            nodes: Vec::new(),
+            relationships: Vec::new(),
+        };
+        graphs.len()
+    ];
+    for members in groups {
+        let walked = store_dynamic_graph_batch(
+            members.iter().map(|index| &graphs[*index].graph),
+            attachment,
+        );
+        for (index, graph) in members.into_iter().zip(walked) {
+            stored[index] = graph;
+        }
+    }
+    stored
 }
 
 /// Record runtime custom graph ownership before either artifact store sees it.
@@ -10403,6 +10457,76 @@ mod tests {
         assert_eq!(data.chunks[0].contains, vec![json!(root.to_string())]);
         let documents: Vec<Uuid> = data.documents.iter().map(|d| d.base.id).collect();
         assert_eq!(documents, [kept_doc]);
+    }
+
+    #[test]
+    fn dynamic_storage_shares_claims_within_one_data_item_batch_only() {
+        // Python's `add_data_points` runs per data item and per
+        // `chunks_per_batch` chunks, sharing node claims inside that call.
+        let schema = DynamicGraphSchema::compile(&json!({
+            "$defs": {"Company": {
+                "title": "Company", "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "metadata": {"type": "object", "default": {"identity_fields": ["name"]}}
+                },
+                "required": ["name"]
+            }},
+            "title": "Person", "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "employer": {"$ref": "#/$defs/Company"},
+                "metadata": {"type": "object", "default": {"identity_fields": ["name"]}}
+            },
+            "required": ["name", "employer"]
+        }))
+        .expect("schema compiles");
+        let (doc_a, doc_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let chunks = vec![
+            test_chunk(Uuid::new_v4(), doc_a, "Alice works at Acme"),
+            test_chunk(Uuid::new_v4(), doc_a, "Alice works at Initech"),
+            test_chunk(Uuid::new_v4(), doc_b, "Alice works at Initech"),
+            test_chunk(Uuid::new_v4(), doc_a, "Alice works at Globex"),
+        ];
+        let graphs: Vec<AttributedDynamicGraph> = chunks
+            .iter()
+            .zip(["Acme", "Initech", "Initech", "Globex"])
+            .map(|(chunk, employer)| AttributedDynamicGraph {
+                graph: schema
+                    .materialize(
+                        &json!({"name": "Alice", "employer": {"name": employer}}),
+                        Uuid::nil(),
+                    )
+                    .expect("answer materializes"),
+                chunk_id: chunk.base.id,
+                data_id: chunk.document_id,
+            })
+            .collect();
+        let edge_count = |stored: &StoredDynamicGraph| stored.relationships.len();
+
+        // Two chunks per batch: doc A's third chunk opens a new batch.
+        let config = CognifyConfig {
+            chunks_per_batch: 2,
+            ..CognifyConfig::default()
+        };
+        let stored = store_dynamic_graphs(&graphs, &chunks, &config);
+        let counts: Vec<(usize, usize)> = stored
+            .iter()
+            .map(|stored| (stored.nodes.len(), edge_count(stored)))
+            .collect();
+        // Doc A chunk 2 loses to chunk 1's Alice; doc B and doc A's next
+        // batch claim afresh.
+        assert_eq!(counts, [(2, 1), (0, 0), (2, 1), (2, 1)]);
+
+        let config = CognifyConfig {
+            chunks_per_batch: 10,
+            ..CognifyConfig::default()
+        };
+        let counts: Vec<(usize, usize)> = store_dynamic_graphs(&graphs, &chunks, &config)
+            .iter()
+            .map(|stored| (stored.nodes.len(), edge_count(stored)))
+            .collect();
+        assert_eq!(counts, [(2, 1), (0, 0), (2, 1), (0, 0)]);
     }
 
     #[tokio::test]
