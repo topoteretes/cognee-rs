@@ -23,7 +23,7 @@ reflect them.
 
 ### Findings surfaced during planning (not blocking, noted for awareness)
 
-- `CognifyConfig.graph_schema` was originally stored but not consumed by the core graph-extraction task. SDK-1124 subsequently wired schemas emitted by Python's `graph_model_to_graph_schema()` through extraction, transparent graph walking, provenance, graph persistence, and vector indexing. Item 4's summary-schema wiring remains independent of that path.
+- `CognifyConfig.graph_schema` was originally stored but not consumed by the core graph-extraction task. SDK-1124 subsequently wired Pydantic-compatible graph schemas (Python's `graph_model_to_graph_schema()` over `BaseModel` classes, or `graph_spec_to_json_schema()`) through extraction, transparent graph walking, provenance, graph persistence, and vector indexing. Item 4's summary-schema wiring remains independent of that path.
 - `PgGraphAdapter::new()` runs its own migrations internally (no separate `initialize()` call, unlike `LadybugAdapter`) and also exposes `from_connection(db)` to share an existing SeaORM connection — directly useful for the Item 3 hybrid adapter.
 - The `Llm` trait already exposes a dynamic-schema path (`create_structured_output_raw(text, prompt, &Value, opts)` returning a raw `Value`), so Item 4 needs no new LLM API.
 

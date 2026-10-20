@@ -65,21 +65,55 @@ indexing stages.
 
 ### Schema contract
 
-Pass the JSON Schema emitted by Python's `graph_model_to_graph_schema()` helper.
-That helper calls Pydantic after removing inherited DataPoint infrastructure
-fields; passing an unprocessed `DataPoint.model_json_schema()` is not supported.
-Local `$defs` and `#/$defs/...` references—including optional and recursive
-model references—are supported. External references are rejected so the schema
-is self-contained and deterministic. The DataPoint `metadata` property is
-consumed by the storage walk and removed from the schema sent to the LLM;
-descriptive JSON Schema annotations remain available to guide it.
+Pass a Pydantic-compatible JSON Schema whose models declare their policy in a
+`metadata` property. Python produces one in either of two ways:
 
-Python encodes runtime policy in the `metadata` property's default object. Its
-`identity_fields` determine the stable UUID, `index_fields` select vectorized
-scalar fields, and `transparent: true` makes a structural container disappear
-during persistence so its DataPoint descendants take its place. For useful
-output, a transparent root must have at least one reachable non-transparent
-descendant; otherwise the custom graph intentionally stores no nodes.
+- `graph_model_to_graph_schema()` applied to plain `pydantic.BaseModel`
+  classes that declare an explicit `metadata: dict = {...}` field — the pattern
+  Python's own example uses.
+- `graph_spec_to_json_schema()` applied to a `GraphSchemaSpec`.
+
+`graph_model_to_graph_schema()` applied to a `DataPoint` subclass drops every
+field `DataPoint` declares, `metadata` included, so that schema carries no
+policy: every node gets a random id, nothing is vector-indexed and nothing is
+transparent. Python's own round trip produces the same result, so Rust compiles
+it the same way rather than rejecting it. An unprocessed
+`DataPoint.model_json_schema()` is rejected, because it declares the reserved
+DataPoint infrastructure fields.
+
+Local `$defs` and `#/$defs/...` references are supported, whether a field holds
+one model, an optional model, a union of models, or a list of any of these;
+`null` list items are skipped. A union value is stored as the first declared
+model whose fields cover the object's keys and that validates. Other shapes that
+reach a model — a union mixing models with scalars, a dictionary of models, a
+nested list — are rejected rather than stored as opaque properties. External
+references are rejected so the schema is self-contained and deterministic. The
+`metadata` property is consumed by the storage walk and removed from the schema
+sent to the LLM; descriptive JSON Schema annotations remain available to guide
+it.
+
+Policy lives in the `metadata` property's default object:
+
+```json
+"metadata": {
+    "type": "object",
+    "additionalProperties": true,
+    "default": { "identity_fields": ["name"], "index_fields": ["name"] }
+}
+```
+
+`identity_fields` determine the stable UUID, and `index_fields` select the
+scalar fields written to `{Model}_{field}` vector collections; a `null` or blank
+value is not indexed, as in Python. `transparent: true` makes a structural
+container disappear during persistence so its DataPoint descendants take its
+place. Python's `GraphSchemaSpec` compiler never emits `transparent`, so it only
+comes from a hand-written or `BaseModel` schema. For useful output, a
+transparent root must have at least one reachable non-transparent descendant;
+otherwise the custom graph intentionally stores no nodes.
+
+Only the single-pass LLM extractor honours a custom schema: `validate()` rejects
+`graph_schema` together with a `graph_backend` or the `cascade` extraction
+strategy, as Python raises for a custom `graph_model` with a non-LLM extractor.
 
 ### Example (programmatic)
 
