@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use tracing::{Span, instrument, warn};
 use uuid::Uuid;
@@ -1055,11 +1055,12 @@ pub async fn get_unique_edges_for_run(
 /// *uncorrelated*, rather than a per-row `NOT EXISTS` or an `IN` list of
 /// candidate texts — a run owns one text per edge, and that list would blow
 /// past SQLite's `SQLITE_MAX_VARIABLE_NUMBER` and Postgres' 65 535. It runs as
-/// two reads: a `SELECT DISTINCT` of the names of rows with no attributes
-/// (their text is the name), and a plain read of the rows that do have
-/// attributes, whose text is derived here. The second is not `DISTINCT`
-/// because Postgres has no equality operator for `json`, and keeping the JSON
-/// extraction in Rust avoids a backend-specific query.
+/// one `SELECT DISTINCT` of `(relationship_name, edge_text)` pairs, with the
+/// string `edge_text` pulled out of the JSON attributes by the backend
+/// ([`edge_text_sql`]) so neither duplicate rows nor attribute blobs cross the
+/// wire; the retrieval text is then derived from each pair here. A backend
+/// with no JSON extraction falls back to reading the attributes and
+/// deduplicating in Rust.
 ///
 /// No `selects_nothing` early return, deliberately: an empty selection makes
 /// every row an outside row, and "everything is claimed" is both the honest and
@@ -1092,42 +1093,68 @@ pub async fn get_edge_retrieval_texts_claimed_outside_run(
         outside
     };
 
-    let bare_names: Vec<String> = edge::Entity::find()
-        .select_only()
-        .column(edge::Column::RelationshipName)
-        .distinct()
-        .filter(outside())
-        .filter(edge::Column::Attributes.is_null())
-        .into_tuple::<String>()
-        .all(db)
-        .await
-        .map_err(map_sea_err)?;
+    let pairs: Vec<(String, Option<String>)> = match edge_text_sql(db.get_database_backend()) {
+        Some(edge_text) => edge::Entity::find()
+            .select_only()
+            .column(edge::Column::RelationshipName)
+            .column_as(Expr::cust(edge_text), "edge_text")
+            .distinct()
+            .filter(outside())
+            .into_tuple::<(String, Option<String>)>()
+            .all(db)
+            .await
+            .map_err(map_sea_err)?,
+        None => edge::Entity::find()
+            .select_only()
+            .column(edge::Column::RelationshipName)
+            .column(edge::Column::Attributes)
+            .filter(outside())
+            .into_tuple::<(String, Option<serde_json::Value>)>()
+            .all(db)
+            .await
+            .map_err(map_sea_err)?
+            .into_iter()
+            .map(|(name, attributes)| {
+                let edge_text = attributes
+                    .as_ref()
+                    .and_then(|attributes| attributes.get("edge_text"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                (name, edge_text)
+            })
+            .collect(),
+    };
 
-    let attributed: Vec<(String, Option<serde_json::Value>)> = edge::Entity::find()
-        .select_only()
-        .column(edge::Column::RelationshipName)
-        .column(edge::Column::Attributes)
-        .filter(outside())
-        .filter(edge::Column::Attributes.is_not_null())
-        .into_tuple::<(String, Option<serde_json::Value>)>()
-        .all(db)
-        .await
-        .map_err(map_sea_err)?;
-
-    let texts: BTreeSet<String> = bare_names
+    let texts: BTreeSet<String> = pairs
         .iter()
-        .map(|name| EdgeType::retrieval_text(None, name))
-        .chain(attributed.iter().map(|(name, attributes)| {
-            let edge_text = attributes
-                .as_ref()
-                .and_then(|attributes| attributes.get("edge_text"))
-                .and_then(serde_json::Value::as_str);
-            EdgeType::retrieval_text(edge_text, name)
-        }))
+        .map(|(name, edge_text)| EdgeType::retrieval_text(edge_text.as_deref(), name))
         .collect();
 
     Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
     Ok(texts.into_iter().collect())
+}
+
+/// SQL for an edge row's `attributes.edge_text` when it is a JSON string, else
+/// `NULL` — the value `attributes.get("edge_text").and_then(Value::as_str)`
+/// reads. `None` for a backend without JSON functions.
+///
+/// SQLite guards with `json_valid` because its JSON functions raise on a
+/// malformed document instead of returning `NULL`. Postgres casts to `json`
+/// so a `jsonb` column (a database first written by another tool) reads the
+/// same way.
+fn edge_text_sql(backend: DbBackend) -> Option<&'static str> {
+    match backend {
+        DbBackend::Sqlite => Some(
+            "CASE WHEN json_valid(attributes) THEN \
+             CASE WHEN json_type(attributes, '$.edge_text') = 'text' \
+             THEN json_extract(attributes, '$.edge_text') END END",
+        ),
+        DbBackend::Postgres => Some(
+            "CASE WHEN json_typeof(CAST(attributes AS json) -> 'edge_text') = 'string' \
+             THEN CAST(attributes AS json) ->> 'edge_text' END",
+        ),
+        _ => None,
+    }
 }
 
 /// Delete the provenance node rows within `scope`, returning how many went.

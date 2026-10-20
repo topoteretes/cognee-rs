@@ -354,6 +354,14 @@ async fn claimed_texts_prefer_the_edge_text_attribute() {
         ),
         with_attributes(f.run_2, "  founded  ", json!({ "edge_text": "   " })),
         with_attributes(f.run_2, "owns", json!({ "weight": 1 })),
+        // A non-string `edge_text` is no text: the name stands in.
+        with_attributes(f.run_2, "rates", json!({ "edge_text": 5 })),
+        // The same pair twice is reported once.
+        with_attributes(
+            f.run_2,
+            "employees",
+            json!({ "edge_text": "Acme employees Alice.", "weight": 2 }),
+        ),
         // Inside the scope: never claimed, whatever its text.
         with_attributes(f.run_1, "employees", json!({ "edge_text": "Mine." })),
     ])
@@ -368,7 +376,7 @@ async fn claimed_texts_prefer_the_edge_text_attribute() {
     claimed.sort();
     assert_eq!(
         claimed,
-        ["Acme employees Alice.", "founded", "owns"],
+        ["Acme employees Alice.", "founded", "owns", "rates"],
         "edge_text wins when nonblank; otherwise the trimmed name, as cognify keys the point",
     );
 }
