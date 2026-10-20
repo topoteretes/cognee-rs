@@ -68,7 +68,12 @@ pub mod types;
 
 pub use adapters::{AnthropicAdapter, OpenAIAdapter};
 pub use config::{LlmConfig, LlmProvider};
-pub use dynamic_model::{DynamicGraphModel, GraphModelError, graph_schema_to_graph_model};
+pub use dynamic_model::DynamicGraphModel;
+#[allow(
+    deprecated,
+    reason = "kept re-exported for downstream callers until removal"
+)]
+pub use dynamic_model::{GraphModelError, graph_schema_to_graph_model};
 pub use error::{LlmError, LlmResult};
 pub use factory::build_openai_compatible_adapter;
 pub use llm_trait::{Llm, LlmExt};

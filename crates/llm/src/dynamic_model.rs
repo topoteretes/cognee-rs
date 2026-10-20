@@ -1,13 +1,17 @@
-//! Dynamic graph model for cross-SDK schema sharing.
+//! A named JSON-schema envelope for exchanging graph model schemas.
 //!
-//! Provides [`DynamicGraphModel`], a runtime representation of a graph model's
-//! JSON schema. This enables schema exchange between the Python and Rust cognee
-//! SDKs without requiring compiled types on both sides.
+//! Provides [`DynamicGraphModel`], a name plus a JSON schema (and optional
+//! description and source), so a schema can be stored or sent between SDKs
+//! without a compiled Rust type. It is a carrier only: it does not compile the
+//! schema, check it against Python's rules or drive extraction, and its
+//! `check_required_fields` looks at top-level keys only.
 //!
-//! The Python SDK can serialize a Pydantic model to JSON schema, send it to the
-//! Rust SDK as a [`DynamicGraphModel`], and vice versa. This mirrors Python's
-//! `graph_model_to_graph_schema()` / `graph_schema_to_graph_model()` from
-//! `cognee/shared/graph_model_utils.py`.
+//! The runtime counterpart of Python's `graph_schema_to_graph_model()`
+//! (`cognee/shared/graph_model_utils.py`), which turns a Pydantic JSON schema
+//! into a `DataPoint` model, lives in `cognee-cognify`:
+//! `cognee_cognify::DynamicGraphSchema::compile`, the compiler behind
+//! `CognifyConfig::graph_schema`. This crate cannot depend on it, which is why
+//! the deprecated [`graph_schema_to_graph_model`] below is not that port.
 //!
 //! # Usage
 //!
@@ -213,9 +217,11 @@ impl DynamicGraphModel {
     }
 }
 
-// ─── graph_schema_to_graph_model ──────────────────────────────────────────────
+// ─── graph_schema_to_graph_model (deprecated) ─────────────────────────────────
 
-/// Errors emitted by [`graph_schema_to_graph_model`].
+/// Errors emitted by the deprecated [`graph_schema_to_graph_model`].
+#[deprecated(note = "only returned by the deprecated graph_schema_to_graph_model; \
+            cognee_cognify::DynamicGraphSchema::compile reports DynamicGraphError")]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum GraphModelError {
     #[error("graph schema must be a JSON object, got {0}")]
@@ -228,20 +234,28 @@ pub enum GraphModelError {
     NotAList(&'static str, &'static str),
 }
 
-/// Validate a JSON value against the canonical graph-model shape.
+/// Check that a JSON value is an object carrying `entity_types` and
+/// `relationship_types` arrays.
 ///
-/// Mirrors Python's
-/// [`graph_schema_to_graph_model`](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py)
-/// in *spirit only* — the Rust port does not generate runtime Pydantic classes
-/// (the LLM-router handler only ever uses the error path to distinguish
-/// "schema invalid" → 409 from "JSON parse error" → 422).
+/// **Not a port of Python's `graph_schema_to_graph_model`**, despite the
+/// name. Python compiles a Pydantic JSON schema (`title`, `properties`,
+/// `$defs`) into a `DataPoint` model class and raises when it cannot; this
+/// function never looks at those keys, so it rejects every schema Python
+/// accepts — including the one Python's `/infer-schema` prompt asks the LLM
+/// for — and accepts a bare `{"entity_types": [], "relationship_types": []}`
+/// that Python rejects. To validate a graph schema as Python does, compile it
+/// with `cognee_cognify::DynamicGraphSchema::compile`.
 ///
-/// The validation rules are:
+/// The rules are:
 /// - Top-level value must be a JSON object.
 /// - The object must carry an `entity_types` array.
 /// - The object must carry a `relationship_types` array.
-///
-/// On success returns `Ok(())` (the success value is unused by the handler).
+#[deprecated(
+    note = "checks an entity_types/relationship_types shape Python's graph schemas \
+            never have; compile the schema with cognee_cognify::DynamicGraphSchema::compile \
+            to validate it as Python's graph_schema_to_graph_model does"
+)]
+#[allow(deprecated, reason = "returns the deprecated GraphModelError")]
 pub fn graph_schema_to_graph_model(value: &Value) -> Result<(), GraphModelError> {
     let obj = match value {
         Value::Object(map) => map,
@@ -512,6 +526,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the deprecated helper until it is removed"
+    )]
     fn test_graph_schema_to_graph_model_accepts_canonical_shape() {
         let value = serde_json::json!({
             "entity_types": [{"name": "Person"}],
@@ -521,6 +539,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the deprecated helper until it is removed"
+    )]
     fn test_graph_schema_to_graph_model_rejects_non_object() {
         let value = serde_json::json!([]);
         let err = graph_schema_to_graph_model(&value).unwrap_err();
@@ -528,6 +550,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the deprecated helper until it is removed"
+    )]
     fn test_graph_schema_to_graph_model_missing_entity_types() {
         let value = serde_json::json!({"relationship_types": []});
         let err = graph_schema_to_graph_model(&value).unwrap_err();
@@ -535,6 +561,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the deprecated helper until it is removed"
+    )]
     fn test_graph_schema_to_graph_model_missing_relationship_types() {
         let value = serde_json::json!({"entity_types": []});
         let err = graph_schema_to_graph_model(&value).unwrap_err();
@@ -542,6 +572,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the deprecated helper until it is removed"
+    )]
     fn test_graph_schema_to_graph_model_entity_types_must_be_array() {
         let value = serde_json::json!({
             "entity_types": "wrong",

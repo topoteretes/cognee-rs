@@ -2116,227 +2116,6 @@ fn attach_dynamic_graphs(
     }
 }
 
-/// Extract a custom graph model from chunks via LLM (Task 3 — custom model variant).
-///
-/// Mirrors the Python branching at `extract_graph_from_data.py:99-103`:
-/// when the graph model is **not** the built-in [`KnowledgeGraph`], the LLM
-/// output is serialized to JSON and stored directly in each
-/// [`DocumentChunk::contains`] without entity/edge expansion, deduplication,
-/// or graph DB storage.
-///
-/// This function is the generic counterpart of [`extract_graph_from_data`].
-/// It accepts any type implementing [`GraphModel`].
-///
-/// The returned [`ExtractedGraphData`] will have empty `entities` and `edges`
-/// fields (those only apply to the default KnowledgeGraph flow).
-///
-/// # Type Parameters
-/// * `M` — A type implementing [`GraphModel`]. Must be `Serialize +
-///   DeserializeOwned + JsonSchema + Clone + Send + Sync + 'static`.
-///
-/// # Errors
-/// - [`CognifyError::LlmError`] if any LLM call fails
-/// - [`CognifyError::SerializationError`] if the extracted model cannot be
-///   serialized to JSON
-pub async fn extract_custom_graph_from_data<M: crate::fact_extraction::GraphModel>(
-    input: &ExtractedChunks,
-    llm: Arc<dyn Llm>,
-    config: &CognifyConfig,
-) -> Result<ExtractedGraphData, CognifyError> {
-    if input.chunks.is_empty() {
-        return Ok(ExtractedGraphData {
-            chunks: input.chunks.clone(),
-            documents: input.documents.clone(),
-            entities: vec![],
-            timestamps: vec![],
-            edges: vec![],
-            producers: ArtifactProducers::default(),
-            dynamic_graphs: vec![],
-            backend_summaries: vec![],
-            dataset_id: input.dataset_id,
-            user_id: input.user_id,
-            tenant_id: input.tenant_id,
-            failures: input.failures.clone(),
-        });
-    }
-
-    // Filter out DLT chunks — same as extract_graph_from_data
-    let dlt_doc_ids: HashSet<Uuid> = input
-        .documents
-        .iter()
-        .filter(|d| d.document_type == "dlt_row")
-        .map(|d| d.base.id)
-        .collect();
-
-    let batch_size = config.chunks_per_batch;
-    let max_parallel = config.max_parallel_extractions.max(1);
-
-    let mut updated_chunks = input.chunks.clone();
-
-    // Only process non-DLT chunks through LLM
-    let non_dlt_indices: Vec<usize> = updated_chunks
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| !dlt_doc_ids.contains(&c.document_id))
-        .map(|(i, _)| i)
-        .collect();
-
-    if non_dlt_indices.is_empty() {
-        return Ok(ExtractedGraphData {
-            chunks: updated_chunks,
-            documents: input.documents.clone(),
-            entities: vec![],
-            timestamps: vec![],
-            edges: vec![],
-            producers: ArtifactProducers::default(),
-            dynamic_graphs: vec![],
-            backend_summaries: vec![],
-            dataset_id: input.dataset_id,
-            user_id: input.user_id,
-            tenant_id: input.tenant_id,
-            failures: input.failures.clone(),
-        });
-    }
-
-    let total_batches = non_dlt_indices.len().div_ceil(batch_size);
-    let failure_policy = config.failure_policy();
-    let mut failures = input.failures.clone();
-    // Set once a `FailFast` abort has fired; the failed and unreached files are
-    // dropped from the output below.
-    let mut aborted = false;
-
-    for (batch_idx, batch_indices) in non_dlt_indices.chunks(batch_size).enumerate() {
-        // Owned per-chunk inputs, for the same higher-ranked-lifetime reason as
-        // `extract_graph_from_data`.
-        let inputs: Vec<String> = batch_indices
-            .iter()
-            .map(|&idx| updated_chunks[idx].text.clone())
-            .collect();
-
-        // Bounded-concurrency pipeline. `buffer_unordered`, not `buffered`, for
-        // the reason spelled out in `extract_graph_from_data`: `buffered` holds a
-        // completed-but-undrained output in its slot, so one slow chunk blocks
-        // every chunk queued behind it. The results below are indexed back onto
-        // `batch_indices`, so each future carries its position and the batch is
-        // re-sorted here — a positional zip against completion order would
-        // attach each extraction to the wrong chunk.
-        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-            .map(|(index, text)| {
-                let extractor = FactExtractor::new(Arc::clone(&llm));
-                let prompt = config.custom_extraction_prompt.clone();
-                async move {
-                    let result = tokio::spawn(async move {
-                        extractor.extract::<M>(&text, prompt.as_deref()).await
-                    })
-                    .await;
-                    (index, result)
-                }
-            })
-            .buffer_unordered(max_parallel)
-            .collect()
-            .await;
-        indexed_results.sort_by_key(|(index, _)| *index);
-        let batch_results: Vec<_> = indexed_results
-            .into_iter()
-            .map(|(_, result)| result)
-            .collect();
-
-        let batch_len = batch_indices.len();
-        let mut batch_failed = false;
-
-        for (i, result) in batch_results.into_iter().enumerate() {
-            let chunk = &updated_chunks[batch_indices[i]];
-            let chunk_id = chunk.base.id;
-            let document_id = chunk.document_id;
-            let outcome = result
-                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
-                .and_then(|inner| inner)
-                .and_then(|model: M| {
-                    serde_json::to_value(&model)
-                        .map_err(|e| CognifyError::SerializationError(e.to_string()))
-                });
-            match outcome {
-                Ok(value) => updated_chunks[batch_indices[i]].contains = vec![value],
-                Err(e) => {
-                    warn!(
-                        data_id = %document_id,
-                        chunk_id = %chunk_id,
-                        "custom graph extraction failed for chunk: {e}"
-                    );
-                    failures.record(StageFailure {
-                        stage: FailureStage::GraphExtraction,
-                        data_id: document_id,
-                        chunk_id: Some(chunk_id),
-                        error: e.to_string(),
-                        fails_item: true,
-                    });
-                    batch_failed = true;
-                }
-            }
-        }
-
-        info!(
-            "Processed custom graph extraction batch {}/{} ({} chunks)",
-            batch_idx + 1,
-            total_batches,
-            batch_len
-        );
-
-        if batch_failed && failure_policy.stop == FailureStop::FailFast {
-            for &idx in non_dlt_indices.iter().skip((batch_idx + 1) * batch_size) {
-                failures.mark_unreached(updated_chunks[idx].document_id);
-            }
-            aborted = true;
-            break;
-        }
-    }
-
-    // This function persists nothing, so there is no partition to compute —
-    // only, on a `FailFast` abort, the failed and unreached files to drop from
-    // the output, which is what keeps a partially-extracted file from reaching a
-    // later persisting stage. Under `RunToEnd` the output is left whole, which
-    // is the same choice `extract_graph_from_data` makes, so both extraction
-    // functions mean the same thing by `RunToEnd`.
-    if aborted && failure_policy.scope != RollbackScope::FailedItems {
-        return Err(CognifyError::RunFailed {
-            report: Box::new(failures),
-        });
-    }
-    let excluded: HashSet<Uuid> = if aborted {
-        failures
-            .failed_items()
-            .iter()
-            .chain(failures.unreached_items().iter())
-            .copied()
-            .collect()
-    } else {
-        HashSet::new()
-    };
-    if !excluded.is_empty() {
-        updated_chunks.retain(|c| !excluded.contains(&c.document_id));
-    }
-
-    Ok(ExtractedGraphData {
-        chunks: updated_chunks,
-        documents: input
-            .documents
-            .iter()
-            .filter(|d| !excluded.contains(&d.base.id))
-            .cloned()
-            .collect(),
-        entities: vec![],
-        timestamps: vec![],
-        edges: vec![],
-        producers: ArtifactProducers::default(),
-        dynamic_graphs: vec![],
-        backend_summaries: vec![],
-        dataset_id: input.dataset_id,
-        user_id: input.user_id,
-        tenant_id: input.tenant_id,
-        failures,
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Task 3b: summarize_text — the other half of the fused stage; runs
 // concurrently with `extract_graph_from_data` over the same chunks.
@@ -14128,29 +13907,59 @@ mod tests {
         }
     }
 
-    /// The custom-model extraction path collects its chunk failures like its
+    /// A one-model runtime schema every [`custom_person_answer`] satisfies.
+    fn custom_person_schema() -> serde_json::Value {
+        json!({
+            "title": "Person",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "metadata": {"type": "object", "default": {"identity_fields": ["name"]}}
+            },
+            "required": ["name"]
+        })
+    }
+
+    fn custom_person_answer() -> String {
+        json!({"name": "Alice"}).to_string()
+    }
+
+    /// The custom-schema extraction stage as the fused task runs it:
+    /// extraction, then chunk attachment.
+    async fn run_custom_extraction(
+        input: &ExtractedChunks,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedGraphData, CognifyError> {
+        use cognee_test_utils::MockLlm;
+
+        let llm = Arc::new(
+            MockLlm::new(vec![custom_person_answer(); 8])
+                .with_failing_markers(vec!["FAILMARKER".to_string()]),
+        );
+        let extracted = extract_dynamic_graphs_from_data(input, llm, config).await?;
+        Ok(attach_dynamic_graphs(
+            input,
+            extracted,
+            config.chunk_attachment,
+        ))
+    }
+
+    /// The custom-schema extraction path collects its chunk failures like its
     /// sibling, and — like its sibling — leaves the output whole under
     /// `RunToEnd`, where the item-scoped sweep is what removes the failed
     /// file's contributions.
     #[tokio::test]
     async fn custom_extraction_collects_failures_under_run_to_end() {
-        use crate::fact_extraction::KnowledgeGraph;
-        use cognee_test_utils::MockLlm;
-
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
-        let config =
-            one_chunk_per_batch(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
+        let config = one_chunk_per_batch(
+            CognifyConfig::default()
+                .with_graph_schema(custom_person_schema())
+                .with_failure_stop(FailureStop::RunToEnd),
+        );
 
-        let result = extract_custom_graph_from_data::<KnowledgeGraph>(
-            &input,
-            Arc::new(
-                MockLlm::new(vec![ownership_canned_graph(); 8])
-                    .with_failing_markers(vec!["FAILMARKER".to_string()]),
-            ),
-            &config,
-        )
-        .await
-        .expect("RunToEnd collects rather than propagates");
+        let result = run_custom_extraction(&input, &config)
+            .await
+            .expect("RunToEnd collects rather than propagates");
 
         assert_eq!(
             result
@@ -14178,7 +13987,7 @@ mod tests {
             assert_eq!(
                 chunk.contains.is_empty(),
                 chunk.document_id == b,
-                "only the failed chunk carries no extracted model"
+                "only the failed chunk links to no extracted node"
             );
         }
     }
@@ -14188,24 +13997,16 @@ mod tests {
     /// persisting stage.
     #[tokio::test]
     async fn custom_extraction_abort_drops_failed_and_unreached_files() {
-        use crate::fact_extraction::KnowledgeGraph;
-        use cognee_test_utils::MockLlm;
-
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
         let config = one_chunk_per_batch(
-            CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
+            CognifyConfig::default()
+                .with_graph_schema(custom_person_schema())
+                .with_rollback_scope(RollbackScope::FailedItems),
         );
 
-        let result = extract_custom_graph_from_data::<KnowledgeGraph>(
-            &input,
-            Arc::new(
-                MockLlm::new(vec![ownership_canned_graph(); 8])
-                    .with_failing_markers(vec!["FAILMARKER".to_string()]),
-            ),
-            &config,
-        )
-        .await
-        .expect("FailedItems keeps the complete files");
+        let result = run_custom_extraction(&input, &config)
+            .await
+            .expect("FailedItems keeps the complete files");
 
         assert_eq!(
             result
@@ -14217,6 +14018,10 @@ mod tests {
             "only A is complete"
         );
         assert!(result.chunks.iter().all(|chunk| chunk.document_id == a));
+        assert!(
+            result.dynamic_graphs.iter().all(|graph| graph.data_id == a),
+            "no graph of a failed or unreached file survives the abort"
+        );
         assert_eq!(
             result
                 .failures

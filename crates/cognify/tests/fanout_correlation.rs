@@ -6,7 +6,7 @@
 //! Correlation and liveness coverage for the three fan-out loops in
 //! [`cognee_cognify::tasks`] — **offline**, no LLM key, no skip path.
 //!
-//! Each of `extract_graph_from_data`, `extract_custom_graph_from_data` and
+//! Each of `extract_graph_from_data`, `extract_dynamic_graphs_from_data` and
 //! `extract_temporal_events` fans a batch of chunks out over a bounded stream
 //! and then puts the results back against their chunks. Two properties have to
 //! hold and neither was covered before:
@@ -38,11 +38,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cognee_cognify::CognifyConfig;
 use cognee_cognify::tasks::{
-    ExtractedChunks, extract_custom_graph_from_data, extract_graph_from_data,
+    ExtractedChunks, extract_dynamic_graphs_from_data, extract_graph_from_data,
     extract_temporal_events,
 };
-use cognee_cognify::{CognifyConfig, fact_extraction::GraphModel};
 use cognee_database::ops::datasets::create_dataset;
 use cognee_llm::error::{LlmError, LlmResult};
 use cognee_llm::types::{GenerationOptions, GenerationResponse, Message};
@@ -50,8 +50,6 @@ use cognee_llm::{Llm, MessageRole};
 use cognee_models::{Dataset, DocumentChunk};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_test_utils::MockGraphDB;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -311,27 +309,29 @@ async fn graph_extraction_attributes_each_graph_to_its_own_chunk() {
     }
 }
 
-// ── Loop 2: extract_custom_graph_from_data ─────────────────────────────────
+// ── Loop 2: extract_dynamic_graphs_from_data ───────────────────────────────
 
-/// A custom (non-`KnowledgeGraph`) model, stored verbatim in
-/// [`DocumentChunk::contains`] rather than expanded into graph nodes.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-struct MarkerModel {
-    marker: String,
+/// A one-model runtime graph schema (SDK-1124) whose answer carries the marker.
+fn marker_schema() -> Value {
+    json!({
+        "title": "Marker",
+        "type": "object",
+        "properties": {"marker": {"type": "string"}},
+        "required": ["marker"]
+    })
 }
 
-impl GraphModel for MarkerModel {}
-
 #[tokio::test]
-async fn custom_graph_extraction_writes_each_model_to_its_own_chunk() {
+async fn custom_graph_extraction_attributes_each_graph_to_its_own_chunk() {
     let llm: Arc<dyn Llm> = Arc::new(MarkerLlm::new(
         |index| json!({ "marker": format!("MARKER-{index:04}") }),
     ));
-    let (input, chunk_ids, _) = make_input();
+    let (input, chunk_ids, document_ids) = make_input();
+    let config = config().with_graph_schema(marker_schema());
 
     let result = tokio::time::timeout(
         STALL_TIMEOUT,
-        extract_custom_graph_from_data::<MarkerModel>(&input, llm, &config()),
+        extract_dynamic_graphs_from_data(&input, llm, &config),
     )
     .await
     .expect(
@@ -340,19 +340,20 @@ async fn custom_graph_extraction_writes_each_model_to_its_own_chunk() {
     )
     .expect("extraction should succeed");
 
-    assert_eq!(result.chunks.len(), CHUNKS);
-    for (index, chunk_id) in chunk_ids.iter().enumerate() {
-        let chunk = result
-            .chunks
+    assert_eq!(result.graphs.len(), CHUNKS, "one graph per chunk");
+    for (index, (chunk_id, document_id)) in chunk_ids.iter().zip(&document_ids).enumerate() {
+        let attributed = result
+            .graphs
             .iter()
-            .find(|c| c.base.id == *chunk_id)
-            .unwrap_or_else(|| panic!("chunk {index} missing from the output"));
+            .find(|graph| graph.chunk_id == *chunk_id)
+            .unwrap_or_else(|| panic!("no graph attributed to chunk {index}"));
+        assert_eq!(attributed.data_id, *document_id);
         assert_eq!(
-            chunk.contains,
-            vec![json!({ "marker": format!("MARKER-{index:04}") })],
-            "chunk {index} must carry the model extracted from its own text; this \
-             loop indexes results back onto `batch_indices`, so a completion-order \
-             zip writes each model onto the wrong chunk",
+            attributed.graph.nodes[0].properties["marker"],
+            json!(format!("MARKER-{index:04}")),
+            "chunk {index} must carry the graph extracted from its own text; the \
+             loop re-sorts by carried position, so a completion-order zip would \
+             attach each graph to the wrong chunk",
         );
     }
 }
