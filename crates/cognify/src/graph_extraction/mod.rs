@@ -10,6 +10,7 @@
 mod edge_text;
 mod extractable;
 
+pub(crate) use edge_text::trim_preview;
 pub use edge_text::{
     CHUNK_MENTIONS_PREFIX, EdgeLabels, chunk_mentions_text, ensure_default_edge_text,
     ensure_default_edge_text_for_pairs,

@@ -5,7 +5,7 @@
 //! descriptor and materializes LLM answers into an arena of dynamic nodes and
 //! field relationships.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use cognee_models::DataPoint;
@@ -95,6 +95,12 @@ pub struct DynamicDataPoint {
     pub base: DataPoint,
     /// Custom scalar properties belonging to this node.
     pub properties: Map<String, Value>,
+    /// Python `str()` of each non-null scalar property as the Pydantic
+    /// instance holds it: an enum member prints `Role.lead_dev`, a boolean
+    /// `True`, a `date-time` the `datetime` text, a list its `repr`, a scalar
+    /// `$defs` value `root=...`. A schema default Pydantic left unvalidated
+    /// prints as the raw JSON value. Edge labels and triplet text use these.
+    pub property_strs: BTreeMap<String, String>,
     /// Fields to vector-index, copied from the compiled model.
     pub index_fields: Vec<String>,
     /// A transparent node is replaced by its relationship children at storage.
@@ -129,30 +135,35 @@ impl DynamicDataPoint {
         })
     }
 
-    /// Python `_extract_embeddable_text_from_datapoint`: every indexable
-    /// field's text joined with a space.
-    pub fn embeddable_text(&self) -> String {
-        self.index_field_texts()
-            .map(|(_, text)| text)
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// Each declared index field's Python `str()`, stripped, skipping a
+    /// `None` and a blank text — the values Python's `_get_node_label` and
+    /// `_extract_embeddable_text_from_datapoint` read.
+    fn index_field_strs(&self) -> impl Iterator<Item = &str> + '_ {
+        self.index_fields.iter().filter_map(|field| {
+            let text = self.property_strs.get(field)?.trim();
+            (!text.is_empty()).then_some(text)
+        })
     }
 
-    /// Python `_get_node_label`: the first indexable field's text, else a
-    /// nonblank `name`, else the type name.
+    /// Python `_extract_embeddable_text_from_datapoint`: every indexable
+    /// field's `str()` joined with a space.
+    pub fn embeddable_text(&self) -> String {
+        self.index_field_strs().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Python `_get_node_label`: the first indexable field's `str()` trimmed
+    /// by `_trim_preview`, else a nonblank `name` (only stripped), else the
+    /// type name. The result is final: insert it with
+    /// [`crate::graph_extraction::EdgeLabels::insert_label`].
     pub fn label(&self) -> String {
-        self.index_field_texts()
-            .next()
-            .map(|(_, text)| text)
-            .or_else(|| {
-                self.properties
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| self.base.data_type.clone())
+        if let Some(text) = self.index_field_strs().next() {
+            return crate::graph_extraction::trim_preview(text);
+        }
+        self.property_strs
+            .get("name")
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .map_or_else(|| self.base.data_type.clone(), str::to_string)
     }
 }
 
@@ -715,7 +726,9 @@ fn compile_model(
     for field in declared_index_fields {
         if field_kind(&field) == Some(&DynamicFieldKind::Scalar) {
             index_fields.push(field);
-        } else {
+        } else if first_warning(&format!("index_field:{name}.{field}")) {
+            // Once per process: `validate()` compiles the schema at every
+            // entry point, so an unkeyed warning repeats several times a call.
             warn!(
                 model = name,
                 field = %field,
@@ -738,7 +751,7 @@ fn compile_model(
                 None | Some(BaseIdentity::Random)
             ),
         };
-        if !stable {
+        if !stable && first_warning(&format!("identity_field:{name}.{field}")) {
             warn!(
                 model = name,
                 field = %field,
@@ -1010,8 +1023,17 @@ impl<'a> Materializer<'a> {
         let mut properties = Map::new();
         let mut relationship_values = Vec::new();
 
+        // Pydantic does not validate a default: the instance holds the raw
+        // JSON value, so it is neither checked, coerced nor typed.
+        let mut defaulted = HashSet::new();
         for field in &model.fields {
-            let value = object.get(&field.name).or(field.default.as_ref());
+            let value = match object.get(&field.name) {
+                Some(value) => Some(value),
+                None => {
+                    defaulted.insert(field.name.as_str());
+                    field.default.as_ref()
+                }
+            };
             let Some(value) = value else {
                 if field.required {
                     return Err(DynamicGraphError::MissingRequiredField {
@@ -1022,6 +1044,9 @@ impl<'a> Materializer<'a> {
                 continue;
             };
             match &field.kind {
+                DynamicFieldKind::Scalar if defaulted.contains(field.name.as_str()) => {
+                    properties.insert(field.name.clone(), value.clone());
+                }
                 DynamicFieldKind::Scalar => {
                     let definitions = &self.schema.scalar_definitions;
                     validate_scalar_value(value, &field.schema, definitions, 0).map_err(
@@ -1039,7 +1064,30 @@ impl<'a> Materializer<'a> {
             }
         }
 
-        let id = dynamic_id(model, object, &properties, &self.schema.scalar_definitions);
+        let property_python_values: BTreeMap<&str, PyValue> = model
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let value = properties.get(&field.name)?;
+                let python = if defaulted.contains(field.name.as_str()) {
+                    plain_python_value(value)
+                } else {
+                    python_value(
+                        value,
+                        &field.schema,
+                        &self.schema.scalar_definitions,
+                        Some(&python_class_name(&field.name)),
+                    )
+                };
+                Some((field.name.as_str(), python))
+            })
+            .collect();
+        let id = dynamic_id(model, object, &property_python_values);
+        let property_strs = property_python_values
+            .iter()
+            .filter(|(_, value)| **value != PyValue::None)
+            .map(|(field, value)| ((*field).to_string(), value.to_str()))
+            .collect();
         let mut base = DataPoint::new(model.name.clone(), Some(self.dataset_id));
         base.id = id;
         base.metadata.insert(
@@ -1075,6 +1123,7 @@ impl<'a> Materializer<'a> {
             occurrence_id,
             base,
             properties,
+            property_strs,
             index_fields: model.index_fields.clone(),
             transparent: model.transparent,
         });
@@ -1114,22 +1163,14 @@ impl<'a> Materializer<'a> {
     }
 
     /// Materialize a value declared as one of several models, returning its
-    /// occurrence id. Like Pydantic's smart-mode union validation, a model
-    /// whose fields cover every key of the object is preferred over a looser
-    /// match; ties keep declaration order. A rejected candidate leaves nothing
-    /// behind.
+    /// occurrence id. The first declared model that validates wins, keys it
+    /// does not declare being ignored: Python's generated models subclass
+    /// `DataPoint`, whose custom `__init__` keeps Pydantic's smart-mode union
+    /// from ranking candidates by how many fields they set, so it falls back
+    /// to left-to-right order. A rejected candidate leaves nothing behind.
     fn visit_any(&mut self, models: &[String], value: &Value) -> Result<Uuid, DynamicGraphError> {
-        let mut candidates: Vec<&String> = models.iter().collect();
-        if let Some(object) = value.as_object() {
-            candidates.sort_by_key(|model| {
-                let fields = &self.schema.models[model.as_str()].fields;
-                !object
-                    .keys()
-                    .all(|key| fields.iter().any(|field| field.name == *key))
-            });
-        }
         let mut first_error = None;
-        for model in candidates {
+        for model in models {
             let (nodes, relationships) = (self.nodes.len(), self.relationships.len());
             match self.visit(model, value) {
                 Ok((occurrence, _)) => return Ok(occurrence),
@@ -1149,7 +1190,9 @@ impl<'a> Materializer<'a> {
 }
 
 /// Python `DataPoint.__init__` + `_generate_identity_id`: the id comes from
-/// the Pydantic-validated values of the identity fields, each `str()`-ed.
+/// the Pydantic-validated values of the identity fields, each `str()`-ed
+/// (`properties` holds them; a field filled from its schema default holds the
+/// raw JSON value, as Pydantic leaves defaults unvalidated).
 ///
 /// Every declared field is in the validated instance: an omitted optional
 /// field holds its `None` default, so it contributes `"None"`. An undeclared
@@ -1160,8 +1203,7 @@ impl<'a> Materializer<'a> {
 fn dynamic_id(
     model: &DynamicModelSchema,
     answer: &Map<String, Value>,
-    properties: &Map<String, Value>,
-    definitions: &HashMap<String, Value>,
+    properties: &BTreeMap<&str, PyValue>,
 ) -> Uuid {
     if model.identity_fields.is_empty() {
         return Uuid::new_v4();
@@ -1178,15 +1220,9 @@ fn dynamic_id(
             }
         };
         let text = match field.kind {
-            DynamicFieldKind::Scalar => match properties.get(name) {
-                Some(value) => python_identity_text(&python_value(
-                    value,
-                    &field.schema,
-                    definitions,
-                    Some(&python_class_name(&field.name)),
-                )),
-                None => "None".to_string(),
-            },
+            DynamicFieldKind::Scalar => properties
+                .get(name.as_str())
+                .map_or_else(|| "None".to_string(), python_identity_text),
             DynamicFieldKind::Relationship { .. } => {
                 match answer.get(name).or(field.default.as_ref()) {
                     None | Some(Value::Null) => "None".to_string(),
@@ -3190,6 +3226,99 @@ mod tests {
         assert_eq!(graph.all_attachment_targets().len(), 2);
     }
 
+    /// Python's recursive `_resolve_children`: a transparent container whose
+    /// child is itself transparent resolves to the stored grandchildren, and
+    /// an inner container reached through two fields of the same object (a
+    /// diamond) is expanded once, so each stored id appears once.
+    #[test]
+    fn nested_transparent_containers_resolve_to_stored_grandchildren() {
+        let node = |data_type: &str, name: &str, transparent: bool| {
+            let mut base = DataPoint::new(data_type, Some(Uuid::nil()));
+            base.id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("{data_type}:{name}").as_bytes(),
+            );
+            DynamicDataPoint {
+                occurrence_id: Uuid::new_v4(),
+                base,
+                properties: Map::new(),
+                property_strs: BTreeMap::new(),
+                index_fields: Vec::new(),
+                transparent,
+            }
+        };
+        let relationship = |source: &DynamicDataPoint, field: &str, target: &DynamicDataPoint| {
+            DynamicRelationship {
+                source: source.occurrence_id,
+                target: target.occurrence_id,
+                field_name: field.to_string(),
+            }
+        };
+        let owner = node("Person", "owner", false);
+        let outer = node("Outer", "outer", true);
+        let inner = node("Inner", "inner", true);
+        let alice = node("Person", "alice", false);
+        let bob = node("Person", "bob", false);
+        let carol = node("Person", "carol", false);
+        let relationships = vec![
+            relationship(&owner, "team", &outer),
+            // The same inner occurrence through two fields: a diamond.
+            relationship(&outer, "left", &inner),
+            relationship(&outer, "right", &inner),
+            relationship(&inner, "members", &alice),
+            relationship(&inner, "members", &bob),
+            relationship(&outer, "lead", &carol),
+        ];
+        let nodes = vec![
+            owner.clone(),
+            outer.clone(),
+            inner.clone(),
+            alice.clone(),
+            bob.clone(),
+            carol.clone(),
+        ];
+        let grandchildren = vec![alice.base.id, bob.base.id, carol.base.id];
+
+        // Behind a stored owner, the owning field edge is hoisted onto every
+        // stored descendant, once each.
+        let graph = DynamicGraph {
+            root: owner.base.id,
+            root_occurrence: owner.occurrence_id,
+            nodes: nodes.clone(),
+            relationships: relationships.clone(),
+        };
+        let stored = graph.stored_graph();
+        assert_eq!(
+            stored_ids(&stored),
+            [owner.base.id, alice.base.id, bob.base.id, carol.base.id]
+        );
+        assert_eq!(
+            stored.relationships,
+            grandchildren
+                .iter()
+                .map(|target| edge(owner.base.id, "team", *target))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(graph.direct_attachment_targets(), [owner.base.id]);
+        assert_eq!(
+            graph.all_attachment_targets(),
+            [owner.base.id, alice.base.id, bob.base.id, carol.base.id]
+        );
+
+        // As the root, the nested containers vanish entirely.
+        let graph = DynamicGraph {
+            root: outer.base.id,
+            root_occurrence: outer.occurrence_id,
+            nodes,
+            relationships,
+        };
+        let stored = graph.stored_graph();
+        assert_eq!(stored_ids(&stored), grandchildren);
+        assert!(stored.relationships.is_empty());
+        assert_eq!(graph.direct_attachment_targets(), grandchildren);
+        assert_eq!(graph.all_attachment_targets(), grandchildren);
+    }
+
     #[test]
     fn transparent_target_preserves_owning_field_edge() {
         let person = |name: &str| {
@@ -3199,6 +3328,7 @@ mod tests {
                 occurrence_id: base.id,
                 base,
                 properties: Map::from_iter([("name".to_string(), json!(name))]),
+                property_strs: BTreeMap::from([("name".to_string(), name.to_string())]),
                 index_fields: vec!["name".to_string()],
                 transparent: false,
             }
@@ -3211,6 +3341,7 @@ mod tests {
             occurrence_id: container_base.id,
             base: container_base,
             properties: Map::new(),
+            property_strs: BTreeMap::new(),
             index_fields: Vec::new(),
             transparent: true,
         };
@@ -3518,6 +3649,7 @@ mod tests {
                 ]
                 .map(|(field, value)| (field.to_string(), value)),
             ),
+            property_strs: BTreeMap::new(),
             index_fields: Vec::new(),
             transparent: true,
         };
@@ -3592,10 +3724,12 @@ mod tests {
                 .find(|node| node.properties.get("name") == Some(&json!(name)))
                 .map(|node| node.base.data_type.clone())
         };
-        assert_eq!(type_of("Acme").as_deref(), Some("Org"));
+        // The first declared variant that validates wins, as in Python: an
+        // object with an Org-only `domain` key still validates as a Person.
+        assert_eq!(type_of("Acme").as_deref(), Some("Person"));
         assert_eq!(type_of("Alice").as_deref(), Some("Person"));
         assert_eq!(type_of("Bob").as_deref(), Some("Person"));
-        assert_eq!(type_of("Initech").as_deref(), Some("Org"));
+        assert_eq!(type_of("Initech").as_deref(), Some("Person"));
         // Root + four children; the null member is skipped.
         assert_eq!(graph.nodes.len(), 5);
         let mut fields: Vec<&str> = graph
@@ -3728,5 +3862,203 @@ mod tests {
             .materialize(&json!({"body": " "}), Uuid::nil())
             .expect("answer should materialize");
         assert_eq!(graph.nodes[0].label(), "Note");
+    }
+
+    /// A one-node schema whose `v` field is the label source.
+    fn label_schema(v: Value, defs: Value) -> Value {
+        json!({
+            "title": "Thing", "type": "object", "$defs": defs,
+            "properties": {
+                "name": {"type": "string"},
+                "v": v,
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["v"], "identity_fields": ["name"]
+                }}
+            },
+            "required": ["name", "v"]
+        })
+    }
+
+    /// Python `_get_node_label` and the triplet text `str()` the Pydantic
+    /// value; expected texts from cognee @ f154b32's `ensure_default_edge_properties`.
+    #[test]
+    fn labels_print_the_python_value_not_the_json_text() {
+        let role = json!({"Role": {"title": "Role", "type": "string", "enum": ["lead dev", "qa"]}});
+        let code = json!({"Code": {"title": "Code", "type": "string", "pattern": "^[A-Z]+$"}});
+        for (field, defs, value, expected) in [
+            (
+                json!({"$ref": "#/$defs/Role"}),
+                role,
+                json!("lead dev"),
+                "Role.lead_dev",
+            ),
+            (json!({"type": "boolean"}), json!({}), json!(true), "True"),
+            (
+                json!({"type": "string", "format": "date-time"}),
+                json!({}),
+                json!("2024-03-01T10:00:00Z"),
+                "2024-03-01 10:00:00+00:00",
+            ),
+            (
+                json!({"type": "array", "items": {"type": "string"}}),
+                json!({}),
+                json!(["x", "y"]),
+                "['x', 'y']",
+            ),
+            (
+                json!({"$ref": "#/$defs/Code"}),
+                code,
+                json!("ABC"),
+                "root='ABC'",
+            ),
+            (json!({"type": "number"}), json!({}), json!(3), "3.0"),
+        ] {
+            let graph = DynamicGraphSchema::compile(&label_schema(field, defs))
+                .expect("schema should compile")
+                .materialize(&json!({"name": "A", "v": value}), Uuid::nil())
+                .expect("answer should materialize");
+            assert_eq!(graph.nodes[0].label(), expected, "{value}");
+            assert_eq!(graph.nodes[0].embeddable_text(), expected, "{value}");
+        }
+    }
+
+    /// `_trim_preview` applies to a label taken from an index field only; the
+    /// `name` fallback is just stripped.
+    #[test]
+    fn only_an_index_field_label_is_trimmed() {
+        let long_name = format!("Alice   Smith {}", "x".repeat(90));
+        let schema = |index_fields: Value| {
+            json!({
+                "title": "Person", "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "metadata": {"type": "object", "default": {
+                        "index_fields": index_fields, "identity_fields": ["name"]
+                    }}
+                },
+                "required": ["name"]
+            })
+        };
+        let label = |index_fields: Value| {
+            DynamicGraphSchema::compile(&schema(index_fields))
+                .expect("schema should compile")
+                .materialize(&json!({"name": format!(" {long_name} ")}), Uuid::nil())
+                .expect("answer should materialize")
+                .nodes[0]
+                .label()
+        };
+        assert_eq!(label(json!([])), long_name);
+        assert_eq!(
+            label(json!(["name"])),
+            format!("Alice Smith {}", "x".repeat(68))
+        );
+    }
+
+    /// Pydantic leaves a field default unvalidated, so the identity reads the
+    /// raw JSON value: ids from cognee @ f154b32.
+    #[test]
+    fn defaults_feed_the_identity_unvalidated_like_pydantic() {
+        let item = DynamicGraphSchema::compile(&json!({
+            "title": "Item", "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "kind": {"type": "string", "default": "Thing One"},
+                "n": {"type": "number", "default": 2},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["kind", "n", "name"]
+                }}
+            },
+            "required": ["name"]
+        }))
+        .expect("schema should compile");
+        let defaulted = item
+            .materialize(&json!({"name": "x"}), Uuid::nil())
+            .expect("answer should materialize");
+        assert_eq!(
+            defaulted.root,
+            Uuid::parse_str("3a5567aa-2559-56ef-bf6b-8b97c6ec77ec").expect("uuid")
+        );
+        assert_eq!(defaulted.nodes[0].properties["n"], json!(2));
+        // The same value given explicitly is validated into a float.
+        let explicit = item
+            .materialize(&json!({"name": "x", "n": 2}), Uuid::nil())
+            .expect("answer should materialize");
+        assert_eq!(
+            explicit.root,
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Item:thing_one|2.0|x")
+        );
+
+        let graph = DynamicGraphSchema::compile(&json!({
+            "title": "D", "type": "object",
+            "$defs": {"Role": {"title": "Role", "type": "string", "enum": ["lead dev", "qa"]}},
+            "properties": {
+                "name": {"type": "string"},
+                "role": {"$ref": "#/$defs/Role", "default": "lead dev"},
+                "when": {"type": "string", "format": "date-time", "default": "2024-03-01T00:00:00Z"},
+                "cnt": {"type": "integer", "default": 3},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name", "role", "when", "cnt"]
+                }}
+            },
+            "required": ["name"]
+        }))
+        .expect("schema should compile")
+        .materialize(&json!({"name": "x"}), Uuid::nil())
+        .expect("answer should materialize");
+        assert_eq!(
+            graph.root,
+            Uuid::parse_str("cfcbc722-d497-5560-814e-5a81a2cd390c").expect("uuid")
+        );
+    }
+
+    /// The first declared union variant that validates wins, even when a later
+    /// one declares more of the object's keys: Cat/Dog ids from cognee @ f154b32.
+    #[test]
+    fn a_union_takes_the_first_declared_model_that_validates() {
+        let animal = |required: &[&str], extra: (&str, Value)| {
+            let mut properties = json!({
+                "name": {"type": "string"},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name"]
+                }}
+            });
+            properties[extra.0] = extra.1;
+            json!({"type": "object", "properties": properties, "required": required})
+        };
+        let graph = DynamicGraphSchema::compile(&json!({
+            "title": "Box", "type": "object",
+            "$defs": {
+                "Cat": animal(&["name"], ("meows", json!({"type": "boolean", "default": true}))),
+                "Dog": animal(&["name", "barks"], ("barks", json!({"type": "boolean"})))
+            },
+            "properties": {
+                "name": {"type": "string"},
+                "items": {"type": "array", "items": {
+                    "anyOf": [{"$ref": "#/$defs/Cat"}, {"$ref": "#/$defs/Dog"}]
+                }},
+                "metadata": {"type": "object", "default": {
+                    "index_fields": ["name"], "identity_fields": ["name"]
+                }}
+            },
+            "required": ["name", "items"]
+        }))
+        .expect("schema should compile")
+        .materialize(
+            &json!({"name": "B", "items": [{"name": "Rex", "barks": true}, {"name": "Tom"}]}),
+            Uuid::nil(),
+        )
+        .expect("answer should materialize");
+        let rex = graph
+            .nodes
+            .iter()
+            .find(|node| node.properties.get("name") == Some(&json!("Rex")))
+            .expect("Rex is materialized");
+        assert_eq!(rex.base.data_type, "Cat");
+        assert_eq!(
+            rex.base.id,
+            Uuid::parse_str("be1d4b52-2e2d-5bb4-b4cb-552e7eb4681c").expect("uuid")
+        );
+        assert_eq!(rex.properties.get("meows"), Some(&json!(true)));
+        assert!(!rex.properties.contains_key("barks"));
     }
 }

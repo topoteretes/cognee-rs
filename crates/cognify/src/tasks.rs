@@ -3972,7 +3972,7 @@ fn stamp_structural_edge_text(
 
     let mut labels = EdgeLabels::default();
     for (id, node) in dynamic_nodes {
-        labels.insert(*id, &node.label());
+        labels.insert_label(*id, node.label());
     }
     for chunk in &input.chunks {
         labels.insert(chunk.base.id, &chunk.text);

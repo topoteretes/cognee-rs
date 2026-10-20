@@ -117,13 +117,24 @@ float (`3` becomes `3.0`), an `integer` field accepts `3.0` as `3`, a
 member prints as `Enum.member` with datamodel-code-generator's member name
 (`"_x"` is `field_x`, `"mro"` is `mro_`, `1e20` is `number_1e_20`), lists use
 Python `repr` quoting, and only plain strings are lower-cased with spaces turned
-into `_`. An omitted optional identity field contributes `None`. A DataPoint
+into `_`. An omitted optional identity field contributes `None`. A field
+filled from its schema `default` keeps the raw JSON value, because Pydantic does
+not validate defaults: a `number` default `2` contributes `2`, not `2.0`, and a
+`date-time` or enum default is a plain string. A DataPoint
 base field the schema does not declare contributes the value a fresh Python
 instance holds: `type` is the model name, `metadata` the declared default,
 `version` `1`, `ontology_valid` `False`, the `source_*` fields `None`, and so
 on. `id`, `created_at`, `updated_at` and any name that is neither a field nor a
 base field make every node fall back to a random UUID, as in Python (a warning
 is logged).
+
+Edge sentences (`"{source} {field} {target}."`) and triplet text label a custom
+node with the same Python `str()` of its first non-blank index field, trimmed to
+80 characters with whitespace collapsed (`Role.lead_dev`, `True`,
+`['x', 'y']`), else its `name` stripped but otherwise untouched, else the model
+name. For a union of models (`anyOf` of `$ref`s) the first declared model the
+value validates against wins, keys it does not declare being ignored: the
+generated `DataPoint` subclasses keep Pydantic from ranking candidates.
 
 Answers are validated as Pydantic validates the generated model: a `date-time`
 must be an ISO 8601 datetime with an offset, as speedate accepts it (`T`, `t`,

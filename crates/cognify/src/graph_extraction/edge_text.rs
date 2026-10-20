@@ -70,6 +70,15 @@ impl EdgeLabels {
         }
     }
 
+    /// Record `id`'s label as given, with no `_trim_preview`: for a label
+    /// that is already final, such as [`crate::dynamic_graph::DynamicDataPoint::label`],
+    /// whose `name` fallback Python only strips. A blank label records nothing.
+    pub fn insert_label(&mut self, id: Uuid, label: String) {
+        if !label.trim().is_empty() {
+            self.labels.insert(id, label);
+        }
+    }
+
     fn get(&self, id: &str) -> Option<&str> {
         let id = Uuid::parse_str(id).ok()?;
         self.labels.get(&id).map(String::as_str)
@@ -78,7 +87,7 @@ impl EdgeLabels {
 
 /// Python `_trim_preview`: collapse whitespace runs to single spaces, then
 /// keep the first [`PREVIEW_MAX_CHARS`] characters.
-fn trim_preview(text: &str) -> String {
+pub(crate) fn trim_preview(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
