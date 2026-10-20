@@ -117,8 +117,11 @@ uppercase letter and holds only letters and ASCII digits (`ResearchGraph`, not
 `True`, `False` or `DataPoint`. Python looks the generated class up by that
 title, and its code generator rewrites the other spellings, so Python fails on
 them too. The Rust check is slightly stricter in one place: it rejects
-non-ASCII digits, which Python keeps. A root given as a `$ref` keeps its `$defs` key as the type
-name, but the definition it points at must carry such a title.
+non-ASCII digits, which Python keeps. A root given as a `$ref` still needs that
+top-level `title`, and it must equal the `$defs` key the `$ref` points at
+(`{"title": "Company", "$ref": "#/$defs/Company", ...}`): Python reads only the
+top-level title, raising `KeyError` without one, and any other title makes its
+generator wrap the model in a `RootModel` it cannot store.
 
 Only the single-pass LLM extractor honours a custom schema: `validate()` rejects
 `graph_schema` together with a `graph_backend` or the `cascade` extraction
