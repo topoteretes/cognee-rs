@@ -183,6 +183,16 @@ fn resolve_graph_backend(
     Ok(Some((kind, spec)))
 }
 
+/// Whether this call selects a graph-extraction backend other than the
+/// built-in LLM extractor (the opts' selection, else the configured default),
+/// without checking that anything is registered under it.
+///
+/// # Errors
+/// As [`graph_backend_spec`].
+pub fn selects_graph_backend(cm: &ComponentManager, opts: &Value) -> Result<bool, SdkError> {
+    Ok(resolve_graph_backend(cm, opts)?.is_some())
+}
+
 /// Whether the process-wide shim registry serves `kind`.
 fn legacy_registered(kind: &str) -> bool {
     REGISTRY

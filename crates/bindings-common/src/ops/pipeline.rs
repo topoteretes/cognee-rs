@@ -44,7 +44,9 @@ use uuid::Uuid;
 use cognee::cognify::cognify as cognee_cognify;
 use cognee::models::{Data, Dataset};
 
-use crate::graph_backend::{check_graph_backend_registered, graph_backend_from_opts};
+use crate::graph_backend::{
+    check_graph_backend_registered, graph_backend_from_opts, selects_graph_backend,
+};
 use crate::wire::{cognify_result_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
 
@@ -75,43 +77,207 @@ pub fn opts_tenant(opts: &serde_json::Value) -> Result<Option<Uuid>, SdkError> {
         .map_err(|e| SdkError::Validation(format!("invalid `tenant` UUID: {e}")))
 }
 
-/// Build a per-call `CognifyConfig` by cloning the cached config and applying
-/// any `opts` overrides on top (rather than mutating the cached one).
+/// Every key the `cognify` / `add_and_cognify` opts are read for.
 ///
-/// `"graphBackend"` (else the configured `graph_extraction.backend`) is
-/// resolved through [`crate::graph_backend`], which is why this is `async` and
-/// fallible: building a backend can do I/O, and a kind nothing is registered
-/// under is an error rather than a silent fall back to the LLM extractor. With
-/// no backend registered — every build in this repository — and the default
-/// `llm`, the only opts that can reach either path are ones that name a backend
-/// no build here can serve, so this is inert for existing callers.
+/// `graphModel` is an alias of `graphSchema` under Python's argument name.
+pub const COGNIFY_OPT_KEYS: &[&str] = &[
+    "tenant",
+    "chunkSize",
+    "chunkOverlap",
+    "summarization",
+    "temporalCognify",
+    "triplet",
+    "graphBackend",
+    "graphSchema",
+    "graphModel",
+    "chunkAttachment",
+];
+
+/// The keys of a cognify `opts` object that nothing reads, sorted.
+///
+/// Python's `cognify()` takes `**kwargs` and forwards the unknown ones into the
+/// extraction LLM call rather than raising, so an unknown key is a warning
+/// here (see [`apply_cognify_opts`]), not an error: upstream scripts pass
+/// arguments this port has no use for (`run_in_background`, `user`, …).
+#[must_use]
+pub fn unknown_cognify_opts(opts: &serde_json::Value) -> Vec<String> {
+    let Some(map) = opts.as_object() else {
+        return Vec::new();
+    };
+    let mut unknown: Vec<String> = map
+        .keys()
+        .filter(|key| !COGNIFY_OPT_KEYS.contains(&key.as_str()))
+        .cloned()
+        .collect();
+    unknown.sort();
+    unknown
+}
+
+/// The value under `key`, with an explicit `null` read as absent (Python
+/// callers pass `chunk_size=None` and friends for "unset").
+fn opt_value<'a>(opts: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    opts.get(key).filter(|value| !value.is_null())
+}
+
+/// A non-negative integer option. A present value of any other shape is an
+/// error: it used to be dropped without a word.
+fn opt_usize(opts: &serde_json::Value, key: &str) -> Result<Option<usize>, SdkError> {
+    let Some(value) = opt_value(opts, key) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .map(Some)
+        .ok_or_else(|| {
+            SdkError::Validation(format!(
+                "`{key}` must be a non-negative integer, got {value}"
+            ))
+        })
+}
+
+/// A boolean option; a present non-boolean is an error.
+fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkError> {
+    let Some(value) = opt_value(opts, key) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| SdkError::Validation(format!("`{key}` must be a boolean, got {value}")))
+}
+
+/// Apply the cognify `opts` (everything but `graphBackend`, which needs the
+/// async registry) on top of `cfg`.
+///
+/// Every known key is type-checked: a present value of the wrong shape is a
+/// [`SdkError::Validation`] rather than a silent no-op, and an unknown key is
+/// logged as a warning (see [`unknown_cognify_opts`]). `graphSchema` (alias
+/// `graphModel`) takes a JSON Schema object or a string holding one;
+/// `chunkAttachment` takes `"direct"` or `"all"`. The combination is checked
+/// by [`cognee::cognify::CognifyConfig::validate`], which the callers run.
 ///
 /// # Errors
-/// [`SdkError::Validation`] for a malformed or unregistered `graphBackend`
-/// selection, or whatever the registered factory returns.
+/// [`SdkError::Validation`] for non-object opts, a wrongly-typed value, both
+/// `graphSchema` and `graphModel`, a graph schema that is not an object, or a
+/// `chunkAttachment` outside `"direct"` / `"all"`.
+pub fn apply_cognify_opts(
+    mut cfg: cognee::cognify::CognifyConfig,
+    opts: &serde_json::Value,
+) -> Result<cognee::cognify::CognifyConfig, SdkError> {
+    if !(opts.is_null() || opts.is_object()) {
+        return Err(SdkError::Validation(format!(
+            "cognify options must be an object, got {opts}"
+        )));
+    }
+    let unknown = unknown_cognify_opts(opts);
+    if !unknown.is_empty() {
+        tracing::warn!(
+            unknown = ?unknown,
+            known = ?COGNIFY_OPT_KEYS,
+            "ignoring unknown cognify option(s)"
+        );
+    }
+    if let Some(n) = opt_usize(opts, "chunkSize")? {
+        cfg = cfg.with_chunk_size(n);
+    }
+    if let Some(n) = opt_usize(opts, "chunkOverlap")? {
+        cfg = cfg.with_chunk_overlap(n);
+    }
+    if let Some(b) = opt_bool(opts, "summarization")? {
+        cfg = cfg.with_summarization(b);
+    }
+    if let Some(b) = opt_bool(opts, "temporalCognify")? {
+        cfg = cfg.with_temporal_cognify(b);
+    }
+    if let Some(b) = opt_bool(opts, "triplet")? {
+        cfg = cfg.with_triplet_embeddings(b);
+    }
+    let schema = match (
+        opt_value(opts, "graphSchema"),
+        opt_value(opts, "graphModel"),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(SdkError::Validation(
+                "pass either `graphSchema` or its alias `graphModel`, not both".to_string(),
+            ));
+        }
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    if let Some(value) = schema {
+        let parsed = cognee::cognify::parse_graph_schema(value)
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
+        cfg.graph_schema = parsed;
+    }
+    if let Some(value) = opt_value(opts, "chunkAttachment") {
+        let text = value.as_str().ok_or_else(|| {
+            SdkError::Validation(format!(
+                "`chunkAttachment` must be \"direct\" or \"all\", got {value}"
+            ))
+        })?;
+        let attachment = cognee::cognify::ChunkAttachment::parse(text)
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
+        cfg = cfg.with_chunk_attachment(attachment);
+    }
+    Ok(cfg)
+}
+
+/// [`CognifyConfig::validate`](cognee::cognify::CognifyConfig::validate) as a
+/// binding-boundary error.
+fn validate_cognify_config(cfg: &cognee::cognify::CognifyConfig) -> Result<(), SdkError> {
+    cfg.validate()
+        .map_err(|e| SdkError::Validation(format!("invalid cognify options: {e}")))
+}
+
+/// Check the cognify `opts` against the cached config without building
+/// anything: what [`cognify_config_with_opts`] would reject, minus building a
+/// graph backend. Cheap enough to call before side effects, which is why
+/// `add_and_cognify` runs it before the add.
+///
+/// # Errors
+/// As [`apply_cognify_opts`], plus [`SdkError::Validation`] for a combination
+/// [`CognifyConfig::validate`](cognee::cognify::CognifyConfig::validate)
+/// rejects — including a graph schema with a non-LLM graph backend.
+pub fn check_cognify_opts(svc: &CogneeServices, opts: &serde_json::Value) -> Result<(), SdkError> {
+    let cfg = apply_cognify_opts(svc.cognify_config.clone(), opts)?;
+    if cfg.graph_schema.is_some() && selects_graph_backend(&svc.component_manager, opts)? {
+        return Err(SdkError::Validation(
+            "invalid cognify options: graph_schema is only supported by the LLM extractor; \
+             unset graph_backend"
+                .to_string(),
+        ));
+    }
+    validate_cognify_config(&cfg)
+}
+
+/// Build a per-call `CognifyConfig` by cloning the cached config and applying
+/// any `opts` overrides on top (rather than mutating the cached one), then
+/// validating the result.
+///
+/// The non-backend keys are applied by [`apply_cognify_opts`]. `"graphBackend"`
+/// (else the configured `graph_extraction.backend`) is resolved through
+/// [`crate::graph_backend`], which is why this is `async` and fallible:
+/// building a backend can do I/O, and a kind nothing is registered under is an
+/// error rather than a silent fall back to the LLM extractor. With no backend
+/// registered — every build in this repository — and the default `llm`, the
+/// only opts that can reach either path are ones that name a backend no build
+/// here can serve, so this is inert for existing callers.
+///
+/// # Errors
+/// As [`apply_cognify_opts`]; [`SdkError::Validation`] for a malformed or
+/// unregistered `graphBackend` selection or an invalid combination (e.g.
+/// `chunkAttachment` without `graphSchema`), or whatever the registered
+/// factory returns.
 pub async fn cognify_config_with_opts(
     svc: &CogneeServices,
     opts: &serde_json::Value,
 ) -> Result<cognee::cognify::CognifyConfig, SdkError> {
-    let mut cfg = svc.cognify_config.clone();
-    if let Some(n) = opts.get("chunkSize").and_then(|v| v.as_u64()) {
-        cfg = cfg.with_chunk_size(n as usize);
-    }
-    if let Some(n) = opts.get("chunkOverlap").and_then(|v| v.as_u64()) {
-        cfg = cfg.with_chunk_overlap(n as usize);
-    }
-    if let Some(b) = opts.get("summarization").and_then(|v| v.as_bool()) {
-        cfg = cfg.with_summarization(b);
-    }
-    if let Some(b) = opts.get("temporalCognify").and_then(|v| v.as_bool()) {
-        cfg = cfg.with_temporal_cognify(b);
-    }
-    if let Some(b) = opts.get("triplet").and_then(|v| v.as_bool()) {
-        cfg = cfg.with_triplet_embeddings(b);
-    }
+    let mut cfg = apply_cognify_opts(svc.cognify_config.clone(), opts)?;
     if let Some(backend) = graph_backend_from_opts(&svc.component_manager, opts).await? {
         cfg = cfg.with_graph_backend(backend);
     }
+    validate_cognify_config(&cfg)?;
     Ok(cfg)
 }
 
@@ -348,6 +514,9 @@ pub async fn cognify(
     let tenant_id = opts_tenant(opts)?;
 
     let svc = state.services().await?;
+    // Up front, so invalid options fail even on a dataset with nothing to
+    // cognify (which returns before the per-call config is built).
+    check_cognify_opts(&svc, opts)?;
     let owner_id = state.owner_id().await?;
 
     let dataset = resolve_dataset(&svc, dataset_name, owner_id, tenant_id).await?;
@@ -383,6 +552,9 @@ pub async fn add_and_cognify(
     check_graph_backend_registered(&state.cm, opts)?;
 
     let svc = state.services().await?;
+    // Likewise for every other cognify option: a misspelled chunk attachment
+    // or a schema that does not compile must fail before anything is written.
+    check_cognify_opts(&svc, opts)?;
     let owner_id = state.owner_id().await?;
 
     let pre_existing = existing_data_ids(&svc, dataset_name, owner_id, tenant_id).await?;

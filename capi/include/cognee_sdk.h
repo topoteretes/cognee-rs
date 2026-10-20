@@ -414,6 +414,14 @@ void cg_sdk_add(const CgSdk*        sdk,
  *   "summarization"  — boolean
  *   "temporalCognify"— boolean
  *   "triplet"        — boolean
+ *   "graphSchema"    — a custom graph model's JSON Schema, as an object or a
+ *                      JSON string (alias "graphModel"); {} means the
+ *                      default KnowledgeGraph. Not with temporalCognify.
+ *   "chunkAttachment"— "direct" (default) or "all"; requires graphSchema.
+ *
+ * A wrongly-typed or invalid value, or an invalid combination, fails with
+ * CG_ERR_SDK_VALIDATION before the dataset is looked up; an unknown key is
+ * logged as a warning and ignored.
  *
  * Async (D4, R1): callback fires exactly once on a tokio worker thread.
  * result_json on success: CogneeCognifyResult JSON object.
@@ -435,7 +443,8 @@ void cg_sdk_cognify(const CgSdk*        sdk,
  *
  * Equivalent to cg_sdk_add + cg_sdk_cognify on the same dataset, but cognify
  * only processes the **newly-added** items.  If all inputs were duplicates,
- * cognify is skipped and a zeroed CogneeCognifyResult is returned.
+ * cognify is skipped and a zeroed CogneeCognifyResult is returned.  opts_json
+ * takes the cg_sdk_cognify keys, validated before anything is added.
  *
  * Async (D4, R1): callback fires exactly once on a tokio worker thread.
  * result_json on success:

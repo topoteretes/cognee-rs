@@ -34,6 +34,19 @@ export interface CogneeCognifyOptions {
   temporalCognify?: boolean;
   /** Index `"source → relation → target"` triplet embeddings. */
   triplet?: boolean;
+  /**
+   * A custom graph model's JSON Schema (an object, or a string holding one),
+   * extracted instead of the default `KnowledgeGraph` — Python's `graph_model`.
+   * `{}` means the default model. Not supported with `temporalCognify`; see
+   * docs/guides/custom-graph-schema.md for the schema contract.
+   */
+  graphSchema?: Record<string, unknown> | string;
+  /**
+   * How each chunk links to the custom graph extracted from it: `"direct"`
+   * (the root, the default) or `"all"` (every stored node). Requires
+   * `graphSchema`.
+   */
+  chunkAttachment?: "direct" | "all";
 }
 
 /**

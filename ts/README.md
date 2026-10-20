@@ -159,7 +159,16 @@ await c.cognify("my-dataset", {
   summarization: true,
   triplet: true,       // also index triplet embeddings (enables TripletCompletion search)
 });
+
+// With a custom graph model (its JSON Schema, as an object or a JSON string)
+await c.cognify("my-dataset", {
+  graphSchema: mySchema,
+  chunkAttachment: "all", // "direct" (default) or "all"
+});
 ```
+
+An invalid option value is rejected with a `VALIDATION_ERROR`; see
+[the custom graph schema guide](../docs/guides/custom-graph-schema.md).
 
 ### addAndCognify
 

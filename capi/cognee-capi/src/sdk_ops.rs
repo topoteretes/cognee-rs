@@ -166,7 +166,10 @@ pub unsafe extern "C" fn cg_sdk_add(
 /// a prior `cg_sdk_add` call).  `opts_json` may be `NULL` or a JSON object with
 /// optional keys: `tenant` (UUID string), `chunkSize` (integer), `chunkOverlap`
 /// (integer), `summarization` (boolean), `temporalCognify` (boolean),
-/// `triplet` (boolean).
+/// `triplet` (boolean), `graphSchema` (a custom graph model's JSON Schema, as
+/// an object or a JSON string; alias `graphModel`) and `chunkAttachment`
+/// (`"direct"` or `"all"`). A wrongly-typed or invalid value fails with
+/// `CG_ERR_SDK_VALIDATION`; an unknown key is logged as a warning.
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///

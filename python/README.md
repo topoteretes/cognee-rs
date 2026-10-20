@@ -207,7 +207,16 @@ Extract entities and relationships into the knowledge graph.
 
 ```python
 await cognee.cognify("my-dataset")
+
+# With a custom graph model: its JSON Schema (a dict or a JSON string)
+await cognee.cognify("my-dataset", {"graph_schema": schema, "chunk_attachment": "all"})
 ```
+
+The compat API takes upstream's arguments instead:
+`compat.cognify(graph_model=MyModel, chunk_attachment="all")`, where `MyModel`
+is a Pydantic model class (or its schema as a dict). An invalid option value
+raises `CogneeValidationError`; see
+[the custom graph schema guide](../docs/guides/custom-graph-schema.md).
 
 #### add_and_cognify
 

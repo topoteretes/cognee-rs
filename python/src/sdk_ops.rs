@@ -134,8 +134,12 @@ impl PyCognee {
     ///
     /// Supported ``opts`` keys:
     /// ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-    /// ``temporalCognify``, ``triplet`` — ``snake_case`` spellings
-    /// (``chunk_size``, …) are accepted too and normalised automatically.
+    /// ``temporalCognify``, ``triplet``, ``graphSchema`` (a custom graph
+    /// model's JSON Schema, as a dict or a JSON string; alias
+    /// ``graphModel``) and ``chunkAttachment`` (``"direct"`` or ``"all"``) —
+    /// ``snake_case`` spellings (``chunk_size``, …) are accepted too and
+    /// normalised automatically. A wrongly-typed or invalid value raises
+    /// ``CogneeValidationError``; an unknown key is logged as a warning.
     #[pyo3(signature = (dataset_name, opts=None))]
     fn cognify<'py>(
         &self,
@@ -154,6 +158,9 @@ impl PyCognee {
     ///
     /// Returns a dict with two top-level keys: ``add`` (same shape as
     /// ``add()`` result) and ``cognify`` (same shape as ``cognify()`` result).
+    ///
+    /// Accepts the ``cognify()`` ``opts`` keys; they are validated before
+    /// anything is added.
     #[pyo3(signature = (inputs, dataset_name, opts=None))]
     fn add_and_cognify<'py>(
         &self,

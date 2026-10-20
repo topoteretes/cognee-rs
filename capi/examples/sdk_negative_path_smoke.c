@@ -21,6 +21,11 @@
  *        cg_sdk_waiter_wait last-error path (it calls set_last_error on
  *        the calling thread with the single-use message).
  *
+ *   4. Invalid cognify options (CG_ERR_SDK_VALIDATION):
+ *      - cg_sdk_cognify with a bad chunkAttachment, a chunkAttachment without
+ *        graphSchema, a graph schema that does not compile, or a wrongly-typed
+ *        chunkSize returns CG_ERR_SDK_VALIDATION before any dataset lookup.
+ *
  * Environment:
  *   MOCK_EMBEDDING=true set via JSON settings overlay (no network needed).
  *
@@ -175,6 +180,41 @@ int main(void)
                (int)second_code, cg_last_error_message());
     }
     cg_sdk_waiter_destroy(w);
+
+    /* ── Test 4: invalid cognify options → CG_ERR_SDK_VALIDATION ─────────── */
+    printf("=== Test 4: cg_sdk_cognify with invalid options ===\n");
+
+    /* Each value used to be dropped without a word; now each is checked before
+     * the dataset is resolved, so no dataset (and no LLM) is needed. */
+    const char* bad_opts[] = {
+        /* chunkAttachment outside "direct" / "all". */
+        "{\"graphSchema\": {\"title\": \"Graph\", \"properties\": {}},"
+        " \"chunkAttachment\": \"everything\"}",
+        /* chunkAttachment without a graph schema. */
+        "{\"chunkAttachment\": \"direct\"}",
+        /* A graph schema (as a JSON string) that does not compile. */
+        "{\"graphSchema\": \"{\\\"title\\\": \\\"lower\\\", \\\"properties\\\": {}}\"}",
+        /* A wrongly-typed known option. */
+        "{\"chunkSize\": \"512\"}",
+    };
+    for (size_t i = 0; i < sizeof(bad_opts) / sizeof(bad_opts[0]); i++) {
+        CgSdkWaiter* cw = cg_sdk_waiter_new();
+        ASSERT(cw != NULL, "cg_sdk_waiter_new must return non-NULL");
+        if (!cw) { goto cleanup; }
+        cg_sdk_cognify(sdk, "missing_dataset", bad_opts[i], cg_sdk_waiter_callback, cw);
+        char* cognify_result = NULL;
+        cg_last_error_clear();
+        CgErrorCode cognify_code = cg_sdk_waiter_wait(cw, &cognify_result);
+        cg_string_destroy(cognify_result);
+        cg_sdk_waiter_destroy(cw);
+        ASSERT_EQ(cognify_code, (CgErrorCode)CG_ERR_SDK_VALIDATION,
+                  "cg_sdk_cognify with invalid options must return CG_ERR_SDK_VALIDATION");
+        if (cognify_code == (CgErrorCode)CG_ERR_SDK_VALIDATION) {
+            printf("  opts #%zu: code=%d, last_error=\"%s\"  OK\n", i,
+                   (int)cognify_code,
+                   cg_last_error_message() ? cg_last_error_message() : "(none)");
+        }
+    }
 
 cleanup:
     /* ── Cleanup ─────────────────────────────────────────────────────────── */

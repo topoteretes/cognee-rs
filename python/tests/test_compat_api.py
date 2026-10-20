@@ -354,3 +354,131 @@ def test_cognee_alias_same_functions():
     assert _cognee.add is _compat.add
     assert _cognee.search is _compat.search
     assert _cognee.SearchType is cp.SearchType
+
+
+# ---------------------------------------------------------------------------
+# Custom graph models: graph_model / chunk_attachment (no network I/O needed)
+# ---------------------------------------------------------------------------
+
+_GRAPH_SCHEMA = {
+    "title": "Graph",
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "metadata": {
+            "type": "object",
+            "default": {"identity_fields": ["name"], "index_fields": ["name"]},
+        },
+    },
+    "required": ["name"],
+}
+
+
+class _RecordingHandle:
+    """Stands in for the native handle and records the opts it is sent."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def cognify(self, dataset_name, opts=None):
+        self.calls.append(("cognify", dataset_name, opts))
+        return {"chunks": 0}
+
+    async def add_and_cognify(self, inputs, dataset_name, opts=None):
+        self.calls.append(("add_and_cognify", dataset_name, opts))
+        return {"add": {}, "cognify": {}}
+
+
+class _FakeModel:
+    """Duck-types a Pydantic model class (``model_json_schema``)."""
+
+    @classmethod
+    def model_json_schema(cls, schema_generator=None):
+        return dict(_GRAPH_SCHEMA)
+
+
+def test_graph_model_dict_and_string_pass_through():
+    import json
+    import cognee_py.compat as _compat
+    assert _compat._graph_model_to_schema(None) is None
+    assert _compat._graph_model_to_schema(_GRAPH_SCHEMA) is _GRAPH_SCHEMA
+    text = json.dumps(_GRAPH_SCHEMA)
+    assert _compat._graph_model_to_schema(text) == text
+
+
+def test_graph_model_class_becomes_its_json_schema():
+    import cognee_py.compat as _compat
+    assert _compat._graph_model_to_schema(_FakeModel) == _GRAPH_SCHEMA
+
+
+def test_graph_model_rejects_other_values():
+    import cognee_py.compat as _compat
+    with pytest.raises(cp.CogneeValidationError, match="graph_model must be"):
+        _compat._graph_model_to_schema(42)
+    with pytest.raises(cp.CogneeValidationError, match="graph_model must be"):
+        _compat._graph_model_to_schema(_FakeModel())
+
+
+def test_upstream_knowledge_graph_means_the_default_pipeline():
+    import cognee_py.compat as _compat
+    KnowledgeGraph = type("KnowledgeGraph", (_FakeModel,), {})
+    KnowledgeGraph.__module__ = "cognee.shared.data_models"
+    assert _compat._graph_model_to_schema(KnowledgeGraph) is None
+
+
+def test_pydantic_model_schema_drops_default_field_titles():
+    pydantic = pytest.importorskip("pydantic")
+    import cognee_py.compat as _compat
+
+    class Person(pydantic.BaseModel):
+        name: str
+        metadata: dict = {"identity_fields": ["name"]}
+
+    schema = _compat._graph_model_to_schema(Person)
+    assert schema["title"] == "Person"
+    assert "title" not in schema["properties"]["name"]
+    assert schema["properties"]["metadata"]["default"] == {"identity_fields": ["name"]}
+
+
+@pytest.mark.asyncio
+async def test_compat_cognify_sends_graph_schema_and_chunk_attachment():
+    import cognee_py.compat as _compat
+    recorder = _RecordingHandle()
+    _compat._default_handle = recorder
+    try:
+        await cognee.cognify("ds", graph_model=_FakeModel, chunk_attachment="all")
+        await cognee.add_and_cognify("text", "ds", graph_model=_GRAPH_SCHEMA)
+        await cognee.cognify("ds")
+    finally:
+        _compat.reset_default_handle()
+    assert recorder.calls[0] == (
+        "cognify",
+        "ds",
+        {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
+    )
+    assert recorder.calls[1] == ("add_and_cognify", "ds", {"graph_schema": _GRAPH_SCHEMA})
+    assert recorder.calls[2] == ("cognify", "ds", None)
+
+
+@pytest.mark.asyncio
+async def test_compat_cognify_rejects_graph_model_and_graph_schema_together():
+    import cognee_py.compat as _compat
+    _compat._default_handle = _RecordingHandle()
+    try:
+        with pytest.raises(cp.CogneeValidationError, match="not both"):
+            await cognee.cognify("ds", graph_model=_FakeModel, graph_schema=_GRAPH_SCHEMA)
+    finally:
+        _compat.reset_default_handle()
+
+
+@SKIP_IF_NO_ADD
+@pytest.mark.asyncio
+async def test_compat_cognify_rejects_an_invalid_chunk_attachment(tmp_path):
+    """The native layer validates the options instead of dropping them."""
+    _patch_default_handle(tmp_path)
+    with pytest.raises(cp.CogneeValidationError, match="chunk_attachment"):
+        await cognee.cognify("ds", graph_model=_GRAPH_SCHEMA, chunk_attachment="everything")
+    with pytest.raises(cp.CogneeValidationError, match="requires graph_schema"):
+        await cognee.cognify("ds", chunk_attachment="direct")
+    with pytest.raises(cp.CogneeValidationError, match="Invalid graph schema"):
+        await cognee.cognify("ds", graph_model={"title": "lower", "properties": {}})

@@ -686,7 +686,11 @@ class Cognee:
 
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-        ``temporalCognify``, ``triplet``.
+        ``temporalCognify``, ``triplet``, ``graphSchema`` (a custom graph
+        model's JSON Schema, as a dict or a JSON string; alias ``graphModel``)
+        and ``chunkAttachment`` (``"direct"`` or ``"all"``). A wrongly-typed or
+        invalid value raises ``CogneeValidationError``; an unknown key is
+        logged as a warning.
         """
         ...
 
@@ -699,7 +703,8 @@ class Cognee:
         """Ingest inputs and immediately extract the knowledge graph.
 
         Returns a dict with two top-level keys: ``add`` and ``cognify``
-        (same shapes as the individual operations).
+        (same shapes as the individual operations). Accepts the ``cognify``
+        *opts* keys, validated before anything is added.
         """
         ...
 
