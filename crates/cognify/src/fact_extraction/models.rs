@@ -15,12 +15,20 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 /// structured output. The LLM generates JSON conforming to the type's
 /// [`JsonSchema`], which is then deserialized into the concrete type.
 ///
-/// The built-in [`KnowledgeGraph`] model implements this trait with
-/// `is_default_knowledge_graph() == true`, which triggers additional
-/// post-processing (entity/edge expansion, deduplication, graph DB storage).
-/// Custom models return `false`, causing the extracted value to be stored
-/// directly in [`DocumentChunk::contains`] as serialized JSON — mirroring
-/// the Python branching at `extract_graph_from_data.py:99-103`.
+/// This is the structured-output bound of [`FactExtractor::extract`](crate::FactExtractor::extract):
+/// any implementor can be requested from the LLM and deserialized, but the
+/// cognify pipeline itself only ever extracts the built-in [`KnowledgeGraph`]
+/// (and the cascade's intermediate models). Implementing `GraphModel` for a
+/// Rust type does **not** give it a custom graph-model cognify path.
+///
+/// # Custom graph models
+///
+/// The port of Python's custom `graph_model` branch
+/// (`extract_graph_from_data.py`) is driven by a runtime JSON schema, not by
+/// this trait: set [`CognifyConfig::graph_schema`](crate::CognifyConfig::graph_schema)
+/// or call [`extract_dynamic_graphs_from_data`](crate::extract_dynamic_graphs_from_data).
+/// That path walks the extracted instances into graph nodes and edges and
+/// persists and indexes them, as Python does.
 ///
 /// # Required bounds
 /// `Serialize + DeserializeOwned + JsonSchema + Clone + Send + Sync + 'static`
@@ -29,9 +37,10 @@ pub trait GraphModel:
 {
     /// Returns `true` if this is the built-in [`KnowledgeGraph`] model.
     ///
-    /// Custom models should leave the default (`false`), which changes
-    /// the processing flow: extracted data is stored as-is in chunk metadata
-    /// instead of being expanded into graph nodes and edges.
+    /// Informational only: no part of the cognify pipeline reads this flag,
+    /// and returning `false` does not change how an extracted value is
+    /// processed or stored. It is kept so existing implementors keep
+    /// compiling. See the trait docs for the custom graph-model path.
     fn is_default_knowledge_graph() -> bool {
         false
     }
