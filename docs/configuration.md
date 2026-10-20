@@ -1504,9 +1504,16 @@ themselves get the configured backend from
 ### Custom graph schema (per call)
 
 A custom graph model is a per-call option, not a setting: there is no env var
-and no `keys.rs` row. Python exposes it the same way — `graph_model` is an
-argument of `cognify()` (and a field of the HTTP cognify request), never an
-environment variable — and so is `chunk_attachment`.
+for it. Python exposes it the same way — `graph_model` is an argument of
+`cognify()` (and a field of the HTTP cognify request), never an environment
+variable — and so is `chunk_attachment`.
+
+**The `graph_model` setting does not select it.** The key registry does carry a
+`graph_model` row (`Settings::set_graph_model`, `ConfigManager::set("graph_model",
+…)`, `cognee-cli config set graph_model …`, the bindings' config setters), but
+nothing reads it: setting it succeeds and has no effect on cognify. That mirrors
+Python, whose `config.set_graph_model` stores a value `cognify()` does not read.
+Pass the schema per call instead, as below.
 
 | Entry point | Graph schema | Chunk attachment |
 |---|---|---|
