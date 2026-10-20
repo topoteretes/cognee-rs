@@ -308,7 +308,9 @@ def _check_chunk_attachment_model(graph_model: Any, chunk_attachment: Any) -> No
     model (or the default ``KnowledgeGraph``) is rejected natively, because
     ``chunk_attachment`` without a graph schema fails validation.
     """
-    if chunk_attachment is None or not isinstance(graph_model, type):
+    # Upstream rejects an unusable value before it looks at the model, so
+    # leave that error to the native validation.
+    if chunk_attachment not in ("direct", "all") or not isinstance(graph_model, type):
         return
     if _is_default_graph_model(graph_model):
         return

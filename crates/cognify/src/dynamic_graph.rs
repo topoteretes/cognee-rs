@@ -1786,7 +1786,7 @@ fn python_float_repr(number: f64) -> String {
 /// Python `repr(str)`: single quotes unless the text holds a single quote
 /// and no double quote, with backslashes, the quote and control characters
 /// escaped.
-fn python_str_repr(text: &str) -> String {
+pub(crate) fn python_str_repr(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {

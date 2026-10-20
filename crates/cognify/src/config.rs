@@ -97,7 +97,8 @@ impl ChunkAttachment {
             "direct" => Ok(Self::Direct),
             "all" => Ok(Self::All),
             other => Err(ConfigError::InvalidParameter(format!(
-                "Invalid chunk_attachment {other:?}; expected 'direct', 'all', or None."
+                "Invalid chunk_attachment {}; expected 'direct', 'all', or None.",
+                crate::dynamic_graph::python_str_repr(other)
             ))),
         }
     }
@@ -1646,6 +1647,17 @@ mod tests {
                 "{error}"
             );
         }
+        // The value is quoted with Python's `repr`, as `cognify.py`'s `!r`.
+        assert_eq!(
+            ChunkAttachment::parse("everything")
+                .expect_err("must be rejected")
+                .to_string(),
+            ConfigError::InvalidParameter(
+                "Invalid chunk_attachment 'everything'; expected 'direct', 'all', or None."
+                    .to_string()
+            )
+            .to_string()
+        );
         assert_eq!(ChunkAttachment::All.as_str(), "all");
         assert_eq!(ChunkAttachment::Direct.as_str(), "direct");
     }

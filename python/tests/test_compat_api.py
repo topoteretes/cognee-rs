@@ -486,6 +486,9 @@ async def test_compat_chunk_attachment_requires_a_datapoint_class(monkeypatch):
         assert recorder.calls == [], "rejected before reaching the native layer"
 
         monkeypatch.setattr(_compat, "_graph_model_to_schema", lambda model: _GRAPH_SCHEMA)
+        # Upstream reports an unusable value before the model, so the
+        # native invalid-value error is left to come first.
+        await cognee.cognify("ds", graph_model=_FakeModel, chunk_attachment="bogus")
         await cognee.cognify("ds", graph_model=Entity, chunk_attachment="all")
         # Without chunk_attachment any model class is fine, as upstream.
         await cognee.cognify("ds", graph_model=_FakeModel)
@@ -498,6 +501,7 @@ async def test_compat_chunk_attachment_requires_a_datapoint_class(monkeypatch):
     finally:
         _compat.reset_default_handle()
     assert [call[2] for call in recorder.calls] == [
+        {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "bogus"},
         {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
         {"graph_schema": _GRAPH_SCHEMA},
         {"graph_schema": _GRAPH_SCHEMA, "chunk_attachment": "all"},
@@ -521,7 +525,9 @@ async def test_compat_cognify_rejects_graph_model_and_graph_schema_together():
 async def test_compat_cognify_rejects_an_invalid_chunk_attachment(tmp_path):
     """The native layer validates the options instead of dropping them."""
     _patch_default_handle(tmp_path)
-    with pytest.raises(cp.CogneeValidationError, match="chunk_attachment"):
+    with pytest.raises(
+        cp.CogneeValidationError, match="Invalid chunk_attachment 'everything'; expected"
+    ):
         await cognee.cognify("ds", graph_model=_GRAPH_SCHEMA, chunk_attachment="everything")
     with pytest.raises(cp.CogneeValidationError, match="requires graph_schema"):
         await cognee.cognify("ds", chunk_attachment="direct")
