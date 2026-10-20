@@ -1912,7 +1912,11 @@ pub async fn extract_dynamic_graphs_from_data(
                 let chunk_id = chunk.base.id;
                 let data_id = chunk.document_id;
                 async move {
-                    let result = async {
+                    // Spawned like the other extractors: CPU-bound validation
+                    // spreads across the runtime, and a panicking chunk becomes
+                    // that chunk's failure under the policy instead of
+                    // unwinding the whole stage.
+                    let result = tokio::spawn(async move {
                         let messages = vec![
                             Message {
                                 role: MessageRole::System,
@@ -1945,8 +1949,14 @@ pub async fn extract_dynamic_graphs_from_data(
                         schema
                             .materialize(&answer, dataset_id)
                             .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
-                    }
-                    .await;
+                    })
+                    .await
+                    .map_err(|error| {
+                        CognifyError::GraphExtractionError(format!(
+                            "dynamic graph extraction task failed: {error}"
+                        ))
+                    })
+                    .and_then(|result| result);
                     (position, chunk_id, data_id, result)
                 }
             })
