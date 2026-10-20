@@ -177,6 +177,16 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     let tenant_id = super::parse_tenant_id(args.tenant_id.as_deref())?;
     let requested_datasets = args.datasets.clone();
 
+    // Every flag-derived setting, validated before any component is built.
+    let flag_config = super::apply_graph_schema_args(
+        settings
+            .cognify_config()
+            .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
+            .with_max_parallel_extractions(effective_max_parallel)
+            .with_temporal_cognify(args.temporal_cognify),
+        &args.graph_schema,
+    )?;
+
     crate::teardown::run_command(Arc::clone(&cm), async {
         // Resolve datasets first (cheap) — fail early before initializing heavy components
         let database = cm
@@ -222,13 +232,11 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 CliError::Runtime(format!("Ontology initialization failed: {error}"))
             })?;
 
-        let base_config = cm.settings().cognify_config();
-        let mut cognify_config = base_config
-            .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
-            .with_max_parallel_extractions(effective_max_parallel)
-            .with_temporal_cognify(args.temporal_cognify);
+        let mut cognify_config = flag_config;
         if let Some(backend) = graph_backend {
             cognify_config = cognify_config.with_graph_backend(backend);
+            // A configured backend cannot serve `--graph-schema`.
+            super::validate_cognify_config(&cognify_config)?;
         }
         if let Some(transcriber) = cm
             .transcriber()

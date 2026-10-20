@@ -49,6 +49,48 @@ pub fn parse_tenant_id(raw: Option<&str>) -> Result<Option<uuid::Uuid>, CliError
         .map_err(|error| CliError::Validation(format!("Invalid --tenant-id: {error}")))
 }
 
+/// Apply `--graph-schema` / `--chunk-attachment` to `cfg` and validate the
+/// result — the step `cognify` and `add-and-cognify` run before building any
+/// component, so a bad flag fails fast with exit code 2.
+///
+/// The schema file is parsed by [`cognee::cognify::parse_graph_schema`] (`{}`
+/// is the default model) and compiled by `CognifyConfig::validate`, which also
+/// rejects `--chunk-attachment` without `--graph-schema` and either with
+/// `--temporal-cognify`.
+pub(crate) fn apply_graph_schema_args(
+    mut cfg: cognee::cognify::CognifyConfig,
+    args: &crate::cli::GraphSchemaArgs,
+) -> Result<cognee::cognify::CognifyConfig, CliError> {
+    if let Some(path) = &args.graph_schema {
+        let text = std::fs::read_to_string(path).map_err(|error| {
+            CliError::Validation(format!(
+                "Cannot read --graph-schema {}: {error}",
+                path.display()
+            ))
+        })?;
+        cfg.graph_schema = cognee::cognify::parse_graph_schema(&serde_json::Value::String(text))
+            .map_err(|error| {
+                CliError::Validation(format!(
+                    "Invalid --graph-schema {}: {error}",
+                    path.display()
+                ))
+            })?;
+    }
+    if let Some(attachment) = args.chunk_attachment {
+        cfg = cfg.with_chunk_attachment(attachment.into());
+    }
+    validate_cognify_config(&cfg)?;
+    Ok(cfg)
+}
+
+/// `CognifyConfig::validate` as a CLI validation error (exit code 2).
+pub(crate) fn validate_cognify_config(
+    cfg: &cognee::cognify::CognifyConfig,
+) -> Result<(), CliError> {
+    cfg.validate()
+        .map_err(|error| CliError::Validation(format!("Invalid cognify options: {error}")))
+}
+
 /// Build the `DeleteService` shared by every deletion path in the CLI.
 ///
 /// `delete`, `forget` and the `bench` dataset-delete phase must wire the same

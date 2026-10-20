@@ -431,6 +431,9 @@ pub struct CognifyArgs {
     #[arg(long = "temporal-cognify", default_value_t = false)]
     pub temporal_cognify: bool,
 
+    #[command(flatten)]
+    pub graph_schema: GraphSchemaArgs,
+
     /// Tenant to run as; without `--datasets`, cognify runs on the owner's datasets
     /// in this tenant. Datasets are matched by strict tenant equality: a dataset
     /// added with `--tenant-id T` is found only with `--tenant-id T`; without the
@@ -477,6 +480,49 @@ pub struct AddAndCognifyArgs {
     /// only tenant-less datasets are reachable.
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
+
+    #[command(flatten)]
+    pub graph_schema: GraphSchemaArgs,
+}
+
+/// Custom graph model flags shared by `cognify` and `add-and-cognify`.
+///
+/// Python's CLI has neither; they expose the `graph_model` and
+/// `chunk_attachment` arguments of Python's `cognify()`. Both are validated
+/// (the schema compiled) before any component is built, so a bad value fails
+/// with exit code 2 instead of being ignored.
+#[derive(Debug, Default, Args)]
+pub struct GraphSchemaArgs {
+    /// JSON file holding a custom graph model's JSON Schema, extracted instead
+    /// of the default KnowledgeGraph (Python's `graph_model`). `{}` means the
+    /// default model. Not supported with `--temporal-cognify`. See
+    /// docs/guides/custom-graph-schema.md for the schema contract.
+    #[arg(long = "graph-schema", value_name = "FILE")]
+    pub graph_schema: Option<std::path::PathBuf>,
+
+    /// How each chunk links to the custom graph extracted from it: `direct`
+    /// (the root, the default) or `all` (every stored node). Requires
+    /// `--graph-schema`.
+    #[arg(long = "chunk-attachment", value_enum)]
+    pub chunk_attachment: Option<ChunkAttachmentArg>,
+}
+
+/// `--chunk-attachment` values, Python's `chunk_attachment` spellings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ChunkAttachmentArg {
+    #[value(name = "direct")]
+    Direct,
+    #[value(name = "all")]
+    All,
+}
+
+impl From<ChunkAttachmentArg> for cognee::cognify::ChunkAttachment {
+    fn from(value: ChunkAttachmentArg) -> Self {
+        match value {
+            ChunkAttachmentArg::Direct => Self::Direct,
+            ChunkAttachmentArg::All => Self::All,
+        }
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]

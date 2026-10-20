@@ -36,6 +36,16 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
     // dataset in the caller's tenant (`create_dataset.py:16-22@37f788bd2`).
     let tenant_id = super::parse_tenant_id(args.tenant_id.as_deref())?;
 
+    // Every flag-derived setting, validated before anything is added.
+    let flag_config = super::apply_graph_schema_args(
+        settings
+            .cognify_config()
+            .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
+            .with_max_parallel_extractions(effective_max_parallel)
+            .with_summarization(!summarization_model.is_empty()),
+        &args.graph_schema,
+    )?;
+
     match args.chunker {
         ChunkerArg::Text => {}
         ChunkerArg::Langchain | ChunkerArg::Csv => {
@@ -52,6 +62,13 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         let graph_backend = cm.configured_graph_extractor().await.map_err(|error| {
             CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
         })?;
+        let mut cognify_config = flag_config;
+        if let Some(backend) = graph_backend {
+            cognify_config = cognify_config.with_graph_backend(backend);
+            // A configured backend cannot serve `--graph-schema`; fail before
+            // the add.
+            super::validate_cognify_config(&cognify_config)?;
+        }
 
         let database = cm
             .database()
@@ -155,14 +172,6 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
                 CliError::Runtime(format!("Ontology initialization failed: {error}"))
             })?;
 
-        let base_config = cm.settings().cognify_config();
-        let mut cognify_config = base_config
-            .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
-            .with_max_parallel_extractions(effective_max_parallel)
-            .with_summarization(!summarization_model.is_empty());
-        if let Some(backend) = graph_backend {
-            cognify_config = cognify_config.with_graph_backend(backend);
-        }
         if let Some(transcriber) = cm
             .transcriber()
             .await
