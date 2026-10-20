@@ -105,6 +105,9 @@ cognee-embedding  = { path = "../embedding", features = ["onnx"] }
 cognee-graph      = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-vector     = { path = "../vector", features = ["testing"] }
 cognee-database   = { path = "../database", features = ["sqlite"] }
+# `custom_graph_ownership` installs a SQLite trigger to fail the ownership
+# ledger write; `ConnectionTrait::execute_unprepared` is not re-exported.
+sea-orm           = { version = "1.1", default-features = false }
 cognee-search     = { path = "../search" }
 cognee-test-utils = { path = "../test-utils" }
 cognee-config-core = { path = "../config-core" }

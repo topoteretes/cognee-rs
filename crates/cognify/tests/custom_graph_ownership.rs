@@ -31,6 +31,7 @@ use cognee_ontology::NoOpOntologyResolver;
 use cognee_test_utils::{MockLlm, MockVectorDB};
 use cognee_vector::{SearchResult, VectorDB, VectorDBError, VectorDBResult, VectorPoint};
 use rollback_harness::{FAIL_MARKER, Harness, extraction_config};
+use sea_orm::ConnectionTrait;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -412,6 +413,67 @@ async fn a_failed_custom_run_is_swept_clean() {
                 .was_create_collection_called("Company", "name"),
         "the run wrote its EdgeType and Company points before it failed"
     );
+    assert_eq!(CustomArtifacts::of(&harness).await, CustomArtifacts::NONE);
+    assert!(harness.ledger_nodes().await.is_empty());
+    assert!(harness.ledger_edges().await.is_empty());
+}
+
+/// A graph-store failure after the ownership ledger was written — on the node
+/// write, or on the edge write after the custom nodes already landed — is
+/// swept like the vector-stage one: no custom node, point or ledger row
+/// survives the run.
+#[tokio::test]
+async fn a_custom_run_whose_graph_write_fails_is_swept_clean() {
+    for failing_write in ["add_nodes", "add_edges"] {
+        let mut harness = Harness::new().await;
+        let data_id = harness.add_file("Alice works at Acme.").await;
+        match failing_write {
+            "add_nodes" => harness
+                .graph_db
+                .set_add_nodes_error("simulated node outage"),
+            _ => harness
+                .graph_db
+                .set_add_edges_error("simulated edge outage"),
+        }
+
+        let result = harness.run_over(&config(), &[data_id], llm(4)).await;
+
+        let error = format!("{:?}", result.expect_err("the graph failure fails the run"));
+        assert!(error.contains("simulated"), "{failing_write}: {error}");
+        assert_eq!(
+            CustomArtifacts::of(&harness).await,
+            CustomArtifacts::NONE,
+            "{failing_write}"
+        );
+        assert!(harness.ledger_nodes().await.is_empty(), "{failing_write}");
+        assert!(harness.ledger_edges().await.is_empty(), "{failing_write}");
+    }
+}
+
+/// An ownership-ledger write that fails part-way — the custom field edge's
+/// row is refused after the node rows went in — fails the run before any
+/// custom artifact is written, and the sweep removes the rows that did land.
+#[tokio::test]
+async fn a_custom_run_whose_ledger_write_fails_is_swept_clean() {
+    let mut harness = Harness::new().await;
+    let data_id = harness.add_file("Alice works at Acme.").await;
+    harness
+        .db
+        .execute_unprepared(
+            "CREATE TRIGGER refuse_custom_field_edge BEFORE INSERT ON edges \
+             WHEN NEW.relationship_name = 'employees' \
+             BEGIN SELECT RAISE(ABORT, 'simulated ledger outage'); END",
+        )
+        .await
+        .expect("install the failing-ledger trigger");
+
+    let result = harness.run_over(&config(), &[data_id], llm(4)).await;
+
+    let error = format!(
+        "{:?}",
+        result.expect_err("the ledger failure fails the run")
+    );
+    assert!(error.contains("simulated ledger outage"), "{error}");
     assert_eq!(CustomArtifacts::of(&harness).await, CustomArtifacts::NONE);
     assert!(harness.ledger_nodes().await.is_empty());
     assert!(harness.ledger_edges().await.is_empty());
