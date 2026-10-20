@@ -193,35 +193,37 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
 }
 
 /// The `node_set` value a document is tagged from: the `node_set` key of its
-/// `external_metadata` when the key is present (whatever it holds — Python
-/// reads only that key), else, for a row with no metadata or a metadata
-/// object without the key, the `Data.node_set` column.
+/// `external_metadata` when the metadata is a JSON object carrying that key
+/// (whatever it holds — Python reads only that key), else the `Data.node_set`
+/// column.
 ///
 /// The column fallback has no Python counterpart. Before SDK-1129 the Rust
 /// `add` wrote the node set to the column only, so every row ingested with a
 /// node set until then has the column and no metadata key; without the
-/// fallback those rows would stay untagged forever. It is scoped to exactly
-/// that shape. Python-written rows carry the key whenever they have a node
-/// set, and Python's `update_node_set` returns early — untagged — on metadata
-/// that is not a JSON object; a row whose metadata is present but not an
-/// object is therefore left untagged here too, column or not, rather than
-/// tagged from a column Python would never read.
+/// fallback those rows would stay untagged until a re-add. That legacy shape
+/// includes metadata that is not a JSON object at all: the old
+/// `merge_external_metadata` stored a `DataItem`'s metadata text verbatim
+/// (`"crm export"`, `"[1,2]"`, `"null"`) when there was no URL metadata, so
+/// the column is the only place such a row's node set lives. The fallback
+/// therefore applies whenever the metadata carries no `node_set` key —
+/// absent, not JSON, not an object, or an object without the key.
+///
+/// Parity is unaffected: Python always writes `node_set` inside a dict
+/// metadata (`ext_metadata["node_set"] = ...`), so it never produces a row
+/// with a set column and non-object metadata, and a row carrying the key
+/// behaves exactly as in Python — the key wins whenever it is present, even
+/// when it holds `null` or a malformed value.
 fn node_set_value(
     external_metadata: Option<&str>,
     node_set_column: Option<&str>,
 ) -> Option<serde_json::Value> {
-    let from_column = || node_set_column.and_then(|c| serde_json::from_str(c).ok());
-    let Some(metadata) = external_metadata else {
-        return from_column();
-    };
-    match serde_json::from_str::<serde_json::Value>(metadata) {
-        Ok(serde_json::Value::Object(object)) => {
-            object.get("node_set").cloned().or_else(from_column)
-        }
-        // Valid JSON that is not an object, or not JSON at all: Python's
-        // `update_node_set` returns early here.
-        _ => None,
-    }
+    let from_key = external_metadata
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .and_then(|v| match v {
+            serde_json::Value::Object(mut object) => object.remove("node_set"),
+            _ => None,
+        });
+    from_key.or_else(|| node_set_column.and_then(|c| serde_json::from_str(c).ok()))
 }
 
 impl HasDataPoint for Document {
@@ -714,38 +716,36 @@ mod tests {
     }
 
     /// Rows ingested before SDK-1129 carry the node set in the `Data.node_set`
-    /// column only; they are tagged from it when there is no metadata or the
-    /// metadata object has no `node_set` key.
+    /// column only; they are tagged from it whenever the metadata carries no
+    /// `node_set` key — no metadata, an object without the key, or metadata
+    /// that is not a JSON object at all (the pre-SDK-1129
+    /// `merge_external_metadata` stored a `DataItem`'s metadata text
+    /// verbatim, so `"crm export"`, `"[1,2]"` or `"null"` are real legacy
+    /// shapes).
     #[test]
     fn node_set_column_tags_rows_without_the_metadata_key() {
-        for metadata in [None, Some(r#"{"other_key": "value"}"#), Some("{}")] {
+        for metadata in [
+            None,
+            Some(r#"{"other_key": "value"}"#),
+            Some("{}"),
+            Some("crm export"),
+            Some("not json"),
+            Some("[1,2]"),
+            Some("null"),
+            Some(r#""a string""#),
+            Some("42"),
+            Some("true"),
+        ] {
             let data = vec![make_data_with_node_set_column(metadata, r#"["legacy"]"#)];
             let docs = classify_documents(&data);
             assert_eq!(docs.len(), 1);
-            let bts = docs[0].base.belongs_to_set.as_ref().unwrap();
+            let bts =
+                docs[0].base.belongs_to_set.as_ref().unwrap_or_else(|| {
+                    panic!("metadata {metadata:?} must fall back to the column")
+                });
             assert_eq!(bts.len(), 1, "metadata {metadata:?}");
             assert_eq!(bts[0]["name"], "legacy");
             assert_eq!(docs[0].base.source_node_set.as_deref(), Some("legacy"));
-        }
-    }
-
-    /// Metadata that is present but not a JSON object is where Python's
-    /// `update_node_set` returns early (JSONDecodeError, or not a dict), so
-    /// the column fallback does not apply: the document stays untagged.
-    #[test]
-    fn node_set_column_is_ignored_when_metadata_is_not_an_object() {
-        for metadata in ["not json", "[1, 2]", r#""a string""#, "42", "true"] {
-            let data = vec![make_data_with_node_set_column(
-                Some(metadata),
-                r#"["legacy"]"#,
-            )];
-            let docs = classify_documents(&data);
-            assert_eq!(docs.len(), 1);
-            assert!(
-                docs[0].base.belongs_to_set.is_none(),
-                "metadata {metadata:?} must not fall back to the column"
-            );
-            assert!(docs[0].base.source_node_set.is_none());
         }
     }
 
