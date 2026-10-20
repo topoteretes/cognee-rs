@@ -60,7 +60,7 @@ impl IngestDb for DefaultsOnly<'_> {
         data_id: Uuid,
         node_set: Option<&str>,
         external_metadata: Option<&str>,
-    ) -> Result<(), DatabaseError> {
+    ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
         IngestDb::update_data_node_set(self.0, data_id, node_set, external_metadata).await
     }
     async fn attach_data_to_dataset(

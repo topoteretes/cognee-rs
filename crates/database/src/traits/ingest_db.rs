@@ -70,12 +70,16 @@ pub trait IngestDb: Send + Sync {
     /// `pipeline_status` a concurrent cognify or search wrote in between.
     /// Implementations must not touch other columns. A missing row is
     /// [`DatabaseError::NotFound`].
+    ///
+    /// Returns the `updated_at` value written, exactly as a later read would
+    /// return it, so the caller can patch the row it already holds instead of
+    /// reading it back.
     async fn update_data_node_set(
         &self,
         data_id: Uuid,
         node_set: Option<&str>,
         external_metadata: Option<&str>,
-    ) -> Result<(), DatabaseError>;
+    ) -> Result<DateTime<Utc>, DatabaseError>;
 
     async fn attach_data_to_dataset(
         &self,
@@ -143,7 +147,7 @@ impl IngestDb for DatabaseConnection {
         data_id: Uuid,
         node_set: Option<&str>,
         external_metadata: Option<&str>,
-    ) -> Result<(), DatabaseError> {
+    ) -> Result<DateTime<Utc>, DatabaseError> {
         data::update_data_node_set(self, data_id, node_set, external_metadata).await
     }
 

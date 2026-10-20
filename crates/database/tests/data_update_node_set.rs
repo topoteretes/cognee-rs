@@ -55,7 +55,7 @@ async fn update_data_node_set_touches_only_its_columns() {
         .await
         .unwrap();
 
-    update_data_node_set(
+    let written = update_data_node_set(
         &db,
         id,
         Some(r#"["alpha"]"#),
@@ -70,7 +70,12 @@ async fn update_data_node_set_touches_only_its_columns() {
         row.external_metadata.as_deref(),
         Some(r#"{"source":"crm","node_set":["alpha"]}"#)
     );
-    assert!(row.updated_at.is_some(), "updated_at is stamped");
+    assert_eq!(
+        row.updated_at,
+        Some(written),
+        "updated_at is stamped with exactly the value the call returned, so a \
+         caller can patch its snapshot instead of reading the row back"
+    );
     assert_eq!(row.token_count, 42, "token_count survives the refresh");
     assert_eq!(row.last_accessed, Some(accessed), "last_accessed survives");
     let status: serde_json::Value =

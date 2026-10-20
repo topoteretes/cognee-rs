@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
@@ -96,6 +96,15 @@ pub async fn update_data(db: &DatabaseConnection, d: Data) -> Result<Data, Datab
 /// `token_count`, `last_accessed` or `pipeline_status` written by a concurrent
 /// cognify or search between the pipeline's read and this write survives.
 ///
+/// Returns the `updated_at` it wrote, so a caller holding the row it read
+/// before can patch that snapshot instead of reading the row back: the
+/// timestamp is truncated to microseconds, the finest precision every
+/// supported store keeps, so the returned value equals what a later read
+/// returns. (`UPDATE ... RETURNING` would serve the same purpose, but sea-orm
+/// only issues it on SQLite behind its `sqlite-use-returning-for-3_35`
+/// feature — which would switch every SQLite insert to RETURNING too — and
+/// panics with `unimplemented!` without it.)
+///
 /// Returns [`DatabaseError::NotFound`] when no row has `data_id`, like
 /// [`update_data_token_count`].
 #[instrument(
@@ -110,8 +119,9 @@ pub async fn update_data_node_set(
     data_id: Uuid,
     node_set: Option<&str>,
     external_metadata: Option<&str>,
-) -> Result<(), DatabaseError> {
+) -> Result<DateTime<Utc>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let updated_at = Utc::now().trunc_subsecs(6);
     let result = data::Entity::update_many()
         .col_expr(
             data::Column::NodeSet,
@@ -121,7 +131,7 @@ pub async fn update_data_node_set(
             data::Column::ExternalMetadata,
             Expr::value(external_metadata.map(str::to_owned)),
         )
-        .col_expr(data::Column::UpdatedAt, Expr::value(Some(Utc::now())))
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)))
         .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
         .exec(db)
         .await
@@ -130,7 +140,7 @@ pub async fn update_data_node_set(
     if result.rows_affected == 0 {
         return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
     }
-    Ok(())
+    Ok(updated_at)
 }
 
 #[instrument(

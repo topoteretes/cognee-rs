@@ -551,6 +551,28 @@ pub async fn persist_data_with_acl_and_locks(
 
     let data_id = processed.data_id;
 
+    // Serialize the read-modify-write of this data row against every other
+    // `persist_data*` call for the same `data_id` in this process. The re-add
+    // refresh below derives the `external_metadata` it writes from the row it
+    // read here; without the lock two concurrent re-adds of the same content
+    // with different node sets could interleave read-read-write-write, so the
+    // later write would merge into a stale snapshot — dropping whatever the
+    // other wrote to the metadata — and the two calls would each return a row
+    // the store no longer holds. Under the lock every refresh reads the row
+    // the previous one wrote, and the `node_set` column and the metadata key
+    // it writes are always derived from that one read.
+    //
+    // In-process only, like `DatasetLocks` (and keyed the same way): two
+    // processes re-adding the same content to a shared database can still
+    // race, and the last writer wins on `external_metadata` — a whole-value
+    // write, so the column and the key still agree with each other, but a
+    // metadata change the other process made between this read and this write
+    // is lost. Closing that needs a row lock (`SELECT ... FOR UPDATE`) or a
+    // compare-and-swap on `updated_at`, which neither SQLite nor the
+    // `IngestDb` trait offers today; it is not worth a cross-process lock for
+    // a refresh whose inputs are the caller's own re-add.
+    let _data_guard = data_id_locks().lock(data_id).await;
+
     if let Some(mut existing_data) = database.get_data(data_id).await? {
         database.attach_data_to_dataset(dataset.id, data_id).await?;
         // Python's `ingest_data` update branch rewrites the existing row's
@@ -581,9 +603,10 @@ pub async fn persist_data_with_acl_and_locks(
         // produced that the new one does not reproduce (entities, edges,
         // summaries) would stay in the graph and vector stores. In both SDKs
         // `update()` is the way to re-tag cognified content: it removes the
-        // item's memory before re-adding and re-cognifying it (Python resets
-        // the marker on the pinned row; Rust deletes the old item and adds
-        // the new content afresh).
+        // item's memory and re-cognifies it (Python resets the marker on the
+        // pinned row; Rust adds the replacement first, then deletes the old
+        // item — or, when the replacement is this same content-addressed row,
+        // drops only its memory and completion marker).
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
                 existing_data.external_metadata.as_deref(),
@@ -597,7 +620,10 @@ pub async fn persist_data_with_acl_and_locks(
                 existing_data.external_metadata.as_deref(),
                 external_metadata.as_deref(),
             ) {
-                database
+                // A row deleted since the read above fails the write with
+                // `DatabaseError::NotFound`, which propagates: the call does
+                // not report a row that no longer exists.
+                let updated_at = database
                     .update_data_node_set(
                         data_id,
                         node_set_column.as_deref(),
@@ -605,17 +631,12 @@ pub async fn persist_data_with_acl_and_locks(
                     )
                     .await?;
                 info!(data_id = %data_id, "node_set refreshed on re-add");
-                // The row as stored now, including the `updated_at` stamp and
-                // whatever another writer put on the other columns meanwhile.
-                // A row deleted in that window is reported from the snapshot.
-                existing_data = match database.get_data(data_id).await? {
-                    Some(fresh) => fresh,
-                    None => {
-                        existing_data.node_set = node_set_column;
-                        existing_data.external_metadata = external_metadata;
-                        existing_data
-                    }
-                };
+                // Patch the snapshot with exactly what was written rather than
+                // reading the row back: the three columns are the only ones the
+                // refresh touches, and `updated_at` is the value stored.
+                existing_data.node_set = node_set_column;
+                existing_data.external_metadata = external_metadata;
+                existing_data.updated_at = Some(updated_at);
             }
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
@@ -673,6 +694,20 @@ pub async fn persist_data_with_acl_and_locks(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// The process-wide per-`data_id` locks [`persist_data_with_acl_and_locks`]
+/// holds across its read-modify-write of one data row.
+///
+/// Process-wide rather than an `AddPipeline` option: the race it closes —
+/// two concurrent re-adds of the same content — needs no server to happen
+/// (any embedder can run two `add`s at once), and every `persist_data*` entry
+/// point must take the same lock for it to mean anything. Contention is only
+/// ever between calls for the same `data_id`. A registry of its own, separate
+/// from any [`DatasetLocks`] a caller wires for datasets.
+fn data_id_locks() -> &'static DatasetLocks {
+    static LOCKS: std::sync::LazyLock<DatasetLocks> = std::sync::LazyLock::new(DatasetLocks::new);
+    &LOCKS
+}
 
 /// Resolve the MIME type for a file extension.
 ///
@@ -3403,6 +3438,24 @@ mod tests {
     struct WritesBetweenReadAndRefresh {
         inner: Arc<cognee_database::DatabaseConnection>,
         dataset_id: Uuid,
+        hook: AfterRead,
+    }
+
+    /// What [`WritesBetweenReadAndRefresh`] does between the pipeline's read
+    /// of the row and its refresh.
+    enum AfterRead {
+        /// Write `token_count` and the cognify completion marker.
+        WriteOtherColumns,
+        /// Delete the row once it has been attached (the dataset link goes
+        /// with it, `ON DELETE CASCADE`).
+        DeleteRow,
+        /// Track how many calls are between their read and their refresh at
+        /// once, yielding after the read so an unserialized second call would
+        /// get its own read in first.
+        CountOverlap {
+            in_flight: Arc<std::sync::atomic::AtomicUsize>,
+            max_in_flight: Arc<std::sync::atomic::AtomicUsize>,
+        },
     }
 
     #[async_trait::async_trait]
@@ -3426,11 +3479,29 @@ mod tests {
             IngestDb::list_datasets_by_owner(&*self.inner, owner_id).await
         }
         async fn get_data(&self, id: Uuid) -> Result<Option<Data>, cognee_database::DatabaseError> {
+            use std::sync::atomic::Ordering;
             let snapshot = IngestDb::get_data(&*self.inner, id).await?;
             if snapshot.is_some() {
-                ops::data::update_data_token_count(&self.inner, id, 42).await?;
-                ops::data::mark_cognify_pipeline_status_complete(&self.inner, id, self.dataset_id)
-                    .await?;
+                match &self.hook {
+                    AfterRead::WriteOtherColumns => {
+                        ops::data::update_data_token_count(&self.inner, id, 42).await?;
+                        ops::data::mark_cognify_pipeline_status_complete(
+                            &self.inner,
+                            id,
+                            self.dataset_id,
+                        )
+                        .await?;
+                    }
+                    AfterRead::DeleteRow => {}
+                    AfterRead::CountOverlap {
+                        in_flight,
+                        max_in_flight,
+                    } => {
+                        let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_in_flight.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                }
             }
             Ok(snapshot)
         }
@@ -3442,15 +3513,25 @@ mod tests {
             data_id: Uuid,
             node_set: Option<&str>,
             external_metadata: Option<&str>,
-        ) -> Result<(), cognee_database::DatabaseError> {
-            IngestDb::update_data_node_set(&*self.inner, data_id, node_set, external_metadata).await
+        ) -> Result<chrono::DateTime<chrono::Utc>, cognee_database::DatabaseError> {
+            let written =
+                IngestDb::update_data_node_set(&*self.inner, data_id, node_set, external_metadata)
+                    .await;
+            if let AfterRead::CountOverlap { in_flight, .. } = &self.hook {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            written
         }
         async fn attach_data_to_dataset(
             &self,
             dataset_id: Uuid,
             data_id: Uuid,
         ) -> Result<(), cognee_database::DatabaseError> {
-            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await
+            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await?;
+            if matches!(self.hook, AfterRead::DeleteRow) {
+                ops::data::delete_data(&self.inner, data_id).await?;
+            }
+            Ok(())
         }
         async fn update_last_accessed(
             &self,
@@ -3498,6 +3579,7 @@ mod tests {
         let racing = WritesBetweenReadAndRefresh {
             inner: db.clone(),
             dataset_id,
+            hook: AfterRead::WriteOtherColumns,
         };
         processed.node_set = Some(vec!["alpha".into()]);
         let refreshed = persist_data(&processed, &racing, "raced_ds", owner_id, None)
@@ -3527,8 +3609,122 @@ mod tests {
              deliberately not cleared by a node-set change (Python parity; `update()` \
              is the re-tag path)"
         );
-        // The returned row is the stored one, not the stale snapshot.
-        assert_eq!(refreshed.token_count, 42);
+        // The returned row is the read snapshot patched with exactly what the
+        // refresh wrote — no read-back. The refreshed columns and the
+        // `updated_at` stamp equal the stored ones; columns other writers own
+        // are as of the read (the row is not re-selected after every refresh).
+        assert_eq!(refreshed.node_set, stored.node_set);
+        assert_eq!(refreshed.external_metadata, stored.external_metadata);
         assert!(refreshed.updated_at.is_some());
+        assert_eq!(refreshed.updated_at, stored.updated_at);
+        assert_eq!(refreshed.token_count, -1, "as of the read");
+    }
+
+    /// Review finding (#306): a row deleted between the pipeline's read and
+    /// its refresh used to be reported from the stale snapshot as a success.
+    /// The refresh's `NotFound` now propagates instead.
+    #[tokio::test]
+    async fn re_add_refresh_of_a_row_deleted_after_the_read_is_an_error() {
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut processed = process_input(
+            &DataInput::Text("Vanishing row".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        persist_data(&processed, &*db, "vanish_ds", owner_id, None)
+            .await
+            .unwrap();
+
+        let racing = WritesBetweenReadAndRefresh {
+            inner: db.clone(),
+            dataset_id: generate_dataset_id("vanish_ds", owner_id, None),
+            hook: AfterRead::DeleteRow,
+        };
+        processed.node_set = Some(vec!["alpha".into()]);
+        let err = persist_data(&processed, &racing, "vanish_ds", owner_id, None)
+            .await
+            .expect_err("a vanished row is not reported as refreshed");
+        assert!(err.to_string().contains("not found"), "got {err}");
+        assert!(
+            cognee_database::IngestDb::get_data(&*db, processed.data_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Review finding (#306): two concurrent re-adds of the same content used
+    /// to interleave read-read-write-write, each merging its node set into the
+    /// same stale metadata. The read-modify-write is now serialized per
+    /// `data_id`, so no two calls are ever between their read and their write
+    /// at once, and the stored row is the last writer's — column and metadata
+    /// key agreeing.
+    #[tokio::test]
+    async fn concurrent_re_adds_of_one_row_are_serialized() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let processed = process_input(
+            &DataInput::Text("Contended row".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        persist_data(&processed, &*db, "contended_ds", owner_id, None)
+            .await
+            .unwrap();
+
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let racing = WritesBetweenReadAndRefresh {
+            inner: db.clone(),
+            dataset_id: generate_dataset_id("contended_ds", owner_id, None),
+            hook: AfterRead::CountOverlap {
+                in_flight: Arc::clone(&in_flight),
+                max_in_flight: Arc::clone(&max_in_flight),
+            },
+        };
+        let mut with_a = processed.clone();
+        with_a.node_set = Some(vec!["a".into()]);
+        let mut with_b = processed.clone();
+        with_b.node_set = Some(vec!["b".into()]);
+
+        let (a, b) = tokio::join!(
+            persist_data(&with_a, &racing, "contended_ds", owner_id, None),
+            persist_data(&with_b, &racing, "contended_ds", owner_id, None),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            1,
+            "the two re-adds' read-modify-writes must not overlap"
+        );
+        assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+
+        // The later writer's row is the stored one, column and key agreeing.
+        let stored = cognee_database::IngestDb::get_data(&*db, processed.data_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let last = if a.updated_at >= b.updated_at { &a } else { &b };
+        assert_eq!(stored.node_set, last.node_set);
+        assert_eq!(stored.external_metadata, last.external_metadata);
+        let column: serde_json::Value =
+            serde_json::from_str(stored.node_set.as_deref().unwrap()).unwrap();
+        assert_eq!(metadata_json(&stored)["node_set"], column);
     }
 }
