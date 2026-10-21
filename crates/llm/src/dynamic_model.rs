@@ -10,8 +10,8 @@
 //! (`cognee/shared/graph_model_utils.py`), which turns a Pydantic JSON schema
 //! into a `DataPoint` model, lives in `cognee-cognify`:
 //! `cognee_cognify::DynamicGraphSchema::compile`, the compiler behind
-//! `CognifyConfig::graph_schema`. This crate cannot depend on it, which is why
-//! the deprecated [`graph_schema_to_graph_model`] below is not that port.
+//! `CognifyConfig::graph_schema`. This crate cannot depend on it, so this
+//! module holds only the carrier type.
 //!
 //! # Usage
 //!
@@ -43,7 +43,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
 
 use crate::schema::generate_json_schema;
 
@@ -215,74 +214,6 @@ impl DynamicGraphModel {
             ))
         }
     }
-}
-
-// ─── graph_schema_to_graph_model (deprecated) ─────────────────────────────────
-
-/// Errors emitted by the deprecated [`graph_schema_to_graph_model`].
-#[deprecated(note = "only returned by the deprecated graph_schema_to_graph_model; \
-            cognee_cognify::DynamicGraphSchema::compile reports DynamicGraphError")]
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum GraphModelError {
-    #[error("graph schema must be a JSON object, got {0}")]
-    NotAnObject(&'static str),
-
-    #[error("graph schema is missing required key `{0}`")]
-    MissingKey(&'static str),
-
-    #[error("graph schema field `{0}` must be a list, got {1}")]
-    NotAList(&'static str, &'static str),
-}
-
-/// Check that a JSON value is an object carrying `entity_types` and
-/// `relationship_types` arrays.
-///
-/// **Not a port of Python's `graph_schema_to_graph_model`**, despite the
-/// name. Python compiles a Pydantic JSON schema (`title`, `properties`,
-/// `$defs`) into a `DataPoint` model class and raises when it cannot; this
-/// function never looks at those keys, so it rejects every schema Python
-/// accepts — including the one Python's `/infer-schema` prompt asks the LLM
-/// for — and accepts a bare `{"entity_types": [], "relationship_types": []}`
-/// that Python rejects. To validate a graph schema as Python does, compile it
-/// with `cognee_cognify::DynamicGraphSchema::compile`.
-///
-/// The rules are:
-/// - Top-level value must be a JSON object.
-/// - The object must carry an `entity_types` array.
-/// - The object must carry a `relationship_types` array.
-#[deprecated(
-    note = "checks an entity_types/relationship_types shape Python's graph schemas \
-            never have; compile the schema with cognee_cognify::DynamicGraphSchema::compile \
-            to validate it as Python's graph_schema_to_graph_model does"
-)]
-#[allow(deprecated, reason = "returns the deprecated GraphModelError")]
-pub fn graph_schema_to_graph_model(value: &Value) -> Result<(), GraphModelError> {
-    let obj = match value {
-        Value::Object(map) => map,
-        _ => return Err(GraphModelError::NotAnObject(value_type_name(value))),
-    };
-
-    let entity_types = obj
-        .get("entity_types")
-        .ok_or(GraphModelError::MissingKey("entity_types"))?;
-    if !entity_types.is_array() {
-        return Err(GraphModelError::NotAList(
-            "entity_types",
-            value_type_name(entity_types),
-        ));
-    }
-
-    let relationship_types = obj
-        .get("relationship_types")
-        .ok_or(GraphModelError::MissingKey("relationship_types"))?;
-    if !relationship_types.is_array() {
-        return Err(GraphModelError::NotAList(
-            "relationship_types",
-            value_type_name(relationship_types),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Return a human-readable name for a JSON value type.
@@ -523,66 +454,6 @@ mod tests {
 
         assert_eq!(model.description.as_deref(), Some("A test model"));
         assert_eq!(model.source.as_deref(), Some("python-sdk"));
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the deprecated helper until it is removed"
-    )]
-    fn test_graph_schema_to_graph_model_accepts_canonical_shape() {
-        let value = serde_json::json!({
-            "entity_types": [{"name": "Person"}],
-            "relationship_types": [{"name": "WORKS_AT"}],
-        });
-        assert!(graph_schema_to_graph_model(&value).is_ok());
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the deprecated helper until it is removed"
-    )]
-    fn test_graph_schema_to_graph_model_rejects_non_object() {
-        let value = serde_json::json!([]);
-        let err = graph_schema_to_graph_model(&value).unwrap_err();
-        assert!(matches!(err, GraphModelError::NotAnObject(_)));
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the deprecated helper until it is removed"
-    )]
-    fn test_graph_schema_to_graph_model_missing_entity_types() {
-        let value = serde_json::json!({"relationship_types": []});
-        let err = graph_schema_to_graph_model(&value).unwrap_err();
-        assert_eq!(err, GraphModelError::MissingKey("entity_types"));
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the deprecated helper until it is removed"
-    )]
-    fn test_graph_schema_to_graph_model_missing_relationship_types() {
-        let value = serde_json::json!({"entity_types": []});
-        let err = graph_schema_to_graph_model(&value).unwrap_err();
-        assert_eq!(err, GraphModelError::MissingKey("relationship_types"));
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the deprecated helper until it is removed"
-    )]
-    fn test_graph_schema_to_graph_model_entity_types_must_be_array() {
-        let value = serde_json::json!({
-            "entity_types": "wrong",
-            "relationship_types": [],
-        });
-        let err = graph_schema_to_graph_model(&value).unwrap_err();
-        assert!(matches!(err, GraphModelError::NotAList("entity_types", _)));
     }
 
     #[test]

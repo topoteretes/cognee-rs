@@ -848,7 +848,7 @@ fn non_null_variants(variants: &[Value]) -> Vec<&Value> {
 }
 
 /// Whether `title` survives Python's schema-to-model step unchanged, so
-/// `graph_schema_to_graph_model`'s `namespace[schema["title"]]` finds the
+/// Python's `graph_schema_to_graph_model()` lookup `namespace[schema["title"]]` finds the
 /// generated class. datamodel-code-generator capitalizes the first letter,
 /// drops `_`, `-` and spaces (`person_model` becomes `PersonModel`), prefixes
 /// a leading digit or numeric character (`Ⅷ` becomes `FieldⅧ`), strips
