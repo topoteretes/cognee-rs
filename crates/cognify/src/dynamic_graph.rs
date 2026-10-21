@@ -1021,6 +1021,7 @@ impl<'a> Materializer<'a> {
                 model: model_name.to_string(),
             })?;
         let mut properties = Map::new();
+        let mut scalar_python_values: HashMap<&str, PyValue> = HashMap::new();
         let mut relationship_values = Vec::new();
 
         // Pydantic does not validate a default: the instance holds the raw
@@ -1050,14 +1051,24 @@ impl<'a> Materializer<'a> {
                 DynamicFieldKind::Scalar => {
                     let definitions = &self.schema.scalar_definitions;
                     // Store what Pydantic hands to storage: the validated,
-                    // coerced value rather than the answer's raw JSON.
-                    let coerced = coerce_scalar_value(value, &field.schema, definitions, 0)
-                        .map_err(|reason| DynamicGraphError::InvalidScalarValue {
+                    // coerced value rather than the answer's raw JSON, and
+                    // keep the Python object it became for the identity.
+                    let coerced = coerce_scalar_value(
+                        value,
+                        &field.schema,
+                        definitions,
+                        Some(&python_class_name(&field.name)),
+                        0,
+                    )
+                    .map_err(|reason| {
+                        DynamicGraphError::InvalidScalarValue {
                             model: model_name.to_string(),
                             field: field.name.clone(),
                             reason,
-                        })?;
-                    properties.insert(field.name.clone(), coerced);
+                        }
+                    })?;
+                    properties.insert(field.name.clone(), coerced.stored);
+                    scalar_python_values.insert(field.name.as_str(), coerced.python);
                 }
                 DynamicFieldKind::Relationship { targets, many } => {
                     relationship_values.push((field.name.clone(), targets, *many, value));
@@ -1070,15 +1081,9 @@ impl<'a> Materializer<'a> {
             .iter()
             .filter_map(|field| {
                 let value = properties.get(&field.name)?;
-                let python = if defaulted.contains(field.name.as_str()) {
-                    plain_python_value(value)
-                } else {
-                    python_value(
-                        value,
-                        &field.schema,
-                        &self.schema.scalar_definitions,
-                        Some(&python_class_name(&field.name)),
-                    )
+                let python = match scalar_python_values.remove(field.name.as_str()) {
+                    Some(python) if !defaulted.contains(field.name.as_str()) => python,
+                    _ => plain_python_value(value),
                 };
                 Some((field.name.as_str(), python))
             })
@@ -1381,112 +1386,6 @@ impl PyValue {
     }
 }
 
-/// The Python value Pydantic builds from `value` for a field declared by
-/// `schema`, as datamodel-code-generator types it: `number` is a `float`,
-/// `integer` an `int`, a `date-time` string an aware `datetime`, an enum a
-/// generated `Enum` member (`enum_class` names an inline enum's class), and a
-/// scalar `$defs` entry a `RootModel`. Assumes `value` already validated.
-fn python_value(
-    value: &Value,
-    schema: &Value,
-    definitions: &HashMap<String, Value>,
-    enum_class: Option<&str>,
-) -> PyValue {
-    if value.is_null() {
-        return PyValue::None;
-    }
-    if let Some(name) = schema
-        .get("$ref")
-        .and_then(Value::as_str)
-        .and_then(|reference| reference.strip_prefix("#/$defs/"))
-        && let Some(definition) = definitions.get(name)
-    {
-        let class = python_class_name(name);
-        if definition.get("enum").is_some() {
-            return python_value(value, definition, definitions, Some(&class));
-        }
-        return PyValue::Root {
-            root: Box::new(python_value(value, definition, definitions, None)),
-            class,
-        };
-    }
-    if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        // Pydantic's smart-mode union keeps an exact type match over a
-        // coercing one: `3` stays an `int` in `float | int` but becomes `3.0`
-        // in `str | float`.
-        let valid =
-            |variant: &&Value| validate_scalar_value(value, variant, definitions, 0).is_ok();
-        let chosen = variants
-            .iter()
-            .filter(valid)
-            .find(|variant| exact_type_match(value, variant))
-            .or_else(|| variants.iter().find(valid));
-        return match chosen {
-            Some(variant) => python_value(value, variant, definitions, enum_class),
-            None => plain_python_value(value),
-        };
-    }
-    let kind = schema.get("type").and_then(Value::as_str);
-    if let (Some(choices), Some(class)) = (schema.get("enum").and_then(Value::as_array), enum_class)
-        && let Some(position) = choices.iter().position(|choice| json_equal(choice, value))
-        && let Some(member) = python_enum_member_names(choices, kind)
-            .into_iter()
-            .nth(position)
-            .flatten()
-    {
-        let choice = &choices[position];
-        return PyValue::Enum {
-            class: class.to_string(),
-            member,
-            value: Box::new(python_value(choice, &Value::Null, definitions, None)),
-            int_enum: kind == Some("integer"),
-        };
-    }
-    match (kind, value) {
-        (Some("number"), Value::Number(number)) => number
-            .as_f64()
-            .map_or_else(|| plain_python_value(value), PyValue::Float),
-        (Some("integer"), Value::Number(number)) => match number.as_f64() {
-            Some(float) if number.as_i64().is_none() && number.as_u64().is_none() => {
-                PyValue::Int(format!("{float:.0}"))
-            }
-            _ => PyValue::Int(number.to_string()),
-        },
-        (Some("string"), Value::String(text)) => schema
-            .get("format")
-            .and_then(Value::as_str)
-            .and_then(|format| formatted_py_value(format, text))
-            .unwrap_or_else(|| PyValue::Str(text.clone())),
-        (_, Value::Array(items)) => {
-            let item_schema = schema.get("items").unwrap_or(&Value::Null);
-            PyValue::List(
-                items
-                    .iter()
-                    .map(|item| python_value(item, item_schema, definitions, None))
-                    .collect(),
-            )
-        }
-        (_, Value::Object(entries)) => {
-            let properties = schema.get("properties");
-            PyValue::Dict(
-                entries
-                    .iter()
-                    .map(|(key, item)| {
-                        let item_schema = properties
-                            .and_then(|properties| properties.get(key))
-                            .unwrap_or(&Value::Null);
-                        (
-                            key.clone(),
-                            python_value(item, item_schema, definitions, None),
-                        )
-                    })
-                    .collect(),
-            )
-        }
-        _ => plain_python_value(value),
-    }
-}
-
 /// The Python value `json.loads` gives for an untyped JSON value.
 fn plain_python_value(value: &Value) -> PyValue {
     match value {
@@ -1504,19 +1403,6 @@ fn plain_python_value(value: &Value) -> PyValue {
                 .map(|(key, value)| (key.clone(), plain_python_value(value)))
                 .collect(),
         ),
-    }
-}
-
-/// Whether a union variant takes `value` without coercion.
-fn exact_type_match(value: &Value, variant: &Value) -> bool {
-    match variant.get("type").and_then(Value::as_str) {
-        Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
-        Some("number") => value.is_f64(),
-        Some("string") => value.is_string(),
-        Some("boolean") => value.is_boolean(),
-        Some("array") => value.is_array(),
-        Some("object") => value.is_object(),
-        _ => false,
     }
 }
 
@@ -1933,7 +1819,7 @@ fn timestamp_floor(float: f64) -> Option<i64> {
 /// seconds are judged on their own.
 fn naive_from_json_timestamp(number: &serde_json::Number) -> Option<chrono::NaiveDateTime> {
     if let Some(ts) = number.as_i64() {
-        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.abs() as f64), 0);
+        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.unsigned_abs() as f64), 0);
     }
     if number.is_u64() {
         // Beyond `i64`: every year it names is out of range.
@@ -1948,7 +1834,7 @@ fn naive_from_json_timestamp(number: &serde_json::Number) -> Option<chrono::Naiv
     };
     naive_from_timestamp(
         ts,
-        is_millisecond_timestamp(ts.abs() as f64),
+        is_millisecond_timestamp(ts.unsigned_abs() as f64),
         (float.fract().abs() * scale).round() as i64,
     )
 }
@@ -1958,10 +1844,9 @@ fn naive_from_json_timestamp(number: &serde_json::Number) -> Option<chrono::Naiv
 /// `1.7e9`, but `1e9` is not a timestamp). A text fraction runs the right
 /// way, unlike a JSON float, and the watershed is judged on the whole value.
 fn naive_from_timestamp_text(text: &str) -> Option<chrono::NaiveDateTime> {
-    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
-    if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+    if is_integer_timestamp_text(text) {
         let ts = text.parse::<i64>().ok()?;
-        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.abs() as f64), 0);
+        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.unsigned_abs() as f64), 0);
     }
     if text.contains('.') {
         let float: f64 = text.parse().ok()?;
@@ -1971,6 +1856,12 @@ fn naive_from_timestamp_text(text: &str) -> Option<chrono::NaiveDateTime> {
         return naive_from_timestamp(ts, millis, ((float - float.floor()) * scale).round() as i64);
     }
     None
+}
+
+/// Whether `text` is `[+-]digits`, an integer Unix timestamp.
+fn is_integer_timestamp_text(text: &str) -> bool {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// An aware datetime from ISO text, Unix-timestamp text or a number, as
@@ -1993,22 +1884,28 @@ fn parse_aware_datetime_lax(value: &Value) -> Option<chrono::DateTime<chrono::Fi
 }
 
 /// A `date` from `YYYY-MM-DD`, from a datetime text or timestamp that falls
-/// exactly on midnight (any offset is ignored), or from a timestamp number.
-fn parse_date_lax(value: &Value) -> Option<chrono::NaiveDate> {
-    let naive = match value {
+/// exactly on midnight (any offset is ignored), or from a timestamp number,
+/// with how exactly it matched. speedate's own date parser reads a date and
+/// integer timestamp text (strict); pydantic-core's fallback through a
+/// datetime, and any JSON number, is lax.
+fn parse_date_lax(value: &Value) -> Option<(chrono::NaiveDate, Exactness)> {
+    let (naive, exactness) = match value {
         Value::String(text) => {
             if let Some(date) = parse_date_text(text) {
-                return Some(date);
+                return Some((date, Exactness::Strict));
             }
             match parse_iso_datetime(text) {
-                Some((naive, _)) => naive,
-                None => naive_from_timestamp_text(text)?,
+                Some((naive, _)) => (naive, Exactness::Lax),
+                None if is_integer_timestamp_text(text) => {
+                    (naive_from_timestamp_text(text)?, Exactness::Strict)
+                }
+                None => (naive_from_timestamp_text(text)?, Exactness::Lax),
             }
         }
-        Value::Number(number) => naive_from_json_timestamp(number)?,
+        Value::Number(number) => (naive_from_json_timestamp(number)?, Exactness::Lax),
         _ => return None,
     };
-    (naive.time() == chrono::NaiveTime::MIN).then(|| naive.date())
+    (naive.time() == chrono::NaiveTime::MIN).then(|| (naive.date(), exactness))
 }
 
 /// A `time` from `HH:MM[:SS[.f]]` with an optional offset, or from a number
@@ -2110,83 +2007,90 @@ fn python_tzinfo_repr(offset: Option<i32>) -> String {
     offset.map_or_else(String::new, |offset| format!(", tzinfo=TzInfo({offset})"))
 }
 
-/// The Python value Pydantic builds for a string of `format` that the
-/// validator turned into a `datetime`, `date`, `time` or `UUID`. `text` is
-/// the canonical form [`coerce_formatted`] stores.
-fn formatted_py_value(format: &str, text: &str) -> Option<PyValue> {
+/// Coerce a value for a `string` field of `format` as Pydantic does: the
+/// form Python's storage encoder writes (`isoformat()` for a datetime, date
+/// or time, the hyphenated text of a UUID), the `datetime`, `date`, `time` or
+/// `UUID` Python holds, and how exactly the input matched. `None` when the
+/// field has no such format.
+fn coerce_formatted(format: &str, value: &Value) -> Option<Result<Coerced, String>> {
     use chrono::Datelike;
 
-    match format {
-        "date-time" => {
-            let (naive, offset) = parse_iso_datetime(text)?;
-            let aware = parse_aware_datetime(text)?;
-            Some(PyValue::Opaque {
-                text: python_datetime_str(&aware),
-                repr: format!(
-                    "datetime.datetime({}, {}, {}, {}{})",
-                    naive.year(),
-                    naive.month(),
-                    naive.day(),
-                    python_clock_repr(naive.time()),
-                    python_tzinfo_repr(offset)
-                ),
-            })
-        }
-        "date" => {
-            let date = parse_date_text(text)?;
-            Some(PyValue::Opaque {
-                text: date.format("%Y-%m-%d").to_string(),
-                repr: format!(
-                    "datetime.date({}, {}, {})",
-                    date.year(),
-                    date.month(),
-                    date.day()
-                ),
-            })
-        }
-        "time" => {
-            let (time, offset) = parse_time_text(text)?;
-            Some(PyValue::Opaque {
-                text: python_time_str(time, offset),
-                repr: format!(
-                    "datetime.time({}{})",
-                    python_clock_repr(time),
-                    python_tzinfo_repr(offset)
-                ),
-            })
-        }
-        "uuid" => {
-            let uuid = Uuid::parse_str(text).ok()?;
-            Some(PyValue::Opaque {
-                text: uuid.to_string(),
-                repr: format!("UUID('{uuid}')"),
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Coerce a value for a `string` field of `format` as Pydantic does, and
-/// return the form Python's storage encoder writes (`isoformat()` for a
-/// datetime, date or time, the hyphenated text of a UUID). `None` when the
-/// field has no such format.
-fn coerce_formatted(format: &str, value: &Value) -> Option<Result<Value, String>> {
-    let canonical = match format {
+    // pydantic-core reads JSON text for a datetime or time strictly and a
+    // JSON number laxly; a UUID string is an exact match.
+    let text_exactness = if value.is_string() {
+        Exactness::Strict
+    } else {
+        Exactness::Lax
+    };
+    let coerced = match format {
         "date-time" => parse_aware_datetime_lax(value).map(|date| {
-            let mut text = python_datetime_str(&date);
+            let naive = date.naive_local();
+            let offset = date.offset().local_minus_utc();
+            let text = python_datetime_str(&date);
+            let mut iso = text.clone();
             // `isoformat()` separates the date from the time with a `T`.
-            text.replace_range(10..11, "T");
-            text
+            iso.replace_range(10..11, "T");
+            Coerced {
+                stored: Value::String(iso),
+                python: PyValue::Opaque {
+                    text,
+                    repr: format!(
+                        "datetime.datetime({}, {}, {}, {}{})",
+                        naive.year(),
+                        naive.month(),
+                        naive.day(),
+                        python_clock_repr(naive.time()),
+                        python_tzinfo_repr(Some(offset))
+                    ),
+                },
+                exactness: text_exactness,
+            }
         }),
-        "date" => parse_date_lax(value).map(|date| date.format("%Y-%m-%d").to_string()),
-        "time" => parse_time_lax(value).map(|(time, offset)| python_time_str(time, offset)),
+        "date" => parse_date_lax(value).map(|(date, exactness)| {
+            let text = date.format("%Y-%m-%d").to_string();
+            Coerced {
+                stored: Value::String(text.clone()),
+                python: PyValue::Opaque {
+                    text,
+                    repr: format!(
+                        "datetime.date({}, {}, {})",
+                        date.year(),
+                        date.month(),
+                        date.day()
+                    ),
+                },
+                exactness,
+            }
+        }),
+        "time" => parse_time_lax(value).map(|(time, offset)| {
+            let text = python_time_str(time, offset);
+            Coerced {
+                stored: Value::String(text.clone()),
+                python: PyValue::Opaque {
+                    text,
+                    repr: format!(
+                        "datetime.time({}{})",
+                        python_clock_repr(time),
+                        python_tzinfo_repr(offset)
+                    ),
+                },
+                exactness: text_exactness,
+            }
+        }),
         "uuid" => value
             .as_str()
             .and_then(|text| Uuid::parse_str(text).ok())
-            .map(|uuid| uuid.to_string()),
+            .map(|uuid| Coerced {
+                stored: Value::String(uuid.to_string()),
+                python: PyValue::Opaque {
+                    text: uuid.to_string(),
+                    repr: format!("UUID('{uuid}')"),
+                },
+                exactness: Exactness::Exact,
+            }),
         _ => return None,
     };
-    Some(canonical.map(Value::String).ok_or_else(|| {
+    Some(coerced.ok_or_else(|| {
         let kind = match format {
             "date-time" => "a timezone-aware date-time or Unix timestamp",
             "date" => "a date",
@@ -2239,15 +2143,6 @@ const PYDANTIC_FLOAT_AS_INT_LIMIT: f64 = 9_223_372_036_854_775_808.0;
 /// Reference chains between scalar definitions deeper than this are treated
 /// as cycles and rejected.
 const MAX_SCALAR_REFERENCE_DEPTH: usize = 32;
-
-fn validate_scalar_value(
-    value: &Value,
-    schema: &Value,
-    definitions: &HashMap<String, Value>,
-    depth: usize,
-) -> Result<(), String> {
-    coerce_scalar_value(value, schema, definitions, depth).map(|_| ())
-}
 
 /// Python `==` between two JSON values, where `True == 1` and `1 == 1.0`:
 /// how Pydantic matches an input against an `Enum` member's value.
@@ -2389,11 +2284,66 @@ fn coerce_bool(value: &Value) -> Result<bool, String> {
     }
 }
 
+/// How exactly an input matched a type, as pydantic-core grades a JSON
+/// input: a smart-mode union keeps the most exact variant, and the first
+/// declared on a tie. Ordered from least to most exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Exactness {
+    /// A coercion: numeric text for a number, `1` for a bool, any input for
+    /// an `Enum`, a timestamp number for a datetime.
+    Lax,
+    /// Allowed in strict mode without being the type itself: an int for a
+    /// `float`, any JSON string for `str`, ISO or timestamp text for a
+    /// datetime, a `RootModel` built from its root.
+    Strict,
+    /// The type itself: a JSON integer for `int`, a float for `float`, a
+    /// bool for `bool`, a string for `UUID`, a list for `list`.
+    Exact,
+}
+
+/// A scalar answer after validation: the JSON form Python's storage encoder
+/// writes, the Python object Pydantic holds (for its `str()` and the node
+/// identity), and how exactly the input matched.
+#[derive(Debug)]
+struct Coerced {
+    stored: Value,
+    python: PyValue,
+    exactness: Exactness,
+}
+
+impl Coerced {
+    fn untyped(value: &Value, exactness: Exactness) -> Self {
+        Self {
+            stored: value.clone(),
+            python: plain_python_value(value),
+            exactness,
+        }
+    }
+}
+
+/// The Python value of a JSON value declared as `kind`: a `number` is a
+/// `float` and an `integer` an `int`, anything else as `json.loads` gives it.
+fn typed_python_value(kind: Option<&str>, value: &Value) -> PyValue {
+    match (kind, value) {
+        (Some("number"), Value::Number(number)) => number
+            .as_f64()
+            .map_or_else(|| plain_python_value(value), PyValue::Float),
+        (Some("integer"), Value::Number(number)) => match number.as_f64() {
+            Some(float) if number.as_i64().is_none() && number.as_u64().is_none() => {
+                PyValue::Int(format!("{float:.0}"))
+            }
+            _ => PyValue::Int(number.to_string()),
+        },
+        _ => plain_python_value(value),
+    }
+}
+
 /// Match `value` against an enum's members. A string enum takes only its
 /// text. An `IntEnum` (`"type": "integer"`) first reads the input as a lax
 /// `int`, so `"1"` and `1.0` select `1`. Any other enum matches by Python
-/// equality, where `true` is `1` and `1.0` is `1`. Returns the member's value.
-fn coerce_enum(value: &Value, schema: &Value, choices: &[Value]) -> Result<Value, String> {
+/// equality, where `true` is `1` and `1.0` is `1`. Returns the member's
+/// position.
+fn coerce_enum(value: &Value, schema: &Value, choices: &[Value]) -> Result<usize, String> {
     let probe = if schema.get("type").and_then(Value::as_str) == Some("integer") {
         coerce_int(value)?
     } else {
@@ -2401,64 +2351,149 @@ fn coerce_enum(value: &Value, schema: &Value, choices: &[Value]) -> Result<Value
     };
     choices
         .iter()
-        .find(|choice| python_equal(choice, &probe))
-        .cloned()
+        .position(|choice| python_equal(choice, &probe))
         .ok_or_else(|| "is not one of the declared enum values".to_string())
 }
 
 /// Validate a scalar answer against its schema as Pydantic's lax mode does
-/// (`model_validate_json` on the generated model) and return the value
-/// Python holds, in the JSON form its storage encoder writes: a `number` is
-/// a float, an `integer` an int, a bool a bool, an enum member its value, a
-/// `date-time`, `date` or `time` its `isoformat()` text and a `uuid` its
-/// hyphenated text. Strings, numbers and bools are coerced the way
-/// pydantic-core coerces them; see `docs/guides/custom-graph-schema.md`.
+/// (`model_validate_json` on the generated model) and return what Python
+/// holds: the value in the JSON form its storage encoder writes (a `number`
+/// is a float, an `integer` an int, a bool a bool, an enum member its value,
+/// a `date-time`, `date` or `time` its `isoformat()` text and a `uuid` its
+/// hyphenated text) together with the Python object, typed as
+/// datamodel-code-generator declares it (an enum a generated `Enum` member,
+/// `enum_class` naming an inline enum's class, and a scalar `$defs` entry a
+/// `RootModel`). Strings, numbers and bools are coerced the way pydantic-core
+/// coerces them; see `docs/guides/custom-graph-schema.md`.
 fn coerce_scalar_value(
     value: &Value,
     schema: &Value,
     definitions: &HashMap<String, Value>,
+    enum_class: Option<&str>,
     depth: usize,
-) -> Result<Value, String> {
+) -> Result<Coerced, String> {
     // Compilation routes every model reference to a relationship, so a
     // reference reaching scalar validation must name a scalar definition and
     // must not match vacuously.
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        let definition = reference
+        let (name, definition) = reference
             .strip_prefix("#/$defs/")
-            .and_then(|name| definitions.get(name))
+            .and_then(|name| definitions.get(name).map(|definition| (name, definition)))
             .ok_or_else(|| "is a model reference, not a scalar".to_string())?;
         if depth >= MAX_SCALAR_REFERENCE_DEPTH {
             return Err("nests scalar definition references too deeply".to_string());
         }
-        return coerce_scalar_value(value, definition, definitions, depth + 1);
+        let class = python_class_name(name);
+        if definition.get("enum").is_some() {
+            return coerce_scalar_value(value, definition, definitions, Some(&class), depth + 1);
+        }
+        let inner = coerce_scalar_value(value, definition, definitions, None, depth + 1)?;
+        // Building a model is never an exact match.
+        return Ok(Coerced {
+            stored: inner.stored,
+            python: PyValue::Root {
+                class,
+                root: Box::new(inner.python),
+            },
+            exactness: inner.exactness.min(Exactness::Strict),
+        });
     }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        // Pydantic's smart-mode union keeps an exact type match over a
-        // coercing one and otherwise takes the first variant that accepts.
-        let accepted: Vec<(&Value, Value)> = variants
-            .iter()
-            .filter_map(|variant| {
-                coerce_scalar_value(value, variant, definitions, depth)
-                    .ok()
-                    .map(|coerced| (variant, coerced))
-            })
-            .collect();
-        return accepted
-            .iter()
-            .find(|(variant, _)| exact_type_match(value, variant))
-            .or_else(|| accepted.first())
-            .map(|(_, coerced)| coerced.clone())
-            .ok_or_else(|| "does not match any allowed variant".to_string());
+        // Pydantic's smart-mode union tries every variant and keeps the most
+        // exact match, the first declared on a tie: `3` stays an `int` in
+        // `float | int` but `"3"` becomes `3.0`, and `1700000000` is a
+        // `float` in `datetime | float`.
+        let mut best: Option<Coerced> = None;
+        for variant in variants {
+            let Ok(candidate) = coerce_scalar_value(value, variant, definitions, enum_class, depth)
+            else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|current| current.exactness < candidate.exactness)
+            {
+                let exact = candidate.exactness == Exactness::Exact;
+                best = Some(candidate);
+                if exact {
+                    break;
+                }
+            }
+        }
+        return best.ok_or_else(|| "does not match any allowed variant".to_string());
     }
-    let mut coerced = value.clone();
+    let kind = schema.get("type").and_then(Value::as_str);
+    // An untyped value is an `Any`, which pydantic-core grades strict.
+    let mut coerced = Coerced::untyped(value, Exactness::Strict);
     if let Some(choices) = schema.get("enum").and_then(Value::as_array) {
-        coerced = coerce_enum(value, schema, choices)?;
-    } else if let Some(expected) = schema.get("type").and_then(Value::as_str) {
+        let position = coerce_enum(value, schema, choices)?;
+        let choice = &choices[position];
+        let member = enum_class.and_then(|class| {
+            python_enum_member_names(choices, kind)
+                .into_iter()
+                .nth(position)
+                .flatten()
+                .map(|member| (class, member))
+        });
+        coerced = Coerced {
+            stored: choice.clone(),
+            python: match member {
+                Some((class, member)) => PyValue::Enum {
+                    class: class.to_string(),
+                    member,
+                    value: Box::new(plain_python_value(choice)),
+                    int_enum: kind == Some("integer"),
+                },
+                None => typed_python_value(kind, choice),
+            },
+            // An `Enum` built from a JSON value is always a lax match.
+            exactness: Exactness::Lax,
+        };
+    } else if let Some(expected) = kind {
         coerced = match expected {
-            "null" if value.is_null() => Value::Null,
-            "boolean" => Value::Bool(coerce_bool(value)?),
-            "integer" => coerce_int(value)?,
-            "number" => coerce_float(value)?,
+            "null" if value.is_null() => Coerced {
+                stored: Value::Null,
+                python: PyValue::None,
+                exactness: Exactness::Exact,
+            },
+            "boolean" => {
+                let flag = coerce_bool(value)?;
+                Coerced {
+                    stored: Value::Bool(flag),
+                    python: PyValue::Bool(flag),
+                    exactness: if value.is_boolean() {
+                        Exactness::Exact
+                    } else {
+                        Exactness::Lax
+                    },
+                }
+            }
+            "integer" => {
+                let stored = coerce_int(value)?;
+                Coerced {
+                    python: PyValue::Int(stored.to_string()),
+                    stored,
+                    exactness: if value.is_i64() || value.is_u64() {
+                        Exactness::Exact
+                    } else {
+                        Exactness::Lax
+                    },
+                }
+            }
+            "number" => {
+                let stored = coerce_float(value)?;
+                Coerced {
+                    python: typed_python_value(kind, &stored),
+                    stored,
+                    exactness: if value.is_f64() {
+                        Exactness::Exact
+                    } else if value.is_number() {
+                        Exactness::Strict
+                    } else {
+                        Exactness::Lax
+                    },
+                }
+            }
             "string" => {
                 let formatted = schema
                     .get("format")
@@ -2466,14 +2501,24 @@ fn coerce_scalar_value(
                     .and_then(|format| coerce_formatted(format, value));
                 match formatted {
                     Some(result) => result?,
-                    None if value.is_string() => value.clone(),
+                    // A JSON string for `str` is strict, not exact.
+                    None if value.is_string() => Coerced::untyped(value, Exactness::Strict),
                     None => return Err("expected string".to_string()),
                 }
             }
-            "array" if value.is_array() => value.clone(),
-            "object" if value.is_object() => value.clone(),
+            // A `list[Any]` with items is strict; typed items grade below.
+            "array" if value.is_array() => Coerced::untyped(
+                value,
+                if schema.get("items").is_some() || value.as_array().is_some_and(Vec::is_empty) {
+                    Exactness::Exact
+                } else {
+                    Exactness::Strict
+                },
+            ),
+            // A `dict[str, Any]` or a nested model: strict at best.
+            "object" if value.is_object() => Coerced::untyped(value, Exactness::Strict),
             "null" | "array" | "object" => return Err(format!("expected {expected}")),
-            _ => value.clone(),
+            _ => coerced,
         };
     }
     if let Some(constant) = schema.get("const")
@@ -2498,12 +2543,21 @@ fn coerce_scalar_value(
     if let Some(items) = value.as_array()
         && let Some(item_schema) = schema.get("items")
     {
-        coerced = Value::Array(
-            items
-                .iter()
-                .map(|item| coerce_scalar_value(item, item_schema, definitions, depth))
-                .collect::<Result<_, _>>()?,
-        );
+        // A list is as exact as its least exact item.
+        let mut stored = Vec::with_capacity(items.len());
+        let mut python = Vec::with_capacity(items.len());
+        let mut exactness = coerced.exactness;
+        for item in items {
+            let item = coerce_scalar_value(item, item_schema, definitions, None, depth)?;
+            exactness = exactness.min(item.exactness);
+            stored.push(item.stored);
+            python.push(item.python);
+        }
+        coerced = Coerced {
+            stored: Value::Array(stored),
+            python: PyValue::List(python),
+            exactness,
+        };
     }
     if let Some(object) = value.as_object() {
         let properties = schema.get("properties").and_then(Value::as_object);
@@ -2515,17 +2569,23 @@ fn coerce_scalar_value(
             }
         }
         if let Some(properties) = properties {
-            let mut entries = Map::new();
+            let mut stored = Map::new();
+            let mut python = Vec::with_capacity(object.len());
             for (field, field_value) in object {
                 let entry = match properties.get(field) {
                     Some(field_schema) => {
-                        coerce_scalar_value(field_value, field_schema, definitions, depth)?
+                        coerce_scalar_value(field_value, field_schema, definitions, None, depth)?
                     }
-                    None => field_value.clone(),
+                    None => Coerced::untyped(field_value, Exactness::Strict),
                 };
-                entries.insert(field.clone(), entry);
+                stored.insert(field.clone(), entry.stored);
+                python.push((field.clone(), entry.python));
             }
-            coerced = Value::Object(entries);
+            coerced = Coerced {
+                stored: Value::Object(stored),
+                python: PyValue::Dict(python),
+                exactness: coerced.exactness.min(Exactness::Strict),
+            };
         }
     }
     Ok(coerced)
@@ -2879,12 +2939,15 @@ mod tests {
             ),
             ("Big".to_string(), json!({"type": "number", "enum": [1e20]})),
         ]);
-        python_identity_text(&python_value(
+        let coerced = coerce_scalar_value(
             &value,
             &schema,
             &definitions,
             Some(&python_class_name(field)),
-        ))
+            0,
+        )
+        .unwrap_or_else(|error| panic!("{value} validates: {error}"));
+        python_identity_text(&coerced.python)
     }
 
     #[test]
@@ -4601,8 +4664,8 @@ mod tests {
             }
         }
         // The table must not silently shrink.
-        assert!(accepted_rows > 250, "{accepted_rows} accepted rows");
-        assert!(rejected_rows > 150, "{rejected_rows} rejected rows");
+        assert!(accepted_rows >= 356, "{accepted_rows} accepted rows");
+        assert!(rejected_rows >= 178, "{rejected_rows} rejected rows");
         assert_eq!(gap_rows, 8, "{gap_rows} known-gap rows");
     }
 
@@ -4743,5 +4806,90 @@ mod tests {
         let strs = &graph.nodes[0].property_strs;
         assert_eq!(strs["when"], "2023-11-14 22:13:20+00:00");
         assert_eq!(strs["day"], "2024-01-02");
+    }
+
+    /// A smart-mode union keeps the most exact variant (exact, then strict,
+    /// then lax) and the first declared on a tie. Expectations recorded from
+    /// Pydantic 2.13.5 (`un_*` rows of the ground-truth table).
+    #[test]
+    fn a_union_keeps_the_most_exact_variant_like_pydantic() {
+        let defs = json!({
+            "Digits": {"enum": ["1", "2"]},
+            "Txt": {"type": "string"},
+        });
+        let number = json!({"type": "number"});
+        let date_time = json!({"type": "string", "format": "date-time"});
+        let uuid = json!({"type": "string", "format": "uuid"});
+        for (variants, answer, stored, text) in [
+            // An int is strict for `float` but lax for `datetime`.
+            (
+                json!([date_time, number]),
+                json!(1_700_000_000),
+                json!(1_700_000_000.0),
+                "1700000000.0",
+            ),
+            // Timestamp text is strict for `datetime`, lax for `float`.
+            (
+                json!([number, date_time]),
+                json!("1700000000"),
+                json!("2023-11-14T22:13:20+00:00"),
+                "2023-11-14 22:13:20+00:00",
+            ),
+            // An `Enum` is always lax, so the earlier lax `float` wins.
+            (
+                json!([number, {"$ref": "#/$defs/Digits"}]),
+                json!("1"),
+                json!(1.0),
+                "1.0",
+            ),
+            // A `RootModel[str]` is strict, which beats a lax `float`.
+            (
+                json!([number, {"$ref": "#/$defs/Txt"}]),
+                json!("1"),
+                json!("1"),
+                "root='1'",
+            ),
+            // A UUID string is exact, which beats a strict `str`.
+            (
+                json!([{"type": "string"}, uuid]),
+                json!("ABCDEF78-1234-5678-1234-567812345678"),
+                json!("abcdef78-1234-5678-1234-567812345678"),
+                "abcdef78-1234-5678-1234-567812345678",
+            ),
+        ] {
+            let schema = json!({
+                "title": "Thing", "type": "object",
+                "properties": {"v": {"anyOf": variants}},
+                "$defs": defs,
+            });
+            let compiled = DynamicGraphSchema::compile(&schema).expect("schema compiles");
+            let graph = compiled
+                .materialize(&json!({ "v": answer }), Uuid::nil())
+                .unwrap_or_else(|error| panic!("{variants} <- {answer}: {error}"));
+            let node = &graph.nodes[0];
+            assert_eq!(node.properties["v"], stored, "{variants} <- {answer}");
+            assert_eq!(node.property_strs["v"], text, "{variants} <- {answer}");
+        }
+    }
+
+    /// `i64::MIN` as a timestamp is refused, as Pydantic refuses it, instead
+    /// of overflowing while its magnitude is taken.
+    #[test]
+    fn an_i64_min_timestamp_is_refused_without_overflow() {
+        for format in ["date-time", "date", "time"] {
+            let schema = json!({
+                "title": "Thing", "type": "object",
+                "properties": {"v": {"type": "string", "format": format}},
+            });
+            let compiled = DynamicGraphSchema::compile(&schema).expect("schema compiles");
+            for answer in [json!(i64::MIN), json!(i64::MIN.to_string())] {
+                assert!(
+                    compiled
+                        .materialize(&json!({ "v": answer }), Uuid::nil())
+                        .is_err(),
+                    "{format} <- {answer}"
+                );
+            }
+        }
     }
 }

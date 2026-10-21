@@ -65,6 +65,12 @@
     "2"
    ],
    "type": "string"
+  },
+  "Txt": {
+   "type": "string"
+  },
+  "Num": {
+   "type": "number"
   }
  },
  "fields": {
@@ -239,9 +245,241 @@
    "items": {
     "type": "boolean"
    }
+  },
+  "un_num_ustr1": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "$ref": "#/$defs/UStr1"
+    }
+   ]
+  },
+  "un_num_eb": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "$ref": "#/$defs/EB"
+    }
+   ]
+  },
+  "un_num_txt": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "$ref": "#/$defs/Txt"
+    }
+   ]
+  },
+  "un_str_txt": {
+   "anyOf": [
+    {
+     "type": "string"
+    },
+    {
+     "$ref": "#/$defs/Txt"
+    }
+   ]
+  },
+  "un_txt_str": {
+   "anyOf": [
+    {
+     "$ref": "#/$defs/Txt"
+    },
+    {
+     "type": "string"
+    }
+   ]
+  },
+  "un_int_numdef": {
+   "anyOf": [
+    {
+     "type": "integer"
+    },
+    {
+     "$ref": "#/$defs/Num"
+    }
+   ]
+  },
+  "un_ei_int": {
+   "anyOf": [
+    {
+     "$ref": "#/$defs/EI"
+    },
+    {
+     "type": "integer"
+    }
+   ]
+  },
+  "un_uint_bool": {
+   "anyOf": [
+    {
+     "$ref": "#/$defs/UInt"
+    },
+    {
+     "type": "boolean"
+    }
+   ]
+  },
+  "un_bool_uint": {
+   "anyOf": [
+    {
+     "type": "boolean"
+    },
+    {
+     "$ref": "#/$defs/UInt"
+    }
+   ]
+  },
+  "un_str_uuid": {
+   "anyOf": [
+    {
+     "type": "string"
+    },
+    {
+     "type": "string",
+     "format": "uuid"
+    }
+   ]
+  },
+  "un_uuid_str": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "uuid"
+    },
+    {
+     "type": "string"
+    }
+   ]
+  },
+  "un_dt_num": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "date-time"
+    },
+    {
+     "type": "number"
+    }
+   ]
+  },
+  "un_num_dt": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "type": "string",
+     "format": "date-time"
+    }
+   ]
+  },
+  "un_date_num": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "date"
+    },
+    {
+     "type": "number"
+    }
+   ]
+  },
+  "un_num_date": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "type": "string",
+     "format": "date"
+    }
+   ]
+  },
+  "un_time_num": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "time"
+    },
+    {
+     "type": "number"
+    }
+   ]
+  },
+  "un_num_time": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "type": "string",
+     "format": "time"
+    }
+   ]
+  },
+  "un_date_str": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "date"
+    },
+    {
+     "type": "string"
+    }
+   ]
+  },
+  "un_str_dt": {
+   "anyOf": [
+    {
+     "type": "string"
+    },
+    {
+     "type": "string",
+     "format": "date-time"
+    }
+   ]
+  },
+  "un_int_date": {
+   "anyOf": [
+    {
+     "type": "integer"
+    },
+    {
+     "type": "string",
+     "format": "date"
+    }
+   ]
+  },
+  "l_dt": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "format": "date-time"
+   }
+  },
+  "l_time": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "format": "time"
+   }
+  },
+  "l_uuid": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "format": "uuid"
+   }
   }
  },
- "pydantic": "2.12.5",
+ "pydantic": "2.13.5",
  "rows": [
   {
    "field": "s",
@@ -2087,6 +2325,21 @@
    "accepted": false
   },
   {
+   "field": "dt",
+   "input": "-9223372036854775808",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"-9223372036854775808\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "-9223372036854775807",
+   "accepted": false
+  },
+  {
    "field": "d",
    "input": "\"2024-01-02\"",
    "accepted": true,
@@ -2471,6 +2724,16 @@
    "str": "1969-12-31",
    "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
    "stored": "1969-12-31"
+  },
+  {
+   "field": "d",
+   "input": "-9223372036854775808",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"-9223372036854775808\"",
+   "accepted": false
   },
   {
    "field": "t",
@@ -2896,6 +3159,16 @@
    "str": "23:59:59.999999+00:00",
    "id": "3ed79083-961a-526e-9225-23f9baaf9857",
    "stored": "23:59:59.999999+00:00"
+  },
+  {
+   "field": "t",
+   "input": "-9223372036854775808",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"-9223372036854775808\"",
+   "accepted": false
   },
   {
    "field": "u",
@@ -3369,6 +3642,693 @@
    "field": "l_bool",
    "input": "[2]",
    "accepted": false
+  },
+  {
+   "field": "un_num_ustr1",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_ustr1",
+   "input": "1",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_ustr1",
+   "input": "\"2\"",
+   "accepted": true,
+   "str": "2.0",
+   "id": "e11e6c16-4c9e-5978-a281-b7cb3a1cc802",
+   "stored": 2.0
+  },
+  {
+   "field": "un_num_ustr1",
+   "input": "\"x\"",
+   "accepted": false
+  },
+  {
+   "field": "un_num_eb",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_eb",
+   "input": "false",
+   "accepted": true,
+   "str": "0.0",
+   "id": "dc868cff-9042-5de2-8702-f8a50c6cfd84",
+   "stored": 0.0
+  },
+  {
+   "field": "un_num_eb",
+   "input": "1",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_txt",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "root='1'",
+   "id": "0e71c221-523c-59b3-88b9-25782b380c98",
+   "stored": "1"
+  },
+  {
+   "field": "un_num_txt",
+   "input": "1",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_txt",
+   "input": "\"x\"",
+   "accepted": true,
+   "str": "root='x'",
+   "id": "1e54f748-5182-5add-9a3d-7310bc2d98ca",
+   "stored": "x"
+  },
+  {
+   "field": "un_str_txt",
+   "input": "\"a\"",
+   "accepted": true,
+   "str": "a",
+   "id": "30d9a91e-ab94-5dd2-a183-7e818ff8f0b2",
+   "stored": "a"
+  },
+  {
+   "field": "un_txt_str",
+   "input": "\"a\"",
+   "accepted": true,
+   "str": "root='a'",
+   "id": "d7df9b02-930e-56ba-a87c-7e0a325507ae",
+   "stored": "a"
+  },
+  {
+   "field": "un_int_numdef",
+   "input": "1",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_int_numdef",
+   "input": "1.5",
+   "accepted": true,
+   "str": "root=1.5",
+   "id": "0a9bd62b-6517-5927-853a-081f8f2acb11",
+   "stored": 1.5
+  },
+  {
+   "field": "un_int_numdef",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_ei_int",
+   "input": "1",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_ei_int",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_uint_bool",
+   "input": "true",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_uint_bool",
+   "input": "1",
+   "accepted": true,
+   "str": "UInt.int_1",
+   "id": "27b275cd-c43b-59fc-986d-99f116ca385d",
+   "stored": 1
+  },
+  {
+   "field": "un_bool_uint",
+   "input": "true",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_bool_uint",
+   "input": "1",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_str_uuid",
+   "input": "\"12345678-1234-5678-1234-567812345678\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "un_str_uuid",
+   "input": "\"ABCDEF78-1234-5678-1234-567812345678\"",
+   "accepted": true,
+   "str": "abcdef78-1234-5678-1234-567812345678",
+   "id": "cf1e20b9-612d-5aa2-947e-518ea8c27436",
+   "stored": "abcdef78-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "un_str_uuid",
+   "input": "\"abc\"",
+   "accepted": true,
+   "str": "abc",
+   "id": "ae3ba80b-9fa4-53e1-8bd1-b601b5aae7b7",
+   "stored": "abc"
+  },
+  {
+   "field": "un_uuid_str",
+   "input": "\"12345678123456781234567812345678\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "un_uuid_str",
+   "input": "\"abc\"",
+   "accepted": true,
+   "str": "abc",
+   "id": "ae3ba80b-9fa4-53e1-8bd1-b601b5aae7b7",
+   "stored": "abc"
+  },
+  {
+   "field": "un_dt_num",
+   "input": "1700000000",
+   "accepted": true,
+   "str": "1700000000.0",
+   "id": "01f168aa-8763-5880-8c33-4f3ce4052ab8",
+   "stored": 1700000000.0
+  },
+  {
+   "field": "un_dt_num",
+   "input": "1700000000.5",
+   "accepted": true,
+   "str": "1700000000.5",
+   "id": "da39e466-a483-5f06-a56c-c05aa722cd35",
+   "stored": 1700000000.5
+  },
+  {
+   "field": "un_dt_num",
+   "input": "\"1700000000\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "un_dt_num",
+   "input": "\"2024-01-02T03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "un_dt_num",
+   "input": "\"3.5\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:03.500000+00:00",
+   "id": "d7ea4567-dddb-5d74-8fcf-13c5bbba4a5d",
+   "stored": "1970-01-01T00:00:03.500000+00:00"
+  },
+  {
+   "field": "un_dt_num",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_dt",
+   "input": "1700000000",
+   "accepted": true,
+   "str": "1700000000.0",
+   "id": "01f168aa-8763-5880-8c33-4f3ce4052ab8",
+   "stored": 1700000000.0
+  },
+  {
+   "field": "un_num_dt",
+   "input": "1700000000.5",
+   "accepted": true,
+   "str": "1700000000.5",
+   "id": "da39e466-a483-5f06-a56c-c05aa722cd35",
+   "stored": 1700000000.5
+  },
+  {
+   "field": "un_num_dt",
+   "input": "\"1700000000\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "un_num_dt",
+   "input": "\"2024-01-02T03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "un_num_dt",
+   "input": "\"3.5\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:03.500000+00:00",
+   "id": "d7ea4567-dddb-5d74-8fcf-13c5bbba4a5d",
+   "stored": "1970-01-01T00:00:03.500000+00:00"
+  },
+  {
+   "field": "un_num_dt",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_date_num",
+   "input": "86400",
+   "accepted": true,
+   "str": "86400.0",
+   "id": "5de12338-a7aa-546a-9ad4-98dd1f99f89c",
+   "stored": 86400.0
+  },
+  {
+   "field": "un_date_num",
+   "input": "86400.0",
+   "accepted": true,
+   "str": "86400.0",
+   "id": "5de12338-a7aa-546a-9ad4-98dd1f99f89c",
+   "stored": 86400.0
+  },
+  {
+   "field": "un_date_num",
+   "input": "\"86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_date_num",
+   "input": "\"86400.0\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_date_num",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_date_num",
+   "input": "\"2024-01-02T00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_num_date",
+   "input": "86400",
+   "accepted": true,
+   "str": "86400.0",
+   "id": "5de12338-a7aa-546a-9ad4-98dd1f99f89c",
+   "stored": 86400.0
+  },
+  {
+   "field": "un_num_date",
+   "input": "86400.0",
+   "accepted": true,
+   "str": "86400.0",
+   "id": "5de12338-a7aa-546a-9ad4-98dd1f99f89c",
+   "stored": 86400.0
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"86400.0\"",
+   "accepted": true,
+   "str": "86400.0",
+   "id": "5de12338-a7aa-546a-9ad4-98dd1f99f89c",
+   "stored": 86400.0
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"-86400\"",
+   "accepted": true,
+   "str": "1969-12-31",
+   "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
+   "stored": "1969-12-31"
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"+86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_num_date",
+   "input": "\"2024-01-02T00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_time_num",
+   "input": "3661",
+   "accepted": true,
+   "str": "3661.0",
+   "id": "07afbbb0-eed6-51d4-bbaa-8ef43503a701",
+   "stored": 3661.0
+  },
+  {
+   "field": "un_time_num",
+   "input": "3661.5",
+   "accepted": true,
+   "str": "3661.5",
+   "id": "3d798a1d-7284-5c71-9d36-e752330bb788",
+   "stored": 3661.5
+  },
+  {
+   "field": "un_time_num",
+   "input": "\"3661\"",
+   "accepted": true,
+   "str": "3661.0",
+   "id": "07afbbb0-eed6-51d4-bbaa-8ef43503a701",
+   "stored": 3661.0
+  },
+  {
+   "field": "un_time_num",
+   "input": "\"03:04:05\"",
+   "accepted": true,
+   "str": "03:04:05",
+   "id": "8006115b-1424-5a69-9e51-b9bde7fbbf42",
+   "stored": "03:04:05"
+  },
+  {
+   "field": "un_num_time",
+   "input": "3661",
+   "accepted": true,
+   "str": "3661.0",
+   "id": "07afbbb0-eed6-51d4-bbaa-8ef43503a701",
+   "stored": 3661.0
+  },
+  {
+   "field": "un_num_time",
+   "input": "3661.5",
+   "accepted": true,
+   "str": "3661.5",
+   "id": "3d798a1d-7284-5c71-9d36-e752330bb788",
+   "stored": 3661.5
+  },
+  {
+   "field": "un_num_time",
+   "input": "\"3661\"",
+   "accepted": true,
+   "str": "3661.0",
+   "id": "07afbbb0-eed6-51d4-bbaa-8ef43503a701",
+   "stored": 3661.0
+  },
+  {
+   "field": "un_num_time",
+   "input": "\"03:04:05\"",
+   "accepted": true,
+   "str": "03:04:05",
+   "id": "8006115b-1424-5a69-9e51-b9bde7fbbf42",
+   "stored": "03:04:05"
+  },
+  {
+   "field": "un_date_str",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_date_str",
+   "input": "\"2024-01-02T00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02T00:00:00",
+   "id": "2837d47c-b0ed-50cc-b1f4-8640a0f9f9b1",
+   "stored": "2024-01-02T00:00:00"
+  },
+  {
+   "field": "un_date_str",
+   "input": "\"86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_str_dt",
+   "input": "\"2024-01-02T03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02T03:04:05Z",
+   "id": "77a09e57-9371-5539-883c-ff251ea3bd29",
+   "stored": "2024-01-02T03:04:05Z"
+  },
+  {
+   "field": "un_str_dt",
+   "input": "\"1700000000\"",
+   "accepted": true,
+   "str": "1700000000",
+   "id": "e3706ef1-8125-5401-ba49-5b7682628da8",
+   "stored": "1700000000"
+  },
+  {
+   "field": "un_int_date",
+   "input": "\"86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_int_date",
+   "input": "86400",
+   "accepted": true,
+   "str": "86400",
+   "id": "6ce0eb3a-3f5c-52f9-b215-14372c600546",
+   "stored": 86400
+  },
+  {
+   "field": "un_int_date",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "l_dt",
+   "input": "[\"2024-01-02T03:04:05Z\"]",
+   "accepted": true,
+   "str": "[datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=TzInfo(0))]",
+   "id": "407107a0-c04b-5e45-9f56-b8402d07ca8b",
+   "stored": [
+    "2024-01-02T03:04:05+00:00"
+   ]
+  },
+  {
+   "field": "l_dt",
+   "input": "[\"2024-01-02T03:04:05+02:00\", \"2024-01-02T03:04:05.5-05:30\"]",
+   "accepted": true,
+   "str": "[datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=TzInfo(7200)), datetime.datetime(2024, 1, 2, 3, 4, 5, 500000, tzinfo=TzInfo(-19800))]",
+   "id": "2370bf19-893c-5bf9-a040-4f21c7940736",
+   "stored": [
+    "2024-01-02T03:04:05+02:00",
+    "2024-01-02T03:04:05.500000-05:30"
+   ]
+  },
+  {
+   "field": "l_dt",
+   "input": "[\"2024-01-02T03:04:05\"]",
+   "accepted": false
+  },
+  {
+   "field": "l_dt",
+   "input": "[1700000000]",
+   "accepted": true,
+   "str": "[datetime.datetime(2023, 11, 14, 22, 13, 20, tzinfo=TzInfo(0))]",
+   "id": "46743173-8c70-5050-9ebf-6b5a9ec15f22",
+   "stored": [
+    "2023-11-14T22:13:20+00:00"
+   ]
+  },
+  {
+   "field": "l_dt",
+   "input": "[\"2024-01-02T03:04:00+05:45\"]",
+   "accepted": true,
+   "str": "[datetime.datetime(2024, 1, 2, 3, 4, tzinfo=TzInfo(20700))]",
+   "id": "ab6698f4-0ea3-5812-adc9-3e1b4c728cf0",
+   "stored": [
+    "2024-01-02T03:04:00+05:45"
+   ]
+  },
+  {
+   "field": "l_dt",
+   "input": "[\"2024-01-02T00:00:00.000001Z\"]",
+   "accepted": true,
+   "str": "[datetime.datetime(2024, 1, 2, 0, 0, 0, 1, tzinfo=TzInfo(0))]",
+   "id": "2cc7d15d-a645-5170-83f6-bbb12ad6b81b",
+   "stored": [
+    "2024-01-02T00:00:00.000001+00:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:04:05Z\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 4, 5, tzinfo=TzInfo(0))]",
+   "id": "c9890515-e0a6-5c4e-91e4-36c822c96fdb",
+   "stored": [
+    "03:04:05+00:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:04:05+02:00\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 4, 5, tzinfo=TzInfo(7200))]",
+   "id": "da2d5371-d1a3-58d2-83ee-6822ebc6d6a5",
+   "stored": [
+    "03:04:05+02:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:04:05\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 4, 5)]",
+   "id": "a90ae354-1fa9-5bf3-a141-efcf25873ffe",
+   "stored": [
+    "03:04:05"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:04\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 4)]",
+   "id": "d998c00e-98c2-5146-aa6b-9ebfdad46f99",
+   "stored": [
+    "03:04:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[3661]",
+   "accepted": true,
+   "str": "[datetime.time(1, 1, 1, tzinfo=TzInfo(0))]",
+   "id": "3f229778-f0d7-52bb-a011-96d9a47caaa0",
+   "stored": [
+    "01:01:01+00:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:04:05.5-05:30\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 4, 5, 500000, tzinfo=TzInfo(-19800))]",
+   "id": "67d33997-888c-5796-a799-d00c6e194916",
+   "stored": [
+    "03:04:05.500000-05:30"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"00:00\"]",
+   "accepted": true,
+   "str": "[datetime.time(0, 0)]",
+   "id": "9d842597-ffb6-5f77-a639-4cdf256d5c60",
+   "stored": [
+    "00:00:00"
+   ]
+  },
+  {
+   "field": "l_time",
+   "input": "[\"03:00:00.000001\"]",
+   "accepted": true,
+   "str": "[datetime.time(3, 0, 0, 1)]",
+   "id": "3b4b8db9-d1dc-58d5-8f27-608ba026aadd",
+   "stored": [
+    "03:00:00.000001"
+   ]
+  },
+  {
+   "field": "l_uuid",
+   "input": "[\"{12345678-1234-5678-1234-567812345678}\"]",
+   "accepted": true,
+   "str": "[UUID('12345678-1234-5678-1234-567812345678')]",
+   "id": "e8f1b5f8-779b-5d33-9b9a-0c511fd74caf",
+   "stored": [
+    "12345678-1234-5678-1234-567812345678"
+   ]
   }
  ]
 }

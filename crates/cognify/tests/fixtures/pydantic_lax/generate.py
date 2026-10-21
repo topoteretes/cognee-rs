@@ -86,10 +86,15 @@ DEFS = {
     "UStr1": {"enum": ["1", "2"]},
     "NInt": {"enum": [1, 2], "type": "number"},
     "SInt": {"enum": ["1", "2"], "type": "string"},
+    "Txt": {"type": "string"},
+    "Num": {"type": "number"},
 }
 REF = lambda name: {"$ref": f"#/$defs/{name}"}
 DATE = {"type": "string", "format": "date"}
 DATETIME = {"type": "string", "format": "date-time"}
+TIME = {"type": "string", "format": "time"}
+UUID_ = {"type": "string", "format": "uuid"}
+NUMBER = {"type": "number"}
 FIELDS = {
     "s": {"type": "string"},
     "n": {"type": "number"},
@@ -108,8 +113,8 @@ FIELDS = {
     "sint": REF("SInt"),
     "dt": DATETIME,
     "d": DATE,
-    "t": {"type": "string", "format": "time"},
-    "u": {"type": "string", "format": "uuid"},
+    "t": TIME,
+    "u": UUID_,
     "un_str_num": {"anyOf": [{"type": "string"}, {"type": "number"}]},
     "un_num_int": {"anyOf": [{"type": "number"}, {"type": "integer"}]},
     "un_int_num": {"anyOf": [{"type": "integer"}, {"type": "number"}]},
@@ -122,6 +127,32 @@ FIELDS = {
     "l_int": {"type": "array", "items": {"type": "integer"}},
     "l_date": {"type": "array", "items": DATE},
     "l_bool": {"type": "array", "items": {"type": "boolean"}},
+    # Smart-mode unions pick the most exact variant (exact > strict > lax),
+    # the first on a tie: an enum is always lax, a RootModel at best strict,
+    # a JSON string strict for `str`/date/time/date-time but exact for UUID.
+    "un_num_ustr1": {"anyOf": [NUMBER, REF("UStr1")]},
+    "un_num_eb": {"anyOf": [NUMBER, REF("EB")]},
+    "un_num_txt": {"anyOf": [NUMBER, REF("Txt")]},
+    "un_str_txt": {"anyOf": [{"type": "string"}, REF("Txt")]},
+    "un_txt_str": {"anyOf": [REF("Txt"), {"type": "string"}]},
+    "un_int_numdef": {"anyOf": [{"type": "integer"}, REF("Num")]},
+    "un_ei_int": {"anyOf": [REF("EI"), {"type": "integer"}]},
+    "un_uint_bool": {"anyOf": [REF("UInt"), {"type": "boolean"}]},
+    "un_bool_uint": {"anyOf": [{"type": "boolean"}, REF("UInt")]},
+    "un_str_uuid": {"anyOf": [{"type": "string"}, UUID_]},
+    "un_uuid_str": {"anyOf": [UUID_, {"type": "string"}]},
+    "un_dt_num": {"anyOf": [DATETIME, NUMBER]},
+    "un_num_dt": {"anyOf": [NUMBER, DATETIME]},
+    "un_date_num": {"anyOf": [DATE, NUMBER]},
+    "un_num_date": {"anyOf": [NUMBER, DATE]},
+    "un_time_num": {"anyOf": [TIME, NUMBER]},
+    "un_num_time": {"anyOf": [NUMBER, TIME]},
+    "un_date_str": {"anyOf": [DATE, {"type": "string"}]},
+    "un_str_dt": {"anyOf": [{"type": "string"}, DATETIME]},
+    "un_int_date": {"anyOf": [{"type": "integer"}, DATE]},
+    "l_dt": {"type": "array", "items": DATETIME},
+    "l_time": {"type": "array", "items": TIME},
+    "l_uuid": {"type": "array", "items": UUID_},
 }
 
 # Every input is raw JSON text, so `1.0`, `1e2` and big integers keep their
@@ -175,7 +206,7 @@ CASES = {
         '"1700000000.9999999"', '"0001-01-01T00:00:00Z"', '"0000-01-01T00:00:00Z"',
         '"9999-12-31T23:59:59.999999Z"', '"2024-01-02T03:04:05-00:00"', '"2024-01-02T03:04:05+23:59"',
         '"2024-01-02T03:04:05+24:00"', '"2024-01-02T24:00:00Z"', '"2024-02-29T00:00:00Z"',
-        '"2023-02-29T00:00:00Z"',
+        '"2023-02-29T00:00:00Z"', "-9223372036854775808", '"-9223372036854775808"', "-9223372036854775807",
     ],
     "d": [
         '"2024-01-02"', '"2024-01-02T00:00:00"', '"2024-01-02T00:00:00Z"', '"2024-01-02T10:00:00"', '"2024-1-2"',
@@ -187,7 +218,7 @@ CASES = {
         '"86400.5"', '"-86400"', '"+86400"', '"86400."', '"2024-01-02T00:00:00.0"', '"2024-01-02t00:00:00"',
         '"2024-01-02T00:00Z"', '"2024-01-02T00:00:00.999999"', '"2024-01-02T00:00:00.0000001"', "-86400.0",
         "86400.00", "172800.0", "1e5", '"1e5"', '"1.728e5"', '"1.728E5"', "1.728e5", '"2024-01-02T24:00:00"',
-        '"1969-12-31"',
+        '"1969-12-31"', "-9223372036854775808", '"-9223372036854775808"',
     ],
     "t": [
         '"03:04:05"', '"03:04"', '"03:04:05.123456"', '"03:04:05.1234567"', '"03:04:05Z"', '"03:04:05+02:00"',
@@ -200,6 +231,7 @@ CASES = {
         '"03:04:05-00:00"', '"03:04:05-24:00"', '"03:04:05+23:59"', '"03:04:05+02:60"',
         '"03:04:05\\u221202:00"', "0.0", "86399.5", "1e0", '"00:00:00.000000"', "1.0000004", "1.0000005",
         "0.9999995", "0.9999994", "3661.123456789", "86399.9999995",
+        "-9223372036854775808", '"-9223372036854775808"',
     ],
     "u": [
         '"12345678-1234-5678-1234-567812345678"', '"12345678123456781234567812345678"',
@@ -223,6 +255,35 @@ CASES = {
     "l_int": ['[1, "2", 3.0, true]', "[3.5]"],
     "l_date": ['["2024-01-02", 86400]', "[1700000000]"],
     "l_bool": ['[true, 1, "yes", 0]', "[2]"],
+    "un_num_ustr1": ['"1"', "1", '"2"', '"x"'],
+    "un_num_eb": ["true", "false", "1"],
+    "un_num_txt": ['"1"', "1", '"x"'],
+    "un_str_txt": ['"a"'],
+    "un_txt_str": ['"a"'],
+    "un_int_numdef": ["1", "1.5", '"1"'],
+    "un_ei_int": ["1", '"1"'],
+    "un_uint_bool": ["true", "1"],
+    "un_bool_uint": ["true", "1"],
+    "un_str_uuid": ['"12345678-1234-5678-1234-567812345678"', '"ABCDEF78-1234-5678-1234-567812345678"', '"abc"'],
+    "un_uuid_str": ['"12345678123456781234567812345678"', '"abc"'],
+    "un_dt_num": ["1700000000", "1700000000.5", '"1700000000"', '"2024-01-02T03:04:05Z"', '"3.5"', "true"],
+    "un_num_dt": ["1700000000", "1700000000.5", '"1700000000"', '"2024-01-02T03:04:05Z"', '"3.5"', "true"],
+    "un_date_num": ["86400", "86400.0", '"86400"', '"86400.0"', '"2024-01-02"', '"2024-01-02T00:00:00"'],
+    "un_num_date": ["86400", "86400.0", '"86400"', '"86400.0"', '"-86400"', '"+86400"','"2024-01-02"', '"2024-01-02T00:00:00"'],
+    "un_time_num": ["3661", "3661.5", '"3661"', '"03:04:05"'],
+    "un_num_time": ["3661", "3661.5", '"3661"', '"03:04:05"'],
+    "un_date_str": ['"2024-01-02"', '"2024-01-02T00:00:00"', '"86400"'],
+    "un_str_dt": ['"2024-01-02T03:04:05Z"', '"1700000000"'],
+    "un_int_date": ['"86400"', "86400", '"2024-01-02"'],
+    "l_dt": [
+        '["2024-01-02T03:04:05Z"]', '["2024-01-02T03:04:05+02:00", "2024-01-02T03:04:05.5-05:30"]',
+        '["2024-01-02T03:04:05"]', "[1700000000]", '["2024-01-02T03:04:00+05:45"]', '["2024-01-02T00:00:00.000001Z"]',
+    ],
+    "l_time": [
+        '["03:04:05Z"]', '["03:04:05+02:00"]', '["03:04:05"]', '["03:04"]', "[3661]", '["03:04:05.5-05:30"]',
+        '["00:00"]', '["03:00:00.000001"]',
+    ],
+    "l_uuid": ['["{12345678-1234-5678-1234-567812345678}"]'],
 }
 
 
@@ -237,6 +298,9 @@ def stored(value):
     """The JSON form cognee's storage encoder (cognee.modules.storage.utils.JSONEncoder) writes."""
     if isinstance(value, enum.Enum):
         return stored(value.value)
+    if isinstance(value, pydantic.RootModel):
+        # A scalar `$defs` entry; storage holds its root, as `model_dump` does.
+        return stored(value.root)
     if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
         return value.isoformat()
     if isinstance(value, UUID):
@@ -250,6 +314,8 @@ def unrepresentable(value):
     """Why a validated value cannot be held by a serde_json `Value`, if so."""
     if isinstance(value, enum.Enum):
         return unrepresentable(value.value)
+    if isinstance(value, pydantic.RootModel):
+        return unrepresentable(value.root)
     if isinstance(value, float) and not math.isfinite(value):
         return "non-finite float"
     if isinstance(value, int) and not isinstance(value, bool) and not (-(2**63) <= value < 2**64):

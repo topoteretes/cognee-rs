@@ -165,9 +165,18 @@ Pydantic still rejects `"3.5"` and `3.5` for an `integer`, `2` for a `boolean`,
 field, a naive or date-only `date-time`, a date or `"1700000000"` that is not
 midnight for a `date`, and a bare-digits string for a `time`; so does Rust. The
 same coercions apply inside a list (`[1, "2"]` for `number` items holds
-`[1.0, 2.0]`) and per variant of a union, where an exact type match beats a
-coercing one and otherwise the first variant that accepts wins (`"3"` is `3` in
-`integer | number` but `3.0` in `number | integer`).
+`[1.0, 2.0]`) and per variant of a union. A union follows Pydantic's smart
+mode: every variant is tried, the most exact match wins and the first declared
+variant breaks a tie (`"3"` is `3` in `integer | number` but `3.0` in
+`number | integer`). Pydantic grades a JSON input as *exact* (a JSON integer
+for `integer`, a float for `number`, a bool for `boolean`, any string for
+`uuid`), *strict* (an integer for `number`, any string for `string`, ISO or
+timestamp text for `date-time` and `time`, a date or integer text for `date`,
+a scalar `$defs` entry, which becomes a `RootModel`, at best) or *lax* (every
+other coercion, and every enum match). So `1700000000` is the float
+`1700000000.0` in `date-time | number`, while `"1700000000"` is a datetime in
+`number | date-time`; and `"1"` is `1.0` in `number | Digits` for a string
+enum `Digits`, because an enum match is never better than lax.
 
 Stored properties are the values Python holds in the form its storage encoder
 writes: a `number` as a float, an `integer` as an int, a `boolean` as a bool, an
