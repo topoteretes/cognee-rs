@@ -128,6 +128,32 @@ pub trait DeleteDb: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<Vec<GraphEdge>, DatabaseError>;
 
+    /// Structural edge rows (`is_part_of`, `contains`, ...) that cognify wrote
+    /// with a nil `data_id` but whose source node belongs only to
+    /// `(data_id, dataset_id)`. Selected through their endpoint because the
+    /// `data_id` column does not name them.
+    async fn get_structural_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphEdge>, DatabaseError>;
+
+    /// Delete the rows [`DeleteDb::get_structural_edges_for_data`] returns.
+    /// Must be called before the item's node rows are deleted.
+    async fn delete_structural_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<u64, DatabaseError>;
+
+    /// `EdgeType` retrieval texts still claimed by edge rows that survive the
+    /// deletion of `(data_id, dataset_id)`.
+    async fn get_edge_retrieval_texts_claimed_outside_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<String>, DatabaseError>;
+
     /// Delete all provenance node rows for a dataset.
     async fn delete_provenance_nodes_for_dataset(
         &self,
@@ -310,6 +336,31 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
         graph_storage::get_unique_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn get_structural_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<GraphEdge>, DatabaseError> {
+        graph_storage::get_structural_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn delete_structural_edges_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<u64, DatabaseError> {
+        graph_storage::delete_structural_edges_for_data(self, data_id, dataset_id).await
+    }
+
+    async fn get_edge_retrieval_texts_claimed_outside_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<Vec<String>, DatabaseError> {
+        graph_storage::get_edge_retrieval_texts_claimed_outside_data(self, data_id, dataset_id)
+            .await
     }
 
     async fn delete_provenance_nodes_for_dataset(

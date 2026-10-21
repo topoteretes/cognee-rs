@@ -738,6 +738,144 @@ pub async fn get_unique_edges_for_data(
     Ok(rows)
 }
 
+/// Selection predicate for the structural edge rows (`is_part_of`, `contains`,
+/// `made_from`, `is_a`, ...) that belong to `(data_id, dataset_id)` although
+/// their `data_id` column is nil.
+///
+/// Cognify writes those rows with a nil `data_id` ("structural edges span
+/// multiple DataPoints"), so `data_id = :data` never selects them. Their owner
+/// is recoverable from the source endpoint instead: a row belongs to the data
+/// item when its source node is claimed by that item's node rows and by no
+/// other item's. A chunk, summary or document is exclusive to one item. An
+/// entity shared by several items is not, which keeps the row (and so its
+/// claim on its retrieval text) alive until the last of its owners goes.
+///
+/// Because the predicate reads the node rows, it has to be evaluated before
+/// the data item's node rows are deleted.
+fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str) -> Condition {
+    let owned = Query::select()
+        .column(node::Column::Slug)
+        .from(Alias::new("nodes"))
+        .and_where(node::Column::DatasetId.eq(dataset_hex))
+        .and_where(node::Column::DataId.eq(data_hex))
+        .to_owned();
+    let shared = Query::select()
+        .column(node::Column::Slug)
+        .from(Alias::new("nodes"))
+        .and_where(node::Column::DatasetId.eq(dataset_hex))
+        .and_where(node::Column::DataId.ne(data_hex))
+        .to_owned();
+    Condition::all()
+        .add(edge::Column::DataId.eq(uuid_hex::to_hex(Uuid::nil())))
+        .add(edge::Column::DatasetId.eq(dataset_hex))
+        .add(edge::Column::SourceNodeId.in_subquery(owned))
+        .add(edge::Column::SourceNodeId.not_in_subquery(shared))
+}
+
+/// The nil-`data_id` structural edge rows that belong to `(data_id, dataset_id)`
+/// by their source endpoint; see [`structural_edges_owned_by`].
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_structural_edges_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_structural_edges_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<GraphEdge> = edge::Entity::find()
+        .filter(structural_edges_owned_by(
+            &uuid_hex::to_hex(data_id),
+            &uuid_hex::to_hex(dataset_id),
+        ))
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// Delete the rows [`get_structural_edges_for_data`] selects, returning how
+/// many went. Must run before the data item's node rows are deleted.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.delete_structural_edges_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn delete_structural_edges_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<u64, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let deleted = edge::Entity::delete_many()
+        .filter(structural_edges_owned_by(
+            &uuid_hex::to_hex(data_id),
+            &uuid_hex::to_hex(dataset_id),
+        ))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?
+        .rows_affected;
+    Span::current().record(COGNEE_DB_ROW_COUNT, deleted as i64);
+    Ok(deleted)
+}
+
+/// The `EdgeType` retrieval texts that edge rows surviving the deletion of
+/// `(data_id, dataset_id)` still claim: every row except the item's own
+/// (`data_id`/`dataset_id` match) and the structural rows
+/// [`get_structural_edges_for_data`] attributes to it. Rows of the same data
+/// item in another dataset, and of other items anywhere, count as surviving.
+///
+/// The `EdgeType` point id is many-to-one over edges (every `is_a` shares one),
+/// so slug exclusivity does not say whether the point may go; a caller
+/// subtracts this set from the texts it is about to delete. See
+/// [`get_edge_retrieval_texts_claimed_outside_run`] for the run-scoped sibling.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edge_retrieval_texts_claimed_outside_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_edge_retrieval_texts_claimed_outside_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+) -> Result<Vec<String>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let data_hex = uuid_hex::to_hex(data_id);
+    let dataset_hex = uuid_hex::to_hex(dataset_id);
+    let surviving = Condition::all()
+        .add(
+            Condition::any()
+                .add(edge::Column::DataId.ne(&data_hex))
+                .add(edge::Column::DatasetId.ne(&dataset_hex)),
+        )
+        .add(structural_edges_owned_by(&data_hex, &dataset_hex).not());
+    let texts = retrieval_texts_where(db, surviving).await?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
+    Ok(texts)
+}
+
 // ---------------------------------------------------------------------------
 // Run-scoped provenance queries
 // ---------------------------------------------------------------------------
@@ -1082,24 +1220,34 @@ pub async fn get_edge_retrieval_texts_claimed_outside_run(
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
 
     // `IS NULL` is not redundant with `<> :run`; see `get_unique_nodes_for_run`.
-    let outside = || {
-        let mut outside = Condition::any()
-            .add(edge::Column::PipelineRunId.is_null())
-            .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
-            .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
-        if let Some(data_hexes) = scope.data_hexes() {
-            outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
-        }
-        outside
-    };
+    let mut outside = Condition::any()
+        .add(edge::Column::PipelineRunId.is_null())
+        .add(edge::Column::PipelineRunId.ne(scope.run_hex()))
+        .add(edge::Column::DatasetId.ne(scope.dataset_hex()));
+    if let Some(data_hexes) = scope.data_hexes() {
+        outside = outside.add(edge::Column::DataId.is_not_in(data_hexes));
+    }
 
+    let texts = retrieval_texts_where(db, outside).await?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
+    Ok(texts)
+}
+
+/// The distinct `EdgeType` retrieval texts of the edge rows matching `filter`,
+/// derived exactly as cognify derived the point's key; see
+/// [`get_edge_retrieval_texts_claimed_outside_run`] for why it runs as a
+/// `SELECT DISTINCT` of `(relationship_name, edge_text)` pairs.
+async fn retrieval_texts_where(
+    db: &DatabaseConnection,
+    filter: Condition,
+) -> Result<Vec<String>, DatabaseError> {
     let pairs: Vec<(String, Option<String>)> = match edge_text_sql(db.get_database_backend()) {
         Some(edge_text) => edge::Entity::find()
             .select_only()
             .column(edge::Column::RelationshipName)
             .column_as(Expr::cust(edge_text), "edge_text")
             .distinct()
-            .filter(outside())
+            .filter(filter)
             .into_tuple::<(String, Option<String>)>()
             .all(db)
             .await
@@ -1108,7 +1256,7 @@ pub async fn get_edge_retrieval_texts_claimed_outside_run(
             .select_only()
             .column(edge::Column::RelationshipName)
             .column(edge::Column::Attributes)
-            .filter(outside())
+            .filter(filter)
             .into_tuple::<(String, Option<serde_json::Value>)>()
             .all(db)
             .await
@@ -1129,8 +1277,6 @@ pub async fn get_edge_retrieval_texts_claimed_outside_run(
         .iter()
         .map(|(name, edge_text)| EdgeType::retrieval_text(edge_text.as_deref(), name))
         .collect();
-
-    Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
     Ok(texts.into_iter().collect())
 }
 
