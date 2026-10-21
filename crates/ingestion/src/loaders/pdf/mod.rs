@@ -31,6 +31,9 @@ mod pdfium;
 #[cfg(all(feature = "pdf-pure-rust", not(feature = "pdf-pdfium")))]
 mod pure_rust;
 
+#[cfg(all(feature = "pdf-pure-rust", not(feature = "pdf-pdfium")))]
+mod startxref;
+
 use async_trait::async_trait;
 use cognee_models::Document;
 

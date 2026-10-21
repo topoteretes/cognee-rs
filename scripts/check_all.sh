@@ -118,9 +118,12 @@ echo "================================================================"
 # through it, and `loaders::pdf::pure_rust`, being `cfg(not(pdf-pdfium))`, is
 # not even type-checked by `cargo check --all-targets`. The backend the Python,
 # TS and Java bindings actually ship is therefore untested and unchecked unless
-# the lane is spelled out with pdfium excluded.
+# the lane is spelled out with pdfium excluded. The `--lib` run covers the
+# inline tests of `loaders::pdf::{pure_rust,startxref}`, for the same reason.
 cargo test -p cognee-ingestion --no-default-features --features pdf-pure-rust \
   --test pdf_pure_rust_fixture_extraction
+cargo test -p cognee-ingestion --no-default-features --features pdf-pure-rust \
+  --lib loaders::pdf::
 
 echo ""
 echo "================================================================"

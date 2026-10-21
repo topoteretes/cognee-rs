@@ -328,11 +328,15 @@ jobs:
       # pure-rust test, and `loaders::pdf::pure_rust` is `cfg(not(pdf-pdfium))`
       # and so is not even type-checked by `cargo check --all-targets`. This is
       # the only lane that reads a real PDF with the backend the Python, TS and
-      # Java bindings actually ship. Mirrored in scripts/check_all.sh.
+      # Java bindings actually ship. The `--lib` run covers the inline tests of
+      # `loaders::pdf::{pure_rust,startxref}`, which compile nowhere else.
+      # Mirrored in scripts/check_all.sh.
       - name: Test (PDF pure-rust backend lane)
         run: |
           cargo test -p cognee-ingestion --no-default-features \
             --features pdf-pure-rust --test pdf_pure_rust_fixture_extraction
+          cargo test -p cognee-ingestion --no-default-features \
+            --features pdf-pure-rust --lib loaders::pdf::
 
       # The `session.fs` / `session.redis` config sections exist only when
       # `cognee`'s `session-fs` / `session-redis` features are on, and nothing
