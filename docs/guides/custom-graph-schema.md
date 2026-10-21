@@ -114,8 +114,10 @@ value is not indexed, as in Python. An `index_fields` name that is not a scalar
 field of the model is skipped with a warning, as Python's `index_data_points`
 skips it. The UUID is `uuid5(NAMESPACE_OID, "{Model}:{values}")` over each
 identity value as Python `str()`s it after Pydantic validation: a `number` is a
-float (`3` becomes `3.0`), an `integer` field accepts `3.0` as `3`, a
-`date-time` is a timezone-aware datetime (`2024-03-01 00:00:00+00:00`), an enum
+float (`3` and `"3"` become `3.0`), an `integer` field accepts `3.0` and `"3"` as
+`3`, a `date-time` is a timezone-aware datetime (`2024-03-01 00:00:00+00:00`; a
+Unix timestamp is read as UTC), a `date`, `time` or `uuid` prints as Python's
+`2024-01-02`, `03:04:05` and hyphenated lower-case text, an enum
 member prints as `Enum.member` with datamodel-code-generator's member name
 (`"_x"` is `field_x`, `"mro"` is `mro_`, `1e20` is `number_1e_20`), lists use
 Python `repr` quoting, and only plain strings are lower-cased with spaces turned
@@ -138,16 +140,62 @@ name. For a union of models (`anyOf` of `$ref`s) the first declared model the
 value validates against wins, keys it does not declare being ignored: the
 generated `DataPoint` subclasses keep Pydantic from ranking candidates.
 
-Answers are validated as Pydantic validates the generated model: a `date-time`
-must be an ISO 8601 datetime with an offset, as speedate accepts it (`T`, `t`,
-`_` or space separator, `.` or `,` fraction, no surrounding whitespace, no
-second 60); an `integer` accepts an integral float below 2^63 in magnitude. A
-non-object `$defs` entry that wraps a model (`People = list[Person]`) is
-rejected at compile time. Known gaps: Unix-timestamp values for a `date-time`
-field and integer literals beyond the u64 range are refused, though Pydantic
-accepts both, and enum member names use Rust's Unicode tables, so a few
-non-ASCII values (combining marks, numeric ideographs) can be named differently
-from Python.
+Answers are validated as Pydantic validates the generated model, in lax mode
+(`model_validate_json`, the call instructor makes for a structured-output
+answer), and a field holds the coerced value, not the raw JSON. The table below
+was recorded from real Pydantic 2.12 (`crates/cognify/tests/fixtures/pydantic_lax/`
+holds the generator and the full ground-truth table that the unit tests replay,
+including the node ids Python's `uuid5` computes).
+
+| Field | Accepted besides the exact JSON type | Held as (`str()` feeds identity and labels) |
+|---|---|---|
+| `number` (`float`) | an integer, a bool (`true` is `1.0`), numeric text (`"3"`, `" 3.5 "`, `"1e3"`, `"1_0"`, `".5"`) | `3` and `"3"` are `3.0` |
+| `integer` (`int`) | an integral float below 2^63 (`3.0`), a bool, text of digits (`"3"`, `" 3 "`, `"+3"`, `"3.0"`, `"1_0"`) | `"3.0"` is `3` |
+| `boolean` | `0`/`1`/`0.0`/`1.0`, and the texts `0 off f false n no` / `1 on t true y yes` in any case | `"yes"` is `True` |
+| string enum | the exact text only | `Role.lead_dev` |
+| `integer` enum (`IntEnum`) | the member value read as an `integer` (`true`, `1.0`, `"1"`) | prints the value, `1` |
+| any other enum | Python equality: `true` is `1`, `1` is `true`, `1.0` is `1`; numeric text is not read | `Flag.bool_True` |
+| `date-time` | ISO text with an offset, or a Unix timestamp as a number or as text (`1700000000`, `"1700000000.5"`, `"1.7e9"`); past 2e10 a timestamp is milliseconds | `2023-11-14 22:13:20+00:00`, stored `2023-11-14T22:13:20+00:00` |
+| `date` | `YYYY-MM-DD`, a datetime text or timestamp that is exactly midnight (`"2024-01-02T00:00:00+02:00"`, `86400`, `"86400"`) | `1970-01-02` |
+| `time` | `HH:MM[:SS[.f]]` with an optional offset, or a number of seconds in `[0, 86400)` (read as UTC) | `01:01:01+00:00` |
+| `uuid` | hyphenated, 32 hex digits, `{...}` and `urn:uuid:` forms, any case | `abcdef78-1234-...` lower-case |
+
+Pydantic still rejects `"3.5"` and `3.5` for an `integer`, `2` for a `boolean`,
+`"1"` for a string enum or an untyped integer enum, a bare number for a `string`
+field, a naive or date-only `date-time`, a date or `"1700000000"` that is not
+midnight for a `date`, and a bare-digits string for a `time`; so does Rust. The
+same coercions apply inside a list (`[1, "2"]` for `number` items holds
+`[1.0, 2.0]`) and per variant of a union, where an exact type match beats a
+coercing one and otherwise the first variant that accepts wins (`"3"` is `3` in
+`integer | number` but `3.0` in `number | integer`).
+
+Stored properties are the values Python holds in the form its storage encoder
+writes: a `number` as a float, an `integer` as an int, a `boolean` as a bool, an
+enum as its member value, a `date-time`, `date` or `time` as `isoformat()` text
+(`2023-11-14T22:13:20+00:00`) and a `uuid` as lower-case hyphenated text. A
+`date-time` string that Rust used to keep verbatim is now normalised the same
+way (`2024-03-01T00:00:00Z` is stored as `2024-03-01T00:00:00+00:00`).
+
+Details that follow speedate and pydantic-core: a `date-time` accepts `T`, `t`,
+`_` or space as the separator, `.` or `,` fractions (truncated to microseconds),
+no surrounding whitespace and no second 60; a JSON float timestamp is floored
+and its fraction added as an absolute value (`-1.25` is `23:59:58.25`, while the
+text `"-1.25"` is `23:59:58.75`); a timestamp text must be `[+-]digits` or
+contain a `.` (`"1e9"` is not one, `"1.7e9"` is). A non-object `$defs` entry
+that wraps a model (`People = list[Person]`) is rejected at compile time.
+
+Known gaps, where Pydantic accepts a value that is refused here:
+
+- a value `serde_json` cannot hold: numeric text that parses to `inf` or `nan`
+  (`"inf"`, `"NaN"`, `"1e400"`), and an integer beyond the `i64`/`u64` range
+  (`"99999999999999999999"`, `18446744073709551616`);
+- `null` for a field that is not declared nullable: the generated Python model
+  makes every property missing from `required` optional, so it takes `null`,
+  while Rust reads the schema as written;
+- enum member names use Rust's Unicode tables, so a few non-ASCII values
+  (combining marks, numeric ideographs) can be named differently from Python;
+- the `uuid1`..`uuid5` formats and other string formats are plain strings, as
+  before.
 
 Within one storage batch (one data item's `chunks_per_batch` chunks, as Python's
 `add_data_points` call) a node id is claimed by its first occurrence: a later

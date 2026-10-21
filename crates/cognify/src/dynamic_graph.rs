@@ -1049,14 +1049,15 @@ impl<'a> Materializer<'a> {
                 }
                 DynamicFieldKind::Scalar => {
                     let definitions = &self.schema.scalar_definitions;
-                    validate_scalar_value(value, &field.schema, definitions, 0).map_err(
-                        |reason| DynamicGraphError::InvalidScalarValue {
+                    // Store what Pydantic hands to storage: the validated,
+                    // coerced value rather than the answer's raw JSON.
+                    let coerced = coerce_scalar_value(value, &field.schema, definitions, 0)
+                        .map_err(|reason| DynamicGraphError::InvalidScalarValue {
                             model: model_name.to_string(),
                             field: field.name.clone(),
                             reason,
-                        },
-                    )?;
-                    properties.insert(field.name.clone(), coerce_number(value, &field.schema));
+                        })?;
+                    properties.insert(field.name.clone(), coerced);
                 }
                 DynamicFieldKind::Relationship { targets, many } => {
                     relationship_values.push((field.name.clone(), targets, *many, value));
@@ -1297,8 +1298,12 @@ enum PyValue {
     Int(String),
     Float(f64),
     Str(String),
-    /// `str()` of an aware `datetime`.
-    DateTime(String),
+    /// A value whose `str()` and `repr()` are not derived from a plain JSON
+    /// shape: an aware `datetime`, a `date`, a `time` or a `UUID`.
+    Opaque {
+        text: String,
+        repr: String,
+    },
     /// A member of a generated `Enum`; an `IntEnum` member carries its value,
     /// which is what its `str()` prints.
     Enum {
@@ -1320,7 +1325,7 @@ impl PyValue {
     /// Python `str()`.
     fn to_str(&self) -> String {
         match self {
-            Self::Str(text) | Self::DateTime(text) => text.clone(),
+            Self::Str(text) | Self::Opaque { text, .. } => text.clone(),
             Self::Enum {
                 class,
                 member,
@@ -1348,9 +1353,7 @@ impl PyValue {
             Self::Int(digits) => digits.clone(),
             Self::Float(number) => python_float_repr(*number),
             Self::Str(text) => python_str_repr(text),
-            // `repr(datetime)` is the constructor call; the `str()` form is
-            // close enough for the rare list of datetimes.
-            Self::DateTime(text) => text.clone(),
+            Self::Opaque { repr, .. } => repr.clone(),
             Self::Enum {
                 class,
                 member,
@@ -1449,14 +1452,11 @@ fn python_value(
             }
             _ => PyValue::Int(number.to_string()),
         },
-        (Some("string"), Value::String(text))
-            if schema.get("format").and_then(Value::as_str) == Some("date-time") =>
-        {
-            parse_aware_datetime(text).map_or_else(
-                || PyValue::Str(text.clone()),
-                |date| PyValue::DateTime(python_datetime_str(&date)),
-            )
-        }
+        (Some("string"), Value::String(text)) => schema
+            .get("format")
+            .and_then(Value::as_str)
+            .and_then(|format| formatted_py_value(format, text))
+            .unwrap_or_else(|| PyValue::Str(text.clone())),
         (_, Value::Array(items)) => {
             let item_schema = schema.get("items").unwrap_or(&Value::Null);
             PyValue::List(
@@ -1517,39 +1517,6 @@ fn exact_type_match(value: &Value, variant: &Value) -> bool {
         Some("array") => value.is_array(),
         Some("object") => value.is_object(),
         _ => false,
-    }
-}
-
-/// Store `number` fields as floats and `integer` fields as integers, the
-/// types Pydantic hands to storage (`3` becomes `3.0`, `3.0` becomes `3`).
-fn coerce_number(value: &Value, schema: &Value) -> Value {
-    let Value::Number(number) = value else {
-        return value.clone();
-    };
-    // An enum member or a `RootModel` keeps the value it was declared with.
-    if schema.get("enum").is_some() || schema.get("$ref").is_some() {
-        return value.clone();
-    }
-    let kind = match schema.get("anyOf").and_then(Value::as_array) {
-        Some(variants) => {
-            let non_null = non_null_variants(variants);
-            match non_null.as_slice() {
-                [only] => only.get("type").and_then(Value::as_str),
-                _ => None,
-            }
-        }
-        None => schema.get("type").and_then(Value::as_str),
-    };
-    match kind {
-        Some("number") if !number.is_f64() => number
-            .as_f64()
-            .and_then(serde_json::Number::from_f64)
-            .map_or_else(|| value.clone(), Value::Number),
-        Some("integer") if number.is_f64() => number
-            .as_f64()
-            .filter(|float| float.fract() == 0.0 && float.abs() < PYDANTIC_FLOAT_AS_INT_LIMIT)
-            .map_or_else(|| value.clone(), |float| Value::from(float as i64)),
-        _ => value.clone(),
     }
 }
 
@@ -1814,30 +1781,18 @@ pub(crate) fn python_str_repr(text: &str) -> String {
     out
 }
 
-/// Parse a string the way Pydantic's `AwareDatetime` (speedate) accepts it in
-/// JSON: `YYYY-MM-DD`, a `T`, `t`, `_` or space separator, `HH:MM`, optional
-/// `:SS` with an optional `.` or `,` fraction (truncated to microseconds),
-/// then a `Z`/`z` or `±HH:MM`/`±HHMM` offset (`−` counts as a minus). Nothing
-/// may surround it, a second of 60 is rejected, and a naive datetime is
-/// rejected. speedate's Unix-timestamp strings (`"1700000000"`) are not
-/// accepted here.
-fn parse_aware_datetime(text: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    use chrono::TimeZone;
+type CharStream<'a> = std::iter::Peekable<std::str::Chars<'a>>;
 
-    let mut chars = text.chars().peekable();
-    let year = fixed_digits(&mut chars, 4)?;
-    expect_char(&mut chars, &['-'])?;
-    let month = fixed_digits(&mut chars, 2)?;
-    expect_char(&mut chars, &['-'])?;
-    let day = fixed_digits(&mut chars, 2)?;
-    expect_char(&mut chars, &['T', 't', '_', ' '])?;
-    let hour = fixed_digits(&mut chars, 2)?;
-    expect_char(&mut chars, &[':'])?;
-    let minute = fixed_digits(&mut chars, 2)?;
+/// `HH:MM`, optional `:SS` with an optional `.` or `,` fraction (truncated to
+/// microseconds), as speedate reads a time of day. A second of 60 is refused.
+fn parse_clock(chars: &mut CharStream<'_>) -> Option<chrono::NaiveTime> {
+    let hour = fixed_digits(chars, 2)?;
+    expect_char(chars, &[':'])?;
+    let minute = fixed_digits(chars, 2)?;
     let mut second = 0;
     let mut micros = 0;
     if chars.next_if_eq(&':').is_some() {
-        second = fixed_digits(&mut chars, 2)?;
+        second = fixed_digits(chars, 2)?;
         if chars.next_if(|c| matches!(c, '.' | ',')).is_some() {
             let mut seen = 0;
             while let Some(digit) = chars.next_if(char::is_ascii_digit) {
@@ -1852,32 +1807,247 @@ fn parse_aware_datetime(text: &str) -> Option<chrono::DateTime<chrono::FixedOffs
             micros *= 10u32.pow(6u32.saturating_sub(seen));
         }
     }
-    let offset_seconds = match chars.next()? {
-        'Z' | 'z' => 0,
-        sign @ ('+' | '-' | '\u{2212}') => {
-            let hours = fixed_digits(&mut chars, 2)?;
+    chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, micros)
+}
+
+/// An optional UTC offset after a clock: `Some(None)` when the text ends
+/// here, `Some(Some(seconds))` for `Z`/`z` or `±HH:MM`/`±HHMM` (`−` counts as
+/// a minus), `None` when what follows is not an offset.
+fn parse_offset(chars: &mut CharStream<'_>) -> Option<Option<i32>> {
+    match chars.next() {
+        None => Some(None),
+        Some('Z' | 'z') => Some(Some(0)),
+        Some(sign @ ('+' | '-' | '\u{2212}')) => {
+            let hours = fixed_digits(chars, 2)?;
             chars.next_if_eq(&':');
-            let minutes = fixed_digits(&mut chars, 2)?;
+            let minutes = fixed_digits(chars, 2)?;
             if hours >= 24 || minutes >= 60 {
                 return None;
             }
             let magnitude = i32::try_from(hours * 3600 + minutes * 60).ok()?;
-            if sign == '+' { magnitude } else { -magnitude }
+            Some(Some(if sign == '+' { magnitude } else { -magnitude }))
         }
-        _ => return None,
-    };
-    if chars.next().is_some() || year == 0 || second >= 60 {
+        Some(_) => None,
+    }
+}
+
+/// `YYYY-MM-DD` with a year of at least 1.
+fn parse_date_chars(chars: &mut CharStream<'_>) -> Option<chrono::NaiveDate> {
+    let year = fixed_digits(chars, 4)?;
+    expect_char(chars, &['-'])?;
+    let month = fixed_digits(chars, 2)?;
+    expect_char(chars, &['-'])?;
+    let day = fixed_digits(chars, 2)?;
+    if year == 0 {
         return None;
     }
-    let date = chrono::NaiveDate::from_ymd_opt(i32::try_from(year).ok()?, month, day)?;
-    let time = chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, micros)?;
-    chrono::FixedOffset::east_opt(offset_seconds)?
-        .from_local_datetime(&date.and_time(time))
+    chrono::NaiveDate::from_ymd_opt(i32::try_from(year).ok()?, month, day)
+}
+
+/// A bare `YYYY-MM-DD` date and nothing else.
+fn parse_date_text(text: &str) -> Option<chrono::NaiveDate> {
+    let mut chars = text.chars().peekable();
+    let date = parse_date_chars(&mut chars)?;
+    chars.next().is_none().then_some(date)
+}
+
+/// A time of day with an optional offset (`03:04:05`, `03:04+02:00`).
+fn parse_time_text(text: &str) -> Option<(chrono::NaiveTime, Option<i32>)> {
+    let mut chars = text.chars().peekable();
+    let time = parse_clock(&mut chars)?;
+    let offset = parse_offset(&mut chars)?;
+    chars.next().is_none().then_some((time, offset))
+}
+
+/// An ISO 8601 date and time as speedate reads it: `YYYY-MM-DD`, a `T`, `t`,
+/// `_` or space separator, a clock, then an optional offset. Nothing may
+/// surround it.
+fn parse_iso_datetime(text: &str) -> Option<(chrono::NaiveDateTime, Option<i32>)> {
+    let mut chars = text.chars().peekable();
+    let date = parse_date_chars(&mut chars)?;
+    expect_char(&mut chars, &['T', 't', '_', ' '])?;
+    let time = parse_clock(&mut chars)?;
+    let offset = parse_offset(&mut chars)?;
+    chars
+        .next()
+        .is_none()
+        .then_some((date.and_time(time), offset))
+}
+
+/// Parse a string the way Pydantic's `AwareDatetime` (speedate) accepts an
+/// ISO 8601 datetime in JSON: `YYYY-MM-DD`, a `T`, `t`, `_` or space
+/// separator, `HH:MM`, optional `:SS` with an optional `.` or `,` fraction
+/// (truncated to microseconds), then a `Z`/`z` or `±HH:MM`/`±HHMM` offset
+/// (`−` counts as a minus). Nothing may surround it, a second of 60 is
+/// rejected, and a naive datetime is rejected. Unix-timestamp text is not
+/// ISO; [`parse_aware_datetime_lax`] adds it.
+fn parse_aware_datetime(text: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    use chrono::TimeZone;
+
+    let (naive, offset) = parse_iso_datetime(text)?;
+    chrono::FixedOffset::east_opt(offset?)?
+        .from_local_datetime(&naive)
         .single()
 }
 
+/// speedate's watershed between a Unix timestamp in seconds and one in
+/// milliseconds: a magnitude above it is read as milliseconds.
+const TIMESTAMP_MS_WATERSHED: i64 = 20_000_000_000;
+
+/// The UTC datetime of Unix timestamp `ts`, read as milliseconds when
+/// `millis` and as seconds otherwise, plus `extra_micros`. Years outside
+/// 1..=9999 are refused.
+fn naive_from_timestamp(ts: i64, millis: bool, extra_micros: i64) -> Option<chrono::NaiveDateTime> {
+    use chrono::Datelike;
+
+    let (mut seconds, mut micros) = if millis {
+        (ts.div_euclid(1000), ts.rem_euclid(1000) * 1000)
+    } else {
+        (ts, 0)
+    };
+    micros += extra_micros;
+    seconds = seconds.checked_add(micros.div_euclid(1_000_000))?;
+    micros = micros.rem_euclid(1_000_000);
+    let nanos = u32::try_from(micros).ok()?.checked_mul(1000)?;
+    let naive = chrono::DateTime::from_timestamp(seconds, nanos)?.naive_utc();
+    (1..=9999).contains(&naive.year()).then_some(naive)
+}
+
+/// Whether an integer timestamp is read as milliseconds.
+fn is_millisecond_timestamp(magnitude: f64) -> bool {
+    magnitude > TIMESTAMP_MS_WATERSHED as f64
+}
+
+/// The whole seconds of a fractional timestamp, or `None` when it does not
+/// fit an `i64`.
+fn timestamp_floor(float: f64) -> Option<i64> {
+    let floor = float.floor();
+    // The bound keeps the cast inside `i64`.
+    (floor.is_finite() && floor.abs() < 9.2e18).then_some(floor as i64)
+}
+
+/// A JSON number as a Unix timestamp. pydantic-core floors a float and adds
+/// the absolute value of its fractional part, so a negative fraction runs
+/// the wrong way (`-1.25` is `23:59:58.25`). The fraction is read as
+/// milliseconds when the whole float is past the watershed, while the whole
+/// seconds are judged on their own.
+fn naive_from_json_timestamp(number: &serde_json::Number) -> Option<chrono::NaiveDateTime> {
+    if let Some(ts) = number.as_i64() {
+        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.abs() as f64), 0);
+    }
+    if number.is_u64() {
+        // Beyond `i64`: every year it names is out of range.
+        return None;
+    }
+    let float = number.as_f64()?;
+    let ts = timestamp_floor(float)?;
+    let scale = if is_millisecond_timestamp(float.abs()) {
+        1_000.0
+    } else {
+        1_000_000.0
+    };
+    naive_from_timestamp(
+        ts,
+        is_millisecond_timestamp(ts.abs() as f64),
+        (float.fract().abs() * scale).round() as i64,
+    )
+}
+
+/// Unix-timestamp text as speedate falls back to when ISO parsing fails:
+/// `[+-]digits`, or a decimal containing a `.` (an exponent is allowed there:
+/// `1.7e9`, but `1e9` is not a timestamp). A text fraction runs the right
+/// way, unlike a JSON float, and the watershed is judged on the whole value.
+fn naive_from_timestamp_text(text: &str) -> Option<chrono::NaiveDateTime> {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        let ts = text.parse::<i64>().ok()?;
+        return naive_from_timestamp(ts, is_millisecond_timestamp(ts.abs() as f64), 0);
+    }
+    if text.contains('.') {
+        let float: f64 = text.parse().ok()?;
+        let ts = timestamp_floor(float)?;
+        let millis = is_millisecond_timestamp(float.abs());
+        let scale = if millis { 1_000.0 } else { 1_000_000.0 };
+        return naive_from_timestamp(ts, millis, ((float - float.floor()) * scale).round() as i64);
+    }
+    None
+}
+
+/// An aware datetime from ISO text, Unix-timestamp text or a number, as
+/// Pydantic's `AwareDatetime` takes JSON. A timestamp is UTC.
+fn parse_aware_datetime_lax(value: &Value) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    use chrono::TimeZone;
+
+    let utc = chrono::FixedOffset::east_opt(0)?;
+    let naive = match value {
+        Value::String(text) => {
+            if let Some(aware) = parse_aware_datetime(text) {
+                return Some(aware);
+            }
+            naive_from_timestamp_text(text)?
+        }
+        Value::Number(number) => naive_from_json_timestamp(number)?,
+        _ => return None,
+    };
+    utc.from_local_datetime(&naive).single()
+}
+
+/// A `date` from `YYYY-MM-DD`, from a datetime text or timestamp that falls
+/// exactly on midnight (any offset is ignored), or from a timestamp number.
+fn parse_date_lax(value: &Value) -> Option<chrono::NaiveDate> {
+    let naive = match value {
+        Value::String(text) => {
+            if let Some(date) = parse_date_text(text) {
+                return Some(date);
+            }
+            match parse_iso_datetime(text) {
+                Some((naive, _)) => naive,
+                None => naive_from_timestamp_text(text)?,
+            }
+        }
+        Value::Number(number) => naive_from_json_timestamp(number)?,
+        _ => return None,
+    };
+    (naive.time() == chrono::NaiveTime::MIN).then(|| naive.date())
+}
+
+/// A `time` from `HH:MM[:SS[.f]]` with an optional offset, or from a number
+/// of seconds since midnight below 86400 (which Pydantic reads as UTC). Text
+/// holding a number is refused.
+fn parse_time_lax(value: &Value) -> Option<(chrono::NaiveTime, Option<i32>)> {
+    match value {
+        Value::String(text) => parse_time_text(text),
+        Value::Number(number) => {
+            let (seconds, micros) = match number.as_i64() {
+                Some(seconds) => (seconds, 0),
+                None if number.is_u64() => return None,
+                None => {
+                    let float = number.as_f64()?;
+                    if !float.is_finite() || float < 0.0 {
+                        return None;
+                    }
+                    (
+                        float.floor() as i64,
+                        (float.fract() * 1_000_000.0).round() as i64,
+                    )
+                }
+            };
+            let total = seconds.checked_mul(1_000_000)?.checked_add(micros)?;
+            if !(0..86_400_000_000).contains(&total) {
+                return None;
+            }
+            let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
+                u32::try_from(total / 1_000_000).ok()?,
+                u32::try_from(total % 1_000_000).ok()?.checked_mul(1000)?,
+            )?;
+            Some((time, Some(0)))
+        }
+        _ => None,
+    }
+}
+
 /// Exactly `width` ASCII digits as a number.
-fn fixed_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, width: usize) -> Option<u32> {
+fn fixed_digits(chars: &mut CharStream<'_>, width: usize) -> Option<u32> {
     let mut value = 0;
     for _ in 0..width {
         value = value * 10 + chars.next_if(char::is_ascii_digit)?.to_digit(10)?;
@@ -1885,11 +2055,146 @@ fn fixed_digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, width: usi
     Some(value)
 }
 
-fn expect_char(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    allowed: &[char],
-) -> Option<()> {
+fn expect_char(chars: &mut CharStream<'_>, allowed: &[char]) -> Option<()> {
     chars.next_if(|c| allowed.contains(c)).map(|_| ())
+}
+
+/// Python `isoformat()` / `str()` of a time: `HH:MM:SS`, `.ffffff` when
+/// there are microseconds, then the `+HH:MM` offset when there is one.
+fn python_time_str(time: chrono::NaiveTime, offset: Option<i32>) -> String {
+    use chrono::Timelike;
+
+    let mut text = time.format("%H:%M:%S").to_string();
+    let micros = time.nanosecond() / 1_000 % 1_000_000;
+    if micros != 0 {
+        text.push_str(&format!(".{micros:06}"));
+    }
+    if let Some(offset) = offset {
+        text.push_str(&python_offset_str(offset));
+    }
+    text
+}
+
+/// The `+HH:MM` offset text Python prints (with `:SS` for an odd offset).
+fn python_offset_str(offset: i32) -> String {
+    let (sign, magnitude) = if offset < 0 {
+        ('-', -offset)
+    } else {
+        ('+', offset)
+    };
+    let mut text = format!("{sign}{:02}:{:02}", magnitude / 3600, magnitude % 3600 / 60);
+    if magnitude % 60 != 0 {
+        text.push_str(&format!(":{:02}", magnitude % 60));
+    }
+    text
+}
+
+/// The constructor arguments Python's `repr` prints for a time of day: the
+/// seconds and microseconds only when they are not zero.
+fn python_clock_repr(time: chrono::NaiveTime) -> String {
+    use chrono::Timelike;
+
+    let micros = time.nanosecond() / 1_000 % 1_000_000;
+    let mut text = format!("{}, {}", time.hour(), time.minute());
+    if time.second() != 0 || micros != 0 {
+        text.push_str(&format!(", {}", time.second()));
+    }
+    if micros != 0 {
+        text.push_str(&format!(", {micros}"));
+    }
+    text
+}
+
+/// pydantic-core's `tzinfo=TzInfo(<seconds>)` suffix of a repr.
+fn python_tzinfo_repr(offset: Option<i32>) -> String {
+    offset.map_or_else(String::new, |offset| format!(", tzinfo=TzInfo({offset})"))
+}
+
+/// The Python value Pydantic builds for a string of `format` that the
+/// validator turned into a `datetime`, `date`, `time` or `UUID`. `text` is
+/// the canonical form [`coerce_formatted`] stores.
+fn formatted_py_value(format: &str, text: &str) -> Option<PyValue> {
+    use chrono::Datelike;
+
+    match format {
+        "date-time" => {
+            let (naive, offset) = parse_iso_datetime(text)?;
+            let aware = parse_aware_datetime(text)?;
+            Some(PyValue::Opaque {
+                text: python_datetime_str(&aware),
+                repr: format!(
+                    "datetime.datetime({}, {}, {}, {}{})",
+                    naive.year(),
+                    naive.month(),
+                    naive.day(),
+                    python_clock_repr(naive.time()),
+                    python_tzinfo_repr(offset)
+                ),
+            })
+        }
+        "date" => {
+            let date = parse_date_text(text)?;
+            Some(PyValue::Opaque {
+                text: date.format("%Y-%m-%d").to_string(),
+                repr: format!(
+                    "datetime.date({}, {}, {})",
+                    date.year(),
+                    date.month(),
+                    date.day()
+                ),
+            })
+        }
+        "time" => {
+            let (time, offset) = parse_time_text(text)?;
+            Some(PyValue::Opaque {
+                text: python_time_str(time, offset),
+                repr: format!(
+                    "datetime.time({}{})",
+                    python_clock_repr(time),
+                    python_tzinfo_repr(offset)
+                ),
+            })
+        }
+        "uuid" => {
+            let uuid = Uuid::parse_str(text).ok()?;
+            Some(PyValue::Opaque {
+                text: uuid.to_string(),
+                repr: format!("UUID('{uuid}')"),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Coerce a value for a `string` field of `format` as Pydantic does, and
+/// return the form Python's storage encoder writes (`isoformat()` for a
+/// datetime, date or time, the hyphenated text of a UUID). `None` when the
+/// field has no such format.
+fn coerce_formatted(format: &str, value: &Value) -> Option<Result<Value, String>> {
+    let canonical = match format {
+        "date-time" => parse_aware_datetime_lax(value).map(|date| {
+            let mut text = python_datetime_str(&date);
+            // `isoformat()` separates the date from the time with a `T`.
+            text.replace_range(10..11, "T");
+            text
+        }),
+        "date" => parse_date_lax(value).map(|date| date.format("%Y-%m-%d").to_string()),
+        "time" => parse_time_lax(value).map(|(time, offset)| python_time_str(time, offset)),
+        "uuid" => value
+            .as_str()
+            .and_then(|text| Uuid::parse_str(text).ok())
+            .map(|uuid| uuid.to_string()),
+        _ => return None,
+    };
+    Some(canonical.map(Value::String).ok_or_else(|| {
+        let kind = match format {
+            "date-time" => "a timezone-aware date-time or Unix timestamp",
+            "date" => "a date",
+            "time" => "a time of day",
+            _ => "a UUID",
+        };
+        format!("is not {kind}")
+    }))
 }
 
 /// Python `str(datetime)` for an aware datetime: `YYYY-MM-DD HH:MM:SS`, then
@@ -1901,20 +2206,7 @@ fn python_datetime_str(date: &chrono::DateTime<chrono::FixedOffset>) -> String {
     if micros != 0 {
         text.push_str(&format!(".{micros:06}"));
     }
-    let offset = date.offset().local_minus_utc();
-    let (sign, offset) = if offset < 0 {
-        ('-', -offset)
-    } else {
-        ('+', offset)
-    };
-    text.push_str(&format!(
-        "{sign}{:02}:{:02}",
-        offset / 3600,
-        offset % 3600 / 60
-    ));
-    if offset % 60 != 0 {
-        text.push_str(&format!(":{:02}", offset % 60));
-    }
+    text.push_str(&python_offset_str(date.offset().local_minus_utc()));
     text
 }
 
@@ -1954,6 +2246,179 @@ fn validate_scalar_value(
     definitions: &HashMap<String, Value>,
     depth: usize,
 ) -> Result<(), String> {
+    coerce_scalar_value(value, schema, definitions, depth).map(|_| ())
+}
+
+/// Python `==` between two JSON values, where `True == 1` and `1 == 1.0`:
+/// how Pydantic matches an input against an `Enum` member's value.
+fn python_equal(left: &Value, right: &Value) -> bool {
+    let number = |value: &Value| match value {
+        Value::Number(number) => number.as_f64(),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        _ => None,
+    };
+    match (number(left), number(right)) {
+        (Some(left), Some(right)) => left == right,
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => match (left, right) {
+            (Value::Array(left), Value::Array(right)) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| python_equal(left, right))
+            }
+            (Value::Object(left), Value::Object(right)) => {
+                left.len() == right.len()
+                    && left.iter().all(|(key, value)| {
+                        right
+                            .get(key)
+                            .is_some_and(|other| python_equal(value, other))
+                    })
+            }
+            _ => left == right,
+        },
+    }
+}
+
+/// Whether every `_` of `text` sits between two ASCII letters or digits, as
+/// pydantic-core requires before it ignores underscores in a number.
+fn underscores_are_separators(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.iter().enumerate().all(|(index, byte)| {
+        *byte != b'_'
+            || (index > 0
+                && bytes[index - 1].is_ascii_alphanumeric()
+                && bytes.get(index + 1).is_some_and(u8::is_ascii_alphanumeric))
+    })
+}
+
+/// A `number` field's value as pydantic-core's lax `float` takes it: a JSON
+/// number, a bool (`true` is `1.0`), or numeric text (trimmed, `_` between
+/// digits, `inf` and `nan` in any case).
+fn coerce_float(value: &Value) -> Result<Value, String> {
+    let float = match value {
+        Value::Number(number) => number.as_f64(),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        Value::String(text) => {
+            let text = text.trim();
+            if !underscores_are_separators(text) {
+                return Err("expected number".to_string());
+            }
+            text.replace('_', "").parse::<f64>().ok()
+        }
+        _ => None,
+    }
+    .ok_or_else(|| "expected number".to_string())?;
+    // A JSON value cannot hold `inf` or `nan`, which Pydantic accepts.
+    serde_json::Number::from_f64(float)
+        .map(Value::Number)
+        .ok_or_else(|| "is not a finite number".to_string())
+}
+
+/// An `integer` field's value as pydantic-core's lax `int` takes it: a JSON
+/// integer, an integral float below 2^63 in magnitude, a bool, or text of
+/// digits (trimmed, optionally signed, `_` between digits, and an all-zero
+/// fraction such as `3.0`).
+fn coerce_int(value: &Value) -> Result<Value, String> {
+    match value {
+        Value::Number(number) if number.is_i64() || number.is_u64() => Ok(value.clone()),
+        // serde parses an integer literal beyond u64 as a float, so such a
+        // literal is refused here although Python takes it as an `int`.
+        Value::Number(number) => number
+            .as_f64()
+            .filter(|float| float.fract() == 0.0 && float.abs() < PYDANTIC_FLOAT_AS_INT_LIMIT)
+            .map(|float| Value::from(float as i64))
+            .ok_or_else(|| "expected integer".to_string()),
+        Value::Bool(flag) => Ok(Value::from(u8::from(*flag))),
+        Value::String(text) => parse_int_text(text),
+        _ => Err("expected integer".to_string()),
+    }
+}
+
+fn parse_int_text(text: &str) -> Result<Value, String> {
+    let invalid = || "expected integer".to_string();
+    let text = text.trim();
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (whole, fraction) = match unsigned.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (unsigned, None),
+    };
+    // `3.0` is `3`, but `3.5`, `3.` and `3.0_0` are not integers.
+    if fraction.is_some_and(|zeros| zeros.is_empty() || !zeros.bytes().all(|b| b == b'0')) {
+        return Err(invalid());
+    }
+    if !whole.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        || !whole.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+        || !underscores_are_separators(whole)
+    {
+        return Err(invalid());
+    }
+    let range = || "is outside the supported integer range".to_string();
+    let magnitude: u128 = whole.replace('_', "").parse().map_err(|_| range())?;
+    if negative {
+        // `i64::MIN` has no positive counterpart, hence the signed detour.
+        let negated = i128::try_from(magnitude).map(|n| -n).map_err(|_| range())?;
+        Ok(Value::from(i64::try_from(negated).map_err(|_| range())?))
+    } else {
+        Ok(Value::from(u64::try_from(magnitude).map_err(|_| range())?))
+    }
+}
+
+/// A `boolean` field's value as pydantic-core's lax `bool` takes it: a bool,
+/// `0`/`1` (or `0.0`/`1.0`), or one of the texts `0 off f false n no` and
+/// `1 on t true y yes` in any case.
+fn coerce_bool(value: &Value) -> Result<bool, String> {
+    let invalid = || "expected boolean".to_string();
+    match value {
+        Value::Bool(flag) => Ok(*flag),
+        Value::Number(number) => match number.as_f64() {
+            Some(0.0) => Ok(false),
+            Some(1.0) => Ok(true),
+            _ => Err(invalid()),
+        },
+        Value::String(text) => match text.to_lowercase().as_str() {
+            "0" | "off" | "f" | "false" | "n" | "no" => Ok(false),
+            "1" | "on" | "t" | "true" | "y" | "yes" => Ok(true),
+            _ => Err(invalid()),
+        },
+        _ => Err(invalid()),
+    }
+}
+
+/// Match `value` against an enum's members. A string enum takes only its
+/// text. An `IntEnum` (`"type": "integer"`) first reads the input as a lax
+/// `int`, so `"1"` and `1.0` select `1`. Any other enum matches by Python
+/// equality, where `true` is `1` and `1.0` is `1`. Returns the member's value.
+fn coerce_enum(value: &Value, schema: &Value, choices: &[Value]) -> Result<Value, String> {
+    let probe = if schema.get("type").and_then(Value::as_str) == Some("integer") {
+        coerce_int(value)?
+    } else {
+        value.clone()
+    };
+    choices
+        .iter()
+        .find(|choice| python_equal(choice, &probe))
+        .cloned()
+        .ok_or_else(|| "is not one of the declared enum values".to_string())
+}
+
+/// Validate a scalar answer against its schema as Pydantic's lax mode does
+/// (`model_validate_json` on the generated model) and return the value
+/// Python holds, in the JSON form its storage encoder writes: a `number` is
+/// a float, an `integer` an int, a bool a bool, an enum member its value, a
+/// `date-time`, `date` or `time` its `isoformat()` text and a `uuid` its
+/// hyphenated text. Strings, numbers and bools are coerced the way
+/// pydantic-core coerces them; see `docs/guides/custom-graph-schema.md`.
+fn coerce_scalar_value(
+    value: &Value,
+    schema: &Value,
+    definitions: &HashMap<String, Value>,
+    depth: usize,
+) -> Result<Value, String> {
     // Compilation routes every model reference to a relationship, so a
     // reference reaching scalar validation must name a scalar definition and
     // must not match vacuously.
@@ -1965,58 +2430,56 @@ fn validate_scalar_value(
         if depth >= MAX_SCALAR_REFERENCE_DEPTH {
             return Err("nests scalar definition references too deeply".to_string());
         }
-        return validate_scalar_value(value, definition, definitions, depth + 1);
+        return coerce_scalar_value(value, definition, definitions, depth + 1);
     }
     if let Some(variants) = schema.get("anyOf").and_then(Value::as_array) {
-        if variants
+        // Pydantic's smart-mode union keeps an exact type match over a
+        // coercing one and otherwise takes the first variant that accepts.
+        let accepted: Vec<(&Value, Value)> = variants
             .iter()
-            .any(|variant| validate_scalar_value(value, variant, definitions, depth).is_ok())
-        {
-            return Ok(());
-        }
-        return Err("does not match any allowed variant".to_string());
+            .filter_map(|variant| {
+                coerce_scalar_value(value, variant, definitions, depth)
+                    .ok()
+                    .map(|coerced| (variant, coerced))
+            })
+            .collect();
+        return accepted
+            .iter()
+            .find(|(variant, _)| exact_type_match(value, variant))
+            .or_else(|| accepted.first())
+            .map(|(_, coerced)| coerced.clone())
+            .ok_or_else(|| "does not match any allowed variant".to_string());
     }
-    if let Some(expected) = schema.get("type").and_then(Value::as_str) {
-        let matches = match expected {
-            "null" => value.is_null(),
-            "boolean" => value.is_boolean(),
-            // Pydantic's lax `int` takes a float with no fractional part
-            // whose magnitude is below 2^63 (`1e20` is "too big"). serde
-            // parses an integer literal beyond u64 as a float, so such a
-            // literal is refused here although Python takes it as an `int`.
-            "integer" => {
-                value.as_i64().is_some()
-                    || value.as_u64().is_some()
-                    || value.as_f64().is_some_and(|number| {
-                        number.fract() == 0.0 && number.abs() < PYDANTIC_FLOAT_AS_INT_LIMIT
-                    })
+    let mut coerced = value.clone();
+    if let Some(choices) = schema.get("enum").and_then(Value::as_array) {
+        coerced = coerce_enum(value, schema, choices)?;
+    } else if let Some(expected) = schema.get("type").and_then(Value::as_str) {
+        coerced = match expected {
+            "null" if value.is_null() => Value::Null,
+            "boolean" => Value::Bool(coerce_bool(value)?),
+            "integer" => coerce_int(value)?,
+            "number" => coerce_float(value)?,
+            "string" => {
+                let formatted = schema
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .and_then(|format| coerce_formatted(format, value));
+                match formatted {
+                    Some(result) => result?,
+                    None if value.is_string() => value.clone(),
+                    None => return Err("expected string".to_string()),
+                }
             }
-            "number" => value.is_number(),
-            "string" => value.is_string(),
-            "array" => value.is_array(),
-            "object" => value.is_object(),
-            _ => true,
+            "array" if value.is_array() => value.clone(),
+            "object" if value.is_object() => value.clone(),
+            "null" | "array" | "object" => return Err(format!("expected {expected}")),
+            _ => value.clone(),
         };
-        if !matches {
-            return Err(format!("expected {expected}"));
-        }
-        if expected == "string"
-            && schema.get("format").and_then(Value::as_str) == Some("date-time")
-            && let Some(text) = value.as_str()
-            && parse_aware_datetime(text).is_none()
-        {
-            return Err("is not a timezone-aware date-time".to_string());
-        }
     }
     if let Some(constant) = schema.get("const")
         && !json_equal(value, constant)
     {
         return Err("does not equal the declared constant".to_string());
-    }
-    if let Some(choices) = schema.get("enum").and_then(Value::as_array)
-        && !choices.iter().any(|choice| json_equal(choice, value))
-    {
-        return Err("is not one of the declared enum values".to_string());
     }
     if let (Some(text), Some(minimum)) = (
         value.as_str(),
@@ -2035,9 +2498,12 @@ fn validate_scalar_value(
     if let Some(items) = value.as_array()
         && let Some(item_schema) = schema.get("items")
     {
-        for item in items {
-            validate_scalar_value(item, item_schema, definitions, depth)?;
-        }
+        coerced = Value::Array(
+            items
+                .iter()
+                .map(|item| coerce_scalar_value(item, item_schema, definitions, depth))
+                .collect::<Result<_, _>>()?,
+        );
     }
     if let Some(object) = value.as_object() {
         let properties = schema.get("properties").and_then(Value::as_object);
@@ -2049,14 +2515,20 @@ fn validate_scalar_value(
             }
         }
         if let Some(properties) = properties {
+            let mut entries = Map::new();
             for (field, field_value) in object {
-                if let Some(field_schema) = properties.get(field) {
-                    validate_scalar_value(field_value, field_schema, definitions, depth)?;
-                }
+                let entry = match properties.get(field) {
+                    Some(field_schema) => {
+                        coerce_scalar_value(field_value, field_schema, definitions, depth)?
+                    }
+                    None => field_value.clone(),
+                };
+                entries.insert(field.clone(), entry);
             }
+            coerced = Value::Object(entries);
         }
     }
-    Ok(())
+    Ok(coerced)
 }
 
 #[cfg(test)]
@@ -4060,5 +4532,216 @@ mod tests {
         );
         assert_eq!(rex.properties.get("meows"), Some(&json!(true)));
         assert!(!rex.properties.contains_key("barks"));
+    }
+
+    /// One field's schema as a one-field custom model whose only identity
+    /// field is that field, so the node id depends on the validated value.
+    fn lax_model(table: &Value, field: &str) -> DynamicGraphSchema {
+        let schema = json!({
+            "title": "Thing",
+            "type": "object",
+            "properties": {
+                field: table["fields"][field],
+                "metadata": {"type": "object", "default": {"identity_fields": [field]}},
+            },
+            "$defs": table["defs"],
+        });
+        DynamicGraphSchema::compile(&schema).expect("table schema compiles")
+    }
+
+    /// Every row of the ground-truth table recorded from real Pydantic
+    /// (`tests/fixtures/pydantic_lax/generate.py`, `model_validate_json` on
+    /// the model datamodel-code-generator builds): accepted and rejected
+    /// inputs, the value held in storage form, its `str()`, and the node id
+    /// cognee derives from it, computed by Python's `uuid5`.
+    #[test]
+    fn pydantic_lax_table_is_reproduced() {
+        let table: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/pydantic_lax/pydantic_lax_table.json"
+        ))
+        .expect("the fixture is valid JSON");
+        let rows = table["rows"].as_array().expect("rows is an array");
+        let mut accepted_rows = 0;
+        let mut rejected_rows = 0;
+        let mut gap_rows = 0;
+        for row in rows {
+            let field = row["field"].as_str().expect("field is text");
+            let input = row["input"].as_str().expect("input is text");
+            let label = format!("{field} <- {input}");
+            let answer: Value = serde_json::from_str(input).expect("input is JSON");
+            let compiled = lax_model(&table, field);
+            let result = compiled.materialize(&json!({ field: answer }), Uuid::nil());
+            if row["accepted"] != json!(true) {
+                rejected_rows += 1;
+                assert!(result.is_err(), "{label}: Pydantic rejects it");
+                continue;
+            }
+            if let Some(gap) = row.get("gap") {
+                // Pydantic holds a value a JSON `Value` cannot (`inf`, `nan`,
+                // an integer beyond 64 bits); the answer is refused instead.
+                gap_rows += 1;
+                assert!(result.is_err(), "{label}: known gap ({gap})");
+                continue;
+            }
+            accepted_rows += 1;
+            let graph = result.unwrap_or_else(|error| panic!("{label}: {error}"));
+            let node = &graph.nodes[0];
+            assert_eq!(
+                node.base.id.to_string(),
+                row["id"].as_str().expect("id is text"),
+                "{label}: node id"
+            );
+            assert_eq!(node.properties[field], row["stored"], "{label}: stored");
+            if !row["stored"].is_null() {
+                assert_eq!(
+                    node.property_strs[field],
+                    row["str"].as_str().expect("str is text"),
+                    "{label}: str()"
+                );
+            }
+        }
+        // The table must not silently shrink.
+        assert!(accepted_rows > 250, "{accepted_rows} accepted rows");
+        assert!(rejected_rows > 150, "{rejected_rows} rejected rows");
+        assert_eq!(gap_rows, 8, "{gap_rows} known-gap rows");
+    }
+
+    /// One identity UUID per coercion family, computed with Python's
+    /// `uuid5(NAMESPACE_OID, "Thing:<str(value)>")` (cognee's identity
+    /// algorithm), never from this code.
+    #[test]
+    fn coerced_values_hash_to_the_ids_python_computes() {
+        let defs = json!({
+            "Flag": {"enum": [true, false]},
+            "Level": {"enum": [1, 2], "type": "integer"},
+        });
+        let date_time = json!({"type": "string", "format": "date-time"});
+        for (schema, answer, expected) in [
+            // numeric string for number: `"3"` is `3.0`.
+            (
+                json!({"type": "number"}),
+                json!("3"),
+                "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+            ),
+            // numeric string for integer: `"3"` is `3`.
+            (
+                json!({"type": "integer"}),
+                json!("3"),
+                "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+            ),
+            // text for boolean: `"yes"` is `True`.
+            (
+                json!({"type": "boolean"}),
+                json!("yes"),
+                "57542da9-7a39-5ead-b901-778ef0ea0a79",
+            ),
+            // bool matches an int enum member: `true` is `Level.integer_1`,
+            // which prints `1`.
+            (
+                json!({"$ref": "#/$defs/Level"}),
+                json!(true),
+                "b61468a2-d621-5c40-b148-12963ff9b2de",
+            ),
+            // int matches a bool enum member: `1` is `Flag.bool_True`.
+            (
+                json!({"$ref": "#/$defs/Flag"}),
+                json!(1),
+                "705a39b0-871a-521a-8cd6-db99aec6fd55",
+            ),
+            // Unix timestamp for date-time, as a number and as text.
+            (
+                date_time.clone(),
+                json!(1_700_000_000),
+                "37944ed6-b3f5-5590-893b-cf823edb7c86",
+            ),
+            (
+                date_time,
+                json!("1700000000"),
+                "37944ed6-b3f5-5590-893b-cf823edb7c86",
+            ),
+            // a timestamp on midnight for date.
+            (
+                json!({"type": "string", "format": "date"}),
+                json!(86_400),
+                "33af0cff-08f2-553c-a421-7d86a6ad5974",
+            ),
+            // seconds since midnight for time, read as UTC.
+            (
+                json!({"type": "string", "format": "time"}),
+                json!(3661),
+                "56a9c8b0-0a73-5e38-b8a0-9e467805dfc1",
+            ),
+            // a braced UUID prints hyphenated.
+            (
+                json!({"type": "string", "format": "uuid"}),
+                json!("{12345678-1234-5678-1234-567812345678}"),
+                "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+            ),
+            // coercion applies inside a list: `[1, "2"]` prints `[1.0, 2.0]`.
+            (
+                json!({"type": "array", "items": {"type": "number"}}),
+                json!([1, "2"]),
+                "d3124fad-7cbe-5abf-997c-b2f8c3cba75c",
+            ),
+        ] {
+            let schema_json = json!({
+                "title": "Thing", "type": "object",
+                "properties": {
+                    "v": schema,
+                    "metadata": {"type": "object", "default": {"identity_fields": ["v"]}},
+                },
+                "$defs": defs,
+            });
+            let compiled = DynamicGraphSchema::compile(&schema_json).expect("schema compiles");
+            let graph = compiled
+                .materialize(&json!({ "v": answer }), Uuid::nil())
+                .unwrap_or_else(|error| panic!("{answer}: {error}"));
+            assert_eq!(graph.nodes[0].base.id.to_string(), expected, "{answer}");
+        }
+    }
+
+    /// Stored properties are the values Python holds, in the form its storage
+    /// encoder writes.
+    #[test]
+    fn coerced_properties_are_stored_as_python_holds_them() {
+        let schema = json!({
+            "title": "Thing", "type": "object",
+            "properties": {
+                "n": {"type": "number"}, "i": {"type": "integer"}, "b": {"type": "boolean"},
+                "when": {"type": "string", "format": "date-time"},
+                "day": {"type": "string", "format": "date"},
+                "at": {"type": "string", "format": "time"},
+                "ref": {"type": "string", "format": "uuid"},
+            },
+        });
+        let compiled = DynamicGraphSchema::compile(&schema).expect("schema compiles");
+        let answer = |id: &str| {
+            json!({
+                "n": "3", "i": " 7 ", "b": "off", "when": 1_700_000_000_i64,
+                "day": "2024-01-02T00:00:00Z", "at": "03:04", "ref": id,
+            })
+        };
+        let error = compiled
+            .materialize(&answer("not-a-uuid"), Uuid::nil())
+            .expect_err("`not-a-uuid` is not a UUID");
+        assert!(error.to_string().contains("`Thing.ref`"), "{error}");
+        let graph = compiled
+            .materialize(&answer("ABCDEF78-1234-5678-1234-567812345678"), Uuid::nil())
+            .expect("every value coerces");
+        let properties = &graph.nodes[0].properties;
+        assert_eq!(properties["n"], json!(3.0));
+        assert!(properties["n"].is_f64());
+        assert_eq!(properties["i"], json!(7));
+        assert_eq!(properties["b"], json!(false));
+        assert_eq!(properties["when"], json!("2023-11-14T22:13:20+00:00"));
+        assert_eq!(properties["day"], json!("2024-01-02"));
+        assert_eq!(properties["at"], json!("03:04:00"));
+        assert_eq!(
+            properties["ref"],
+            json!("abcdef78-1234-5678-1234-567812345678")
+        );
+        let strs = &graph.nodes[0].property_strs;
+        assert_eq!(strs["when"], "2023-11-14 22:13:20+00:00");
+        assert_eq!(strs["day"], "2024-01-02");
     }
 }

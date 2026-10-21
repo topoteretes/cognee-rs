@@ -1,0 +1,3374 @@
+{
+ "defs": {
+  "E": {
+   "enum": [
+    "x",
+    "y"
+   ],
+   "type": "string"
+  },
+  "EI": {
+   "enum": [
+    1,
+    2
+   ],
+   "type": "integer"
+  },
+  "EB": {
+   "enum": [
+    true,
+    false
+   ]
+  },
+  "EN": {
+   "enum": [
+    1.5,
+    2.5
+   ],
+   "type": "number"
+  },
+  "UInt": {
+   "enum": [
+    1,
+    2
+   ]
+  },
+  "UFlt": {
+   "enum": [
+    1.5,
+    2.5
+   ]
+  },
+  "UMix": {
+   "enum": [
+    "a",
+    1,
+    true
+   ]
+  },
+  "UStr1": {
+   "enum": [
+    "1",
+    "2"
+   ]
+  },
+  "NInt": {
+   "enum": [
+    1,
+    2
+   ],
+   "type": "number"
+  },
+  "SInt": {
+   "enum": [
+    "1",
+    "2"
+   ],
+   "type": "string"
+  }
+ },
+ "fields": {
+  "s": {
+   "type": "string"
+  },
+  "n": {
+   "type": "number"
+  },
+  "i": {
+   "type": "integer"
+  },
+  "b": {
+   "type": "boolean"
+  },
+  "e": {
+   "$ref": "#/$defs/E"
+  },
+  "ei": {
+   "$ref": "#/$defs/EI"
+  },
+  "eb": {
+   "$ref": "#/$defs/EB"
+  },
+  "en": {
+   "$ref": "#/$defs/EN"
+  },
+  "es": {
+   "type": "string",
+   "enum": [
+    "a",
+    "b"
+   ]
+  },
+  "uint": {
+   "$ref": "#/$defs/UInt"
+  },
+  "uflt": {
+   "$ref": "#/$defs/UFlt"
+  },
+  "umix": {
+   "$ref": "#/$defs/UMix"
+  },
+  "ustr1": {
+   "$ref": "#/$defs/UStr1"
+  },
+  "nint": {
+   "$ref": "#/$defs/NInt"
+  },
+  "sint": {
+   "$ref": "#/$defs/SInt"
+  },
+  "dt": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "d": {
+   "type": "string",
+   "format": "date"
+  },
+  "t": {
+   "type": "string",
+   "format": "time"
+  },
+  "u": {
+   "type": "string",
+   "format": "uuid"
+  },
+  "un_str_num": {
+   "anyOf": [
+    {
+     "type": "string"
+    },
+    {
+     "type": "number"
+    }
+   ]
+  },
+  "un_num_int": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "type": "integer"
+    }
+   ]
+  },
+  "un_int_num": {
+   "anyOf": [
+    {
+     "type": "integer"
+    },
+    {
+     "type": "number"
+    }
+   ]
+  },
+  "un_bool_int": {
+   "anyOf": [
+    {
+     "type": "boolean"
+    },
+    {
+     "type": "integer"
+    }
+   ]
+  },
+  "un_int_bool": {
+   "anyOf": [
+    {
+     "type": "integer"
+    },
+    {
+     "type": "boolean"
+    }
+   ]
+  },
+  "un_date_int": {
+   "anyOf": [
+    {
+     "type": "string",
+     "format": "date"
+    },
+    {
+     "type": "integer"
+    }
+   ]
+  },
+  "un_int_dt": {
+   "anyOf": [
+    {
+     "type": "integer"
+    },
+    {
+     "type": "string",
+     "format": "date-time"
+    }
+   ]
+  },
+  "opt_num": {
+   "anyOf": [
+    {
+     "type": "number"
+    },
+    {
+     "type": "null"
+    }
+   ]
+  },
+  "l_num": {
+   "type": "array",
+   "items": {
+    "type": "number"
+   }
+  },
+  "l_int": {
+   "type": "array",
+   "items": {
+    "type": "integer"
+   }
+  },
+  "l_date": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "format": "date"
+   }
+  },
+  "l_bool": {
+   "type": "array",
+   "items": {
+    "type": "boolean"
+   }
+  }
+ },
+ "pydantic": "2.12.5",
+ "rows": [
+  {
+   "field": "s",
+   "input": "\"a\"",
+   "accepted": true,
+   "str": "a",
+   "id": "30d9a91e-ab94-5dd2-a183-7e818ff8f0b2",
+   "stored": "a"
+  },
+  {
+   "field": "s",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "s",
+   "input": "1.5",
+   "accepted": false
+  },
+  {
+   "field": "s",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "s",
+   "input": "[]",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "3",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "n",
+   "input": "3.5",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "n",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "n",
+   "input": "\"3.5\"",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "n",
+   "input": "\" 3.5 \"",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "n",
+   "input": "\"1e3\"",
+   "accepted": true,
+   "str": "1000.0",
+   "id": "ce23481a-8429-5963-9149-08127e262224",
+   "stored": 1000.0
+  },
+  {
+   "field": "n",
+   "input": "\"1_0\"",
+   "accepted": true,
+   "str": "10.0",
+   "id": "6b6e3f66-09d7-537a-ab48-56c548619d18",
+   "stored": 10.0
+  },
+  {
+   "field": "n",
+   "input": "\"inf\"",
+   "accepted": true,
+   "str": "inf",
+   "id": "d4442093-f492-55cf-a145-d094ce8f0110",
+   "gap": "non-finite float"
+  },
+  {
+   "field": "n",
+   "input": "\"nan\"",
+   "accepted": true,
+   "str": "nan",
+   "id": "cd2eca46-b9ac-52db-bf07-84fa5738f429",
+   "gap": "non-finite float"
+  },
+  {
+   "field": "n",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "n",
+   "input": "false",
+   "accepted": true,
+   "str": "0.0",
+   "id": "dc868cff-9042-5de2-8702-f8a50c6cfd84",
+   "stored": 0.0
+  },
+  {
+   "field": "n",
+   "input": "[]",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"Infinity\"",
+   "accepted": true,
+   "str": "inf",
+   "id": "d4442093-f492-55cf-a145-d094ce8f0110",
+   "gap": "non-finite float"
+  },
+  {
+   "field": "n",
+   "input": "\"-inf\"",
+   "accepted": true,
+   "str": "-inf",
+   "id": "a2bea34b-a71d-5be0-aac8-e71f1bd50226",
+   "gap": "non-finite float"
+  },
+  {
+   "field": "n",
+   "input": "\"+1.5\"",
+   "accepted": true,
+   "str": "1.5",
+   "id": "7050b4e1-9b0f-570e-b103-a610990ce17c",
+   "stored": 1.5
+  },
+  {
+   "field": "n",
+   "input": "\".5\"",
+   "accepted": true,
+   "str": "0.5",
+   "id": "41ae1247-f2b1-532e-9332-0ca22842532c",
+   "stored": 0.5
+  },
+  {
+   "field": "n",
+   "input": "\"5.\"",
+   "accepted": true,
+   "str": "5.0",
+   "id": "1bb9f622-0969-5fd2-92ed-b1d417802c2a",
+   "stored": 5.0
+  },
+  {
+   "field": "n",
+   "input": "\"1E3\"",
+   "accepted": true,
+   "str": "1000.0",
+   "id": "ce23481a-8429-5963-9149-08127e262224",
+   "stored": 1000.0
+  },
+  {
+   "field": "n",
+   "input": "\"1__0\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"_1\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"1_\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"0x10\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"1,5\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"\\u00a03\\u00a0\"",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "n",
+   "input": "\"3\\n\"",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "n",
+   "input": "\"  \"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"1e400\"",
+   "accepted": true,
+   "str": "inf",
+   "id": "d4442093-f492-55cf-a145-d094ce8f0110",
+   "gap": "non-finite float"
+  },
+  {
+   "field": "n",
+   "input": "\"-0\"",
+   "accepted": true,
+   "str": "-0.0",
+   "id": "b3b83e84-068c-5b64-97b0-4e77faa7666d",
+   "stored": -0.0
+  },
+  {
+   "field": "n",
+   "input": "\"1_0.5_5\"",
+   "accepted": true,
+   "str": "10.55",
+   "id": "9976d20e-dab5-575c-99c7-0ecd31a45ce1",
+   "stored": 10.55
+  },
+  {
+   "field": "n",
+   "input": "\"1_e5\"",
+   "accepted": true,
+   "str": "100000.0",
+   "id": "c1c7955f-cfa5-58f2-9e04-61dfcd178f1c",
+   "stored": 100000.0
+  },
+  {
+   "field": "n",
+   "input": "\"1.e5\"",
+   "accepted": true,
+   "str": "100000.0",
+   "id": "c1c7955f-cfa5-58f2-9e04-61dfcd178f1c",
+   "stored": 100000.0
+  },
+  {
+   "field": "n",
+   "input": "\".e5\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"+.5\"",
+   "accepted": true,
+   "str": "0.5",
+   "id": "41ae1247-f2b1-532e-9332-0ca22842532c",
+   "stored": 0.5
+  },
+  {
+   "field": "n",
+   "input": "\"-.5e-2\"",
+   "accepted": true,
+   "str": "-0.005",
+   "id": "be7774d5-13b4-5136-9b9b-2bff0409c5f9",
+   "stored": -0.005
+  },
+  {
+   "field": "n",
+   "input": "\"1e-400\"",
+   "accepted": true,
+   "str": "0.0",
+   "id": "dc868cff-9042-5de2-8702-f8a50c6cfd84",
+   "stored": 0.0
+  },
+  {
+   "field": "n",
+   "input": "\"1f\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"1 0\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"\\uff13\"",
+   "accepted": false
+  },
+  {
+   "field": "n",
+   "input": "\"\\uff11.\\uff15\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "3",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "3.0",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "3.5",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\" 3 \"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"+3\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"3.0\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"3.5\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"1e3\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"1_0\"",
+   "accepted": true,
+   "str": "10",
+   "id": "3fd05b97-24ef-5be2-80ae-0201f2318ed9",
+   "stored": 10
+  },
+  {
+   "field": "i",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "true",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "i",
+   "input": "false",
+   "accepted": true,
+   "str": "0",
+   "id": "b73315dc-7914-5a76-9742-15e480f52353",
+   "stored": 0
+  },
+  {
+   "field": "i",
+   "input": "1e20",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"-3\"",
+   "accepted": true,
+   "str": "-3",
+   "id": "3eff6ad7-6322-5ffc-b3f4-13b9942a7e27",
+   "stored": -3
+  },
+  {
+   "field": "i",
+   "input": "\"3 \"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"3_000\"",
+   "accepted": true,
+   "str": "3000",
+   "id": "19fef5bc-1728-5108-a884-b801051d842e",
+   "stored": 3000
+  },
+  {
+   "field": "i",
+   "input": "\"0003\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"-0\"",
+   "accepted": true,
+   "str": "0",
+   "id": "b73315dc-7914-5a76-9742-15e480f52353",
+   "stored": 0
+  },
+  {
+   "field": "i",
+   "input": "9223372036854775807",
+   "accepted": true,
+   "str": "9223372036854775807",
+   "id": "71991aae-d474-5046-bbab-4a4c0095515c",
+   "stored": 9223372036854775807
+  },
+  {
+   "field": "i",
+   "input": "-9223372036854775808",
+   "accepted": true,
+   "str": "-9223372036854775808",
+   "id": "38221c22-710f-55d1-b610-074f2e7b9ac2",
+   "stored": -9223372036854775808
+  },
+  {
+   "field": "i",
+   "input": "1e18",
+   "accepted": true,
+   "str": "1000000000000000000",
+   "id": "b40c5347-93f5-5b77-8a64-5e9ceeb0bb4b",
+   "stored": 1000000000000000000
+  },
+  {
+   "field": "i",
+   "input": "9.3e18",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3.00\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"3.\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\".0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3e0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"1.0e1\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "3.0000000000000004",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"\\u0663\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"\\uff13\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3.50\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3.0_0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"-3.0\"",
+   "accepted": true,
+   "str": "-3",
+   "id": "3eff6ad7-6322-5ffc-b3f4-13b9942a7e27",
+   "stored": -3
+  },
+  {
+   "field": "i",
+   "input": "\"+3.0\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"1_0.0\"",
+   "accepted": true,
+   "str": "10",
+   "id": "3fd05b97-24ef-5be2-80ae-0201f2318ed9",
+   "stored": 10
+  },
+  {
+   "field": "i",
+   "input": "\"0.0\"",
+   "accepted": true,
+   "str": "0",
+   "id": "b73315dc-7914-5a76-9742-15e480f52353",
+   "stored": 0
+  },
+  {
+   "field": "i",
+   "input": "\"-0.0\"",
+   "accepted": true,
+   "str": "0",
+   "id": "b73315dc-7914-5a76-9742-15e480f52353",
+   "stored": 0
+  },
+  {
+   "field": "i",
+   "input": "\"1_000.\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"0_3\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "i",
+   "input": "\"3__0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"--3\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"3.0.0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "1.0e0",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "i",
+   "input": "-1e18",
+   "accepted": true,
+   "str": "-1000000000000000000",
+   "id": "ef46856f-c066-5d99-9ea4-f2388de0fa9b",
+   "stored": -1000000000000000000
+  },
+  {
+   "field": "i",
+   "input": "\"1.5e0\"",
+   "accepted": false
+  },
+  {
+   "field": "i",
+   "input": "\"99999999999999999999\"",
+   "accepted": true,
+   "str": "99999999999999999999",
+   "id": "24c30282-f7e8-5ce2-a964-275f1dc03b62",
+   "gap": "integer outside the i64/u64 range"
+  },
+  {
+   "field": "i",
+   "input": "9223372036854775808",
+   "accepted": true,
+   "str": "9223372036854775808",
+   "id": "48a12353-2c9f-5f6c-b5ef-546b228802ba",
+   "stored": 9223372036854775808
+  },
+  {
+   "field": "i",
+   "input": "18446744073709551615",
+   "accepted": true,
+   "str": "18446744073709551615",
+   "id": "7fba52ff-1b36-5c5f-9996-5eb87ccfaa92",
+   "stored": 18446744073709551615
+  },
+  {
+   "field": "i",
+   "input": "18446744073709551616",
+   "accepted": true,
+   "str": "18446744073709551616",
+   "id": "28db4806-d2a2-5ba9-85d8-b7dacf2c1a86",
+   "gap": "integer outside the i64/u64 range"
+  },
+  {
+   "field": "i",
+   "input": "-9223372036854775809",
+   "accepted": true,
+   "str": "-9223372036854775809",
+   "id": "1469b39d-2d36-5e7f-b6b6-a1a6770cb1bc",
+   "gap": "integer outside the i64/u64 range"
+  },
+  {
+   "field": "b",
+   "input": "true",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "false",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "1",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "0",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "2",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "1.0",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "0.0",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "1.5",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "-1",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\"true\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"True\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"TRUE\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"yes\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"Yes\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"y\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"t\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"T\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"on\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"off\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"OFF\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"n\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"no\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"f\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"false\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"False\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "b",
+   "input": "\"0\"",
+   "accepted": true,
+   "str": "False",
+   "id": "b428595b-c971-5c6e-80d6-87da0c916a38",
+   "stored": false
+  },
+  {
+   "field": "b",
+   "input": "\"1.0\"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\" true \"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\"\"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\"2\"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\"maybe\"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "\"nope\"",
+   "accepted": false
+  },
+  {
+   "field": "b",
+   "input": "[]",
+   "accepted": false
+  },
+  {
+   "field": "e",
+   "input": "\"x\"",
+   "accepted": true,
+   "str": "E.x",
+   "id": "142e667c-be93-55a6-ab25-9ca25560e78a",
+   "stored": "x"
+  },
+  {
+   "field": "e",
+   "input": "\"z\"",
+   "accepted": false
+  },
+  {
+   "field": "e",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "e",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "es",
+   "input": "\"a\"",
+   "accepted": true,
+   "str": "Es.a",
+   "id": "368ed3e9-33c0-53f4-bf08-6bad4b9d82ef",
+   "stored": "a"
+  },
+  {
+   "field": "es",
+   "input": "\"c\"",
+   "accepted": false
+  },
+  {
+   "field": "ei",
+   "input": "1",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "ei",
+   "input": "1.0",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "ei",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "ei",
+   "input": "2",
+   "accepted": true,
+   "str": "2",
+   "id": "5905f322-2d17-5689-a17d-8379d778c296",
+   "stored": 2
+  },
+  {
+   "field": "ei",
+   "input": "3",
+   "accepted": false
+  },
+  {
+   "field": "ei",
+   "input": "true",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "ei",
+   "input": "\"x\"",
+   "accepted": false
+  },
+  {
+   "field": "ei",
+   "input": "1.5",
+   "accepted": false
+  },
+  {
+   "field": "eb",
+   "input": "true",
+   "accepted": true,
+   "str": "EB.bool_True",
+   "id": "692abd1b-3fb6-5401-b81a-7204d562fd20",
+   "stored": true
+  },
+  {
+   "field": "eb",
+   "input": "false",
+   "accepted": true,
+   "str": "EB.bool_False",
+   "id": "10b633af-39c9-5592-bd55-3545771eae53",
+   "stored": false
+  },
+  {
+   "field": "eb",
+   "input": "1",
+   "accepted": true,
+   "str": "EB.bool_True",
+   "id": "692abd1b-3fb6-5401-b81a-7204d562fd20",
+   "stored": true
+  },
+  {
+   "field": "eb",
+   "input": "0",
+   "accepted": true,
+   "str": "EB.bool_False",
+   "id": "10b633af-39c9-5592-bd55-3545771eae53",
+   "stored": false
+  },
+  {
+   "field": "eb",
+   "input": "\"true\"",
+   "accepted": false
+  },
+  {
+   "field": "eb",
+   "input": "\"True\"",
+   "accepted": false
+  },
+  {
+   "field": "eb",
+   "input": "2",
+   "accepted": false
+  },
+  {
+   "field": "en",
+   "input": "1.5",
+   "accepted": true,
+   "str": "EN.number_1_5",
+   "id": "2470b98c-1867-5ce8-a214-9e87efaa09d2",
+   "stored": 1.5
+  },
+  {
+   "field": "en",
+   "input": "2.5",
+   "accepted": true,
+   "str": "EN.number_2_5",
+   "id": "1a381e7b-ace2-5771-93ad-36c3641ad0cc",
+   "stored": 2.5
+  },
+  {
+   "field": "en",
+   "input": "\"1.5\"",
+   "accepted": false
+  },
+  {
+   "field": "en",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "en",
+   "input": "2",
+   "accepted": false
+  },
+  {
+   "field": "uint",
+   "input": "1",
+   "accepted": true,
+   "str": "UInt.int_1",
+   "id": "27b275cd-c43b-59fc-986d-99f116ca385d",
+   "stored": 1
+  },
+  {
+   "field": "uint",
+   "input": "1.0",
+   "accepted": true,
+   "str": "UInt.int_1",
+   "id": "27b275cd-c43b-59fc-986d-99f116ca385d",
+   "stored": 1
+  },
+  {
+   "field": "uint",
+   "input": "\"1\"",
+   "accepted": false
+  },
+  {
+   "field": "uint",
+   "input": "true",
+   "accepted": true,
+   "str": "UInt.int_1",
+   "id": "27b275cd-c43b-59fc-986d-99f116ca385d",
+   "stored": 1
+  },
+  {
+   "field": "uint",
+   "input": "3",
+   "accepted": false
+  },
+  {
+   "field": "uint",
+   "input": "\"x\"",
+   "accepted": false
+  },
+  {
+   "field": "uflt",
+   "input": "1.5",
+   "accepted": true,
+   "str": "UFlt.float_1_5",
+   "id": "cd4dbb99-3651-5b93-bdfa-6cf887a40a1c",
+   "stored": 1.5
+  },
+  {
+   "field": "uflt",
+   "input": "\"1.5\"",
+   "accepted": false
+  },
+  {
+   "field": "uflt",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "umix",
+   "input": "\"a\"",
+   "accepted": true,
+   "str": "UMix.a",
+   "id": "981e9202-e484-5f02-8f85-1e5c2cffdd60",
+   "stored": "a"
+  },
+  {
+   "field": "umix",
+   "input": "1",
+   "accepted": true,
+   "str": "UMix.int_1",
+   "id": "f452be9c-22bd-5f2a-81eb-1f2af474c0b2",
+   "stored": 1
+  },
+  {
+   "field": "umix",
+   "input": "true",
+   "accepted": true,
+   "str": "UMix.int_1",
+   "id": "f452be9c-22bd-5f2a-81eb-1f2af474c0b2",
+   "stored": 1
+  },
+  {
+   "field": "umix",
+   "input": "1.0",
+   "accepted": true,
+   "str": "UMix.int_1",
+   "id": "f452be9c-22bd-5f2a-81eb-1f2af474c0b2",
+   "stored": 1
+  },
+  {
+   "field": "umix",
+   "input": "\"1\"",
+   "accepted": false
+  },
+  {
+   "field": "umix",
+   "input": "0",
+   "accepted": false
+  },
+  {
+   "field": "ustr1",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "UStr1.field_1",
+   "id": "39a817b0-cec5-5bde-8f3c-b3a6e8b923cc",
+   "stored": "1"
+  },
+  {
+   "field": "ustr1",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "nint",
+   "input": "1",
+   "accepted": true,
+   "str": "NInt.number_1",
+   "id": "72ed634c-d2f5-5b83-baed-b66754dd6bac",
+   "stored": 1
+  },
+  {
+   "field": "nint",
+   "input": "1.0",
+   "accepted": true,
+   "str": "NInt.number_1",
+   "id": "72ed634c-d2f5-5b83-baed-b66754dd6bac",
+   "stored": 1
+  },
+  {
+   "field": "nint",
+   "input": "\"1\"",
+   "accepted": false
+  },
+  {
+   "field": "nint",
+   "input": "true",
+   "accepted": true,
+   "str": "NInt.number_1",
+   "id": "72ed634c-d2f5-5b83-baed-b66754dd6bac",
+   "stored": 1
+  },
+  {
+   "field": "nint",
+   "input": "1.5",
+   "accepted": false
+  },
+  {
+   "field": "sint",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "SInt.field_1",
+   "id": "bb259224-c320-57b8-a7d9-a6804dd253af",
+   "stored": "1"
+  },
+  {
+   "field": "sint",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05+02:00\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+02:00",
+   "id": "8d05fc34-9f97-5090-b1ec-9b0c5b93f723",
+   "stored": "2024-01-02T03:04:05+02:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "1700000000",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1700000000.5",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.500000+00:00",
+   "id": "99cd0066-7e85-5993-93a1-810d8b1e2a9d",
+   "stored": "2023-11-14T22:13:20.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000.5\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.500000+00:00",
+   "id": "99cd0066-7e85-5993-93a1-810d8b1e2a9d",
+   "stored": "2023-11-14T22:13:20.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1700000000000",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000000\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-1",
+   "accepted": true,
+   "str": "1969-12-31 23:59:59+00:00",
+   "id": "f2582525-0047-588f-a70a-3c2d0ae9a1ba",
+   "stored": "1969-12-31T23:59:59+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"-1\"",
+   "accepted": true,
+   "str": "1969-12-31 23:59:59+00:00",
+   "id": "f2582525-0047-588f-a70a-3c2d0ae9a1ba",
+   "stored": "1969-12-31T23:59:59+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "0",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00+00:00",
+   "id": "1c36c51b-32bd-5f22-8630-548a2b3287ba",
+   "stored": "1970-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"0\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00+00:00",
+   "id": "1c36c51b-32bd-5f22-8630-548a2b3287ba",
+   "stored": "1970-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "253402300800",
+   "accepted": true,
+   "str": "1978-01-11 21:31:40.800000+00:00",
+   "id": "1319e188-b201-5288-9040-a388471cf35b",
+   "stored": "1978-01-11T21:31:40.800000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "253402300799",
+   "accepted": true,
+   "str": "1978-01-11 21:31:40.799000+00:00",
+   "id": "c06ba552-6392-56fa-a949-a628d78450af",
+   "stored": "1978-01-11T21:31:40.799000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1e20",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05.5Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05.500000+00:00",
+   "id": "5b69b748-53b2-598e-81f6-c4d03898cc69",
+   "stored": "2024-01-02T03:04:05.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02 03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:00+00:00",
+   "id": "98f4b128-3b4c-5bf5-aeb9-a3de93c56bbb",
+   "stored": "2024-01-02T03:04:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000 \"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\" 1700000000\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"+1700000000\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1_700_000_000\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"1e9\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"1.7e9\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1.7e9",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "19999999999",
+   "accepted": true,
+   "str": "2603-10-11 11:33:19+00:00",
+   "id": "14098658-279b-55c5-908e-238fa82c53b6",
+   "stored": "2603-10-11T11:33:19+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "20000000001",
+   "accepted": true,
+   "str": "1970-08-20 11:33:20.001000+00:00",
+   "id": "0bb00761-635b-5ae1-b323-1142985766b5",
+   "stored": "1970-08-20T11:33:20.001000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "20000000000",
+   "accepted": true,
+   "str": "2603-10-11 11:33:20+00:00",
+   "id": "bd1fec05-1495-5638-a973-a428a4ae8b1e",
+   "stored": "2603-10-11T11:33:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-20000000001",
+   "accepted": true,
+   "str": "1969-05-14 12:26:39.999000+00:00",
+   "id": "e6f0c08c-2d97-5ba1-b0a7-816226b42b7a",
+   "stored": "1969-05-14T12:26:39.999000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1700000000.123456789",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.123457+00:00",
+   "id": "64aa8609-e752-5b16-b4a3-f29127eaf070",
+   "stored": "2023-11-14T22:13:20.123457+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000.1234567\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.123457+00:00",
+   "id": "64aa8609-e752-5b16-b4a3-f29127eaf070",
+   "stored": "2023-11-14T22:13:20.123457+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000.\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20+00:00",
+   "id": "37944ed6-b3f5-5590-893b-cf823edb7c86",
+   "stored": "2023-11-14T22:13:20+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\".5\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00.500000+00:00",
+   "id": "b125a0aa-ac7a-5019-9f33-fbef0f4c0a21",
+   "stored": "1970-01-01T00:00:00.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"-0.5\"",
+   "accepted": true,
+   "str": "1969-12-31 23:59:59.500000+00:00",
+   "id": "9ef5a4ce-fd65-53f8-bb58-fe215625cfe6",
+   "stored": "1969-12-31T23:59:59.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-0.5",
+   "accepted": true,
+   "str": "1969-12-31 23:59:59.500000+00:00",
+   "id": "9ef5a4ce-fd65-53f8-bb58-fe215625cfe6",
+   "stored": "1969-12-31T23:59:59.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "253402300799000",
+   "accepted": true,
+   "str": "9999-12-31 23:59:59+00:00",
+   "id": "f5e138cc-beac-5289-9e14-79b936e95645",
+   "stored": "9999-12-31T23:59:59+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "253402300800000",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "-62135596800",
+   "accepted": true,
+   "str": "1968-01-12 20:06:43.200000+00:00",
+   "id": "851f5e36-ba66-5375-8e63-2726133d829c",
+   "stored": "1968-01-12T20:06:43.200000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-62135596801",
+   "accepted": true,
+   "str": "1968-01-12 20:06:43.199000+00:00",
+   "id": "432ba561-8881-5276-9b82-6fa5b4f0a7d6",
+   "stored": "1968-01-12T20:06:43.199000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1e15",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05+0200\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+02:00",
+   "id": "8d05fc34-9f97-5090-b1ec-9b0c5b93f723",
+   "stored": "2024-01-02T03:04:05+02:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05-02\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05.1234567Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05.123456+00:00",
+   "id": "d4f17fff-e76d-5594-9273-5b2a8b3984ed",
+   "stored": "2024-01-02T03:04:05.123456+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-1.25",
+   "accepted": true,
+   "str": "1969-12-31 23:59:58.250000+00:00",
+   "id": "3aedec21-3b30-51ad-aa93-3dd8b96ed340",
+   "stored": "1969-12-31T23:59:58.250000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-1.5",
+   "accepted": true,
+   "str": "1969-12-31 23:59:58.500000+00:00",
+   "id": "59df70d5-07a4-5141-baaf-afbe12982fe7",
+   "stored": "1969-12-31T23:59:58.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "0.9999999",
+   "accepted": true,
+   "str": "1970-01-01 00:00:01+00:00",
+   "id": "4bdf357a-0a38-58e2-bf3e-f3c4c82e5756",
+   "stored": "1970-01-01T00:00:01+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1.9999999",
+   "accepted": true,
+   "str": "1970-01-01 00:00:02+00:00",
+   "id": "6c5b49c6-3d4e-5d3d-a8bd-3fc291b30a26",
+   "stored": "1970-01-01T00:00:02+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1700000000123.7",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.123700+00:00",
+   "id": "c9245e4b-da04-5349-9c59-0b6251dfa5f7",
+   "stored": "2023-11-14T22:13:20.123700+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "1700000000123.456",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.123456+00:00",
+   "id": "dc7fee20-207a-50e5-89dc-3b73939b0b5f",
+   "stored": "2023-11-14T22:13:20.123456+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-1700000000123.7",
+   "accepted": true,
+   "str": "1916-02-18 01:46:39.876700+00:00",
+   "id": "9d2f9c9b-99a3-56b6-aeb0-2e9db3ea904b",
+   "stored": "1916-02-18T01:46:39.876700+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-1700000000123",
+   "accepted": true,
+   "str": "1916-02-18 01:46:39.877000+00:00",
+   "id": "1eac4caa-c9db-56ff-bd3f-a682d69b6005",
+   "stored": "1916-02-18T01:46:39.877000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "-20000000000.5",
+   "accepted": true,
+   "str": "1969-05-14 12:26:39.999500+00:00",
+   "id": "735e7d19-da0f-5448-a387-d53c07cf4f39",
+   "stored": "1969-05-14T12:26:39.999500+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "20000000000.5",
+   "accepted": true,
+   "str": "2603-10-11 11:33:20.000500+00:00",
+   "id": "61f43b07-a5eb-5fa1-873a-36a5830ae47a",
+   "stored": "2603-10-11T11:33:20.000500+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"20000000000.5\"",
+   "accepted": true,
+   "str": "1970-08-20 11:33:20.000500+00:00",
+   "id": "09da3817-b8d2-53d6-83c1-4fdca5393ca7",
+   "stored": "1970-08-20T11:33:20.000500+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"-1.25\"",
+   "accepted": true,
+   "str": "1969-12-31 23:59:58.750000+00:00",
+   "id": "48e82945-43e4-5fd2-83cd-23d501fc9a51",
+   "stored": "1969-12-31T23:59:58.750000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1.5e1\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:15+00:00",
+   "id": "316a437a-3384-5eaf-9a54-3b23f6fd029a",
+   "stored": "1970-01-01T00:00:15+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1.e1\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:10+00:00",
+   "id": "5982940c-ab5b-5ebc-9776-b32b2f18109b",
+   "stored": "1970-01-01T00:00:10+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1.5E3\"",
+   "accepted": true,
+   "str": "1970-01-01 00:25:00+00:00",
+   "id": "6bbb7844-97e3-5e89-a1b4-6a224d584d2e",
+   "stored": "1970-01-01T00:25:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"inf.0\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"+.5\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00.500000+00:00",
+   "id": "b125a0aa-ac7a-5019-9f33-fbef0f4c0a21",
+   "stored": "1970-01-01T00:00:00.500000+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1.5.5\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"1.5e\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"0.0\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00+00:00",
+   "id": "1c36c51b-32bd-5f22-8630-548a2b3287ba",
+   "stored": "1970-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"-0\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00+00:00",
+   "id": "1c36c51b-32bd-5f22-8630-548a2b3287ba",
+   "stored": "1970-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"+0\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:00+00:00",
+   "id": "1c36c51b-32bd-5f22-8630-548a2b3287ba",
+   "stored": "1970-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"00000000000001\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:01+00:00",
+   "id": "4bdf357a-0a38-58e2-bf3e-f3c4c82e5756",
+   "stored": "1970-01-01T00:00:01+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"9223372036854775807\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"9223372036854775808\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "9223372036854775807",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000.123456\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:20.123456+00:00",
+   "id": "dc7fee20-207a-50e5-89dc-3b73939b0b5f",
+   "stored": "2023-11-14T22:13:20.123456+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"1700000000.9999999\"",
+   "accepted": true,
+   "str": "2023-11-14 22:13:21+00:00",
+   "id": "523bbd07-aff7-55da-89e6-3aaa71a0267f",
+   "stored": "2023-11-14T22:13:21+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"0001-01-01T00:00:00Z\"",
+   "accepted": true,
+   "str": "0001-01-01 00:00:00+00:00",
+   "id": "d1330fa1-457f-5f81-9694-2d9d2a060f0e",
+   "stored": "0001-01-01T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"0000-01-01T00:00:00Z\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"9999-12-31T23:59:59.999999Z\"",
+   "accepted": true,
+   "str": "9999-12-31 23:59:59.999999+00:00",
+   "id": "c00b2845-2973-5190-b0d3-0abd6bf2ca46",
+   "stored": "9999-12-31T23:59:59.999999+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05-00:00\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05+23:59\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+23:59",
+   "id": "bc7146d0-81db-5de2-a345-60a07702f4c1",
+   "stored": "2024-01-02T03:04:05+23:59"
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T03:04:05+24:00\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-01-02T24:00:00Z\"",
+   "accepted": false
+  },
+  {
+   "field": "dt",
+   "input": "\"2024-02-29T00:00:00Z\"",
+   "accepted": true,
+   "str": "2024-02-29 00:00:00+00:00",
+   "id": "22b7ce44-7acb-5619-8a7b-e460e241fa20",
+   "stored": "2024-02-29T00:00:00+00:00"
+  },
+  {
+   "field": "dt",
+   "input": "\"2023-02-29T00:00:00Z\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00Z\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T10:00:00\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-1-2\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "1700000000",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "1700000000000",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"1700000000\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"1700000000.5\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "0",
+   "accepted": true,
+   "str": "1970-01-01",
+   "id": "8a530dd0-b906-52e5-a644-62b852133a83",
+   "stored": "1970-01-01"
+  },
+  {
+   "field": "d",
+   "input": "-1",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "86400",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "86400.0",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "86400.5",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"20240102\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-02-30\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00.000\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02 00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00+02:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00.5\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "-86400",
+   "accepted": true,
+   "str": "1969-12-31",
+   "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
+   "stored": "1969-12-31"
+  },
+  {
+   "field": "d",
+   "input": "86400000",
+   "accepted": true,
+   "str": "1972-09-27",
+   "id": "dfe373bf-ade3-54ed-9ada-afcf41563f36",
+   "stored": "1972-09-27"
+  },
+  {
+   "field": "d",
+   "input": "86400000.0",
+   "accepted": true,
+   "str": "1972-09-27",
+   "id": "dfe373bf-ade3-54ed-9ada-afcf41563f36",
+   "stored": "1972-09-27"
+  },
+  {
+   "field": "d",
+   "input": "1700006400",
+   "accepted": true,
+   "str": "2023-11-15",
+   "id": "bb367777-b85b-522e-8c45-703303434b6b",
+   "stored": "2023-11-15"
+  },
+  {
+   "field": "d",
+   "input": "172800",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "\"172800\"",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "\"1970-01-02\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"0000-01-01\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"9999-12-31\"",
+   "accepted": true,
+   "str": "9999-12-31",
+   "id": "e11f5df6-66b4-57e4-af53-0b7ce6ab5a31",
+   "stored": "9999-12-31"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02 \"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"+2024-01-02\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "20000000000",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "1.7e9",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "253402214400",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "253402300800",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-W01-1\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"86400.0\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"86400.5\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"-86400\"",
+   "accepted": true,
+   "str": "1969-12-31",
+   "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
+   "stored": "1969-12-31"
+  },
+  {
+   "field": "d",
+   "input": "\"+86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"86400.\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00.0\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02t00:00:00\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00Z\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00.999999\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T00:00:00.0000001\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "d",
+   "input": "-86400.0",
+   "accepted": true,
+   "str": "1969-12-31",
+   "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
+   "stored": "1969-12-31"
+  },
+  {
+   "field": "d",
+   "input": "86400.00",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "d",
+   "input": "172800.0",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "1e5",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"1e5\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"1.728e5\"",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "\"1.728E5\"",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "1.728e5",
+   "accepted": true,
+   "str": "1970-01-03",
+   "id": "02807361-3fb5-5f12-8fa4-af0bf327f029",
+   "stored": "1970-01-03"
+  },
+  {
+   "field": "d",
+   "input": "\"2024-01-02T24:00:00\"",
+   "accepted": false
+  },
+  {
+   "field": "d",
+   "input": "\"1969-12-31\"",
+   "accepted": true,
+   "str": "1969-12-31",
+   "id": "e0fd4fe7-df21-58e9-9168-d9bb9cd4c522",
+   "stored": "1969-12-31"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05\"",
+   "accepted": true,
+   "str": "03:04:05",
+   "id": "8006115b-1424-5a69-9e51-b9bde7fbbf42",
+   "stored": "03:04:05"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04\"",
+   "accepted": true,
+   "str": "03:04:00",
+   "id": "0f25b6c3-aabc-5c1b-b5e8-31682e305837",
+   "stored": "03:04:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.123456\"",
+   "accepted": true,
+   "str": "03:04:05.123456",
+   "id": "66c77350-a852-58e8-81cf-dd3c8c650f97",
+   "stored": "03:04:05.123456"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.1234567\"",
+   "accepted": true,
+   "str": "03:04:05.123456",
+   "id": "66c77350-a852-58e8-81cf-dd3c8c650f97",
+   "stored": "03:04:05.123456"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05Z\"",
+   "accepted": true,
+   "str": "03:04:05+00:00",
+   "id": "508c5136-d74b-5cce-8e89-4b540dce20c0",
+   "stored": "03:04:05+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05+02:00\"",
+   "accepted": true,
+   "str": "03:04:05+02:00",
+   "id": "a6acdde2-70ef-5ff8-bb4d-f0065f1a753d",
+   "stored": "03:04:05+02:00"
+  },
+  {
+   "field": "t",
+   "input": "\"2024-01-02T03:04:05\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"24:00:00\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:60\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "3661",
+   "accepted": true,
+   "str": "01:01:01+00:00",
+   "id": "56a9c8b0-0a73-5e38-b8a0-9e467805dfc1",
+   "stored": "01:01:01+00:00"
+  },
+  {
+   "field": "t",
+   "input": "3661.5",
+   "accepted": true,
+   "str": "01:01:01.500000+00:00",
+   "id": "11d4d334-98ff-5c1f-b8fa-fbc0a16b1294",
+   "stored": "01:01:01.500000+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"3661\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "86400",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "86399",
+   "accepted": true,
+   "str": "23:59:59+00:00",
+   "id": "6c4ba2d1-67d9-596b-90b1-37020887c59d",
+   "stored": "23:59:59+00:00"
+  },
+  {
+   "field": "t",
+   "input": "-1",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "0",
+   "accepted": true,
+   "str": "00:00:00+00:00",
+   "id": "0ddb9125-901c-53ad-8967-b5f5cef0eede",
+   "stored": "00:00:00+00:00"
+  },
+  {
+   "field": "t",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"3:04:05\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05 \"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05-0200\"",
+   "accepted": true,
+   "str": "03:04:05-02:00",
+   "id": "ee9b6dd0-77ec-5594-a330-a3d20ffea423",
+   "stored": "03:04:05-02:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.5\"",
+   "accepted": true,
+   "str": "03:04:05.500000",
+   "id": "1068cd30-5f41-5e4f-b3b3-f599e5d85b96",
+   "stored": "03:04:05.500000"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05,5\"",
+   "accepted": true,
+   "str": "03:04:05.500000",
+   "id": "1068cd30-5f41-5e4f-b3b3-f599e5d85b96",
+   "stored": "03:04:05.500000"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05z\"",
+   "accepted": true,
+   "str": "03:04:05+00:00",
+   "id": "508c5136-d74b-5cce-8e89-4b540dce20c0",
+   "stored": "03:04:05+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"230405\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"T03:04:05\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05+24:00\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"23:59:59.9999999\"",
+   "accepted": true,
+   "str": "23:59:59.999999",
+   "id": "702bcb52-29f6-5b7a-9a79-fe6bb332c98e",
+   "stored": "23:59:59.999999"
+  },
+  {
+   "field": "t",
+   "input": "\"23:59:60\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"00:00\"",
+   "accepted": true,
+   "str": "00:00:00",
+   "id": "229b90b0-5677-5ed4-b9a4-b9e314ef28dc",
+   "stored": "00:00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"0:0:0\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "86399.999999",
+   "accepted": true,
+   "str": "23:59:59.999999+00:00",
+   "id": "3ed79083-961a-526e-9225-23f9baaf9857",
+   "stored": "23:59:59.999999+00:00"
+  },
+  {
+   "field": "t",
+   "input": "86399.9999999",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "86400.0",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "1.5",
+   "accepted": true,
+   "str": "00:00:01.500000+00:00",
+   "id": "d05a2b1f-f592-5d02-bca5-6b226e01dede",
+   "stored": "00:00:01.500000+00:00"
+  },
+  {
+   "field": "t",
+   "input": "-0.5",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "20000000000",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"12:00 PM\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.0000009\"",
+   "accepted": true,
+   "str": "03:04:05",
+   "id": "8006115b-1424-5a69-9e51-b9bde7fbbf42",
+   "stored": "03:04:05"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.9999995\"",
+   "accepted": true,
+   "str": "03:04:05.999999",
+   "id": "2c488822-caf9-592e-9354-de6a0db32fba",
+   "stored": "03:04:05.999999"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05+02\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05 +02:00\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04+02:00\"",
+   "accepted": true,
+   "str": "03:04:00+02:00",
+   "id": "08cc2116-bb8b-53e5-adbf-14d056294847",
+   "stored": "03:04:00+02:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04Z\"",
+   "accepted": true,
+   "str": "03:04:00+00:00",
+   "id": "e3b8aefd-81fa-5640-9680-53bb5a54dc6a",
+   "stored": "03:04:00+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.Z\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05.\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"24:00\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"23:60\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"-03:04\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05-00:00\"",
+   "accepted": true,
+   "str": "03:04:05+00:00",
+   "id": "508c5136-d74b-5cce-8e89-4b540dce20c0",
+   "stored": "03:04:05+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05-24:00\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05+23:59\"",
+   "accepted": true,
+   "str": "03:04:05+23:59",
+   "id": "7cd385cb-8e38-5205-b2d6-ebc8b1a14ed2",
+   "stored": "03:04:05+23:59"
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05+02:60\"",
+   "accepted": false
+  },
+  {
+   "field": "t",
+   "input": "\"03:04:05\\u221202:00\"",
+   "accepted": true,
+   "str": "03:04:05-02:00",
+   "id": "ee9b6dd0-77ec-5594-a330-a3d20ffea423",
+   "stored": "03:04:05-02:00"
+  },
+  {
+   "field": "t",
+   "input": "0.0",
+   "accepted": true,
+   "str": "00:00:00+00:00",
+   "id": "0ddb9125-901c-53ad-8967-b5f5cef0eede",
+   "stored": "00:00:00+00:00"
+  },
+  {
+   "field": "t",
+   "input": "86399.5",
+   "accepted": true,
+   "str": "23:59:59.500000+00:00",
+   "id": "2a720792-db8c-54b0-bed0-c7875e40b573",
+   "stored": "23:59:59.500000+00:00"
+  },
+  {
+   "field": "t",
+   "input": "1e0",
+   "accepted": true,
+   "str": "00:00:01+00:00",
+   "id": "9eb0ebaa-0057-57fb-b0e2-adefb461bd48",
+   "stored": "00:00:01+00:00"
+  },
+  {
+   "field": "t",
+   "input": "\"00:00:00.000000\"",
+   "accepted": true,
+   "str": "00:00:00",
+   "id": "229b90b0-5677-5ed4-b9a4-b9e314ef28dc",
+   "stored": "00:00:00"
+  },
+  {
+   "field": "t",
+   "input": "1.0000004",
+   "accepted": true,
+   "str": "00:00:01+00:00",
+   "id": "9eb0ebaa-0057-57fb-b0e2-adefb461bd48",
+   "stored": "00:00:01+00:00"
+  },
+  {
+   "field": "t",
+   "input": "1.0000005",
+   "accepted": true,
+   "str": "00:00:01.000001+00:00",
+   "id": "4682f2e6-1783-5084-978d-03cffbe525fb",
+   "stored": "00:00:01.000001+00:00"
+  },
+  {
+   "field": "t",
+   "input": "0.9999995",
+   "accepted": true,
+   "str": "00:00:01+00:00",
+   "id": "9eb0ebaa-0057-57fb-b0e2-adefb461bd48",
+   "stored": "00:00:01+00:00"
+  },
+  {
+   "field": "t",
+   "input": "0.9999994",
+   "accepted": true,
+   "str": "00:00:00.999999+00:00",
+   "id": "9ef08713-d66e-52a5-a72e-a94c99962715",
+   "stored": "00:00:00.999999+00:00"
+  },
+  {
+   "field": "t",
+   "input": "3661.123456789",
+   "accepted": true,
+   "str": "01:01:01.123457+00:00",
+   "id": "ec543af6-2b15-5d67-8e9d-054a3ca293e6",
+   "stored": "01:01:01.123457+00:00"
+  },
+  {
+   "field": "t",
+   "input": "86399.9999995",
+   "accepted": true,
+   "str": "23:59:59.999999+00:00",
+   "id": "3ed79083-961a-526e-9225-23f9baaf9857",
+   "stored": "23:59:59.999999+00:00"
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-567812345678\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "u",
+   "input": "\"12345678123456781234567812345678\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "u",
+   "input": "\"{12345678-1234-5678-1234-567812345678}\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "u",
+   "input": "\"urn:uuid:12345678-1234-5678-1234-567812345678\"",
+   "accepted": true,
+   "str": "12345678-1234-5678-1234-567812345678",
+   "id": "6d5af9c5-f5e8-56ac-a65f-35a74be1a911",
+   "stored": "12345678-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-56781234567\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"ABCDEF78-1234-5678-1234-567812345678\"",
+   "accepted": true,
+   "str": "abcdef78-1234-5678-1234-567812345678",
+   "id": "cf1e20b9-612d-5aa2-947e-518ea8c27436",
+   "stored": "abcdef78-1234-5678-1234-567812345678"
+  },
+  {
+   "field": "u",
+   "input": "\"abc\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "1",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "true",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-56781234567g\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-567812345678 \"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"1234567812345678-1234-567812345678\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-5678123456789\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"urn:uuid:ABCDEF78123456781234567812345678\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"{12345678123456781234567812345678}\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"12345678-1234-5678-1234-567812345678}\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"UUID:12345678-1234-5678-1234-567812345678\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"1234567-81234-5678-1234-567812345678\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"\"",
+   "accepted": false
+  },
+  {
+   "field": "u",
+   "input": "\"\\uff11\\uff12345678-1234-5678-1234-567812345678\"",
+   "accepted": false
+  },
+  {
+   "field": "un_str_num",
+   "input": "3",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "un_str_num",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": "3"
+  },
+  {
+   "field": "un_str_num",
+   "input": "3.5",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "un_str_num",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_num_int",
+   "input": "3",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "un_num_int",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "un_num_int",
+   "input": "3.5",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "un_num_int",
+   "input": "\"3.5\"",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "un_num_int",
+   "input": "true",
+   "accepted": true,
+   "str": "1.0",
+   "id": "6e841770-a502-5f49-b18e-4bb828fa6595",
+   "stored": 1.0
+  },
+  {
+   "field": "un_int_num",
+   "input": "3",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "un_int_num",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "un_int_num",
+   "input": "3.5",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "un_int_num",
+   "input": "\"3.5\"",
+   "accepted": true,
+   "str": "3.5",
+   "id": "0b39ab91-0394-5f09-b0d4-7b8a98402563",
+   "stored": 3.5
+  },
+  {
+   "field": "un_int_num",
+   "input": "3.0",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "un_int_num",
+   "input": "true",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_bool_int",
+   "input": "true",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_bool_int",
+   "input": "1",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_bool_int",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_bool_int",
+   "input": "\"true\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_bool_int",
+   "input": "2",
+   "accepted": true,
+   "str": "2",
+   "id": "5905f322-2d17-5689-a17d-8379d778c296",
+   "stored": 2
+  },
+  {
+   "field": "un_int_bool",
+   "input": "true",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_int_bool",
+   "input": "1",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_int_bool",
+   "input": "\"1\"",
+   "accepted": true,
+   "str": "1",
+   "id": "b61468a2-d621-5c40-b148-12963ff9b2de",
+   "stored": 1
+  },
+  {
+   "field": "un_int_bool",
+   "input": "\"true\"",
+   "accepted": true,
+   "str": "True",
+   "id": "57542da9-7a39-5ead-b901-778ef0ea0a79",
+   "stored": true
+  },
+  {
+   "field": "un_int_bool",
+   "input": "2",
+   "accepted": true,
+   "str": "2",
+   "id": "5905f322-2d17-5689-a17d-8379d778c296",
+   "stored": 2
+  },
+  {
+   "field": "un_date_int",
+   "input": "\"2024-01-02\"",
+   "accepted": true,
+   "str": "2024-01-02",
+   "id": "80b10a9d-ebea-5296-a487-4aba907b71d1",
+   "stored": "2024-01-02"
+  },
+  {
+   "field": "un_date_int",
+   "input": "86400",
+   "accepted": true,
+   "str": "86400",
+   "id": "6ce0eb3a-3f5c-52f9-b215-14372c600546",
+   "stored": 86400
+  },
+  {
+   "field": "un_date_int",
+   "input": "\"86400\"",
+   "accepted": true,
+   "str": "1970-01-02",
+   "id": "33af0cff-08f2-553c-a421-7d86a6ad5974",
+   "stored": "1970-01-02"
+  },
+  {
+   "field": "un_date_int",
+   "input": "5",
+   "accepted": true,
+   "str": "5",
+   "id": "063b2304-f855-5bbe-a6f7-fdcfb74b1e17",
+   "stored": 5
+  },
+  {
+   "field": "un_int_dt",
+   "input": "3",
+   "accepted": true,
+   "str": "3",
+   "id": "8e8006e1-4b68-57d1-ae5c-97ad0354780e",
+   "stored": 3
+  },
+  {
+   "field": "un_int_dt",
+   "input": "\"2024-01-02T03:04:05Z\"",
+   "accepted": true,
+   "str": "2024-01-02 03:04:05+00:00",
+   "id": "05af67ce-519c-5a9e-97f4-ba33b19fd136",
+   "stored": "2024-01-02T03:04:05+00:00"
+  },
+  {
+   "field": "un_int_dt",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "1970-01-01 00:00:03+00:00",
+   "id": "eaf708b9-2d6e-5067-a2c5-67d69c49da00",
+   "stored": "1970-01-01T00:00:03+00:00"
+  },
+  {
+   "field": "un_int_dt",
+   "input": "1700000000",
+   "accepted": true,
+   "str": "1700000000",
+   "id": "e3706ef1-8125-5401-ba49-5b7682628da8",
+   "stored": 1700000000
+  },
+  {
+   "field": "opt_num",
+   "input": "null",
+   "accepted": true,
+   "str": "None",
+   "id": "67e8e91d-8114-55b1-90ad-7e50682dc53f",
+   "stored": null
+  },
+  {
+   "field": "opt_num",
+   "input": "\"3\"",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "opt_num",
+   "input": "3",
+   "accepted": true,
+   "str": "3.0",
+   "id": "bbeb856f-23d1-52a8-9856-cc9367ad9697",
+   "stored": 3.0
+  },
+  {
+   "field": "l_num",
+   "input": "[1, \"2\", 3.5, true]",
+   "accepted": true,
+   "str": "[1.0, 2.0, 3.5, 1.0]",
+   "id": "286fa40a-0466-5196-88bf-442f2325592b",
+   "stored": [
+    1.0,
+    2.0,
+    3.5,
+    1.0
+   ]
+  },
+  {
+   "field": "l_num",
+   "input": "[\"x\"]",
+   "accepted": false
+  },
+  {
+   "field": "l_int",
+   "input": "[1, \"2\", 3.0, true]",
+   "accepted": true,
+   "str": "[1, 2, 3, 1]",
+   "id": "494088da-0584-5537-a7f9-200b5e52618a",
+   "stored": [
+    1,
+    2,
+    3,
+    1
+   ]
+  },
+  {
+   "field": "l_int",
+   "input": "[3.5]",
+   "accepted": false
+  },
+  {
+   "field": "l_date",
+   "input": "[\"2024-01-02\", 86400]",
+   "accepted": true,
+   "str": "[datetime.date(2024, 1, 2), datetime.date(1970, 1, 2)]",
+   "id": "fa95e42c-a338-5f7b-bc58-c3acf278bd9b",
+   "stored": [
+    "2024-01-02",
+    "1970-01-02"
+   ]
+  },
+  {
+   "field": "l_date",
+   "input": "[1700000000]",
+   "accepted": false
+  },
+  {
+   "field": "l_bool",
+   "input": "[true, 1, \"yes\", 0]",
+   "accepted": true,
+   "str": "[True, True, True, False]",
+   "id": "aa4d0d33-e604-518c-960a-0b73a2b271d8",
+   "stored": [
+    true,
+    true,
+    true,
+    false
+   ]
+  },
+  {
+   "field": "l_bool",
+   "input": "[2]",
+   "accepted": false
+  }
+ ]
+}
