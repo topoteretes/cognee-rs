@@ -98,6 +98,11 @@ path = "tests/provenance_transaction.rs"
 required-features = ["sqlite"]
 
 [[test]]
+name = "structural_edge_ownership"
+path = "tests/structural_edge_ownership.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "relational_ops_span_instrumentation"
 path = "tests/relational_ops_span_instrumentation.rs"
 required-features = ["sqlite"]

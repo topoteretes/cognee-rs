@@ -1114,6 +1114,15 @@ jobs:
           cargo test -p cognee-database --features sqlite,postgres \
             --test pipeline_run_listing -- --nocapture 2>&1 | tee pg-run-listing.log
 
+      # Same feature pair: one SQLite case and one on a throwaway Postgres
+      # database, for the data-scoped delete's structural-edge ownership queries
+      # (correlated EXISTS, JSON and trim SQL that differ per backend).
+      - name: Run structural-edge ownership tests (Postgres case)
+        run: |
+          set -o pipefail
+          cargo test -p cognee-database --features sqlite,postgres \
+            --test structural_edge_ownership -- --nocapture 2>&1 | tee pg-structural-edges.log
+
       - name: Run single-database coexistence test
         run: |
           set -o pipefail
@@ -1146,11 +1155,13 @@ jobs:
             --log pg-provenance.log   --min-tests 3 \
             --log pg-nul-bytes.log    --min-tests 5 \
             --log pg-run-listing.log  --min-tests 5 \
+            --log pg-structural-edges.log --min-tests 2 \
             --log pg-single-stack.log --min-tests 1 \
             --log pg-full-stack.log   --min-tests 1 \
             --require-test upsert_batch_with_duplicate_ids_dedups_keeping_last \
             --require-test errored_run_info_with_nul_is_written_to_postgres \
             --require-test listing_and_user_id_postgres \
+            --require-test structural_edge_ownership_postgres \
             --require-test temp_database_supports_back_to_back_initialize \
             --require-test relational_pgvector_pggraph_coexist_in_one_database \
             --require-test pg_full_stack_add_and_cognify

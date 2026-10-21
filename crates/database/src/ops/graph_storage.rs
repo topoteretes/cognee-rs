@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
-use sea_orm::sea_query::{Alias, Expr, OnConflict, Query};
+use sea_orm::sea_query::{Alias, Expr, Func, OnConflict, Query, SimpleExpr};
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
@@ -738,42 +738,118 @@ pub async fn get_unique_edges_for_data(
     Ok(rows)
 }
 
+/// `EXISTS (SELECT 1 FROM nodes AS n WHERE n.slug = edges.<endpoint> AND ...)`:
+/// whether some node row, narrowed by `narrow`, claims the edge row's
+/// `endpoint`. Correlated, so both backends can plan it per edge row through
+/// `ix_nodes_slug` (or `index_node_dataset_slug` when `narrow` pins the
+/// dataset) instead of materializing a slug list.
+fn endpoint_claimed(
+    endpoint: edge::Column,
+    narrow: impl FnOnce(&Alias) -> Vec<SimpleExpr>,
+) -> SimpleExpr {
+    let n = Alias::new("n");
+    let mut claim = Query::select();
+    claim
+        .expr(Expr::val(1))
+        .from_as(Alias::new("nodes"), n.clone())
+        .and_where(
+            Expr::col((n.clone(), node::Column::Slug)).equals((Alias::new("edges"), endpoint)),
+        );
+    for condition in narrow(&n) {
+        claim.and_where(condition);
+    }
+    Expr::exists(claim.to_owned())
+}
+
+/// The edge row's `endpoint` is exclusively owned by `(data_hex, dataset_hex)`:
+/// that item's node rows claim it and no other item's node rows in the dataset
+/// do. This is exactly the set [`get_unique_nodes_for_data`] returns, which is
+/// the set a data-scoped delete detach-deletes from the graph.
+fn endpoint_exclusive_to(endpoint: edge::Column, data_hex: &str, dataset_hex: &str) -> Condition {
+    let in_dataset_with = |data_eq: bool| {
+        move |n: &Alias| {
+            let data = Expr::col((n.clone(), node::Column::DataId));
+            vec![
+                Expr::col((n.clone(), node::Column::DatasetId)).eq(dataset_hex),
+                if data_eq {
+                    data.eq(data_hex)
+                } else {
+                    data.ne(data_hex)
+                },
+            ]
+        }
+    };
+    Condition::all()
+        .add(endpoint_claimed(endpoint, in_dataset_with(true)))
+        .add(endpoint_claimed(endpoint, in_dataset_with(false)).not())
+}
+
 /// Selection predicate for the structural edge rows (`is_part_of`, `contains`,
 /// `made_from`, `is_a`, ...) that belong to `(data_id, dataset_id)` although
 /// their `data_id` column is nil.
 ///
 /// Cognify writes those rows with a nil `data_id` ("structural edges span
 /// multiple DataPoints"), so `data_id = :data` never selects them. Their owner
-/// is recoverable from the source endpoint instead: a row belongs to the data
-/// item when its source node is claimed by that item's node rows and by no
-/// other item's. A chunk, summary or document is exclusive to one item. An
-/// entity shared by several items is not, which keeps the row (and so its
-/// claim on its retrieval text) alive until the last of its owners goes.
+/// is recoverable from their endpoints instead: a row belongs to the data item
+/// when *either* endpoint is exclusive to it (see [`endpoint_exclusive_to`]).
+/// The delete detach-deletes every such node from the graph, and a graph edge
+/// cannot outlive either of its endpoints, so the row's edge is gone with the
+/// item whichever end was exclusive. A chunk, summary or document is
+/// exclusive to one item. An entity shared by several items is not, and an
+/// `EntityType` never is (its node row carries a nil `data_id`), so an edge
+/// joining two such nodes keeps its row, and its claim on its retrieval text,
+/// until one of its endpoints goes.
 ///
 /// Because the predicate reads the node rows, it has to be evaluated before
 /// the data item's node rows are deleted.
 fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str) -> Condition {
-    let owned = Query::select()
-        .column(node::Column::Slug)
-        .from(Alias::new("nodes"))
-        .and_where(node::Column::DatasetId.eq(dataset_hex))
-        .and_where(node::Column::DataId.eq(data_hex))
-        .to_owned();
-    let shared = Query::select()
-        .column(node::Column::Slug)
-        .from(Alias::new("nodes"))
-        .and_where(node::Column::DatasetId.eq(dataset_hex))
-        .and_where(node::Column::DataId.ne(data_hex))
-        .to_owned();
     Condition::all()
         .add(edge::Column::DataId.eq(uuid_hex::to_hex(Uuid::nil())))
         .add(edge::Column::DatasetId.eq(dataset_hex))
-        .add(edge::Column::SourceNodeId.in_subquery(owned))
-        .add(edge::Column::SourceNodeId.not_in_subquery(shared))
+        .add(
+            Condition::any()
+                .add(endpoint_exclusive_to(
+                    edge::Column::SourceNodeId,
+                    data_hex,
+                    dataset_hex,
+                ))
+                .add(endpoint_exclusive_to(
+                    edge::Column::DestinationNodeId,
+                    data_hex,
+                    dataset_hex,
+                )),
+        )
+}
+
+/// Whether an edge row still stands for a graph edge that may exist, and so
+/// may claim an `EdgeType` retrieval text.
+///
+/// A row with a real `data_id` always does: it leaves the ledger with its data
+/// item. A nil-`data_id` structural row does not, because no data-scoped delete
+/// selected it before structural rows were attributed through their endpoints:
+/// a database whose items were deleted earlier still holds their structural
+/// rows, with every node row of both endpoints gone. Such a row can never be
+/// selected again, and its graph edge was detach-deleted with its endpoints, so
+/// counting it as a live claim would pin its text's `EdgeType` point forever.
+///
+/// The test is deliberately weak: a nil-`data_id` row is live while *either*
+/// endpoint is claimed by any node row in any dataset. Every structural edge's
+/// source is a chunk, summary, entity or entity type, and each of those gets a
+/// node row in the same ledger write as the edge row, so a row whose edge is
+/// still in the graph always has at least that claimed endpoint. Asking for
+/// both endpoints would be stronger but unsafe: a document written before
+/// documents got node rows would orphan every `is_part_of` row pointing at it.
+fn edge_row_is_live_claim() -> Condition {
+    Condition::any()
+        .add(edge::Column::DataId.ne(uuid_hex::to_hex(Uuid::nil())))
+        .add(endpoint_claimed(edge::Column::SourceNodeId, |_| Vec::new()))
+        .add(endpoint_claimed(edge::Column::DestinationNodeId, |_| {
+            Vec::new()
+        }))
 }
 
 /// The nil-`data_id` structural edge rows that belong to `(data_id, dataset_id)`
-/// by their source endpoint; see [`structural_edges_owned_by`].
+/// by their endpoints; see [`structural_edges_owned_by`].
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_structural_edges_for_data",
     level = "info",
@@ -805,10 +881,15 @@ pub async fn get_structural_edges_for_data(
     Ok(rows)
 }
 
-/// Delete the rows [`get_structural_edges_for_data`] selects, returning how
-/// many went. Must run before the data item's node rows are deleted.
+/// Delete the provenance edge rows with these ids, returning how many went.
+///
+/// By id rather than by re-running a selection predicate, so a caller that
+/// selected rows, acted on what they name, and then deletes them removes
+/// exactly the rows it acted on: a row written in between is left for a later
+/// delete instead of vanishing with no cleanup of its artifacts. Ids that no
+/// longer exist are not an error; the count says how many did.
 #[instrument(
-    name = "cognee.db.relational.graph_storage.delete_structural_edges_for_data",
+    name = "cognee.db.relational.graph_storage.delete_edges_by_ids",
     level = "info",
     skip_all,
     fields(
@@ -817,35 +898,63 @@ pub async fn get_structural_edges_for_data(
     ),
     err,
 )]
-pub async fn delete_structural_edges_for_data(
+pub async fn delete_edges_by_ids(
     db: &DatabaseConnection,
-    data_id: Uuid,
-    dataset_id: Uuid,
+    ids: &[Uuid],
 ) -> Result<u64, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let deleted = edge::Entity::delete_many()
-        .filter(structural_edges_owned_by(
-            &uuid_hex::to_hex(data_id),
-            &uuid_hex::to_hex(dataset_id),
-        ))
-        .exec(db)
-        .await
-        .map_err(map_sea_err)?
-        .rows_affected;
+    let mut deleted = 0u64;
+    if !ids.is_empty() {
+        // One transaction, so a failure part-way through leaves every row.
+        let txn = db.begin().await.map_err(map_sea_err)?;
+        for batch in ids.chunks(PROVENANCE_INSERT_BATCH) {
+            deleted += edge::Entity::delete_many()
+                .filter(edge::Column::Id.is_in(batch.iter().map(|id| uuid_hex::to_hex(*id))))
+                .exec(&txn)
+                .await
+                .map_err(map_sea_err)?
+                .rows_affected;
+        }
+        txn.commit().await.map_err(map_sea_err)?;
+    }
     Span::current().record(COGNEE_DB_ROW_COUNT, deleted as i64);
     Ok(deleted)
 }
 
-/// The `EdgeType` retrieval texts that edge rows surviving the deletion of
-/// `(data_id, dataset_id)` still claim: every row except the item's own
-/// (`data_id`/`dataset_id` match) and the structural rows
-/// [`get_structural_edges_for_data`] attributes to it. Rows of the same data
-/// item in another dataset, and of other items anywhere, count as surviving.
+/// Every character Rust's `str::trim` strips: the Unicode `White_Space`
+/// property. [`EdgeType::retrieval_text`] trims with it, so a SQL filter that
+/// matches a row's text against candidate texts has to trim with the same set.
+const UNICODE_WHITE_SPACE: &str = "\u{9}\u{A}\u{B}\u{C}\u{D}\u{20}\u{85}\u{A0}\u{1680}\
+    \u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200A}\
+    \u{2028}\u{2029}\u{202F}\u{205F}\u{3000}";
+
+/// Candidate texts per query of
+/// [`get_edge_retrieval_texts_claimed_outside_data`]. Each one is bound twice,
+/// so 250 keeps a statement near 500 parameters, under SQLite's
+/// `SQLITE_MAX_VARIABLE_NUMBER` on any build and far under Postgres' 65 535.
+const CANDIDATE_TEXT_BATCH: usize = 250;
+
+/// The `candidates` that edge rows surviving the deletion of
+/// `(data_id, dataset_id)` still claim as `EdgeType` retrieval texts.
 ///
-/// The `EdgeType` point id is many-to-one over edges (every `is_a` shares one),
-/// so slug exclusivity does not say whether the point may go; a caller
-/// subtracts this set from the texts it is about to delete. See
+/// A row survives unless it is the item's own (`data_id`/`dataset_id` match) or
+/// a structural row [`get_structural_edges_for_data`] attributes to it. Rows of
+/// the same data item in another dataset, and of other items anywhere, survive;
+/// a nil-`data_id` row whose endpoints are both gone does not claim anything
+/// (see [`edge_row_is_live_claim`]).
+///
+/// The `EdgeType` point id is many-to-one over edges (every `is_part_of` shares
+/// one), so slug exclusivity does not say whether the point may go; a caller
+/// keeps the point of every text returned here. See
 /// [`get_edge_retrieval_texts_claimed_outside_run`] for the run-scoped sibling.
+///
+/// Only rows that could produce a candidate are read: a row's retrieval text is
+/// its trimmed `edge_text` attribute or, failing that, its trimmed
+/// `relationship_name`, so `trim(relationship_name) IN (...) OR
+/// trim(edge_text) IN (...)` is a superset of the producing rows, and the text
+/// is then derived exactly as [`retrieval_texts_where`] always does. A backend
+/// with no JSON extraction reads every surviving row instead, which gives the
+/// same answer.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_edge_retrieval_texts_claimed_outside_data",
     level = "info",
@@ -860,20 +969,70 @@ pub async fn get_edge_retrieval_texts_claimed_outside_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
+    candidates: &[String],
 ) -> Result<Vec<String>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
-    let surviving = Condition::all()
-        .add(
-            Condition::any()
-                .add(edge::Column::DataId.ne(&data_hex))
-                .add(edge::Column::DatasetId.ne(&dataset_hex)),
-        )
-        .add(structural_edges_owned_by(&data_hex, &dataset_hex).not());
-    let texts = retrieval_texts_where(db, surviving).await?;
-    Span::current().record(COGNEE_DB_ROW_COUNT, texts.len() as i64);
-    Ok(texts)
+    let wanted: BTreeSet<&str> = candidates.iter().map(String::as_str).collect();
+    let surviving = || {
+        Condition::all()
+            .add(
+                Condition::any()
+                    .add(edge::Column::DataId.ne(&data_hex))
+                    .add(edge::Column::DatasetId.ne(&dataset_hex)),
+            )
+            .add(structural_edges_owned_by(&data_hex, &dataset_hex).not())
+            .add(edge_row_is_live_claim())
+    };
+
+    let mut claimed = BTreeSet::new();
+    if wanted.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let backend = db.get_database_backend();
+    match edge_text_sql(backend) {
+        Some(edge_text) => {
+            // `trim(x, chars)` on SQLite, `btrim(x, chars)` on Postgres (the
+            // only backends `edge_text_sql` answers for).
+            let trim = Alias::new(if backend == DbBackend::Postgres {
+                "btrim"
+            } else {
+                "trim"
+            });
+            let trimmed = |expr: SimpleExpr| {
+                Expr::expr(
+                    Func::cust(trim.clone())
+                        .arg(expr)
+                        .arg(Expr::val(UNICODE_WHITE_SPACE)),
+                )
+            };
+            let wanted: Vec<&str> = wanted.iter().copied().collect();
+            for batch in wanted.chunks(CANDIDATE_TEXT_BATCH) {
+                let produces_candidate = Condition::any()
+                    .add(
+                        trimmed(Expr::col(edge::Column::RelationshipName).into())
+                            .is_in(batch.iter().copied()),
+                    )
+                    .add(trimmed(Expr::cust(edge_text)).is_in(batch.iter().copied()));
+                for text in retrieval_texts_where(db, surviving().add(produces_candidate)).await? {
+                    if batch.contains(&text.as_str()) {
+                        claimed.insert(text);
+                    }
+                }
+            }
+        }
+        None => {
+            for text in retrieval_texts_where(db, surviving()).await? {
+                if wanted.contains(text.as_str()) {
+                    claimed.insert(text);
+                }
+            }
+        }
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, claimed.len() as i64);
+    Ok(claimed.into_iter().collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -1439,4 +1598,20 @@ pub async fn get_data_ids_for_run(
 
     Span::current().record(COGNEE_DB_ROW_COUNT, data_ids.len() as i64);
     Ok(data_ids.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UNICODE_WHITE_SPACE;
+
+    /// The SQL trim set is exactly what `str::trim` strips, so the candidate
+    /// filter matches a row iff `EdgeType::retrieval_text` would.
+    #[test]
+    fn sql_trim_set_is_rusts_whitespace() {
+        let expected: String = (0..=u32::from(char::MAX))
+            .filter_map(char::from_u32)
+            .filter(|c| c.is_whitespace())
+            .collect();
+        assert_eq!(UNICODE_WHITE_SPACE, expected);
+    }
 }

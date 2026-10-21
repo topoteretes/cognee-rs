@@ -1529,8 +1529,8 @@ impl DeleteService {
 
         // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
         // nil `data_id`, so the queries above never see them; find them through
-        // their source node instead. They only contribute `EdgeType` points:
-        // no Triplet is indexed for a structural edge.
+        // their endpoints instead. They only contribute `EdgeType` points: no
+        // Triplet is indexed for a structural edge.
         let structural_edges = self
             .database
             .get_structural_edges_for_data(data_id, dataset_id)
@@ -1560,10 +1560,14 @@ impl DeleteService {
                 DeleteError::Runtime(format!(
                     "Failed to count provenance edges for data {data_id}: {e}"
                 ))
-            })?
-            + structural_edges.len();
+            })?;
 
-        if nodes.is_empty() && edges.is_empty() && all_prov_nodes == 0 && all_prov_edges == 0 {
+        if nodes.is_empty()
+            && edges.is_empty()
+            && structural_edges.is_empty()
+            && all_prov_nodes == 0
+            && all_prov_edges == 0
+        {
             return Ok((0, 0, 0, 0, warnings));
         }
 
@@ -1583,16 +1587,31 @@ impl DeleteService {
         warnings.extend(vw);
 
         // --- Provenance cleanup ---
-        // The structural rows are found through the item's node rows, so they
-        // go first.
-        self.database
-            .delete_structural_edges_for_data(data_id, dataset_id)
+        // The structural rows go by the ids selected above, not by re-running
+        // their predicate, so the rows removed are exactly the rows whose
+        // `EdgeType` texts were just weighed. A row a concurrent cognify writes
+        // in between stays, still claiming its text, for a later delete.
+        //
+        // No transaction spans the select and this delete, as for the item's
+        // other rows: the graph and vector deletes run in between, and holding
+        // a relational write transaction across them would block every writer
+        // (on SQLite, the whole database) for the duration of remote I/O while
+        // still not making those stores atomic with the ledger. The ledger goes
+        // last so that a failed graph or vector step leaves it in place for a
+        // retry to find the same artifacts.
+        let structural_ids: Vec<Uuid> = structural_edges.iter().map(|row| row.id).collect();
+        let structural_deleted = self
+            .database
+            .delete_provenance_edges_by_ids(&structural_ids)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
                     "Failed to delete structural provenance edges for data {data_id}: {e}"
                 ))
             })?;
+        // Bounded by `structural_ids.len()`, so the conversion cannot saturate.
+        let all_prov_edges = all_prov_edges
+            .saturating_add(usize::try_from(structural_deleted).unwrap_or(usize::MAX));
         self.database
             .delete_provenance_edges_for_data(data_id, dataset_id)
             .await
@@ -1625,7 +1644,9 @@ impl DeleteService {
     /// unique semantic edges and the structural rows attributed to it. A point
     /// is dropped from the set when any surviving ledger row still claims the
     /// same retrieval text, because the id is many-to-one over edges: every
-    /// `is_part_of` edge in the store shares one point.
+    /// `is_part_of` edge in the store shares one point. Only the candidates
+    /// are looked up, so the query reads the rows that could claim one of
+    /// them rather than every edge row in the database.
     async fn edge_type_ids_to_delete(
         &self,
         data_id: Uuid,
@@ -1633,18 +1654,20 @@ impl DeleteService {
         edges: &[GraphEdge],
         structural_edges: &[GraphEdge],
     ) -> Result<Vec<Uuid>, DeleteError> {
-        let candidates: BTreeSet<String> = edges
+        let candidates: Vec<String> = edges
             .iter()
             .chain(structural_edges)
             .map(edge_retrieval_text)
             .filter(|text| !text.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
         let claimed: HashSet<String> = self
             .database
-            .get_edge_retrieval_texts_claimed_outside_data(data_id, dataset_id)
+            .get_edge_retrieval_texts_claimed_outside_data(data_id, dataset_id, &candidates)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -4099,6 +4122,207 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// Review follow-ups on the structural cleanup, through the service:
+    ///
+    /// * a structural row goes with the item when its *destination* is the
+    ///   item's exclusive node, although its source is shared: the graph delete
+    ///   detach-deletes that node, so the edge cannot survive it;
+    /// * a structural row left behind by an earlier delete (both endpoints'
+    ///   node rows gone) does not keep its text's point alive;
+    /// * the provenance edge count is what was actually deleted.
+    #[tokio::test]
+    async fn data_delete_attributes_by_either_endpoint_and_ignores_orphans() {
+        let (svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let dataset = Dataset::new("either_ds".to_string(), owner, None, Uuid::new_v4());
+        let dataset_id = dataset.id;
+        ops::datasets::create_dataset(&db, dataset).await.unwrap();
+        let mut data_ids = Vec::new();
+        for name in ["a.txt", "b.txt"] {
+            let location = storage.store(name.as_bytes(), name).await.unwrap();
+            let data_id = Uuid::new_v4();
+            ops::data::create_data(
+                &db,
+                Data::builder(
+                    data_id,
+                    name,
+                    location,
+                    format!("file://{name}"),
+                    "txt",
+                    "text/plain",
+                    format!("hash_{name}"),
+                    owner,
+                )
+                .build(),
+            )
+            .await
+            .unwrap();
+            ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id)
+                .await
+                .unwrap();
+            data_ids.push(data_id);
+        }
+        let (a, b) = (data_ids[0], data_ids[1]);
+
+        // `alice` is merged from both items; `person` is exclusive to A and
+        // `engineer` to B (a ledger whose type rows carry the producing item).
+        let (alice, person, engineer, chunk_a, doc_a) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        for data_id in [a, b] {
+            seed_provenance_nodes(
+                &db,
+                dataset_id,
+                data_id,
+                owner,
+                &[alice],
+                "Entity",
+                serde_json::json!([]),
+            )
+            .await;
+        }
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            a,
+            owner,
+            &[person, chunk_a, doc_a],
+            "Entity",
+            serde_json::json!([]),
+        )
+        .await;
+        seed_provenance_nodes(
+            &db,
+            dataset_id,
+            b,
+            owner,
+            &[engineer],
+            "EntityType",
+            serde_json::json!([]),
+        )
+        .await;
+        for id in [alice, person, engineer, chunk_a, doc_a] {
+            graph_db
+                .add_node_raw(serde_json::json!({"id": id.to_string(), "type": "Entity"}))
+                .await
+                .unwrap();
+        }
+        graph_db
+            .add_edge(&alice.to_string(), &person.to_string(), "is_a", None)
+            .await
+            .unwrap();
+        graph_db
+            .add_edge(&alice.to_string(), &engineer.to_string(), "is_a", None)
+            .await
+            .unwrap();
+
+        let structural = |source: Uuid, target: Uuid, name: &str, text: Option<&str>| GraphEdge {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: owner,
+            data_id: Uuid::nil(),
+            dataset_id,
+            pipeline_run_id: None,
+            source_node_id: source,
+            destination_node_id: target,
+            relationship_name: name.to_string(),
+            label: None,
+            attributes: text.map(|text| serde_json::json!({ "edge_text": text })),
+            created_at: chrono::Utc::now(),
+        };
+        let orphan = structural(Uuid::new_v4(), Uuid::new_v4(), "is_part_of", None);
+        ops::graph_storage::upsert_edges(
+            &db,
+            &[
+                structural(alice, person, "is_a", Some("alice is a person.")),
+                structural(alice, engineer, "is_a", Some("alice is a engineer.")),
+                structural(chunk_a, doc_a, "is_part_of", None),
+                // Left by an item deleted before this cleanup existed.
+                orphan.clone(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let texts = ["alice is a person.", "alice is a engineer.", "is_part_of"];
+        vector_db
+            .create_collection("EdgeType", "relationship_name", 3)
+            .await
+            .unwrap();
+        let points: Vec<_> = texts
+            .iter()
+            .map(|text| {
+                cognee_vector::VectorPoint::new(
+                    EdgeType::deterministic_id(text),
+                    vec![1.0, 0.0, 0.0],
+                )
+            })
+            .collect();
+        vector_db
+            .index_points("EdgeType", "relationship_name", &points)
+            .await
+            .unwrap();
+        let has_point = |text: &str| {
+            vector_db
+                .get_payload(
+                    "EdgeType",
+                    "relationship_name",
+                    EdgeType::deterministic_id(text),
+                )
+                .is_some()
+        };
+
+        let result = svc
+            .execute(&DeleteRequest {
+                scope: DeleteScope::Data {
+                    owner_id: owner,
+                    data_id: a,
+                    dataset_name: Some("either_ds".to_string()),
+                    delete_dataset_if_empty: false,
+                    tenant_id: None,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            })
+            .await
+            .expect("execute should succeed");
+
+        assert!(
+            graph_db.get_edges(&alice.to_string()).await.unwrap().len() == 1,
+            "the graph delete took `alice -is_a-> person` with `person`"
+        );
+        assert!(
+            !has_point("alice is a person."),
+            "the edge whose destination A owned is gone, so is its point"
+        );
+        assert!(has_point("alice is a engineer."), "B's edge still needs it");
+        assert!(
+            !has_point("is_part_of"),
+            "an orphaned row does not keep the shared point alive"
+        );
+        assert_eq!(
+            result.deleted_provenance_edges, 2,
+            "the two structural rows attributed to A, counted as deleted"
+        );
+        let mut remaining: Vec<Uuid> = ops::graph_storage::get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.destination_node_id)
+            .collect();
+        remaining.sort();
+        let mut expected = vec![engineer, orphan.destination_node_id];
+        expected.sort();
+        assert_eq!(
+            remaining, expected,
+            "B's row and the orphan (no item's row) remain"
         );
     }
 

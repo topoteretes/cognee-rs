@@ -139,23 +139,21 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::get_structural_edges_for_data(self.inner.as_ref(), data_id, dataset_id).await
     }
 
-    async fn delete_structural_edges_for_data(
-        &self,
-        data_id: Uuid,
-        dataset_id: Uuid,
-    ) -> Result<u64, DatabaseError> {
-        DeleteDb::delete_structural_edges_for_data(self.inner.as_ref(), data_id, dataset_id).await
+    async fn delete_provenance_edges_by_ids(&self, ids: &[Uuid]) -> Result<u64, DatabaseError> {
+        DeleteDb::delete_provenance_edges_by_ids(self.inner.as_ref(), ids).await
     }
 
     async fn get_edge_retrieval_texts_claimed_outside_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        candidates: &[String],
     ) -> Result<Vec<String>, DatabaseError> {
         DeleteDb::get_edge_retrieval_texts_claimed_outside_data(
             self.inner.as_ref(),
             data_id,
             dataset_id,
+            candidates,
         )
         .await
     }
