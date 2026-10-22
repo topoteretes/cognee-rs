@@ -81,16 +81,15 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
 
-        let add_pipeline = Arc::new(
-            AddPipeline::new(
-                Arc::clone(&storage),
-                Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
-            )
-            .with_thread_pool(thread_pool)
-            .with_graph_db(Arc::clone(&graph_db))
-            .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database)),
-        );
+        let add_pipeline = AddPipeline::new(
+            Arc::clone(&storage),
+            Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
+        )
+        .with_thread_pool(thread_pool)
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database));
+        let add_pipeline = Arc::new(cm.attach_transcriber(add_pipeline).await);
 
         // Session backing store/manager are only required by session-mode
         // remember (when `--session-id` is set); building them eagerly is cheap

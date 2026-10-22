@@ -705,6 +705,7 @@ async fn phase_add(
         .with_vector_db(vector_db)
         .with_database(Arc::clone(&database))
         .with_pipeline_run_repo(pipeline_run_repo);
+    let pipeline = cm.attach_transcriber(pipeline).await;
 
     let inputs: Vec<DataInput> = memories
         .iter()

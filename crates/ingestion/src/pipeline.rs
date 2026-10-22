@@ -23,6 +23,8 @@ use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
+#[cfg(feature = "audio-loader")]
+use cognee_llm::Transcriber;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -116,13 +118,34 @@ pub struct ProcessedInput {
 /// content hash, and extract all metadata needed to create a [`Data`] record.
 ///
 /// This is the first step of the ingest pipeline (Task 1).
-#[instrument(name = "ingestion.process_input", skip(input, storage))]
 pub async fn process_input(
     input: &DataInput,
     storage: &dyn StorageTrait,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_with_registry(
+        input,
+        storage,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        &LoaderRegistry::default_registry(),
+    )
+    .await
+}
+
+/// [`process_input`] with the loaders of `registry` instead of
+/// [`LoaderRegistry::default_registry`].
+#[instrument(name = "ingestion.process_input", skip(input, storage, registry))]
+async fn process_input_with_registry(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    registry: &LoaderRegistry,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -234,7 +257,6 @@ pub async fn process_input(
         // Non-URL path: run the document loader at ADD time and store the
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
-        let registry = LoaderRegistry::default_registry();
         let doc_type = cognee_models::doc_type_for_extension(&original_extension)
             .unwrap_or("text")
             .to_string();
@@ -251,8 +273,9 @@ pub async fn process_input(
         // *text* loader but the bytes are not valid UTF-8 text, store the RAW
         // bytes verbatim instead of running text extraction. This only affects
         // the generic-text fallback path: files routed to a real loader by
-        // their extension (text/csv/html/pdf — actually-text content; or
-        // image/audio — `UnsupportedDocumentType`) are unchanged.
+        // their extension (text/csv/html/pdf, which are actually-text content;
+        // audio when a transcriber is attached; otherwise image/audio, which
+        // fail with `UnsupportedDocumentType`) are unchanged.
         let is_text_doc_type = doc_type == "text";
         if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
             let stored_name = format!("text_{content_hash}.bin");
@@ -1227,14 +1250,39 @@ pub fn make_process_input_task(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_with_registry(
+        storage,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        Arc::new(LoaderRegistry::default_registry()),
+    )
+}
+
+/// [`make_process_input_task`] with the loaders of `registry`.
+fn make_process_input_task_with_registry(
+    storage: Arc<dyn StorageTrait>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    registry: Arc<LoaderRegistry>,
+) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
+        let registry = Arc::clone(&registry);
         Box::pin(async move {
-            process_input(&input, &*storage, hash_algorithm, owner_id, tenant_id)
-                .await
-                .map(Box::new)
-                .map_err(preserve_ingestion_error)
+            process_input_with_registry(
+                &input,
+                &*storage,
+                hash_algorithm,
+                owner_id,
+                tenant_id,
+                &registry,
+            )
+            .await
+            .map(Box::new)
+            .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -1379,6 +1427,7 @@ pub fn build_add_pipeline_with_acl(
         tenant_id,
         acl_db,
         AddParamsInjection::default(),
+        Arc::new(LoaderRegistry::default_registry()),
     )
 }
 
@@ -1399,6 +1448,7 @@ fn build_add_pipeline_internal(
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
     add_params: AddParamsInjection,
+    registry: Arc<LoaderRegistry>,
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
     // the pipeline input (`DataInput`), which has no UUID until
@@ -1408,7 +1458,13 @@ fn build_add_pipeline_internal(
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
-        make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
+        make_process_input_task_with_registry(
+            Arc::clone(&storage),
+            hash_algorithm,
+            owner_id,
+            tenant_id,
+            registry,
+        ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
         database,
@@ -1460,6 +1516,9 @@ pub struct AddPipeline {
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     // ─── Concurrency (SDK-636) ────────────────────────────────────────────
     dataset_locks: Option<Arc<DatasetLocks>>,
+    // ─── Media loaders at ADD time ────────────────────────────────────────
+    #[cfg(feature = "audio-loader")]
+    transcriber: Option<Arc<dyn Transcriber>>,
 }
 
 impl AddPipeline {
@@ -1473,18 +1532,7 @@ impl AddPipeline {
     /// [`with_database`](Self::with_database). A missing handle surfaces as
     /// `IngestionError::MissingBackend` at `add()` time.
     pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn IngestDb>) -> Self {
-        Self {
-            storage,
-            database,
-            hash_algorithm: HashAlgorithm::default(),
-            acl_db: None,
-            thread_pool: None,
-            graph_db: None,
-            vector_db: None,
-            db_connection: None,
-            pipeline_run_repo: None,
-            dataset_locks: None,
-        }
+        Self::new_with_algorithm(storage, database, HashAlgorithm::default())
     }
 
     /// Create with an explicit hash algorithm.
@@ -1504,6 +1552,8 @@ impl AddPipeline {
             db_connection: None,
             pipeline_run_repo: None,
             dataset_locks: None,
+            #[cfg(feature = "audio-loader")]
+            transcriber: None,
         }
     }
 
@@ -1571,6 +1621,34 @@ impl AddPipeline {
     pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
         self.pipeline_run_repo = Some(repo);
         self
+    }
+
+    /// Run the audio loader at ADD time, transcribing with `transcriber`.
+    ///
+    /// Without it an audio input fails with
+    /// [`IngestionError::UnsupportedDocumentType`], as no audio loader is
+    /// registered (Python transcribes at add time too, `ingest_data.py:103`).
+    #[cfg(feature = "audio-loader")]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// The loaders `add` runs: the default registry, plus the audio loader
+    /// when a transcriber is attached.
+    fn loader_registry(&self) -> LoaderRegistry {
+        #[allow(unused_mut)]
+        let mut registry = LoaderRegistry::default_registry();
+        #[cfg(feature = "audio-loader")]
+        if let Some(transcriber) = &self.transcriber {
+            registry.register(
+                "audio",
+                Arc::new(crate::loaders::audio::AudioLoader::new(Arc::clone(
+                    transcriber,
+                ))),
+            );
+        }
+        registry
     }
 
     #[instrument(
@@ -1656,6 +1734,7 @@ impl AddPipeline {
             tenant_id,
             self.acl_db.clone(),
             add_params_inj,
+            Arc::new(self.loader_registry()),
         );
 
         // ── Build the TaskContext ────────────────────────────────────────

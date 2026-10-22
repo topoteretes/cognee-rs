@@ -336,17 +336,16 @@ impl CogneeServices {
 
         sweep_killed_run_leftovers(cm, &pipeline_run_repo, &database, &graph_db, &vector_db).await;
 
-        let add_pipeline = Arc::new(
-            AddPipeline::new(
-                Arc::clone(&storage),
-                Arc::clone(&database) as Arc<dyn IngestDb>,
-            )
-            .with_thread_pool(Arc::clone(&thread_pool) as Arc<dyn CpuPool>)
-            .with_graph_db(Arc::clone(&graph_db))
-            .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
-        );
+        let add_pipeline = AddPipeline::new(
+            Arc::clone(&storage),
+            Arc::clone(&database) as Arc<dyn IngestDb>,
+        )
+        .with_thread_pool(Arc::clone(&thread_pool) as Arc<dyn CpuPool>)
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_database(Arc::clone(&database))
+        .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+        let add_pipeline = Arc::new(cm.attach_transcriber(add_pipeline).await);
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase
         // concern.

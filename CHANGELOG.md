@@ -516,6 +516,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Audio ingestion through `add`.** Loaders run at add time, but `add` had no
+  transcriber, so an audio file failed with `Unsupported document type at
+  ingest: audio` and never reached cognify. `AddPipeline::with_transcriber`
+  (`audio-loader` feature) registers the audio loader at add, and
+  `ComponentManager::attach_transcriber` attaches the configured provider's
+  transcriber; the CLI (`add`, `add-and-cognify`, `remember`, `improve`,
+  `bench`) and the bindings services use it. The transcript is stored as the
+  item's text, as in Python. Only providers with a Whisper-style route
+  (`openai`, `custom` / `openai_compatible`) transcribe; with any other
+  provider, or when no transcriber can be built (no API key, say), `add` keeps
+  the old error for audio and text adds are unaffected.
+
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
   `response_format: {"type": "json_schema", "json_schema": {"strict": true,

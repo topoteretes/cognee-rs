@@ -90,6 +90,7 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
         .with_database(Arc::clone(&database));
+        let add_pipeline = cm.attach_transcriber(add_pipeline).await;
 
         let session_store: Arc<dyn SessionStore> = cm
             .session_store()

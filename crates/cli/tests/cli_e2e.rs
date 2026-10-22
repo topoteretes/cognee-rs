@@ -632,6 +632,95 @@ fn add_url_rejects_loopback_target() {
     drop(server);
 }
 
+/// `add` of an audio file transcribes it through the configured provider and
+/// stores the transcript. Without an API key there is no transcriber, so the
+/// same file fails as an unsupported type while text still adds.
+#[test]
+fn add_audio_file_stores_the_transcript() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    let (server, whisper) = rt.block_on(async {
+        let mut server = mockito::Server::new_async().await;
+        let whisper = server
+            .mock("POST", "/audio/transcriptions")
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"text":"Hello from the meeting.","language":"english","duration":1.5}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        (server, whisper)
+    });
+
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+    let audio_path = workdir.path().join("speech.mp3");
+    std::fs::write(&audio_path, b"ID3   fake-mp3-payload").expect("write audio");
+    let audio_arg = audio_path.display().to_string();
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+    config_set(&config_home, workdir.path(), "llm_provider", "\"openai\"");
+
+    make_cmd_in(&config_home, workdir.path())
+        .env_remove("LLM_API_KEY")
+        .args(["add", &audio_arg, "--dataset-name", "no_key"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "Unsupported document type at ingest: audio",
+        ));
+    make_cmd_in(&config_home, workdir.path())
+        .env_remove("LLM_API_KEY")
+        .args(["add", "text needs no key", "--dataset-name", "no_key"])
+        .assert()
+        .success();
+
+    config_set(&config_home, workdir.path(), "llm_api_key", "\"sk-test\"");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "llm_endpoint",
+        &format!("\"{}\"", server.url()),
+    );
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", &audio_arg, "--dataset-name", "audio"])
+        .assert()
+        .success();
+    rt.block_on(whisper.assert_async());
+
+    let conn = Connection::open(&db_file_path).expect("open sqlite database");
+    let (loader_engine, raw_data_location): (String, String) = conn
+        .query_row(
+            "SELECT loader_engine, raw_data_location FROM data WHERE original_extension = 'mp3'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the audio data row");
+    assert_eq!(loader_engine, "audio_loader");
+    let stored_path = raw_data_location
+        .strip_prefix("file://")
+        .unwrap_or(&raw_data_location);
+    assert_eq!(
+        std::fs::read_to_string(stored_path).expect("read the stored transcript"),
+        "Hello from the meeting."
+    );
+    drop(server);
+}
+
 /// `graph_extraction.backend` (`GRAPH_EXTRACTOR`) is honoured by the CLI's
 /// cognify paths: a kind nothing is registered under fails the command, naming
 /// the kind, instead of silently extracting with the LLM. `add-and-cognify`

@@ -103,6 +103,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_vector_db(vector_db_for_add)
             .with_database(Arc::clone(&database))
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+        let ingest = cm.attach_transcriber(ingest).await;
 
         let inputs = args
             .data
