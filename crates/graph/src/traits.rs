@@ -35,7 +35,7 @@ pub struct NodeTruthState {
 /// non-numeric elements are dropped (a structural-parity approximation of
 /// Python's dynamically-typed pass-through). Any non-array/missing value
 /// yields an empty vector.
-pub(crate) fn extract_truth_alignment(value: Option<&Value>) -> Vec<f64> {
+pub fn extract_truth_alignment(value: Option<&Value>) -> Vec<f64> {
     match value.and_then(|v| v.as_array()) {
         Some(arr) => arr.iter().filter_map(|e| e.as_f64()).collect(),
         None => Vec::new(),
@@ -49,7 +49,7 @@ pub(crate) fn extract_truth_alignment(value: Option<&Value>) -> Vec<f64> {
 /// JSON string (e.g. `"3"`), matching Python's tolerance for stringly-typed
 /// epoch values. Anything missing, non-numeric, or non-finite (`NaN`/`inf`)
 /// yields the `-1` "never scored" sentinel.
-pub(crate) fn extract_truth_epoch(value: Option<&Value>) -> i64 {
+pub fn extract_truth_epoch(value: Option<&Value>) -> i64 {
     match value {
         Some(v) => v
             .as_i64()

@@ -37,8 +37,10 @@ pub type EdgeData = (
 ///
 /// Returns `None` when the value is missing or is neither shape, letting the
 /// caller substitute the write time.
-#[cfg(any(feature = "ladybug", feature = "postgres"))]
-pub(crate) fn parse_audit_timestamp(
+///
+/// Public so graph adapters outside this crate store audit timestamps by the
+/// same rule as the built-in ones.
+pub fn parse_audit_timestamp(
     value: Option<&serde_json::Value>,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     match value? {

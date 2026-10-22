@@ -47,9 +47,9 @@ pub use temporal::{
 };
 pub use traits::{
     EdgeKey, GraphDBTrait, GraphDBTraitExt, NODE_LABEL_KEYS, NeighborhoodScope, NodeTruthState,
-    apply_neighborhood_scope, node_label_contains,
+    apply_neighborhood_scope, extract_truth_alignment, extract_truth_epoch, node_label_contains,
 };
-pub use types::{EdgeData, GraphEdge, GraphNode, NodeData};
+pub use types::{EdgeData, GraphEdge, GraphNode, NodeData, parse_audit_timestamp};
 
 #[cfg(feature = "ladybug")]
 pub use ladybug::{DEFAULT_MAX_DB_SIZE, LadybugAdapter, LadybugConfig};
