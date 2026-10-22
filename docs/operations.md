@@ -222,7 +222,11 @@ summary variants) rank triplets around the vector-search hits. A triplet's
 score, as in Python, sums its source node's, target node's and edge's cosine
 distances, each scaled by `2 - importance_weight` (0.5 when absent) and, with
 `feedback_influence > 0`, blended with its `feedback_weight` (higher feedback
-ranks better; unmatched elements keep the distance penalty). By default they
+ranks better). An element with no vector match takes `triplet_distance_penalty`
+(6.5) before that scaling — 9.75 at the default weight — and is not blended.
+`importance_weight` is not clamped, as in Python: above about 1.69 the scaled
+penalty is blended like a real match, and above 2 it turns negative and ranks
+first. By default they
 rank only the edges touching a hit. `neighborhood_depth` (a positive integer;
 the CLI's `--neighborhood-depth`, the bindings' `neighborhoodDepth`) switches to
 Python's neighborhood projection: load the `depth`-hop neighborhood of the

@@ -22,11 +22,20 @@ pub struct TripletElement {
     pub distance: f32,
     /// `importance_weight`: the distance is multiplied by `2 - w` before
     /// feedback blending, so `1.0` keeps it, the `0.5` default scales it by
-    /// 1.5 and `0.0` doubles it. Not clamped, as in Python. Edges never carry
-    /// one in Python's projection, so theirs is always the default.
+    /// 1.5 and `0.0` doubles it. Edges never carry one in Python's
+    /// projection, so theirs is always the default.
+    ///
+    /// Not clamped, exactly as in Python, which has two consequences for a
+    /// weight outside `[0, 1]`: above about 1.69 the *scaled* penalty drops
+    /// into `[0, 2]` and is feedback-blended like a real match (see
+    /// [`rank_edge_score`]), and above 2 the factor turns negative, so every
+    /// distance — the penalty included — becomes a large negative score and
+    /// the element's triplets rank first whatever the query. Cognify only
+    /// writes weights in `[0, 1]`; anything else comes from a hand-edited or
+    /// foreign graph.
     pub importance_weight: f32,
-    /// `feedback_weight`, clamped to `[0, 1]` when blended. Only read when the
-    /// feedback influence is positive.
+    /// `feedback_weight`, clamped to `[0, 1]` when blended. Ignored when the
+    /// feedback influence is not positive.
     pub feedback_weight: f32,
 }
 
@@ -44,9 +53,13 @@ impl TripletElement {
 /// The score of a triplet (lower = better match): the sum of its three
 /// elements' importance-scaled, feedback-blended distances.
 ///
-/// `distance_penalty` is the configured triplet distance penalty: a scaled
-/// distance at or above it — an unmatched element — is never blended, so
-/// missing elements keep ranking below real matches.
+/// `distance_penalty` is the configured triplet distance penalty. Like Python,
+/// the blend's guard tests the *importance-scaled* distance: a scaled distance
+/// at or above the penalty, or outside `[0, 2]`, is not blended. At the
+/// default importance an unmatched element scales to `1.5 × penalty` and so is
+/// never blended, keeping missing elements below real matches; an importance
+/// weight above about 1.69 scales the default 6.5 penalty to 2 or less, and
+/// that element *is* blended (see [`TripletElement::importance_weight`]).
 pub fn rank_edge_score(
     source: TripletElement,
     target: TripletElement,
@@ -106,17 +119,40 @@ fn blend_feedback(
 
 /// A node or edge weight property read the way Python's `float(value)` with
 /// an `except (TypeError, ValueError): 0.5` fallback reads it: a number, a
-/// boolean (`True` is 1.0), or a numeric string (surrounding whitespace
-/// allowed); anything else — including a missing or null property — is
+/// boolean (`True` is 1.0), or a numeric string (see [`parse_python_float`]);
+/// anything else — including a missing or null property — is
 /// [`DEFAULT_ELEMENT_WEIGHT`].
 pub(crate) fn element_weight(value: Option<&Value>) -> f32 {
     let parsed = match value {
         Some(Value::Number(number)) => number.as_f64(),
         Some(Value::Bool(flag)) => Some(if *flag { 1.0 } else { 0.0 }),
-        Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+        Some(Value::String(text)) => parse_python_float(text),
         _ => None,
     };
     parsed.map_or(DEFAULT_ELEMENT_WEIGHT, |weight| weight as f32)
+}
+
+/// Python's `float(str)`: surrounding whitespace is ignored and an underscore
+/// may group digits (`"1_0"` is 10.0), but only *between* two digits — a
+/// leading, trailing or doubled underscore, or one next to the point or
+/// exponent, is rejected. The rest (sign, `inf` / `nan` in any case, exponent)
+/// is what Rust's own float parser accepts.
+fn parse_python_float(text: &str) -> Option<f64> {
+    let text = text.trim();
+    if !text.contains('_') {
+        return text.parse().ok();
+    }
+    let bytes = text.as_bytes();
+    let grouped_digits = bytes.iter().enumerate().all(|(i, &b)| {
+        b != b'_'
+            || (i > 0
+                && bytes[i - 1].is_ascii_digit()
+                && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
+    });
+    if !grouped_digits {
+        return None;
+    }
+    text.replace('_', "").parse().ok()
 }
 
 #[cfg(test)]
@@ -233,12 +269,49 @@ mod tests {
         );
     }
 
+    /// Underscores group digits only between two digits, as in Python.
+    #[test]
+    fn python_float_underscore_rules() {
+        for (text, expected) in [
+            ("1_000", Some(1000.0)),
+            ("1_0.2_5", Some(10.25)),
+            ("1e1_0", Some(1e10)),
+            ("_1", None),
+            ("1_", None),
+            ("1__0", None),
+            ("1_.5", None),
+            ("1._5", None),
+            ("1_e5", None),
+            ("-inf", Some(f64::NEG_INFINITY)),
+            ("  .5  ", Some(0.5)),
+        ] {
+            assert_eq!(parse_python_float(text), expected, "{text:?}");
+        }
+        assert!(parse_python_float("NaN").is_some_and(f64::is_nan));
+    }
+
+    /// An importance weight above ~1.69 scales the penalty into `[0, 2]`, so —
+    /// as in Python — it is feedback-blended like a real match.
+    #[test]
+    fn high_importance_lets_the_penalty_be_blended() {
+        let unmatched = element(PENALTY, 1.9, 1.0);
+        // (2 - 1.9) * 6.5 = 0.65, fully blended towards w = 1.0 -> 0.0.
+        assert_close(element_distance(unmatched, 1.0, PENALTY), 0.0);
+        // Above 2 the factor is negative: the penalty becomes a reward.
+        assert_close(
+            element_distance(element(PENALTY, 5.0, 0.5), 0.0, PENALTY),
+            -3.0 * PENALTY,
+        );
+    }
+
     #[test]
     fn element_weight_reads_like_python_float() {
         assert_eq!(element_weight(Some(&json!(0.75))), 0.75);
         assert_eq!(element_weight(Some(&json!(1))), 1.0);
         assert_eq!(element_weight(Some(&json!(true))), 1.0);
         assert_eq!(element_weight(Some(&json!(" 0.25 "))), 0.25);
+        assert_eq!(element_weight(Some(&json!("1_0"))), 10.0);
+        assert_eq!(element_weight(Some(&json!("0.2_5"))), 0.25);
         assert_eq!(element_weight(Some(&json!("heavy"))), 0.5);
         assert_eq!(element_weight(Some(&json!(null))), 0.5);
         assert_eq!(element_weight(Some(&json!([1.0]))), 0.5);

@@ -152,7 +152,8 @@ fn config() -> GraphRetrievalConfig {
 /// so before the tie-break the surviving members of a tie were whatever arrived
 /// first. Ties are routine here, not a corner case: every endpoint missing from
 /// the vector results takes the same `triplet_distance_penalty`, so all three
-/// edges below score identically (0 for the seed + 6.5 + 6.5).
+/// edges below score identically: 1.5 × (0 for the seed + 6.5 + 6.5) = 19.5,
+/// each distance scaled by `2 - importance_weight` at the default 0.5.
 #[tokio::test]
 async fn exactly_tied_edges_rank_by_id_not_by_arrival_order() {
     // Fixed, ordered uuids so the expected order is exact. Edges are inserted in

@@ -40,6 +40,10 @@ const NEIGHBORHOOD_DEPTH: usize = 1;
 /// vector match for the current query. Matches Python's `triplet_distance_penalty`
 /// default of 6.5 in
 /// `cognee/modules/retrieval/utils/brute_force_triplet_search.py:56,227`.
+///
+/// Like every element distance it is scaled by `2 - importance_weight` before
+/// it enters a triplet's score, so an unmatched element contributes 9.75 at the
+/// default importance of 0.5 (see [`rank_edge_score`]).
 pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 6.5;
 
 /// Collections searched to find candidate graph nodes and edge-type distances.
@@ -393,8 +397,8 @@ pub async fn brute_force_triplet_search(
     let mut node_names: HashMap<String, String> = HashMap::new();
     let mut node_texts: HashMap<String, String> = HashMap::new();
     let mut node_descriptions: HashMap<String, String> = HashMap::new();
-    let mut node_importance_weights: HashMap<String, f32> = HashMap::new();
-    let mut node_feedback_weights: HashMap<String, f32> = HashMap::new();
+    // node id -> (importance_weight, feedback_weight)
+    let mut node_weights: HashMap<String, (f32, f32)> = HashMap::new();
 
     // Internal nodes (Python's `InternalDataPoint`, e.g. per-user preference
     // state in a graph shared with the Python SDK) are never projected, and
@@ -419,29 +423,27 @@ pub async fn brute_force_triplet_search(
         if let Some(desc) = properties.get("description").and_then(|v| v.as_str()) {
             node_descriptions.insert(node_id.clone(), desc.to_string());
         }
-        // Python projects `importance_weight` on every node and
-        // `feedback_weight` only when feedback influences the ranking.
-        node_importance_weights.insert(
+        // Python only projects `feedback_weight` when feedback influences the
+        // ranking; reading it always is equivalent, since the blend ignores
+        // it at zero influence.
+        node_weights.insert(
             node_id.clone(),
-            element_weight(properties.get("importance_weight")),
-        );
-        if config.feedback_influence > 0.0 {
-            node_feedback_weights.insert(
-                node_id.clone(),
+            (
+                element_weight(properties.get("importance_weight")),
                 element_weight(properties.get("feedback_weight")),
-            );
-        }
+            ),
+        );
     }
-    let node_element = |node_id: &String, distance: f32| TripletElement {
-        distance,
-        importance_weight: node_importance_weights
+    let node_element = |node_id: &String, distance: f32| {
+        let (importance_weight, feedback_weight) = node_weights
             .get(node_id)
             .copied()
-            .unwrap_or(DEFAULT_ELEMENT_WEIGHT),
-        feedback_weight: node_feedback_weights
-            .get(node_id)
-            .copied()
-            .unwrap_or(DEFAULT_ELEMENT_WEIGHT),
+            .unwrap_or((DEFAULT_ELEMENT_WEIGHT, DEFAULT_ELEMENT_WEIGHT));
+        TripletElement {
+            distance,
+            importance_weight,
+            feedback_weight,
+        }
     };
 
     let default_penalty = config.triplet_distance_penalty;
@@ -489,15 +491,10 @@ pub async fn brute_force_triplet_search(
                         .and_then(|point_id| edge_type_distances.get(&point_id).copied())
                         .unwrap_or(default_penalty);
 
-                // Python's edge projection carries `feedback_weight` (when
-                // feedback is on) but never `importance_weight`, so an edge's
-                // importance is always the default.
+                // Python's edge projection carries `feedback_weight` but never
+                // `importance_weight`, so an edge's importance is the default.
                 let edge = TripletElement {
-                    feedback_weight: if config.feedback_influence > 0.0 {
-                        element_weight(properties.get("feedback_weight"))
-                    } else {
-                        DEFAULT_ELEMENT_WEIGHT
-                    },
+                    feedback_weight: element_weight(properties.get("feedback_weight")),
                     ..TripletElement::new(edge_dist)
                 };
 

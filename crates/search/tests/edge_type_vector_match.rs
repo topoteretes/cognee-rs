@@ -265,7 +265,7 @@ async fn blank_edge_text_falls_back_to_relationship_name_and_still_matches() {
     assert!(
         (matched - SCALE * EDGE_DISTANCE).abs() < 1e-5,
         "a blank edge_text must fall back to the relationship_name, so the edge \
-         scores {EDGE_DISTANCE}, got {matched}"
+         scores {SCALE} * {EDGE_DISTANCE}, got {matched}"
     );
 }
 
@@ -300,6 +300,6 @@ async fn absent_edge_text_falls_back_to_relationship_name_and_still_matches() {
     assert!(
         (matched - SCALE * EDGE_DISTANCE).abs() < 1e-5,
         "an edge with no edge_text property keys on its relationship_name, so it \
-         scores {EDGE_DISTANCE}, got {matched}"
+         scores {SCALE} * {EDGE_DISTANCE}, got {matched}"
     );
 }
