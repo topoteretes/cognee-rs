@@ -2,9 +2,9 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use cognee_embedding::EmbeddingEngine;
-use cognee_graph::{GraphDBTrait, GraphNode, NeighborhoodScope};
+use cognee_graph::{EdgeData, GraphDBTrait, GraphNode, NeighborhoodScope};
 use cognee_models::{INTERNAL_PROPERTY, marks_internal};
-use cognee_vector::VectorDB;
+use cognee_vector::{SearchResult, VectorDB};
 use serde_json::Value;
 use tracing::debug;
 use uuid::Uuid;
@@ -183,21 +183,7 @@ pub async fn brute_force_triplet_search(
     graph_db: &dyn GraphDBTrait,
     config: &GraphRetrievalConfig,
 ) -> Result<Vec<RankedGraphEdge>, SearchError> {
-    if config.feedback_influence < 0.0 || config.feedback_influence > 1.0 {
-        return Err(SearchError::InvalidInput(
-            "feedback_influence must be in range [0.0, 1.0]".to_string(),
-        ));
-    }
-
-    validate_neighborhood(config.neighborhood_depth, config.neighborhood_seed_top_k)?;
-
-    let op = config.node_name_filter_operator.to_uppercase();
-    if op != "AND" && op != "OR" {
-        return Err(SearchError::InvalidInput(format!(
-            "Invalid node_name_filter_operator: {:?}. Must be AND or OR.",
-            config.node_name_filter_operator
-        )));
-    }
+    validate_config(config)?;
 
     let load = GraphLoad::resolve(config);
     if load == GraphLoad::NoSeeds {
@@ -212,34 +198,10 @@ pub async fn brute_force_triplet_search(
         return Ok(vec![]);
     }
 
-    let query_vectors = embedding_engine.embed_query(query).await?;
-    let query_vector = query_vectors.into_iter().next().ok_or_else(|| {
-        SearchError::InvalidInput("embedding engine returned no vectors".to_string())
-    })?;
+    let query_vector = embed_query(embedding_engine, query).await?;
 
-    // node_id -> cosine distance (lower = better)
-    let mut node_distances = HashMap::<String, f32>::new();
-    let mut candidate_node_ids = HashSet::<String>::new();
+    let mut hits = QueryHits::default();
     let mut node_dataset_ids = HashMap::<String, String>::new();
-
-    // EdgeType vector-row point id -> cosine distance (lower = better).
-    //
-    // NOT keyed by the bare `relationship_name`. cognify builds one EdgeType row
-    // per edge *retrieval text* — the nonblank `edge_text` property falling back
-    // to the relationship name (`EdgeType::retrieval_text`) — and both the row's
-    // point id and its `relationship_name` metadata carry that retrieval text,
-    // not the relation label. Since `fact_extraction` asks the LLM for a
-    // description on every edge, keying on the label made the lookup below miss
-    // for essentially every edge, so every edge silently took the
-    // `triplet_distance_penalty` and edge vectors never influenced ranking at all.
-    //
-    // Python matches by point id for the same reason: `CogneeGraph.add_edge`
-    // stamps `edge_type_id = EdgeType.id_for(edge_text or relationship_type)` on
-    // each edge (`CogneeGraph.py:58-61`) and `map_vector_distances_to_graph_edges`
-    // looks the hit up by `str(result.id)` (`CogneeGraph.py:392`). Rust's hybrid
-    // lane already did the same via `connection_edge_type_id`. The lookup below
-    // recomputes the id with the shared `edge_type_point_id` helper.
-    let mut edge_type_distances = HashMap::<String, f32>::new();
 
     // The per-collection searches are independent: run them concurrently
     // (one pooled connection each), then merge in the fixed collection order
@@ -275,39 +237,11 @@ pub async fn brute_force_triplet_search(
         if !is_edge_type_collection(data_type, field_name) {
             node_collections.push((data_type, field_name));
         }
-
-        for result in results {
-            // Convert Qdrant cosine similarity to cosine distance: distance = 1 - similarity
-            let distance = 1.0 - result.score;
-
-            if is_edge_type_collection(data_type, field_name) {
-                // The row's point id IS `EdgeType::deterministic_id(retrieval_text)`
-                // (cognify builds these with `EdgeType::new_deterministic`), which is
-                // exactly what the scoring loop recomputes per graph edge. Take it
-                // straight off the hit rather than re-deriving it from the
-                // `relationship_name` metadata: identical in value, but it is the
-                // point's actual identity and matches Python's `str(result.id)`.
-                //
-                // Deliberately NOT added to `candidate_node_ids`: an EdgeType id is
-                // never a graph node id, and seeding the node set with it would widen
-                // the neighborhood load for nothing.
-                keep_nearest(&mut edge_type_distances, result.id.to_string(), distance);
-            } else {
-                // Node distances keyed by vector point ID.
-                // Use min to merge across collections (lower distance = better match).
-                let node_id = result.id.to_string();
-                candidate_node_ids.insert(node_id.clone());
-                keep_nearest(&mut node_distances, node_id.clone(), distance);
-                if let Some(dataset_id) = result.metadata.get("dataset_id").and_then(|v| v.as_str())
-                {
-                    node_dataset_ids
-                        .entry(node_id)
-                        .or_insert_with(|| dataset_id.to_string());
-                }
-            }
-        }
+        hits.absorb(data_type, field_name, results, &mut node_dataset_ids);
     }
 
+    // The vector-search hits, before any expansion adds distances.
+    let candidate_node_ids: HashSet<String> = hits.node_distances.keys().cloned().collect();
     if candidate_node_ids.is_empty() {
         debug!("no candidate nodes found from vector search — returning empty");
         tracing::Span::current().record("cognee.result.count", 0u64);
@@ -338,7 +272,8 @@ pub async fn brute_force_triplet_search(
         // defaults to 100, so the id filter is always populated and
         // `CogneeGraph._get_full_or_id_filtered_graph` always takes the scoped
         // branch (brute_force_triplet_search.py:156-160, CogneeGraph.py:123-151).
-        // The full-graph branch is dead code there.
+        // The full-graph branch is reached only by batch search, which is
+        // [`brute_force_triplet_search_batch`].
         //
         // Deliberately NOT `get_id_filtered_graph_data`, despite the name match
         // with Python's method: this trait's version keeps an edge only when
@@ -350,14 +285,14 @@ pub async fn brute_force_triplet_search(
         // iteration order varies per process, and the trait's default BFS walks
         // the frontier in seed order — so an unsorted seed list makes that
         // backend's edge order vary run to run. Cheap insurance; the ranking
-        // sort's tie-break below is what actually guarantees a stable top-k,
-        // since neither real adapter's row order tracks the seed order (Ladybug
+        // sort's tie-break is what actually guarantees a stable top-k, since
+        // neither real adapter's row order tracks the seed order (Ladybug
         // re-collects into its own `HashSet` and returns storage order; the
         // Postgres CTE has no ORDER BY).
         let (seed_ids, depth) = match load {
             // Python's neighborhood projection: the nearest `seed_top_k` seeds.
             GraphLoad::Projection { depth, seed_top_k } => {
-                (nearest_seeds(&node_distances, seed_top_k), depth)
+                (nearest_seeds(&hits.node_distances, seed_top_k), depth)
             }
             _ => {
                 let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
@@ -386,56 +321,332 @@ pub async fn brute_force_triplet_search(
             &node_collections,
             &graph_nodes,
             &candidate_node_ids,
-            &mut node_distances,
+            &mut hits.node_distances,
             &mut node_dataset_ids,
         )
         .await?;
     }
 
-    // Extract name, text, description, importance_weight and (optionally)
-    // feedback_weight from each node.
-    let mut node_names: HashMap<String, String> = HashMap::new();
-    let mut node_texts: HashMap<String, String> = HashMap::new();
-    let mut node_descriptions: HashMap<String, String> = HashMap::new();
-    // node id -> (importance_weight, feedback_weight)
-    let mut node_weights: HashMap<String, (f32, f32)> = HashMap::new();
+    let graph = ProjectedGraph::new(graph_nodes, graph_edges);
+    // Only edges with at least one endpoint found in vector search are ranked;
+    // the neighborhood projection ranks every edge it loaded instead, as Python
+    // ranks every edge of its fragment — otherwise edges past the first hop
+    // could never surface.
+    let seed_filter = (!load.ranks_every_loaded_edge()).then_some(&candidate_node_ids);
+    let ranked_edges = graph.rank(&hits, seed_filter, &node_dataset_ids, config);
+    tracing::Span::current().record("cognee.result.count", ranked_edges.len() as u64);
+    Ok(ranked_edges)
+}
 
-    // Internal nodes (Python's `InternalDataPoint`, e.g. per-user preference
-    // state in a graph shared with the Python SDK) are never projected, and
-    // an edge touching one is dropped with them (`CogneeGraph.py:192-232`).
-    let mut internal_node_ids: HashSet<String> = HashSet::new();
-
-    for (node_id, properties) in graph_nodes {
-        if marks_internal(properties.get(INTERNAL_PROPERTY)) {
-            internal_node_ids.insert(node_id);
-            continue;
-        }
-        let name = properties
-            .get("name")
-            .and_then(|value| value.as_str())
-            .unwrap_or(node_id.as_str())
-            .to_string();
-        node_names.insert(node_id.clone(), name);
-
-        if let Some(text) = properties.get("text").and_then(|v| v.as_str()) {
-            node_texts.insert(node_id.clone(), text.to_string());
-        }
-        if let Some(desc) = properties.get("description").and_then(|v| v.as_str()) {
-            node_descriptions.insert(node_id.clone(), desc.to_string());
-        }
-        // Python only projects `feedback_weight` when feedback influences the
-        // ranking; reading it always is equivalent, since the blend ignores
-        // it at zero influence.
-        node_weights.insert(
-            node_id.clone(),
-            (
-                element_weight(properties.get("importance_weight")),
-                element_weight(properties.get("feedback_weight")),
-            ),
-        );
+/// Graph triplet search for several queries over **one** graph load: one ranked
+/// list per query, in query order. Port of Python's batch mode
+/// (`brute_force_triplet_search(query_batch=...)`), which the decomposition
+/// retriever uses for its sub-questions.
+///
+/// Python's batch mode differs from single-query search, and so does this:
+///
+/// * every vector collection is searched **without a limit** (Python's
+///   `batch_search(limit=None)` reads the whole collection), so every node
+///   and edge type gets its real distance to every query;
+/// * the **whole graph** is loaded (`get_graph_data`) — or the NodeSet
+///   subgraph with `node_type` + `node_name` — since there is no seed set to
+///   scope it by, and every loaded edge is ranked;
+/// * `wide_search_top_k` and `node_name` play no part in the vector search,
+///   and `neighborhood_depth` yields no triplets: the projection needs seed
+///   ids, which batch mode never has (Python's `get_memory_fragment` swallows
+///   the resulting `ValueError`).
+///
+/// That makes it far more expensive than a single search on a large store.
+/// Callers with one query should use [`brute_force_triplet_search`], as
+/// Python's `get_triplets_batch` does.
+///
+/// # Errors
+/// [`SearchError::InvalidInput`] for an empty batch or a blank query (Python's
+/// `validate_queries`) and for the configuration errors
+/// [`brute_force_triplet_search`] rejects.
+#[tracing::instrument(
+    name = "cognee.retrieval.graph_search_batch",
+    skip(queries, graph_db, vector_db, embedding_engine, config),
+    fields(
+        cognee.retrieval.batch_size = queries.len(),
+        cognee.result.count = tracing::field::Empty,
+    )
+)]
+pub async fn brute_force_triplet_search_batch(
+    queries: &[&str],
+    vector_db: &dyn VectorDB,
+    embedding_engine: &dyn EmbeddingEngine,
+    graph_db: &dyn GraphDBTrait,
+    config: &GraphRetrievalConfig,
+) -> Result<Vec<Vec<RankedGraphEdge>>, SearchError> {
+    if queries.is_empty() {
+        return Err(SearchError::InvalidInput(
+            "query_batch must be a non-empty list of strings.".to_string(),
+        ));
     }
-    let node_element = |node_id: &String, distance: f32| {
-        let (importance_weight, feedback_weight) = node_weights
+    if queries.iter().any(|query| query.trim().is_empty()) {
+        return Err(SearchError::InvalidInput(
+            "All items in query_batch must be non-empty strings.".to_string(),
+        ));
+    }
+    validate_config(config)?;
+    let empty = || vec![Vec::new(); queries.len()];
+
+    if config.neighborhood_depth.is_some() {
+        tracing::warn!(
+            target: "cognee::search",
+            "neighborhood_depth requires seed node ids from vector search, which batch \
+             search never has — returning no triplets"
+        );
+        tracing::Span::current().record("cognee.result.count", 0u64);
+        return Ok(empty());
+    }
+
+    // Each query through `embed_query`, not one `embed` call: an engine may
+    // shape queries differently from passages (BGE's query instruction).
+    let query_vectors = futures::future::try_join_all(
+        queries
+            .iter()
+            .map(|query| embed_query(embedding_engine, query)),
+    )
+    .await?;
+
+    let searches = SEARCH_COLLECTIONS.map(|(data_type, field_name)| {
+        let query_vectors = &query_vectors;
+        async move {
+            if !vector_db.has_collection(data_type, field_name).await? {
+                debug!("vector collection {data_type}/{field_name} does not exist — skipping");
+                return Ok::<_, SearchError>(None);
+            }
+            let size = vector_db.collection_size(data_type, field_name).await?;
+            if size == 0 {
+                return Ok(None);
+            }
+            let results = vector_db
+                .batch_search_similar(data_type, field_name, query_vectors, size)
+                .await?;
+            Ok(Some(results))
+        }
+    });
+    let searched = futures::future::join_all(searches).await;
+
+    let mut hits: Vec<QueryHits> = (0..queries.len()).map(|_| QueryHits::default()).collect();
+    let mut node_dataset_ids = HashMap::<String, String>::new();
+    for ((data_type, field_name), results) in SEARCH_COLLECTIONS.into_iter().zip(searched) {
+        let Some(per_query) = results? else {
+            continue;
+        };
+        for (query_hits, results) in hits.iter_mut().zip(per_query) {
+            query_hits.absorb(data_type, field_name, results, &mut node_dataset_ids);
+        }
+    }
+
+    // Python's `has_results`: any node or edge hit for any query.
+    if hits.iter().all(QueryHits::is_empty) {
+        debug!("no vector results for any query in the batch — returning empty");
+        tracing::Span::current().record("cognee.result.count", 0u64);
+        return Ok(empty());
+    }
+
+    let (graph_nodes, graph_edges) = match GraphLoad::resolve(config) {
+        GraphLoad::NodeSet {
+            node_type,
+            node_names,
+        } => {
+            graph_db
+                .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
+                .await?
+        }
+        _ => graph_db.get_graph_data().await?,
+    };
+    let graph = ProjectedGraph::new(graph_nodes, graph_edges);
+
+    let ranked: Vec<Vec<RankedGraphEdge>> = hits
+        .iter()
+        .map(|query_hits| graph.rank(query_hits, None, &node_dataset_ids, config))
+        .collect();
+    tracing::Span::current().record(
+        "cognee.result.count",
+        ranked.iter().map(Vec::len).sum::<usize>() as u64,
+    );
+    Ok(ranked)
+}
+
+/// The configuration checks both search modes share.
+fn validate_config(config: &GraphRetrievalConfig) -> Result<(), SearchError> {
+    if config.feedback_influence < 0.0 || config.feedback_influence > 1.0 {
+        return Err(SearchError::InvalidInput(
+            "feedback_influence must be in range [0.0, 1.0]".to_string(),
+        ));
+    }
+
+    validate_neighborhood(config.neighborhood_depth, config.neighborhood_seed_top_k)?;
+
+    let op = config.node_name_filter_operator.to_uppercase();
+    if op != "AND" && op != "OR" {
+        return Err(SearchError::InvalidInput(format!(
+            "Invalid node_name_filter_operator: {:?}. Must be AND or OR.",
+            config.node_name_filter_operator
+        )));
+    }
+    Ok(())
+}
+
+async fn embed_query(
+    embedding_engine: &dyn EmbeddingEngine,
+    query: &str,
+) -> Result<Vec<f32>, SearchError> {
+    embedding_engine
+        .embed_query(query)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            SearchError::InvalidInput("embedding engine returned no vectors".to_string())
+        })
+}
+
+/// One query's vector-search distances, keyed the way the ranking looks them up.
+#[derive(Debug, Default)]
+struct QueryHits {
+    /// node id -> cosine distance (lower = better), the nearest across
+    /// collections.
+    node_distances: HashMap<String, f32>,
+    /// EdgeType vector-row point id -> cosine distance (lower = better).
+    ///
+    /// NOT keyed by the bare `relationship_name`. cognify builds one EdgeType
+    /// row per edge *retrieval text* — the nonblank `edge_text` property
+    /// falling back to the relationship name (`EdgeType::retrieval_text`) —
+    /// and both the row's point id and its `relationship_name` metadata carry
+    /// that retrieval text, not the relation label. Since `fact_extraction`
+    /// asks the LLM for a description on every edge, keying on the label made
+    /// the lookup miss for essentially every edge, so every edge silently took
+    /// the `triplet_distance_penalty` and edge vectors never influenced
+    /// ranking at all.
+    ///
+    /// Python matches by point id for the same reason: `CogneeGraph.add_edge`
+    /// stamps `edge_type_id = EdgeType.id_for(edge_text or relationship_type)`
+    /// on each edge (`CogneeGraph.py:58-61`) and
+    /// `map_vector_distances_to_graph_edges` looks the hit up by
+    /// `str(result.id)` (`CogneeGraph.py:392`). Rust's hybrid lane already did
+    /// the same via `connection_edge_type_id`. The ranking recomputes the id
+    /// with the shared `edge_type_point_id` helper.
+    edge_type_distances: HashMap<String, f32>,
+}
+
+impl QueryHits {
+    /// Merge one collection's search results for this query. A node's dataset
+    /// id is first-wins across collections (and, in a batch, across queries:
+    /// it is the row's metadata, the same whichever query found it).
+    fn absorb(
+        &mut self,
+        data_type: &str,
+        field_name: &str,
+        results: Vec<SearchResult>,
+        node_dataset_ids: &mut HashMap<String, String>,
+    ) {
+        for result in results {
+            // Convert cosine similarity to cosine distance: distance = 1 - similarity
+            let distance = 1.0 - result.score;
+
+            if is_edge_type_collection(data_type, field_name) {
+                // The row's point id IS `EdgeType::deterministic_id(retrieval_text)`
+                // (cognify builds these with `EdgeType::new_deterministic`), which is
+                // exactly what the ranking recomputes per graph edge. Take it
+                // straight off the hit rather than re-deriving it from the
+                // `relationship_name` metadata: identical in value, but it is the
+                // point's actual identity and matches Python's `str(result.id)`.
+                //
+                // Deliberately NOT a node distance: an EdgeType id is never a graph
+                // node id, and seeding the node set with it would widen the
+                // neighborhood load for nothing.
+                keep_nearest(
+                    &mut self.edge_type_distances,
+                    result.id.to_string(),
+                    distance,
+                );
+            } else {
+                // Node distances keyed by vector point ID.
+                // Use min to merge across collections (lower distance = better match).
+                let node_id = result.id.to_string();
+                keep_nearest(&mut self.node_distances, node_id.clone(), distance);
+                if let Some(dataset_id) = result.metadata.get("dataset_id").and_then(|v| v.as_str())
+                {
+                    node_dataset_ids
+                        .entry(node_id)
+                        .or_insert_with(|| dataset_id.to_string());
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.node_distances.is_empty() && self.edge_type_distances.is_empty()
+    }
+}
+
+/// A loaded graph, projected the way Python's `CogneeGraph` projects it, ready
+/// to rank against one or more queries' distances.
+struct ProjectedGraph {
+    edges: Vec<EdgeData>,
+    node_names: HashMap<String, String>,
+    node_texts: HashMap<String, String>,
+    node_descriptions: HashMap<String, String>,
+    /// node id -> (importance_weight, feedback_weight)
+    node_weights: HashMap<String, (f32, f32)>,
+    /// Internal nodes (Python's `InternalDataPoint`, e.g. per-user preference
+    /// state in a graph shared with the Python SDK) are never projected, and
+    /// an edge touching one is dropped with them (`CogneeGraph.py:192-232`).
+    internal_node_ids: HashSet<String>,
+}
+
+impl ProjectedGraph {
+    fn new(nodes: Vec<GraphNode>, edges: Vec<EdgeData>) -> Self {
+        let mut graph = Self {
+            edges,
+            node_names: HashMap::new(),
+            node_texts: HashMap::new(),
+            node_descriptions: HashMap::new(),
+            node_weights: HashMap::new(),
+            internal_node_ids: HashSet::new(),
+        };
+        for (node_id, properties) in nodes {
+            if marks_internal(properties.get(INTERNAL_PROPERTY)) {
+                graph.internal_node_ids.insert(node_id);
+                continue;
+            }
+            let name = properties
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or(node_id.as_str())
+                .to_string();
+            graph.node_names.insert(node_id.clone(), name);
+
+            if let Some(text) = properties.get("text").and_then(|v| v.as_str()) {
+                graph.node_texts.insert(node_id.clone(), text.to_string());
+            }
+            if let Some(desc) = properties.get("description").and_then(|v| v.as_str()) {
+                graph
+                    .node_descriptions
+                    .insert(node_id.clone(), desc.to_string());
+            }
+            // Python only projects `feedback_weight` when feedback influences the
+            // ranking; reading it always is equivalent, since the blend ignores
+            // it at zero influence.
+            graph.node_weights.insert(
+                node_id,
+                (
+                    element_weight(properties.get("importance_weight")),
+                    element_weight(properties.get("feedback_weight")),
+                ),
+            );
+        }
+        graph
+    }
+
+    fn node_element(&self, node_id: &str, distance: f32) -> TripletElement {
+        let (importance_weight, feedback_weight) = self
+            .node_weights
             .get(node_id)
             .copied()
             .unwrap_or((DEFAULT_ELEMENT_WEIGHT, DEFAULT_ELEMENT_WEIGHT));
@@ -444,131 +655,141 @@ pub async fn brute_force_triplet_search(
             importance_weight,
             feedback_weight,
         }
-    };
+    }
 
-    let default_penalty = config.triplet_distance_penalty;
+    /// The `top_k` edges for one query's `hits`, best first. With
+    /// `seed_filter`, only edges with an endpoint in it are ranked.
+    fn rank(
+        &self,
+        hits: &QueryHits,
+        seed_filter: Option<&HashSet<String>>,
+        node_dataset_ids: &HashMap<String, String>,
+        config: &GraphRetrievalConfig,
+    ) -> Vec<RankedGraphEdge> {
+        let default_penalty = config.triplet_distance_penalty;
 
-    // Score every candidate edge against borrowed data; the owned
-    // `RankedGraphEdge` (names, texts, descriptions, edge text) is built only
-    // for the `top_k` that survive the cut below.
-    let mut scored = graph_edges
-        .iter()
-        .enumerate()
-        .filter_map(
-            |(index, (source_id, target_id, relationship_name, properties))| {
-                // Only consider edges where at least one endpoint was found in
-                // vector search. The neighborhood projection ranks every edge it
-                // loaded instead, as Python ranks every edge of its fragment —
-                // otherwise edges past the first hop could never surface.
-                if !load.ranks_every_loaded_edge()
-                    && !candidate_node_ids.contains(source_id)
-                    && !candidate_node_ids.contains(target_id)
-                {
-                    return None;
-                }
-                if internal_node_ids.contains(source_id) || internal_node_ids.contains(target_id) {
-                    return None;
-                }
+        // Score every candidate edge against borrowed data; the owned
+        // `RankedGraphEdge` (names, texts, descriptions, edge text) is built only
+        // for the `top_k` that survive the cut below.
+        let mut scored = self
+            .edges
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(index, (source_id, target_id, relationship_name, properties))| {
+                    if seed_filter.is_some_and(|seeds| {
+                        !seeds.contains(source_id) && !seeds.contains(target_id)
+                    }) {
+                        return None;
+                    }
+                    if self.internal_node_ids.contains(source_id)
+                        || self.internal_node_ids.contains(target_id)
+                    {
+                        return None;
+                    }
 
-                // Unmatched nodes get the default penalty distance (not 0.0)
-                let source_dist = node_distances
-                    .get(source_id)
-                    .copied()
-                    .unwrap_or(default_penalty);
-                let target_dist = node_distances
-                    .get(target_id)
-                    .copied()
-                    .unwrap_or(default_penalty);
-
-                // Recompute the EdgeType vector-row id this edge was indexed under and
-                // look the distance up by that. `edge_type_point_id` returns `None`
-                // only when both the `edge_text` property and the relationship name
-                // are blank — cognify skips building a row for such an edge, so there
-                // is nothing to match and the penalty is correct.
-                // Unmatched edge types get the default penalty distance.
-                let edge_dist =
-                    edge_type_point_id(nonblank_edge_text(properties), relationship_name)
-                        .and_then(|point_id| edge_type_distances.get(&point_id).copied())
+                    // Unmatched nodes get the default penalty distance (not 0.0)
+                    let source_dist = hits
+                        .node_distances
+                        .get(source_id)
+                        .copied()
+                        .unwrap_or(default_penalty);
+                    let target_dist = hits
+                        .node_distances
+                        .get(target_id)
+                        .copied()
                         .unwrap_or(default_penalty);
 
-                // Python's edge projection carries `feedback_weight` but never
-                // `importance_weight`, so an edge's importance is the default.
-                let edge = TripletElement {
-                    feedback_weight: element_weight(properties.get("feedback_weight")),
-                    ..TripletElement::new(edge_dist)
-                };
+                    // Recompute the EdgeType vector-row id this edge was indexed under and
+                    // look the distance up by that. `edge_type_point_id` returns `None`
+                    // only when both the `edge_text` property and the relationship name
+                    // are blank — cognify skips building a row for such an edge, so there
+                    // is nothing to match and the penalty is correct.
+                    // Unmatched edge types get the default penalty distance.
+                    let edge_dist =
+                        edge_type_point_id(nonblank_edge_text(properties), relationship_name)
+                            .and_then(|point_id| hits.edge_type_distances.get(&point_id).copied())
+                            .unwrap_or(default_penalty);
 
-                let score = rank_edge_score(
-                    node_element(source_id, source_dist),
-                    node_element(target_id, target_dist),
-                    edge,
-                    config.feedback_influence,
-                    default_penalty,
-                );
-                Some((index, score))
-            },
-        )
-        .collect::<Vec<_>>();
+                    // Python's edge projection carries `feedback_weight` but never
+                    // `importance_weight`, so an edge's importance is the default.
+                    let edge = TripletElement {
+                        feedback_weight: element_weight(properties.get("feedback_weight")),
+                        ..TripletElement::new(edge_dist)
+                    };
 
-    // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest).
-    //
-    // Ties break on the edge triple, not on arrival order. `sort_by` is stable, so
-    // without an explicit tie-break the winners of a tie are decided by whatever
-    // order the graph backend returned its rows in — which no backend guarantees
-    // (the Postgres neighborhood CTE has no ORDER BY; Ladybug is storage-ordered)
-    // and which `take(top_k)` below then makes user-visible. Ties are the common
-    // case rather than a rarity: every endpoint absent from the vector results
-    // takes the same `triplet_distance_penalty`, so an `is_a` fan-out around one
-    // EntityType hub yields hundreds of exactly-equal scores. Comparing the ids
-    // makes the top-k context handed to the LLM identical across runs and across
-    // backends.
-    //
-    // A NaN score (pgvector returns a NaN similarity for a zero-norm row or
-    // query) ranks last. `partial_cmp(..).unwrap_or(Equal)` made the comparator
-    // intransitive in that case, which the standard sort detects and panics on.
-    let rank_key = |score: f32| if score.is_nan() { f32::INFINITY } else { score };
-    scored.sort_by(|&(left, left_score), &(right, right_score)| {
-        let (left_source, left_target, left_relationship, _) = &graph_edges[left];
-        let (right_source, right_target, right_relationship, _) = &graph_edges[right];
-        rank_key(left_score)
-            .total_cmp(&rank_key(right_score))
-            .then_with(|| left_source.cmp(right_source))
-            .then_with(|| left_target.cmp(right_target))
-            .then_with(|| left_relationship.cmp(right_relationship))
-    });
-    scored.truncate(config.top_k);
+                    let score = rank_edge_score(
+                        self.node_element(source_id, source_dist),
+                        self.node_element(target_id, target_dist),
+                        edge,
+                        config.feedback_influence,
+                        default_penalty,
+                    );
+                    Some((index, score))
+                },
+            )
+            .collect::<Vec<_>>();
 
-    let ranked_edges: Vec<RankedGraphEdge> = scored
-        .into_iter()
-        .map(|(index, score)| {
-            let (source_id, target_id, relationship_name, properties) = &graph_edges[index];
-            RankedGraphEdge {
-                source_id: source_id.clone(),
-                target_id: target_id.clone(),
-                relationship_name: relationship_name.clone(),
-                score,
-                source_name: node_names
-                    .get(source_id)
-                    .cloned()
-                    .unwrap_or_else(|| source_id.clone()),
-                target_name: node_names
-                    .get(target_id)
-                    .cloned()
-                    .unwrap_or_else(|| target_id.clone()),
-                dataset_id: node_dataset_ids
-                    .get(source_id)
-                    .or_else(|| node_dataset_ids.get(target_id))
-                    .cloned(),
-                source_text: node_texts.get(source_id).cloned(),
-                target_text: node_texts.get(target_id).cloned(),
-                source_description: node_descriptions.get(source_id).cloned(),
-                target_description: node_descriptions.get(target_id).cloned(),
-                edge_text: nonblank_edge_text(properties).map(str::to_string),
-            }
-        })
-        .collect();
-    tracing::Span::current().record("cognee.result.count", ranked_edges.len() as u64);
-    Ok(ranked_edges)
+        // Sort ascending: lowest total distance = best match (matches Python heapq.nsmallest).
+        //
+        // Ties break on the edge triple, not on arrival order. `sort_by` is stable, so
+        // without an explicit tie-break the winners of a tie are decided by whatever
+        // order the graph backend returned its rows in — which no backend guarantees
+        // (the Postgres neighborhood CTE has no ORDER BY; Ladybug is storage-ordered)
+        // and which `take(top_k)` below then makes user-visible. Ties are the common
+        // case rather than a rarity: every endpoint absent from the vector results
+        // takes the same `triplet_distance_penalty`, so an `is_a` fan-out around one
+        // EntityType hub yields hundreds of exactly-equal scores. Comparing the ids
+        // makes the top-k context handed to the LLM identical across runs and across
+        // backends.
+        //
+        // A NaN score (pgvector returns a NaN similarity for a zero-norm row or
+        // query) ranks last. `partial_cmp(..).unwrap_or(Equal)` made the comparator
+        // intransitive in that case, which the standard sort detects and panics on.
+        let rank_key = |score: f32| if score.is_nan() { f32::INFINITY } else { score };
+        scored.sort_by(|&(left, left_score), &(right, right_score)| {
+            let (left_source, left_target, left_relationship, _) = &self.edges[left];
+            let (right_source, right_target, right_relationship, _) = &self.edges[right];
+            rank_key(left_score)
+                .total_cmp(&rank_key(right_score))
+                .then_with(|| left_source.cmp(right_source))
+                .then_with(|| left_target.cmp(right_target))
+                .then_with(|| left_relationship.cmp(right_relationship))
+        });
+        scored.truncate(config.top_k);
+
+        scored
+            .into_iter()
+            .map(|(index, score)| {
+                let (source_id, target_id, relationship_name, properties) = &self.edges[index];
+                RankedGraphEdge {
+                    source_id: source_id.clone(),
+                    target_id: target_id.clone(),
+                    relationship_name: relationship_name.clone(),
+                    score,
+                    source_name: self
+                        .node_names
+                        .get(source_id)
+                        .cloned()
+                        .unwrap_or_else(|| source_id.clone()),
+                    target_name: self
+                        .node_names
+                        .get(target_id)
+                        .cloned()
+                        .unwrap_or_else(|| target_id.clone()),
+                    dataset_id: node_dataset_ids
+                        .get(source_id)
+                        .or_else(|| node_dataset_ids.get(target_id))
+                        .cloned(),
+                    source_text: self.node_texts.get(source_id).cloned(),
+                    target_text: self.node_texts.get(target_id).cloned(),
+                    source_description: self.node_descriptions.get(source_id).cloned(),
+                    target_description: self.node_descriptions.get(target_id).cloned(),
+                    edge_text: nonblank_edge_text(properties).map(str::to_string),
+                }
+            })
+            .collect()
+    }
 }
 
 /// How the graph is loaded around the vector-search hits, and so which loaded

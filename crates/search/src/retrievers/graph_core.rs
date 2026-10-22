@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::graph_retrieval::{
     DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, RankedGraphEdge,
-    brute_force_triplet_search,
+    brute_force_triplet_search, brute_force_triplet_search_batch,
 };
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
 use crate::utils::{
@@ -111,6 +111,48 @@ impl GraphRetrieverCore {
             &self.retrieval_config(params),
         )
         .await
+    }
+
+    /// The ranked triplets for each of `queries`, best first, in query order —
+    /// Python's `get_triplets_batch`. A single query runs the single-query
+    /// search (and its seed-scoped graph load); several share one batch search
+    /// over one full graph load ([`brute_force_triplet_search_batch`]), as in
+    /// Python, where the two modes rank differently.
+    pub(crate) async fn ranked_edges_batch(
+        &self,
+        queries: &[&str],
+        params: &SearchParams,
+    ) -> Result<Vec<Vec<RankedGraphEdge>>, SearchError> {
+        if let [query] = queries {
+            return Ok(vec![self.ranked_edges(query, params).await?]);
+        }
+        brute_force_triplet_search_batch(
+            queries,
+            self.vector_db.as_ref(),
+            self.embedding_engine.as_ref(),
+            self.graph_db.as_ref(),
+            &self.retrieval_config(params),
+        )
+        .await
+    }
+
+    /// [`search`](Self::search) for each of `queries`, through
+    /// [`ranked_edges_batch`](Self::ranked_edges_batch): one context per
+    /// query, in query order.
+    pub(crate) async fn search_batch(
+        &self,
+        queries: &[&str],
+        params: &SearchParams,
+    ) -> Result<Vec<SearchContext>, SearchError> {
+        if self.graph_db.is_empty().await? {
+            return Ok(vec![Vec::new(); queries.len()]);
+        }
+        Ok(self
+            .ranked_edges_batch(queries, params)
+            .await?
+            .into_iter()
+            .map(|edges| edges.into_iter().map(ranked_edge_to_item).collect())
+            .collect())
     }
 
     /// The ranked triplets for `query` as context items. An empty graph yields
@@ -211,5 +253,106 @@ pub(crate) async fn complete(
     } else {
         let completion = llm.generate(messages, generation_options).await?;
         Ok(SearchOutput::Text(completion.content))
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use async_trait::async_trait;
+    use cognee_embedding::EmbeddingResult;
+    use cognee_graph::MockGraphDB;
+    use cognee_vector::{MockVectorDB, VectorPoint};
+
+    use super::*;
+
+    struct AlignedEmbedding;
+
+    #[async_trait]
+    impl EmbeddingEngine for AlignedEmbedding {
+        async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![1.0, 0.0]).collect())
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+        fn batch_size(&self) -> usize {
+            8
+        }
+        fn max_sequence_length(&self) -> usize {
+            128
+        }
+    }
+
+    async fn core() -> (GraphRetrieverCore, Arc<MockGraphDB>) {
+        let seed = uuid::Uuid::from_u128(1);
+        let other = uuid::Uuid::from_u128(2);
+        let vector_db = MockVectorDB::new();
+        vector_db
+            .create_collection("Entity", "name", 2)
+            .await
+            .unwrap();
+        vector_db
+            .index_points("Entity", "name", &[VectorPoint::new(seed, vec![1.0, 0.0])])
+            .await
+            .unwrap();
+        let graph = Arc::new(MockGraphDB::new());
+        for id in [seed, other] {
+            graph
+                .add_node_raw(json!({ "id": id.to_string(), "name": id.to_string() }))
+                .await
+                .unwrap();
+        }
+        graph
+            .add_edge(&seed.to_string(), &other.to_string(), "rel", None)
+            .await
+            .unwrap();
+        let core = GraphRetrieverCore::new(
+            Arc::new(vector_db),
+            Arc::new(AlignedEmbedding),
+            graph.clone(),
+            None,
+            None,
+            None,
+        );
+        (core, graph)
+    }
+
+    /// Python's `get_triplets_batch`: a lone query takes the single-query
+    /// path, with its seed-scoped load; several share one full-graph load.
+    #[tokio::test]
+    async fn a_lone_query_runs_single_and_several_share_one_batch_load() {
+        let (core, graph) = core().await;
+        let params = SearchParams::default();
+
+        let single = core.search_batch(&["q"], &params).await.unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].len(), 1);
+        let calls = graph.get_call_log();
+        assert!(
+            calls.iter().any(|call| call == "get_neighborhood"),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call == "get_graph_data"),
+            "{calls:?}"
+        );
+
+        let batch = core.search_batch(&["q", "r", "s"], &params).await.unwrap();
+        assert_eq!(batch.len(), 3);
+        assert!(batch.iter().all(|context| context.len() == 1), "{batch:?}");
+        let calls = graph.get_call_log();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| *call == "get_graph_data")
+                .count(),
+            1,
+            "{calls:?}"
+        );
     }
 }

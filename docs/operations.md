@@ -236,6 +236,13 @@ adapter without it leaves them at the distance penalty), and rank every loaded
 edge. Combined with `node_name`, which disables the seed search, it returns no
 triplets, as in Python.
 
+`brute_force_triplet_search_batch` is Python's batch mode
+(`query_batch=`): several queries share one graph load and come back as one
+ranked list each. As in Python it searches every vector collection without a
+limit and loads the whole graph (or the NodeSet subgraph), so it costs far more
+than a single search on a large store; `GraphRetrieverCore::search_batch` sends
+a lone query to the single-query search instead, as `get_triplets_batch` does.
+
 `Temporal` is `HybridCompletion` reranked by the time window the question asks
 about (`TemporalHybridRetriever`, Python's retriever of the same name). The hybrid
 candidate fetch — chunks and entities at `candidate_top_k`, default `4 × top_k`,
