@@ -117,6 +117,12 @@ class SearchOpts(TypedDict, total=False):
     use_combined_context: bool
     verbose: bool
     auto_feedback_detection: bool
+    #: Graph searches only: rank triplets this many hops around the nearest
+    #: hits. A positive integer.
+    neighborhood_depth: int
+    #: With ``neighborhood_depth``: at most this many hits to expand from,
+    #: nearest first (all of them when omitted).
+    neighborhood_seed_top_k: int
     user_id: str
 
 
@@ -130,6 +136,8 @@ class RecallOpts(TypedDict, total=False):
     session_id: str
     #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"`` | ``"graph_context"`` | ``"all"``
     scope: Union[str, list[str]]
+    neighborhood_depth: int
+    neighborhood_seed_top_k: int
 
 
 class RememberOpts(TypedDict, total=False):

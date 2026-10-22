@@ -569,6 +569,55 @@ pub async fn test_retrieve_round_trip(db: &dyn VectorDB) {
     assert_eq!(r1.metadata.get("k"), Some(&json!("v1")));
 }
 
+/// `score_by_ids` scores exactly the requested ids that exist, with no top-k
+/// cutoff, on `search_similar`'s similarity scale, and answers `[]` for empty
+/// ids or a missing collection.
+pub async fn test_score_by_ids(db: &dyn VectorDB) {
+    db.create_collection("ScoreIds", "f", 2).await.unwrap();
+    let near = Uuid::new_v4();
+    let mid = Uuid::new_v4();
+    let far = Uuid::new_v4();
+    let points = vec![
+        VectorPoint::new(near, vec![1.0, 0.0]).with_metadata("dataset_id", json!("ds")),
+        VectorPoint::new(mid, vec![0.6, 0.8]),
+        VectorPoint::new(far, vec![-1.0, 0.0]),
+    ];
+    db.index_points("ScoreIds", "f", &points).await.unwrap();
+
+    let query = [1.0, 0.0];
+    let scored = db
+        .score_by_ids("ScoreIds", "f", &[mid, far, Uuid::new_v4()], &query)
+        .await
+        .unwrap()
+        .expect("this adapter implements score_by_ids");
+    let by_id: std::collections::HashMap<Uuid, f32> =
+        scored.iter().map(|r| (r.id, r.score)).collect();
+    assert_eq!(by_id.len(), 2, "exactly the known requested ids: {by_id:?}");
+    // The farthest row is scored too: no ANN index or top-k may drop it.
+    assert!((by_id[&mid] - 0.6).abs() < 1e-3, "{by_id:?}");
+    assert!((by_id[&far] + 1.0).abs() < 1e-3, "{by_id:?}");
+
+    let near_hit = db
+        .score_by_ids("ScoreIds", "f", &[near], &query)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(near_hit[0].metadata.get("dataset_id"), Some(&json!("ds")));
+
+    let empty = db
+        .score_by_ids("ScoreIds", "f", &[], &query)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(empty.is_empty());
+    let missing = db
+        .score_by_ids("NoSuchScoreIds", "f", &[near], &query)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(missing.is_empty(), "missing collection scores to []");
+}
+
 pub async fn test_retrieve_missing_collection(db: &dyn VectorDB) {
     // Never created — must be Ok([]), not Err.
     let results = db

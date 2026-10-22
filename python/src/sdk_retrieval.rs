@@ -101,6 +101,10 @@ impl PyCognee {
     /// - ``use_combined_context`` / ``useCombinedContext`` — bool
     /// - ``verbose`` — bool
     /// - ``auto_feedback_detection`` / ``autoFeedbackDetection`` — bool
+    /// - ``neighborhood_depth`` / ``neighborhoodDepth`` — positive int; graph
+    ///   searches rank the triplets this many hops around the nearest hits
+    /// - ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK`` — positive int;
+    ///   how many of those hits to expand from, nearest first (default: all)
     ///
     /// ``userId`` / ``user_id`` in opts is ignored; the owner is always taken
     /// from the handle so dataset-name resolution works correctly.
@@ -137,6 +141,8 @@ impl PyCognee {
     /// - ``session_id`` / ``sessionId`` — session UUID string
     /// - ``scope`` — ``str`` or ``list[str]``:
     ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"`` | ``"graph_context"``
+    /// - ``neighborhood_depth`` / ``neighborhoodDepth``,
+    ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK`` — as for ``search``
     #[pyo3(signature = (query, opts=None))]
     fn recall<'py>(
         &self,

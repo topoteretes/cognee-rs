@@ -2,11 +2,12 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use cognee_embedding::EmbeddingEngine;
-use cognee_graph::{GraphDBTrait, NeighborhoodScope};
+use cognee_graph::{GraphDBTrait, GraphNode, NeighborhoodScope};
 use cognee_models::{INTERNAL_PROPERTY, marks_internal};
 use cognee_vector::VectorDB;
 use serde_json::Value;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::graph_retrieval::rank_edge_score;
 use crate::types::SearchError;
@@ -14,7 +15,8 @@ use crate::utils::edge_type_point_id;
 
 const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
-/// Hop radius used to scope the graph load around the vector-search seed set.
+/// Hop radius of the default graph load around the vector-search seed set,
+/// used when [`GraphRetrievalConfig::neighborhood_depth`] is unset.
 ///
 /// Must stay at 1 for the scoped load to be **result-identical** to loading the
 /// whole graph. The edge ranking below keeps an edge when *at least one*
@@ -29,6 +31,8 @@ const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 /// identical output. Lowering it to 0 is backend-dependent (the trait's default
 /// BFS returns no edges at depth 0, while the Postgres and Ladybug overrides
 /// return seed-to-seed edges) and would drop edges with one non-seed endpoint.
+/// A caller-set `neighborhood_depth` takes a different path altogether (see
+/// that field).
 const NEIGHBORHOOD_DEPTH: usize = 1;
 
 /// Default cosine distance assigned to graph elements (nodes or edges) that have no
@@ -95,8 +99,25 @@ pub struct GraphRetrievalConfig {
     /// CHANGES results: edges from a hub seed to its dropped neighbours never
     /// reach the ranking (they carry the non-seed penalty, so they rank below
     /// seed-to-seed edges, but they can still make the top k).
-    /// `None` and `Some(0)` both mean uncapped.
+    /// `None` and `Some(0)` both mean uncapped. Only applies at depth 1, so
+    /// it has no effect when `neighborhood_depth` is above 1.
     pub neighbor_cap: Option<usize>,
+    /// k-hop radius of Python's neighborhood projection
+    /// (`neighborhood_depth`, `brute_force_triplet_search.py`
+    /// `get_memory_fragment`). `None` (the default) keeps the depth-1 load
+    /// described on [`NEIGHBORHOOD_DEPTH`]. `Some(depth)` projects the
+    /// `depth`-hop neighborhood of the nearest
+    /// [`neighborhood_seed_top_k`](Self::neighborhood_seed_top_k) seeds,
+    /// gives the nodes that expansion discovered a real distance through
+    /// [`VectorDB::score_by_ids`], and ranks **every** projected edge — not
+    /// only those touching a seed — exactly as Python ranks every edge of its
+    /// fragment. Must be at least 1.
+    pub neighborhood_depth: Option<usize>,
+    /// How many seeds, nearest first, the neighborhood projection expands
+    /// from. `None` means all of them: Python's public `search()` passes
+    /// `None` through, and `relevant_ids[:None]` is the whole list. Ignored
+    /// without `neighborhood_depth`. Must be at least 1.
+    pub neighborhood_seed_top_k: Option<usize>,
 }
 
 impl Default for GraphRetrievalConfig {
@@ -110,6 +131,8 @@ impl Default for GraphRetrievalConfig {
             node_name: None,
             node_name_filter_operator: "OR".to_string(),
             neighbor_cap: None,
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
         }
     }
 }
@@ -158,6 +181,8 @@ pub async fn brute_force_triplet_search(
             "feedback_influence must be in range [0.0, 1.0]".to_string(),
         ));
     }
+
+    validate_neighborhood(config.neighborhood_depth, config.neighborhood_seed_top_k)?;
 
     let op = config.node_name_filter_operator.to_uppercase();
     if op != "AND" && op != "OR" {
@@ -219,16 +244,23 @@ pub async fn brute_force_triplet_search(
         }
     });
     let searched = futures::future::join_all(searches).await;
+    // The node collections that exist, in search order: the neighborhood
+    // projection re-scores its expansion against exactly these (Python
+    // iterates `vector_search.node_distances`).
+    let mut node_collections: Vec<(&str, &str)> = Vec::new();
     for ((data_type, field_name), results) in SEARCH_COLLECTIONS.into_iter().zip(searched) {
         let Some(results) = results? else {
             continue;
         };
+        if !is_edge_type_collection(data_type, field_name) {
+            node_collections.push((data_type, field_name));
+        }
 
         for result in results {
             // Convert Qdrant cosine similarity to cosine distance: distance = 1 - similarity
             let distance = 1.0 - result.score;
 
-            if data_type == "EdgeType" && field_name == "relationship_name" {
+            if is_edge_type_collection(data_type, field_name) {
                 // The row's point id IS `EdgeType::deterministic_id(retrieval_text)`
                 // (cognify builds these with `EdgeType::new_deterministic`), which is
                 // exactly what the scoring loop recomputes per graph edge. Take it
@@ -276,6 +308,21 @@ pub async fn brute_force_triplet_search(
         "Vector search complete"
     );
 
+    // Python's neighborhood projection needs seed ids, and `node_name` turns
+    // the seed search off (`wide_search_limit` is `None` whenever `node_name`
+    // is set, so `relevant_node_ids` is `None`). `get_memory_fragment` then
+    // raises, catches its own `ValueError`, logs it and returns an empty
+    // fragment — so the caller sees an empty result, not an error.
+    if config.neighborhood_depth.is_some() && config.node_name.is_some() {
+        tracing::warn!(
+            target: "cognee::search",
+            "neighborhood_depth requires seed node ids from vector search, which a \
+             node_name filter disables — returning no triplets"
+        );
+        tracing::Span::current().record("cognee.result.count", 0u64);
+        return Ok(vec![]);
+    }
+
     let has_node_filter = config.node_type.is_some()
         && config
             .node_name
@@ -322,25 +369,44 @@ pub async fn brute_force_triplet_search(
         // since neither real adapter's row order tracks the seed order (Ladybug
         // re-collects into its own `HashSet` and returns storage order; the
         // Postgres CTE has no ORDER BY).
-        let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
-        seed_ids.sort_unstable();
-        match config.neighbor_cap.filter(|n| *n > 0) {
+        let (seed_ids, depth) = match config.neighborhood_depth {
+            // Python's neighborhood projection: the nearest `seed_top_k` seeds.
+            Some(depth) => (
+                nearest_seeds(&node_distances, config.neighborhood_seed_top_k),
+                depth,
+            ),
             None => {
-                graph_db
-                    .get_neighborhood(&seed_ids, NEIGHBORHOOD_DEPTH)
-                    .await?
+                let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
+                seed_ids.sort_unstable();
+                (seed_ids, NEIGHBORHOOD_DEPTH)
             }
+        };
+        match config.neighbor_cap.filter(|n| *n > 0) {
+            None => graph_db.get_neighborhood(&seed_ids, depth).await?,
             Some(cap) => {
                 let scope = NeighborhoodScope {
                     max_neighbors_per_seed: Some(cap),
                     ..NeighborhoodScope::default()
                 };
                 graph_db
-                    .get_neighborhood_scoped(&seed_ids, NEIGHBORHOOD_DEPTH, &scope)
+                    .get_neighborhood_scoped(&seed_ids, depth, &scope)
                     .await?
             }
         }
     };
+
+    if config.neighborhood_depth.is_some() {
+        score_neighborhood_expansion(
+            vector_db,
+            &query_vector,
+            &node_collections,
+            &graph_nodes,
+            &candidate_node_ids,
+            &mut node_distances,
+            &mut node_dataset_ids,
+        )
+        .await?;
+    }
 
     // Extract name, text, description, and (optionally) feedback_weight from each node.
     let mut node_names: HashMap<String, String> = HashMap::new();
@@ -390,8 +456,12 @@ pub async fn brute_force_triplet_search(
         .enumerate()
         .filter_map(
             |(index, (source_id, target_id, relationship_name, properties))| {
-                // Only consider edges where at least one endpoint was found in vector search
-                if !candidate_node_ids.contains(source_id)
+                // Only consider edges where at least one endpoint was found in
+                // vector search. The neighborhood projection ranks every edge it
+                // loaded instead, as Python ranks every edge of its fragment —
+                // otherwise edges past the first hop could never surface.
+                if config.neighborhood_depth.is_none()
+                    && !candidate_node_ids.contains(source_id)
                     && !candidate_node_ids.contains(target_id)
                 {
                     return None;
@@ -498,6 +568,115 @@ pub async fn brute_force_triplet_search(
     Ok(ranked_edges)
 }
 
+fn is_edge_type_collection(data_type: &str, field_name: &str) -> bool {
+    data_type == "EdgeType" && field_name == "relationship_name"
+}
+
+/// Reject a non-positive `neighborhood_depth` / `neighborhood_seed_top_k`,
+/// with the messages Python's `cognee.search()` raises.
+pub(crate) fn validate_neighborhood(
+    depth: Option<usize>,
+    seed_top_k: Option<usize>,
+) -> Result<(), SearchError> {
+    if depth == Some(0) {
+        return Err(SearchError::InvalidInput(
+            "neighborhood_depth must be a positive integer.".to_string(),
+        ));
+    }
+    if seed_top_k == Some(0) {
+        return Err(SearchError::InvalidInput(
+            "neighborhood_seed_top_k must be a positive integer.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The seed ids for the neighborhood projection: nearest first, at most
+/// `seed_top_k` (all when `None`).
+///
+/// Python's `extract_relevant_node_ids` ranks each node by its best distance
+/// across collections and `get_memory_fragment` slices that list, so the
+/// slice keeps the most similar nodes. Equal distances break on the id (Python
+/// keeps insertion order there, which a `HashMap` cannot reproduce), and a NaN
+/// distance ranks last, as Python's `None` score does.
+fn nearest_seeds(node_distances: &HashMap<String, f32>, seed_top_k: Option<usize>) -> Vec<String> {
+    let rank_key = |distance: f32| {
+        if distance.is_nan() {
+            f32::INFINITY
+        } else {
+            distance
+        }
+    };
+    let mut seeds: Vec<(&String, f32)> = node_distances
+        .iter()
+        .map(|(id, distance)| (id, rank_key(*distance)))
+        .collect();
+    seeds.sort_by(|(left_id, left), (right_id, right)| {
+        left.total_cmp(right).then_with(|| left_id.cmp(right_id))
+    });
+    seeds
+        .into_iter()
+        .take(seed_top_k.unwrap_or(usize::MAX))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Give the nodes a neighborhood projection discovered (every projected node
+/// that was not a vector-search hit) their real distance to the query, so they
+/// are ranked on similarity rather than all taking the penalty.
+///
+/// Port of the expansion re-scoring in Python's
+/// `_get_top_triplet_importances`: each existing node collection is asked
+/// for the expansion ids through `score_by_ids`; an adapter that cannot
+/// answer stops the loop (Python `break`s on `NotImplementedError`) and the
+/// remaining expansion nodes keep the penalty.
+async fn score_neighborhood_expansion(
+    vector_db: &dyn VectorDB,
+    query_vector: &[f32],
+    node_collections: &[(&str, &str)],
+    graph_nodes: &[GraphNode],
+    seed_ids: &HashSet<String>,
+    node_distances: &mut HashMap<String, f32>,
+    node_dataset_ids: &mut HashMap<String, String>,
+) -> Result<(), SearchError> {
+    let mut expansion_ids: Vec<Uuid> = graph_nodes
+        .iter()
+        .filter(|(id, properties)| {
+            !seed_ids.contains(id) && !marks_internal(properties.get(INTERNAL_PROPERTY))
+        })
+        .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+        .collect();
+    expansion_ids.sort_unstable();
+    expansion_ids.dedup();
+    if expansion_ids.is_empty() {
+        return Ok(());
+    }
+
+    for &(data_type, field_name) in node_collections {
+        let Some(scored) = vector_db
+            .score_by_ids(data_type, field_name, &expansion_ids, query_vector)
+            .await?
+        else {
+            debug!("vector adapter does not support scoring by id — expansion keeps the penalty");
+            break;
+        };
+        for result in scored {
+            let node_id = result.id.to_string();
+            let distance = 1.0 - result.score;
+            let entry = node_distances.entry(node_id.clone()).or_insert(distance);
+            if distance < *entry {
+                *entry = distance;
+            }
+            if let Some(dataset_id) = result.metadata.get("dataset_id").and_then(|v| v.as_str()) {
+                node_dataset_ids
+                    .entry(node_id)
+                    .or_insert_with(|| dataset_id.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// An edge's `edge_text` property, unless absent or blank.
 fn nonblank_edge_text<'a>(properties: &'a HashMap<Cow<'static, str>, Value>) -> Option<&'a str> {
     properties
@@ -514,6 +693,24 @@ fn nonblank_edge_text<'a>(properties: &'a HashMap<Cow<'static, str>, Value>) -> 
 )]
 mod penalty_default_tests {
     use super::*;
+
+    #[test]
+    fn nearest_seeds_orders_by_distance_then_id_and_truncates() {
+        let distances: HashMap<String, f32> = [
+            ("d".to_string(), 0.9),
+            ("c".to_string(), f32::NAN),
+            ("b".to_string(), 0.1),
+            ("a".to_string(), 0.1),
+            ("e".to_string(), 0.5),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            nearest_seeds(&distances, None),
+            vec!["a", "b", "e", "d", "c"]
+        );
+        assert_eq!(nearest_seeds(&distances, Some(3)), vec!["a", "b", "e"]);
+    }
 
     #[test]
     fn default_triplet_distance_penalty_matches_python() {

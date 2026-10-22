@@ -682,6 +682,17 @@ pub struct SearchArgs {
     /// without the flag only tenant-less data is reachable.
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
+
+    /// Graph searches only: rank the triplets in this many hops around the
+    /// nearest vector-search hits instead of only the edges touching them
+    /// (Python's `neighborhood_depth`). Larger values load more of the graph.
+    #[arg(long = "neighborhood-depth")]
+    pub neighborhood_depth: Option<std::num::NonZeroUsize>,
+
+    /// With --neighborhood-depth: expand from at most this many hits, nearest
+    /// first. All of them when unset.
+    #[arg(long = "neighborhood-seed-top-k")]
+    pub neighborhood_seed_top_k: Option<std::num::NonZeroUsize>,
 }
 
 /// Arguments for `cognee-cli remember` — one-call store (add + cognify + improve).
@@ -742,6 +753,14 @@ pub struct RecallArgs {
     /// Tenant to recall as (strict tenant equality, as for `search`).
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
+
+    /// As for `search`: hops around the nearest hits that graph searches rank.
+    #[arg(long = "neighborhood-depth")]
+    pub neighborhood_depth: Option<std::num::NonZeroUsize>,
+
+    /// As for `search`: at most this many hits to expand from, nearest first.
+    #[arg(long = "neighborhood-seed-top-k")]
+    pub neighborhood_seed_top_k: Option<std::num::NonZeroUsize>,
 }
 
 /// Arguments for `cognee-cli forget` — remove memory.

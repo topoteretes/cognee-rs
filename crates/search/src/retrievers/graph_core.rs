@@ -85,6 +85,8 @@ impl GraphRetrieverCore {
                 .triplet_distance_penalty_or(self.triplet_distance_penalty),
             feedback_influence: params.feedback_influence_or(self.feedback_influence),
             neighbor_cap: self.neighbor_cap,
+            neighborhood_depth: params.neighborhood_depth,
+            neighborhood_seed_top_k: params.neighborhood_seed_top_k,
             node_type: params.node_type.clone(),
             node_name: params.node_name.clone(),
             node_name_filter_operator: params

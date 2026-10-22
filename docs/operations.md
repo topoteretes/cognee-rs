@@ -217,6 +217,17 @@ LLM completion). A hybrid search falls back to `GraphCompletion` when it sets
 `triplet_distance_penalty` with hybrid is an error. Entry: [`cognee-search`](../crates/search/)
 (`SearchBuilder` / `SearchOrchestrator`).
 
+The graph retrievers (`GraphCompletion` and its CoT, context-extension and
+summary variants) rank triplets around the vector-search hits. By default they
+rank only the edges touching a hit. `neighborhood_depth` (a positive integer;
+the CLI's `--neighborhood-depth`, the bindings' `neighborhoodDepth`) switches to
+Python's neighborhood projection: load the `depth`-hop neighborhood of the
+nearest `neighborhood_seed_top_k` hits (all of them when unset), score the
+nodes the expansion found against the query (`VectorDB::score_by_ids`; an
+adapter without it leaves them at the distance penalty), and rank every loaded
+edge. Combined with `node_name`, which disables the seed search, it returns no
+triplets, as in Python.
+
 `Temporal` is `HybridCompletion` reranked by the time window the question asks
 about (`TemporalHybridRetriever`, Python's retriever of the same name). The hybrid
 candidate fetch — chunks and entities at `candidate_top_k`, default `4 × top_k`,

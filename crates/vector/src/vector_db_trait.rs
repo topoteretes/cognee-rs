@@ -281,6 +281,37 @@ pub trait VectorDB: Send + Sync {
         ids: &[Uuid],
     ) -> VectorDBResult<Vec<SearchResult>>;
 
+    /// Score the stored points with the given `ids` against `query_vector`,
+    /// with no top-k cutoff: every requested id that exists is returned with
+    /// its cosine similarity in `score` (higher = more similar, the same scale
+    /// as [`search_similar`](Self::search_similar)) and its `metadata`.
+    ///
+    /// Graph search uses this to give the nodes a k-hop neighborhood expansion
+    /// discovered a real distance, since they were not among the query's
+    /// top-k hits. Port of Python's optional `VectorDBInterface.score_by_ids`
+    /// (`vector_db_interface.py`).
+    ///
+    /// # Semantics
+    /// * **`Ok(None)`** — the adapter does not support scoring by id. This is
+    ///   the default, so an external provider keeps working without it; graph
+    ///   search then leaves the expanded nodes at the distance penalty, as
+    ///   Python does when an adapter raises `NotImplementedError`.
+    /// * **Empty `ids`** or **unknown collection** → `Ok(Some(vec![]))`.
+    /// * **IDs not present** are silently absent; **order is not guaranteed**.
+    /// * Implementations must filter by id before scoring (and must not route
+    ///   through an approximate index that could drop requested rows), rather
+    ///   than searching the whole collection.
+    async fn score_by_ids(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        ids: &[Uuid],
+        query_vector: &[f32],
+    ) -> VectorDBResult<Option<Vec<SearchResult>>> {
+        let _ = (data_type, field_name, ids, query_vector);
+        Ok(None)
+    }
+
     /// Get collection statistics
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize>;
 

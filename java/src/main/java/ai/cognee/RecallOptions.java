@@ -26,4 +26,8 @@ public final class RecallOptions extends Options {
     public RecallOptions scope(String scope) { put("scope", scope); return this; }
     /** Multiple scopes, e.g. ["graph","session"]. */
     public RecallOptions scope(List<String> scopes) { put("scope", scopes); return this; }
+    /** As {@link SearchOptions#neighborhoodDepth}. */
+    public RecallOptions neighborhoodDepth(int n) { put("neighborhoodDepth", n); return this; }
+    /** As {@link SearchOptions#neighborhoodSeedTopK}. */
+    public RecallOptions neighborhoodSeedTopK(int n) { put("neighborhoodSeedTopK", n); return this; }
 }

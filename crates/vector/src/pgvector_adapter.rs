@@ -60,7 +60,7 @@ use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query, warn_zero_no
 )]
 mod vector_index_tests;
 
-/// Ids per `= ANY($1::uuid[])` array parameter (retrieve, delete).
+/// Ids per `= ANY($1::uuid[])` array parameter (retrieve, score_by_ids, delete).
 const ID_BATCH: usize = 20_000;
 
 /// Rows per multi-row upsert `INSERT` (three bind parameters per row, so
@@ -4005,6 +4005,70 @@ impl VectorDB for PgVectorAdapter {
 
         Span::current().record(COGNEE_VECTOR_RESULT_COUNT, results.len() as i64);
         Ok(results)
+    }
+
+    #[instrument(
+        name = "cognee.db.vector.score_by_ids",
+        level = "info",
+        skip_all,
+        fields(
+            cognee.db.system = "pgvector",
+            cognee.vector.collection = tracing::field::Empty,
+            cognee.vector.result_count = tracing::field::Empty,
+        ),
+        err,
+    )]
+    async fn score_by_ids(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        ids: &[Uuid],
+        query_vector: &[f32],
+    ) -> VectorDBResult<Option<Vec<SearchResult>>> {
+        let coll = Self::collection_name(data_type, field_name)?;
+        if ids.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        if !self.has_collection(data_type, field_name).await? {
+            return Ok(Some(vec![]));
+        }
+        warn_zero_norm_query("pgvector", &coll, query_vector);
+
+        // Filter by primary key, then score: no ORDER BY on distance, so the
+        // HNSW index (which could drop far-away rows) is never in play and
+        // every requested row is scored exactly in fp32.
+        let sql = format!(
+            r#"SELECT id, 1 - (vector <=> $1::vector) AS score, metadata
+               FROM "{coll}"
+               WHERE id = ANY($2::uuid[])"#
+        );
+        let vec_str = Self::format_vector(query_vector);
+        let mut results = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(ID_BATCH) {
+            let rows = match self
+                .db
+                .query_all(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    &sql,
+                    [vec_str.clone().into(), chunk.to_vec().into()],
+                ))
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))
+            {
+                Ok(rows) => rows,
+                // Dropped since `has_collection` said it exists: keep what the
+                // earlier chunks found, as `retrieve` does.
+                Err(e) if self.forget_if_missing(&coll, &e) => break,
+                Err(e) => return Err(e),
+            };
+            for row in &rows {
+                results.push(Self::row_to_search_result(row)?);
+            }
+        }
+
+        Span::current().record(COGNEE_VECTOR_RESULT_COUNT, results.len() as i64);
+        Ok(Some(results))
     }
 
     #[instrument(

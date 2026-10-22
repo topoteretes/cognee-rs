@@ -113,8 +113,8 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             response_schema: None,
             custom_search_type: None,
             auto_feedback_detection: None,
-            neighborhood_depth: None,
-            neighborhood_seed_top_k: None,
+            neighborhood_depth: args.neighborhood_depth.map(usize::from),
+            neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),
             summarize_context: None,
         };
 

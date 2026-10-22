@@ -44,6 +44,10 @@ use crate::models::{
 use crate::vector_db_trait::VectorDB;
 use crate::zero_norm::{warn_zero_norm_points, warn_zero_norm_query};
 
+/// Ids per `id IN (...)` predicate in [`VectorDB::score_by_ids`] (Python's
+/// `LanceDBAdapter.SCORE_ID_BATCH_SIZE`).
+const SCORE_ID_BATCH: usize = 1000;
+
 fn collection_name(data_type: &str, field_name: &str) -> String {
     format!("{data_type}_{field_name}")
 }
@@ -594,6 +598,52 @@ impl VectorDB for LanceDbAdapter {
             .collect())
     }
 
+    async fn score_by_ids(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        ids: &[Uuid],
+        query_vector: &[f32],
+    ) -> VectorDBResult<Option<Vec<SearchResult>>> {
+        if ids.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        let name = collection_name(data_type, field_name);
+        let table = match self.connection.open_table(&name).execute().await {
+            Ok(t) => t,
+            Err(lancedb::Error::TableNotFound { .. }) => return Ok(Some(vec![])),
+            Err(other) => return Err(map_lance_err(other)),
+        };
+        let mut out = Vec::with_capacity(ids.len());
+        // Bounded `id IN (...)` predicates, as Python's `SCORE_ID_BATCH_SIZE`.
+        for chunk in ids.chunks(SCORE_ID_BATCH) {
+            let id_values: Vec<String> = chunk
+                .iter()
+                .map(|id| {
+                    let hex: String = id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
+                    format!("X'{hex}'")
+                })
+                .collect();
+            // Prefilter (the vector-query default) and bypass the ANN index, so
+            // an indexed table still scores every requested row, including
+            // neighbours far from the query.
+            let stream = table
+                .query()
+                .only_if(format!("id IN ({})", id_values.join(", ")))
+                .nearest_to(query_vector)
+                .map_err(map_lance_err)?
+                .distance_type(DistanceType::Cosine)
+                .bypass_vector_index()
+                .limit(chunk.len())
+                .execute()
+                .await
+                .map_err(map_lance_err)?;
+            let batches: Vec<RecordBatch> = stream.try_collect().await.map_err(map_lance_err)?;
+            out.extend(search_results_from_batches(batches)?);
+        }
+        Ok(Some(out))
+    }
+
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let name = collection_name(data_type, field_name);
         match self.connection.drop_table(&name, &[]).await {
@@ -1061,6 +1111,47 @@ mod tests {
         }
         let r1 = results.iter().find(|r| r.id == id1).unwrap();
         assert_eq!(r1.metadata.get("kind").unwrap(), &json!("a"));
+    }
+
+    /// Scores every requested row, including one far from the query, and
+    /// returns `search_similar`'s similarity scale.
+    #[tokio::test]
+    async fn score_by_ids_scores_requested_rows_only() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter.create_collection("Chunk", "text", 2).await.unwrap();
+        let near = Uuid::new_v4();
+        let far = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        adapter
+            .index_points(
+                "Chunk",
+                "text",
+                &[
+                    point(near, vec![0.6, 0.8], "a"),
+                    point(far, vec![-1.0, 0.0], "b"),
+                    point(other, vec![1.0, 0.0], "c"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let scored = adapter
+            .score_by_ids("Chunk", "text", &[near, far, Uuid::new_v4()], &[1.0, 0.0])
+            .await
+            .unwrap()
+            .unwrap();
+        let by_id: std::collections::HashMap<Uuid, f32> =
+            scored.iter().map(|r| (r.id, r.score)).collect();
+        assert_eq!(by_id.len(), 2, "{by_id:?}");
+        assert!((by_id[&near] - 0.6).abs() < 1e-3, "{by_id:?}");
+        assert!((by_id[&far] + 1.0).abs() < 1e-3, "{by_id:?}");
+
+        let missing = adapter
+            .score_by_ids("Nope", "text", &[near], &[1.0, 0.0])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(missing.is_empty());
     }
 
     #[tokio::test]

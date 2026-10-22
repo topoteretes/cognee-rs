@@ -1366,8 +1366,7 @@ The **CLI** still hardcodes `retriever_specific_config: None`
 ([`cli/src/commands/search.rs`](../crates/cli/src/commands/search.rs)), and so
 does the HTTP server, which is not part of this repository (its search,
 recall and responses handlers): the knobs are **not** wire fields on
-`SearchPayloadDTO` — the same class as `neighborhood_depth` and the other
-orchestrator-only `SearchParams` knobs.
+`SearchPayloadDTO`.
 
 When a knob is unset the retriever falls back through a three-layer resolution:
 `retriever_specific_config.<knob>` → `SearchRequest.top_k` capped at 10 → the

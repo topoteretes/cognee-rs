@@ -187,3 +187,8 @@ async fn brute_force_upsert_raw_vectors_empty_noop() {
 async fn brute_force_nul_bytes_in_metadata_are_persistable() {
     common::test_nul_bytes_in_metadata_are_persistable(&BruteForceVectorDB::new()).await;
 }
+
+#[tokio::test]
+async fn brute_force_score_by_ids() {
+    common::test_score_by_ids(&BruteForceVectorDB::new()).await;
+}

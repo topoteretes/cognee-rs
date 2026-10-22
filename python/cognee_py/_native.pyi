@@ -741,7 +741,9 @@ class Cognee:
         ``nodeType``, ``node_name`` / ``nodeName``, ``node_name_filter_operator``
         / ``nodeNameFilterOperator``, ``only_context`` /
         ``onlyContext``, ``use_combined_context`` / ``useCombinedContext``,
-        ``verbose``, ``auto_feedback_detection`` / ``autoFeedbackDetection``.
+        ``verbose``, ``auto_feedback_detection`` / ``autoFeedbackDetection``,
+        ``neighborhood_depth`` / ``neighborhoodDepth``,
+        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``.
         """
         ...
 
@@ -758,7 +760,8 @@ class Cognee:
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``search_type`` / ``searchType``, ``datasets``, ``top_k`` / ``topK``,
         ``auto_route`` / ``autoRoute``, ``session_id`` / ``sessionId``,
-        ``scope``.
+        ``scope``, ``neighborhood_depth`` / ``neighborhoodDepth``,
+        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``.
         """
         ...
 

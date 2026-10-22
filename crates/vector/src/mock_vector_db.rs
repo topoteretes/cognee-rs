@@ -414,6 +414,35 @@ impl VectorDB for MockVectorDB {
             .collect())
     }
 
+    async fn score_by_ids(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        ids: &[Uuid],
+        query_vector: &[f32],
+    ) -> VectorDBResult<Option<Vec<SearchResult>>> {
+        if ids.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        let key = Self::collection_key(data_type, field_name);
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
+        let Some(collection) = collections.get(&key) else {
+            return Ok(Some(vec![]));
+        };
+        Ok(Some(
+            collection
+                .points
+                .iter()
+                .filter(|p| ids.contains(&p.id))
+                .map(|p| SearchResult {
+                    id: p.id,
+                    score: Self::cosine_similarity(&p.vector, query_vector),
+                    metadata: p.metadata.clone(),
+                })
+                .collect(),
+        ))
+    }
+
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let key = Self::collection_key(data_type, field_name);
         let mut collections = self.collections.lock().unwrap(); // lock poison is unrecoverable

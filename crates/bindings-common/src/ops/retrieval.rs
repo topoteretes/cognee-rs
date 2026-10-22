@@ -171,6 +171,8 @@ pub struct RecallArgs {
     pub auto_route: bool,
     pub session_id: Option<String>,
     pub scope: Option<Vec<cognee::api::RecallScope>>,
+    pub neighborhood_depth: Option<usize>,
+    pub neighborhood_seed_top_k: Option<usize>,
 }
 
 /// Parse camelCase recall `opts` into [`RecallArgs`].
@@ -221,6 +223,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     // non-empty vec (including vec![Auto] from a missing/null/auto scope) is
     // passed as-is — recall() treats Some(vec![Auto]) and None identically.
     let scope = if scope.is_empty() { None } else { Some(scope) };
+    let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
 
     Ok(RecallArgs {
         query_type,
@@ -231,7 +234,34 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         auto_route,
         session_id,
         scope,
+        neighborhood_depth,
+        neighborhood_seed_top_k,
     })
+}
+
+/// `neighborhoodDepth` / `neighborhoodSeedTopK`: the k-hop graph projection
+/// knobs of Python's `search()` / `recall()`, which both have to be positive
+/// integers there (`cognee/api/v1/search/search.py`).
+fn parse_neighborhood(
+    opts: &serde_json::Value,
+) -> Result<(Option<usize>, Option<usize>), SdkError> {
+    let positive = |key: &str, name: &str| -> Result<Option<usize>, SdkError> {
+        let Some(value) = opts.get(key).filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        match value.as_u64() {
+            Some(n) if n >= 1 => usize::try_from(n)
+                .map(Some)
+                .map_err(|_| SdkError::Validation(format!("{name} is too large: {n}"))),
+            _ => Err(SdkError::Validation(format!(
+                "{name} must be a positive integer."
+            ))),
+        }
+    };
+    Ok((
+        positive("neighborhoodDepth", "neighborhood_depth")?,
+        positive("neighborhoodSeedTopK", "neighborhood_seed_top_k")?,
+    ))
 }
 
 /// `nodeNameFilterOperator`: how `nodeName` combines — `"OR"` (any of the
@@ -309,6 +339,7 @@ pub fn build_search_request(
     let use_combined_context = opts.get("useCombinedContext").and_then(|v| v.as_bool());
     let verbose = opts.get("verbose").and_then(|v| v.as_bool());
     let auto_feedback_detection = opts.get("autoFeedbackDetection").and_then(|v| v.as_bool());
+    let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
     // Per-retriever knobs, forwarded verbatim. `SearchRequest` documents these
     // as caller-defined and silently ignores unknown keys, so the binding has
     // no table to keep in step — it only has to stop dropping the object. Until
@@ -357,8 +388,8 @@ pub fn build_search_request(
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection,
-        neighborhood_depth: None,
-        neighborhood_seed_top_k: None,
+        neighborhood_depth,
+        neighborhood_seed_top_k,
         summarize_context: None,
     })
 }
@@ -444,6 +475,8 @@ pub async fn recall(
         auto_route,
         session_id: session_id_owned,
         scope: scope_opt,
+        neighborhood_depth,
+        neighborhood_seed_top_k,
     } = build_recall_args(opts)?;
     let session_id: Option<&str> = session_id_owned.as_deref();
 
@@ -464,12 +497,14 @@ pub async fn recall(
         Some(session_store_ref.as_ref()),
         Some(session_manager_ref.as_ref()),
         scope_opt,
-        // Only the tenant is set; the rest of `RecallOptions` is advanced
-        // tuning these opts do not expose. Same reasoning as the `tenant_id`
-        // on `build_search_request`: `add` / `remember` accept a per-call
+        // The rest of `RecallOptions` is advanced tuning these opts do not
+        // expose. The tenant has the same reasoning as the `tenant_id` on
+        // `build_search_request`: `add` / `remember` accept a per-call
         // `tenant`, so a name must be resolved under the caller's tenant.
         Some(RecallOptions {
             tenant_id,
+            neighborhood_depth,
+            neighborhood_seed_top_k,
             ..Default::default()
         }),
     )
@@ -720,6 +755,46 @@ mod tests {
                     Err(SdkError::Validation(_))
                 ),
                 "{bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn neighborhood_opts_reach_search_and_recall() {
+        let opts = json!({ "neighborhoodDepth": 2, "neighborhoodSeedTopK": 5 });
+        let req = build_search_request("q", &opts, Uuid::new_v4()).unwrap();
+        assert_eq!(req.neighborhood_depth, Some(2));
+        assert_eq!(req.neighborhood_seed_top_k, Some(5));
+        let args = build_recall_args(&opts).unwrap();
+        assert_eq!(args.neighborhood_depth, Some(2));
+        assert_eq!(args.neighborhood_seed_top_k, Some(5));
+
+        let req = build_search_request("q", &json!({}), Uuid::new_v4()).unwrap();
+        assert_eq!(
+            (req.neighborhood_depth, req.neighborhood_seed_top_k),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn non_positive_neighborhood_opts_are_rejected() {
+        for opts in [
+            json!({ "neighborhoodDepth": 0 }),
+            json!({ "neighborhoodDepth": -1 }),
+            json!({ "neighborhoodDepth": 1.5 }),
+            json!({ "neighborhoodSeedTopK": 0 }),
+            json!({ "neighborhoodSeedTopK": "3" }),
+        ] {
+            assert!(
+                matches!(
+                    build_search_request("q", &opts, Uuid::new_v4()),
+                    Err(SdkError::Validation(_))
+                ),
+                "search must reject {opts}"
+            );
+            assert!(
+                matches!(build_recall_args(&opts), Err(SdkError::Validation(_))),
+                "recall must reject {opts}"
             );
         }
     }

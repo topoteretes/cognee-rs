@@ -562,6 +562,13 @@ impl SearchOrchestrator {
     ) -> Result<SearchResponse, crate::types::SearchError> {
         emit_search_started(request);
 
+        // Python's `cognee.search()` rejects these up front, for every search
+        // type, before any retriever runs.
+        crate::graph_retrieval::validate_neighborhood(
+            request.neighborhood_depth,
+            request.neighborhood_seed_top_k,
+        )?;
+
         let defaulted_request;
         let request: &SearchRequest = if request.system_prompt.is_none()
             && request.system_prompt_path.is_none()
@@ -4169,6 +4176,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.search_type, SearchType::GraphCompletion);
+    }
+
+    /// Python's `cognee.search()` rejects a non-positive depth or seed count
+    /// before any retriever runs, whatever the search type.
+    #[tokio::test]
+    async fn non_positive_neighborhood_params_are_rejected() {
+        for (extra, expected) in [
+            (
+                r#", "neighborhood_depth": 0"#,
+                "neighborhood_depth must be a positive integer.",
+            ),
+            (
+                r#", "neighborhood_seed_top_k": 0"#,
+                "neighborhood_seed_top_k must be a positive integer.",
+            ),
+        ] {
+            let error = hybrid_orchestrator(None)
+                .search(&untyped_request(extra))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, SearchError::InvalidInput(message) if message == expected),
+                "{extra}: got {error:?}"
+            );
+        }
     }
 
     #[tokio::test]

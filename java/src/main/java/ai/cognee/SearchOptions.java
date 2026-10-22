@@ -25,6 +25,17 @@ public final class SearchOptions extends Options {
     public SearchOptions verbose(boolean b) { put("verbose", b); return this; }
     public SearchOptions autoFeedbackDetection(boolean b) { put("autoFeedbackDetection", b); return this; }
     /**
+     * Graph searches only: rank the triplets within this many hops of the
+     * nearest vector-search hits, not just the edges touching them. Must be
+     * positive; larger values load more of the graph.
+     */
+    public SearchOptions neighborhoodDepth(int n) { put("neighborhoodDepth", n); return this; }
+    /**
+     * With {@link #neighborhoodDepth}: expand from at most this many hits,
+     * nearest first (all of them when unset). Must be positive.
+     */
+    public SearchOptions neighborhoodSeedTopK(int n) { put("neighborhoodSeedTopK", n); return this; }
+    /**
      * Per-retriever knobs, forwarded verbatim to the retriever the search
      * resolves to. Keys are snake_case and retriever-defined; a key the chosen
      * retriever does not know is ignored, not an error.

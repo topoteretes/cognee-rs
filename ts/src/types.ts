@@ -256,6 +256,17 @@ export interface CogneeSearchOptions {
   /** Detect feedback about the previous response before searching. */
   autoFeedbackDetection?: boolean;
   /**
+   * Graph searches only: rank the triplets within this many hops of the
+   * nearest vector-search hits, not just the edges touching them. A positive
+   * integer; larger values load more of the graph.
+   */
+  neighborhoodDepth?: number;
+  /**
+   * With `neighborhoodDepth`: expand from at most this many hits, nearest
+   * first (all of them when omitted). A positive integer.
+   */
+  neighborhoodSeedTopK?: number;
+  /**
    * Per-retriever knobs, forwarded verbatim to the retriever the search
    * resolves to. Keys are snake_case and retriever-defined; a key the chosen
    * retriever does not know is ignored rather than rejected.
@@ -299,6 +310,10 @@ export interface CogneeRecallOptions {
    * "all" → fan out across all four concrete sources.
    */
   scope?: RecallScopeString | RecallScopeString[];
+  /** As `CogneeSearchOptions.neighborhoodDepth`. */
+  neighborhoodDepth?: number;
+  /** As `CogneeSearchOptions.neighborhoodSeedTopK`. */
+  neighborhoodSeedTopK?: number;
 }
 
 /**

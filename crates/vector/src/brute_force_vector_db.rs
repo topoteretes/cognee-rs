@@ -336,6 +336,42 @@ impl VectorDB for BruteForceVectorDB {
             .collect())
     }
 
+    async fn score_by_ids(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        ids: &[Uuid],
+        query_vector: &[f32],
+    ) -> VectorDBResult<Option<Vec<SearchResult>>> {
+        if ids.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        let key = Self::key(data_type, field_name);
+        let g = self.collections.read().await;
+        let Some(coll) = g.get(&key) else {
+            return Ok(Some(vec![]));
+        };
+        if query_vector.len() != coll.dimension {
+            return Err(VectorDBError::DimensionMismatch {
+                collection: key,
+                expected: coll.dimension,
+                actual: query_vector.len(),
+            });
+        }
+        let ids: std::collections::HashSet<&Uuid> = ids.iter().collect();
+        Ok(Some(
+            coll.points
+                .iter()
+                .filter(|p| ids.contains(&p.id))
+                .map(|p| SearchResult {
+                    id: p.id,
+                    score: cosine_similarity(&p.vector, query_vector),
+                    metadata: p.metadata.clone(),
+                })
+                .collect(),
+        ))
+    }
+
     async fn delete_collection(&self, data_type: &str, field_name: &str) -> VectorDBResult<()> {
         let mut g = self.collections.write().await;
         g.remove(&Self::key(data_type, field_name));
