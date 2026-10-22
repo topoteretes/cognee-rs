@@ -560,14 +560,15 @@ impl SearchOrchestrator {
         &self,
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
-        emit_search_started(request);
-
         // Python's `cognee.search()` rejects these up front, for every search
-        // type, before any retriever runs.
+        // type, before any retriever runs — and before `search()` emits its
+        // "EXECUTION STARTED" telemetry event, so an invalid request sends none.
         crate::graph_retrieval::validate_neighborhood(
             request.neighborhood_depth,
             request.neighborhood_seed_top_k,
         )?;
+
+        emit_search_started(request);
 
         let defaulted_request;
         let request: &SearchRequest = if request.system_prompt.is_none()

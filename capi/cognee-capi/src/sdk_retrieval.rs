@@ -55,6 +55,10 @@ use crate::sdk_ops::parse_c_str_or_fire;
 ///   "useCombinedContext"     — boolean
 ///   "verbose"                — boolean
 ///   "autoFeedbackDetection"  — boolean
+///   "neighborhoodDepth"      — positive integer; graph searches rank the
+///                              triplets this many hops around the nearest hits
+///   "neighborhoodSeedTopK"   — positive integer; at most this many hits to
+///                              expand from, nearest first (default: all)
 ///
 /// `userId` from opts is ignored; `user_id` in `SearchRequest` is always set
 /// from the handle's `owner_id` so dataset-name resolution works correctly.
@@ -120,6 +124,7 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "scope"       — string or string array:
 ///                   "auto" | "graph" | "session" | "trace" | "graph_context"
 ///                   (absent/null → "auto" default applied by recall())
+///   "neighborhoodDepth", "neighborhoodSeedTopK" — as for `cg_sdk_search`
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///

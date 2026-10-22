@@ -192,6 +192,19 @@ pub async fn brute_force_triplet_search(
         )));
     }
 
+    let load = GraphLoad::resolve(config);
+    if load == GraphLoad::NoSeeds {
+        // Decided by the config alone, so before paying for the embedding and
+        // the vector searches.
+        tracing::warn!(
+            target: "cognee::search",
+            "neighborhood_depth requires seed node ids from vector search, which a \
+             node_name filter disables — returning no triplets"
+        );
+        tracing::Span::current().record("cognee.result.count", 0u64);
+        return Ok(vec![]);
+    }
+
     let query_vectors = embedding_engine.embed_query(query).await?;
     let query_vector = query_vectors.into_iter().next().ok_or_else(|| {
         SearchError::InvalidInput("embedding engine returned no vectors".to_string())
@@ -271,21 +284,13 @@ pub async fn brute_force_triplet_search(
                 // Deliberately NOT added to `candidate_node_ids`: an EdgeType id is
                 // never a graph node id, and seeding the node set with it would widen
                 // the neighborhood load for nothing.
-                let entry = edge_type_distances
-                    .entry(result.id.to_string())
-                    .or_insert(distance);
-                if distance < *entry {
-                    *entry = distance;
-                }
+                keep_nearest(&mut edge_type_distances, result.id.to_string(), distance);
             } else {
                 // Node distances keyed by vector point ID.
                 // Use min to merge across collections (lower distance = better match).
                 let node_id = result.id.to_string();
                 candidate_node_ids.insert(node_id.clone());
-                let entry = node_distances.entry(node_id.clone()).or_insert(distance);
-                if distance < *entry {
-                    *entry = distance;
-                }
+                keep_nearest(&mut node_distances, node_id.clone(), distance);
                 if let Some(dataset_id) = result.metadata.get("dataset_id").and_then(|v| v.as_str())
                 {
                     node_dataset_ids
@@ -308,38 +313,11 @@ pub async fn brute_force_triplet_search(
         "Vector search complete"
     );
 
-    // Python's neighborhood projection needs seed ids, and `node_name` turns
-    // the seed search off (`wide_search_limit` is `None` whenever `node_name`
-    // is set, so `relevant_node_ids` is `None`). `get_memory_fragment` then
-    // raises, catches its own `ValueError`, logs it and returns an empty
-    // fragment — so the caller sees an empty result, not an error.
-    if config.neighborhood_depth.is_some() && config.node_name.is_some() {
-        tracing::warn!(
-            target: "cognee::search",
-            "neighborhood_depth requires seed node ids from vector search, which a \
-             node_name filter disables — returning no triplets"
-        );
-        tracing::Span::current().record("cognee.result.count", 0u64);
-        return Ok(vec![]);
-    }
-
-    let has_node_filter = config.node_type.is_some()
-        && config
-            .node_name
-            .as_ref()
-            .is_some_and(|names| !names.is_empty());
-
-    let (graph_nodes, graph_edges) = if has_node_filter {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let node_type = config
-            .node_type
-            .as_deref()
-            .expect("node_type is checked non-None in has_node_filter");
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let node_names = config
-            .node_name
-            .as_deref()
-            .expect("node_name is checked non-empty in has_node_filter");
+    let (graph_nodes, graph_edges) = if let GraphLoad::NodeSet {
+        node_type,
+        node_names,
+    } = load
+    {
         graph_db
             .get_nodeset_subgraph(node_type, node_names, &config.node_name_filter_operator)
             .await?
@@ -369,13 +347,12 @@ pub async fn brute_force_triplet_search(
         // since neither real adapter's row order tracks the seed order (Ladybug
         // re-collects into its own `HashSet` and returns storage order; the
         // Postgres CTE has no ORDER BY).
-        let (seed_ids, depth) = match config.neighborhood_depth {
+        let (seed_ids, depth) = match load {
             // Python's neighborhood projection: the nearest `seed_top_k` seeds.
-            Some(depth) => (
-                nearest_seeds(&node_distances, config.neighborhood_seed_top_k),
-                depth,
-            ),
-            None => {
+            GraphLoad::Projection { depth, seed_top_k } => {
+                (nearest_seeds(&node_distances, seed_top_k), depth)
+            }
+            _ => {
                 let mut seed_ids: Vec<String> = candidate_node_ids.iter().cloned().collect();
                 seed_ids.sort_unstable();
                 (seed_ids, NEIGHBORHOOD_DEPTH)
@@ -395,7 +372,7 @@ pub async fn brute_force_triplet_search(
         }
     };
 
-    if config.neighborhood_depth.is_some() {
+    if load.ranks_every_loaded_edge() {
         score_neighborhood_expansion(
             vector_db,
             &query_vector,
@@ -460,7 +437,7 @@ pub async fn brute_force_triplet_search(
                 // vector search. The neighborhood projection ranks every edge it
                 // loaded instead, as Python ranks every edge of its fragment —
                 // otherwise edges past the first hop could never surface.
-                if config.neighborhood_depth.is_none()
+                if !load.ranks_every_loaded_edge()
                     && !candidate_node_ids.contains(source_id)
                     && !candidate_node_ids.contains(target_id)
                 {
@@ -568,6 +545,72 @@ pub async fn brute_force_triplet_search(
     Ok(ranked_edges)
 }
 
+/// How the graph is loaded around the vector-search hits, and so which loaded
+/// edges are ranked — decided once from the config.
+#[derive(Debug, PartialEq)]
+enum GraphLoad<'a> {
+    /// `node_type` + `node_name`: the NodeSet subgraph.
+    NodeSet {
+        node_type: &'a str,
+        node_names: &'a [String],
+    },
+    /// The default: the depth-1 neighbourhood of every hit (see
+    /// [`NEIGHBORHOOD_DEPTH`]).
+    SeedNeighborhood,
+    /// Python's neighborhood projection (`neighborhood_depth`).
+    Projection {
+        depth: usize,
+        seed_top_k: Option<usize>,
+    },
+    /// `neighborhood_depth` with `node_name`. Python's projection needs seed
+    /// ids, and `node_name` turns its seed search off (`wide_search_limit` is
+    /// `None` whenever `node_name` is set, so `relevant_node_ids` is `None`);
+    /// `get_memory_fragment` then raises, catches its own `ValueError` and
+    /// returns an empty fragment — an empty result, not an error.
+    NoSeeds,
+}
+
+impl<'a> GraphLoad<'a> {
+    fn resolve(config: &'a GraphRetrievalConfig) -> Self {
+        if let Some(depth) = config.neighborhood_depth {
+            return if config.node_name.is_some() {
+                Self::NoSeeds
+            } else {
+                Self::Projection {
+                    depth,
+                    seed_top_k: config.neighborhood_seed_top_k,
+                }
+            };
+        }
+        match (config.node_type.as_deref(), config.node_name.as_deref()) {
+            (Some(node_type), Some(node_names)) if !node_names.is_empty() => Self::NodeSet {
+                node_type,
+                node_names,
+            },
+            _ => Self::SeedNeighborhood,
+        }
+    }
+
+    /// Whether every loaded edge is ranked — and the nodes the load added
+    /// re-scored — rather than only edges with a vector-search hit as an
+    /// endpoint. Only the projection does: Python ranks every edge of its
+    /// fragment, and without it edges past the first hop could never surface.
+    fn ranks_every_loaded_edge(&self) -> bool {
+        matches!(self, Self::Projection { .. })
+    }
+}
+
+/// Merge `distance` into `map[id]`, keeping the nearer one. A NaN (pgvector's
+/// similarity for a zero-norm row) never displaces a real distance and is
+/// always displaced by one, so a node scored in several collections ranks on
+/// its best real match.
+fn keep_nearest(map: &mut HashMap<String, f32>, id: String, distance: f32) {
+    let entry = map.entry(id).or_insert(distance);
+    if entry.is_nan() || distance < *entry {
+        *entry = distance;
+    }
+}
+
 fn is_edge_type_collection(data_type: &str, field_name: &str) -> bool {
     data_type == "EdgeType" && field_name == "relationship_name"
 }
@@ -652,21 +695,25 @@ async fn score_neighborhood_expansion(
         return Ok(());
     }
 
-    for &(data_type, field_name) in node_collections {
-        let Some(scored) = vector_db
-            .score_by_ids(data_type, field_name, &expansion_ids, query_vector)
-            .await?
-        else {
+    // Independent per collection, like the seed searches: run them
+    // concurrently, then merge in collection order so the outcome is the
+    // sequential one, including where an unsupporting adapter stops it.
+    let expansion_ids = &expansion_ids;
+    let scorings = node_collections
+        .iter()
+        .map(|&(data_type, field_name)| async move {
+            vector_db
+                .score_by_ids(data_type, field_name, expansion_ids, query_vector)
+                .await
+        });
+    for scored in futures::future::join_all(scorings).await {
+        let Some(scored) = scored? else {
             debug!("vector adapter does not support scoring by id — expansion keeps the penalty");
             break;
         };
         for result in scored {
             let node_id = result.id.to_string();
-            let distance = 1.0 - result.score;
-            let entry = node_distances.entry(node_id.clone()).or_insert(distance);
-            if distance < *entry {
-                *entry = distance;
-            }
+            keep_nearest(node_distances, node_id.clone(), 1.0 - result.score);
             if let Some(dataset_id) = result.metadata.get("dataset_id").and_then(|v| v.as_str()) {
                 node_dataset_ids
                     .entry(node_id)
@@ -710,6 +757,61 @@ mod penalty_default_tests {
             vec!["a", "b", "e", "d", "c"]
         );
         assert_eq!(nearest_seeds(&distances, Some(3)), vec!["a", "b", "e"]);
+    }
+
+    #[test]
+    fn keep_nearest_prefers_any_real_distance_over_nan() {
+        let mut map = HashMap::new();
+        keep_nearest(&mut map, "a".to_string(), f32::NAN);
+        keep_nearest(&mut map, "a".to_string(), 0.7);
+        keep_nearest(&mut map, "a".to_string(), 0.4);
+        keep_nearest(&mut map, "a".to_string(), f32::NAN);
+        keep_nearest(&mut map, "a".to_string(), 0.9);
+        assert_eq!(map["a"], 0.4);
+    }
+
+    #[test]
+    fn graph_load_resolves_from_config() {
+        let names = vec!["n".to_string()];
+        let base = GraphRetrievalConfig::default();
+        assert_eq!(GraphLoad::resolve(&base), GraphLoad::SeedNeighborhood);
+
+        let node_set = GraphRetrievalConfig {
+            node_type: Some("Entity".to_string()),
+            node_name: Some(names.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            GraphLoad::resolve(&node_set),
+            GraphLoad::NodeSet {
+                node_type: "Entity",
+                node_names: &names
+            }
+        );
+
+        let projection = GraphRetrievalConfig {
+            neighborhood_depth: Some(2),
+            neighborhood_seed_top_k: Some(3),
+            ..Default::default()
+        };
+        let load = GraphLoad::resolve(&projection);
+        assert_eq!(
+            load,
+            GraphLoad::Projection {
+                depth: 2,
+                seed_top_k: Some(3)
+            }
+        );
+        assert!(load.ranks_every_loaded_edge());
+        assert!(!GraphLoad::resolve(&base).ranks_every_loaded_edge());
+
+        // Python: `node_name` (with or without `node_type`) disables the seeds.
+        let no_seeds = GraphRetrievalConfig {
+            neighborhood_depth: Some(2),
+            node_name: Some(names.clone()),
+            ..Default::default()
+        };
+        assert_eq!(GraphLoad::resolve(&no_seeds), GraphLoad::NoSeeds);
     }
 
     #[test]

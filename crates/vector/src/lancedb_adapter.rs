@@ -155,12 +155,13 @@ fn points_to_batch(
     .map_err(|e| VectorDBError::StorageError(format!("record batch build: {e}")))
 }
 
-/// `id IN (X'…', …)` over the points' UUID bytes, as SQL hex literals.
-fn id_predicate(points: &[VectorPoint]) -> String {
-    let id_values: Vec<String> = points
-        .iter()
-        .map(|p| {
-            let hex: String = p.id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
+/// `id IN (X'…', …)` over the ids' UUID bytes, as SQL hex literals. The one
+/// place every id-scoped read, write and delete builds its predicate.
+fn id_predicate<'a>(ids: impl IntoIterator<Item = &'a Uuid>) -> String {
+    let id_values: Vec<String> = ids
+        .into_iter()
+        .map(|id| {
+            let hex: String = id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
             format!("X'{hex}'")
         })
         .collect();
@@ -332,7 +333,7 @@ impl LanceDbAdapter {
         validate_points(&name, dimension, &points)?;
 
         // Upsert by id so re-indexing existing points replaces them.
-        let predicate = id_predicate(&points);
+        let predicate = id_predicate(points.iter().map(|p| &p.id));
 
         // Read the membership of any existing rows we're about to replace, then
         // union it into the incoming points. Point IDs are content-addressed, so
@@ -497,7 +498,7 @@ impl VectorDB for LanceDbAdapter {
         // still keeps a repeated id from landing as two physical rows.
         let points = dedup_points_by_id_last_wins_cow(points);
         validate_points(&name, dimension, &points)?;
-        let predicate = id_predicate(&points);
+        let predicate = id_predicate(points.iter().map(|p| &p.id));
         table
             .delete(predicate.as_str())
             .await
@@ -568,14 +569,7 @@ impl VectorDB for LanceDbAdapter {
         };
         // Same hex-literal `id IN (X'..', ...)` predicate the writer path
         // (index_points / delete_points) builds.
-        let id_values: Vec<String> = ids
-            .iter()
-            .map(|id| {
-                let hex: String = id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
-                format!("X'{hex}'")
-            })
-            .collect();
-        let predicate = format!("id IN ({})", id_values.join(", "));
+        let predicate = id_predicate(ids);
         let stream = table
             .query()
             .only_if(predicate)
@@ -609,6 +603,7 @@ impl VectorDB for LanceDbAdapter {
             return Ok(Some(vec![]));
         }
         let name = collection_name(data_type, field_name);
+        warn_zero_norm_query("lancedb", &name, query_vector);
         let table = match self.connection.open_table(&name).execute().await {
             Ok(t) => t,
             Err(lancedb::Error::TableNotFound { .. }) => return Ok(Some(vec![])),
@@ -617,19 +612,12 @@ impl VectorDB for LanceDbAdapter {
         let mut out = Vec::with_capacity(ids.len());
         // Bounded `id IN (...)` predicates, as Python's `SCORE_ID_BATCH_SIZE`.
         for chunk in ids.chunks(SCORE_ID_BATCH) {
-            let id_values: Vec<String> = chunk
-                .iter()
-                .map(|id| {
-                    let hex: String = id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
-                    format!("X'{hex}'")
-                })
-                .collect();
             // Prefilter (the vector-query default) and bypass the ANN index, so
             // an indexed table still scores every requested row, including
             // neighbours far from the query.
             let stream = table
                 .query()
-                .only_if(format!("id IN ({})", id_values.join(", ")))
+                .only_if(id_predicate(chunk))
                 .nearest_to(query_vector)
                 .map_err(map_lance_err)?
                 .distance_type(DistanceType::Cosine)
@@ -677,14 +665,7 @@ impl VectorDB for LanceDbAdapter {
                 }
                 other => map_lance_err(other),
             })?;
-        let id_values: Vec<String> = point_ids
-            .iter()
-            .map(|id| {
-                let hex: String = id.as_bytes().iter().map(|b| format!("{b:02X}")).collect();
-                format!("X'{hex}'")
-            })
-            .collect();
-        let predicate = format!("id IN ({})", id_values.join(", "));
+        let predicate = id_predicate(point_ids);
         table
             .delete(predicate.as_str())
             .await

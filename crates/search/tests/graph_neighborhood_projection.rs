@@ -45,6 +45,25 @@ impl EmbeddingEngine for AlignedEmbedding {
     }
 }
 
+/// Fails the test if the search embeds the query at all.
+struct UnusedEmbedding;
+
+#[async_trait]
+impl EmbeddingEngine for UnusedEmbedding {
+    async fn embed(&self, _texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        panic!("the query must not be embedded");
+    }
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn batch_size(&self) -> usize {
+        8
+    }
+    fn max_sequence_length(&self) -> usize {
+        128
+    }
+}
+
 /// A [`MockVectorDB`] that does not implement `score_by_ids`, like an
 /// external adapter written before it existed.
 struct NoScoreById(MockVectorDB);
@@ -287,7 +306,8 @@ async fn non_positive_depth_or_seed_count_is_rejected() {
 }
 
 /// `node_name` disables Python's seed search, so its neighborhood projection
-/// has no seeds and the search comes back empty rather than failing.
+/// has no seeds and the search comes back empty rather than failing. That is
+/// known from the config alone, so neither the embedding nor a graph load runs.
 #[tokio::test]
 async fn depth_with_node_name_returns_empty() {
     let (vector_db, graph, _) = chain().await;
@@ -296,7 +316,9 @@ async fn depth_with_node_name_returns_empty() {
         node_name: Some(vec!["anything".to_string()]),
         ..config(Some(2))
     };
-    let ranked = search(&vector_db, &graph, &cfg).await.unwrap();
+    let ranked = brute_force_triplet_search("q", &vector_db, &UnusedEmbedding, &graph, &cfg)
+        .await
+        .unwrap();
     assert!(ranked.is_empty(), "got {ranked:?}");
     assert!(
         !graph

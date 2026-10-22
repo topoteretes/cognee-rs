@@ -517,6 +517,10 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *   "useCombinedContext"    — boolean
  *   "verbose"               — boolean
  *   "autoFeedbackDetection" — boolean
+ *   "neighborhoodDepth"     — positive integer; graph searches rank the
+ *                             triplets this many hops around the nearest hits
+ *   "neighborhoodSeedTopK"  — positive integer; at most this many hits to
+ *                             expand from, nearest first (default: all)
  *
  * Note: "userId" in opts is ignored — user_id in the request is always set
  * from the handle's owner_id so dataset-name resolution works correctly.
@@ -551,6 +555,7 @@ void cg_sdk_search(const CgSdk*        sdk,
  *   "scope"      — string or string array of RecallScope values:
  *                  "auto" | "graph" | "session" | "trace" | "graph_context"
  *                  Absent or null → "auto" default applied by recall().
+ *   "neighborhoodDepth", "neighborhoodSeedTopK" — as for cg_sdk_search
  *
  * Async (D4, R1): callback fires exactly once on a tokio worker thread.
  * result_json on success: CogneeRecallResult JSON object (see above).

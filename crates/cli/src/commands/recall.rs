@@ -97,12 +97,10 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             Some(session_store.as_ref()),
             Some(session_manager.as_ref()),
             None,
-            // Only the flags this command exposes; with none of them set, keep
-            // `None` (no options at all).
-            (tenant_id.is_some()
-                || args.neighborhood_depth.is_some()
-                || args.neighborhood_seed_top_k.is_some())
-            .then(|| cognee::api::RecallOptions {
+            // Only the flags this command exposes. Always `Some`: recall reads
+            // every option field-by-field, so an all-default value means the
+            // same as `None` and a new flag cannot be dropped by a stale guard.
+            Some(cognee::api::RecallOptions {
                 tenant_id,
                 neighborhood_depth: args.neighborhood_depth.map(usize::from),
                 neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),

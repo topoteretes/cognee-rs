@@ -4030,9 +4030,6 @@ impl VectorDB for PgVectorAdapter {
             return Ok(Some(vec![]));
         }
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
-        if !self.has_collection(data_type, field_name).await? {
-            return Ok(Some(vec![]));
-        }
         warn_zero_norm_query("pgvector", &coll, query_vector);
 
         // Filter by primary key, then score: no ORDER BY on distance, so the
@@ -4057,8 +4054,10 @@ impl VectorDB for PgVectorAdapter {
                 .map_err(|e| VectorDBError::StorageError(e.to_string()))
             {
                 Ok(rows) => rows,
-                // Dropped since `has_collection` said it exists: keep what the
-                // earlier chunks found, as `retrieve` does.
+                // A missing table answers `[]` without a `has_collection`
+                // round trip first (the caller has just checked it); one
+                // dropped mid-read keeps what the earlier chunks found, as
+                // `retrieve` does.
                 Err(e) if self.forget_if_missing(&coll, &e) => break,
                 Err(e) => return Err(e),
             };
