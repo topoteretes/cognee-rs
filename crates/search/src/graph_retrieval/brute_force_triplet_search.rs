@@ -9,7 +9,8 @@ use serde_json::Value;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::graph_retrieval::rank_edge_score;
+use crate::graph_retrieval::triplet_ranking::element_weight;
+use crate::graph_retrieval::{DEFAULT_ELEMENT_WEIGHT, TripletElement, rank_edge_score};
 use crate::types::SearchError;
 use crate::utils::edge_type_point_id;
 
@@ -142,8 +143,10 @@ pub struct RankedGraphEdge {
     pub source_id: String,
     pub target_id: String,
     pub relationship_name: String,
-    /// Total triplet distance (lower = better match).
-    /// Sum of source_node_distance + edge_distance + target_node_distance.
+    /// Total triplet distance (lower = better match): the sum of the source
+    /// node's, target node's and edge's cosine distances, each scaled by
+    /// `2 - importance_weight` and blended with its `feedback_weight` (see
+    /// [`rank_edge_score`]).
     pub score: f32,
     pub source_name: String,
     pub target_name: String,
@@ -385,10 +388,12 @@ pub async fn brute_force_triplet_search(
         .await?;
     }
 
-    // Extract name, text, description, and (optionally) feedback_weight from each node.
+    // Extract name, text, description, importance_weight and (optionally)
+    // feedback_weight from each node.
     let mut node_names: HashMap<String, String> = HashMap::new();
     let mut node_texts: HashMap<String, String> = HashMap::new();
     let mut node_descriptions: HashMap<String, String> = HashMap::new();
+    let mut node_importance_weights: HashMap<String, f32> = HashMap::new();
     let mut node_feedback_weights: HashMap<String, f32> = HashMap::new();
 
     // Internal nodes (Python's `InternalDataPoint`, e.g. per-user preference
@@ -414,14 +419,30 @@ pub async fn brute_force_triplet_search(
         if let Some(desc) = properties.get("description").and_then(|v| v.as_str()) {
             node_descriptions.insert(node_id.clone(), desc.to_string());
         }
+        // Python projects `importance_weight` on every node and
+        // `feedback_weight` only when feedback influences the ranking.
+        node_importance_weights.insert(
+            node_id.clone(),
+            element_weight(properties.get("importance_weight")),
+        );
         if config.feedback_influence > 0.0 {
-            let fw = properties
-                .get("feedback_weight")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.5) as f32;
-            node_feedback_weights.insert(node_id.clone(), fw);
+            node_feedback_weights.insert(
+                node_id.clone(),
+                element_weight(properties.get("feedback_weight")),
+            );
         }
     }
+    let node_element = |node_id: &String, distance: f32| TripletElement {
+        distance,
+        importance_weight: node_importance_weights
+            .get(node_id)
+            .copied()
+            .unwrap_or(DEFAULT_ELEMENT_WEIGHT),
+        feedback_weight: node_feedback_weights
+            .get(node_id)
+            .copied()
+            .unwrap_or(DEFAULT_ELEMENT_WEIGHT),
+    };
 
     let default_penalty = config.triplet_distance_penalty;
 
@@ -468,16 +489,24 @@ pub async fn brute_force_triplet_search(
                         .and_then(|point_id| edge_type_distances.get(&point_id).copied())
                         .unwrap_or(default_penalty);
 
-                let source_fw = node_feedback_weights.get(source_id).copied().unwrap_or(0.5);
-                let target_fw = node_feedback_weights.get(target_id).copied().unwrap_or(0.5);
+                // Python's edge projection carries `feedback_weight` (when
+                // feedback is on) but never `importance_weight`, so an edge's
+                // importance is always the default.
+                let edge = TripletElement {
+                    feedback_weight: if config.feedback_influence > 0.0 {
+                        element_weight(properties.get("feedback_weight"))
+                    } else {
+                        DEFAULT_ELEMENT_WEIGHT
+                    },
+                    ..TripletElement::new(edge_dist)
+                };
 
                 let score = rank_edge_score(
-                    source_dist,
-                    target_dist,
-                    edge_dist,
+                    node_element(source_id, source_dist),
+                    node_element(target_id, target_dist),
+                    edge,
                     config.feedback_influence,
-                    source_fw,
-                    target_fw,
+                    default_penalty,
                 );
                 Some((index, score))
             },

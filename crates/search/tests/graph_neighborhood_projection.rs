@@ -26,6 +26,10 @@ use uuid::Uuid;
 
 const PENALTY: f32 = DEFAULT_TRIPLET_DISTANCE_PENALTY;
 
+/// Every element distance is scaled by `2 - importance_weight`; no fixture
+/// node carries a weight, so it is Python's default 0.5.
+const SCALE: f32 = 1.5;
+
 /// Every query embeds to `[1, 0]`.
 struct AlignedEmbedding;
 
@@ -220,9 +224,9 @@ async fn depth_two_ranks_every_projected_edge_with_rescored_expansion() {
     assert_eq!(scores.len(), 2, "got {scores:?}");
     // s is an exact hit (0); x1 is in no collection and the edge type has no
     // vector, so both take the penalty.
-    assert_close(scores["s_x1"], 2.0 * PENALTY, "s_x1");
+    assert_close(scores["s_x1"], SCALE * 2.0 * PENALTY, "s_x1");
     // x2 was not a top-1 hit, so only `score_by_ids` gives it 1 - 0.6 = 0.4.
-    assert_close(scores["x1_x2"], 0.4 + 2.0 * PENALTY, "x1_x2");
+    assert_close(scores["x1_x2"], SCALE * (0.4 + 2.0 * PENALTY), "x1_x2");
     assert_eq!(
         ranked[0].relationship_name, "s_x1",
         "the seed edge stays first"
@@ -238,7 +242,7 @@ async fn adapter_without_score_by_ids_leaves_expansion_at_the_penalty() {
         .await
         .unwrap();
     let scores = scores_by_relationship(&ranked);
-    assert_close(scores["x1_x2"], 3.0 * PENALTY, "x1_x2");
+    assert_close(scores["x1_x2"], SCALE * 3.0 * PENALTY, "x1_x2");
 }
 
 /// `seed_top_k` keeps the *nearest* seeds, not the first by id: `far` sorts

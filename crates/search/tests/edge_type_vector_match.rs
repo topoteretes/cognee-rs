@@ -66,6 +66,10 @@ const EDGE_DISTANCE: f32 = 0.4;
 /// `triplet_distance_penalty`.
 const PENALTY: f32 = 6.5;
 
+/// Every element distance is scaled by `2 - importance_weight` before it is
+/// summed; none of these nodes carries a weight, so it is Python's default 0.5.
+const SCALE: f32 = 1.5;
+
 fn props(pairs: &[(&'static str, serde_json::Value)]) -> HashMap<Cow<'static, str>, Value> {
     pairs
         .iter()
@@ -208,18 +212,18 @@ async fn described_edge_takes_its_vector_distance_not_the_penalty() {
 
     let matched = score_of(&ranked, "works_at");
     assert!(
-        (matched - EDGE_DISTANCE).abs() < 1e-6,
-        "the described edge must score 0.0 (source) + 0.0 (target) + {EDGE_DISTANCE} \
-         (its EdgeType vector distance) = {EDGE_DISTANCE}, got {matched}. A score of \
+        (matched - SCALE * EDGE_DISTANCE).abs() < 1e-5,
+        "the described edge must score {SCALE} * (0.0 (source) + 0.0 (target) + \
+         {EDGE_DISTANCE} (its EdgeType vector distance)), got {matched}. A score of \
          {} means the EdgeType hit was looked up by the bare relationship_name and \
          missed, so the edge fell through to the triplet_distance_penalty.",
-        PENALTY
+        SCALE * PENALTY
     );
 
     let unmatched = score_of(&ranked, "mentions");
     assert!(
-        (unmatched - PENALTY).abs() < 1e-6,
-        "an edge with no EdgeType row must still take the {PENALTY} penalty, got {unmatched}"
+        (unmatched - SCALE * PENALTY).abs() < 1e-5,
+        "an edge with no EdgeType row must still take the scaled {PENALTY} penalty, got {unmatched}"
     );
 }
 
@@ -259,7 +263,7 @@ async fn blank_edge_text_falls_back_to_relationship_name_and_still_matches() {
 
     let matched = score_of(&ranked, "knows");
     assert!(
-        (matched - EDGE_DISTANCE).abs() < 1e-6,
+        (matched - SCALE * EDGE_DISTANCE).abs() < 1e-5,
         "a blank edge_text must fall back to the relationship_name, so the edge \
          scores {EDGE_DISTANCE}, got {matched}"
     );
@@ -294,7 +298,7 @@ async fn absent_edge_text_falls_back_to_relationship_name_and_still_matches() {
 
     let matched = score_of(&ranked, "knows");
     assert!(
-        (matched - EDGE_DISTANCE).abs() < 1e-6,
+        (matched - SCALE * EDGE_DISTANCE).abs() < 1e-5,
         "an edge with no edge_text property keys on its relationship_name, so it \
          scores {EDGE_DISTANCE}, got {matched}"
     );
