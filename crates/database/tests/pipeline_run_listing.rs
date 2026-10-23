@@ -308,6 +308,22 @@ async fn user_id_writes_sqlite() {
     user_id_write_suite(sqlite().await).await;
 }
 
+/// The migrations from `m20261020_000001_pipeline_runs_user_id` to the end of
+/// the chain: how many `Migrator::down` reverts to undo it, and where `up`
+/// stops just before it. Counted, not assumed to be one: later migrations
+/// (`dataset_database`, SDK-1162) sit after it.
+fn migrations_from_user_id() -> u32 {
+    let names: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    let position = names
+        .iter()
+        .position(|name| name.contains("pipeline_runs_user_id"))
+        .expect("the user_id migration is in the chain");
+    (names.len() - position) as u32
+}
+
 /// Python's alembic `a7f3c9e1b5d2` may add `user_id` and its index to a shared
 /// SQLite file first; the Rust migration must skip both instead of failing
 /// with "duplicate column name". Then `down` and `up` round-trip.
@@ -320,7 +336,7 @@ async fn user_id_migration_tolerates_python_first_and_round_trips() {
     );
     let db = connect(&url).await.expect("connect");
     let chain = Migrator::migrations().len() as u32;
-    Migrator::up(&db, Some(chain - 1))
+    Migrator::up(&db, Some(chain - migrations_from_user_id()))
         .await
         .expect("everything before user_id");
     for sql in [
@@ -354,7 +370,9 @@ async fn user_id_migration_tolerates_python_first_and_round_trips() {
         }
     };
     assert_eq!(has_column(&db).await, 1);
-    Migrator::down(&db, Some(1)).await.expect("down");
+    Migrator::down(&db, Some(migrations_from_user_id()))
+        .await
+        .expect("down");
     assert_eq!(has_column(&db).await, 0, "down drops the column");
     Migrator::up(&db, None).await.expect("up again");
     assert_eq!(has_column(&db).await, 1);
@@ -379,7 +397,9 @@ async fn listing_and_user_id_postgres() {
     user_id_write_suite(Arc::clone(&db)).await;
 
     // down / up of the user_id migration on Postgres.
-    Migrator::down(db.as_ref(), Some(1)).await.expect("down");
+    Migrator::down(db.as_ref(), Some(migrations_from_user_id()))
+        .await
+        .expect("down");
     Migrator::up(db.as_ref(), None).await.expect("up again");
     drop(db);
     tmp.cleanup().await;
