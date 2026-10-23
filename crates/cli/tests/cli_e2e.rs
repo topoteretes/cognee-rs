@@ -658,7 +658,7 @@ fn add_audio_file_stores_the_transcript() {
     let db_file_path = workdir.path().join("cognee.db");
     std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
     let audio_path = workdir.path().join("speech.mp3");
-    std::fs::write(&audio_path, b"ID3   fake-mp3-payload").expect("write audio");
+    std::fs::write(&audio_path, b"ID3\x04\x00\x00\x00fake-mp3-payload").expect("write audio");
     let audio_arg = audio_path.display().to_string();
 
     config_set(
