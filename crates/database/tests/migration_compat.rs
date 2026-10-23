@@ -291,6 +291,9 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 9 for `m20261020_000001_pipeline_runs_user_id`: `pipeline_runs`
 /// gains the nullable triggering-user column and its index (Python alembic
 /// `a7f3c9e1b5d2`), again without rewriting the baseline.
+/// Bumped to 10 for `m20261023_000001_dataset_database`: the per-dataset
+/// storage table (Python's `dataset_database`, SDK-1162), created only if
+/// missing because a database Python migrated already has it.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -300,7 +303,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        9,
+        10,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
