@@ -4814,6 +4814,70 @@
   "GRAPH_DATABASE_USERNAME=\"{\\\"ssl\\\":true}\"": {
     "graph.username": "{\"ssl\":true}"
   },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"  \"": {
+    "graph.dataset_database_handler": "  "
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"\"": {},
+  "GRAPH_DATASET_DATABASE_HANDLER=\"-1\"": {
+    "graph.dataset_database_handler": "-1"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"0\"": {
+    "graph.dataset_database_handler": "0"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"1\"": {
+    "graph.dataset_database_handler": "1"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"1.5\"": {
+    "graph.dataset_database_handler": "1.5"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"42\"": {
+    "graph.dataset_database_handler": "42"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"5000000000\"": {
+    "graph.dataset_database_handler": "5000000000"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"70000\"": {
+    "graph.dataset_database_handler": "70000"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"TRUE\"": {
+    "graph.dataset_database_handler": "TRUE"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"[1]\"": {
+    "graph.dataset_database_handler": "[1]"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"abc\"": {
+    "graph.dataset_database_handler": "abc"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"false\"": {
+    "graph.dataset_database_handler": "false"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"no\"": {
+    "graph.dataset_database_handler": "no"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"on\"": {
+    "graph.dataset_database_handler": "on"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"require\"": {
+    "graph.dataset_database_handler": "require"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"true\"": {
+    "graph.dataset_database_handler": "true"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"v\"": {
+    "graph.dataset_database_handler": "v"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"yes\"": {
+    "graph.dataset_database_handler": "yes"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"{\\\"a\\\":1}\"": {
+    "graph.dataset_database_handler": "{\"a\":1}"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "graph.dataset_database_handler": "{\"ssl\":\"verify-full\"}"
+  },
+  "GRAPH_DATASET_DATABASE_HANDLER=\"{\\\"ssl\\\":true}\"": {
+    "graph.dataset_database_handler": "{\"ssl\":true}"
+  },
   "GRAPH_EXTRACTOR=\"  \"": {
     "graph_extraction.backend": "  "
   },
@@ -7508,6 +7572,70 @@
   },
   "TRANSCRIPTION_MODEL=\"{\\\"ssl\\\":true}\"": {
     "llm.openai_compatible.transcription_model": "{\"ssl\":true}"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"  \"": {
+    "vector.dataset_database_handler": "  "
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"\"": {},
+  "VECTOR_DATASET_DATABASE_HANDLER=\"-1\"": {
+    "vector.dataset_database_handler": "-1"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"0\"": {
+    "vector.dataset_database_handler": "0"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"1\"": {
+    "vector.dataset_database_handler": "1"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"1.5\"": {
+    "vector.dataset_database_handler": "1.5"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"42\"": {
+    "vector.dataset_database_handler": "42"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"5000000000\"": {
+    "vector.dataset_database_handler": "5000000000"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"70000\"": {
+    "vector.dataset_database_handler": "70000"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"TRUE\"": {
+    "vector.dataset_database_handler": "TRUE"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"[1]\"": {
+    "vector.dataset_database_handler": "[1]"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"abc\"": {
+    "vector.dataset_database_handler": "abc"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"false\"": {
+    "vector.dataset_database_handler": "false"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"no\"": {
+    "vector.dataset_database_handler": "no"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"on\"": {
+    "vector.dataset_database_handler": "on"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"require\"": {
+    "vector.dataset_database_handler": "require"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"true\"": {
+    "vector.dataset_database_handler": "true"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"v\"": {
+    "vector.dataset_database_handler": "v"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"yes\"": {
+    "vector.dataset_database_handler": "yes"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"{\\\"a\\\":1}\"": {
+    "vector.dataset_database_handler": "{\"a\":1}"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "vector.dataset_database_handler": "{\"ssl\":\"verify-full\"}"
+  },
+  "VECTOR_DATASET_DATABASE_HANDLER=\"{\\\"ssl\\\":true}\"": {
+    "vector.dataset_database_handler": "{\"ssl\":true}"
   },
   "VECTOR_DB_HOST=\"  \"": {
     "vector.host": "  "

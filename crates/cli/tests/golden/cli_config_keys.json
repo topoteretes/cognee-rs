@@ -57,6 +57,7 @@
     "embedding.rate_limit_requests",
     "enable_access_control",
     "enable_last_accessed",
+    "graph.dataset_database_handler",
     "graph.file_path",
     "graph.filename",
     "graph.host",
@@ -145,6 +146,7 @@
     "strict_config",
     "summarization_model",
     "system_root_directory",
+    "vector.dataset_database_handler",
     "vector.host",
     "vector.key",
     "vector.name",
@@ -244,6 +246,7 @@
     "vector.username",
     "vector.password",
     "vector.host",
+    "vector.dataset_database_handler",
     "graph.provider",
     "graph.url",
     "graph.name",
@@ -253,6 +256,7 @@
     "graph.host",
     "graph.key",
     "graph.file_path",
+    "graph.dataset_database_handler",
     "graph.filename",
     "relational.provider",
     "relational.url",
@@ -5307,7 +5311,9 @@
     "err": true
   },
   "set enable_access_control <- true": {
-    "err": true
+    "ok": {
+      "enable_access_control": true
+    }
   },
   "set enable_access_control <- {\"a\":1}": {
     "err": true
@@ -5404,6 +5410,57 @@
     }
   },
   "set enable_last_accessed <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "set graph.dataset_database_handler <- \"1\"": {
+    "ok": {
+      "graph.dataset_database_handler": "1"
+    }
+  },
+  "set graph.dataset_database_handler <- \"s\"": {
+    "ok": {
+      "graph.dataset_database_handler": "s"
+    }
+  },
+  "set graph.dataset_database_handler <- \"true\"": {
+    "ok": {
+      "graph.dataset_database_handler": "true"
+    }
+  },
+  "set graph.dataset_database_handler <- -1": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- 0": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- 1": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- 1.5": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- 5000000000": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- 70000": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- [1]": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- false": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- null": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- true": {
+    "err": true
+  },
+  "set graph.dataset_database_handler <- {\"a\":1}": {
     "err": true
   },
   "set graph.file_path <- \"\"": {
@@ -6375,6 +6432,57 @@
     "err": true
   },
   "set graph_database_username <- {\"a\":1}": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "set graph_dataset_database_handler <- \"1\"": {
+    "ok": {
+      "graph.dataset_database_handler": "1"
+    }
+  },
+  "set graph_dataset_database_handler <- \"s\"": {
+    "ok": {
+      "graph.dataset_database_handler": "s"
+    }
+  },
+  "set graph_dataset_database_handler <- \"true\"": {
+    "ok": {
+      "graph.dataset_database_handler": "true"
+    }
+  },
+  "set graph_dataset_database_handler <- -1": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- 0": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- 1": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- 1.5": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- 5000000000": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- 70000": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- [1]": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- false": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- null": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- true": {
+    "err": true
+  },
+  "set graph_dataset_database_handler <- {\"a\":1}": {
     "err": true
   },
   "set graph_extraction.backend <- \"\"": {
@@ -12996,6 +13104,57 @@
   "set transcription_model <- {\"a\":1}": {
     "err": true
   },
+  "set vector.dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "set vector.dataset_database_handler <- \"1\"": {
+    "ok": {
+      "vector.dataset_database_handler": "1"
+    }
+  },
+  "set vector.dataset_database_handler <- \"s\"": {
+    "ok": {
+      "vector.dataset_database_handler": "s"
+    }
+  },
+  "set vector.dataset_database_handler <- \"true\"": {
+    "ok": {
+      "vector.dataset_database_handler": "true"
+    }
+  },
+  "set vector.dataset_database_handler <- -1": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- 0": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- 1": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- 1.5": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- 5000000000": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- 70000": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- [1]": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- false": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- null": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- true": {
+    "err": true
+  },
+  "set vector.dataset_database_handler <- {\"a\":1}": {
+    "err": true
+  },
   "set vector.host <- \"\"": {
     "ok": {}
   },
@@ -13614,6 +13773,57 @@
     "err": true
   },
   "set vector.username <- {\"a\":1}": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "set vector_dataset_database_handler <- \"1\"": {
+    "ok": {
+      "vector.dataset_database_handler": "1"
+    }
+  },
+  "set vector_dataset_database_handler <- \"s\"": {
+    "ok": {
+      "vector.dataset_database_handler": "s"
+    }
+  },
+  "set vector_dataset_database_handler <- \"true\"": {
+    "ok": {
+      "vector.dataset_database_handler": "true"
+    }
+  },
+  "set vector_dataset_database_handler <- -1": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- 0": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- 1": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- 1.5": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- 5000000000": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- 70000": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- [1]": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- false": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- null": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- true": {
+    "err": true
+  },
+  "set vector_dataset_database_handler <- {\"a\":1}": {
     "err": true
   },
   "set vector_db_host <- \"\"": {
@@ -14715,6 +14925,13 @@
       "relational.port": 1
     }
   },
+  "unset graph.dataset_database_handler": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset graph.file_path": {
     "ok": {
       "chunk_size": 7,
@@ -14842,6 +15059,13 @@
     }
   },
   "unset graph_database_username": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset graph_dataset_database_handler": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -15744,6 +15968,13 @@
       "relational.port": 1
     }
   },
+  "unset vector.dataset_database_handler": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset vector.host": {
     "ok": {
       "chunk_size": 7,
@@ -15822,6 +16053,13 @@
     }
   },
   "unset vector.username": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset vector_dataset_database_handler": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

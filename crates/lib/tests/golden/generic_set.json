@@ -6069,8 +6069,9 @@
     "key": "enable_access_control"
   },
   "enable_access_control <- true": {
-    "err": "Unsupported",
-    "key": "enable_access_control"
+    "ok": {
+      "enable_access_control": true
+    }
   },
   "enable_access_control <- {\"a\":1}": {
     "err": "TypeMismatch",
@@ -6195,6 +6196,68 @@
   "enable_last_accessed <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "enable_last_accessed"
+  },
+  "graph.dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "graph.dataset_database_handler <- \"1\"": {
+    "ok": {
+      "graph.dataset_database_handler": "1"
+    }
+  },
+  "graph.dataset_database_handler <- \"s\"": {
+    "ok": {
+      "graph.dataset_database_handler": "s"
+    }
+  },
+  "graph.dataset_database_handler <- \"true\"": {
+    "ok": {
+      "graph.dataset_database_handler": "true"
+    }
+  },
+  "graph.dataset_database_handler <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- false": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- null": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- true": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
+  },
+  "graph.dataset_database_handler <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph.dataset_database_handler"
   },
   "graph.file_path <- \"\"": {
     "ok": {}
@@ -7379,6 +7442,68 @@
   "graph_database_username <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "graph_database_username"
+  },
+  "graph_dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "graph_dataset_database_handler <- \"1\"": {
+    "ok": {
+      "graph.dataset_database_handler": "1"
+    }
+  },
+  "graph_dataset_database_handler <- \"s\"": {
+    "ok": {
+      "graph.dataset_database_handler": "s"
+    }
+  },
+  "graph_dataset_database_handler <- \"true\"": {
+    "ok": {
+      "graph.dataset_database_handler": "true"
+    }
+  },
+  "graph_dataset_database_handler <- -1": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- 0": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- 1": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- 70000": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- [1]": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- false": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- null": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- true": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
+  },
+  "graph_dataset_database_handler <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "graph_dataset_database_handler"
   },
   "graph_extraction.backend <- \"\"": {
     "ok": {
@@ -15462,6 +15587,68 @@
     "err": "TypeMismatch",
     "key": "transcription_model"
   },
+  "vector.dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "vector.dataset_database_handler <- \"1\"": {
+    "ok": {
+      "vector.dataset_database_handler": "1"
+    }
+  },
+  "vector.dataset_database_handler <- \"s\"": {
+    "ok": {
+      "vector.dataset_database_handler": "s"
+    }
+  },
+  "vector.dataset_database_handler <- \"true\"": {
+    "ok": {
+      "vector.dataset_database_handler": "true"
+    }
+  },
+  "vector.dataset_database_handler <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- false": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- null": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- true": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
+  "vector.dataset_database_handler <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector.dataset_database_handler"
+  },
   "vector.host <- \"\"": {
     "ok": {}
   },
@@ -16214,6 +16401,68 @@
   "vector.username <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "vector.username"
+  },
+  "vector_dataset_database_handler <- \"\"": {
+    "ok": {}
+  },
+  "vector_dataset_database_handler <- \"1\"": {
+    "ok": {
+      "vector.dataset_database_handler": "1"
+    }
+  },
+  "vector_dataset_database_handler <- \"s\"": {
+    "ok": {
+      "vector.dataset_database_handler": "s"
+    }
+  },
+  "vector_dataset_database_handler <- \"true\"": {
+    "ok": {
+      "vector.dataset_database_handler": "true"
+    }
+  },
+  "vector_dataset_database_handler <- -1": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- 0": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- 1": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- 70000": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- [1]": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- false": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- null": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- true": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
+  },
+  "vector_dataset_database_handler <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "vector_dataset_database_handler"
   },
   "vector_db_host <- \"\"": {
     "ok": {}
