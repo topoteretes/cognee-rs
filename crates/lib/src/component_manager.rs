@@ -358,6 +358,28 @@ impl ComponentManager {
         Ok(new)
     }
 
+    /// `pipeline` with the configured [`Transcriber`] attached, so `add` runs
+    /// the audio loader.
+    ///
+    /// A provider without transcription, or a transcriber that cannot be built
+    /// (no API key, say), leaves `pipeline` unchanged: a text `add` needs no
+    /// LLM and must not fail over one. Audio inputs then fail with
+    /// `UnsupportedDocumentType`, as without the `audio-loader` feature.
+    pub async fn attach_transcriber(
+        &self,
+        pipeline: cognee_ingestion::AddPipeline,
+    ) -> cognee_ingestion::AddPipeline {
+        #[cfg(feature = "audio-loader")]
+        match self.transcriber().await {
+            Ok(Some(transcriber)) => return pipeline.with_transcriber(transcriber),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!(%error, "no transcriber for add, audio inputs are unsupported");
+            }
+        }
+        pipeline
+    }
+
     /// Release every cached component, so the OS resources they hold go away now
     /// instead of at an unspecified later time — or never.
     ///

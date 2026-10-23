@@ -63,6 +63,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_vector_db(vector_db)
         .with_database(database)
         .with_pipeline_run_repo(pipeline_run_repo);
+        let pipeline = cm.attach_transcriber(pipeline).await;
 
         let inputs = args
             .data

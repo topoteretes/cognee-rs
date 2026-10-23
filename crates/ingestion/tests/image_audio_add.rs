@@ -8,15 +8,15 @@
 //! As of task 17 ("Run loaders at ADD + correct `raw_content_hash`"), the
 //! document loader runs at **ingest time** and the stored artifact is the
 //! extracted text (Python parity, `ingest_data.py:103`). The image and audio
-//! loaders extract via vision / Whisper and therefore require an LLM /
-//! transcriber handle that `AddPipeline` does not currently carry, so they are
-//! NOT part of `LoaderRegistry::default_registry()`.
+//! loaders extract via vision / Whisper and therefore need an LLM /
+//! transcriber handle, so they are NOT part of
+//! `LoaderRegistry::default_registry()`.
 //!
-//! Consequently, adding an image/audio input now surfaces a clear error rather
-//! than silently storing raw bytes with image/audio metadata (the old, buggy
-//! behaviour). These tests assert that contract. Wiring an LLM-backed
-//! image/audio loader into the ADD path (so the extracted text is stored, as
-//! Python does) is a residual parity gap tracked separately.
+//! Audio: with `AddPipeline::with_transcriber` the audio loader runs at add
+//! and the transcript is stored, as Python does. Without one, and for images
+//! (no LLM handle on the add path yet), adding surfaces a clear error rather
+//! than silently storing raw bytes with media metadata (the old, buggy
+//! behaviour). These tests assert both contracts.
 //!
 //! `content_hash` / `data_id` (derived from the raw bytes) are unaffected and
 //! still match Python; only the stored artifact + extraction differ.
@@ -25,6 +25,8 @@ use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize};
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
+#[cfg(feature = "audio-loader")]
+use cognee_ingestion::HashAlgorithm;
 use cognee_models::DataInput;
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
@@ -144,4 +146,104 @@ async fn add_audio_errors_without_loader_pg() {
         return;
     };
     impl_add_audio_errors_without_loader(&url).await;
+}
+
+// ---------------------------------------------------------------------------
+// Audio add with a transcriber — the transcript is stored as text
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "audio-loader")]
+fn transcriber(text: &str) -> Arc<dyn cognee_llm::Transcriber> {
+    Arc::new(cognee_test_utils::MockTranscriber::new(
+        "mock-whisper",
+        vec![cognee_llm::TranscriptionOutput {
+            text: text.to_string(),
+            language: Some("english".to_string()),
+            duration: Some(1.5),
+        }],
+    ))
+}
+
+#[cfg(feature = "audio-loader")]
+async fn impl_add_audio_stores_transcript(db_url: &str) {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _db, storage) = make_pipeline(&dir, db_url).await;
+    let pipeline = pipeline.with_transcriber(transcriber("Hello from the meeting."));
+    let owner = Uuid::new_v4();
+    let audio = b"ID3\x04\x00\x00\x00fake-mp3-payload".to_vec();
+
+    let data = pipeline
+        .add(
+            vec![DataInput::Binary {
+                data: audio.clone(),
+                name: "speech.mp3".to_string(),
+            }],
+            "audio",
+            owner,
+            None,
+        )
+        .await
+        .expect("audio add with a transcriber must succeed");
+
+    assert_eq!(data.len(), 1);
+    let data = &data[0];
+    assert_eq!(data.loader_engine.as_deref(), Some("audio_loader"));
+    assert_eq!(data.extension, "txt");
+    assert_eq!(data.mime_type, "text/plain");
+    assert_eq!(data.original_extension.as_deref(), Some("mp3"));
+    assert_eq!(
+        data.content_hash,
+        cognee_ingestion::ContentHasher::hash_content(&audio, HashAlgorithm::Md5),
+        "content_hash stays the hash of the raw audio bytes"
+    );
+    assert_eq!(
+        storage.retrieve(&data.raw_data_location).await.unwrap(),
+        b"Hello from the meeting."
+    );
+}
+
+#[cfg(feature = "audio-loader")]
+#[tokio::test]
+async fn add_audio_stores_transcript_sqlite() {
+    let dir = TempDir::new().expect("tempdir");
+    let url = sqlite_db_url(&dir);
+    impl_add_audio_stores_transcript(&url).await;
+}
+
+#[cfg(feature = "audio-loader")]
+#[tokio::test]
+async fn add_audio_stores_transcript_pg() {
+    let Some(url) = cognee_test_utils::pg_test_url() else {
+        return;
+    };
+    impl_add_audio_stores_transcript(&url).await;
+}
+
+/// `flac` is classified as audio but Whisper does not accept it, so the
+/// loader refuses it before any transcription call.
+#[cfg(feature = "audio-loader")]
+#[tokio::test]
+async fn add_audio_rejects_format_whisper_does_not_accept() {
+    let dir = TempDir::new().expect("tempdir");
+    let url = sqlite_db_url(&dir);
+    let (pipeline, _db, _storage) = make_pipeline(&dir, &url).await;
+    let pipeline = pipeline.with_transcriber(transcriber("never returned"));
+
+    let error = pipeline
+        .add(
+            vec![DataInput::Binary {
+                data: b"fLaC-fake-payload".to_vec(),
+                name: "speech.flac".to_string(),
+            }],
+            "audio",
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .expect_err("flac must be refused");
+
+    assert!(
+        error.to_string().contains("flac"),
+        "unexpected error: {error}"
+    );
 }
