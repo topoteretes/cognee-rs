@@ -12,7 +12,7 @@ mod session_qa_db;
 
 pub use acl_db::AclDb;
 pub use dataset_config_db::{DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch};
-pub use dataset_database_db::{DatasetDatabaseDb, DatasetDatabaseRecord};
+pub use dataset_database_db::{DatasetDatabaseDb, DatasetDatabaseRecord, DatasetStorageLifecycle};
 pub use delete_db::DeleteDb;
 pub use ingest_db::IngestDb;
 pub use notebook_db::{Notebook, NotebookDb, NotebookUpdatePatch};

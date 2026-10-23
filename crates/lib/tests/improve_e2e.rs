@@ -617,3 +617,54 @@ async fn improve_records_distill_sessions_when_lessons_published() {
         r.lessons_published
     );
 }
+
+/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the memify
+/// stage reads the dataset's own graph: with routing engines that fail
+/// outside a dataset scope, it still runs.
+#[tokio::test]
+async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let dataset_id = Uuid::new_v4();
+    IngestDb::create_dataset(
+        &*h.db,
+        Dataset::new("ds_per_dataset".to_string(), owner, None, dataset_id),
+    )
+    .await
+    .unwrap();
+    let stores = cognee_test_utils::PerDatasetMocks::new();
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    let config = CognifyConfig::default();
+
+    let r = improve(ImproveParams {
+        dataset_name: "ds_per_dataset".to_string(),
+        session_ids: None,
+        node_name: None,
+        owner_id: owner,
+        tenant_id: None,
+        feedback_alpha: 0.1,
+        llm,
+        storage: Arc::clone(&h.storage),
+        graph_db: stores.graph_db(),
+        vector_db: stores.vector_db(),
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(h.db.clone()),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        add_pipeline: Some(&h.add_pipeline),
+        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
+        build_global_context_index: false,
+        build_truth_subspace: false,
+        run_in_background: false,
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    assert_eq!(stores.graph_datasets(), vec![dataset_id], "memify read the dataset's graph");
+}

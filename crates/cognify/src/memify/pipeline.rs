@@ -175,8 +175,43 @@ pub fn build_memify_index_only_pipeline(
 ///
 /// # Returns
 /// A [`MemifyResult`] with counts of extracted and indexed triplets.
+///
+/// With a `dataset_id` the whole run is in that dataset's
+/// [`cognee_models::dataset_scope`] (per-dataset storage); without one it runs
+/// in the caller's scope, if any.
 #[allow(clippy::too_many_arguments)]
 pub async fn memify(
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    thread_pool: Arc<dyn CpuPool>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    dataset_id: Option<Uuid>,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+    config: &MemifyConfig,
+) -> Result<MemifyResult, MemifyError> {
+    cognee_models::dataset_scope::maybe_with_dataset(
+        dataset_id,
+        memify_in_scope(
+            graph_db,
+            vector_db,
+            embedding_engine,
+            thread_pool,
+            database,
+            pipeline_run_repo,
+            dataset_id,
+            user_id,
+            tenant_id,
+            config,
+        ),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn memify_in_scope(
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,

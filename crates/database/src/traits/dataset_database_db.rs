@@ -63,3 +63,21 @@ pub trait DatasetDatabaseDb: Send + Sync + 'static {
     /// Every row, for prune.
     async fn list_dataset_databases(&self) -> Result<Vec<DatasetDatabaseRecord>, DatabaseError>;
 }
+
+/// Drops datasets' own databases under per-dataset storage
+/// (`ENABLE_BACKEND_ACCESS_CONTROL`). Implemented by
+/// `cognee_components::DatasetStorage`; declared here so the delete and
+/// prune paths can hold one without depending on the component layer.
+#[async_trait]
+pub trait DatasetStorageLifecycle: Send + Sync {
+    /// Drop the dataset's graph and vector databases and its
+    /// `dataset_database` row (Python `delete_dataset`'s handler calls).
+    /// `Ok(false)` when the dataset never had per-dataset storage. Its next
+    /// use provisions empty databases again.
+    async fn drop_dataset_storage(&self, dataset_id: Uuid) -> Result<bool, DatabaseError>;
+
+    /// Drop every dataset's databases and rows (Python `prune_system`'s
+    /// `prune_graph_databases` / `prune_vector_databases`). Returns how many
+    /// datasets were dropped.
+    async fn drop_all_dataset_storage(&self) -> Result<usize, DatabaseError>;
+}

@@ -350,15 +350,23 @@ impl CogneeServices {
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase
         // concern.
-        let delete_service = Arc::new(
-            DeleteService::new(
-                Arc::clone(&storage),
-                Arc::clone(&database) as Arc<dyn DeleteDb>,
-            )
-            .with_graph_db(Arc::clone(&graph_db))
-            .with_vector_db(Arc::clone(&vector_db))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
-        );
+        let mut delete_service = DeleteService::new(
+            Arc::clone(&storage),
+            Arc::clone(&database) as Arc<dyn DeleteDb>,
+        )
+        .with_graph_db(Arc::clone(&graph_db))
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+        // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
+        // dataset drops its own databases.
+        if let Some(dataset_storage) = cm
+            .dataset_storage()
+            .await
+            .map_err(|e| SdkError::ServiceBuild(format!("dataset storage: {e}")))?
+        {
+            delete_service = delete_service.with_dataset_storage(dataset_storage);
+        }
+        let delete_service = Arc::new(delete_service);
 
         // Session: the `session.store` factory (default `relational`).
         let session_store = cm

@@ -88,7 +88,32 @@ pub struct TruthSubspaceResult {
 ///    shape; `build.py:196-283`).
 /// 6. full success → `{centroids.len(), nodes_scored, signature, current_epoch}`
 ///    (`build.py:294-299`).
+///
+/// Runs in `dataset_id`'s [`cognee_models::dataset_scope`] (per-dataset
+/// storage).
 pub async fn build_truth_subspace(
+    dataset_id: Uuid,
+    session_ids: &[String],
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    k: usize,
+) -> TruthSubspaceResult {
+    cognee_models::dataset_scope::with_dataset(
+        dataset_id,
+        build_truth_subspace_in_scope(
+            dataset_id,
+            session_ids,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            k,
+        ),
+    )
+    .await
+}
+
+async fn build_truth_subspace_in_scope(
     dataset_id: Uuid,
     session_ids: &[String],
     graph_db: Arc<dyn GraphDBTrait>,

@@ -833,7 +833,32 @@ fn emit_task_event(
 /// `batch_size`.  If the next task is a batch variant, the slice is passed
 /// directly; otherwise each item is executed individually through the
 /// remaining pipeline before the next batch is pulled.
+///
+/// A run with a dataset ([`PipelineContext::dataset_id`](crate::task_context::PipelineContext))
+/// runs in that dataset's [`cognee_models::dataset_scope`], so under per-dataset
+/// storage (`ENABLE_BACKEND_ACCESS_CONTROL`) every task reaches the dataset's
+/// own graph and vector databases — Python's `run_pipeline` entering
+/// `set_database_global_context_variables(dataset.id, …)`.
 pub async fn execute(
+    pipeline: &Pipeline,
+    inputs: Vec<Arc<dyn Value>>,
+    ctx: Arc<TaskContext>,
+    watcher: &dyn PipelineWatcher,
+) -> Result<Vec<Arc<dyn Value>>, ExecutionError> {
+    match ctx.pipeline_ctx.as_ref().and_then(|p| p.dataset_id) {
+        Some(dataset_id) => {
+            cognee_models::dataset_scope::with_dataset(
+                dataset_id,
+                execute_unscoped(pipeline, inputs, ctx, watcher),
+            )
+            .await
+        }
+        None => execute_unscoped(pipeline, inputs, ctx, watcher).await,
+    }
+}
+
+/// [`execute`] without entering the run's dataset scope.
+async fn execute_unscoped(
     pipeline: &Pipeline,
     inputs: Vec<Arc<dyn Value>>,
     ctx: Arc<TaskContext>,

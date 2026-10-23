@@ -16,15 +16,64 @@
 //!
 //! ## opts shape
 //!
-//! `{"destinationPath?": "<path>"}` — only `destinationPath` is parsed;
-//! unknown keys are ignored.
+//! `{"destinationPath?": "<path>", "dataset?": "<name or id>"}`; unknown keys
+//! are ignored. `dataset` defaults to the `default_dataset_name` setting
+//! (Python's `visualize_graph(dataset=DEFAULT_DATASET_NAME)`): with per-dataset
+//! storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the render is that dataset's own
+//! graph and the dataset must exist; over the shared store every dataset's
+//! graph is rendered, as before.
 
 use crate::{HandleState, SdkError};
 
+/// The dataset a render runs in: `opts.dataset` (an id, or a name among the
+/// handle owner's datasets in its tenant), else `default_dataset_name`.
+/// `None` when the name resolves to nothing — an error under per-dataset
+/// storage, where there is no store outside a dataset.
+#[cfg(feature = "visualization")]
+async fn render_dataset(
+    state: &HandleState,
+    svc: &crate::services::CogneeServices,
+    opts: Option<&serde_json::Value>,
+) -> Result<Option<uuid::Uuid>, SdkError> {
+    let dataset = match opts.and_then(|v| v.get("dataset")).and_then(|v| v.as_str()) {
+        Some(dataset) => dataset.to_string(),
+        None => svc
+            .component_manager
+            .settings()
+            .effective_default_dataset_name()
+            .to_string(),
+    };
+    let dataset_id = match uuid::Uuid::parse_str(&dataset) {
+        Ok(id) => Some(id),
+        Err(_) => {
+            let owner_id = state.owner_id().await?;
+            cognee::database::IngestDb::get_dataset_by_name_in_tenant(
+                svc.database.as_ref(),
+                &dataset,
+                owner_id,
+                state.tenant_id(),
+            )
+            .await
+            .map_err(|e| SdkError::Runtime(format!("failed to resolve dataset '{dataset}': {e}")))?
+            .map(|ds| ds.id)
+        }
+    };
+    let per_dataset = svc
+        .component_manager
+        .dataset_storage()
+        .await
+        .map_err(|e| SdkError::Runtime(format!("dataset storage: {e}")))?
+        .is_some();
+    if per_dataset && dataset_id.is_none() {
+        return Err(SdkError::Validation(format!("dataset '{dataset}' not found")));
+    }
+    Ok(dataset_id)
+}
+
 /// Render the knowledge graph as a self-contained HTML document.
 ///
-/// Returns the full HTML string on success. `_opts` is accepted for API
-/// symmetry but no keys are currently consumed.
+/// Returns the full HTML string on success. `_opts` may name the `dataset`
+/// (see the module docs).
 ///
 /// When the `visualization` feature is not compiled in, returns
 /// [`SdkError::FeatureNotBuilt`].
@@ -36,11 +85,13 @@ pub async fn visualize(
     {
         use std::sync::Arc;
 
+        use cognee::models::dataset_scope::maybe_with_dataset;
         use cognee::visualization::render;
 
         let svc = state.services().await?;
+        let dataset_id = render_dataset(state, &svc, _opts).await?;
         let graph_db = Arc::clone(&svc.graph_db);
-        let html = render(&*graph_db)
+        let html = maybe_with_dataset(dataset_id, render(&*graph_db))
             .await
             .map_err(|e| SdkError::Runtime(format!("visualization render failed: {e}")))?;
         Ok(html)
@@ -71,6 +122,7 @@ pub async fn visualize_to_file(
         use std::path::PathBuf;
         use std::sync::Arc;
 
+        use cognee::models::dataset_scope::maybe_with_dataset;
         use cognee::visualize;
 
         let dest: Option<PathBuf> = opts
@@ -79,8 +131,9 @@ pub async fn visualize_to_file(
             .map(PathBuf::from);
 
         let svc = state.services().await?;
+        let dataset_id = render_dataset(state, &svc, opts).await?;
         let graph_db = Arc::clone(&svc.graph_db);
-        let path = visualize(&*graph_db, dest.as_deref())
+        let path = maybe_with_dataset(dataset_id, visualize(&*graph_db, dest.as_deref()))
             .await
             .map_err(|e| SdkError::Runtime(format!("visualize to file failed: {e}")))?;
 

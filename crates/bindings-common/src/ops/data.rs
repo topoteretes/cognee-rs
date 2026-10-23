@@ -41,7 +41,8 @@ use uuid::Uuid;
 use cognee::add::generate_dataset_id;
 use cognee::api::{
     DatasetRef, ForgetTarget, PruneTarget, forget as cognee_forget,
-    prune_data as cognee_prune_data, prune_system as cognee_prune_system, update as cognee_update,
+    prune_data as cognee_prune_data, prune_system_with_storage as cognee_prune_system_with_storage,
+    update as cognee_update,
 };
 use cognee::database::IngestDb;
 
@@ -316,11 +317,19 @@ pub async fn prune_system(
             .unwrap_or(defaults.cache),
     };
 
-    let result = cognee_prune_system(
+    let dataset_storage = svc
+        .component_manager
+        .dataset_storage()
+        .await
+        .map_err(|e| SdkError::Runtime(format!("prune_system failed: {e}")))?;
+    let result = cognee_prune_system_with_storage(
         &target,
         Some(svc.graph_db.as_ref()),
         Some(svc.vector_db.as_ref()),
         Some(svc.session_store.as_ref()),
+        dataset_storage
+            .as_deref()
+            .map(|s| s as &dyn cognee::database::DatasetStorageLifecycle),
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("prune_system failed: {e}")))?;

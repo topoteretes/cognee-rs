@@ -26,6 +26,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_llm::Llm;
 use cognee_models::DataInput;
+use cognee_models::dataset_scope::maybe_with_dataset;
 use cognee_ontology::OntologyResolver;
 use cognee_session::{ImproveLockGuard, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
@@ -153,6 +154,26 @@ pub struct ImproveParams<'a> {
 /// synchronous. Stage 4 always runs when sessions are present.
 ///
 /// All inputs are passed via [`ImproveParams`] (see Decision 8 / LIB-04).
+/// The id of the owner's dataset `name` in `tenant`, or `None` when there is
+/// no relational database, no such dataset, or the lookup fails (logged).
+async fn dataset_id_by_name(
+    db: Option<&Arc<dyn RelationalDb>>,
+    name: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Option<Uuid> {
+    let db = db?;
+    match cognee_database::IngestDb::get_dataset_by_name_in_tenant(&**db, name, owner_id, tenant_id)
+        .await
+    {
+        Ok(dataset) => dataset.map(|ds| ds.id),
+        Err(e) => {
+            warn!("improve: dataset lookup failed (non-fatal): {e}");
+            None
+        }
+    }
+}
+
 pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiError> {
     let ImproveParams {
         dataset_name,
@@ -247,6 +268,14 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         );
     }
 
+    // The dataset the graph-reading stages (1, 3, 3b) run in. Under per-dataset
+    // storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the graph they read and write
+    // is that dataset's own, as Python's memify runs in the dataset's database
+    // context. Stages 2–2d scope themselves (add, cognify, truth subspace). A
+    // dataset that does not exist yet has no graph to weight; stage 2 may
+    // create it, so the later stages look it up again.
+    let stage1_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await;
+
     // ---- Stage 1: Apply Feedback Weights ----
     if has_sessions {
         #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
@@ -255,13 +284,16 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
         match (session_store.as_ref(), session_manager.as_ref()) {
             (Some(store), Some(mgr)) => {
-                match apply_feedback_weights_pipeline(
-                    sids,
-                    owner_id,
-                    feedback_alpha,
-                    &*graph_db,
-                    Arc::clone(store),
-                    Arc::clone(mgr),
+                match maybe_with_dataset(
+                    stage1_dataset,
+                    apply_feedback_weights_pipeline(
+                        sids,
+                        owner_id,
+                        feedback_alpha,
+                        &*graph_db,
+                        Arc::clone(store),
+                        Arc::clone(mgr),
+                    ),
                 )
                 .await
                 {
@@ -633,6 +665,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     }
 
     // ---- Stage 3: Default Enrichment (always) ----
+    let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await;
     let memify_config = if let Some(names) = node_name {
         MemifyConfig::default().with_node_name_filter(names)
     } else {
@@ -644,17 +677,20 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                 let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
                 let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
                     Arc::clone(database).pipeline_runs();
-                match run_memify(
-                    Arc::clone(&graph_db),
-                    Arc::clone(&vector_db),
-                    Arc::clone(&embedding_engine),
-                    thread_pool,
-                    Arc::clone(database),
-                    pipeline_run_repo,
-                    None,
-                    Some(owner_id),
-                    tenant_id,
-                    &memify_config,
+                match maybe_with_dataset(
+                    later_dataset,
+                    run_memify(
+                        Arc::clone(&graph_db),
+                        Arc::clone(&vector_db),
+                        Arc::clone(&embedding_engine),
+                        thread_pool,
+                        Arc::clone(database),
+                        pipeline_run_repo,
+                        None,
+                        Some(owner_id),
+                        tenant_id,
+                        &memify_config,
+                    ),
                 )
                 .await
                 {
@@ -710,7 +746,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             // TODO(parity): replace with a full `global_context_index_pipeline` that
             // uses LLM bucket/root summarisation (`bucketing_strategy="graph"`,
             // `max_bucket_size=4`) matching Python's `_build_global_context_index`.
-            match graph_db.get_graph_data().await {
+            match maybe_with_dataset(later_dataset, graph_db.get_graph_data()).await {
                 Ok((_nodes, edges)) if !edges.is_empty() => {
                     let global_context = edges
                         .iter()

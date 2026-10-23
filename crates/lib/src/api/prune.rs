@@ -2,6 +2,7 @@
 //!
 //! Equivalent to Python's `cognee.api.v1.prune.prune`.
 
+use cognee_database::DatasetStorageLifecycle;
 use cognee_graph::GraphDBTrait;
 use cognee_session::SessionStore;
 use cognee_storage::StorageTrait;
@@ -99,9 +100,36 @@ pub async fn prune_system(
     vector_db: Option<&dyn VectorDB>,
     session_store: Option<&dyn SessionStore>,
 ) -> Result<PruneResult, ApiError> {
+    prune_system_with_storage(target, graph_db, vector_db, session_store, None).await
+}
+
+/// [`prune_system`] that knows about per-dataset storage
+/// (`ENABLE_BACKEND_ACCESS_CONTROL`, `ComponentManager::dataset_storage`).
+///
+/// With `dataset_storage`, `graph` or `vector` drops every dataset's own
+/// databases — Python's `prune_graph_databases` / `prune_vector_databases`.
+/// A dataset's graph and vector databases go together; its next use
+/// provisions empty ones. Without it, as [`prune_system`].
+pub async fn prune_system_with_storage(
+    target: &PruneTarget,
+    graph_db: Option<&dyn GraphDBTrait>,
+    vector_db: Option<&dyn VectorDB>,
+    session_store: Option<&dyn SessionStore>,
+    dataset_storage: Option<&dyn DatasetStorageLifecycle>,
+) -> Result<PruneResult, ApiError> {
     let mut result = PruneResult::default();
 
-    if target.graph {
+    if let Some(storage) = dataset_storage
+        && (target.graph || target.vector)
+    {
+        let dropped = storage
+            .drop_all_dataset_storage()
+            .await
+            .map_err(|e| ApiError::Graph(cognee_graph::GraphDBError::DatabaseError(e.to_string())))?;
+        result.graph_pruned = true;
+        result.vector_pruned = true;
+        info!(datasets = dropped, "prune_system: every dataset's graph and vector databases dropped");
+    } else if target.graph {
         if let Some(gdb) = graph_db {
             gdb.delete_graph().await?;
             result.graph_pruned = true;
@@ -111,7 +139,7 @@ pub async fn prune_system(
         }
     }
 
-    if target.vector {
+    if target.vector && dataset_storage.is_none() {
         if let Some(vdb) = vector_db {
             vdb.prune().await?;
             result.vector_pruned = true;

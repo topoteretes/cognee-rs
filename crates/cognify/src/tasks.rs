@@ -4507,8 +4507,55 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 ///
 /// For composable pipeline-based execution (with concurrency, retry, progress
 /// tracking), use [`build_cognify_pipeline`] + [`cognee_core::execute`].
+///
+/// The whole run — the completion markers and the rollback included — runs in
+/// `dataset_id`'s [`cognee_models::dataset_scope`], so under per-dataset
+/// storage (`ENABLE_BACKEND_ACCESS_CONTROL`) every graph and vector call
+/// reaches that dataset's own databases.
 #[allow(clippy::too_many_arguments)]
 pub async fn cognify(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    llm: Arc<dyn Llm>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    thread_pool: Arc<dyn CpuPool>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    config: &CognifyConfig,
+) -> Result<CognifyResult, CognifyError> {
+    cognee_models::dataset_scope::with_dataset(
+        dataset_id,
+        cognify_in_scope(
+            data_items,
+            dataset_id,
+            user_id,
+            user_email,
+            tenant_id,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            database,
+            pipeline_run_repo,
+            thread_pool,
+            ontology_resolver,
+            config,
+        ),
+    )
+    .await
+}
+
+/// [`cognify`], already inside the dataset's scope.
+#[allow(clippy::too_many_arguments)]
+async fn cognify_in_scope(
     data_items: Vec<Data>,
     dataset_id: Uuid,
     user_id: Option<Uuid>,

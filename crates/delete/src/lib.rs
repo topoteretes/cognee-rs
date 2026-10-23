@@ -26,8 +26,12 @@ use cognee_core::pipeline_run_registry::{
     ids::{pipeline_id, pipeline_run_id},
     run_info_for_initiated,
 };
-use cognee_database::{DeleteDb, GraphEdge, GraphNode, PipelineRunRepository, PipelineRunStatus};
+use cognee_database::{
+    DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
+    PipelineRunStatus,
+};
 use cognee_graph::GraphDBTrait;
+use cognee_models::dataset_scope::with_dataset;
 use cognee_models::{Dataset, EdgeType, Triplet};
 use cognee_session::SessionStore;
 use cognee_storage::{StorageError, StorageTrait};
@@ -330,6 +334,8 @@ pub struct DeleteService {
     session_store: Option<Arc<dyn SessionStore>>,
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     dataset_locks: Option<Arc<DatasetLocks>>,
+    /// Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`), when on.
+    dataset_storage: Option<Arc<dyn DatasetStorageLifecycle>>,
 }
 
 impl DeleteService {
@@ -342,7 +348,26 @@ impl DeleteService {
             session_store: None,
             pipeline_run_repo: None,
             dataset_locks: None,
+            dataset_storage: None,
         }
+    }
+
+    /// Run under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): every
+    /// dataset has its own graph and vector databases, which the wired
+    /// `graph_db` / `vector_db` reach through the dataset scope
+    /// (`docs/design/per-dataset-storage.md`).
+    ///
+    /// - Deleting a dataset — or its memory only — drops its databases
+    ///   (Python `delete_dataset`'s handler calls), instead of deleting its
+    ///   artifacts one by one from a shared store. The ledger still sizes
+    ///   the report.
+    /// - Deleting a data item removes its artifacts inside its dataset's own
+    ///   databases.
+    /// - The store-wide `All` drops every dataset's databases.
+    /// - Hard mode's orphan sweeps run in each affected dataset.
+    pub fn with_dataset_storage(mut self, storage: Arc<dyn DatasetStorageLifecycle>) -> Self {
+        self.dataset_storage = Some(storage);
+        self
     }
 
     /// Take the per-dataset lock of every dataset a delete touches, from the
@@ -986,14 +1011,38 @@ impl DeleteService {
         let mut deleted_orphan_edge_types = 0usize;
 
         if matches!(request.mode, DeleteMode::Hard) {
-            let (oe, oet, sweep_warnings) = self.sweep_orphan_nodes().await?;
-            deleted_orphan_entities = oe;
-            deleted_orphan_entity_types = oet;
-            warnings.extend(sweep_warnings);
-
-            let (oedge, edge_sweep_warnings) = self.sweep_orphan_edge_types().await?;
-            deleted_orphan_edge_types = oedge;
-            warnings.extend(edge_sweep_warnings);
+            // The sweeps read the whole store they reach. Under per-dataset
+            // storage that is one dataset's: sweep each dataset an item was
+            // detached from (a deleted dataset's databases are gone already).
+            let sweep_scopes: Vec<Option<Uuid>> = if self.dataset_storage.is_some() {
+                let deleted: HashSet<Uuid> =
+                    targets.datasets_to_delete.iter().map(|d| d.id).collect();
+                let affected: BTreeSet<Uuid> = targets
+                    .links_to_detach
+                    .iter()
+                    .map(|(dataset_id, _)| *dataset_id)
+                    .filter(|dataset_id| !deleted.contains(dataset_id))
+                    .collect();
+                affected.into_iter().map(Some).collect()
+            } else {
+                vec![None]
+            };
+            for scope in sweep_scopes {
+                let sweeps = async {
+                    let nodes = self.sweep_orphan_nodes().await?;
+                    let edge_types = self.sweep_orphan_edge_types().await?;
+                    Ok::<_, DeleteError>((nodes, edge_types))
+                };
+                let ((oe, oet, sweep_warnings), (oedge, edge_sweep_warnings)) = match scope {
+                    Some(dataset_id) => with_dataset(dataset_id, sweeps).await?,
+                    None => sweeps.await?,
+                };
+                deleted_orphan_entities += oe;
+                deleted_orphan_entity_types += oet;
+                warnings.extend(sweep_warnings);
+                deleted_orphan_edge_types += oedge;
+                warnings.extend(edge_sweep_warnings);
+            }
         }
 
         // ------------------------------------------------------------------
@@ -1312,6 +1361,13 @@ impl DeleteService {
     /// Note: provenance counts are 0 because the dataset cascade in phase 2
     /// handles provenance row deletion.
     async fn cleanup_all(&self) -> Result<(usize, usize, usize, usize, Vec<String>), DeleteError> {
+        if let Some(storage) = &self.dataset_storage {
+            // Every dataset's own databases; there is no shared store to wipe.
+            storage.drop_all_dataset_storage().await.map_err(|e| {
+                DeleteError::GraphCleanup(format!("Failed to drop per-dataset storage: {e}"))
+            })?;
+            return Ok((0, 0, 0, 0, Vec::new()));
+        }
         let mut warnings = Vec::new();
         let graph_nodes = 0usize;
         let vector_points = 0usize;
@@ -1440,25 +1496,39 @@ impl DeleteService {
         let prov_node_count = nodes.len();
         let prov_edge_count = edges.len();
 
-        if nodes.is_empty() && edges.is_empty() {
-            return Ok((0, 0, 0, 0, warnings));
+        if let Some(storage) = &self.dataset_storage {
+            // The dataset's own databases go whole: nothing in them belongs to
+            // another dataset. Done even when the ledger is empty, so a
+            // provisioned-but-never-cognified dataset leaves nothing behind.
+            storage.drop_dataset_storage(dataset_id).await.map_err(|e| {
+                DeleteError::GraphCleanup(format!(
+                    "Failed to drop the storage of dataset {dataset_id}: {e}"
+                ))
+            })?;
+            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+            graph_node_count += gn;
+            vector_point_count += vp;
+        } else {
+            if nodes.is_empty() && edges.is_empty() {
+                return Ok((0, 0, 0, 0, warnings));
+            }
+
+            // --- Graph cleanup ---
+            let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
+            graph_node_count += gn;
+            warnings.extend(gw);
+
+            // --- Vector cleanup ---
+            let (vp, vw) = delete_vector_artifacts(
+                self.vector_db.as_ref(),
+                &nodes,
+                &edges,
+                &unchecked_edge_type_vector_ids(&edges),
+            )
+            .await?;
+            vector_point_count += vp;
+            warnings.extend(vw);
         }
-
-        // --- Graph cleanup ---
-        let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
-        graph_node_count += gn;
-        warnings.extend(gw);
-
-        // --- Vector cleanup ---
-        let (vp, vw) = delete_vector_artifacts(
-            self.vector_db.as_ref(),
-            &nodes,
-            &edges,
-            &unchecked_edge_type_vector_ids(&edges),
-        )
-        .await?;
-        vector_point_count += vp;
-        warnings.extend(vw);
 
         // --- Provenance cleanup ---
         // Note: for dataset deletion, the FK CASCADE on dataset_id will handle
@@ -1499,6 +1569,16 @@ impl DeleteService {
     /// provenance rows for this `(data_id, dataset_id)` pair, not just the
     /// unique ones used for graph/vector cleanup.
     async fn cleanup_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+    ) -> Result<(usize, usize, usize, usize, Vec<String>), DeleteError> {
+        // In the dataset's scope: under per-dataset storage the item's
+        // artifacts live in that dataset's own databases.
+        with_dataset(dataset_id, self.cleanup_data_in_scope(data_id, dataset_id)).await
+    }
+
+    async fn cleanup_data_in_scope(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
@@ -1888,25 +1968,9 @@ impl DeleteService {
 
             prov_nodes += nodes.len();
             prov_edges += edges.len();
-
-            // Unique node slugs = graph nodes to delete
-            let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
-            graph_nodes += unique_slugs.len();
-
-            // Count vector points from indexed_fields
-            for node in &nodes {
-                let fields = parse_indexed_fields(&node.indexed_fields);
-                vector_points += fields.len();
-            }
-            // Each edge contributes a Triplet point, plus an EdgeType point
-            // only when it has a retrieval text — the same predicate
-            // `delete_vector_artifacts` uses, so the preview cannot promise a
-            // point the execution will not delete.
-            vector_points += edges.len()
-                + edges
-                    .iter()
-                    .filter(|edge| edge_type_vector_id(edge).is_some())
-                    .count();
+            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+            graph_nodes += gn;
+            vector_points += vp;
         }
 
         Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
@@ -2406,6 +2470,28 @@ pub(crate) async fn delete_graph_artifacts(
 /// passed in separately as `edge_type_ids`, because their id is *many*-to-one
 /// over edges: deciding which of them a caller may delete needs an exclusivity
 /// check over the retrieval text, which is the caller's to make.
+/// The graph nodes and vector points a dataset's ledger rows account for:
+/// what a dataset delete reports, previewed or executed.
+fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, usize) {
+    // Unique node slugs = graph nodes to delete
+    let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
+    // Count vector points from indexed_fields
+    let node_points: usize = nodes
+        .iter()
+        .map(|node| parse_indexed_fields(&node.indexed_fields).len())
+        .sum();
+    // Each edge contributes a Triplet point, plus an EdgeType point only when
+    // it has a retrieval text — the same predicate `delete_vector_artifacts`
+    // uses, so the preview cannot promise a point the execution will not
+    // delete.
+    let edge_points = edges.len()
+        + edges
+            .iter()
+            .filter(|edge| edge_type_vector_id(edge).is_some())
+            .count();
+    (unique_slugs.len(), node_points + edge_points)
+}
+
 pub(crate) async fn delete_vector_artifacts(
     vector_db: Option<&Arc<dyn VectorDB>>,
     nodes: &[GraphNode],

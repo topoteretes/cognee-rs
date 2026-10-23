@@ -28,7 +28,7 @@ pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{ImproveParams, ImproveResult, improve};
 pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
-pub use prune::{PruneResult, PruneTarget, prune_data, prune_system};
+pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{
     RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,
     normalize_scope, recall,

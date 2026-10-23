@@ -145,8 +145,20 @@ pub(crate) async fn build_delete_service(
 
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
 
-    Ok(DeleteService::new(storage, database as Arc<dyn DeleteDb>)
+    let service = DeleteService::new(storage, database as Arc<dyn DeleteDb>)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
-        .with_pipeline_run_repo(pipeline_run_repo))
+        .with_pipeline_run_repo(pipeline_run_repo);
+    // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
+    // dataset drops its own databases.
+    Ok(
+        match cm
+            .dataset_storage()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?
+        {
+            Some(dataset_storage) => service.with_dataset_storage(dataset_storage),
+            None => service,
+        },
+    )
 }

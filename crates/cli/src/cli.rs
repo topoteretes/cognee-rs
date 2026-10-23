@@ -204,6 +204,18 @@ pub struct VisualizeArgs {
     /// Destination HTML file. If omitted, writes to `~/graph_visualization.html`.
     #[arg(long = "output", short = 'o')]
     pub output: Option<String>,
+
+    /// Dataset to render, by name or id; defaults to `default_dataset_name`
+    /// (Python's `visualize_graph(dataset=DEFAULT_DATASET_NAME)`). With
+    /// per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the graph is that
+    /// dataset's own and the dataset must exist; over the shared store every
+    /// dataset's graph is rendered, as before.
+    #[arg(long = "dataset", short = 'd')]
+    pub dataset: Option<String>,
+
+    /// Tenant the dataset belongs to (strict tenant equality, as for `add`).
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
 }
 
 /// Report, and optionally clear, what a killed run left behind on a dataset.

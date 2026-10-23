@@ -21,6 +21,7 @@ pub mod failing_delete_db;
 pub mod mock_acl_db;
 pub mod mock_llm;
 pub mod mock_transcriber;
+pub mod per_dataset;
 pub mod span_capture;
 
 use std::{path::PathBuf, sync::Arc};
@@ -37,6 +38,7 @@ pub use failing_delete_db::FailingDeleteDb;
 pub use mock_acl_db::{GrantGate, MockAclDb};
 pub use mock_llm::MockLlm;
 pub use mock_transcriber::MockTranscriber;
+pub use per_dataset::PerDatasetMocks;
 pub use span_capture::{CapturedSpan, SpanCapture, SpanCaptureGuard};
 
 /// Resolve the directory used for local ONNX embedding artifacts in E2E tests.

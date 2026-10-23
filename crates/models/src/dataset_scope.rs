@@ -54,6 +54,16 @@ pub fn current_dataset() -> Option<Uuid> {
     None
 }
 
+/// `future` in `dataset_id`'s scope when there is one, unscoped otherwise —
+/// for an operation whose dataset is optional (an ad-hoc memify, an improve
+/// whose dataset does not exist yet).
+pub async fn maybe_with_dataset<F: Future>(dataset_id: Option<Uuid>, future: F) -> F::Output {
+    match dataset_id {
+        Some(id) => with_dataset(id, future).await,
+        None => future.await,
+    }
+}
+
 /// `future` in the caller's dataset scope, for a future that will run in
 /// another task (`tokio::spawn`), which does not inherit it. Outside a scope
 /// the future is returned to run unscoped.

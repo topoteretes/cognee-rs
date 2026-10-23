@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use cognee_database::{DatasetDatabaseRecord, RelationalDb};
+use cognee_database::{DatabaseError, DatasetDatabaseRecord, DatasetStorageLifecycle, RelationalDb};
 use cognee_graph::{
     DatasetGraphResolver, DatasetRoutedGraphDB, GraphDBError, GraphDBResult, GraphDBTrait,
 };
@@ -642,6 +642,21 @@ fn graph_error(error: ComponentError) -> GraphDBError {
 
 fn vector_error(error: ComponentError) -> VectorDBError {
     VectorDBError::StorageError(format!("per-dataset storage: {error}"))
+}
+
+#[async_trait]
+impl DatasetStorageLifecycle for DatasetStorage {
+    async fn drop_dataset_storage(&self, dataset_id: Uuid) -> Result<bool, DatabaseError> {
+        self.delete_dataset_storage(dataset_id)
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("per-dataset storage: {e}")))
+    }
+
+    async fn drop_all_dataset_storage(&self) -> Result<usize, DatabaseError> {
+        self.prune()
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("per-dataset storage: {e}")))
+    }
 }
 
 #[async_trait]

@@ -23,12 +23,15 @@ use crate::{GraphDBResult, GraphDBTrait};
 ///
 /// # Python parity
 ///
-/// The Rust port intentionally omits Python's `set_database_global_context_variables`
-/// branch — the Rust `GraphDBTrait` instance is already scoped to the caller's
-/// owner/tenant by construction (per `tenants.md §3`). The `dataset_id` and
-/// `user_id` parameters are accepted for API parity with the Python helper but
-/// are currently unused in the read path (matching how Python's helper also
-/// relies on the global context, not the parameters, to scope the query).
+/// Python reads the graph inside `set_database_global_context_variables(
+/// dataset_id, user_id)`. Here the read runs in `dataset_id`'s
+/// [`cognee_models::dataset_scope`]: under per-dataset storage
+/// (`ENABLE_BACKEND_ACCESS_CONTROL`) `graph_db` then reaches that dataset's own
+/// graph, so the snapshot is the dataset's. Over a shared store the scope
+/// changes nothing and the snapshot is the whole store, as Python's is without
+/// backend access control. `user_id` is accepted for API parity; Python only
+/// uses it for the context's optional permission check, which callers here do
+/// before calling.
 ///
 /// # Shape
 ///
@@ -46,9 +49,10 @@ pub async fn get_formatted_graph_data(
     dataset_id: Uuid,
     user_id: Uuid,
 ) -> GraphDBResult<serde_json::Value> {
-    let _ = (dataset_id, user_id);
+    let _ = user_id;
 
-    let (nodes, edges) = graph_db.get_graph_data().await?;
+    let (nodes, edges) =
+        cognee_models::dataset_scope::with_dataset(dataset_id, graph_db.get_graph_data()).await?;
 
     let node_values: Vec<serde_json::Value> = nodes
         .into_iter()
