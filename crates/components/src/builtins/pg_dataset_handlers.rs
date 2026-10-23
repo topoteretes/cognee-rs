@@ -494,21 +494,22 @@ mod tests {
 /// and that a shared-schema dataset never touches `public`. Needs
 /// `PGVECTOR_TEST_URL=postgres://<user>:<password>@<host>:<port>/<db>` with
 /// a role that may `CREATE DATABASE`; skipped when unset.
-#[cfg(test)]
+///
+/// Needs both Postgres backends and both relational drivers (SQLite rows for
+/// the dedicated handlers, Postgres rows for the shared ones).
+#[cfg(all(
+    test,
+    feature = "pgvector",
+    feature = "pggraph",
+    feature = "postgres",
+    feature = "sqlite"
+))]
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
 mod live_tests {
-    // Both Postgres backends, and both relational drivers (SQLite rows for
-    // the dedicated handlers, Postgres rows for the shared ones).
-    #![cfg(all(
-        feature = "pgvector",
-        feature = "pggraph",
-        feature = "postgres",
-        feature = "sqlite"
-    ))]
 
     use std::sync::Arc;
 
