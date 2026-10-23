@@ -241,10 +241,11 @@ pub(crate) async fn create_database_if_not_exists(
 
 /// Drop database `name` from `server`'s cluster if it exists.
 ///
-/// Nothing is terminated: the caller closes its own pools to the database
-/// first (`DatasetStorage` evicts a dataset's engines before its handlers run),
-/// and Postgres itself waits a few seconds for closing backends to exit. A
-/// connection another process still holds makes this fail rather than be cut.
+/// The caller closes its own pools to the database first (`DatasetStorage`
+/// evicts a dataset's engines before its handlers run); sessions another
+/// process still holds are terminated (`WITH (FORCE)`), as Python's handler
+/// terminates them before dropping. A dataset being deleted is not one anyone
+/// may keep using.
 pub(crate) async fn drop_database_if_exists(
     server: &Url,
     name: &str,
@@ -253,9 +254,16 @@ pub(crate) async fn drop_database_if_exists(
     let admin = database_url(server, MAINTENANCE_DATABASE, None, None)?;
     let db = connect(&admin).await?;
     let failed = sql_error("DROP DATABASE", name);
-    db.execute_unprepared(&format!("DROP DATABASE IF EXISTS {}", quote_ident(name)))
-        .await
-        .map_err(&failed)?;
+    // `WITH (FORCE)` (Postgres 13+) terminates the sessions still connected:
+    // another process's engine pool would otherwise fail the drop with "being
+    // accessed by other users". Python terminates them with
+    // `pg_terminate_backend` before dropping, to the same effect.
+    db.execute_unprepared(&format!(
+        "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+        quote_ident(name)
+    ))
+    .await
+    .map_err(&failed)?;
     db.close().await.map_err(&failed)
 }
 

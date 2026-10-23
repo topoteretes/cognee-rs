@@ -513,10 +513,10 @@ mod live_tests {
     use std::sync::Arc;
 
     use cognee_database::{IngestDb, RelationalDb};
-    use cognee_graph::{DatasetGraphResolver, GraphDBTrait};
+    use cognee_graph::GraphDBTrait;
     use cognee_models::Dataset;
     use cognee_models::dataset_scope::with_dataset;
-    use cognee_vector::{DatasetVectorResolver, VectorDB, VectorPoint};
+    use cognee_vector::{VectorDB, VectorPoint};
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
     use serde_json::json;
 
@@ -756,18 +756,10 @@ mod live_tests {
         g1.add_node_raw(node("shared")).await.unwrap();
         assert!(g2.has_node("shared").await.unwrap());
 
-        // Dropping a database needs every pool to it closed. The second
-        // storage is another process's as far as the server can tell, and
-        // nothing terminates its backends (`pg_admin::drop_database_if_exists`),
-        // so the drop fails until that process lets go.
-        assert!(first.delete_dataset_storage(id).await.is_err());
-        for graph in second.cached_graphs() {
-            graph.close().await.unwrap();
-        }
-        for vector in second.cached_vectors() {
-            vector.close().await.unwrap();
-        }
-        assert_eq!(first.prune().await.unwrap(), 1);
+        // The second storage is another process's as far as the server can
+        // tell, and still holds pools to the database. Deleting the dataset
+        // terminates them (`DROP DATABASE … WITH (FORCE)`), as Python does.
+        assert!(first.delete_dataset_storage(id).await.unwrap());
         assert!(!database_exists(&server, &id.to_string()).await);
     }
 

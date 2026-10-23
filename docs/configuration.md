@@ -1604,8 +1604,9 @@ therefore need a Postgres relational database. `CREATE DATABASE` runs on the
 server's `postgres` maintenance database. Creation is idempotent and
 serialized on the advisory locks Python takes, so concurrent first uses (in
 any process) converge on one database. Deleting a dataset drops its database
-(`DROP DATABASE`, which fails while another process still holds a connection
-to it; nothing is terminated) or its schema (`DROP SCHEMA … CASCADE`).
+(`DROP DATABASE … WITH (FORCE)`, Postgres 13+, which terminates sessions
+other processes still hold on it, as Python does) or its schema
+(`DROP SCHEMA … CASCADE`).
 
 `ConfigManager::set_application_access_control` and
 `HandleState::with_application_access_control()` are no longer needed for the
