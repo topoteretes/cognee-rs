@@ -1,10 +1,11 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphNode, NeighborhoodScope};
 use cognee_models::{INTERNAL_PROPERTY, marks_internal};
-use cognee_vector::{SearchResult, VectorDB};
+use cognee_vector::{SearchResult, VectorDB, VectorDBError};
 use serde_json::Value;
 use tracing::debug;
 use uuid::Uuid;
@@ -203,37 +204,28 @@ pub async fn brute_force_triplet_search(
     let mut hits = QueryHits::default();
     let mut node_dataset_ids = HashMap::<String, String>::new();
 
-    // The per-collection searches are independent: run them concurrently
-    // (one pooled connection each), then merge in the fixed collection order
-    // below so the outcome — including first-wins `node_dataset_ids` — is
-    // exactly the sequential one.
-    let searches = SEARCH_COLLECTIONS.map(|(data_type, field_name)| {
-        let query_vector = &query_vector;
-        async move {
-            if !vector_db.has_collection(data_type, field_name).await? {
-                debug!("vector collection {data_type}/{field_name} does not exist — skipping");
-                return Ok::<_, SearchError>(None);
-            }
-            let results = vector_db
-                .search_similar(
-                    data_type,
-                    field_name,
-                    query_vector,
-                    config.wide_search_top_k,
-                )
-                .await?;
-            Ok(Some(results))
-        }
-    });
-    let searched = futures::future::join_all(searches).await;
+    let searched = search_collections(
+        vector_db,
+        &SEARCH_COLLECTIONS,
+        |data_type, field_name| async {
+            Ok(Some(
+                vector_db
+                    .search_similar(
+                        data_type,
+                        field_name,
+                        &query_vector,
+                        config.wide_search_top_k,
+                    )
+                    .await?,
+            ))
+        },
+    )
+    .await?;
     // The node collections that exist, in search order: the neighborhood
     // projection re-scores its expansion against exactly these (Python
     // iterates `vector_search.node_distances`).
     let mut node_collections: Vec<(&str, &str)> = Vec::new();
-    for ((data_type, field_name), results) in SEARCH_COLLECTIONS.into_iter().zip(searched) {
-        let Some(results) = results? else {
-            continue;
-        };
+    for (data_type, field_name, results) in searched {
         if !is_edge_type_collection(data_type, field_name) {
             node_collections.push((data_type, field_name));
         }
@@ -354,7 +346,17 @@ pub async fn brute_force_triplet_search(
 /// * `wide_search_top_k` and `node_name` play no part in the vector search,
 ///   and `neighborhood_depth` yields no triplets: the projection needs seed
 ///   ids, which batch mode never has (Python's `get_memory_fragment` swallows
-///   the resulting `ValueError`).
+///   the resulting `ValueError`);
+/// * `neighbor_cap` (`search.triplet_neighbor_cap`) does not apply either:
+///   it bounds a seed's neighbourhood, and batch mode loads the whole graph
+///   (Python has no such cap);
+/// * a collection that disappears while the batch runs counts as empty, as
+///   Python's `_search_batch_collection` treats `CollectionNotFoundError`.
+///
+/// One deliberate saving over Python: `Triplet_text` is not searched. Its point
+/// ids are never graph node ids, so its rows cannot change any ranking, and an
+/// unlimited read of it — about one row per edge once memify has run — per
+/// query would be pure I/O.
 ///
 /// That makes it far more expensive than a single search on a large store.
 /// Callers with one query should use [`brute_force_triplet_search`], as
@@ -379,16 +381,7 @@ pub async fn brute_force_triplet_search_batch(
     graph_db: &dyn GraphDBTrait,
     config: &GraphRetrievalConfig,
 ) -> Result<Vec<Vec<RankedGraphEdge>>, SearchError> {
-    if queries.is_empty() {
-        return Err(SearchError::InvalidInput(
-            "query_batch must be a non-empty list of strings.".to_string(),
-        ));
-    }
-    if queries.iter().any(|query| query.trim().is_empty()) {
-        return Err(SearchError::InvalidInput(
-            "All items in query_batch must be non-empty strings.".to_string(),
-        ));
-    }
+    validate_query_batch(queries)?;
     validate_config(config)?;
     let empty = || vec![Vec::new(); queries.len()];
 
@@ -402,40 +395,59 @@ pub async fn brute_force_triplet_search_batch(
         return Ok(empty());
     }
 
-    // Each query through `embed_query`, not one `embed` call: an engine may
-    // shape queries differently from passages (BGE's query instruction).
-    let query_vectors = futures::future::try_join_all(
-        queries
-            .iter()
-            .map(|query| embed_query(embedding_engine, query)),
-    )
-    .await?;
+    // One request for the whole batch (Python embeds its `query_texts` at
+    // once), each query shaped as `embed_query` shapes it.
+    let query_vectors = embedding_engine.embed_queries(queries).await?;
+    if query_vectors.len() != queries.len() {
+        return Err(SearchError::EmbeddingError(format!(
+            "embedding engine returned {} vectors for {} queries",
+            query_vectors.len(),
+            queries.len()
+        )));
+    }
 
-    let searches = SEARCH_COLLECTIONS.map(|(data_type, field_name)| {
+    let collections: Vec<(&'static str, &'static str)> = SEARCH_COLLECTIONS
+        .into_iter()
+        .filter(|(data_type, _)| *data_type != "Triplet")
+        .collect();
+    let searched = search_collections(vector_db, &collections, |data_type, field_name| {
         let query_vectors = &query_vectors;
         async move {
-            if !vector_db.has_collection(data_type, field_name).await? {
-                debug!("vector collection {data_type}/{field_name} does not exist — skipping");
-                return Ok::<_, SearchError>(None);
+            let results = async {
+                let size = vector_db.collection_size(data_type, field_name).await?;
+                if size == 0 {
+                    return Ok(Vec::new());
+                }
+                vector_db
+                    .batch_search_similar(data_type, field_name, query_vectors, size)
+                    .await
             }
-            let size = vector_db.collection_size(data_type, field_name).await?;
-            if size == 0 {
-                return Ok(None);
+            .await;
+            match results {
+                // Dropped since `has_collection` saw it: empty, as Python's
+                // `_search_batch_collection` answers a `CollectionNotFoundError`.
+                Err(VectorDBError::CollectionNotFound(_)) => Ok(None),
+                Err(error) => Err(error.into()),
+                Ok(results) if results.is_empty() => Ok(None),
+                // One list per query, or the distances would land on the wrong
+                // query — `batch_search_similar` is an overridable method.
+                Ok(results) if results.len() != query_vectors.len() => {
+                    Err(SearchError::VectorError(format!(
+                        "batch_search_similar on {data_type}/{field_name} returned {} result \
+                         lists for {} queries",
+                        results.len(),
+                        query_vectors.len()
+                    )))
+                }
+                Ok(results) => Ok(Some(results)),
             }
-            let results = vector_db
-                .batch_search_similar(data_type, field_name, query_vectors, size)
-                .await?;
-            Ok(Some(results))
         }
-    });
-    let searched = futures::future::join_all(searches).await;
+    })
+    .await?;
 
     let mut hits: Vec<QueryHits> = (0..queries.len()).map(|_| QueryHits::default()).collect();
     let mut node_dataset_ids = HashMap::<String, String>::new();
-    for ((data_type, field_name), results) in SEARCH_COLLECTIONS.into_iter().zip(searched) {
-        let Some(per_query) = results? else {
-            continue;
-        };
+    for (data_type, field_name, per_query) in searched {
         for (query_hits, results) in hits.iter_mut().zip(per_query) {
             query_hits.absorb(data_type, field_name, results, &mut node_dataset_ids);
         }
@@ -470,6 +482,57 @@ pub async fn brute_force_triplet_search_batch(
         ranked.iter().map(Vec::len).sum::<usize>() as u64,
     );
     Ok(ranked)
+}
+
+/// Python's `validate_queries` for a batch: non-empty, and no blank query.
+pub(crate) fn validate_query_batch(queries: &[&str]) -> Result<(), SearchError> {
+    if queries.is_empty() {
+        return Err(SearchError::InvalidInput(
+            "query_batch must be a non-empty list of strings.".to_string(),
+        ));
+    }
+    if queries.iter().any(|query| query.trim().is_empty()) {
+        return Err(SearchError::InvalidInput(
+            "All items in query_batch must be non-empty strings.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Search every collection of `collections` that exists, concurrently (one
+/// pooled connection each), and return what `search` found in collection
+/// order — so merging the results is exactly the sequential outcome,
+/// including first-wins dataset ids. A collection that does not exist, or for
+/// which `search` answers `None`, is left out.
+async fn search_collections<T, F, Fut>(
+    vector_db: &dyn VectorDB,
+    collections: &[(&'static str, &'static str)],
+    search: F,
+) -> Result<Vec<(&'static str, &'static str, T)>, SearchError>
+where
+    F: Fn(&'static str, &'static str) -> Fut,
+    Fut: Future<Output = Result<Option<T>, SearchError>>,
+{
+    let searches = collections.iter().map(|&(data_type, field_name)| {
+        let search = &search;
+        async move {
+            if !vector_db.has_collection(data_type, field_name).await? {
+                debug!("vector collection {data_type}/{field_name} does not exist — skipping");
+                return Ok(None);
+            }
+            search(data_type, field_name).await
+        }
+    });
+    let mut found = Vec::with_capacity(collections.len());
+    for (&(data_type, field_name), result) in collections
+        .iter()
+        .zip(futures::future::join_all(searches).await)
+    {
+        if let Some(results) = result? {
+            found.push((data_type, field_name, results));
+        }
+    }
+    Ok(found)
 }
 
 /// The configuration checks both search modes share.

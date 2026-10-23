@@ -362,17 +362,9 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
     ) -> Result<SearchContext, SearchError> {
         // Scoped here, not only by the orchestrator: `get_completion` calls
         // this again for follow-up retrievals the orchestrator never sees.
-        // Python's chain-of-thought and context-extension retrievers fetch
-        // through `get_triplets_batch`, which runs a lone query as a
-        // single-query search.
-        let context = self
-            .core
-            .search_batch(&[query], params)
-            .await?
-            .pop()
-            .unwrap_or_default();
         Ok(crate::orchestration::filter_context_to_params(
-            context, params,
+            self.core.search(query, params).await?,
+            params,
         ))
     }
 
@@ -629,17 +621,9 @@ impl SearchRetriever for GraphCompletionCotRetriever {
     ) -> Result<SearchContext, SearchError> {
         // Scoped here, not only by the orchestrator: `get_completion` calls
         // this again for follow-up retrievals the orchestrator never sees.
-        // Python's chain-of-thought and context-extension retrievers fetch
-        // through `get_triplets_batch`, which runs a lone query as a
-        // single-query search.
-        let context = self
-            .core
-            .search_batch(&[query], params)
-            .await?
-            .pop()
-            .unwrap_or_default();
         Ok(crate::orchestration::filter_context_to_params(
-            context, params,
+            self.core.search(query, params).await?,
+            params,
         ))
     }
 

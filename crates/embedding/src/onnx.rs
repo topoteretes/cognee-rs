@@ -348,6 +348,22 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         }
     }
 
+    /// Every query gets `config.query_instruction`, as in
+    /// [`EmbeddingEngine::embed_query`], and the batch is one `embed` call.
+    async fn embed_queries(&self, queries: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        match self.config.query_instruction.as_deref() {
+            Some(instruction) if !instruction.is_empty() => {
+                let prefixed: Vec<String> = queries
+                    .iter()
+                    .map(|query| format!("{instruction}{query}"))
+                    .collect();
+                let prefixed: Vec<&str> = prefixed.iter().map(String::as_str).collect();
+                self.embed(&prefixed).await
+            }
+            _ => self.embed(queries).await,
+        }
+    }
+
     fn dimension(&self) -> usize {
         self.config.dimensions
     }
@@ -447,6 +463,32 @@ mod tests {
             cos(&as_query, &plain) < 0.999,
             "embed_query must not equal the unprefixed embedding"
         );
+    }
+
+    /// The batch path shapes every query exactly as `embed_query` does.
+    #[tokio::test]
+    async fn embed_queries_matches_embed_query_per_query() {
+        let model = "../../target/models/BGE-Small-v1.5-model_quantized.onnx";
+        let tok = "../../target/models/bge-small-tokenizer.json";
+        if !std::path::Path::new(model).exists() || !std::path::Path::new(tok).exists() {
+            return; // model not available in this environment — skip
+        }
+        let engine = OnnxEmbeddingEngine::new(OnnxEmbeddingConfig {
+            model_path: model.into(),
+            tokenizer_path: tok.into(),
+            batch_size: 4,
+            ..Default::default()
+        })
+        .expect("engine creation");
+
+        let queries = ["Who is Alice", "Where does Bob work"];
+        let batch = engine.embed_queries(&queries).await.expect("embed_queries");
+        assert_eq!(batch.len(), 2);
+        for (query, vector) in queries.iter().zip(&batch) {
+            let single = engine.embed_query(query).await.expect("embed_query")[0].clone();
+            let cos: f32 = vector.iter().zip(&single).map(|(x, y)| x * y).sum();
+            assert!(cos > 0.999, "{query}: batch {cos} vs embed_query");
+        }
     }
 
     #[test]

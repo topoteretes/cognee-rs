@@ -1342,6 +1342,11 @@ measures 0.985 / worst 0.82. The latency it buys is small on a uniform corpus
 `graph_completion` search went from 332 ms to 76 ms by document 11. Treat it as
 a knob for a corpus with known hubs, measured on that corpus, not as a default.
 
+The cap bounds single-query graph search only. Batch graph search
+(`brute_force_triplet_search_batch`, several queries at once, as the
+decomposition retriever issues them) loads the whole graph, as Python's batch
+mode does, and the cap does not apply to it.
+
 `PgGraphAdapter` applies the cap in SQL; every other backend gets the same
 semantics from `GraphDBTrait::get_neighborhood_scoped`'s client-side default,
 and `test_get_neighborhood_scoped_cap_is_deterministic` pins the two to the

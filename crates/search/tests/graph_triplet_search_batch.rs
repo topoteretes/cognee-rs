@@ -10,6 +10,8 @@
 //! Run with:
 //!   cargo test --package cognee-search --test graph_triplet_search_batch -- --nocapture
 
+use std::sync::Mutex;
+
 use async_trait::async_trait;
 use cognee_embedding::{EmbeddingEngine, EmbeddingResult};
 use cognee_graph::{GraphDBTrait, MockGraphDB};
@@ -18,7 +20,9 @@ use cognee_search::graph_retrieval::{
     brute_force_triplet_search_batch,
 };
 use cognee_search::types::SearchError;
-use cognee_vector::{MockVectorDB, VectorDB, VectorPoint};
+use cognee_vector::{
+    MockVectorDB, SearchResult, VectorDB, VectorDBError, VectorDBResult, VectorPoint,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -48,6 +52,130 @@ impl EmbeddingEngine for KeyedEmbedding {
     fn max_sequence_length(&self) -> usize {
         128
     }
+}
+
+/// Like [`KeyedEmbedding`], but only through `embed_queries`: the batch must
+/// embed its queries in one call rather than one `embed_query` each.
+struct BatchOnlyEmbedding;
+
+#[async_trait]
+impl EmbeddingEngine for BatchOnlyEmbedding {
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        KeyedEmbedding.embed(texts).await
+    }
+    async fn embed_query(&self, _query: &str) -> EmbeddingResult<Vec<Vec<f32>>> {
+        panic!("batch search must embed through embed_queries");
+    }
+    async fn embed_queries(&self, queries: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        KeyedEmbedding.embed(queries).await
+    }
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn batch_size(&self) -> usize {
+        8
+    }
+    fn max_sequence_length(&self) -> usize {
+        128
+    }
+}
+
+/// How [`FaultyVectorDb`] misbehaves.
+#[derive(Clone, Copy, PartialEq)]
+enum Fault {
+    None,
+    /// `batch_search_similar` returns one result list fewer than queries.
+    ShortBatch,
+    /// `Entity` is dropped after `has_collection`: its size reads as missing.
+    DroppedMidSearch,
+}
+
+/// A [`MockVectorDB`] that records which collections were searched and can
+/// misbehave the way an external adapter or a concurrent prune might.
+struct FaultyVectorDb {
+    inner: MockVectorDB,
+    fault: Fault,
+    searched: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl VectorDB for FaultyVectorDb {
+    async fn create_collection(&self, d: &str, f: &str, dim: usize) -> VectorDBResult<()> {
+        self.inner.create_collection(d, f, dim).await
+    }
+    async fn has_collection(&self, d: &str, f: &str) -> VectorDBResult<bool> {
+        self.inner.has_collection(d, f).await
+    }
+    async fn index_points(&self, d: &str, f: &str, points: &[VectorPoint]) -> VectorDBResult<()> {
+        self.inner.index_points(d, f, points).await
+    }
+    async fn search_similar(
+        &self,
+        d: &str,
+        f: &str,
+        query_vector: &[f32],
+        top_k: usize,
+    ) -> VectorDBResult<Vec<SearchResult>> {
+        self.inner.search_similar(d, f, query_vector, top_k).await
+    }
+    async fn batch_search_similar(
+        &self,
+        d: &str,
+        f: &str,
+        query_vectors: &[Vec<f32>],
+        top_k: usize,
+    ) -> VectorDBResult<Vec<Vec<SearchResult>>> {
+        self.searched
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push(format!("{d}_{f}"));
+        let mut results = self
+            .inner
+            .batch_search_similar(d, f, query_vectors, top_k)
+            .await?;
+        if self.fault == Fault::ShortBatch {
+            results.pop();
+        }
+        Ok(results)
+    }
+    async fn delete_collection(&self, d: &str, f: &str) -> VectorDBResult<()> {
+        self.inner.delete_collection(d, f).await
+    }
+    async fn retrieve(&self, d: &str, f: &str, ids: &[Uuid]) -> VectorDBResult<Vec<SearchResult>> {
+        self.inner.retrieve(d, f, ids).await
+    }
+    async fn collection_size(&self, d: &str, f: &str) -> VectorDBResult<usize> {
+        if self.fault == Fault::DroppedMidSearch && d == "Entity" {
+            return Err(VectorDBError::CollectionNotFound(format!("{d}_{f}")));
+        }
+        self.inner.collection_size(d, f).await
+    }
+}
+
+/// The fixture's vectors plus a populated `Triplet_text` and `EdgeType` row,
+/// wrapped to record and misbehave.
+async fn faulty(fault: Fault) -> (FaultyVectorDb, MockGraphDB) {
+    let (inner, graph) = fixture(true).await;
+    for (data_type, field_name) in [("Triplet", "text"), ("EdgeType", "relationship_name")] {
+        inner
+            .create_collection(data_type, field_name, 2)
+            .await
+            .unwrap();
+        inner
+            .index_points(
+                data_type,
+                field_name,
+                &[VectorPoint::new(Uuid::new_v4(), vec![1.0, 0.0])],
+            )
+            .await
+            .unwrap();
+    }
+    let vector_db = FaultyVectorDb {
+        inner,
+        fault,
+        searched: Mutex::new(Vec::new()),
+    };
+    (vector_db, graph)
 }
 
 /// The default 6.5 penalty scaled by `2 - 0.5` (the default importance).
@@ -260,5 +388,84 @@ async fn no_vector_results_yields_empty_lists() {
         graph.get_call_log().is_empty(),
         "{:?}",
         graph.get_call_log()
+    );
+}
+
+/// The batch embeds its queries in one `embed_queries` call, and never reads
+/// `Triplet_text`: its ids are never graph nodes, so an unlimited read of it
+/// could not change any ranking.
+#[tokio::test]
+async fn embeds_once_and_skips_the_triplet_collection() {
+    let (vector_db, graph) = faulty(Fault::None).await;
+    let ranked = brute_force_triplet_search_batch(
+        &["x", "y"],
+        &vector_db,
+        &BatchOnlyEmbedding,
+        &graph,
+        &config(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ranked[0][0].relationship_name, "to_a");
+    assert_eq!(ranked[1][0].relationship_name, "to_b");
+
+    let searched = vector_db.searched.lock().unwrap().clone(); // lock poison is unrecoverable
+    assert!(
+        searched.contains(&"Entity_name".to_string()),
+        "{searched:?}"
+    );
+    assert!(
+        searched.contains(&"EdgeType_relationship_name".to_string()),
+        "{searched:?}"
+    );
+    assert!(
+        !searched.contains(&"Triplet_text".to_string()),
+        "{searched:?}"
+    );
+}
+
+/// One result list per query, or the distances would shift onto the wrong
+/// query: a backend that returns fewer is an error, not a silent mismatch.
+#[tokio::test]
+async fn a_short_batch_result_is_an_error() {
+    let (vector_db, graph) = faulty(Fault::ShortBatch).await;
+    let error = brute_force_triplet_search_batch(
+        &["x", "y"],
+        &vector_db,
+        &KeyedEmbedding,
+        &graph,
+        &config(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, SearchError::VectorError(message) if message.contains("1 result lists for 2 queries")),
+        "got {error:?}"
+    );
+}
+
+/// A collection dropped after `has_collection` counts as empty, as Python's
+/// `_search_batch_collection` answers a `CollectionNotFoundError`: the batch
+/// still ranks, every entity at the penalty.
+#[tokio::test]
+async fn a_collection_dropped_mid_search_counts_as_empty() {
+    let (vector_db, graph) = faulty(Fault::DroppedMidSearch).await;
+    let ranked = brute_force_triplet_search_batch(
+        &["x", "y"],
+        &vector_db,
+        &KeyedEmbedding,
+        &graph,
+        &config(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ranked.len(), 2);
+    assert!(
+        ranked
+            .iter()
+            .flatten()
+            .filter(|edge| edge.relationship_name != "e_f")
+            .all(|edge| (edge.score - 3.0 * SCALED_PENALTY).abs() < 1e-4),
+        "{ranked:?}"
     );
 }

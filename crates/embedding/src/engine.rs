@@ -1,4 +1,4 @@
-use crate::error::EmbeddingResult;
+use crate::error::{EmbeddingError, EmbeddingResult};
 use async_trait::async_trait;
 
 /// Core trait for text embedding engines
@@ -48,6 +48,34 @@ pub trait EmbeddingEngine: Send + Sync {
         self.embed(&[query]).await
     }
 
+    /// Embed several **queries**: one vector per query, in order, each shaped
+    /// exactly as [`EmbeddingEngine::embed_query`] shapes it.
+    ///
+    /// The default calls [`EmbeddingEngine::embed_query`] once per query, in
+    /// sequence, so an engine that customises only `embed_query` keeps its
+    /// query handling here. Engines override it to send the whole batch in one
+    /// [`EmbeddingEngine::embed`] call — as Python's `batch_search` embeds its
+    /// `query_texts` — applying their query handling to every query first.
+    ///
+    /// # Errors
+    /// * Returns whatever [`EmbeddingEngine::embed_query`] would return, or
+    ///   [`EmbeddingError::InferenceError`] when it yields no vector.
+    async fn embed_queries(&self, queries: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        let mut vectors = Vec::with_capacity(queries.len());
+        for query in queries {
+            let vector = self
+                .embed_query(query)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    EmbeddingError::InferenceError("embed_query returned no vector".to_string())
+                })?;
+            vectors.push(vector);
+        }
+        Ok(vectors)
+    }
+
     /// Get the dimensionality of embeddings produced by this engine
     ///
     /// # Returns
@@ -69,4 +97,44 @@ pub trait EmbeddingEngine: Send + Sync {
     /// # Returns
     /// * Maximum token count (e.g., 512 for BGE-Small-v1.5)
     fn max_sequence_length(&self) -> usize;
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    /// Shapes queries differently from passages, and overrides nothing else.
+    struct ShapedQueries;
+
+    #[async_trait]
+    impl EmbeddingEngine for ShapedQueries {
+        async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|text| vec![text.len() as f32]).collect())
+        }
+        async fn embed_query(&self, query: &str) -> EmbeddingResult<Vec<Vec<f32>>> {
+            Ok(vec![vec![-(query.len() as f32)]])
+        }
+        fn dimension(&self) -> usize {
+            1
+        }
+        fn batch_size(&self) -> usize {
+            8
+        }
+        fn max_sequence_length(&self) -> usize {
+            128
+        }
+    }
+
+    /// The default goes through `embed_query`, so a custom query shaping is
+    /// kept for every query of a batch.
+    #[tokio::test]
+    async fn default_embed_queries_keeps_the_engines_query_shaping() {
+        let vectors = ShapedQueries.embed_queries(&["a", "bcd"]).await.unwrap();
+        assert_eq!(vectors, vec![vec![-1.0], vec![-3.0]]);
+    }
 }

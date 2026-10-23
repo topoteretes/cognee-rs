@@ -18,7 +18,7 @@ use tracing::debug;
 
 use crate::graph_retrieval::{
     DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, RankedGraphEdge,
-    brute_force_triplet_search, brute_force_triplet_search_batch,
+    brute_force_triplet_search, brute_force_triplet_search_batch, validate_query_batch,
 };
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
 use crate::utils::{
@@ -136,14 +136,24 @@ impl GraphRetrieverCore {
         .await
     }
 
-    /// [`search`](Self::search) for each of `queries`, through
+    /// The ranked triplets for each of `queries` as context items, through
     /// [`ranked_edges_batch`](Self::ranked_edges_batch): one context per
-    /// query, in query order.
+    /// query, in query order. An empty graph yields empty contexts; callers
+    /// that must raise call
+    /// [`ensure_graph_not_empty`](Self::ensure_graph_not_empty) first.
+    ///
+    /// A batch of several queries is validated before anything else, so an
+    /// empty or blank-query batch is rejected whether or not the graph holds
+    /// data (Python's `validate_queries` runs before any engine call). A lone
+    /// query is the single-query search and keeps its own handling.
     pub(crate) async fn search_batch(
         &self,
         queries: &[&str],
         params: &SearchParams,
     ) -> Result<Vec<SearchContext>, SearchError> {
+        if queries.len() != 1 {
+            validate_query_batch(queries)?;
+        }
         if self.graph_db.is_empty().await? {
             return Ok(vec![Vec::new(); queries.len()]);
         }
@@ -155,23 +165,20 @@ impl GraphRetrieverCore {
             .collect())
     }
 
-    /// The ranked triplets for `query` as context items. An empty graph yields
-    /// an empty context; callers that must raise call
-    /// [`ensure_graph_not_empty`](Self::ensure_graph_not_empty) first.
+    /// The ranked triplets for `query` as context items: a batch of one, so
+    /// the empty-graph policy and the item mapping live only in
+    /// [`search_batch`](Self::search_batch).
     pub(crate) async fn search(
         &self,
         query: &str,
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        if self.graph_db.is_empty().await? {
-            return Ok(vec![]);
-        }
-        Ok(self
-            .ranked_edges(query, params)
-            .await?
-            .into_iter()
-            .map(ranked_edge_to_item)
-            .collect())
+        let mut contexts = self.search_batch(&[query], params).await?;
+        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+        let context = contexts
+            .pop()
+            .expect("search_batch returns one context per query, and this passes one query");
+        Ok(context)
     }
 }
 
@@ -320,6 +327,32 @@ mod tests {
             None,
         );
         (core, graph)
+    }
+
+    /// An empty or blank-query batch is rejected before the empty-graph
+    /// shortcut, so the answer does not depend on whether the graph has data.
+    #[tokio::test]
+    async fn an_invalid_batch_is_rejected_even_on_an_empty_graph() {
+        let core = GraphRetrieverCore::new(
+            Arc::new(MockVectorDB::new()),
+            Arc::new(AlignedEmbedding),
+            Arc::new(MockGraphDB::new()),
+            None,
+            None,
+            None,
+        );
+        let params = SearchParams::default();
+        for queries in [&[][..], &["q", " "][..]] {
+            assert!(
+                matches!(
+                    core.search_batch(queries, &params).await,
+                    Err(SearchError::InvalidInput(_))
+                ),
+                "{queries:?}"
+            );
+        }
+        // A lone query on an empty graph is still an empty context.
+        assert_eq!(core.search("q", &params).await.unwrap().len(), 0);
     }
 
     /// Python's `get_triplets_batch`: a lone query takes the single-query

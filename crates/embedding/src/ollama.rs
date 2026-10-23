@@ -336,6 +336,12 @@ impl EmbeddingEngine for OllamaEmbeddingEngine {
         self.embed_all(texts).await
     }
 
+    /// The model is symmetric (no query instruction), so the batch is one
+    /// [`EmbeddingEngine::embed`] call.
+    async fn embed_queries(&self, queries: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        self.embed(queries).await
+    }
+
     fn dimension(&self) -> usize {
         self.dimensions
     }
