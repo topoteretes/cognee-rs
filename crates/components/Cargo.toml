@@ -31,7 +31,7 @@ ladybug      = ["cognee-graph/ladybug"]
 # external adapter) does not need it; `with_builtins()` registers the `lancedb`
 # provider only when this is on.
 lancedb      = ["cognee-vector/lancedb"]
-pgvector     = ["cognee-vector/pgvector", "dep:url"]
+pgvector     = ["cognee-vector/pgvector", "dep:url", "dep:sea-orm"]
 # Relational drivers: `with_builtins()` registers the SeaORM relational factory
 # under `sqlite` / `postgres` only when the matching driver is compiled in.
 sqlite       = ["cognee-database/sqlite"]
@@ -41,7 +41,7 @@ postgres     = ["cognee-database/postgres"]
 # these are on.
 session-fs    = ["cognee-session/fs"]
 session-redis = ["cognee-session/redis"]
-pggraph      = ["cognee-graph/postgres", "dep:url"]
+pggraph      = ["cognee-graph/postgres", "dep:url", "dep:sea-orm"]
 # Record/replay cassette-based mock LLM (MOCK_LLM / COGNEE_RECORD_LLM).
 mock-llm     = ["cognee-llm/mock"]
 # AWS Bedrock provider. Default-on (plan §2.3, §6.2): it registers the
@@ -78,6 +78,10 @@ tracing.workspace = true
 # file removal.
 tokio = { workspace = true }
 url = { workspace = true, optional = true }
+# The Postgres dataset database handlers' admin statements (CREATE DATABASE,
+# CREATE SCHEMA, advisory locks) on a single sqlx connection, through sea-orm's
+# re-export so they share the adapters' sqlx and TLS build.
+sea-orm = { version = "1.1", features = ["runtime-tokio-rustls", "sqlx-postgres"], optional = true }
 uuid.workspace = true
 
 [dev-dependencies]

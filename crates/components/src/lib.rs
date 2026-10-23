@@ -32,6 +32,8 @@ mod builtins;
 mod context;
 pub mod dataset_storage;
 mod error;
+#[cfg(any(feature = "pgvector", feature = "pggraph"))]
+mod pg_admin;
 mod registry;
 pub mod sections;
 mod traits;
@@ -40,6 +42,8 @@ pub use builtins::dataset_handlers::{
     LadybugDatasetHandler, LanceDbDatasetHandler, MemoryDatasetHandler,
 };
 pub use builtins::embedding::{OnnxAssetDefaults, onnx_asset_defaults};
+#[cfg(any(feature = "pgvector", feature = "pggraph"))]
+pub use builtins::pg_dataset_handlers::PostgresDatasetHandler;
 pub use builtins::{build_database, build_embedding_config, build_storage};
 pub use context::{
     AwsInputs, BackendBuildContext, EmbeddingInputs, LlmInputs, parse_reasoning_override,

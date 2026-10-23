@@ -7,6 +7,8 @@ pub mod embedding;
 pub mod graph;
 pub mod llm;
 pub mod ontology;
+#[cfg(any(feature = "pgvector", feature = "pggraph"))]
+pub mod pg_dataset_handlers;
 pub mod session;
 pub mod storage;
 pub mod vector;

@@ -215,20 +215,29 @@ const GRAPH_MIGRATION_VERSION: &str = "m20250101_000001_create_graph_tables";
 /// [`GRAPH_MIGRATION_VERSION`] there, the core migrator would treat it as a
 /// foreign "applied but its file is missing" version and abort. We delete only
 /// the version this adapter itself defines — never a core/relational version — so
-/// the operation is safe and idempotent. Guarded by `to_regclass` so it is a
-/// no-op on fresh installs where the default table does not (yet) exist.
+/// the operation is safe and idempotent. A no-op on fresh installs where the
+/// default table does not (yet) exist.
+///
+/// Only the table in `current_schema()` is considered. A bare
+/// `to_regclass('seaql_migrations')` resolves through the whole `search_path`,
+/// so an adapter whose own schema has no such table would delete from the
+/// next schema's: a per-dataset schema pinned with `search_path = ds_…,
+/// public` (`docs/design/per-dataset-storage.md`) would reach the relational
+/// store's table in `public`.
 ///
 /// # Residual
 /// This only helps when this adapter initialises. If the core migrator runs
 /// *first* against a DB that still holds the legacy row it aborts before this
 /// cleanup can run; such a DB needs a one-time manual
 /// `DELETE FROM seaql_migrations WHERE version = 'm20250101_000001_create_graph_tables'`.
-async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> GraphDBResult<()> {
+async fn cleanup_legacy_seaql_migrations(db: &impl ConnectionTrait) -> GraphDBResult<()> {
     // `GRAPH_MIGRATION_VERSION` is a compile-time constant with no user input,
-    // so inlining it into the DO block carries no injection risk.
+    // so inlining it into the DO block carries no injection risk. A NULL
+    // `current_schema()` (no schema on the path exists) makes the whole
+    // `to_regclass` argument NULL, so the block does nothing.
     let sql = format!(
         "DO $$ BEGIN \
-             IF to_regclass('seaql_migrations') IS NOT NULL THEN \
+             IF to_regclass(quote_ident(current_schema()) || '.seaql_migrations') IS NOT NULL THEN \
                  DELETE FROM seaql_migrations WHERE version = '{GRAPH_MIGRATION_VERSION}'; \
              END IF; \
          END $$;"
@@ -237,6 +246,32 @@ async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> GraphDBResu
         GraphDBError::InitializationError(format!("PgGraph legacy migration cleanup failed: {e}"))
     })?;
     Ok(())
+}
+
+/// Run this adapter's migrations (and the legacy cleanup) in one transaction
+/// that holds an advisory lock on the schema it migrates.
+///
+/// sea-orm's migrator is not safe to run concurrently against one fresh
+/// schema: two `CREATE TABLE IF NOT EXISTS` that both pass the check collide on
+/// the catalog's unique index. Per-dataset storage makes that the common case,
+/// not a deploy-time accident, because the first concurrent uses of a dataset
+/// open its new database (or schema) from several pools at once. The lock key
+/// follows Python's provisioning locks (`databases/postgres/admin.py`); it is
+/// per database, as every advisory lock is, and per `current_schema()`.
+async fn migrate(db: &DatabaseConnection) -> GraphDBResult<()> {
+    let failed = |e: sea_orm::DbErr| {
+        GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
+    };
+    let txn = db.begin().await.map_err(failed)?;
+    txn.execute_unprepared(
+        "SELECT pg_advisory_xact_lock(hashtext('cognee_provisioning'), \
+         hashtext('pggraph_migrations:' || coalesce(current_schema(), '')))",
+    )
+    .await
+    .map_err(failed)?;
+    cleanup_legacy_seaql_migrations(&txn).await?;
+    migrator::Migrator::up(&txn, None).await.map_err(failed)?;
+    txn.commit().await.map_err(failed)
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +326,7 @@ impl PgGraphAdapter {
             .await
             .map_err(|e| GraphDBError::ConnectionError(format!("PgGraph connect failed: {e}")))?;
 
-        cleanup_legacy_seaql_migrations(&db).await?;
-        migrator::Migrator::up(&db, None).await.map_err(|e| {
-            GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
-        })?;
+        migrate(&db).await?;
 
         debug!("PgGraphAdapter initialised");
         Ok(Self {
@@ -316,10 +348,7 @@ impl PgGraphAdapter {
     /// constructor that layout actually uses, so it is the one where the
     /// generic-plan cliff `new()` measures would otherwise be hit.
     pub async fn from_connection(db: DatabaseConnection) -> GraphDBResult<Self> {
-        cleanup_legacy_seaql_migrations(&db).await?;
-        migrator::Migrator::up(&db, None).await.map_err(|e| {
-            GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
-        })?;
+        migrate(&db).await?;
 
         Ok(Self {
             db,
@@ -694,10 +723,7 @@ impl PgGraphAdapter {
 impl GraphDBTrait for PgGraphAdapter {
     async fn initialize(&self) -> GraphDBResult<()> {
         // Migration already ran in the constructor; calling again is idempotent.
-        migrator::Migrator::up(&self.db, None).await.map_err(|e| {
-            GraphDBError::InitializationError(format!("PgGraph migration failed: {e}"))
-        })?;
-        Ok(())
+        migrate(&self.db).await
     }
 
     /// Delegates to the inherent [`PgGraphAdapter::close`], so a holder of an

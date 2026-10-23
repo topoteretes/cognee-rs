@@ -752,7 +752,7 @@ aliases, shown in brackets.
 | `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector.host` / `vector.port` (`vector_db_host` / `vector_db_port`) | _(empty)_ / `1234` |
 | `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector.name` / `vector.key` (`vector_db_name` / `vector_db_key`) | _(empty)_ |
 | `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | `vector.username` / `vector.password` (`vector_db_*`) | _(empty)_ |
-| `VECTOR_DATASET_DATABASE_HANDLER` | `vector.dataset_database_handler` (`vector_dataset_database_handler`) | _(empty — derived from the provider: `lancedb`, `pgvector`, `memory` for `brute-force`/`mock`)_; read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
+| `VECTOR_DATASET_DATABASE_HANDLER` | `vector.dataset_database_handler` (`vector_dataset_database_handler`) | _(empty — derived from the provider: `lancedb`, `pgvector`, `memory` for `brute-force`/`mock`)_; also `pgvector_shared` (a schema per dataset in the relational database). `pgvector` needs `CREATEDB` on the vector server, `pgvector_shared` `CREATE` on the relational database. Read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
 
 Supported providers:
 
@@ -835,7 +835,7 @@ aliases.
 | `GRAPH_DATABASE_HOST` / `GRAPH_DATABASE_PORT` | `graph.host` / `graph.port` (`graph_database_host` / `graph_database_port`) | _(empty)_ / `123` |
 | `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | `graph.name` / `graph.key` (`graph_database_*`) | _(empty)_ |
 | `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | `graph.username` / `graph.password` (`graph_database_*`) | _(empty)_ |
-| `GRAPH_DATASET_DATABASE_HANDLER` | `graph.dataset_database_handler` (`graph_dataset_database_handler`) | _(empty — derived from the provider: `ladybug`, `kuzu`, `postgres_graph`, `memory` for `mock`)_; read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
+| `GRAPH_DATASET_DATABASE_HANDLER` | `graph.dataset_database_handler` (`graph_dataset_database_handler`) | _(empty — derived from the provider: `ladybug`, `kuzu`, `postgres_graph`, `memory` for `mock`)_; also `postgres_graph_shared` (a schema per dataset in the relational database). `postgres_graph` needs `CREATEDB` on the graph server, `postgres_graph_shared` `CREATE` on the relational database. Read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
 | `GRAPH_MAX_DB_SIZE` | section key `graph.ladybug.max_db_size` (alias `graph_max_db_size`; `ladybug` builds only) | `1073741824` (1 GiB) |
 
 Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).
@@ -1582,10 +1582,30 @@ shares one graph store and one vector store. On:
 
 A configured provider without a handler is an error at the first component
 build naming the handler, the provider and the supported handlers (Python's
-`multi_user_support_possible`). The built-in handlers are `ladybug` / `kuzu`
-and `lancedb` for the embedded stores, `memory` for `mock` / `brute-force`; an
-adapter crate registers its own with
-`ComponentRegistry::register_dataset_database_handler`.
+`multi_user_support_possible`). An adapter crate registers its own with
+`ComponentRegistry::register_dataset_database_handler`. The built-in handlers:
+
+| handler | kind | providers | storage per dataset | Postgres privilege |
+|---|---|---|---|---|
+| `ladybug` / `kuzu` | graph | `ladybug`, `kuzu` | `{system_root}/databases/{owner_id}/{dataset_id}.lbug` (`.pkl` for `kuzu`) | — |
+| `lancedb` | vector | `lancedb` | `{system_root}/databases/{owner_id}/{dataset_id}.lance.db` | — |
+| `memory` | both | `mock`, `brute-force` | a fresh in-memory engine | — |
+| `pgvector` (default for `pgvector`) | vector | `pgvector` | database `"{dataset_id}"` on the vector server, with the `vector` extension | `CREATEDB`, and the right to `CREATE EXTENSION vector` in a new database |
+| `pgvector_shared` | vector | `pgvector` | schema `ds_{dataset_id hex}` in the **relational** database, `search_path = ds_…, public` | `CREATE` on the relational database (and `vector` installed there, or the right to install it) |
+| `postgres_graph` (default for `postgres`) | graph | `postgres`, `postgresql` | database `"{dataset_id}"` on the graph server | `CREATEDB` |
+| `postgres_graph_shared` | graph | `postgres`, `postgresql` | schema `ds_{dataset_id hex}` in the **relational** database, `search_path = ds_…` | `CREATE` on the relational database |
+
+The Postgres handlers are compiled with the `pgvector` / `pggraph` features.
+They store host, port, database and schema in `dataset_database`, never a
+credential: every bind takes the username and password from the live
+configuration — the resolved vector or graph URL for `pgvector` /
+`postgres_graph`, the relational URL for the `_shared` handlers, which
+therefore need a Postgres relational database. `CREATE DATABASE` runs on the
+server's `postgres` maintenance database. Creation is idempotent and
+serialized on the advisory locks Python takes, so concurrent first uses (in
+any process) converge on one database. Deleting a dataset drops its database
+(`DROP DATABASE`, which fails while another process still holds a connection
+to it; nothing is terminated) or its schema (`DROP SCHEMA … CASCADE`).
 
 `ConfigManager::set_application_access_control` and
 `HandleState::with_application_access_control()` are no longer needed for the

@@ -1314,20 +1314,29 @@ const PGVECTOR_MIGRATION_VERSION: &str = "m20250101_000001_create_pgvector_exten
 /// [`PGVECTOR_MIGRATION_VERSION`] there, the core migrator would treat it as a
 /// foreign "applied but its file is missing" version and abort. We delete only
 /// the version this adapter itself defines — never a core/relational version — so
-/// the operation is safe and idempotent. Guarded by `to_regclass` so it is a
-/// no-op on fresh installs where the default table does not (yet) exist.
+/// the operation is safe and idempotent. A no-op on fresh installs where the
+/// default table does not (yet) exist.
+///
+/// Only the table in `current_schema()` is considered. A bare
+/// `to_regclass('seaql_migrations')` resolves through the whole `search_path`,
+/// so an adapter whose own schema has no such table would delete from the
+/// next schema's: a per-dataset schema pinned with `search_path = ds_…,
+/// public` (`docs/design/per-dataset-storage.md`) would reach the relational
+/// store's table in `public`.
 ///
 /// # Residual
 /// This only helps when this adapter initialises. If the core migrator runs
 /// *first* against a DB that still holds the legacy row it aborts before this
 /// cleanup can run; such a DB needs a one-time manual
 /// `DELETE FROM seaql_migrations WHERE version = 'm20250101_000001_create_pgvector_extension'`.
-async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> VectorDBResult<()> {
+async fn cleanup_legacy_seaql_migrations(db: &impl ConnectionTrait) -> VectorDBResult<()> {
     // `PGVECTOR_MIGRATION_VERSION` is a compile-time constant with no user input,
-    // so inlining it into the DO block carries no injection risk.
+    // so inlining it into the DO block carries no injection risk. A NULL
+    // `current_schema()` (no schema on the path exists) makes the whole
+    // `to_regclass` argument NULL, so the block does nothing.
     let sql = format!(
         "DO $$ BEGIN \
-             IF to_regclass('seaql_migrations') IS NOT NULL THEN \
+             IF to_regclass(quote_ident(current_schema()) || '.seaql_migrations') IS NOT NULL THEN \
                  DELETE FROM seaql_migrations WHERE version = '{PGVECTOR_MIGRATION_VERSION}'; \
              END IF; \
          END $$;"
@@ -1336,6 +1345,48 @@ async fn cleanup_legacy_seaql_migrations(db: &DatabaseConnection) -> VectorDBRes
         VectorDBError::StorageError(format!("PGVector legacy migration cleanup failed: {e}"))
     })?;
     Ok(())
+}
+
+/// Run this adapter's migrations (and the legacy cleanup) in one transaction
+/// that holds an advisory lock on the schema it migrates.
+///
+/// sea-orm's migrator is not safe to run concurrently against one fresh
+/// schema: two `CREATE TABLE IF NOT EXISTS` that both pass the check collide on
+/// the catalog's unique index. Per-dataset storage makes that the common case,
+/// not a deploy-time accident, because the first concurrent uses of a dataset
+/// open its new database (or schema) from several pools at once. The lock key
+/// follows Python's provisioning locks (`databases/postgres/admin.py`); it is
+/// per database, as every advisory lock is, and per `current_schema()`.
+async fn migrate(db: &DatabaseConnection) -> VectorDBResult<()> {
+    let failed =
+        |e: sea_orm::DbErr| VectorDBError::StorageError(format!("PGVector migration failed: {e}"));
+    let txn = db.begin().await.map_err(failed)?;
+    txn.execute_unprepared(
+        "SELECT pg_advisory_xact_lock(hashtext('cognee_provisioning'), \
+         hashtext('pgvector_migrations:' || coalesce(current_schema(), '')))",
+    )
+    .await
+    .map_err(failed)?;
+    cleanup_legacy_seaql_migrations(&txn).await?;
+    migrator::Migrator::up(&txn, None).await.map_err(failed)?;
+    txn.commit().await.map_err(failed)
+}
+
+/// Whether the connection's own schema is not `public` (see
+/// `PgVectorAdapter::schema_pinned`). Every pooled connection is opened with
+/// the same options, so one probe answers for the pool.
+async fn schema_pinned(db: &DatabaseConnection) -> VectorDBResult<bool> {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT current_schema() IS DISTINCT FROM 'public' AS pinned",
+        ))
+        .await
+        .map_err(|e| VectorDBError::StorageError(format!("PGVector schema probe failed: {e}")))?;
+    row.map_or(Ok(false), |row| {
+        row.try_get::<bool>("", "pinned")
+            .map_err(|e| VectorDBError::StorageError(format!("PGVector schema probe failed: {e}")))
+    })
 }
 
 /// Vector database backed by PostgreSQL + pgvector extension.
@@ -1397,6 +1448,20 @@ pub struct PgVectorAdapter {
     /// means "checked", not "warned", so the two catalog probes happen at most
     /// once per collection per process.
     legacy_checked: RwLock<HashSet<String>>,
+    /// Whether this adapter's own schema (`current_schema()`, where its
+    /// migrations put its tables) is not `public` — a per-dataset schema of
+    /// the shared-database mode, pinned with `search_path = ds_…, public`
+    /// (`docs/design/per-dataset-storage.md`).
+    ///
+    /// `public` has to stay on that path, because the `vector` extension's
+    /// types and operators live there; but then an unqualified collection
+    /// table this schema does not have resolves to `public`'s table of the same
+    /// name, which in a database that once held the shared store is every
+    /// dataset's data. So a pinned adapter treats a collection that is not in
+    /// its own `_vector_collections` as missing before it touches the table
+    /// (see [`Self::in_own_schema`]). An adapter on `public` keeps the plain
+    /// single-statement paths.
+    schema_pinned: bool,
 }
 
 /// Open bulk-load scopes, and per collection the points written in them and
@@ -1509,10 +1574,8 @@ impl PgVectorAdapter {
             .await
             .map_err(|e| VectorDBError::StorageError(format!("PGVector connect failed: {e}")))?;
 
-        cleanup_legacy_seaql_migrations(&db).await?;
-        migrator::Migrator::up(&db, None)
-            .await
-            .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
+        migrate(&db).await?;
+        let schema_pinned = schema_pinned(&db).await?;
 
         debug!("PgVectorAdapter initialised (dimension={dimension})");
         let features = probe_pgvector_features(&db).await;
@@ -1527,6 +1590,7 @@ impl PgVectorAdapter {
             halfvec: features.halfvec,
             iterative_scan: features.iterative_scan,
             legacy_checked: RwLock::new(HashSet::new()),
+            schema_pinned,
         })
     }
 
@@ -1543,10 +1607,8 @@ impl PgVectorAdapter {
     /// identically to one from [`Self::new`]; it just pays a transaction per
     /// search for the privilege.
     pub async fn from_connection(db: DatabaseConnection, dimension: usize) -> VectorDBResult<Self> {
-        cleanup_legacy_seaql_migrations(&db).await?;
-        migrator::Migrator::up(&db, None)
-            .await
-            .map_err(|e| VectorDBError::StorageError(format!("PGVector migration failed: {e}")))?;
+        migrate(&db).await?;
+        let schema_pinned = schema_pinned(&db).await?;
 
         let features = probe_pgvector_features(&db).await;
         Ok(Self {
@@ -1560,6 +1622,7 @@ impl PgVectorAdapter {
             halfvec: features.halfvec,
             iterative_scan: features.iterative_scan,
             legacy_checked: RwLock::new(HashSet::new()),
+            schema_pinned,
         })
     }
 
@@ -2066,6 +2129,38 @@ impl PgVectorAdapter {
              sequential scan and a sort. Run `cognee-cli vector-reindex` (online, \
              idempotent) to build {current} and reclaim {legacy}."
         );
+    }
+
+    /// Whether `coll` may be touched by its bare name: always on `public`; on a
+    /// pinned schema only when it is this schema's own collection (see
+    /// [`Self::schema_pinned`]). A cache hit costs nothing; a miss is the
+    /// `has_collection` round trip the retrievers and the indexer already make.
+    async fn in_own_schema(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        coll: &str,
+    ) -> VectorDBResult<bool> {
+        if !self.schema_pinned || self.is_known(coll) {
+            return Ok(true);
+        }
+        self.has_collection(data_type, field_name).await
+    }
+
+    /// [`Self::in_own_schema`] as the error a missing table raises, worded so
+    /// callers (and [`Self::forget_if_missing`]) treat it the same way.
+    async fn require_own_collection(
+        &self,
+        data_type: &str,
+        field_name: &str,
+        coll: &str,
+    ) -> VectorDBResult<()> {
+        if self.in_own_schema(data_type, field_name, coll).await? {
+            return Ok(());
+        }
+        Err(VectorDBError::StorageError(format!(
+            "relation \"{coll}\" does not exist in this adapter's schema"
+        )))
     }
 
     /// Whether `e` says `coll`'s table is gone; if so, evict it from the
@@ -3650,6 +3745,8 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
 
         // Dimension check.
         let expected_dim = points[0].vector.len();
@@ -3705,6 +3802,8 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
         // Raw upsert writes system-owned collections (TruthCentroid_vector and
         // friends); a zero-norm centroid stored here is unsearchable too.
         warn_zero_norm_points("pgvector", &coll, points);
@@ -3786,6 +3885,8 @@ impl VectorDB for PgVectorAdapter {
     ) -> VectorDBResult<Vec<SearchResult>> {
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
         warn_zero_norm_query("pgvector", &coll, query_vector);
 
         let vec_str = Self::format_vector(query_vector);
@@ -3876,6 +3977,8 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
         warn_zero_norm_query("pgvector", &coll, query_vector);
 
         let vec_str = Self::format_vector(query_vector);
@@ -4031,6 +4134,9 @@ impl VectorDB for PgVectorAdapter {
         }
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
         warn_zero_norm_query("pgvector", &coll, query_vector);
+        if !self.in_own_schema(data_type, field_name, &coll).await? {
+            return Ok(Some(vec![]));
+        }
 
         // Filter by primary key, then score: no ORDER BY on distance, so the
         // HNSW index (which could drop far-away rows) is never in play and
@@ -4094,6 +4200,8 @@ impl VectorDB for PgVectorAdapter {
         }
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
         // This override never routes through `search_similar`, so the
         // single-query warning would otherwise never fire on this path.
         warn_zero_norm_query_batch("pgvector", &coll, query_vectors);
@@ -4189,15 +4297,19 @@ impl VectorDB for PgVectorAdapter {
         // index or analyse this table at its end.
         self.forget(&coll);
         self.forget_bulk(&coll);
-        let drop = Table::drop()
-            .table(Alias::new(&coll))
-            .if_exists()
-            .to_owned();
+        // `DROP TABLE IF EXISTS` by bare name would drop `public`'s table when
+        // a pinned schema has none of its own.
+        if self.in_own_schema(data_type, field_name, &coll).await? {
+            let drop = Table::drop()
+                .table(Alias::new(&coll))
+                .if_exists()
+                .to_owned();
 
-        self.db
-            .execute_unprepared(&drop.to_string(PostgresQueryBuilder))
-            .await
-            .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+            self.db
+                .execute_unprepared(&drop.to_string(PostgresQueryBuilder))
+                .await
+                .map_err(|e| VectorDBError::StorageError(e.to_string()))?;
+        }
 
         let delete = Query::delete()
             .from_table(VColl::Table)
@@ -4235,6 +4347,8 @@ impl VectorDB for PgVectorAdapter {
 
         let coll = Self::collection_name(data_type, field_name)?;
         Span::current().record(COGNEE_VECTOR_COLLECTION, coll.as_str());
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
 
         // Before the first `DELETE`, not only after the last: a chunk that
         // fails mid-loop leaves the earlier chunks committed and returns, and
@@ -4270,6 +4384,8 @@ impl VectorDB for PgVectorAdapter {
 
     async fn collection_size(&self, data_type: &str, field_name: &str) -> VectorDBResult<usize> {
         let coll = Self::collection_name(data_type, field_name)?;
+        self.require_own_collection(data_type, field_name, &coll)
+            .await?;
 
         let query = Query::select()
             .expr_as(Func::count(Expr::col(Asterisk)), Alias::new("count"))

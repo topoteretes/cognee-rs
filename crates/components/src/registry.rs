@@ -147,6 +147,24 @@ impl ComponentRegistry {
                 HandlerKind::Vector,
             )));
         }
+        #[cfg(feature = "pgvector")]
+        {
+            use crate::builtins::pg_dataset_handlers::PostgresDatasetHandler;
+            reg.register_dataset_database_handler(Arc::new(PostgresDatasetHandler::pgvector()));
+            reg.register_dataset_database_handler(Arc::new(
+                PostgresDatasetHandler::pgvector_shared(),
+            ));
+        }
+        #[cfg(feature = "pggraph")]
+        {
+            use crate::builtins::pg_dataset_handlers::PostgresDatasetHandler;
+            reg.register_dataset_database_handler(Arc::new(
+                PostgresDatasetHandler::postgres_graph(),
+            ));
+            reg.register_dataset_database_handler(Arc::new(
+                PostgresDatasetHandler::postgres_graph_shared(),
+            ));
+        }
 
         // ── llm ───────────────────────────────────────────────────────────
         for id in llm::OPENAI_COMPATIBLE_PROVIDERS {

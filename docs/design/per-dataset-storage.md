@@ -175,8 +175,8 @@ without Docker.
   dataset's owner (looked up from `datasets.owner_id`), never from the caller.
   A grantee's search therefore lands in the owner's databases.
 - **No credentials at rest.** The Postgres handlers store host, port, database
-  and schema only. `resolve_connection` fills the username and password from the
-  live configuration on every bind (graph or vector config for the dedicated
+  and schema only. The handler's `dataset_context` fills the username and
+  password from the live configuration on every bind (graph or vector config for the dedicated
   handlers, relational config for the shared ones).
 - **Embedding model guard.** The vector connection info records the embedding
   model and dimensions at provisioning time. Binding a dataset under a
