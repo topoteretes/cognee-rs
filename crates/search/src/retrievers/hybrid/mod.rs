@@ -894,10 +894,9 @@ fn tag_chunk_item(mut item: SearchItem, chunk_summaries: &HashMap<String, String
     item
 }
 
-/// Stamp an entity's or fact's own dataset membership onto its item, so the
-/// dataset scope filter
-/// ([`filter_context_to_datasets`](crate::orchestration::filter_context_to_datasets))
-/// can decide on it like on a chunk.
+/// Stamp an entity's or fact's own dataset membership onto its item, like a
+/// chunk's: the datasets the result came from. (It once fed a post-search
+/// dataset filter; per-dataset storage replaced that.)
 ///
 /// `membership` is what the item's own vector row records (`Entity_name` for
 /// an entity, `EdgeType` for a fact; see
@@ -1509,23 +1508,6 @@ mod retriever_tests {
                 _ => {}
             }
         }
-
-        let kinds_in = |scope: &[Uuid]| {
-            kinds(&crate::orchestration::filter_context_to_datasets(
-                &context, scope,
-            ))
-        };
-        let only_a = kinds_in(&[dataset_a]);
-        assert!(only_a.iter().any(|k| k == "entity"), "{only_a:?}");
-        assert!(!only_a.iter().any(|k| k == "fact"), "{only_a:?}");
-        let both = kinds_in(&[dataset_a, dataset_b]);
-        assert!(both.iter().any(|k| k == "entity"), "{both:?}");
-        assert!(both.iter().any(|k| k == "fact"), "{both:?}");
-        let neither = kinds_in(&[unrelated]);
-        assert!(
-            !neither.iter().any(|k| k == "entity" || k == "fact"),
-            "an unrelated scope must admit no entity or fact: {neither:?}"
-        );
     }
 
     #[tokio::test]

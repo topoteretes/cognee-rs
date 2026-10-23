@@ -498,16 +498,16 @@ pub async fn run_graph(
 
     span.record(COGNEE_SEARCH_TYPE, format!("{search_type:?}").as_str());
 
-    // With access control wired, an unfiltered graph search covers the
-    // datasets the caller may read, which needs a caller. With none (or one
-    // that is not a UUID) there is nothing the caller can be shown to read, so
-    // the graph source contributes nothing — the same answer as a caller who
-    // may read no dataset (Python: zero per-dataset tasks, `[]`). It is not an
-    // error: recall's other sources (session, trace, graph context) and its
-    // auto-mode fall-through still run. Python has no such case, since
-    // `recall()` resolves a missing user to the default user first.
-    if search_orchestrator.has_acl_db() && owner_id.is_none() && !has_dataset_filter {
-        debug!("recall: access control is wired and the caller is unknown; no graph results");
+    // Under per-dataset storage an unfiltered graph search covers the datasets
+    // the caller may read, which needs a caller. With none (or one that is not
+    // a UUID) there is nothing the caller can be shown to read, so the graph
+    // source contributes nothing — the same answer as a caller who may read no
+    // dataset (Python: zero per-dataset tasks, `[]`). It is not an error:
+    // recall's other sources (session, trace, graph context) and its auto-mode
+    // fall-through still run. Python has no such case, since `recall()`
+    // resolves a missing user to the default user first.
+    if search_orchestrator.scopes_unfiltered_search() && owner_id.is_none() && !has_dataset_filter {
+        debug!("recall: per-dataset storage and an unknown caller; no graph results");
         let response = crate::orchestration::prepare_search_result(
             search_type,
             crate::SearchOutput::Items(Vec::new()),
@@ -813,8 +813,9 @@ mod tests {
             _query: &str,
             _context: Option<SearchContext>,
             _session: &SessionContext,
-            _params: &SearchParams,
+            params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
+            *self.seen.lock().expect("test mutex") = Some(params.clone());
             Ok(SearchOutput::Text("graph-stub".to_string()))
         }
     }
@@ -1047,9 +1048,9 @@ mod tests {
     }
 
     /// SDK-687, recall side: `/v1/recall` reaches the orchestrator through
-    /// `run_graph`, so with an ACL wired an unfiltered recall must be scoped
-    /// to the caller's readable datasets like an unfiltered search, and an
-    /// unreadable dataset must never reach the retriever's scope.
+    /// `run_graph`, so under per-dataset storage an unfiltered recall must be
+    /// scoped to the caller's readable datasets like an unfiltered search, and
+    /// an unreadable dataset must never reach the retriever's scope.
     #[tokio::test]
     async fn run_graph_unfiltered_with_acl_is_scoped_to_readable_datasets() {
         let owner = Uuid::new_v4();
@@ -1063,7 +1064,9 @@ mod tests {
         acl.grant_permission(Uuid::new_v4(), Uuid::new_v4(), "read")
             .await
             .expect("grant");
-        let orchestrator = orchestrator.with_acl_db(acl as Arc<dyn AclDb>);
+        let orchestrator = orchestrator
+            .with_acl_db(acl as Arc<dyn AclDb>)
+            .with_per_dataset_storage(true);
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 
@@ -1096,7 +1099,7 @@ mod tests {
         );
     }
 
-    /// With an ACL wired, an unfiltered recall by a caller who may read
+    /// Under per-dataset storage, an unfiltered recall by a caller who may read
     /// nothing returns no graph items and never runs the retriever. An unknown
     /// caller (no id, or one that is not a UUID) gets the same empty graph
     /// result, not an error, so recall's other sources and its auto-mode
@@ -1107,7 +1110,8 @@ mod tests {
         let (orchestrator, retriever, _dataset_id) =
             orchestrator_with_seeded_dataset("notes", owner).await;
         let orchestrator = orchestrator
-            .with_acl_db(Arc::new(cognee_test_utils::MockAclDb::new()) as Arc<dyn AclDb>);
+            .with_acl_db(Arc::new(cognee_test_utils::MockAclDb::new()) as Arc<dyn AclDb>)
+            .with_per_dataset_storage(true);
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 

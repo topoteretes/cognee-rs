@@ -380,6 +380,12 @@ impl CogneeServices {
         );
 
         let search_tuning = cm.settings().search_tuning();
+        // Per-dataset storage: every dataset is searched in its own databases.
+        let per_dataset_storage = cm
+            .dataset_storage()
+            .await
+            .map_err(|e| SdkError::ServiceBuild(format!("dataset storage: {e}")))?
+            .is_some();
         let search_orchestrator = Arc::new(
             SearchBuilder::new(
                 Arc::clone(&vector_db),
@@ -392,6 +398,7 @@ impl CogneeServices {
             .with_session_manager(Arc::clone(&session_manager))
             .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
             .with_search_history_logging(cm.settings().log_search_history)
+            .with_per_dataset_storage(per_dataset_storage)
             .build(),
         );
 

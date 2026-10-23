@@ -1,4 +1,3 @@
-mod dataset_scope;
 mod hybrid_fallback;
 mod prepare_search_result;
 mod search_execution_builder;
@@ -9,11 +8,7 @@ mod search_type_tools;
 pub const CONTEXT_LABEL_COMBINED: &str = "combined";
 pub const CONTEXT_LABEL_DEFAULT: &str = "default";
 
-pub(crate) use dataset_scope::filter_context_to_params;
-pub use dataset_scope::{
-    filter_context_to_datasets, merge_scoped_contexts, scope_context_by_datasets,
-};
 pub use prepare_search_result::prepare_search_result;
 pub use search_execution_builder::{SearchBuilder, SearchTuning};
-pub use search_orchestrator::SearchOrchestrator;
+pub use search_orchestrator::{DatasetSearchResult, SearchOrchestrator, merge_dataset_results};
 pub use search_type_tools::SearchTypeRegistry;

@@ -868,6 +868,11 @@ async fn bench_search_orchestrator(
     );
     let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
     let search_tuning = cm.settings().search_tuning();
+    let per_dataset_storage = cm
+        .dataset_storage()
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some();
     Ok(SearchBuilder::new(
         vector_db,
         embedding_engine,
@@ -879,6 +884,7 @@ async fn bench_search_orchestrator(
     .with_session_manager(session_manager)
     .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
     .with_search_history_logging(cm.settings().log_search_history)
+    .with_per_dataset_storage(per_dataset_storage)
     .build())
 }
 

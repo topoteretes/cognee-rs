@@ -1,9 +1,6 @@
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
-use crate::orchestration::{
-    SearchTypeRegistry, filter_context_to_datasets, prepare_search_result,
-    scope_context_by_datasets,
-};
+use crate::orchestration::{SearchTypeRegistry, prepare_search_result};
 use crate::retrievers::DatasetScoping;
 use crate::types::{
     SearchContext, SearchError, SearchOutput, SearchParams, SearchPrompt, SearchRequest,
@@ -12,6 +9,7 @@ use crate::types::{
 use crate::utils::detect_feedback;
 use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::{Llm, Message, MessageRole};
+use cognee_models::dataset_scope::with_dataset;
 use cognee_session::{SessionContext, SessionManager, UsedGraphElementIds};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -183,6 +181,30 @@ pub struct SearchOrchestrator {
     /// When `true` (the default), searches are recorded in the wired
     /// `database`'s search history.
     log_search_history: bool,
+    /// Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): every dataset is
+    /// searched in its own databases, one retriever run per dataset. See
+    /// [`Self::with_per_dataset_storage`].
+    per_dataset_storage: bool,
+}
+
+/// One dataset's answer under per-dataset storage, or the single answer of a
+/// shared-store search — Python's `SearchResultPayload` with its `dataset_id`,
+/// `dataset_name`, `dataset_tenant_id` and `error`
+/// (`cognee/modules/search/methods/search.py`, `_collect_dataset_results`).
+#[derive(Debug, Clone)]
+pub struct DatasetSearchResult {
+    /// The dataset searched. `None` for a shared-store search that did not
+    /// name exactly one dataset (Python: `dataset = search_datasets[0] if
+    /// len(search_datasets) == 1 else None`).
+    pub dataset_id: Option<uuid::Uuid>,
+    /// The dataset's name, when a dataset resolver is wired.
+    pub dataset_name: Option<String>,
+    /// The dataset's tenant, when a dataset resolver is wired.
+    pub dataset_tenant_id: Option<uuid::Uuid>,
+    pub response: SearchResponse,
+    /// Why this dataset had nothing to search (an empty graph or collection),
+    /// when some other dataset did. Its `response` is then an empty result.
+    pub error: Option<String>,
 }
 
 impl SearchOrchestrator {
@@ -198,6 +220,7 @@ impl SearchOrchestrator {
             auto_feedback_default: false,
             default_system_prompt_path: None,
             log_search_history: true,
+            per_dataset_storage: false,
         }
     }
 
@@ -254,22 +277,46 @@ impl SearchOrchestrator {
     }
 
     /// Whether this orchestrator refuses a dataset-scoped search of
-    /// `search_type` — with an ACL wired, every search that reads dataset data
-    /// is dataset-scoped, so this is "refused whenever the caller can read
-    /// at least one dataset". It is the predicate [`Self::search`] applies
-    /// (`SearchError::InvalidInput`), exposed so a caller choosing a search
-    /// type (e.g. an auto-router) does not have to mirror the refused set.
-    /// `false` for a type with no registered retriever.
-    pub fn refuses_dataset_scope(&self, search_type: SearchType) -> bool {
-        self.dataset_scoping(search_type)
-            .is_some_and(|scoping| self.refuses_scoping(scoping))
+    /// `search_type`. Always `false`: a dataset scope is applied by searching
+    /// each dataset's own databases (per-dataset storage) or not at all (the
+    /// shared store, Python's non-ACL mode), never by filtering results on
+    /// their dataset membership, so every type runs. Kept for callers that
+    /// chose a search type around the old refusal.
+    pub fn refuses_dataset_scope(&self, _search_type: SearchType) -> bool {
+        false
     }
 
-    /// The refusal rule itself, shared by [`Self::refuses_dataset_scope`] and
-    /// the check in [`Self::search`]: an ACL is wired and the retriever's
-    /// results carry no dataset membership.
-    fn refuses_scoping(&self, scoping: DatasetScoping) -> bool {
-        self.acl_db.is_some() && scoping == DatasetScoping::Unsupported
+    /// Search every dataset in its own databases: per-dataset storage
+    /// (`ENABLE_BACKEND_ACCESS_CONTROL`, `docs/design/per-dataset-storage.md`),
+    /// with graph and vector engines that route through
+    /// [`cognee_models::dataset_scope`].
+    ///
+    /// On: a search runs its retriever once per dataset, inside that
+    /// dataset's scope, over the datasets it names (authorized as usual) or —
+    /// naming none — every dataset the caller may read (the ACL's readable set,
+    /// else the caller's own datasets in its tenant). One
+    /// [`DatasetSearchResult`] per dataset ([`Self::search_datasets`]); every
+    /// search type works and top-k is per dataset. Python's
+    /// `search_in_datasets_context`.
+    ///
+    /// Off (the default): one unscoped search over the shared store, whatever
+    /// datasets the request names — after the same permission check (Python's
+    /// non-ACL branch, `search.py:455-505`).
+    pub fn with_per_dataset_storage(mut self, enabled: bool) -> Self {
+        self.per_dataset_storage = enabled;
+        self
+    }
+
+    /// Whether [`Self::with_per_dataset_storage`] is on.
+    pub fn per_dataset_storage(&self) -> bool {
+        self.per_dataset_storage
+    }
+
+    /// Whether a search that names no dataset is limited to the datasets the
+    /// caller may read, and so needs `SearchRequest::user_id`: under
+    /// per-dataset storage, where there is no store outside a dataset.
+    pub fn scopes_unfiltered_search(&self) -> bool {
+        self.per_dataset_storage
     }
 
     pub fn with_session_manager(mut self, session_manager: Arc<SessionManager>) -> Self {
@@ -548,6 +595,29 @@ impl SearchOrchestrator {
         Ok(hybrid)
     }
 
+    /// Execute a search: [`Self::search_datasets`], its per-dataset answers
+    /// merged into one response ([`merge_dataset_results`]). A search of one
+    /// dataset, or of the shared store, returns that one answer unchanged.
+    pub async fn search(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<SearchResponse, crate::types::SearchError> {
+        let results = self.search_datasets(request).await?;
+        Ok(merge_dataset_results(request, results))
+    }
+
+    /// Execute a search and return its answer per dataset.
+    ///
+    /// Under per-dataset storage ([`Self::with_per_dataset_storage`]) one
+    /// entry per dataset searched, in request order (the readable set sorted,
+    /// when the request names no dataset): Python's list of
+    /// `SearchResultPayload`s. A dataset with nothing to search (an empty
+    /// graph or collection) gets an empty result and its reason on
+    /// [`DatasetSearchResult::error`]; the search fails with `NotFound` only
+    /// when every dataset is in that state. Any other error fails the whole
+    /// search. Over the shared store, the one unscoped answer.
+    ///
+    /// [`Self::search`] is this with the entries merged into one response.
     #[tracing::instrument(
         name = "cognee.search",
         skip(self, request),
@@ -556,10 +626,10 @@ impl SearchOrchestrator {
             cognee.search.query.len = request.query_text.len(),
         )
     )]
-    pub async fn search(
+    pub async fn search_datasets(
         &self,
         request: &SearchRequest,
-    ) -> Result<SearchResponse, crate::types::SearchError> {
+    ) -> Result<Vec<DatasetSearchResult>, crate::types::SearchError> {
         // Python's `cognee.search()` rejects these up front, for every search
         // type, before any retriever runs — and before `search()` emits its
         // "EXECUTION STARTED" telemetry event, so an invalid request sends none.
@@ -726,40 +796,52 @@ impl SearchOrchestrator {
         };
 
         // A request that names no dataset (no ids and no names, empty lists
-        // included). With an ACL wired that means "every dataset the caller may
-        // read", not "unscoped". Python (f154b32) runs every search through
-        // `authorized_search` (`cognee/modules/search/methods/search.py:174`),
-        // whose `get_authorized_existing_datasets(None, "read", user)` returns
-        // `get_all_user_permission_datasets(user, "read")`
-        // (`get_authorized_existing_datasets.py:41-43`); in ACL mode it then
-        // searches only those datasets, one task per dataset
-        // (`search.py:429-453`). So the readable set becomes the dataset scope
-        // here and the per-dataset scoping below applies, keeping every other
-        // dataset out of the result.
-        //
-        // An empty readable set returns an empty result without running the
-        // retriever. Python gathers zero per-dataset tasks and
-        // `_collect_dataset_results` returns `[]` (`search.py:503-504`), with
-        // no error; the query is still logged (`log_search_history.py:33`).
-        //
-        // Without an ACL this block is skipped and the search stays unscoped:
-        // Python's non-ACL branch ignores the dataset list and runs the
-        // retriever once over the shared store (`search.py:455-501`). Scoping
-        // that path would diverge from Python in the other direction. The
-        // ownership fallback is deliberately not used here for the same
-        // reason.
+        // included).
         let names_no_dataset = request.dataset_ids.as_ref().is_none_or(Vec::is_empty)
             && request.datasets.as_ref().is_none_or(Vec::is_empty);
-        let acl_scoped_request_owned;
+
         // A retriever whose results are not dataset data (feedback analysis)
-        // has nothing to scope, so no readable set is needed either.
-        let acl_scoped =
-            self.acl_db.is_some() && names_no_dataset && scoping != DatasetScoping::NotDatasetData;
-        let request: &SearchRequest = if acl_scoped {
+        // reads no store, so it is never fanned out.
+        if !self.per_dataset_storage || scoping == DatasetScoping::NotDatasetData {
+            // The shared store: one unscoped search, whatever datasets the
+            // request names, after the permission check above. Python's
+            // non-ACL branch (`search.py:455-505`): no dataset context, and the
+            // result names the dataset only when exactly one was searched.
+            // Nothing is filtered by dataset membership — that could not be made
+            // tight (cognee-rs #290) and is what per-dataset storage replaces.
+            let (response, log) = self
+                .run_search(request, &retriever, search_type, auto_feedback, false)
+                .await?;
+            if log {
+                self.log_search_history(request, &response).await;
+            }
+            emit_search_completed(request);
+            let dataset_id = match request.dataset_ids.as_deref() {
+                Some([only]) => Some(*only),
+                _ => None,
+            };
+            let (dataset_name, dataset_tenant_id) = self.dataset_label(dataset_id).await;
+            return Ok(vec![DatasetSearchResult {
+                dataset_id,
+                dataset_name,
+                dataset_tenant_id,
+                response,
+                error: None,
+            }]);
+        }
+
+        // Per-dataset storage: the datasets named (authorized above), or —
+        // naming none — every dataset the caller may read. Python
+        // (`search.py:174`) runs every search through `authorized_search`,
+        // whose `get_authorized_existing_datasets(None, "read", user)` returns
+        // `get_all_user_permission_datasets(user, "read")`
+        // (`get_authorized_existing_datasets.py:41-43`), then searches each one
+        // in its own database context (`search.py:429-453`).
+        let datasets: Vec<uuid::Uuid> = if names_no_dataset {
             let requester = request.user_id.ok_or_else(|| {
                 SearchError::InvalidInput(
-                    "an access-controlled search requires SearchRequest.user_id to find the \
-                     datasets the caller may read"
+                    "a search under per-dataset storage that names no dataset requires \
+                     SearchRequest.user_id to find the datasets the caller may read"
                         .to_string(),
                 )
             })?;
@@ -768,76 +850,178 @@ impl SearchOrchestrator {
                 .await?
                 .into_iter()
                 .collect();
-            // Deterministic scope order: the set comes from a HashSet.
+            // Deterministic order: the set comes from a HashSet.
             readable.sort_unstable();
-            let mut clone = request.clone();
-            clone.dataset_ids = Some(readable);
-            acl_scoped_request_owned = clone;
-            &acl_scoped_request_owned
+            readable
         } else {
+            let mut seen = std::collections::HashSet::new();
             request
+                .dataset_ids
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| seen.insert(*id))
+                .collect()
         };
 
-        let params = SearchParams::from(request);
-        let use_dataset_scope = request
-            .dataset_ids
-            .as_ref()
-            .map(|ids| !ids.is_empty())
-            .unwrap_or(false)
-            && scoping != DatasetScoping::NotDatasetData;
-
-        // A dataset scope is applied by filtering results on their dataset
-        // membership. A retriever whose results carry none (Cypher, natural
-        // language, temporal, lexical, feeling-lucky, coding rules, unchecked
-        // community retrievers) cannot be scoped that way: filtering would
-        // answer empty, and not filtering would read every dataset. Python
-        // scopes every type by running it inside each dataset's own database
-        // context (`search.py:330` at f154b32), which a shared store cannot
-        // do. With access control wired that choice is a security boundary,
-        // so the search is refused rather than answered either way.
-        if use_dataset_scope && self.refuses_scoping(scoping) {
-            return Err(SearchError::InvalidInput(format!(
-                "search type {:?} cannot be restricted to datasets: its results carry no \
-                 dataset membership, and access control requires every search to be limited to \
-                 the datasets the caller may read",
-                retriever.search_type()
-            )));
-        }
-
-        if acl_scoped && !use_dataset_scope {
-            // The caller may read no dataset at all: nothing to search.
+        if datasets.is_empty() {
+            // The caller may read no dataset at all: nothing to search. Python
+            // gathers zero per-dataset tasks and returns `[]`
+            // (`search.py:503-504`); the query is still logged.
             let response = prepare_search_result(
                 search_type,
                 SearchOutput::Items(Vec::new()),
                 None,
-                request.dataset_ids.clone(),
+                Some(Vec::new()),
                 request.only_context(),
                 request.use_combined_context(),
                 request.verbose(),
             );
             self.log_search_history(request, &response).await;
             emit_search_completed(request);
-            return Ok(response);
+            return Ok(Vec::new());
         }
 
+        // One run per dataset, each in its own scope, concurrently: Python's
+        // `asyncio.gather` over `_search_in_dataset_context`.
+        let runs = datasets.iter().map(|&dataset_id| {
+            let mut dataset_request = request.clone();
+            dataset_request.dataset_ids = Some(vec![dataset_id]);
+            dataset_request.datasets = None;
+            let retriever = Arc::clone(&retriever);
+            async move {
+                let outcome = with_dataset(
+                    dataset_id,
+                    self.run_search(
+                        &dataset_request,
+                        &retriever,
+                        search_type,
+                        auto_feedback,
+                        true,
+                    ),
+                )
+                .await;
+                (dataset_id, outcome)
+            }
+        });
+        let outcomes = futures::future::join_all(runs).await;
+
+        let mut results = Vec::with_capacity(outcomes.len());
+        let mut no_data = Vec::new();
+        let mut log = false;
+        for (dataset_id, outcome) in outcomes {
+            let (dataset_name, dataset_tenant_id) = self.dataset_label(Some(dataset_id)).await;
+            match outcome {
+                Ok((mut response, dataset_log)) => {
+                    log |= dataset_log;
+                    key_context_by_dataset(&mut response, dataset_id);
+                    response.datasets = Some(vec![dataset_id]);
+                    results.push(DatasetSearchResult {
+                        dataset_id: Some(dataset_id),
+                        dataset_name,
+                        dataset_tenant_id,
+                        response,
+                        error: None,
+                    });
+                }
+                // A dataset with nothing to search: Python's
+                // `DatasetNoDataError`, which fails the search only when every
+                // dataset is in that state (`_collect_dataset_results`).
+                Err(SearchError::NotFound(reason)) => {
+                    let label = dataset_name
+                        .clone()
+                        .unwrap_or_else(|| dataset_id.to_string());
+                    no_data.push(format!("'{label}' (id: {dataset_id}): {reason}"));
+                    let mut response = prepare_search_result(
+                        search_type,
+                        SearchOutput::Items(Vec::new()),
+                        request.only_context().then(Vec::new),
+                        Some(vec![dataset_id]),
+                        request.only_context(),
+                        request.use_combined_context(),
+                        request.verbose(),
+                    );
+                    key_context_by_dataset(&mut response, dataset_id);
+                    results.push(DatasetSearchResult {
+                        dataset_id: Some(dataset_id),
+                        dataset_name,
+                        dataset_tenant_id,
+                        response,
+                        error: Some(reason),
+                    });
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        if no_data.len() == results.len() {
+            // One dataset searched: its own reason, as a shared-store search
+            // reports it; the caller named (or was scoped to) that dataset.
+            if let [only] = results.as_slice()
+                && let Some(reason) = &only.error
+            {
+                return Err(SearchError::NotFound(reason.clone()));
+            }
+            let message = match no_data.as_slice() {
+                [only] => format!("No searchable memory in dataset {only}"),
+                all => format!(
+                    "No searchable memory in any of the {} searched datasets:\n{}",
+                    all.len(),
+                    all.iter()
+                        .map(|line| format!("- {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+            };
+            return Err(SearchError::NotFound(message));
+        }
+        for result in &results {
+            if let Some(reason) = &result.error {
+                tracing::warn!(dataset_id = ?result.dataset_id, %reason, "dataset without searchable memory");
+            }
+        }
+
+        if log {
+            self.log_search_history(request, &merge_dataset_results(request, results.clone()))
+                .await;
+        }
+        emit_search_completed(request);
+        Ok(results)
+    }
+
+    /// The name and tenant of `dataset_id`, when a dataset resolver is wired.
+    async fn dataset_label(
+        &self,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> (Option<String>, Option<uuid::Uuid>) {
+        let (Some(id), Some(resolver)) = (dataset_id, self.dataset_resolver.as_ref()) else {
+            return (None, None);
+        };
+        match resolver.get_dataset(id).await {
+            Ok(Some(dataset)) => (Some(dataset.name), dataset.tenant_id),
+            _ => (None, None),
+        }
+    }
+
+    /// One retriever run over whatever store the current scope reaches — the
+    /// shared store, or one dataset's own under per-dataset storage. Returns
+    /// the response and whether it is to be recorded in the search history (a
+    /// pure-feedback acknowledgement is not).
+    ///
+    /// `keep_context`: fetch the context and keep it on the response, as a
+    /// dataset-scoped search always returned its per-dataset context.
+    async fn run_search(
+        &self,
+        request: &SearchRequest,
+        retriever: &crate::retrievers::SearchRetrieverRef,
+        search_type: SearchType,
+        auto_feedback: bool,
+        keep_context: bool,
+    ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
+        let params = SearchParams::from(request);
         let include_context =
-            request.only_context() || request.use_combined_context() || use_dataset_scope;
-        // The scope, when one applies: the requested ids, the resolved names,
-        // or (ACL) the caller's readable set.
-        let scope_ids: Option<&[uuid::Uuid]> =
-            request.dataset_ids.as_deref().filter(|_| use_dataset_scope);
-        // Narrowed to the scope before anything reads it — access tracking,
-        // the completion, the response — keeping the retriever's ranking.
-        // Every multi-dataset scope answers from all of its datasets, whether
-        // the caller named them or the ACL derived them: Python answers from
-        // each dataset in the scope (one task per dataset, `search.py:429-453`
-        // at f154b32), never from the first one alone.
+            request.only_context() || request.use_combined_context() || keep_context;
         let context = if include_context {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
-            let ctx = match scope_ids {
-                Some(ids) => filter_context_to_datasets(&ctx, ids),
-                None => ctx,
-            };
 
             if self.enable_access_tracking {
                 self.track_access(&ctx).await;
@@ -846,16 +1030,6 @@ impl SearchOrchestrator {
             Some(ctx)
         } else {
             None
-        };
-
-        // The per-dataset breakdown returned as `response.context` for a
-        // non-combined scoped search. Not built for a combined one, which
-        // returns the single merged context instead.
-        let scoped_contexts = match (scope_ids, &context) {
-            (Some(ids), Some(ctx)) if !request.use_combined_context() => {
-                Some(scope_context_by_datasets(ctx, ids))
-            }
-            _ => None,
         };
 
         if request.only_context() {
@@ -883,46 +1057,11 @@ impl SearchOrchestrator {
                     .await
             };
 
-            // Several datasets without combining: one prompt per dataset, from
-            // that dataset's own context, as Python's per-dataset fan-out
-            // builds them, and the top-level prompt is the first dataset's.
-            // Otherwise the top-level prompt covers the whole (scoped) context.
-            let first_dataset_key = request
-                .dataset_ids
-                .as_ref()
-                .and_then(|ids| ids.first())
-                .map(uuid::Uuid::to_string);
-            let first_dataset_context = match (&scoped_contexts, &first_dataset_key) {
-                (Some(map), Some(key)) if map.len() > 1 => map.get(key),
-                _ => None,
-            };
-            let messages = prompt_for(first_dataset_context.unwrap_or(&output_context)).await?;
-            let mut prompts_by_dataset = None;
-            if let Some(scoped_context_map) = &scoped_contexts
-                && !request.use_combined_context()
-                && scoped_context_map.len() > 1
-            {
-                let mut prompts = HashMap::new();
-                for (dataset_key, dataset_context) in scoped_context_map {
-                    let dataset_messages = if Some(dataset_key) == first_dataset_key.as_ref() {
-                        messages.clone()
-                    } else {
-                        prompt_for(dataset_context).await?
-                    };
-                    if let (Some(user_prompt), Some(system_prompt)) =
-                        split_prompt_messages(dataset_messages)
-                    {
-                        prompts.insert(
-                            dataset_key.clone(),
-                            SearchPrompt {
-                                user_prompt,
-                                system_prompt,
-                            },
-                        );
-                    }
-                }
-                prompts_by_dataset = Some(prompts);
-            }
+            // One prompt from the whole context this run fetched. Under
+            // per-dataset storage each dataset's run builds its own, and
+            // `merge_dataset_results` collects them per dataset, as Python's
+            // fan-out builds one per dataset.
+            let messages = prompt_for(&output_context).await?;
             let (user_prompt, system_prompt) = split_prompt_messages(messages);
 
             // Python's `SearchResultPayload.result`: the user prompt when one
@@ -943,18 +1082,8 @@ impl SearchOrchestrator {
             );
             response.user_prompt = user_prompt;
             response.system_prompt = system_prompt;
-            response.prompts = prompts_by_dataset;
 
-            if let Some(scoped_context_map) = scoped_contexts
-                && !request.use_combined_context()
-            {
-                response.context = Some(scoped_context_map);
-            }
-
-            self.log_search_history(request, &response).await;
-
-            emit_search_completed(request);
-            return Ok(response);
+            return Ok((response, true));
         }
 
         let user_id_str = request.user_id.map(|id| id.to_string());
@@ -1035,8 +1164,7 @@ impl SearchOrchestrator {
                         request.use_combined_context(),
                         request.verbose(),
                     );
-                    emit_search_completed(request);
-                    return Ok(response);
+                    return Ok((response, false));
                 }
             }
             // If no feedback, or feedback with follow-up, proceed normally.
@@ -1044,7 +1172,7 @@ impl SearchOrchestrator {
 
         // When the orchestrator did not fetch the context above
         // (`include_context` is `only_context || use_combined_context ||
-        // use_dataset_scope`, false on the default path), the retriever would
+        // keep_context`, false on the default path), the retriever would
         // fetch it privately inside `get_completion`. Two things need that
         // context here, so it is fetched once and handed to `get_completion`
         // — every built-in retriever uses a provided context instead of
@@ -1130,23 +1258,19 @@ impl SearchOrchestrator {
         let mut response = prepare_search_result(
             search_type,
             output,
-            context,
+            context.clone(),
             request.dataset_ids.clone(),
             false,
             request.use_combined_context(),
             request.verbose(),
         );
-
-        if let Some(scoped_context_map) = scoped_contexts
-            && !request.use_combined_context()
-        {
-            response.context = Some(scoped_context_map);
+        // A dataset run keeps its context whatever `verbose` says, as a
+        // dataset-scoped search always returned its per-dataset context.
+        if keep_context && response.context.is_none() {
+            response.context = context.map(|items| HashMap::from([(String::new(), items)]));
         }
 
-        self.log_search_history(request, &response).await;
-
-        emit_search_completed(request);
-        Ok(response)
+        Ok((response, true))
     }
 
     /// The session layer a completion carries: the conversation history,
@@ -1203,6 +1327,200 @@ impl SearchOrchestrator {
             tracing::warn!(%error, "failed to record search history");
         }
     }
+}
+
+/// Key a dataset run's context, graph and prompt by its dataset id, as a
+/// dataset-scoped search has always returned them. A combined-context search
+/// keeps its single `combined` entry.
+fn key_context_by_dataset(response: &mut SearchResponse, dataset_id: uuid::Uuid) {
+    let key = dataset_id.to_string();
+    if !response.use_combined_context {
+        if let Some(map) = response.context.take() {
+            let items: SearchContext = map.into_values().flatten().collect();
+            response.context = Some(HashMap::from([(key.clone(), items)]));
+        }
+        if let Some(graphs) = response.graphs.take()
+            && let Some(graph) = graphs.into_values().next()
+        {
+            response.graphs = Some(HashMap::from([(key.clone(), graph)]));
+        }
+    }
+    if let (Some(user_prompt), Some(system_prompt)) =
+        (response.user_prompt.clone(), response.system_prompt.clone())
+    {
+        response.prompts = Some(HashMap::from([(
+            key,
+            SearchPrompt {
+                user_prompt,
+                system_prompt,
+            },
+        )]));
+    }
+}
+
+/// The per-dataset answers of [`SearchOrchestrator::search_datasets`] as one
+/// [`SearchResponse`], for callers with room for a single answer.
+///
+/// One entry is returned as it is. Several merge in dataset order: their
+/// items concatenate, their completions become one `Texts` answer per dataset
+/// (Python returns the list of per-dataset results), and `context`, `graphs`
+/// and `prompts` keep one entry per dataset; `user_prompt` /
+/// `system_prompt` are the first dataset's. No entry (nothing readable) is an
+/// empty `Items` result over no dataset.
+pub fn merge_dataset_results(
+    request: &SearchRequest,
+    results: Vec<DatasetSearchResult>,
+) -> SearchResponse {
+    let mut responses = results.into_iter().map(|result| result.response);
+    let Some(first) = responses.next() else {
+        return prepare_search_result(
+            request.search_type,
+            SearchOutput::Items(Vec::new()),
+            None,
+            Some(Vec::new()),
+            request.only_context(),
+            request.use_combined_context(),
+            request.verbose(),
+        );
+    };
+    let rest: Vec<SearchResponse> = responses.collect();
+    if rest.is_empty() {
+        return first;
+    }
+
+    let mut merged = first;
+    let mut outputs = vec![std::mem::replace(
+        &mut merged.result,
+        SearchOutput::Items(Vec::new()),
+    )];
+    let mut datasets = merged.datasets.take().unwrap_or_default();
+    for response in rest {
+        outputs.push(response.result);
+        datasets.extend(response.datasets.unwrap_or_default());
+        merge_map(&mut merged.context, response.context);
+        merge_map(&mut merged.graphs, response.graphs);
+        merge_map(&mut merged.prompts, response.prompts);
+        merge_map(&mut merged.diagnostics, response.diagnostics);
+        if merged.user_prompt.is_none() {
+            merged.user_prompt = response.user_prompt;
+            merged.system_prompt = response.system_prompt;
+        }
+    }
+    merged.result = merge_outputs(outputs);
+    merged.datasets = Some(datasets);
+    merged
+}
+
+/// `into` gains `from`'s entries; a key both have keeps `into`'s items
+/// followed by `from`'s when they are lists, else `into`'s value.
+fn merge_map<V: MergeValue>(
+    into: &mut Option<HashMap<String, V>>,
+    from: Option<HashMap<String, V>>,
+) {
+    let Some(from) = from else {
+        return;
+    };
+    let into = into.get_or_insert_with(HashMap::new);
+    for (key, value) in from {
+        match into.get_mut(&key) {
+            Some(existing) => existing.absorb(value),
+            None => {
+                into.insert(key, value);
+            }
+        }
+    }
+}
+
+/// How a per-dataset map value merges with another under the same key.
+trait MergeValue {
+    fn absorb(&mut self, other: Self);
+}
+
+impl MergeValue for SearchContext {
+    fn absorb(&mut self, other: Self) {
+        self.extend(other);
+    }
+}
+
+impl MergeValue for crate::types::SearchGraph {
+    fn absorb(&mut self, other: Self) {
+        self.nodes.extend(other.nodes);
+        self.edges.extend(other.edges);
+    }
+}
+
+impl MergeValue for SearchPrompt {
+    fn absorb(&mut self, _other: Self) {}
+}
+
+impl MergeValue for serde_json::Value {
+    fn absorb(&mut self, _other: Self) {}
+}
+
+/// One output from several datasets' outputs, in dataset order.
+fn merge_outputs(outputs: Vec<SearchOutput>) -> SearchOutput {
+    if outputs
+        .iter()
+        .all(|output| matches!(output, SearchOutput::Items(_)))
+    {
+        return SearchOutput::Items(
+            outputs
+                .into_iter()
+                .flat_map(|output| match output {
+                    SearchOutput::Items(items) => items,
+                    _ => Vec::new(),
+                })
+                .collect(),
+        );
+    }
+    if outputs
+        .iter()
+        .all(|output| matches!(output, SearchOutput::Text(_) | SearchOutput::Texts(_)))
+    {
+        return SearchOutput::Texts(
+            outputs
+                .into_iter()
+                .flat_map(|output| match output {
+                    SearchOutput::Text(text) => vec![text],
+                    SearchOutput::Texts(texts) => texts,
+                    _ => Vec::new(),
+                })
+                .collect(),
+        );
+    }
+    if outputs
+        .iter()
+        .all(|output| matches!(output, SearchOutput::GraphQueryRows(_)))
+    {
+        return SearchOutput::GraphQueryRows(
+            outputs
+                .into_iter()
+                .flat_map(|output| match output {
+                    SearchOutput::GraphQueryRows(rows) => rows,
+                    _ => Vec::new(),
+                })
+                .collect(),
+        );
+    }
+    if outputs
+        .iter()
+        .all(|output| matches!(output, SearchOutput::Rules(_)))
+    {
+        return SearchOutput::Rules(
+            outputs
+                .into_iter()
+                .flat_map(|output| match output {
+                    SearchOutput::Rules(rules) => rules,
+                    _ => Vec::new(),
+                })
+                .collect(),
+        );
+    }
+    // Mixed or structured answers have no common shape: the first dataset's.
+    outputs
+        .into_iter()
+        .next()
+        .unwrap_or(SearchOutput::Items(Vec::new()))
 }
 
 #[cfg(test)]
@@ -1492,18 +1810,232 @@ mod tests {
         assert_eq!(default_graph.edges.len(), 1);
     }
 
-    #[tokio::test]
-    async fn fans_out_context_by_dataset_when_dataset_scope_enabled() {
-        let dataset_a = uuid::Uuid::new_v4();
-        let dataset_b = uuid::Uuid::new_v4();
+    /// A retriever that answers from whatever store the current scope reaches:
+    /// one item naming the scope's dataset (`"shared"` outside one), and none
+    /// for a dataset in `empty`.
+    struct ScopeEchoRetriever {
+        search_type: SearchType,
+        empty: Vec<uuid::Uuid>,
+    }
 
-        struct FakeDatasetRetriever {
-            dataset_a: uuid::Uuid,
-            dataset_b: uuid::Uuid,
+    impl ScopeEchoRetriever {
+        fn new(search_type: SearchType) -> Self {
+            Self {
+                search_type,
+                empty: Vec::new(),
+            }
         }
 
+        fn scope_label() -> String {
+            cognee_models::dataset_scope::current_dataset()
+                .map_or_else(|| "shared".to_string(), |id| id.to_string())
+        }
+    }
+
+    #[async_trait]
+    impl SearchRetriever for ScopeEchoRetriever {
+        fn search_type(&self) -> SearchType {
+            self.search_type
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            if cognee_models::dataset_scope::current_dataset()
+                .is_some_and(|id| self.empty.contains(&id))
+            {
+                return Ok(Vec::new());
+            }
+            Ok(vec![crate::types::SearchItem {
+                id: None,
+                score: Some(0.9),
+                payload: json!({ "text": format!("text of {}", Self::scope_label()) }),
+            }])
+        }
+
+        async fn completion_messages(
+            &self,
+            _query: &str,
+            context: &SearchContext,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<Option<Vec<Message>>, SearchError> {
+            let texts: Vec<&str> = context
+                .iter()
+                .filter_map(|item| item.payload["text"].as_str())
+                .collect();
+            Ok(Some(vec![
+                Message::system("system"),
+                Message::user(texts.join("|")),
+            ]))
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            match self.search_type {
+                SearchType::RagCompletion => Ok(SearchOutput::Text(format!(
+                    "answer from {}",
+                    Self::scope_label()
+                ))),
+                _ => Ok(SearchOutput::Items(context.unwrap_or_default())),
+            }
+        }
+    }
+
+    fn echo_orchestrator(retriever: ScopeEchoRetriever) -> super::SearchOrchestrator {
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(retriever));
+        super::SearchOrchestrator::new(registry)
+    }
+
+    fn echo_request(search_type: SearchType, datasets: &[uuid::Uuid]) -> SearchRequest {
+        let mut request: SearchRequest =
+            serde_json::from_value(json!({ "query_text": "hello" })).unwrap();
+        request.search_type = search_type;
+        request.dataset_ids = Some(datasets.to_vec());
+        request
+    }
+
+    /// Under per-dataset storage every dataset is searched once, in its own
+    /// scope, and answers only from its own store: one entry per dataset, and
+    /// the merged response keys each dataset's context by its id.
+    #[tokio::test]
+    async fn per_dataset_storage_searches_each_dataset_in_its_own_scope() {
+        let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let orchestrator = echo_orchestrator(ScopeEchoRetriever::new(SearchType::Chunks))
+            .with_per_dataset_storage(true);
+        let mut request = echo_request(SearchType::Chunks, &[a, b]);
+        request.only_context = Some(true);
+
+        let results = orchestrator.search_datasets(&request).await.unwrap();
+        assert_eq!(
+            results.iter().map(|r| r.dataset_id).collect::<Vec<_>>(),
+            vec![Some(a), Some(b)],
+            "one entry per dataset, in request order"
+        );
+        for result in &results {
+            let id = result.dataset_id.unwrap().to_string();
+            let context = result.response.context.as_ref().unwrap();
+            assert_eq!(context[&id][0].payload["text"], format!("text of {id}"));
+            assert_eq!(
+                result.response.datasets.as_deref(),
+                Some(result.dataset_id.as_slice())
+            );
+        }
+
+        let merged = orchestrator.search(&request).await.unwrap();
+        let context = merged.context.expect("context keyed per dataset");
+        assert_eq!(context.len(), 2);
+        assert_eq!(
+            context[&a.to_string()][0].payload["text"],
+            format!("text of {a}")
+        );
+        assert_eq!(
+            context[&b.to_string()][0].payload["text"],
+            format!("text of {b}")
+        );
+        assert_eq!(merged.datasets, Some(vec![a, b]));
+    }
+
+    /// Completions merge into one answer per dataset.
+    #[tokio::test]
+    async fn per_dataset_completions_merge_into_one_answer_per_dataset() {
+        let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let orchestrator = echo_orchestrator(ScopeEchoRetriever::new(SearchType::RagCompletion))
+            .with_per_dataset_storage(true);
+        let response = orchestrator
+            .search(&echo_request(SearchType::RagCompletion, &[a, b]))
+            .await
+            .unwrap();
+        match response.result {
+            SearchOutput::Texts(texts) => assert_eq!(
+                texts,
+                vec![format!("answer from {a}"), format!("answer from {b}")]
+            ),
+            other => panic!("expected one answer per dataset, got {other:?}"),
+        }
+    }
+
+    /// Over the shared store a search runs once, unscoped, whatever datasets
+    /// it names: Python's non-ACL mode. Nothing is filtered by dataset.
+    #[tokio::test]
+    async fn the_shared_store_is_searched_once_unscoped() {
+        let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let orchestrator = echo_orchestrator(ScopeEchoRetriever::new(SearchType::Chunks));
+        let mut request = echo_request(SearchType::Chunks, &[a, b]);
+        request.only_context = Some(true);
+
+        let results = orchestrator.search_datasets(&request).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].dataset_id, None,
+            "two datasets named, none recorded"
+        );
+        let context = results[0].response.context.as_ref().unwrap();
+        assert_eq!(
+            context[CONTEXT_LABEL_DEFAULT][0].payload["text"],
+            "text of shared"
+        );
+
+        let single = orchestrator
+            .search_datasets(&echo_request(SearchType::Chunks, &[a]))
+            .await
+            .unwrap();
+        assert_eq!(
+            single[0].dataset_id,
+            Some(a),
+            "exactly one dataset is recorded"
+        );
+    }
+
+    /// `only_context` over several datasets builds one prompt per dataset,
+    /// each from that dataset's own context, keyed like `response.context`;
+    /// the top-level prompt is the first dataset's. A dataset with no context
+    /// gets no prompt.
+    #[tokio::test]
+    async fn only_context_builds_one_prompt_per_dataset() {
+        let (a, b, c) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let orchestrator = echo_orchestrator(ScopeEchoRetriever {
+            search_type: SearchType::RagCompletion,
+            empty: vec![c],
+        })
+        .with_per_dataset_storage(true);
+        let mut request = echo_request(SearchType::RagCompletion, &[a, b, c]);
+        request.only_context = Some(true);
+
+        let response = orchestrator.search(&request).await.unwrap();
+
+        let prompts = response.prompts.expect("one prompt per dataset");
+        assert_eq!(prompts.len(), 2, "dataset C has no context, so no prompt");
+        assert_eq!(prompts[&a.to_string()].user_prompt, format!("text of {a}"));
+        assert_eq!(prompts[&b.to_string()].user_prompt, format!("text of {b}"));
+        assert_eq!(
+            response.user_prompt.as_deref(),
+            Some(prompts[&a.to_string()].user_prompt.as_str()),
+            "the top-level prompt is the first dataset's"
+        );
+    }
+
+    /// A dataset with nothing to search gets an empty entry and its reason;
+    /// the search fails only when every dataset is in that state (Python's
+    /// `_collect_dataset_results`).
+    #[tokio::test]
+    async fn a_dataset_without_data_fails_the_search_only_when_all_do() {
+        struct EmptyIn(Vec<uuid::Uuid>);
+
         #[async_trait]
-        impl SearchRetriever for FakeDatasetRetriever {
+        impl SearchRetriever for EmptyIn {
             fn search_type(&self) -> SearchType {
                 SearchType::Chunks
             }
@@ -1513,24 +2045,11 @@ mod tests {
                 _query: &str,
                 _params: &SearchParams,
             ) -> Result<SearchContext, SearchError> {
-                Ok(vec![
-                    crate::types::SearchItem {
-                        id: None,
-                        score: Some(0.9),
-                        payload: json!({
-                            "dataset_id": self.dataset_a.to_string(),
-                            "text": "A context"
-                        }),
-                    },
-                    crate::types::SearchItem {
-                        id: None,
-                        score: Some(0.8),
-                        payload: json!({
-                            "dataset_id": self.dataset_b.to_string(),
-                            "text": "B context"
-                        }),
-                    },
-                ])
+                let current = cognee_models::dataset_scope::current_dataset();
+                if current.is_some_and(|id| self.0.contains(&id)) {
+                    return Err(SearchError::NotFound("graph is empty".to_string()));
+                }
+                Ok(Vec::new())
             }
 
             async fn get_completion(
@@ -1544,146 +2063,44 @@ mod tests {
             }
         }
 
+        let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         let mut registry = SearchTypeRegistry::new();
-        registry.register(Arc::new(FakeDatasetRetriever {
-            dataset_a,
-            dataset_b,
-        }));
+        registry.register(Arc::new(EmptyIn(vec![a])));
+        let orchestrator = super::SearchOrchestrator::new(registry).with_per_dataset_storage(true);
 
-        let orchestrator = super::SearchOrchestrator::new(registry);
+        let results = orchestrator
+            .search_datasets(&echo_request(SearchType::Chunks, &[a, b]))
+            .await
+            .unwrap();
+        assert_eq!(results[0].error.as_deref(), Some("graph is empty"));
+        assert_eq!(results[1].error, None);
 
-        let request = SearchRequest {
-            query_text: "hello".to_string(),
-            search_type: SearchType::Chunks,
-            top_k: Some(3),
-            datasets: None,
-            dataset_ids: Some(vec![dataset_a, dataset_b]),
-            system_prompt: None,
-            system_prompt_path: None,
-            only_context: Some(true),
-            use_combined_context: Some(false),
-            session_id: None,
-            node_type: None,
-            node_name: None,
-            node_name_filter_operator: None,
-            wide_search_top_k: None,
-            triplet_distance_penalty: None,
-            user_id: None,
-            tenant_id: None,
-            verbose: None,
-            feedback_influence: None,
-            retriever_specific_config: None,
-            response_schema: None,
-            custom_search_type: None,
-            auto_feedback_detection: None,
-            neighborhood_depth: None,
-            neighborhood_seed_top_k: None,
-            summarize_context: None,
-        };
+        // One dataset: the retriever's own reason.
+        let error = orchestrator
+            .search_datasets(&echo_request(SearchType::Chunks, &[a]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, SearchError::NotFound(m) if m == "graph is empty"),
+            "{error:?}"
+        );
 
-        let response = orchestrator.search(&request).await.unwrap();
-        let context_map = response.context.expect("scoped context map must exist");
-
-        assert_eq!(context_map[&dataset_a.to_string()].len(), 1);
-        assert_eq!(context_map[&dataset_b.to_string()].len(), 1);
-    }
-
-    /// `only_context` over several datasets builds one prompt per dataset,
-    /// each from that dataset's own context, keyed like `response.context`;
-    /// the top-level prompt is the first dataset's. A dataset with no context
-    /// gets no prompt.
-    #[tokio::test]
-    async fn only_context_builds_one_prompt_per_dataset() {
-        let dataset_a = uuid::Uuid::new_v4();
-        let dataset_b = uuid::Uuid::new_v4();
-        let dataset_c = uuid::Uuid::new_v4();
-
-        struct PromptingRetriever {
-            datasets: [uuid::Uuid; 2],
-        }
-
-        #[async_trait]
-        impl SearchRetriever for PromptingRetriever {
-            fn search_type(&self) -> SearchType {
-                SearchType::RagCompletion
-            }
-
-            async fn get_context(
-                &self,
-                _query: &str,
-                _params: &SearchParams,
-            ) -> Result<SearchContext, SearchError> {
-                Ok(self
-                    .datasets
-                    .iter()
-                    .map(|dataset| crate::types::SearchItem {
-                        id: None,
-                        score: Some(0.9),
-                        payload: json!({
-                            "dataset_id": dataset.to_string(),
-                            "text": format!("text of {dataset}"),
-                        }),
-                    })
-                    .collect())
-            }
-
-            async fn completion_messages(
-                &self,
-                _query: &str,
-                context: &SearchContext,
-                _session: &SessionContext,
-                _params: &SearchParams,
-            ) -> Result<Option<Vec<Message>>, SearchError> {
-                let texts: Vec<&str> = context
-                    .iter()
-                    .filter_map(|item| item.payload["text"].as_str())
-                    .collect();
-                Ok(Some(vec![
-                    Message::system("system"),
-                    Message::user(texts.join("|")),
-                ]))
-            }
-
-            async fn get_completion(
-                &self,
-                _query: &str,
-                _context: Option<SearchContext>,
-                _session: &SessionContext,
-                _params: &SearchParams,
-            ) -> Result<SearchOutput, SearchError> {
-                Ok(SearchOutput::Text("unused".to_string()))
-            }
-        }
-
+        // Several, all empty: one error naming each.
         let mut registry = SearchTypeRegistry::new();
-        registry.register(Arc::new(PromptingRetriever {
-            datasets: [dataset_a, dataset_b],
-        }));
-        let orchestrator = super::SearchOrchestrator::new(registry);
-
-        let mut request: SearchRequest =
-            serde_json::from_value(json!({ "query_text": "hello" })).unwrap();
-        request.search_type = SearchType::RagCompletion;
-        request.only_context = Some(true);
-        request.dataset_ids = Some(vec![dataset_a, dataset_b, dataset_c]);
-
-        let response = orchestrator.search(&request).await.unwrap();
-
-        let prompts = response.prompts.expect("one prompt per dataset");
-        assert_eq!(prompts.len(), 2, "dataset C has no context, so no prompt");
-        assert_eq!(
-            prompts[&dataset_a.to_string()].user_prompt,
-            format!("text of {dataset_a}")
-        );
-        assert_eq!(
-            prompts[&dataset_b.to_string()].user_prompt,
-            format!("text of {dataset_b}")
-        );
-        assert_eq!(
-            response.user_prompt.as_deref(),
-            Some(prompts[&dataset_a.to_string()].user_prompt.as_str()),
-            "the top-level prompt is the first dataset's"
-        );
+        registry.register(Arc::new(EmptyIn(vec![a, b])));
+        let orchestrator = super::SearchOrchestrator::new(registry).with_per_dataset_storage(true);
+        let error = orchestrator
+            .search_datasets(&echo_request(SearchType::Chunks, &[a, b]))
+            .await
+            .unwrap_err();
+        match error {
+            SearchError::NotFound(message) => {
+                assert!(message.contains(&a.to_string()), "{message}");
+                assert!(message.contains(&b.to_string()), "{message}");
+                assert!(message.contains("graph is empty"), "{message}");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -2016,9 +2433,10 @@ mod tests {
     // before the dataset-scope filter runs. Each test documents the
     // expected behavior and how it's verified.
 
-    /// Local fixture for the resolution tests: emits one chunk per dataset
-    /// so we can assert the post-search scope filter trims the bucket map
-    /// down to the resolved UUID.
+    /// Local fixture for the resolution tests: a store holding one chunk of
+    /// `dataset_a` and one of `dataset_b`. Inside a dataset's scope (per-dataset
+    /// storage) it answers with that dataset's chunk only — its own database —
+    /// and outside every scope (the shared store) with both.
     struct ResolutionFixtureRetriever {
         dataset_a: uuid::Uuid,
         dataset_b: uuid::Uuid,
@@ -2040,34 +2458,37 @@ mod tests {
             _query: &str,
             _params: &SearchParams,
         ) -> Result<SearchContext, SearchError> {
-            Ok(vec![
-                crate::types::SearchItem {
-                    id: None,
-                    score: Some(0.9),
-                    payload: json!({
-                        "dataset_id": self.dataset_a.to_string(),
-                        "text": "A context"
-                    }),
-                },
-                crate::types::SearchItem {
-                    id: None,
-                    score: Some(0.8),
-                    payload: json!({
-                        "dataset_id": self.dataset_b.to_string(),
-                        "text": "B context"
-                    }),
-                },
-            ])
+            let item = |dataset: uuid::Uuid, text: &str, score: f32| crate::types::SearchItem {
+                id: None,
+                score: Some(score),
+                payload: json!({ "dataset_id": dataset.to_string(), "text": text }),
+            };
+            let all = vec![
+                item(self.dataset_a, "A context", 0.9),
+                item(self.dataset_b, "B context", 0.8),
+            ];
+            Ok(match cognee_models::dataset_scope::current_dataset() {
+                Some(scope) => all
+                    .into_iter()
+                    .filter(|i| i.payload["dataset_id"] == scope.to_string())
+                    .collect(),
+                None => all,
+            })
         }
 
+        /// Like every built-in retriever: a provided context, else its own.
         async fn get_completion(
             &self,
-            _query: &str,
+            query: &str,
             context: Option<SearchContext>,
             _session: &SessionContext,
-            _params: &SearchParams,
+            params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
-            Ok(SearchOutput::Items(context.unwrap_or_default()))
+            let context = match context {
+                Some(context) => context,
+                None => self.get_context(query, params).await?,
+            };
+            Ok(SearchOutput::Items(context))
         }
     }
 
@@ -2157,8 +2578,9 @@ mod tests {
             dataset_a: dataset.id,
             dataset_b: other,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let request = SearchRequest {
             datasets: Some(vec!["real".into()]),
@@ -2370,8 +2792,9 @@ mod tests {
             dataset_a: ds_a.id,
             dataset_b: ds_b.id,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let request = SearchRequest {
             datasets: Some(vec!["shared_name".into()]),
@@ -2488,8 +2911,9 @@ mod tests {
             dataset_a: untenanted.id,
             dataset_b: tenanted.id,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let response = orchestrator
             .search(&SearchRequest {
@@ -2653,8 +3077,9 @@ mod tests {
             dataset_a: dataset.id,
             dataset_b: Uuid::new_v4(),
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let request = SearchRequest {
             datasets: Some(vec!["real".into(), "missing".into()]),
@@ -2722,7 +3147,7 @@ mod tests {
             dataset_b: Uuid::new_v4(),
         }));
         // No resolver wired — would fail if names were consulted.
-        let orchestrator = super::SearchOrchestrator::new(registry);
+        let orchestrator = super::SearchOrchestrator::new(registry).with_per_dataset_storage(true);
 
         let request = SearchRequest {
             datasets: Some(vec!["bogus".into()]),
@@ -2754,8 +3179,9 @@ mod tests {
             dataset_a: dataset.id,
             dataset_b: other,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let request = SearchRequest {
             dataset_ids: Some(vec![dataset.id]),
@@ -2916,6 +3342,7 @@ mod tests {
             dataset_b: other,
         }));
         let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
             .with_dataset_resolver(db as Arc<dyn IngestDb>)
             .with_acl_db(acl as Arc<dyn AclDb>);
 
@@ -3138,7 +3565,7 @@ mod tests {
     /// Before the fix this request skipped authorization entirely and
     /// returned B's item too.
     #[tokio::test]
-    async fn acl_wired_unfiltered_search_is_scoped_to_readable_datasets() {
+    async fn per_dataset_acl_unfiltered_search_is_scoped_to_readable_datasets() {
         let caller = Uuid::new_v4();
         let dataset_a = Uuid::new_v4();
         let dataset_b = Uuid::new_v4();
@@ -3156,8 +3583,9 @@ mod tests {
             dataset_a,
             dataset_b,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_acl_db(acl as Arc<dyn AclDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_acl_db(acl as Arc<dyn AclDb>);
 
         let no_filter = [
             (None, None),
@@ -3215,7 +3643,7 @@ mod tests {
     /// retriever's order — a derived scope has no "first requested dataset"
     /// to narrow to.
     #[tokio::test]
-    async fn acl_wired_unfiltered_completion_draws_on_every_readable_dataset() {
+    async fn per_dataset_acl_unfiltered_completion_draws_on_every_readable_dataset() {
         let caller = Uuid::new_v4();
         let dataset_a = Uuid::new_v4();
         let dataset_b = Uuid::new_v4();
@@ -3231,8 +3659,9 @@ mod tests {
             dataset_a,
             dataset_b,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_acl_db(acl as Arc<dyn AclDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_acl_db(acl as Arc<dyn AclDb>);
 
         let response = orchestrator
             .search(&SearchRequest {
@@ -3242,8 +3671,11 @@ mod tests {
             })
             .await
             .expect("search");
+        // One answer per readable dataset, in the readable set's (id) order.
+        let mut texts = item_texts(&response.result);
+        texts.sort();
         assert_eq!(
-            item_texts(&response.result),
+            texts,
             vec!["A context".to_string(), "B context".to_string()]
         );
     }
@@ -3254,7 +3686,7 @@ mod tests {
     /// at all — Python's `search_in_datasets_context` gathers zero
     /// per-dataset tasks and returns `[]`.
     #[tokio::test]
-    async fn acl_wired_unfiltered_search_with_nothing_readable_is_empty() {
+    async fn per_dataset_acl_unfiltered_search_with_nothing_readable_is_empty() {
         let caller = Uuid::new_v4();
         let acl = Arc::new(cognee_test_utils::MockAclDb::new());
         // Someone else's grant: the ACL is not empty, the caller's set is.
@@ -3269,8 +3701,9 @@ mod tests {
         });
         let mut registry = SearchTypeRegistry::new();
         registry.register(Arc::clone(&retriever) as Arc<dyn SearchRetriever>);
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_acl_db(acl as Arc<dyn AclDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_acl_db(acl as Arc<dyn AclDb>);
 
         for only_context in [true, false] {
             let response = orchestrator
@@ -3297,10 +3730,11 @@ mod tests {
     /// Expected: `InvalidInput` — with an ACL the readable set depends on the
     /// caller, and an unknown caller must not fall back to an unscoped search.
     #[tokio::test]
-    async fn acl_wired_unfiltered_search_without_user_id_is_invalid_input() {
+    async fn per_dataset_acl_unfiltered_search_without_user_id_is_invalid_input() {
         let mut registry = SearchTypeRegistry::new();
         registry.register(Arc::new(FakeChunksRetriever));
         let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
             .with_acl_db(Arc::new(cognee_test_utils::MockAclDb::new()) as Arc<dyn AclDb>);
 
         let err = orchestrator
@@ -3373,44 +3807,44 @@ mod tests {
         (orchestrator, retriever)
     }
 
-    /// Review finding 1. Scenario: an ACL is wired and the search type's
-    /// results carry no dataset membership (temporal, Cypher, natural
-    /// language, ...), searched with and without an explicit filter.
-    /// Expected: `InvalidInput` naming the type, before the retriever runs —
-    /// never an empty answer (the membership filter would drop everything)
-    /// and never an unscoped one (it would read datasets the caller may not).
+    /// A type whose results carry no dataset membership (temporal, Cypher,
+    /// lexical, …) is no longer refused under an ACL: nothing is filtered by
+    /// membership any more. Over the shared store it runs once, unscoped;
+    /// under per-dataset storage once per dataset, in that dataset's scope.
     #[tokio::test]
-    async fn acl_wired_search_of_an_unscopable_type_is_refused() {
+    async fn an_unscopable_type_runs_under_an_acl() {
         let caller = Uuid::new_v4();
         let readable = Uuid::new_v4();
-        let acl = Arc::new(cognee_test_utils::MockAclDb::new());
-        acl.grant_permission(caller, readable, "read")
-            .await
-            .expect("grant");
-        let (orchestrator, retriever) = scoping_orchestrator(
-            crate::retrievers::DatasetScoping::Unsupported,
-            Some(acl as Arc<dyn AclDb>),
-        );
-
-        for dataset_ids in [None, Some(vec![readable])] {
-            for only_context in [true, false] {
-                let err = orchestrator
+        for per_dataset in [false, true] {
+            let acl = Arc::new(cognee_test_utils::MockAclDb::new());
+            acl.grant_permission(caller, readable, "read")
+                .await
+                .expect("grant");
+            let (orchestrator, retriever) = scoping_orchestrator(
+                crate::retrievers::DatasetScoping::Unsupported,
+                Some(acl as Arc<dyn AclDb>),
+            );
+            let orchestrator = orchestrator.with_per_dataset_storage(per_dataset);
+            for dataset_ids in [None, Some(vec![readable])] {
+                let response = orchestrator
                     .search(&SearchRequest {
                         search_type: SearchType::Temporal,
                         dataset_ids: dataset_ids.clone(),
                         user_id: Some(caller),
-                        only_context: Some(only_context),
+                        only_context: Some(false),
                         ..dataset_request_template()
                     })
                     .await
-                    .expect_err("an unscopable type must be refused under ACL");
-                let SearchError::InvalidInput(message) = err else {
-                    panic!("expected InvalidInput, got {err:?}");
-                };
-                assert!(message.contains("Temporal"), "{message}");
+                    .expect("no type is refused");
+                assert_eq!(
+                    item_texts(&response.result),
+                    vec!["no membership".to_string()],
+                    "per_dataset={per_dataset} dataset_ids={dataset_ids:?}"
+                );
             }
+            assert!(retriever.calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
+            assert!(!orchestrator.refuses_dataset_scope(SearchType::Temporal));
         }
-        assert_eq!(retriever.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// The same unscopable type without an ACL: unchanged, unscoped.
@@ -3460,53 +3894,24 @@ mod tests {
         );
     }
 
-    /// Cloud S3 finding #7. Scenario: every scoping × ACL wired / not wired.
-    /// Expected: `refuses_dataset_scope` is `true` exactly when `search`
-    /// refuses a dataset-scoped request of that type with `InvalidInput`, and
-    /// `dataset_scoping` reports the registered retriever's scoping (`None`,
-    /// and no refusal, for an unregistered type).
-    /// Verification: run the same search the accessor predicts for and
-    /// compare.
+    /// `dataset_scoping` reports the registered retriever's scoping (`None`
+    /// for an unregistered type), and `refuses_dataset_scope` is `false` for
+    /// every scoping, with or without an ACL: no search type is refused.
     #[tokio::test]
-    async fn the_scoping_accessor_matches_the_refusal_search_applies() {
+    async fn no_search_type_is_refused() {
         use crate::retrievers::DatasetScoping as S;
-        let caller = Uuid::new_v4();
-        let readable = Uuid::new_v4();
         for scoping in [S::Membership, S::NotDatasetData, S::Unsupported] {
             for with_acl in [false, true] {
-                let acl = if with_acl {
-                    let acl = Arc::new(cognee_test_utils::MockAclDb::new());
-                    acl.grant_permission(caller, readable, "read")
-                        .await
-                        .expect("grant");
-                    Some(acl as Arc<dyn AclDb>)
-                } else {
-                    None
-                };
+                let acl = with_acl
+                    .then(|| Arc::new(cognee_test_utils::MockAclDb::new()) as Arc<dyn AclDb>);
                 let (orchestrator, _retriever) = scoping_orchestrator(scoping, acl);
                 assert_eq!(
                     orchestrator.dataset_scoping(SearchType::Temporal),
                     Some(scoping)
                 );
                 assert_eq!(orchestrator.dataset_scoping(SearchType::Cypher), None);
+                assert!(!orchestrator.refuses_dataset_scope(SearchType::Temporal));
                 assert!(!orchestrator.refuses_dataset_scope(SearchType::Cypher));
-
-                let predicted = orchestrator.refuses_dataset_scope(SearchType::Temporal);
-                let outcome = orchestrator
-                    .search(&SearchRequest {
-                        search_type: SearchType::Temporal,
-                        dataset_ids: Some(vec![readable]),
-                        user_id: Some(caller),
-                        only_context: Some(true),
-                        ..dataset_request_template()
-                    })
-                    .await;
-                let refused = matches!(outcome, Err(SearchError::InvalidInput(_)));
-                assert_eq!(
-                    predicted, refused,
-                    "{scoping:?}, acl={with_acl}: accessor says {predicted}, search gave {outcome:?}"
-                );
-                assert_eq!(predicted, with_acl && scoping == S::Unsupported);
             }
         }
     }
@@ -3542,8 +3947,9 @@ mod tests {
             dataset_a: in_a,
             dataset_b: in_b,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_acl_db(acl as Arc<dyn AclDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_acl_db(acl as Arc<dyn AclDb>);
 
         let response = orchestrator
             .search(&SearchRequest {
@@ -3580,37 +3986,44 @@ mod tests {
         assert_eq!(response.datasets, Some(vec![no_tenant]));
     }
 
-    /// Review findings 7 and 9. Scenario: an explicit two-dataset filter,
-    /// with and without combined context, on the completion path.
-    /// Expected: the answer draws on both datasets, in the retriever's ranked
-    /// order — not on the first requested dataset alone, and not in a
-    /// `HashMap`-dependent order.
+    /// An explicit two-dataset filter, with and without combined context, on
+    /// the completion path. Under per-dataset storage the answer draws on both
+    /// datasets, each from its own store, in request order (Python's
+    /// per-dataset results); over the shared store the retriever runs once,
+    /// unscoped, and answers from everything it holds in its own ranking.
     #[tokio::test]
-    async fn explicit_multi_dataset_scope_answers_from_all_datasets_in_rank_order() {
+    async fn explicit_multi_dataset_scope_answers_from_all_datasets() {
         let dataset_a = Uuid::new_v4();
         let dataset_b = Uuid::new_v4();
-        let mut registry = SearchTypeRegistry::new();
-        registry.register(Arc::new(ResolutionFixtureRetriever {
-            dataset_a,
-            dataset_b,
-        }));
-        let orchestrator = super::SearchOrchestrator::new(registry);
-        for combined in [false, true] {
-            // B is requested first; the ranking still puts A (0.9) first.
-            let response = orchestrator
-                .search(&SearchRequest {
-                    dataset_ids: Some(vec![dataset_b, dataset_a]),
-                    only_context: Some(false),
-                    use_combined_context: Some(combined),
-                    ..dataset_request_template()
-                })
-                .await
-                .expect("search");
-            assert_eq!(
-                item_texts(&response.result),
-                vec!["A context".to_string(), "B context".to_string()],
-                "combined={combined}"
-            );
+        for per_dataset in [true, false] {
+            let mut registry = SearchTypeRegistry::new();
+            registry.register(Arc::new(ResolutionFixtureRetriever {
+                dataset_a,
+                dataset_b,
+            }));
+            let orchestrator =
+                super::SearchOrchestrator::new(registry).with_per_dataset_storage(per_dataset);
+            for combined in [false, true] {
+                let response = orchestrator
+                    .search(&SearchRequest {
+                        dataset_ids: Some(vec![dataset_b, dataset_a]),
+                        only_context: Some(false),
+                        use_combined_context: Some(combined),
+                        ..dataset_request_template()
+                    })
+                    .await
+                    .expect("search");
+                let expected = if per_dataset {
+                    vec!["B context".to_string(), "A context".to_string()]
+                } else {
+                    vec!["A context".to_string(), "B context".to_string()]
+                };
+                assert_eq!(
+                    item_texts(&response.result),
+                    expected,
+                    "per_dataset={per_dataset} combined={combined}"
+                );
+            }
         }
     }
 
@@ -3681,8 +4094,9 @@ mod tests {
             dataset_a: dataset.id,
             dataset_b: other,
         }));
-        let orchestrator =
-            super::SearchOrchestrator::new(registry).with_dataset_resolver(db as Arc<dyn IngestDb>);
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>);
 
         let request = SearchRequest {
             datasets: Some(vec!["real".into()]),

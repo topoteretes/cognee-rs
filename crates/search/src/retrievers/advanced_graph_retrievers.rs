@@ -159,12 +159,7 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
         self.core.ensure_graph_not_empty().await?;
-        // Scoped here, not only by the orchestrator: `get_completion` calls
-        // this again for follow-up retrievals the orchestrator never sees.
-        Ok(crate::orchestration::filter_context_to_params(
-            self.core.search(query, params).await?,
-            params,
-        ))
+        Ok(self.core.search(query, params).await?)
     }
 
     async fn completion_messages(
@@ -360,12 +355,7 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
         query: &str,
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        // Scoped here, not only by the orchestrator: `get_completion` calls
-        // this again for follow-up retrievals the orchestrator never sees.
-        Ok(crate::orchestration::filter_context_to_params(
-            self.core.search(query, params).await?,
-            params,
-        ))
+        Ok(self.core.search(query, params).await?)
     }
 
     /// The final prompt over the extended context. The extension rounds call
@@ -619,12 +609,7 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         query: &str,
         params: &SearchParams,
     ) -> Result<SearchContext, SearchError> {
-        // Scoped here, not only by the orchestrator: `get_completion` calls
-        // this again for follow-up retrievals the orchestrator never sees.
-        Ok(crate::orchestration::filter_context_to_params(
-            self.core.search(query, params).await?,
-            params,
-        ))
+        Ok(self.core.search(query, params).await?)
     }
 
     /// The final prompt over the context the reasoning ended with. The

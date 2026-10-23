@@ -24,7 +24,10 @@ pub mod utils;
 #[allow(deprecated)]
 pub use cognee_session::SeaOrmSessionStore;
 pub use cognee_session::{RelationalSessionStore, SessionContext, SessionManager, SessionStore};
-pub use orchestration::{SearchBuilder, SearchOrchestrator, SearchTuning, SearchTypeRegistry};
+pub use orchestration::{
+    DatasetSearchResult, SearchBuilder, SearchOrchestrator, SearchTuning, SearchTypeRegistry,
+    merge_dataset_results,
+};
 pub use query_router::{RouteResult, route_query};
 pub use query_router_stats::{clear_override_counts, override_counts_snapshot, record_override};
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};

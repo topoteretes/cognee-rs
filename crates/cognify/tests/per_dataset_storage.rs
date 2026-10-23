@@ -369,3 +369,72 @@ async fn a_failed_run_is_rolled_back_in_its_dataset() {
         fx.names(a).await
     );
 }
+
+/// Search under per-dataset storage: each dataset answers from its own
+/// store, a dataset filter searches only the datasets it names, and an
+/// unfiltered search covers every dataset the caller owns — one answer per
+/// dataset. Chunks carry their text, so the answers are recognisable.
+#[tokio::test]
+async fn search_answers_each_dataset_from_its_own_store() {
+    use cognee_search::{SearchBuilder, SearchRequest, SearchType, types::SearchOutput};
+
+    let fx = Fixture::new().await;
+    let (a, b) = (fx.dataset("a").await, fx.dataset("b").await);
+    let file_a = fx.add_file(a, "Alice works at Acme.").await;
+    let file_b = fx.add_file(b, "Bob works at Globex.").await;
+    fx.cognify(a, vec![file_a], graph_response("Alice", "Acme"))
+        .await;
+    fx.cognify(b, vec![file_b], graph_response("Bob", "Globex"))
+        .await;
+
+    let orchestrator = SearchBuilder::new(
+        fx.stores.vector_db(),
+        Arc::new(MockEmbeddingEngine::new(8)),
+        fx.stores.graph_db(),
+        Arc::new(MockLlm::empty()),
+        fx.db.clone(),
+    )
+    .with_dataset_resolver(fx.db.clone())
+    .with_per_dataset_storage(true)
+    .build();
+
+    let request = |dataset_ids: Option<Vec<Uuid>>| {
+        let mut request: SearchRequest =
+            serde_json::from_value(json!({ "query_text": "who works where" })).unwrap();
+        request.search_type = SearchType::Chunks;
+        request.dataset_ids = dataset_ids;
+        request.user_id = Some(fx.owner_id);
+        request
+    };
+    let texts = |output: &SearchOutput| -> Vec<String> {
+        match output {
+            SearchOutput::Items(items) => items
+                .iter()
+                .filter_map(|item| item.payload["text"].as_str().map(str::to_string))
+                .collect(),
+            other => panic!("expected chunk items, got {other:?}"),
+        }
+    };
+
+    let only_a = orchestrator.search(&request(Some(vec![a]))).await.unwrap();
+    let only_a = texts(&only_a.result);
+    assert!(only_a.iter().any(|t| t.contains("Alice")), "{only_a:?}");
+    assert!(!only_a.iter().any(|t| t.contains("Bob")), "{only_a:?}");
+
+    let results = orchestrator.search_datasets(&request(None)).await.unwrap();
+    let mut by_dataset: Vec<(Uuid, Vec<String>)> = results
+        .iter()
+        .map(|r| (r.dataset_id.unwrap(), texts(&r.response.result)))
+        .collect();
+    by_dataset.sort();
+    assert_eq!(by_dataset.len(), 2, "one answer per owned dataset");
+    for (dataset_id, texts) in by_dataset {
+        let (own, other) = if dataset_id == a {
+            ("Alice", "Bob")
+        } else {
+            ("Bob", "Alice")
+        };
+        assert!(texts.iter().any(|t| t.contains(own)), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains(other)), "{texts:?}");
+    }
+}

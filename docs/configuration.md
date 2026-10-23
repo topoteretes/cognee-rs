@@ -1624,19 +1624,29 @@ What an attached `AclDb` changes for search and recall:
   caller's tenant (`SearchRequest::tenant_id`, strict equality: no tenant
   reads only tenant-less datasets), as Python's
   `get_all_user_permission_datasets` does.
-- A request that names no dataset is scoped to every dataset the caller may
-  read, and returns an empty result when there is none (Python's ACL mode,
-  where `dataset_ids=None` means "all readable datasets"). Every search then
-  needs the caller's user id; recall with an unknown caller gets no graph
-  results.
-- Scoping filters results on their dataset membership, because all datasets
-  share one graph and vector store (Python instead runs the search inside each
-  dataset's own databases). Search types whose results carry no membership —
-  `TEMPORAL`, `CYPHER`, `NATURAL_LANGUAGE`, `CHUNKS_LEXICAL`, `FEELING_LUCKY`,
-  `CODING_RULES` and community retrievers that do not declare
-  `DatasetScoping::Membership` — are refused with an invalid-input error
-  rather than answered empty or across datasets the caller may not read.
-  `FEEDBACK` is not dataset data and is not scoped.
+- Under per-dataset storage, a request that names no dataset searches every
+  dataset the caller may read, and returns an empty result when there is none
+  (Python's ACL mode). Every such search needs the caller's user id; recall
+  with an unknown caller gets no graph results.
+
+How a search is scoped depends on storage, not on the ACL:
+
+- **Per-dataset storage** (`ENABLE_BACKEND_ACCESS_CONTROL`): the retriever
+  runs once per dataset, in that dataset's own databases —
+  `SearchOrchestrator::search_datasets` returns one result per dataset
+  (Python's `SearchResultPayload` list), `search` merges them (completions
+  become one `Texts` answer per dataset; context, graphs and prompts are keyed
+  by dataset id). Every search type works, top-k is per dataset, and a dataset
+  with nothing to search fails the search only when every dataset does. Without
+  an ACL, "every dataset the caller may read" is the caller's own datasets in
+  its tenant.
+- **Shared store** (the default): one unscoped search, whatever datasets the
+  request names, after the permission check — Python's non-ACL mode. Nothing
+  is filtered by dataset membership any more; the former post-filter could not
+  be made tight, and the six types it refused (`TEMPORAL`, `CYPHER`,
+  `NATURAL_LANGUAGE`, `CHUNKS_LEXICAL`, `FEELING_LUCKY`, `CODING_RULES`) run
+  again. `SearchOrchestrator::refuses_dataset_scope` is always `false`.
+  `CYPHER` and `NATURAL_LANGUAGE` stay gated by `ALLOW_CYPHER_QUERY`.
 
 The per-dataset checks outside search — `DatasetManager` (`list_data`,
 `has_data`, `empty_dataset`, `delete_data`), `AuthorizedDeleteService` and
@@ -1690,8 +1700,7 @@ Deletes in more detail (SDK-936, Python @37f788bd2):
   tenant (`--tenant-id`) — Python's `datasets.delete_all(user)` — not the whole
   store. The library's plain `DeleteScope::All` is still the store-wide wipe.
 
-Without an `AclDb`, an unfiltered search stays unscoped and every type runs, as
-in Python's non-ACL mode. The ownership fallback that replaces the ACL — explicit
+The ownership fallback that replaces the ACL — explicit
 `dataset_ids`, dataset names and `DatasetManager::list_datasets` — also keeps
 only datasets whose tenant equals the caller's: a tenant-less caller (`None`)
 sees only tenant-less datasets (Python `get_dataset_ids.py:34`,

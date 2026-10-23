@@ -75,12 +75,19 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             SessionManager::new(session_store).with_feedback_llm_timeout(feedback_llm_timeout),
         );
         let search_tuning = cm.settings().search_tuning();
+        // Per-dataset storage: every dataset is searched in its own databases.
+        let per_dataset_storage = cm
+            .dataset_storage()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?
+            .is_some();
         let orchestrator =
             SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database.clone())
                 .with_tuning(search_tuning)
                 .with_session_manager(session_manager)
                 .with_dataset_resolver(database as Arc<dyn IngestDb>)
                 .with_search_history_logging(log_search_history)
+                .with_per_dataset_storage(per_dataset_storage)
                 .build();
 
         let datasets = if args.datasets.is_empty() {

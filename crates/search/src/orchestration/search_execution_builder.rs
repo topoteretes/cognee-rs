@@ -76,6 +76,7 @@ pub struct SearchBuilder {
     acl_db: Option<Arc<dyn AclDb>>,
     session_manager: Option<Arc<SessionManager>>,
     log_search_history: bool,
+    per_dataset_storage: bool,
 }
 
 impl SearchBuilder {
@@ -100,6 +101,7 @@ impl SearchBuilder {
             acl_db: None,
             session_manager: None,
             log_search_history: true,
+            per_dataset_storage: false,
         }
     }
 
@@ -136,6 +138,14 @@ impl SearchBuilder {
     /// See [`SearchOrchestrator::with_search_history_logging`].
     pub fn with_search_history_logging(mut self, enabled: bool) -> Self {
         self.log_search_history = enabled;
+        self
+    }
+
+    /// See [`SearchOrchestrator::with_per_dataset_storage`]: on when the
+    /// engines handed to [`Self::new`] are per-dataset storage's routing
+    /// engines (`ComponentManager::dataset_storage` is `Some`).
+    pub fn with_per_dataset_storage(mut self, enabled: bool) -> Self {
+        self.per_dataset_storage = enabled;
         self
     }
 
@@ -406,7 +416,8 @@ impl SearchBuilder {
             .with_llm(llm)
             .with_auto_feedback_default(self.tuning.auto_feedback)
             .with_default_system_prompt_path(self.tuning.default_system_prompt_path)
-            .with_search_history_logging(self.log_search_history);
+            .with_search_history_logging(self.log_search_history)
+            .with_per_dataset_storage(self.per_dataset_storage);
         if self.tuning.access_tracking {
             orchestrator = orchestrator.with_access_tracking();
         }
