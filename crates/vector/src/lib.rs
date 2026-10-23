@@ -4,6 +4,8 @@
 
 /// Pure-Rust in-memory brute-force vector database (OSS default fallback).
 pub mod brute_force_vector_db;
+/// The per-dataset routing engine (`ENABLE_BACKEND_ACCESS_CONTROL`).
+pub mod dataset_routed;
 /// Error types for vector database operations.
 pub mod error;
 /// Data models for vector points, search results, and collection configuration.
@@ -31,6 +33,7 @@ pub mod lancedb_adapter;
 pub mod mock_vector_db;
 
 pub use brute_force_vector_db::BruteForceVectorDB;
+pub use dataset_routed::{DatasetRoutedVectorDB, DatasetVectorResolver};
 pub use error::{VectorDBError, VectorDBResult};
 pub use models::{
     CollectionConfig, DATASET_ID_KEY, DATASET_IDS_KEY, DistanceMetric, SearchResult, VectorPoint,

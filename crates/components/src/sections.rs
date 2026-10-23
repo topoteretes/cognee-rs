@@ -513,6 +513,13 @@ config_section! {
         pub host: String = String::new() => {
             env: ["VECTOR_DB_HOST"], alias: ["vector_db_host"], secret: false,
         },
+        /// Dataset database handler under per-dataset storage
+        /// (`ENABLE_BACKEND_ACCESS_CONTROL`): `lancedb`, `pgvector`,
+        /// `pgvector_shared`, `memory`, or an adapter's. Empty derives it from
+        /// the provider (`default_vector_handler`).
+        pub dataset_database_handler: String = String::new() => {
+            env: ["VECTOR_DATASET_DATABASE_HANDLER"], alias: ["vector_dataset_database_handler"], secret: false,
+        },
     }
 }
 
@@ -556,6 +563,14 @@ config_section! {
         /// Embedded graph file path; empty derives `{system_root}/graph`.
         pub file_path: String = String::new() => {
             env: ["GRAPH_FILE_PATH"], alias: ["graph_file_path"], secret: false,
+        },
+        /// Dataset database handler under per-dataset storage
+        /// (`ENABLE_BACKEND_ACCESS_CONTROL`): `ladybug`, `kuzu`,
+        /// `postgres_graph`, `postgres_graph_shared`, `memory`, or an
+        /// adapter's. Empty derives it from the provider
+        /// (`default_graph_handler`).
+        pub dataset_database_handler: String = String::new() => {
+            env: ["GRAPH_DATASET_DATABASE_HANDLER"], alias: ["graph_dataset_database_handler"], secret: false,
         },
         /// Graph file name (not used yet; see SDK-1070).
         pub filename: String = String::new() => {

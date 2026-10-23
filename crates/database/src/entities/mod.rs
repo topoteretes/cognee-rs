@@ -4,6 +4,7 @@ pub mod data;
 pub mod dataset;
 pub mod dataset_configuration;
 pub mod dataset_data;
+pub mod dataset_database;
 pub mod query;
 pub mod result_log;
 

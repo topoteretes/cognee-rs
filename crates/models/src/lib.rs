@@ -5,6 +5,8 @@ mod data;
 mod data_input;
 mod data_point;
 mod dataset;
+/// The dataset an operation runs in, for per-dataset storage.
+pub mod dataset_scope;
 mod document;
 mod document_chunk;
 mod edge_metadata;

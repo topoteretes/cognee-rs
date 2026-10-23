@@ -22,6 +22,7 @@
 //! db.add_node(&entity).await?;
 //! ```
 
+mod dataset_routed;
 #[cfg(any(feature = "ladybug", feature = "postgres"))]
 mod dedup;
 mod error;
@@ -39,6 +40,7 @@ mod pg_graph_adapter;
 #[cfg(any(test, feature = "testing"))]
 pub mod mock;
 
+pub use dataset_routed::{DatasetGraphResolver, DatasetRoutedGraphDB, NO_DATASET_SCOPE};
 pub use error::{GraphDBError, GraphDBResult};
 pub use formatted::get_formatted_graph_data;
 pub use temporal::{

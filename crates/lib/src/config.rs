@@ -1076,9 +1076,9 @@ pub enum ConfigError {
     /// that fails the key's validation. `reason` says which.
     #[error("Type mismatch for key '{key}': {reason}")]
     TypeMismatch { key: String, reason: String },
-    /// The value is well formed but this build does not support it, e.g.
-    /// `enable_access_control = true` when the application has not declared
-    /// that it provides access control. `reason` says why and what to do.
+    /// The value is well formed but this build does not support it. `reason`
+    /// says why and what to do. No setting reports it today; see
+    /// [`Settings::check_supported`].
     #[error("Unsupported value for key '{key}': {reason}")]
     Unsupported { key: String, reason: String },
 }
@@ -1130,8 +1130,9 @@ pub struct ConfigManager {
     /// `(canonical key, reason)`. They were dropped, and
     /// [`ConfigManager::check_strict`] reports them until the key is set again.
     invalid: Arc<Mutex<Vec<(String, String)>>>,
-    /// Whether the embedding application provides backend access control
-    /// (an `AclDb`), so `enable_access_control = true` is accepted. See
+    /// Whether the embedding application declared that it provides an
+    /// `AclDb`. Informational only since `enable_access_control` turns on
+    /// per-dataset storage; see
     /// [`ConfigManager::set_application_access_control`].
     application_access_control: Arc<AtomicBool>,
 }
@@ -1252,10 +1253,7 @@ impl ConfigManager {
     /// Fail if the configuration that was loaded in bulk (a config file, a
     /// binding's settings object) held a value of the wrong type for a known
     /// key, if any setting holds an unsupported value
-    /// ([`ConfigManager::check_supported`]: `enable_access_control = true`,
-    /// from env too, without
-    /// [`set_application_access_control`](ConfigManager::set_application_access_control)),
-    /// or, with `strict_config` on, if a key no registered setting owns is
+    /// ([`ConfigManager::check_supported`]), or, with `strict_config` on, if a key no registered setting owns is
     /// present. Otherwise `Ok`: unknown keys were already reported as
     /// warnings.
     ///
@@ -1276,8 +1274,7 @@ impl ConfigManager {
                 reason: reason.clone(),
             });
         }
-        // A value the key accepts but this build does not support (e.g.
-        // `enable_access_control = true` from env or a config file): always an
+        // A value the key accepts but this build does not support: always an
         // error, like a wrongly typed one.
         s.check_supported(self.application_access_control())?;
         if !s.strict_config {
@@ -1292,18 +1289,15 @@ impl ConfigManager {
     /// Declare whether the embedding application provides backend access
     /// control, i.e. attaches its own `AclDb`
     /// (`SearchBuilder`/`SearchOrchestrator::with_acl_db`, the ingestion
-    /// builder's `with_acl_db`, `DatasetManager::with_acl`) and enforces it.
+    /// builder's `with_acl_db`, `DatasetManager::with_acl`).
     ///
-    /// cognee-rs never enforces access control from configuration, so by
-    /// default `enable_access_control = true` (`ENABLE_BACKEND_ACCESS_CONTROL`)
-    /// is a [`ConfigError::Unsupported`] error rather than a silently inert
-    /// flag. An application that does provide it calls this with `true`
-    /// before the configuration is validated ([`ConfigManager::check_strict`]
-    /// or the first component build): the setting is then accepted from env,
-    /// config files, [`ConfigManager::set`] and [`ConfigManager::apply_patch`],
-    /// and it is the application's to read and act on. Shared by every clone
-    /// of this manager. Through a binding handle, see
-    /// `HandleState::with_application_access_control`.
+    /// No longer required: `enable_access_control = true`
+    /// (`ENABLE_BACKEND_ACCESS_CONTROL`) used to be refused without it, and
+    /// now turns on per-dataset storage in any application
+    /// (`docs/design/per-dataset-storage.md`). Kept so existing callers
+    /// compile; the value is only reported back by
+    /// [`ConfigManager::application_access_control`]. Shared by every clone of
+    /// this manager.
     pub fn set_application_access_control(&self, provided: bool) {
         self.application_access_control
             .store(provided, Ordering::Release);
@@ -1441,24 +1435,16 @@ enum Applied {
 }
 
 /// Set `key` on `s` the way [`ConfigManager::set`] does, without touching the
-/// manager: `system_root_directory` cascades to the paths derived from it,
-/// and `enable_access_control = true` is accepted only with
-/// `application_access_control`.
+/// manager: `system_root_directory` cascades to the paths derived from it.
 fn apply_one(
     schema: &ConfigSchema,
     s: &mut Settings,
     key: &str,
     value: serde_json::Value,
-    application_access_control: bool,
 ) -> Result<Applied, ConfigError> {
     if let Some(spec) = key_spec(key) {
         if spec.key == "system_root_directory" {
             cascade_system_root(s, as_string(key, &value)?.as_str());
-        } else if spec.key == keys::ACCESS_CONTROL_KEY && application_access_control {
-            s.enable_access_control = value.as_bool().ok_or_else(|| ConfigError::TypeMismatch {
-                key: key.to_string(),
-                reason: "expected a boolean".to_string(),
-            })?;
         } else {
             (spec.set)(s, key, value)?;
         }
@@ -2453,11 +2439,10 @@ impl ConfigManager {
     /// [`ConfigManager::set_system_root_directory`], so the graph and vector
     /// paths derived from the old root move with it.
     pub fn set(&self, key: &str, value: serde_json::Value) -> Result<(), ConfigError> {
-        let application_access_control = self.application_access_control();
         // Lock order: `schema` before `inner` (see `ConfigManager`).
         let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        match apply_one(&schema, &mut s, key, value, application_access_control)? {
+        match apply_one(&schema, &mut s, key, value)? {
             Applied::Known(canonical) => {
                 drop(s);
                 drop(schema);
@@ -2495,20 +2480,13 @@ impl ConfigManager {
         if patch.is_empty() {
             return Ok(());
         }
-        let application_access_control = self.application_access_control();
         // Lock order: `schema` before `inner` (see `ConfigManager`).
         let schema = self.schema.read().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
         let mut next = s.clone();
         let mut applied = Vec::new();
         for (key, value) in patch {
-            match apply_one(
-                &schema,
-                &mut next,
-                key,
-                value.clone(),
-                application_access_control,
-            )? {
+            match apply_one(&schema, &mut next, key, value.clone())? {
                 Applied::Known(canonical) => applied.push(canonical),
                 Applied::Unknown => {
                     // Lenient here even in strict mode: see the doc comment.

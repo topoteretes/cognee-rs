@@ -2,6 +2,7 @@
 //! [`crate::ComponentRegistry::with_builtins`].
 
 pub mod database;
+pub mod dataset_handlers;
 pub mod embedding;
 pub mod graph;
 pub mod llm;

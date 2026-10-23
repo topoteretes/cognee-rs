@@ -67,9 +67,9 @@ pub use sync::{
 };
 pub use traits::{
     AclDb, CostByModelRow, DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch,
-    DatasetDb, DeleteDb, IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, ProvenanceDb,
-    RelationalDb, SearchHistoryDb, SessionLifecycleDb, SessionListFilters, SessionListPage,
-    SessionQaDb, SessionRowWithStatus, SessionStats,
+    DatasetDatabaseDb, DatasetDatabaseRecord, DatasetDb, DeleteDb, IngestDb, Notebook, NotebookDb,
+    NotebookUpdatePatch, ProvenanceDb, RelationalDb, SearchHistoryDb, SessionLifecycleDb,
+    SessionListFilters, SessionListPage, SessionQaDb, SessionRowWithStatus, SessionStats,
 };
 pub use types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,

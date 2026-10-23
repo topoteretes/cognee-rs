@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::instrument;
 
-use cognee_components::ComponentRegistry;
+use cognee_components::{ComponentRegistry, DatasetStorage};
 use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -80,6 +80,10 @@ pub struct ComponentManager {
     // the version-keyed cache envelope.
     #[allow(clippy::type_complexity)]
     transcriber: TokioRwLock<Option<(u64, Option<Arc<dyn Transcriber>>)>>,
+    // Per-dataset storage (`enable_access_control`), behind the routing graph
+    // and vector engines; `None` inside when the flag is off.
+    #[allow(clippy::type_complexity)]
+    dataset_storage: TokioRwLock<Option<(u64, Option<Arc<DatasetStorage>>)>>,
     // Version-keyed cache of the lowered build context, so `Settings::backend_context`
     // (env reads + the Postgres credential-fallback warning) runs once per config
     // version instead of once per component (7×).
@@ -126,6 +130,7 @@ impl ComponentManager {
             embedding_engine: TokioRwLock::new(None),
             llm: TokioRwLock::new(None),
             transcriber: TokioRwLock::new(None),
+            dataset_storage: TokioRwLock::new(None),
             context: TokioRwLock::new(None),
             telemetry_key,
         }
@@ -218,16 +223,75 @@ impl ComponentManager {
         self.registry.build_database(&ctx).await
     }
 
+    /// The shared graph store, or — with `enable_access_control` — the engine
+    /// that routes every call to the current dataset's own graph.
     #[instrument(name = "cognee.component.graph_db", level = "info", skip_all, err)]
     async fn init_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
+        if let Some(storage) = self.dataset_storage().await? {
+            return Ok(storage.graph_db());
+        }
         let ctx = self.build_context().await?;
         self.registry.build_graph(&ctx).await
     }
 
+    /// The shared vector store, or the per-dataset routing engine; see
+    /// [`Self::init_graph_db`].
     #[instrument(name = "cognee.component.vector_db", level = "info", skip_all, err)]
     async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
+        if let Some(storage) = self.dataset_storage().await? {
+            return Ok(storage.vector_db());
+        }
         let ctx = self.build_context().await?;
         self.registry.build_vector(&ctx).await
+    }
+
+    /// Per-dataset storage when `enable_access_control`
+    /// (`ENABLE_BACKEND_ACCESS_CONTROL`) is on, else `None`: every dataset's
+    /// own graph and vector database, provisioned on first use
+    /// (`docs/design/per-dataset-storage.md`). The graph and vector engines
+    /// this manager hands out then route each call to the dataset of the
+    /// current [`cognee_models::dataset_scope`]; this handle is for what spans
+    /// datasets — deleting one's storage, prune.
+    ///
+    /// Cached per config version, like the components.
+    ///
+    /// # Errors
+    /// [`ComponentError::Config`] when the configured graph or vector
+    /// provider has no dataset database handler (Python's
+    /// `multi_user_support_possible`).
+    pub async fn dataset_storage(&self) -> Result<Option<Arc<DatasetStorage>>, ComponentError> {
+        let current_ver = self.config.version();
+        {
+            let guard = self.dataset_storage.read().await;
+            if let Some((ver, storage)) = &*guard
+                && *ver == current_ver
+            {
+                return Ok(storage.clone());
+            }
+        }
+        // The relational database first, without holding this slot's lock:
+        // its own accessor takes the database slot.
+        let enabled = self.settings().enable_access_control;
+        let database = if enabled {
+            Some(self.database().await?)
+        } else {
+            None
+        };
+        let mut guard = self.dataset_storage.write().await;
+        if let Some((ver, storage)) = &*guard
+            && *ver == current_ver
+        {
+            return Ok(storage.clone());
+        }
+        let storage = match database {
+            Some(database) => {
+                let ctx = self.build_context().await?;
+                Some(self.registry.build_dataset_storage(&ctx, database)?)
+            }
+            None => None,
+        };
+        *guard = Some((current_ver, storage.clone()));
+        Ok(storage)
     }
 
     #[instrument(
@@ -538,6 +602,8 @@ impl ComponentManager {
         let llm = self.llm.write().await.take();
         let transcriber = self.transcriber.write().await.take();
         let storage = self.storage.write().await.take();
+        // Closed through the routing graph and vector engines below.
+        let _ = self.dataset_storage.write().await.take();
         // The lowered build context holds no OS resource, but a stale one would
         // outlive the config version it was built for; clear it with the rest.
         let _ = self.context.write().await.take();
@@ -685,28 +751,74 @@ mod tests {
         );
     }
 
-    /// An SDK user that never calls `check_strict` still cannot build a
-    /// component from `ENABLE_BACKEND_ACCESS_CONTROL=true`, unless the
-    /// application declared that it provides access control.
+    /// `ENABLE_BACKEND_ACCESS_CONTROL=true` builds per-dataset storage, and
+    /// the graph and vector engines route through it: a call outside every
+    /// dataset scope fails, one inside reaches that dataset's own store.
+    #[cfg(feature = "testing")]
     #[test]
-    fn components_are_not_built_with_unprovided_access_control() {
+    fn access_control_builds_per_dataset_storage() {
+        let root = tempfile::tempdir().unwrap();
         let mut settings = Settings::default();
         settings.overlay_from(
-            &cognee_config_core::MapEnv::new().with("ENABLE_BACKEND_ACCESS_CONTROL", "true"),
+            &cognee_config_core::MapEnv::new()
+                .with("ENABLE_BACKEND_ACCESS_CONTROL", "true")
+                .with("GRAPH_DATABASE_PROVIDER", "mock")
+                .with("VECTOR_DB_PROVIDER", "mock"),
         );
         let cm = ComponentManager::new(ConfigManager::new(settings));
+        cm.config()
+            .set_system_root_directory(&root.path().to_string_lossy());
+        cm.config()
+            .set(
+                "relational_db_url",
+                serde_json::json!(format!(
+                    "sqlite:{}?mode=rwc",
+                    root.path().join("cognee.db").display()
+                )),
+            )
+            .unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
             .build()
             .unwrap();
-        match rt.block_on(cm.build_context()) {
-            Err(ComponentError::Config(msg)) => {
-                assert!(msg.contains("enable_access_control"), "{msg}");
-            }
-            Err(other) => panic!("expected a config error, got {other}"),
-            Ok(_) => panic!("expected a config error, got a context"),
-        }
-        cm.config().set_application_access_control(true);
-        rt.block_on(cm.build_context()).unwrap();
+        rt.block_on(async {
+            let storage = cm
+                .dataset_storage()
+                .await
+                .unwrap()
+                .expect("per-dataset storage");
+            assert_eq!(storage.handler_names(), ("memory", "memory"));
+            let graph = cm.graph_db().await.unwrap();
+            assert!(
+                graph.is_empty().await.is_err(),
+                "unscoped access fails closed"
+            );
+
+            let owner = uuid::Uuid::new_v4();
+            let dataset =
+                cognee_models::Dataset::new("ds".into(), owner, None, uuid::Uuid::new_v4());
+            let id = dataset.id;
+            let db = cm.database().await.unwrap();
+            cognee_database::IngestDb::create_dataset(&*db, dataset)
+                .await
+                .unwrap();
+            let empty = cognee_models::dataset_scope::with_dataset(id, graph.is_empty())
+                .await
+                .unwrap();
+            assert!(empty);
+            cm.close().await;
+        });
+    }
+
+    /// The flag off (the default) leaves the shared stores and no storage.
+    #[test]
+    fn no_access_control_means_shared_stores() {
+        let cm = ComponentManager::new(ConfigManager::new(Settings::default()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(rt.block_on(cm.dataset_storage()).unwrap().is_none());
     }
 
     fn cm_with_provider(provider: &str) -> ComponentManager {

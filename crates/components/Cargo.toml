@@ -70,12 +70,18 @@ cognee-session = { path = "../session", version = "0.2.0", features = ["relation
 cognee-utils = { path = "../utils", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }
 async-trait.workspace = true
+chrono.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Per-dataset storage: the bind cells (`OnceCell`) and the embedded handlers'
+# file removal.
+tokio = { workspace = true }
 url = { workspace = true, optional = true }
+uuid.workspace = true
 
 [dev-dependencies]
+cognee-models = { path = "../models" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = { workspace = true }
 cognee-vector = { path = "../vector", features = ["testing"] }

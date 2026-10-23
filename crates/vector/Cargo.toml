@@ -27,6 +27,8 @@ testing  = []
 [dependencies]
 # Component-owned config sections (PgVectorConfig).
 cognee-config-core = { path = "../config-core", version = "0.2.0" }
+# The dataset scope the per-dataset routing engine reads (`dataset_scope`).
+cognee-models = { path = "../models", version = "0.2.0" }
 # Async
 tokio       = { workspace = true }
 async-trait = { workspace = true }

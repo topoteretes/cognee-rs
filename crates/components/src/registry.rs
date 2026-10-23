@@ -20,6 +20,10 @@ use crate::builtins::database::SeaOrmRelationalFactory;
 use crate::builtins::embedding::DefaultEmbeddingFactory;
 use crate::builtins::llm::{self, OpenAiCompatibleLlmFactory};
 use crate::context::BackendBuildContext;
+use crate::dataset_storage::{
+    DatasetDatabaseHandler, DatasetStorage, HandlerKind, default_graph_handler,
+    default_vector_handler,
+};
 use crate::error::ComponentError;
 use crate::sections::{OntologyConfig, RelationalConfig, SessionConfig, StorageConfig};
 use crate::traits::{
@@ -48,6 +52,9 @@ pub struct ComponentRegistry {
     session_store: HashMap<String, Arc<dyn SessionStoreFactory>>,
     ontology: HashMap<String, Arc<dyn OntologyResolverFactory>>,
     graph_extractor: HashMap<String, Arc<dyn GraphExtractorFactory>>,
+    /// Dataset database handlers of per-dataset storage, by
+    /// `(kind, name)`: `memory` is both a graph and a vector handler.
+    dataset_handlers: HashMap<(HandlerKind, String), Arc<dyn DatasetDatabaseHandler>>,
     /// Config sections registered directly (not through a factory).
     config_sections: Vec<&'static SectionSchema>,
 }
@@ -70,6 +77,7 @@ impl ComponentRegistry {
             session_store: HashMap::new(),
             ontology: HashMap::new(),
             graph_extractor: HashMap::new(),
+            dataset_handlers: HashMap::new(),
             config_sections: Vec::new(),
         }
     }
@@ -123,6 +131,22 @@ impl ComponentRegistry {
         }
         #[cfg(feature = "testing")]
         reg.register_graph(Arc::new(crate::builtins::graph::MockGraphFactory));
+
+        // ── dataset database handlers (per-dataset storage) ───────────────
+        {
+            use crate::builtins::dataset_handlers::{
+                LadybugDatasetHandler, LanceDbDatasetHandler, MemoryDatasetHandler,
+            };
+            reg.register_dataset_database_handler(Arc::new(LadybugDatasetHandler::new("ladybug")));
+            reg.register_dataset_database_handler(Arc::new(LadybugDatasetHandler::new("kuzu")));
+            reg.register_dataset_database_handler(Arc::new(LanceDbDatasetHandler));
+            reg.register_dataset_database_handler(Arc::new(MemoryDatasetHandler::new(
+                HandlerKind::Graph,
+            )));
+            reg.register_dataset_database_handler(Arc::new(MemoryDatasetHandler::new(
+                HandlerKind::Vector,
+            )));
+        }
 
         // ── llm ───────────────────────────────────────────────────────────
         for id in llm::OPENAI_COMPATIBLE_PROVIDERS {
@@ -195,6 +219,81 @@ impl ComponentRegistry {
     }
 
     /// Register (or override) a graph backend factory under `f.provider()`.
+    /// Register a dataset database handler for per-dataset storage
+    /// (`ENABLE_BACKEND_ACCESS_CONTROL`), replacing one of the same kind and
+    /// name.
+    pub fn register_dataset_database_handler(&mut self, handler: Arc<dyn DatasetDatabaseHandler>) {
+        self.dataset_handlers
+            .insert((handler.kind(), handler.name().to_string()), handler);
+    }
+
+    /// Names of the registered dataset database handlers of `kind` (sorted).
+    pub fn dataset_database_handlers(&self, kind: HandlerKind) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .dataset_handlers
+            .keys()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, name)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Per-dataset storage over `database`, for the providers and handlers
+    /// `ctx` selects (`graph.dataset_database_handler` /
+    /// `vector.dataset_database_handler`, derived from the provider when
+    /// empty).
+    ///
+    /// # Errors
+    /// [`ComponentError::Config`] when a provider has no factory, or a
+    /// selected handler is not registered or does not work with the
+    /// configured provider (Python `multi_user_support_possible`).
+    pub fn build_dataset_storage(
+        &self,
+        ctx: &BackendBuildContext,
+        database: Arc<dyn RelationalDb>,
+    ) -> Result<Arc<DatasetStorage>, ComponentError> {
+        let graph_key = ctx.graph_provider.to_lowercase();
+        let graph_factory = self.graph.get(&graph_key).cloned().ok_or_else(|| {
+            ComponentError::Config(unsupported_msg(
+                "graph_database_provider",
+                &ctx.graph_provider,
+                &self.graph_providers(),
+            ))
+        })?;
+        let vector_key = self.resolve_vector_key(&ctx.vector_provider, ANDROID_LANCEDB_FALLBACK)?;
+        let vector_factory = self.vector.get(&vector_key).cloned().ok_or_else(|| {
+            ComponentError::Config(unsupported_msg(
+                "vector_db_provider",
+                &ctx.vector_provider,
+                &self.vector_providers(),
+            ))
+        })?;
+        let mut base = ctx.clone();
+        base.graph_provider = graph_key;
+        base.vector_provider = vector_key;
+        let graph_handler = non_empty_or(
+            &ctx.section::<crate::sections::GraphConfig>()
+                .dataset_database_handler,
+            || default_graph_handler(&base.graph_provider),
+        );
+        let vector_handler = non_empty_or(
+            &ctx.section::<crate::sections::VectorConfig>()
+                .dataset_database_handler,
+            || default_vector_handler(&base.vector_provider),
+        );
+        let storage = DatasetStorage::new(
+            base,
+            database,
+            graph_factory,
+            vector_factory,
+            &graph_handler,
+            &vector_handler,
+            self.dataset_handlers.clone(),
+        )?;
+        Ok(Arc::new(storage))
+    }
+
     pub fn register_graph(&mut self, f: Arc<dyn GraphDbFactory>) {
         self.graph.insert(f.provider().to_lowercase(), f);
     }
@@ -898,6 +997,12 @@ fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String 
          ComponentRegistry::register_* at the binary entry point.",
         supported.join(", ")
     )
+}
+
+/// `value` trimmed and lowercased, or `default()` when it is empty.
+fn non_empty_or(value: &str, default: impl FnOnce() -> String) -> String {
+    let value = value.trim().to_lowercase();
+    if value.is_empty() { default() } else { value }
 }
 
 #[cfg(test)]

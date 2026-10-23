@@ -752,6 +752,7 @@ aliases, shown in brackets.
 | `VECTOR_DB_HOST` / `VECTOR_DB_PORT` | `vector.host` / `vector.port` (`vector_db_host` / `vector_db_port`) | _(empty)_ / `1234` |
 | `VECTOR_DB_NAME` / `VECTOR_DB_KEY` | `vector.name` / `vector.key` (`vector_db_name` / `vector_db_key`) | _(empty)_ |
 | `VECTOR_DB_USERNAME` / `VECTOR_DB_PASSWORD` | `vector.username` / `vector.password` (`vector_db_*`) | _(empty)_ |
+| `VECTOR_DATASET_DATABASE_HANDLER` | `vector.dataset_database_handler` (`vector_dataset_database_handler`) | _(empty — derived from the provider: `lancedb`, `pgvector`, `memory` for `brute-force`/`mock`)_; read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
 
 Supported providers:
 
@@ -834,6 +835,7 @@ aliases.
 | `GRAPH_DATABASE_HOST` / `GRAPH_DATABASE_PORT` | `graph.host` / `graph.port` (`graph_database_host` / `graph_database_port`) | _(empty)_ / `123` |
 | `GRAPH_DATABASE_NAME` / `GRAPH_DATABASE_KEY` | `graph.name` / `graph.key` (`graph_database_*`) | _(empty)_ |
 | `GRAPH_DATABASE_USERNAME` / `GRAPH_DATABASE_PASSWORD` | `graph.username` / `graph.password` (`graph_database_*`) | _(empty)_ |
+| `GRAPH_DATASET_DATABASE_HANDLER` | `graph.dataset_database_handler` (`graph_dataset_database_handler`) | _(empty — derived from the provider: `ladybug`, `kuzu`, `postgres_graph`, `memory` for `mock`)_; read only with `ENABLE_BACKEND_ACCESS_CONTROL` ([per-dataset storage](#per-dataset-storage)) |
 | `GRAPH_MAX_DB_SIZE` | section key `graph.ladybug.max_db_size` (alias `graph_max_db_size`; `ladybug` builds only) | `1073741824` (1 GiB) |
 
 Supported providers: `ladybug`/`kuzu` (embedded), `postgres` (feature `pggraph`).
@@ -1547,22 +1549,49 @@ keywords into the LLM call instead of raising. See
 | `COGNEE_DEFAULT_USER_ID` | `default_user_id` | nil UUID |
 | `COGNEE_DEFAULT_DATASET_NAME` | `default_dataset_name` | `main_dataset` (the dataset `cognee-cli add`/`add-and-cognify`/`remember`/`improve` and the Python compat `add`/`cognify`/`add_and_cognify` use without an explicit one; a blank value falls back to `main_dataset`) |
 | `DEFAULT_USER_EMAIL` / `DEFAULT_USER_PASSWORD` | `default_user_email` / `default_user_password` | `default_user@example.com` / _(empty)_ (the password has no effect in this repository: the OSS build has no user accounts or login to give it to; Python uses it to make the default user loginable on its API server) |
-| `ENABLE_BACKEND_ACCESS_CONTROL` | `enable_access_control` | `false`; `true` only with application-provided access control (below) |
+| `ENABLE_BACKEND_ACCESS_CONTROL` | `enable_access_control` | `false` ([per-dataset storage](#per-dataset-storage); Python defaults to `true`) |
 
 Setting `system_root_directory` cascades to the default `graph_file_path` and
 `vector_db_url` unless those are set explicitly.
 
-**`ENABLE_BACKEND_ACCESS_CONTROL` / `enable_access_control` is reserved.**
-cognee-rust never enforces access control from configuration: dataset ACLs
-apply only when the embedding application attaches its own `AclDb`
-(`SearchBuilder` / `SearchOrchestrator::with_acl_db`, the ingestion builder's
-`with_acl_db`, `DatasetManager::with_acl`). So by default `true` is a
-configuration error (`ConfigError::Unsupported`), whatever `strict_config` says,
-instead of a flag that would silently change nothing. `false` and unset are
-always accepted, and the key stays known, so a Python-parity configuration
-carrying `ENABLE_BACKEND_ACCESS_CONTROL=false` loads without a warning. Python
-defaults the flag to `true`; this is a deliberate divergence. Every truthy
-spelling (`true`, `1`, `yes`, `on`, any case) counts as `true`.
+### Per-dataset storage
+
+**`ENABLE_BACKEND_ACCESS_CONTROL` / `enable_access_control` gives every dataset
+its own graph and vector database**, as Python does
+([design](design/per-dataset-storage.md)). Off (the default), every dataset
+shares one graph store and one vector store. On:
+
+- A dataset's databases are provisioned on its first use by the selected
+  dataset database handlers (`GRAPH_DATASET_DATABASE_HANDLER`,
+  `VECTOR_DATASET_DATABASE_HANDLER`) and recorded in the `dataset_database`
+  table — Python's table, so the relational database stays shared between the
+  SDKs. Storage is namespaced by the dataset's **owner**: the embedded handlers
+  keep `{system_root_directory}/databases/{owner_id}/{dataset_id}.lbug` and
+  `…/{dataset_id}.lance.db`.
+- The graph and vector engines the components hand out route every call to
+  the dataset of the current `cognee_models::dataset_scope`. A call outside
+  every dataset scope fails rather than reaching another dataset's data.
+- Deleting a dataset drops its databases; prune drops every dataset's.
+- The recorded embedding width is checked on every bind: switching to a model
+  of another width fails with an error naming the dataset, the stored and the
+  configured model.
+- It is not authorization. Permission checks (an attached `AclDb`, or the
+  ownership fallback) run in both modes.
+- **Nothing is migrated.** Turning it on starts every dataset empty; re-add and
+  re-cognify. Turning it off again goes back to the shared stores.
+
+A configured provider without a handler is an error at the first component
+build naming the handler, the provider and the supported handlers (Python's
+`multi_user_support_possible`). The built-in handlers are `ladybug` / `kuzu`
+and `lancedb` for the embedded stores, `memory` for `mock` / `brute-force`; an
+adapter crate registers its own with
+`ComponentRegistry::register_dataset_database_handler`.
+
+`ConfigManager::set_application_access_control` and
+`HandleState::with_application_access_control()` are no longer needed for the
+flag to be accepted (it used to be refused without them); they are kept so
+existing callers compile. Every truthy spelling (`true`, `1`, `yes`, `on`, any
+case) counts as `true`.
 
 What an attached `AclDb` changes for search and recall:
 
@@ -1645,40 +1674,9 @@ sees only tenant-less datasets (Python `get_dataset_ids.py:34`,
 `get_all_user_permission_datasets.py:49-53`).
 
 > **Migrating from Python:** Python's `.env.template` ships an uncommented
-> `ENABLE_BACKEND_ACCESS_CONTROL=True`. A `.env` copied from it (cognee-rust loads
-> `.env` automatically) makes every CLI command, every binding operation and
-> every `ComponentManager` component build fail until that line is changed to
-> `False` or removed. `cognee-cli config unset` cannot override a value that
-> comes from the environment.
-
-* `ConfigManager::set` / `Settings::set_key`, every binding's `set`, a binding's
-  constructor settings object (`apply_patch`, which is atomic: nothing of a
-  failing patch is applied) and `cognee-cli config set` fail at once.
-* A `true` from the environment or a loaded config file is kept and reported by
-  `ConfigManager::check_supported`: from `ConfigManager::check_strict` (the CLI
-  command, a binding handle's first operation) and before every component
-  build of a `ComponentManager`, so a Rust SDK user who never calls
-  `check_strict` cannot run with it either. `cognee-cli config set
-  enable_access_control false` or `config unset enable_access_control` repairs a
-  saved config.
-* Bindings report it with their existing "unsupported" error: C
-  `CG_ERR_UNSUPPORTED`, Python `CogneeUnsupportedError`, TS/Java `UNSUPPORTED`.
-
-**An application that provides access control owns the flag.** It declares so on
-its `ConfigManager` before the configuration is validated:
-
-```rust
-let config = ConfigManager::from_env_with_schema(&registry.config_schema()?)?;
-config.set_application_access_control(true);
-config.check_strict()?; // `ENABLE_BACKEND_ACCESS_CONTROL=true` is accepted now
-let acl_on = config.read().enable_access_control; // the application acts on it
-```
-
-A binding handle does the same with
-`HandleState::with_application_access_control()`. The switch is shared by every
-clone of the manager. With it, `true` is accepted from env, config files, `set`
-and `apply_patch`; reading the value and attaching the `AclDb` remain the
-application's job.
+> `ENABLE_BACKEND_ACCESS_CONTROL=True`, and Python turns it on by default. A
+> `.env` copied from it (cognee-rust loads `.env` automatically) turns on
+> per-dataset storage here too.
 
 ## Session / cache & rate limiting
 
