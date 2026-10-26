@@ -286,7 +286,14 @@ impl ComponentManager {
         let storage = match database {
             Some(database) => {
                 let ctx = self.build_context().await?;
-                Some(self.registry.build_dataset_storage(&ctx, database)?)
+                // Kept across configuration versions while it still serves the
+                // configuration: a second storage would open every dataset's
+                // stores again beside the first (an embedded graph allows one
+                // writer), and a delete through one would not evict the other.
+                match guard.as_ref().and_then(|(_, storage)| storage.clone()) {
+                    Some(storage) if storage.serves(&ctx) => Some(storage),
+                    _ => Some(self.registry.build_dataset_storage(&ctx, database)?),
+                }
             }
             None => None,
         };
@@ -806,6 +813,50 @@ mod tests {
                 .await
                 .unwrap();
             assert!(empty);
+            cm.close().await;
+        });
+    }
+
+    /// A configuration change that does not touch storage keeps the same
+    /// per-dataset storage; one that does builds a new one.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn per_dataset_storage_survives_unrelated_config_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.overlay_from(
+            &cognee_config_core::MapEnv::new()
+                .with("ENABLE_BACKEND_ACCESS_CONTROL", "true")
+                .with("GRAPH_DATABASE_PROVIDER", "mock")
+                .with("VECTOR_DB_PROVIDER", "mock"),
+        );
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        cm.config()
+            .set_system_root_directory(&root.path().to_string_lossy());
+        cm.config()
+            .set(
+                "relational_db_url",
+                serde_json::json!(format!(
+                    "sqlite:{}?mode=rwc",
+                    root.path().join("cognee.db").display()
+                )),
+            )
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let first = cm.dataset_storage().await.unwrap().unwrap();
+            cm.config().set_llm_api_key("sk-other");
+            let same = cm.dataset_storage().await.unwrap().unwrap();
+            assert!(
+                Arc::ptr_eq(&first, &same),
+                "an LLM key does not touch storage"
+            );
+            cm.config().set_embedding_dimensions(7);
+            let rebuilt = cm.dataset_storage().await.unwrap().unwrap();
+            assert!(!Arc::ptr_eq(&first, &rebuilt), "the embedding width does");
             cm.close().await;
         });
     }

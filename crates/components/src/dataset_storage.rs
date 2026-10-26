@@ -186,6 +186,8 @@ pub(crate) type HandlerMap = HashMap<(HandlerKind, String), Arc<dyn DatasetDatab
 /// builds and caches their engines, and drops them with the dataset.
 pub struct DatasetStorage {
     base: BackendBuildContext,
+    /// [`storage_fingerprint`] of the context this storage was built from.
+    fingerprint: String,
     database: Arc<dyn RelationalDb>,
     graph_factory: Arc<dyn GraphDbFactory>,
     vector_factory: Arc<dyn VectorDbFactory>,
@@ -197,6 +199,11 @@ pub struct DatasetStorage {
     /// A poisoned lock is recovered: every critical section is a single map
     /// operation, which a panic cannot leave half done.
     bound: Mutex<HashMap<Uuid, BindCell>>,
+    /// Per-dataset gates: a bind that has to build engines holds its dataset's
+    /// gate shared, a delete holds it exclusively. So no engine is built on a
+    /// database being dropped, and a bind waiting on a delete provisions the
+    /// dataset afresh once it is gone.
+    gates: Mutex<HashMap<Uuid, Arc<tokio::sync::RwLock<()>>>>,
 }
 
 impl DatasetStorage {
@@ -225,6 +232,7 @@ impl DatasetStorage {
             &base.vector_provider,
         )?;
         Ok(Self {
+            fingerprint: storage_fingerprint(&base),
             base,
             database,
             graph_factory,
@@ -233,6 +241,7 @@ impl DatasetStorage {
             vector_handler,
             handlers,
             bound: Mutex::new(HashMap::new()),
+            gates: Mutex::new(HashMap::new()),
         })
     }
 
@@ -250,6 +259,15 @@ impl DatasetStorage {
         Arc::new(DatasetRoutedVectorDB::new(
             Arc::clone(self) as Arc<dyn DatasetVectorResolver>
         ))
+    }
+
+    /// Whether this storage is what `ctx` would build: the same providers,
+    /// locations, credentials, handlers and embedding width. A configuration
+    /// change that leaves them alone (an LLM key, a chunk size) keeps the
+    /// storage — and its open engines — rather than opening every dataset's
+    /// stores a second time beside them.
+    pub fn serves(&self, ctx: &BackendBuildContext) -> bool {
+        self.fingerprint == storage_fingerprint(ctx)
     }
 
     /// The names of the selected graph and vector handlers.
@@ -273,6 +291,13 @@ impl DatasetStorage {
     /// Bind a dataset: its row (provisioned on first use), then its engines.
     /// Concurrent binds of one dataset share one build.
     async fn bind(&self, dataset_id: Uuid) -> Result<Arc<Bound>, ComponentError> {
+        if let Some(bound) = self.cached_for(dataset_id) {
+            return Ok(bound);
+        }
+        // Built under the dataset's gate, shared: a delete in progress finishes
+        // first, and none starts until this build is cached (and so evictable).
+        let gate = self.gate(dataset_id);
+        let _building = gate.read().await;
         let cell = {
             let mut bound = self.bound.lock().unwrap_or_else(PoisonError::into_inner);
             Arc::clone(bound.entry(dataset_id).or_default())
@@ -439,8 +464,20 @@ impl DatasetStorage {
             })
     }
 
+    /// The gate of `dataset_id` (see [`Self::gates`](DatasetStorage)).
+    fn gate(&self, dataset_id: Uuid) -> Arc<tokio::sync::RwLock<()>> {
+        Arc::clone(
+            self.gates
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(dataset_id)
+                .or_default(),
+        )
+    }
+
     /// Take the dataset's engines out of the cache and close them, so its
-    /// databases can be dropped (the embedded ones hold file locks).
+    /// databases can be dropped (the embedded ones hold file locks). Called
+    /// holding the dataset's gate exclusively, so no bind is mid-build.
     async fn evict(&self, dataset_id: Uuid) {
         let cell = {
             self.bound
@@ -461,7 +498,13 @@ impl DatasetStorage {
     /// Drop the dataset's databases and its row (Python `delete_dataset`):
     /// the graph database, then the vector database. `Ok(false)` when the
     /// dataset never had per-dataset storage.
+    ///
+    /// Holds the dataset's gate exclusively throughout: a concurrent first use
+    /// waits, then provisions empty databases; an engine a caller obtained
+    /// before is closed and fails its next call.
     pub async fn delete_dataset_storage(&self, dataset_id: Uuid) -> Result<bool, ComponentError> {
+        let gate = self.gate(dataset_id);
+        let _deleting = gate.write().await;
         self.evict(dataset_id).await;
         let Some(row) = self
             .database
@@ -489,6 +532,8 @@ impl DatasetStorage {
             .await
             .map_err(db_error)?;
         for row in &rows {
+            let gate = self.gate(row.dataset_id);
+            let _deleting = gate.write().await;
             self.evict(row.dataset_id).await;
             self.drop_databases(row).await?;
             self.database
@@ -526,6 +571,30 @@ impl DatasetStorage {
             .get(&dataset_id)
             .and_then(|cell| cell.get().cloned())
     }
+}
+
+/// What a [`DatasetStorage`] depends on in a build context. In memory only:
+/// it carries the resolved database URLs, credentials included.
+fn storage_fingerprint(ctx: &BackendBuildContext) -> String {
+    let graph = ctx.section::<crate::sections::GraphConfig>();
+    let vector = ctx.section::<crate::sections::VectorConfig>();
+    format!(
+        "{:?}",
+        (
+            ctx.graph_provider.to_lowercase(),
+            ctx.vector_provider.to_lowercase(),
+            &ctx.graph_file_path,
+            &ctx.vector_db_url,
+            &ctx.graph_postgres_url,
+            &ctx.vector_postgres_url,
+            &ctx.relational_db_url,
+            &ctx.system_root_directory,
+            ctx.embedding_dimensions,
+            &ctx.embedding.model,
+            graph.dataset_database_handler,
+            vector.dataset_database_handler,
+        )
+    )
 }
 
 fn select_handler(
@@ -803,6 +872,37 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("memory"), "{message}");
+    }
+
+    /// A first use racing a delete never caches an engine on the dropped
+    /// databases: it waits for the delete and binds the dataset afresh.
+    #[tokio::test]
+    async fn a_bind_racing_a_delete_binds_afresh() {
+        let fx = fixture("brute-force").await;
+        let id = dataset(&fx, Uuid::new_v4()).await;
+        let storage = storage(&fx);
+        let before = storage.graph_for(id).await.unwrap();
+
+        // As `delete_dataset_storage` does: the gate, then the eviction; a bind
+        // arriving now finds nothing cached and must wait for the drop.
+        let gate = storage.gate(id);
+        let deleting = gate.write().await;
+        storage.evict(id).await;
+        let racing = {
+            let storage = Arc::clone(&storage);
+            tokio::spawn(async move { storage.graph_for(id).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!racing.is_finished(), "the bind waits for the delete");
+        fx.database.delete_dataset_database(id).await.unwrap();
+        drop(deleting);
+
+        let after = racing.await.unwrap().unwrap();
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "a fresh engine, not the evicted one"
+        );
+        assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
     }
 
     #[cfg(feature = "lancedb")]
