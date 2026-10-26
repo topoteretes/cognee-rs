@@ -497,19 +497,21 @@ mod tests {
 ///
 /// Needs both Postgres backends and both relational drivers (SQLite rows for
 /// the dedicated handlers, Postgres rows for the shared ones).
-#[cfg(all(
-    test,
-    feature = "pgvector",
-    feature = "pggraph",
-    feature = "postgres",
-    feature = "sqlite"
-))]
+#[cfg(test)]
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
 mod live_tests {
+    // `cfg(test)` outside, the features inside: the env-boundary check keys
+    // test modules on the outer attribute.
+    #![cfg(all(
+        feature = "pgvector",
+        feature = "pggraph",
+        feature = "postgres",
+        feature = "sqlite"
+    ))]
 
     use std::sync::Arc;
 
