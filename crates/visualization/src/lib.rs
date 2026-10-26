@@ -117,6 +117,16 @@ pub async fn visualize(
 /// larger page, or post-process it before persisting.
 pub async fn render(graph_db: &dyn GraphDBTrait) -> Result<String, VisualizationError> {
     let (nodes, edges) = graph_db.get_graph_data().await?;
+    render_graph_data(nodes, edges)
+}
+
+/// [`render`] over graph data already in hand — for a caller with no engine
+/// to read, e.g. an empty graph for a dataset whose per-dataset storage was
+/// never provisioned (rendering must not provision it).
+pub fn render_graph_data(
+    nodes: Vec<cognee_graph::GraphNode>,
+    edges: Vec<cognee_graph::EdgeData>,
+) -> Result<String, VisualizationError> {
     let pre = preprocessor::preprocess(nodes, edges, None);
     html::build_html(&pre)
 }
