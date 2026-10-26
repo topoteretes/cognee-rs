@@ -6,9 +6,10 @@
 //! 164 vendor technical data sheets (SDK-1193): 161 of them carry a signature
 //! added as an incremental update, and every one of those records the offset
 //! of the `\n` before `xref`. Acrobat, browsers, pypdf and PDFium read them;
-//! `lopdf` 0.38 (behind `pdf-extract` 0.10) does not, because it parses the
-//! table with a strict `tag("xref")` at exactly the recorded offset and
-//! reports `couldn't parse input: invalid file trailer`.
+//! `lopdf` does not (0.38 behind `pdf-extract` 0.10, and still 0.42 behind
+//! `pdf-extract` 0.12), because it parses the table with a strict
+//! `tag("xref")` at exactly the recorded offset and reports
+//! `couldn't parse input: invalid file trailer`.
 //!
 //! The same writer updating a file a second time (a second signature) copies
 //! its short offset into the new trailer's `/Prev`, and `lopdf` follows

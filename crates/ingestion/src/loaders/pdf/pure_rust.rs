@@ -180,7 +180,7 @@ mod tests {
         // on its own, they would pass without exercising the repair.
         for shorts in [&[1][..], &[1, 1], &[1, 0]] {
             let err = pdf_extract::extract_text_from_mem_by_pages(&incremental_update_pdf(shorts))
-                .expect_err("pdf-extract 0.10 rejects an off-by-one xref offset");
+                .expect_err("pdf-extract 0.12 rejects an off-by-one xref offset");
             assert!(
                 err.to_string().contains("invalid file trailer"),
                 "{shorts:?}: {err}"

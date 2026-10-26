@@ -4,7 +4,8 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! The `pdf-pure-rust` half of [`pdf_fixture_extraction`], over the same PDF.
+//! The `pdf-pure-rust` half of [`pdf_fixture_extraction`], over the same PDF,
+//! plus copies of it encrypted with an empty user password.
 //!
 //! It exists because `pdf-pure-rust` is what a container build wants — no
 //! native library and no runtime download — and it is what the Python, TS and
@@ -84,18 +85,59 @@ fn in_ci() -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extracts_text_from_a_real_pdf() {
+    assert_extracts_the_sample_text(SAMPLE_PDF, "sample.pdf").await;
+}
+
+/// `sample.pdf` encrypted with an EMPTY user password (and a non-empty owner
+/// password), which any reader opens without prompting. See
+/// `fixtures/pdf/README.md` for how these were made.
+///
+/// `pdf-extract` 0.10 returned an empty string for every page of such a file
+/// and reported success, so the document was stored empty and nothing in it
+/// was searchable. Its `lopdf` 0.38 decrypts every object at load time with the
+/// empty password but leaves `/Encrypt` in the trailer; `pdf-extract` then sees
+/// `is_encrypted()` and decrypts a second time. For RC4, which is symmetric,
+/// that re-encrypts the streams, and inflating them fails. `lopdf` 0.42
+/// (behind `pdf-extract` 0.12) drops `/Encrypt` once it has decrypted.
+const ENCRYPTED_EMPTY_USER_PASSWORD: [(&str, &[u8]); 3] = [
+    (
+        "sample.encrypted-rc4-128.pdf",
+        include_bytes!("fixtures/pdf/sample.encrypted-rc4-128.pdf"),
+    ),
+    (
+        "sample.encrypted-aes-128.pdf",
+        include_bytes!("fixtures/pdf/sample.encrypted-aes-128.pdf"),
+    ),
+    (
+        "sample.encrypted-aes-256.pdf",
+        include_bytes!("fixtures/pdf/sample.encrypted-aes-256.pdf"),
+    ),
+];
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extracts_text_from_a_pdf_encrypted_with_an_empty_user_password() {
+    for (name, bytes) in ENCRYPTED_EMPTY_USER_PASSWORD {
+        // The same pages as `sample.pdf`, so the same expected text: a reader
+        // that opens the file at all must not see different content in it.
+        assert_extracts_the_sample_text(bytes, name).await;
+    }
+}
+
+/// Extracts `bytes` with [`PdfLoader`] and asserts the output is the expected
+/// text of `sample.pdf` for whichever backend the loader selects.
+async fn assert_extracts_the_sample_text(bytes: &[u8], name: &str) {
     let doc = Document {
         base: DataPoint::new("PdfDocument", None),
         document_type: "pdf".to_string(),
-        name: "sample.pdf".to_string(),
-        raw_data_location: "file:///sample.pdf".to_string(),
+        name: name.to_string(),
+        raw_data_location: format!("file:///{name}"),
         mime_type: "application/pdf".to_string(),
         extension: "pdf".to_string(),
         data_id: Uuid::new_v4(),
         external_metadata: None,
     };
 
-    let result = PdfLoader.extract(SAMPLE_PDF, &doc).await;
+    let result = PdfLoader.extract(bytes, &doc).await;
 
     // With both features on, the loader binds PDFium, which has to be resolved
     // at runtime and can legitimately be unobtainable. See the skip note in
@@ -114,16 +156,16 @@ async fn extracts_text_from_a_real_pdf() {
              PDFIUM_LIB_PATH. Cause: {e}"
         );
         eprintln!(
-            "SKIP extracts_text_from_a_real_pdf: both PDF backends are enabled, so the loader \
-             selected PDFium, and libpdfium could not be obtained on this machine. Set \
-             PDFIUM_LIB_PATH to an existing libpdfium shared library to run it. Cause: {e}"
+            "SKIP {name}: both PDF backends are enabled, so the loader selected PDFium, and \
+             libpdfium could not be obtained on this machine. Set PDFIUM_LIB_PATH to an \
+             existing libpdfium shared library to run it. Cause: {e}"
         );
         return;
     }
 
-    let output = result.expect("extraction of a valid PDF must succeed");
+    let output = result.unwrap_or_else(|e| panic!("{name}: extraction must succeed: {e}"));
     let LoaderOutput::Text(text) = output else {
-        panic!("the PDF loader must yield text, got {output:?}");
+        panic!("{name}: the PDF loader must yield text, got {output:?}");
     };
 
     // `loaders::pdf` documents that pdfium wins when both features are on.
@@ -137,7 +179,7 @@ async fn extracts_text_from_a_real_pdf() {
         // cannot rot in either direction.
         assert!(
             !text.contains('\r'),
-            "pdf-extract is documented to emit LF within a page; if that changed, \
+            "{name}: pdf-extract is documented to emit LF within a page; if that changed, \
              update the `loaders::pdf` module docs and both expected files. Got: {text:?}"
         );
         (
@@ -149,6 +191,6 @@ async fn extracts_text_from_a_real_pdf() {
     assert_eq!(
         normalise(&text),
         normalise(expected),
-        "extracted text does not match {fixture}"
+        "{name}: extracted text does not match {fixture}"
     );
 }
