@@ -562,3 +562,42 @@ async fn conversational_feedback_persists_to_prior_entry() {
         "feedback_weights_applied must be false after feedback is stored"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A session search under per-dataset storage runs the retriever once per
+// dataset but records ONE turn: the session side effects run around the
+// fan-out, not inside each dataset's run.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_per_dataset_session_search_saves_one_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let session_store = Arc::new(FsSessionStore::new(dir.path().join("sessions")));
+    let session_manager = Arc::new(SessionManager::new(session_store.clone()));
+    let captured: Arc<Mutex<Vec<SessionContext>>> = Arc::new(Mutex::new(vec![]));
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(Arc::new(FakeGraphRetriever::capturing(Arc::clone(
+        &captured,
+    ))));
+    let orchestrator = SearchOrchestrator::new(registry)
+        .with_database(Arc::new(NoOpHistoryDb))
+        .with_session_manager(session_manager)
+        .with_per_dataset_storage(true);
+
+    let session_id = "per-dataset-session";
+    let mut request = graph_request("What is Rust?", Some(session_id));
+    request.dataset_ids = Some(vec![Uuid::new_v4(), Uuid::new_v4()]);
+    orchestrator.search(&request).await.expect("search");
+
+    // lock poison is unrecoverable
+    assert_eq!(captured.lock().unwrap().len(), 2, "one run per dataset");
+    let entries = session_store
+        .get_all_qa_entries(session_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "one turn for the whole search: {entries:?}"
+    );
+}

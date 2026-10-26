@@ -11,6 +11,7 @@ use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::{Llm, Message, MessageRole};
 use cognee_models::dataset_scope::with_dataset;
 use cognee_session::{SessionContext, SessionManager, UsedGraphElementIds};
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -810,7 +811,7 @@ impl SearchOrchestrator {
             // Nothing is filtered by dataset membership — that could not be made
             // tight (cognee-rs #290) and is what per-dataset storage replaces.
             let (response, log) = self
-                .run_search(request, &retriever, search_type, auto_feedback, false)
+                .run_search(request, &retriever, search_type, auto_feedback, false, true)
                 .await?;
             if log {
                 self.log_search_history(request, &response).await;
@@ -882,35 +883,64 @@ impl SearchOrchestrator {
             return Ok(Vec::new());
         }
 
-        // One run per dataset, each in its own scope, concurrently: Python's
-        // `asyncio.gather` over `_search_in_dataset_context`.
-        let runs = datasets.iter().map(|&dataset_id| {
-            let mut dataset_request = request.clone();
-            dataset_request.dataset_ids = Some(vec![dataset_id]);
-            dataset_request.datasets = None;
-            let retriever = Arc::clone(&retriever);
-            async move {
-                let outcome = with_dataset(
-                    dataset_id,
-                    self.run_search(
-                        &dataset_request,
-                        &retriever,
-                        search_type,
-                        auto_feedback,
-                        true,
-                    ),
-                )
-                .await;
-                (dataset_id, outcome)
-            }
-        });
-        let outcomes = futures::future::join_all(runs).await;
+        // The session side effects run once for the whole search, not once per
+        // dataset: a message that is only feedback is acknowledged here.
+        if let Some(acknowledgement) = self
+            .handle_auto_feedback(request, search_type, auto_feedback)
+            .await
+        {
+            emit_search_completed(request);
+            return Ok(vec![DatasetSearchResult {
+                dataset_id: None,
+                dataset_name: None,
+                dataset_tenant_id: None,
+                response: acknowledgement,
+                error: None,
+            }]);
+        }
+
+        // One run per dataset, each in its own scope: Python's `asyncio.gather`
+        // over `_search_in_dataset_context`, here at most
+        // `MAX_CONCURRENT_DATASETS` at a time (each first use opens, or
+        // provisions, a dataset's stores), in request order. Collected first:
+        // a lazy `Map` over `&Uuid` inside the stream defeats rustc's `Send`
+        // inference in the HTTP handlers that await this (`implementation of
+        // FnOnce is not general enough` in cognee-cloud-rs).
+        let runs: Vec<_> = datasets
+            .iter()
+            .copied()
+            .map(|dataset_id| {
+                let mut dataset_request = request.clone();
+                dataset_request.dataset_ids = Some(vec![dataset_id]);
+                dataset_request.datasets = None;
+                let retriever = Arc::clone(&retriever);
+                async move {
+                    let outcome = with_dataset(
+                        dataset_id,
+                        self.run_search(
+                            &dataset_request,
+                            &retriever,
+                            search_type,
+                            auto_feedback,
+                            true,
+                            false,
+                        ),
+                    )
+                    .await;
+                    let label = self.dataset_label(Some(dataset_id)).await;
+                    (dataset_id, label, outcome)
+                }
+            })
+            .collect();
+        let outcomes: Vec<_> = futures::stream::iter(runs)
+            .buffered(MAX_CONCURRENT_DATASETS)
+            .collect()
+            .await;
 
         let mut results = Vec::with_capacity(outcomes.len());
         let mut no_data = Vec::new();
         let mut log = false;
-        for (dataset_id, outcome) in outcomes {
-            let (dataset_name, dataset_tenant_id) = self.dataset_label(Some(dataset_id)).await;
+        for (dataset_id, (dataset_name, dataset_tenant_id), outcome) in outcomes {
             match outcome {
                 Ok((mut response, dataset_log)) => {
                     log |= dataset_log;
@@ -980,9 +1010,24 @@ impl SearchOrchestrator {
             }
         }
 
-        if log {
-            self.log_search_history(request, &merge_dataset_results(request, results.clone()))
+        let merged = merge_dataset_results(request, results.clone());
+        match &merged.result {
+            SearchOutput::Text(answer) => {
+                self.save_session_turn(request, answer, merged_context(&merged).as_deref())
+                    .await;
+            }
+            SearchOutput::Texts(answers) if !answers.is_empty() => {
+                self.save_session_turn(
+                    request,
+                    &answers.join("\n\n"),
+                    merged_context(&merged).as_deref(),
+                )
                 .await;
+            }
+            _ => {}
+        }
+        if log {
+            self.log_search_history(request, &merged).await;
         }
         emit_search_completed(request);
         Ok(results)
@@ -1009,6 +1054,10 @@ impl SearchOrchestrator {
     ///
     /// `keep_context`: fetch the context and keep it on the response, as a
     /// dataset-scoped search always returned its per-dataset context.
+    ///
+    /// `session_turn`: run the session side effects (auto-feedback detection,
+    /// saving the turn). Off for one dataset's run of a fan-out, which runs
+    /// them once around all the runs instead.
     async fn run_search(
         &self,
         request: &SearchRequest,
@@ -1016,6 +1065,7 @@ impl SearchOrchestrator {
         search_type: SearchType,
         auto_feedback: bool,
         keep_context: bool,
+        session_turn: bool,
     ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
         let params = SearchParams::from(request);
         let include_context =
@@ -1086,9 +1136,105 @@ impl SearchOrchestrator {
             return Ok((response, true));
         }
 
-        let user_id_str = request.user_id.map(|id| id.to_string());
         let session_context = self.load_session_context(request).await;
 
+        // Session side effects run once per search: here over the shared
+        // store, around the fan-out under per-dataset storage.
+        if session_turn
+            && let Some(acknowledgement) = self
+                .handle_auto_feedback(request, search_type, auto_feedback)
+                .await
+        {
+            return Ok((acknowledgement, false));
+        }
+
+        // When the orchestrator did not fetch the context above
+        // (`include_context` is `only_context || use_combined_context ||
+        // keep_context`, false on the default path), the retriever would
+        // fetch it privately inside `get_completion`. Two things need that
+        // context here, so it is fetched once and handed to `get_completion`
+        // — every built-in retriever uses a provided context instead of
+        // fetching its own, so the answer is unchanged and nothing is fetched
+        // twice:
+        //
+        // - Access tracking (`enable_last_accessed`). Python updates
+        //   `last_accessed` on every retrieval
+        //   (`session_aware_completion.py`, after `get_retrieved_objects`), so
+        //   a plain completion search with no dataset scope must track too.
+        //   `Feedback` is skipped: its "context" is an LLM analysis of the
+        //   message, carries no data ids, and fetching it would add an LLM
+        //   call.
+        // - P1-10 parity: an unscoped hybrid completion needs its retrieved
+        //   context so the session cache can record `used_graph_element_ids`.
+        //   Python's `HybridRetriever.get_completion` computes
+        //   `extract_context_object_ids(retrieved_objects)` on EVERY
+        //   completion path (`hybrid_retriever.py:242-296`). Scoped to the
+        //   hybrid retriever and only when a session will actually be saved.
+        let fetch_for_tracking =
+            self.enable_access_tracking && retriever.search_type() != SearchType::Feedback;
+        // TEMPORAL is hybrid underneath and inherits the same completion path
+        // in Python (`TemporalHybridRetriever` subclasses `HybridRetriever`).
+        let fetch_for_session = request.session_id.is_some()
+            && self.session_manager.is_some()
+            && matches!(
+                retriever.search_type(),
+                SearchType::HybridCompletion | SearchType::Temporal
+            );
+        let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
+            let ctx = retriever.get_context(&request.query_text, &params).await?;
+            // `context` is `None` only when `include_context` was false, so the
+            // tracking above has not run for this search.
+            if self.enable_access_tracking {
+                self.track_access(&ctx).await;
+            }
+            Some(ctx)
+        } else {
+            context
+        };
+
+        let output = retriever
+            .get_completion(
+                &request.query_text,
+                context.clone(),
+                &session_context,
+                &params,
+            )
+            .await?;
+
+        if session_turn && let SearchOutput::Text(ref answer) = output {
+            self.save_session_turn(request, answer, context.as_deref())
+                .await;
+        }
+
+        let mut response = prepare_search_result(
+            search_type,
+            output,
+            context.clone(),
+            request.dataset_ids.clone(),
+            false,
+            request.use_combined_context(),
+            request.verbose(),
+        );
+        // A dataset run keeps its context whatever `verbose` says, as a
+        // dataset-scoped search always returned its per-dataset context.
+        if keep_context && response.context.is_none() {
+            response.context = context.map(|items| HashMap::from([(String::new(), items)]));
+        }
+
+        Ok((response, true))
+    }
+
+    /// Auto-feedback detection for a session search (Python
+    /// `session_manager.py:461-516`): when the message is feedback on the
+    /// previous turn it is stored there, and a message that is only feedback
+    /// is acknowledged instead of searched (the acknowledgement is returned).
+    async fn handle_auto_feedback(
+        &self,
+        request: &SearchRequest,
+        search_type: SearchType,
+        auto_feedback: bool,
+    ) -> Option<SearchResponse> {
+        let user_id_str = request.user_id.map(|id| id.to_string());
         // Look up the latest QA id for the session. This is used by both the
         // auto-feedback path (to write feedback to the prior entry) and by the
         // session save path (to know which entry precedes the current turn).
@@ -1164,113 +1310,53 @@ impl SearchOrchestrator {
                         request.use_combined_context(),
                         request.verbose(),
                     );
-                    return Ok((response, false));
+                    return Some(response);
                 }
             }
             // If no feedback, or feedback with follow-up, proceed normally.
         }
 
-        // When the orchestrator did not fetch the context above
-        // (`include_context` is `only_context || use_combined_context ||
-        // keep_context`, false on the default path), the retriever would
-        // fetch it privately inside `get_completion`. Two things need that
-        // context here, so it is fetched once and handed to `get_completion`
-        // — every built-in retriever uses a provided context instead of
-        // fetching its own, so the answer is unchanged and nothing is fetched
-        // twice:
-        //
-        // - Access tracking (`enable_last_accessed`). Python updates
-        //   `last_accessed` on every retrieval
-        //   (`session_aware_completion.py`, after `get_retrieved_objects`), so
-        //   a plain completion search with no dataset scope must track too.
-        //   `Feedback` is skipped: its "context" is an LLM analysis of the
-        //   message, carries no data ids, and fetching it would add an LLM
-        //   call.
-        // - P1-10 parity: an unscoped hybrid completion needs its retrieved
-        //   context so the session cache can record `used_graph_element_ids`.
-        //   Python's `HybridRetriever.get_completion` computes
-        //   `extract_context_object_ids(retrieved_objects)` on EVERY
-        //   completion path (`hybrid_retriever.py:242-296`). Scoped to the
-        //   hybrid retriever and only when a session will actually be saved.
-        let fetch_for_tracking =
-            self.enable_access_tracking && retriever.search_type() != SearchType::Feedback;
-        // TEMPORAL is hybrid underneath and inherits the same completion path
-        // in Python (`TemporalHybridRetriever` subclasses `HybridRetriever`).
-        let fetch_for_session = request.session_id.is_some()
-            && self.session_manager.is_some()
-            && matches!(
-                retriever.search_type(),
-                SearchType::HybridCompletion | SearchType::Temporal
-            );
-        let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
-            let ctx = retriever.get_context(&request.query_text, &params).await?;
-            // `context` is `None` only when `include_context` was false, so the
-            // tracking above has not run for this search.
-            if self.enable_access_tracking {
-                self.track_access(&ctx).await;
-            }
-            Some(ctx)
+        None
+    }
+
+    /// Save a session search's turn (Python `save_qa`), once per search.
+    async fn save_session_turn(
+        &self,
+        request: &SearchRequest,
+        answer: &str,
+        context: Option<&[crate::types::SearchItem]>,
+    ) {
+        let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) else {
+            return;
+        };
+        let user_id_str = request.user_id.map(|id| id.to_string());
+        // Python parity: only persist the full context payload when the caller
+        // explicitly opts in via `summarize_context = true`.  Storing the full
+        // context unconditionally would silently change the cross-SDK persisted
+        // shape for callers that omit the flag, so we write an empty string when
+        // it is absent or set to false.
+        let ctx_json = if request.summarize_context == Some(true) {
+            context.and_then(|c| serde_json::to_string(c).ok())
         } else {
-            context
+            Some(String::new())
         };
 
-        let output = retriever
-            .get_completion(
+        // Collect node/edge IDs from the retrieved context items so the memify
+        // pipeline can trace which graph elements produced the answer.
+        // Items from graph-traversal retrievers carry `source_id`/`target_id`
+        // payload fields; pure-RAG items carry neither.
+        let used_graph_element_ids = build_used_graph_element_ids(context);
+
+        let _ = sm
+            .save_qa(
+                Some(session_id),
+                user_id_str.as_deref(),
                 &request.query_text,
-                context.clone(),
-                &session_context,
-                &params,
+                answer,
+                ctx_json.as_deref(),
+                used_graph_element_ids,
             )
-            .await?;
-
-        if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager)
-            && let SearchOutput::Text(ref answer) = output
-        {
-            // Python parity: only persist the full context payload when the caller
-            // explicitly opts in via `summarize_context = true`.  Storing the full
-            // context unconditionally would silently change the cross-SDK persisted
-            // shape for callers that omit the flag, so we write an empty string when
-            // it is absent or set to false.
-            let ctx_json = if request.summarize_context == Some(true) {
-                context.as_ref().and_then(|c| serde_json::to_string(c).ok())
-            } else {
-                Some(String::new())
-            };
-
-            // Collect node/edge IDs from the retrieved context items so the memify
-            // pipeline can trace which graph elements produced the answer.
-            // Items from graph-traversal retrievers carry `source_id`/`target_id`
-            // payload fields; pure-RAG items carry neither.
-            let used_graph_element_ids = build_used_graph_element_ids(context.as_deref());
-
-            let _ = sm
-                .save_qa(
-                    Some(session_id),
-                    user_id_str.as_deref(),
-                    &request.query_text,
-                    answer,
-                    ctx_json.as_deref(),
-                    used_graph_element_ids,
-                )
-                .await;
-        }
-
-        let mut response = prepare_search_result(
-            search_type,
-            output,
-            context.clone(),
-            request.dataset_ids.clone(),
-            false,
-            request.use_combined_context(),
-            request.verbose(),
-        );
-        // A dataset run keeps its context whatever `verbose` says, as a
-        // dataset-scoped search always returned its per-dataset context.
-        if keep_context && response.context.is_none() {
-            response.context = context.map(|items| HashMap::from([(String::new(), items)]));
-        }
-
-        Ok((response, true))
+            .await;
     }
 
     /// The session layer a completion carries: the conversation history,
@@ -1327,6 +1413,18 @@ impl SearchOrchestrator {
             tracing::warn!(%error, "failed to record search history");
         }
     }
+}
+
+/// How many datasets a per-dataset search runs at once.
+const MAX_CONCURRENT_DATASETS: usize = 8;
+
+/// Every item of a response's context, across its datasets, for the session
+/// turn.
+fn merged_context(response: &SearchResponse) -> Option<SearchContext> {
+    response
+        .context
+        .as_ref()
+        .map(|map| map.values().flatten().cloned().collect())
 }
 
 /// Key a dataset run's context, graph and prompt by its dataset id, as a
