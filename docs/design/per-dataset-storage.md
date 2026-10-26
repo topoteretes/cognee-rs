@@ -129,8 +129,23 @@ pub trait DatasetDatabaseHandler: Send + Sync {
     async fn create_dataset(&self, base, dataset_id, owner_id) -> Result<HandlerRecord>;
     fn dataset_context(&self, base, record: &HandlerRecord, owner_id) -> Result<BackendBuildContext>;
     async fn delete_dataset(&self, base, record: &HandlerRecord, owner_id) -> Result<()>;
+    async fn probe(&self, base, relational: &dyn RelationalDb) -> Result<String>;
 }
 ```
+
+`probe` is required, with no default: a handler that cannot say how it is
+probed must not report itself healthy. It checks the place the handler
+provisions in without provisioning anything, and returns a short description
+of what it reached (a path, or a database and `host:port`, never a URL). It
+runs on every health check, so it opens no connection per call and writes no
+file:
+
+| handler | probe |
+|---|---|
+| `ladybug`, `kuzu`, `lancedb` | `{system_root}/databases` is created if missing (as the first bind would) and must be a writable directory, from its metadata |
+| `pgvector`, `postgres_graph` | `SELECT 1` on the server's maintenance database (`postgres`, where datasets are created and dropped), through one lazily connecting pool of one connection, cached per resolved URL in the handler |
+| `pgvector_shared`, `postgres_graph_shared` | `RelationalDb::ping` of the storage's relational database, which holds the schemas |
+| `memory` | always `Ok("in-memory")` |
 
 `dataset_context` is the Rust-specific step, and it also does Python's
 `resolve_dataset_connection_info` (credentials from the live configuration). Python feeds the row into
@@ -186,6 +201,19 @@ without Docker.
 - **Engine cache.** Engines are cached per dataset id and built once per bind
   key. Deleting a dataset evicts and closes its engines before the storage is
   dropped. Teardown closes every cached engine.
+  `DatasetStorage::open_dataset_count()` reports how many datasets have their
+  engines open.
+- **Look without provisioning.** `graph_for` / `vector_for` provision on first
+  use. A read-only caller (the graph visualization) uses
+  `existing_graph_for` / `existing_vector_for` instead, which return
+  `Ok(None)` for a dataset without a `dataset_database` row and then create
+  nothing (no row, database, schema or directory). A dataset with a row is
+  bound exactly as `graph_for` binds it: the same engine cache, the same
+  embedding-width check, and the same gate, so a look never binds a dataset a
+  delete is dropping.
+- **Health.** `DatasetStorage::probe()` runs the selected graph and vector
+  handlers' `probe` concurrently and returns both results
+  (`StorageProbe { graph, vector }`).
 - **Delete a dataset:** graph handler `delete_dataset`, then vector handler
   `delete_dataset`, then the relational rows. The row goes with the dataset
   (FK cascade, plus an explicit delete for SQLite connections without FK

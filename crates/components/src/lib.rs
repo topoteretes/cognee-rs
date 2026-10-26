@@ -50,8 +50,8 @@ pub use context::{
     parse_structured_output_mode,
 };
 pub use dataset_storage::{
-    DatasetDatabaseHandler, DatasetStorage, HandlerKind, HandlerRecord, default_graph_handler,
-    default_vector_handler,
+    DatasetDatabaseHandler, DatasetStorage, HandlerKind, HandlerRecord, StorageProbe,
+    default_graph_handler, default_vector_handler,
 };
 pub use error::ComponentError;
 pub use registry::{ComponentRegistry, LLM_GRAPH_EXTRACTOR, default_graph_provider};

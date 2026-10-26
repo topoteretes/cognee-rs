@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use cognee_database::RelationalDb;
 use uuid::Uuid;
 
 use crate::context::BackendBuildContext;
@@ -22,6 +23,32 @@ fn owner_databases_dir(base: &BackendBuildContext, owner_id: Uuid) -> PathBuf {
     base.system_root_directory
         .join("databases")
         .join(owner_id.to_string())
+}
+
+/// Probe of the embedded handlers: `{system_root}/databases` exists (created
+/// if missing, as the handlers create it on first use) and is a writable
+/// directory. Writes no file: the check is the directory's metadata.
+async fn probe_databases_dir(base: &BackendBuildContext) -> Result<String, ComponentError> {
+    let dir = base.system_root_directory.join("databases");
+    let shown = dir.display();
+    let unusable = |why: String| {
+        ComponentError::Storage(format!(
+            "the embedded databases directory {shown} is unusable: {why}"
+        ))
+    };
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| unusable(e.to_string()))?;
+    let meta = tokio::fs::metadata(&dir)
+        .await
+        .map_err(|e| unusable(e.to_string()))?;
+    if !meta.is_dir() {
+        return Err(unusable("not a directory".to_string()));
+    }
+    if meta.permissions().readonly() {
+        return Err(unusable("read-only".to_string()));
+    }
+    Ok(format!("directory {shown}"))
 }
 
 async fn remove_path(path: &Path) -> Result<(), ComponentError> {
@@ -113,6 +140,14 @@ impl DatasetDatabaseHandler for LadybugDatasetHandler {
         }
         Ok(())
     }
+
+    async fn probe(
+        &self,
+        base: &BackendBuildContext,
+        _relational: &dyn RelationalDb,
+    ) -> Result<String, ComponentError> {
+        probe_databases_dir(base).await
+    }
 }
 
 /// The embedded vector store per dataset: one LanceDB directory per dataset
@@ -176,6 +211,14 @@ impl DatasetDatabaseHandler for LanceDbDatasetHandler {
     ) -> Result<(), ComponentError> {
         let ctx = self.dataset_context(base, record, owner_id)?;
         remove_path(Path::new(&ctx.vector_db_url)).await
+    }
+
+    async fn probe(
+        &self,
+        base: &BackendBuildContext,
+        _relational: &dyn RelationalDb,
+    ) -> Result<String, ComponentError> {
+        probe_databases_dir(base).await
     }
 }
 
@@ -242,5 +285,13 @@ impl DatasetDatabaseHandler for MemoryDatasetHandler {
         _owner_id: Uuid,
     ) -> Result<(), ComponentError> {
         Ok(())
+    }
+
+    async fn probe(
+        &self,
+        _base: &BackendBuildContext,
+        _relational: &dyn RelationalDb,
+    ) -> Result<String, ComponentError> {
+        Ok("in-memory".to_string())
     }
 }

@@ -141,6 +141,40 @@ pub trait DatasetDatabaseHandler: Send + Sync {
         record: &HandlerRecord,
         owner_id: Uuid,
     ) -> Result<(), ComponentError>;
+    /// Check that the place this handler provisions datasets in is reachable,
+    /// without provisioning anything: the embedded databases directory, the
+    /// Postgres server, the relational database holding the shared schemas.
+    ///
+    /// Required, with no default: a handler that cannot say how it is probed
+    /// must not report itself healthy. `relational` is the storage's
+    /// relational database, for handlers that keep datasets in it.
+    ///
+    /// `Ok` carries a short description of what was reached (a path, or a
+    /// `host:port` — never a URL, which may carry a password); `Err` says why
+    /// it is unreachable, equally without credentials. A probe may be called
+    /// on every health check, so it must not open a fresh connection per call
+    /// or write files.
+    async fn probe(
+        &self,
+        base: &BackendBuildContext,
+        relational: &dyn RelationalDb,
+    ) -> Result<String, ComponentError>;
+}
+
+/// The outcome of [`DatasetStorage::probe`]: one result per selected handler.
+#[derive(Debug)]
+pub struct StorageProbe {
+    /// The graph handler's [`DatasetDatabaseHandler::probe`].
+    pub graph: Result<String, ComponentError>,
+    /// The vector handler's [`DatasetDatabaseHandler::probe`].
+    pub vector: Result<String, ComponentError>,
+}
+
+impl StorageProbe {
+    /// Whether both handlers reached their storage.
+    pub fn is_ok(&self) -> bool {
+        self.graph.is_ok() && self.vector.is_ok()
+    }
 }
 
 /// The handler a provider uses when `graph.dataset_database_handler` is
@@ -180,6 +214,13 @@ struct Bound {
 }
 
 type BindCell = Arc<OnceCell<Arc<Bound>>>;
+
+/// Whether a bind may provision a dataset that has no row yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Provision {
+    Yes,
+    No,
+}
 
 /// Registered handlers by `(kind, name)`.
 pub(crate) type HandlerMap = HashMap<(HandlerKind, String), Arc<dyn DatasetDatabaseHandler>>;
@@ -277,6 +318,28 @@ impl DatasetStorage {
         (self.graph_handler.name(), self.vector_handler.name())
     }
 
+    /// How many datasets have their engines open (bound and cached): each
+    /// holds one graph and one vector store open until it is deleted or the
+    /// storage is torn down.
+    pub fn open_dataset_count(&self) -> usize {
+        self.bound
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|cell| cell.initialized())
+            .count()
+    }
+
+    /// Probe the selected graph and vector handlers
+    /// ([`DatasetDatabaseHandler::probe`]), concurrently. Provisions nothing.
+    pub async fn probe(&self) -> StorageProbe {
+        let (graph, vector) = tokio::join!(
+            self.graph_handler.probe(&self.base, &*self.database),
+            self.vector_handler.probe(&self.base, &*self.database),
+        );
+        StorageProbe { graph, vector }
+    }
+
     /// The dataset's graph engine, provisioning its databases on first use.
     pub async fn graph_for(
         &self,
@@ -290,22 +353,94 @@ impl DatasetStorage {
         Ok(Arc::clone(&self.bind(dataset_id).await?.vector))
     }
 
+    /// The dataset's graph engine if the dataset has storage, without
+    /// provisioning any: `Ok(None)` when it has no `dataset_database` row, and
+    /// then nothing is created (no row, database, schema or directory). A
+    /// dataset with a row is bound from it exactly as [`Self::graph_for`]
+    /// binds it (same cache, same embedding-width check, same gate). For
+    /// read-only callers that must not provision on a look.
+    pub async fn existing_graph_for(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Option<Arc<dyn GraphDBTrait>>, ComponentError> {
+        Ok(self
+            .bind_existing(dataset_id)
+            .await?
+            .map(|bound| Arc::clone(&bound.graph)))
+    }
+
+    /// The vector twin of [`Self::existing_graph_for`].
+    pub async fn existing_vector_for(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Option<Arc<dyn VectorDB>>, ComponentError> {
+        Ok(self
+            .bind_existing(dataset_id)
+            .await?
+            .map(|bound| Arc::clone(&bound.vector)))
+    }
+
     /// Bind a dataset: its row (provisioned on first use), then its engines.
     /// Concurrent binds of one dataset share one build.
     async fn bind(&self, dataset_id: Uuid) -> Result<Arc<Bound>, ComponentError> {
+        self.bind_with(dataset_id, Provision::Yes)
+            .await?
+            .ok_or_else(|| {
+                ComponentError::Config(format!(
+                    "dataset {dataset_id} was not bound although provisioning was allowed"
+                ))
+            })
+    }
+
+    /// Bind a dataset that already has a row; `None` when it has none.
+    async fn bind_existing(&self, dataset_id: Uuid) -> Result<Option<Arc<Bound>>, ComponentError> {
+        self.bind_with(dataset_id, Provision::No).await
+    }
+
+    /// [`Self::bind`], provisioning a missing row only with
+    /// [`Provision::Yes`]; with [`Provision::No`] a dataset without a row is
+    /// `None` and nothing is created.
+    async fn bind_with(
+        &self,
+        dataset_id: Uuid,
+        provision: Provision,
+    ) -> Result<Option<Arc<Bound>>, ComponentError> {
         if let Some(bound) = self.cached_for(dataset_id) {
-            return Ok(bound);
+            return Ok(Some(bound));
         }
         // Built under the dataset's gate, shared: a delete in progress finishes
         // first, and none starts until this build is cached (and so evictable).
         let gate = self.gate(dataset_id);
         let _building = gate.read().await;
+        // A look without provisioning reads the row first, under the gate (so
+        // no delete runs between this read and the build), and leaves the
+        // cache untouched when there is none.
+        let existing = match provision {
+            Provision::Yes => None,
+            Provision::No => {
+                if let Some(bound) = self.cached_for(dataset_id) {
+                    return Ok(Some(bound));
+                }
+                match self
+                    .database
+                    .get_dataset_database(dataset_id)
+                    .await
+                    .map_err(db_error)?
+                {
+                    Some(row) => Some(row),
+                    None => return Ok(None),
+                }
+            }
+        };
         let cell = {
             let mut bound = self.bound.lock().unwrap_or_else(PoisonError::into_inner);
             Arc::clone(bound.entry(dataset_id).or_default())
         };
         cell.get_or_try_init(|| async {
-            let row = self.get_or_create_row(dataset_id).await?;
+            let row = match existing {
+                Some(row) => row,
+                None => self.get_or_create_row(dataset_id).await?,
+            };
             self.check_embedding_model(&row)?;
             let owner_id = row.owner_id.ok_or_else(|| {
                 ComponentError::Config(format!(
@@ -333,6 +468,7 @@ impl DatasetStorage {
         })
         .await
         .cloned()
+        .map(Some)
     }
 
     /// The dataset's row, provisioned on first use (Python
@@ -920,6 +1056,112 @@ mod tests {
             "a fresh engine, not the evicted one"
         );
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+    }
+
+    /// A look at a dataset without storage provisions nothing; once it is
+    /// provisioned the look binds the same cached engines; after a delete it
+    /// finds nothing again.
+    #[tokio::test]
+    async fn existing_engines_are_looked_up_without_provisioning() {
+        let fx = fixture("brute-force").await;
+        let owner = Uuid::new_v4();
+        let id = dataset(&fx, owner).await;
+        let storage = storage(&fx);
+        let owner_dir = fx
+            .ctx
+            .system_root_directory
+            .join("databases")
+            .join(owner.to_string());
+
+        assert!(storage.existing_graph_for(id).await.unwrap().is_none());
+        assert!(storage.existing_vector_for(id).await.unwrap().is_none());
+        assert!(
+            fx.database
+                .list_dataset_databases()
+                .await
+                .unwrap()
+                .is_empty(),
+            "a look inserts no row"
+        );
+        assert!(!owner_dir.exists(), "a look creates no directory");
+        assert_eq!(storage.open_dataset_count(), 0, "a look caches nothing");
+        assert!(
+            storage
+                .existing_graph_for(Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none(),
+            "an unknown dataset is simply absent"
+        );
+
+        let provisioned = storage.graph_for(id).await.unwrap();
+        let looked = storage.existing_graph_for(id).await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&provisioned, &looked), "the cached engine");
+        assert!(storage.existing_vector_for(id).await.unwrap().is_some());
+        assert_eq!(storage.open_dataset_count(), 1);
+
+        // Another storage (another process) binds from the row it finds.
+        let other = super::tests::storage(&fx);
+        assert!(other.existing_graph_for(id).await.unwrap().is_some());
+        assert_eq!(other.open_dataset_count(), 1);
+        assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+
+        assert!(storage.delete_dataset_storage(id).await.unwrap());
+        assert_eq!(storage.open_dataset_count(), 0);
+        assert!(storage.existing_graph_for(id).await.unwrap().is_none());
+        assert!(
+            fx.database
+                .get_dataset_database(id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!owner_dir.join(format!("{id}.lbug")).exists());
+    }
+
+    /// A look honours the embedding-width check a bind makes.
+    #[tokio::test]
+    async fn a_look_refuses_another_embedding_width() {
+        let mut fx = fixture("brute-force").await;
+        let id = dataset(&fx, Uuid::new_v4()).await;
+        storage(&fx).vector_for(id).await.unwrap();
+        fx.ctx.embedding_dimensions = 1536;
+        let error = storage(&fx).existing_vector_for(id).await.err().unwrap();
+        assert!(error.to_string().contains("384 dimensions"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_probe_reports_the_embedded_directory_and_memory() {
+        let fx = fixture("brute-force").await;
+        let probe = storage(&fx).probe().await;
+        assert!(probe.is_ok(), "{probe:?}");
+        let databases = fx.ctx.system_root_directory.join("databases");
+        assert!(
+            probe
+                .graph
+                .as_ref()
+                .unwrap()
+                .contains(&databases.display().to_string()),
+            "{probe:?}"
+        );
+        assert_eq!(probe.vector.unwrap(), "in-memory");
+        assert!(databases.is_dir());
+        assert_eq!(
+            std::fs::read_dir(&databases).unwrap().count(),
+            0,
+            "the probe writes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_probe_fails_when_the_databases_directory_is_a_file() {
+        let fx = fixture("brute-force").await;
+        std::fs::create_dir_all(&fx.ctx.system_root_directory).unwrap();
+        std::fs::write(fx.ctx.system_root_directory.join("databases"), b"").unwrap();
+        let probe = storage(&fx).probe().await;
+        let error = probe.graph.err().unwrap().to_string();
+        assert!(error.contains("databases"), "{error}");
+        assert!(probe.vector.is_ok(), "the memory handler is unaffected");
     }
 
     #[cfg(feature = "lancedb")]

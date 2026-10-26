@@ -184,6 +184,91 @@ async fn connect(url: &Url) -> Result<DatabaseConnection, ComponentError> {
     })
 }
 
+/// How long a health probe waits for a connection before reporting the server
+/// unreachable.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Health-probe connections, one pool of at most one connection per database
+/// URL, opened on the first probe of that URL and reused by every later one:
+/// a probe runs on every health check, which must not open a connection each
+/// time. The pools connect lazily, so a pool exists (and is reused) even
+/// while its server is down, and reconnects once it is back.
+///
+/// Keyed by the full URL, credentials included, so a rotated password gets a
+/// pool of its own. In memory only.
+#[derive(Default)]
+pub(crate) struct ProbePools {
+    /// A poisoned lock is recovered: every critical section is a single map
+    /// operation, which a panic cannot leave half done.
+    pools: std::sync::Mutex<std::collections::HashMap<String, DatabaseConnection>>,
+}
+
+impl ProbePools {
+    /// `SELECT 1` on the database `url` names, through its cached pool. `Ok`
+    /// names the database and `host:port` reached; neither result carries
+    /// the URL.
+    pub(crate) async fn ping(&self, url: &Url) -> Result<String, ComponentError> {
+        let (host, port) = host_port(url);
+        let database = database_of(url);
+        let db = self.pool(url).await?;
+        db.execute_unprepared("SELECT 1").await.map_err(|e| {
+            ComponentError::Database(format!(
+                "Postgres database {database:?} on {host}:{port} is unreachable: {e}"
+            ))
+        })?;
+        Ok(format!("Postgres database {database:?} on {host}:{port}"))
+    }
+
+    /// The pool for `url`, opened (lazily, without connecting) on first use.
+    async fn pool(&self, url: &Url) -> Result<DatabaseConnection, ComponentError> {
+        let key = url.as_str();
+        if let Some(db) = self.cached(key) {
+            return Ok(db);
+        }
+        let (host, port) = host_port(url);
+        let mut options = ConnectOptions::new(key);
+        options
+            .min_connections(0)
+            .max_connections(1)
+            .connect_timeout(PROBE_TIMEOUT)
+            .acquire_timeout(PROBE_TIMEOUT)
+            .connect_lazy(true)
+            .sqlx_logging(false);
+        let db = Database::connect(options).await.map_err(|e| {
+            ComponentError::Database(format!(
+                "opening a probe pool for Postgres database {:?} on {host}:{port} failed: {e}",
+                database_of(url)
+            ))
+        })?;
+        // Two first probes may race here; the first pool stored wins and the
+        // other, which never connected, is dropped.
+        Ok(self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key.to_string())
+            .or_insert(db)
+            .clone())
+    }
+
+    fn cached(&self, key: &str) -> Option<DatabaseConnection> {
+        self.pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .cloned()
+    }
+
+    /// How many probe pools are open.
+    #[cfg(all(test, feature = "sqlite"))]
+    pub(crate) fn len(&self) -> usize {
+        self.pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+}
+
 fn statement(sql: &str, name: &str) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, sql, [name.into()])
 }

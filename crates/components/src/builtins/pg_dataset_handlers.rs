@@ -17,6 +17,7 @@
 //! the shared ones.
 
 use async_trait::async_trait;
+use cognee_database::RelationalDb;
 use serde_json::{Map, Value};
 use url::Url;
 use uuid::Uuid;
@@ -42,6 +43,9 @@ enum Layout {
 pub struct PostgresDatasetHandler {
     kind: HandlerKind,
     layout: Layout,
+    /// The dedicated layout's health-probe pools (see
+    /// [`DatasetDatabaseHandler::probe`]).
+    probes: pg_admin::ProbePools,
 }
 
 impl PostgresDatasetHandler {
@@ -50,6 +54,7 @@ impl PostgresDatasetHandler {
         Self {
             kind: HandlerKind::Vector,
             layout: Layout::Database,
+            probes: pg_admin::ProbePools::default(),
         }
     }
 
@@ -58,6 +63,7 @@ impl PostgresDatasetHandler {
         Self {
             kind: HandlerKind::Vector,
             layout: Layout::Schema,
+            probes: pg_admin::ProbePools::default(),
         }
     }
 
@@ -66,6 +72,7 @@ impl PostgresDatasetHandler {
         Self {
             kind: HandlerKind::Graph,
             layout: Layout::Database,
+            probes: pg_admin::ProbePools::default(),
         }
     }
 
@@ -75,6 +82,7 @@ impl PostgresDatasetHandler {
         Self {
             kind: HandlerKind::Graph,
             layout: Layout::Schema,
+            probes: pg_admin::ProbePools::default(),
         }
     }
 
@@ -303,6 +311,37 @@ impl DatasetDatabaseHandler for PostgresDatasetHandler {
             }
         }
     }
+
+    /// A database per dataset: `SELECT 1` on the server's maintenance
+    /// database (where datasets are created and dropped), through a pool
+    /// cached per server URL. A schema per dataset: a ping of the relational
+    /// database the schemas live in, through its own pool.
+    async fn probe(
+        &self,
+        base: &BackendBuildContext,
+        relational: &dyn RelationalDb,
+    ) -> Result<String, ComponentError> {
+        let server = self.server(base)?;
+        match self.layout {
+            Layout::Database => {
+                let admin =
+                    pg_admin::database_url(&server, pg_admin::MAINTENANCE_DATABASE, None, None)?;
+                self.probes.ping(&admin).await
+            }
+            Layout::Schema => {
+                let (host, port) = pg_admin::host_port(&server);
+                let database = server.path().trim_start_matches('/');
+                relational.ping().await.map_err(|e| {
+                    ComponentError::Database(format!(
+                        "the relational database {database:?} on {host}:{port} is unreachable: {e}"
+                    ))
+                })?;
+                Ok(format!(
+                    "schemas in the relational database {database:?} on {host}:{port}"
+                ))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -476,6 +515,63 @@ mod tests {
             error.contains("Missing required Postgres vector credentials"),
             "{error}"
         );
+    }
+
+    /// The relational database of `test_ctx` (in-memory SQLite), for the
+    /// probe's `relational` argument.
+    #[cfg(feature = "sqlite")]
+    async fn relational() -> std::sync::Arc<dyn RelationalDb> {
+        crate::ComponentRegistry::with_builtins()
+            .build_database(&test_ctx())
+            .await
+            .unwrap()
+    }
+
+    /// An unreachable server fails the probe without echoing the password,
+    /// and a second probe reuses the first one's pool.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn an_unreachable_server_fails_the_probe_through_one_cached_pool() {
+        let mut base = ctx();
+        base.vector_postgres_url = Some(Ok(
+            "postgres://probe_user:s3cr3t-pw@127.0.0.1:1/cognee".into()
+        ));
+        let handler = PostgresDatasetHandler::pgvector();
+        let relational = relational().await;
+        for _ in 0..2 {
+            let error = handler
+                .probe(&base, &*relational)
+                .await
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("127.0.0.1:1"), "{error}");
+            assert!(!error.contains("s3cr3t-pw"), "{error}");
+            assert!(!error.contains("probe_user"), "{error}");
+        }
+        assert_eq!(handler.probes.len(), 1, "both probes share one pool");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn a_shared_probe_pings_the_relational_database() {
+        let relational = relational().await;
+        let ok = PostgresDatasetHandler::pgvector_shared()
+            .probe(&ctx(), &*relational)
+            .await
+            .unwrap();
+        assert!(ok.contains("\"cognee_db\" on rel:5433"), "{ok}");
+        assert!(!ok.contains("rp"), "{ok}");
+
+        let mut base = ctx();
+        base.relational_db_url = "sqlite::memory:".to_string();
+        let error = PostgresDatasetHandler::postgres_graph_shared()
+            .probe(&base, &*relational)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("relational database URL"), "{error}");
     }
 
     #[test]
@@ -764,6 +860,40 @@ mod live_tests {
         // terminates them (`DROP DATABASE … WITH (FORCE)`), as Python does.
         assert!(first.delete_dataset_storage(id).await.unwrap());
         assert!(!database_exists(&server, &id.to_string()).await);
+    }
+
+    /// The dedicated handlers probe the server's maintenance database through
+    /// one cached pool; the shared ones ping the relational database.
+    #[tokio::test]
+    async fn probes_reach_the_server_through_one_pool() {
+        let Some(server) = server_url("probes_reach_the_server_through_one_pool") else {
+            return;
+        };
+        let fx = dedicated(&server).await;
+        let handler = PostgresDatasetHandler::pgvector();
+        let (host, port) = pg_admin::host_port(&server);
+        for _ in 0..3 {
+            let ok = handler.probe(&fx.ctx, &*fx.database).await.unwrap();
+            assert!(ok.contains(&format!("{host}:{port}")), "{ok}");
+            if let Some(password) = server.password().filter(|p| !p.is_empty()) {
+                assert!(!ok.contains(password), "{ok}");
+            }
+        }
+        assert_eq!(handler.probes.len(), 1, "every probe reuses one pool");
+        let probe = fx.storage().probe().await;
+        assert!(probe.is_ok(), "{probe:?}");
+
+        let scratch = format!("cognee_test_probe_{}", Uuid::new_v4().simple());
+        pg_admin::create_database_if_not_exists(&server, &scratch)
+            .await
+            .unwrap();
+        let relational = pg_admin::database_url(&server, &scratch, None, None).unwrap();
+        let shared_fx = shared(&server, &relational).await;
+        let probe = shared_fx.storage().probe().await;
+        assert!(probe.is_ok(), "{probe:?}");
+        assert!(probe.vector.unwrap().contains(&scratch));
+        shared_fx.database.close().await.unwrap();
+        force_drop(&server, &scratch).await;
     }
 
     /// What `public` holds: its tables, and the rows of the decoy tables and
