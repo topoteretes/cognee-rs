@@ -67,7 +67,8 @@ pub fn propagate<F: Future>(future: F) -> impl Future<Output = F::Output> {
     }
 }
 
-#[cfg(test)]
+// The task-local scope is native-only; wasm32 has no tokio to test it with.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(
     clippy::unwrap_used,
     clippy::expect_used,
