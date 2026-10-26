@@ -155,23 +155,23 @@ pub struct ImproveParams<'a> {
 ///
 /// All inputs are passed via [`ImproveParams`] (see Decision 8 / LIB-04).
 /// The id of the owner's dataset `name` in `tenant`, or `None` when there is
-/// no relational database, no such dataset, or the lookup fails (logged).
+/// no relational database or no such dataset. Names resolve among the owner's
+/// own datasets only, as Python's `get_dataset_ids` does; a failed lookup is
+/// an error, never a silent run of the graph stages outside the dataset.
 async fn dataset_id_by_name(
     db: Option<&Arc<dyn RelationalDb>>,
     name: &str,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
-) -> Option<Uuid> {
-    let db = db?;
-    match cognee_database::IngestDb::get_dataset_by_name_in_tenant(&**db, name, owner_id, tenant_id)
-        .await
-    {
-        Ok(dataset) => dataset.map(|ds| ds.id),
-        Err(e) => {
-            warn!("improve: dataset lookup failed (non-fatal): {e}");
-            None
-        }
-    }
+) -> Result<Option<Uuid>, ApiError> {
+    let Some(db) = db else {
+        return Ok(None);
+    };
+    let dataset =
+        cognee_database::IngestDb::get_dataset_by_name_in_tenant(&**db, name, owner_id, tenant_id)
+            .await
+            .map_err(|e| ApiError::Improve(format!("dataset lookup failed for '{name}': {e}")))?;
+    Ok(dataset.map(|ds| ds.id))
 }
 
 pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiError> {
@@ -274,7 +274,8 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     // context. Stages 2–2d scope themselves (add, cognify, truth subspace). A
     // dataset that does not exist yet has no graph to weight; stage 2 may
     // create it, so the later stages look it up again.
-    let stage1_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await;
+    let stage1_dataset =
+        dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
 
     // ---- Stage 1: Apply Feedback Weights ----
     if has_sessions {
@@ -665,7 +666,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     }
 
     // ---- Stage 3: Default Enrichment (always) ----
-    let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await;
+    let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
     let memify_config = if let Some(names) = node_name {
         MemifyConfig::default().with_node_name_filter(names)
     } else {

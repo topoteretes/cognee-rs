@@ -28,11 +28,11 @@ use cognee_database::{
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_vector::VectorDB;
 use cognee_models::{Data, Dataset};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{MockStorage, StorageTrait};
 use cognee_test_utils::{MockLlm, PerDatasetMocks};
+use cognee_vector::VectorDB;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -182,8 +182,14 @@ async fn each_dataset_is_cognified_into_its_own_store() {
     let (in_a, in_b) = (fx.names(a).await, fx.names(b).await);
     assert!(in_a.contains("alice") && in_a.contains("acme"), "{in_a:?}");
     assert!(in_b.contains("bob") && in_b.contains("globex"), "{in_b:?}");
-    assert!(!in_a.contains("bob") && !in_a.contains("globex"), "{in_a:?}");
-    assert!(!in_b.contains("alice") && !in_b.contains("acme"), "{in_b:?}");
+    assert!(
+        !in_a.contains("bob") && !in_a.contains("globex"),
+        "{in_a:?}"
+    );
+    assert!(
+        !in_b.contains("alice") && !in_b.contains("acme"),
+        "{in_b:?}"
+    );
     assert_eq!(fx.stores.graph_datasets(), {
         let mut both = vec![a, b];
         both.sort_unstable();
@@ -222,7 +228,10 @@ async fn deleting_a_dataset_drops_only_its_store() {
         .await
         .expect("delete dataset a");
     assert_eq!(result.deleted_datasets, 1);
-    assert!(result.deleted_graph_nodes > 0, "the ledger sizes the report");
+    assert!(
+        result.deleted_graph_nodes > 0,
+        "the ledger sizes the report"
+    );
 
     assert_eq!(fx.stores.graph_datasets(), vec![b], "a's store is gone");
     assert!(fx.names(b).await.contains("bob"));
@@ -251,7 +260,10 @@ async fn deleting_an_item_cleans_its_dataset_store() {
         .await
         .expect("delete the item");
     let left = fx.names(a).await;
-    assert!(!left.contains("alice") && !left.contains("acme"), "{left:?}");
+    assert!(
+        !left.contains("alice") && !left.contains("acme"),
+        "{left:?}"
+    );
 }
 
 /// The store-wide wipe drops every dataset's store.
@@ -301,7 +313,10 @@ async fn memify_runs_in_its_dataset() {
     let in_a = run(a).await.expect("memify a");
     assert!(in_a.triplet_count > 0, "a's graph has a triplet to index");
     let in_b = run(b).await.expect("memify b");
-    assert_eq!(in_b.triplet_count, 0, "b's graph is empty: it never saw a's");
+    assert_eq!(
+        in_b.triplet_count, 0,
+        "b's graph is empty: it never saw a's"
+    );
 }
 
 /// Without a dataset, the routing engines refuse instead of reaching a store.

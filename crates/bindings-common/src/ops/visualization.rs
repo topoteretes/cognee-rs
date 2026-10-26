@@ -25,8 +25,8 @@
 
 use crate::{HandleState, SdkError};
 
-/// The dataset a render runs in: `opts.dataset` (an id, or a name among the
-/// handle owner's datasets in its tenant), else `default_dataset_name`.
+/// The dataset a render runs in: `opts.dataset` (an id or a name, of one of
+/// the handle owner's datasets in its tenant), else `default_dataset_name`.
 /// `None` when the name resolves to nothing — an error under per-dataset
 /// storage, where there is no store outside a dataset.
 #[cfg(feature = "visualization")]
@@ -43,20 +43,28 @@ async fn render_dataset(
             .effective_default_dataset_name()
             .to_string(),
     };
+    // An id is the handle owner's like a name is: its dataset must be theirs
+    // and in their tenant, or it is "not found" — never another user's graph.
+    let owner_id = state.owner_id().await?;
+    let tenant_id = state.tenant_id();
+    let lookup_error = |e: cognee::database::DatabaseError| {
+        SdkError::Runtime(format!("failed to resolve dataset '{dataset}': {e}"))
+    };
     let dataset_id = match uuid::Uuid::parse_str(&dataset) {
-        Ok(id) => Some(id),
-        Err(_) => {
-            let owner_id = state.owner_id().await?;
-            cognee::database::IngestDb::get_dataset_by_name_in_tenant(
-                svc.database.as_ref(),
-                &dataset,
-                owner_id,
-                state.tenant_id(),
-            )
+        Ok(id) => cognee::database::IngestDb::get_dataset(svc.database.as_ref(), id)
             .await
-            .map_err(|e| SdkError::Runtime(format!("failed to resolve dataset '{dataset}': {e}")))?
-            .map(|ds| ds.id)
-        }
+            .map_err(lookup_error)?
+            .filter(|ds| ds.owner_id == owner_id && ds.tenant_id == tenant_id)
+            .map(|ds| ds.id),
+        Err(_) => cognee::database::IngestDb::get_dataset_by_name_in_tenant(
+            svc.database.as_ref(),
+            &dataset,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        .map_err(lookup_error)?
+        .map(|ds| ds.id),
     };
     let per_dataset = svc
         .component_manager
@@ -65,7 +73,9 @@ async fn render_dataset(
         .map_err(|e| SdkError::Runtime(format!("dataset storage: {e}")))?
         .is_some();
     if per_dataset && dataset_id.is_none() {
-        return Err(SdkError::Validation(format!("dataset '{dataset}' not found")));
+        return Err(SdkError::Validation(format!(
+            "dataset '{dataset}' not found"
+        )));
     }
     Ok(dataset_id)
 }

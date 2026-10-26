@@ -40,25 +40,32 @@ pub fn run(args: VisualizeArgs, cm: Arc<ComponentManager>) -> Result<(), CliErro
 
         // The dataset's scope: under per-dataset storage the graph it reaches
         // is the dataset's own.
+        // An id is the caller's like a name is: its dataset must be theirs and
+        // in their tenant, or it is "not found".
+        let database = cm
+            .database()
+            .await
+            .map_err(|e| CliError::Runtime(format!("{e}")))?;
+        let lookup_error = |error: cognee::database::DatabaseError| {
+            CliError::Runtime(format!("Failed to resolve dataset '{dataset}': {error}"))
+        };
         let dataset_id = match Uuid::parse_str(&dataset) {
-            Ok(id) => Some(id),
-            Err(_) => {
-                let database = cm
-                    .database()
-                    .await
-                    .map_err(|e| CliError::Runtime(format!("{e}")))?;
-                cognee::database::IngestDb::get_dataset_by_name_in_tenant(
-                    &*database, &dataset, owner_id, tenant_id,
-                )
+            Ok(id) => cognee::database::IngestDb::get_dataset(&*database, id)
                 .await
-                .map_err(|error| {
-                    CliError::Runtime(format!("Failed to resolve dataset '{dataset}': {error}"))
-                })?
-                .map(|ds| ds.id)
-            }
+                .map_err(lookup_error)?
+                .filter(|ds| ds.owner_id == owner_id && ds.tenant_id == tenant_id)
+                .map(|ds| ds.id),
+            Err(_) => cognee::database::IngestDb::get_dataset_by_name_in_tenant(
+                &*database, &dataset, owner_id, tenant_id,
+            )
+            .await
+            .map_err(lookup_error)?
+            .map(|ds| ds.id),
         };
         if per_dataset && dataset_id.is_none() {
-            return Err(CliError::Validation(format!("Dataset '{dataset}' not found")));
+            return Err(CliError::Validation(format!(
+                "Dataset '{dataset}' not found"
+            )));
         }
 
         let output: Option<PathBuf> = args.output.as_deref().map(PathBuf::from);

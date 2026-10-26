@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cognee::add::AddPipeline;
-use cognee::api::prune::{PruneTarget, prune_data, prune_system};
+use cognee::api::prune::{PruneTarget, prune_data, prune_system_with_storage};
 use cognee::api::{DatasetDb, DatasetManager};
 use cognee::cognify::{TokenCounterKind, cognify};
 use cognee::core::RayonThreadPool;
@@ -663,11 +663,17 @@ async fn phase_prune(cm: &Arc<ComponentManager>) -> Result<(), String> {
     let vector_db = cm.vector_db().await.map_err(|e| e.to_string())?;
     let session_store = cm.session_store().await.map_err(|e| e.to_string())?;
 
-    prune_system(
+    // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): every dataset's
+    // own databases.
+    let dataset_storage = cm.dataset_storage().await.map_err(|e| e.to_string())?;
+    prune_system_with_storage(
         &PruneTarget::default_system(),
         Some(graph_db.as_ref()),
         Some(vector_db.as_ref()),
         Some(&*session_store),
+        dataset_storage
+            .as_deref()
+            .map(|s| s as &dyn cognee::database::DatasetStorageLifecycle),
     )
     .await
     .map_err(|e| e.to_string())?;

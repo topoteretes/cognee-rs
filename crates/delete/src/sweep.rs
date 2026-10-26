@@ -181,8 +181,11 @@ impl RunSweeper {
     /// The sweep, in the run's dataset scope: under per-dataset storage the
     /// run's artifacts live in that dataset's own databases.
     async fn run(&self, scope: &SweepScope, outcome: &mut SweepOutcome) -> Result<(), DeleteError> {
-        cognee_models::dataset_scope::with_dataset(scope.dataset_id, self.run_in_scope(scope, outcome))
-            .await
+        cognee_models::dataset_scope::with_dataset(
+            scope.dataset_id,
+            self.run_in_scope(scope, outcome),
+        )
+        .await
     }
 
     async fn run_in_scope(

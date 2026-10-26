@@ -106,10 +106,12 @@ pub async fn prune_system(
 /// [`prune_system`] that knows about per-dataset storage
 /// (`ENABLE_BACKEND_ACCESS_CONTROL`, `ComponentManager::dataset_storage`).
 ///
-/// With `dataset_storage`, `graph` or `vector` drops every dataset's own
+/// With `dataset_storage`, `graph` and `vector` drop every dataset's own
 /// databases — Python's `prune_graph_databases` / `prune_vector_databases`.
-/// A dataset's graph and vector databases go together; its next use
-/// provisions empty ones. Without it, as [`prune_system`].
+/// A dataset's graph and vector databases go together (its row records both,
+/// and its next use provisions both empty), so asking for one without the
+/// other is refused rather than dropping what the caller asked to keep.
+/// Without it, as [`prune_system`].
 pub async fn prune_system_with_storage(
     target: &PruneTarget,
     graph_db: Option<&dyn GraphDBTrait>,
@@ -119,16 +121,26 @@ pub async fn prune_system_with_storage(
 ) -> Result<PruneResult, ApiError> {
     let mut result = PruneResult::default();
 
+    if dataset_storage.is_some() && target.graph != target.vector {
+        return Err(ApiError::InvalidArgument(
+            "under per-dataset storage (ENABLE_BACKEND_ACCESS_CONTROL) a dataset's graph and \
+             vector databases are pruned together: set both graph and vector, or neither"
+                .to_string(),
+        ));
+    }
+
     if let Some(storage) = dataset_storage
-        && (target.graph || target.vector)
+        && target.graph
     {
-        let dropped = storage
-            .drop_all_dataset_storage()
-            .await
-            .map_err(|e| ApiError::Graph(cognee_graph::GraphDBError::DatabaseError(e.to_string())))?;
+        let dropped = storage.drop_all_dataset_storage().await.map_err(|e| {
+            ApiError::Graph(cognee_graph::GraphDBError::DatabaseError(e.to_string()))
+        })?;
         result.graph_pruned = true;
         result.vector_pruned = true;
-        info!(datasets = dropped, "prune_system: every dataset's graph and vector databases dropped");
+        info!(
+            datasets = dropped,
+            "prune_system: every dataset's graph and vector databases dropped"
+        );
     } else if target.graph {
         if let Some(gdb) = graph_db {
             gdb.delete_graph().await?;
@@ -181,6 +193,51 @@ pub async fn prune_system_with_storage(
 )]
 mod tests {
     use super::*;
+
+    struct CountingStorage(std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl DatasetStorageLifecycle for CountingStorage {
+        async fn drop_dataset_storage(
+            &self,
+            _dataset_id: uuid::Uuid,
+        ) -> Result<bool, cognee_database::DatabaseError> {
+            Ok(false)
+        }
+
+        async fn drop_all_dataset_storage(&self) -> Result<usize, cognee_database::DatabaseError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(0)
+        }
+    }
+
+    /// Under per-dataset storage graph and vector go together: a partial
+    /// prune is refused and drops nothing.
+    #[tokio::test]
+    async fn per_dataset_storage_refuses_a_partial_prune() {
+        let storage = CountingStorage(std::sync::atomic::AtomicUsize::new(0));
+        let graph_only = PruneTarget {
+            graph: true,
+            vector: false,
+            metadata: false,
+            cache: false,
+        };
+        let error = prune_system_with_storage(&graph_only, None, None, None, Some(&storage))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pruned together"), "{error}");
+        assert_eq!(storage.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let both = PruneTarget {
+            vector: true,
+            ..graph_only
+        };
+        let result = prune_system_with_storage(&both, None, None, None, Some(&storage))
+            .await
+            .unwrap();
+        assert!(result.graph_pruned && result.vector_pruned);
+        assert_eq!(storage.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn prune_target_defaults_match_python() {

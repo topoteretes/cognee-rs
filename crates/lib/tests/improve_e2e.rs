@@ -666,5 +666,9 @@ async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
     .unwrap();
 
     assert_eq!(r.stages_run, vec!["memify".to_string()]);
-    assert_eq!(stores.graph_datasets(), vec![dataset_id], "memify read the dataset's graph");
+    assert_eq!(
+        stores.graph_datasets(),
+        vec![dataset_id],
+        "memify read the dataset's graph"
+    );
 }

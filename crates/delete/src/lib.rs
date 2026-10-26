@@ -1500,11 +1500,14 @@ impl DeleteService {
             // The dataset's own databases go whole: nothing in them belongs to
             // another dataset. Done even when the ledger is empty, so a
             // provisioned-but-never-cognified dataset leaves nothing behind.
-            storage.drop_dataset_storage(dataset_id).await.map_err(|e| {
-                DeleteError::GraphCleanup(format!(
-                    "Failed to drop the storage of dataset {dataset_id}: {e}"
-                ))
-            })?;
+            storage
+                .drop_dataset_storage(dataset_id)
+                .await
+                .map_err(|e| {
+                    DeleteError::GraphCleanup(format!(
+                        "Failed to drop the storage of dataset {dataset_id}: {e}"
+                    ))
+                })?;
             let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
             graph_node_count += gn;
             vector_point_count += vp;

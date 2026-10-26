@@ -148,7 +148,8 @@ impl cognee_database::DatasetStorageLifecycle for PerDatasetMocks {
         &self,
         dataset_id: Uuid,
     ) -> Result<bool, cognee_database::DatabaseError> {
-        let existed = self.cached_graph(dataset_id).is_some() || self.cached_vector(dataset_id).is_some();
+        let existed =
+            self.cached_graph(dataset_id).is_some() || self.cached_vector(dataset_id).is_some();
         self.drop_dataset(dataset_id);
         Ok(existed)
     }
