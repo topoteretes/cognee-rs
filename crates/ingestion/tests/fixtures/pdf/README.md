@@ -108,20 +108,32 @@ how the two backends differ.
 password** and the owner password `cognee-owner`. That is the common
 "protected" PDF: any reader opens it without prompting, but the content is
 ciphertext on disk and every extractor has to decrypt it. They hold the same
-pages, so the tests compare them against the same expected files.
+pages, so the tests compare them against the same expected files. Both PDF
+test files read them, through the list in `encrypted.rs`.
 
-They exist because `pdf-extract` 0.10 returned empty text for such a file
-instead of an error: its `lopdf` decrypted at load time but kept `/Encrypt` in
-the trailer, so `pdf-extract` decrypted a second time (see
-`tests/pdf_pure_rust_fixture_extraction.rs`).
+They exist because `pdf-extract` 0.10 could not read such a file: its `lopdf`
+decrypted at load time but kept `/Encrypt` in the trailer, so `pdf-extract`
+decrypted a second time (see `encrypted.rs`). With RC4 that second pass
+re-encrypted the streams, every page came back empty and the loader reported
+success; with AES it failed with `Decryption(InvalidCipherTextLength)`.
+
+`sample.encrypted-user-password-rc4-128.pdf` is the opposite case: the user
+password is `secret`, which the loader cannot supply, so extraction must fail
+rather than yield empty text or ciphertext.
 
 Unlike `sample.pdf` these are binary — their streams are encrypted (and
 deflated, as real-world files are) — so review them by decrypting:
 `mutool clean -d -D sample.encrypted-rc4-128.pdf out.pdf` should show the same
-objects as `sample.pdf`. They are not byte-reproducible: mutool generates a new
-file `/ID` on every run, and the encryption key is derived from it, so every
-encrypted byte changes. Regenerate all three together rather than diffing
-against the old bytes.
+objects as `sample.pdf`. They are not byte-reproducible across runs, but only
+because of the clock: MEASURED with MuPDF 1.23.10, two runs within the same
+second give identical bytes, and runs in different seconds differ in the file
+`/ID`, in the AES stream IVs, and for AES-256 in the salted `/O`, `/U` and
+`/UE`. `/ID` feeds the RC4 and AES-128 key derivation, so every encrypted byte
+changes with it, while their `/O` depends only on the passwords. That is why
+the three empty-user-password files share one `/ID` (they were written in the
+same second), and why the RC4-128 and AES-128 files also share `/O` and `/U`:
+revisions 3 and 4 of the standard handler compute both the same way.
+Regenerate all of them together rather than diffing against the old bytes.
 
 `mutool clean -E` writes `/Encrypt` as an inline dictionary in the trailer.
 Real-world writers put it in an indirect object, and `lopdf` only recognises
@@ -135,6 +147,8 @@ for alg in rc4-128 aes-128 aes-256; do
     mutool clean -z -E "$alg" -O cognee-owner -U "" -P -4 sample.pdf "/tmp/$alg.pdf"
     python3 indirect_encrypt.py "/tmp/$alg.pdf" > "sample.encrypted-$alg.pdf"
 done
+mutool clean -z -E rc4-128 -O cognee-owner -U secret -P -4 sample.pdf /tmp/user.pdf
+python3 indirect_encrypt.py /tmp/user.pdf > sample.encrypted-user-password-rc4-128.pdf
 ```
 
 ```python

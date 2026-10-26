@@ -61,11 +61,15 @@
 
 use cognee_ingestion::loaders::{DocumentLoader, LoaderOutput, pdf::PdfLoader};
 use cognee_models::{DataPoint, Document};
+use encrypted::ENCRYPTED_EMPTY_USER_PASSWORD;
 use uuid::Uuid;
 
 /// A two-page, uncompressed, base-14-font PDF authored in this repository.
 /// See `fixtures/pdf/README.md` for provenance and how to regenerate it.
 const SAMPLE_PDF: &[u8] = include_bytes!("fixtures/pdf/sample.pdf");
+
+#[path = "fixtures/pdf/encrypted.rs"]
+mod encrypted;
 
 /// The loader's expected output, CRLF-normalised — see [`normalise`].
 const EXPECTED: &str = include_str!("fixtures/pdf/sample.expected.txt");
@@ -98,38 +102,67 @@ fn normalise(s: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extracts_text_from_a_real_pdf() {
+    let _ =
+        assert_extracts_the_sample_text("extracts_text_from_a_real_pdf", "sample.pdf", SAMPLE_PDF)
+            .await;
+}
+
+/// The encrypted copies `pdf_pure_rust_fixture_extraction.rs` reads, through
+/// PDFium, so that a PDFium-only build is held to them too. They hold the same
+/// pages as `sample.pdf`, so they must extract to the same text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extracts_text_from_a_pdf_encrypted_with_an_empty_user_password() {
+    for (name, bytes) in ENCRYPTED_EMPTY_USER_PASSWORD {
+        let checked = assert_extracts_the_sample_text(
+            "extracts_text_from_a_pdf_encrypted_with_an_empty_user_password",
+            name,
+            bytes,
+        )
+        .await;
+        if !checked {
+            // Skipped: libpdfium is unobtainable, and that is the cause for
+            // every fixture, so one notice is enough.
+            break;
+        }
+    }
+}
+
+/// Extracts `bytes` with [`PdfLoader`] and asserts the output is
+/// `sample.expected.txt`. Returns `false`, after printing a notice naming
+/// `test`, if libpdfium could not be obtained (see the module docs).
+async fn assert_extracts_the_sample_text(test: &str, name: &str, bytes: &[u8]) -> bool {
     let doc = Document {
         base: DataPoint::new("PdfDocument", None),
         document_type: "pdf".to_string(),
-        name: "sample.pdf".to_string(),
-        raw_data_location: "file:///sample.pdf".to_string(),
+        name: name.to_string(),
+        raw_data_location: format!("file:///{name}"),
         mime_type: "application/pdf".to_string(),
         extension: "pdf".to_string(),
         data_id: Uuid::new_v4(),
         external_metadata: None,
     };
 
-    let output = match PdfLoader.extract(SAMPLE_PDF, &doc).await {
+    let output = match PdfLoader.extract(bytes, &doc).await {
         Ok(output) => output,
         Err(e) if e.to_string().contains(LIBRARY_UNOBTAINABLE) => {
             assert!(
                 !in_ci(),
-                "libpdfium could not be obtained, so real-PDF extraction never ran — and a CI \
-                 lane must not report green on that. Provision the library and set \
+                "{test}: libpdfium could not be obtained, so real-PDF extraction never ran — \
+                 and a CI lane must not report green on that. Provision the library and set \
                  PDFIUM_LIB_PATH. Cause: {e}"
             );
             eprintln!(
-                "SKIP extracts_text_from_a_real_pdf: libpdfium could not be obtained on this \
-                 machine, so real-PDF extraction was NOT verified. Set PDFIUM_LIB_PATH to an \
-                 existing libpdfium shared library to run it. Cause: {e}"
+                "SKIP {test}: libpdfium could not be obtained on this machine, so real-PDF \
+                 extraction was NOT verified. Set PDFIUM_LIB_PATH to an existing libpdfium \
+                 shared library to run it. Cause: {e}"
             );
-            return;
+            return false;
         }
-        Err(e) => panic!("extraction of a valid PDF failed: {e}"),
+        Err(e) => panic!("{name}: extraction of a valid PDF failed: {e}"),
     };
 
     let LoaderOutput::Text(text) = output else {
-        panic!("the PDF loader must yield text, got {output:?}");
+        panic!("{name}: the PDF loader must yield text, got {output:?}");
     };
 
     // `loaders::pdf` documents, as MEASURED, that PDFium separates intra-page
@@ -140,13 +173,14 @@ async fn extracts_text_from_a_real_pdf() {
     // green while the docs went stale.
     assert!(
         text.contains("\r\n"),
-        "PDFium is documented to emit CRLF within a page; if that changed, \
+        "{name}: PDFium is documented to emit CRLF within a page; if that changed, \
          update the `loaders::pdf` module docs and both expected files. Got: {text:?}"
     );
 
     assert_eq!(
         normalise(&text),
         normalise(EXPECTED),
-        "extracted text does not match fixtures/pdf/sample.expected.txt"
+        "{name}: extracted text does not match fixtures/pdf/sample.expected.txt"
     );
+    true
 }
