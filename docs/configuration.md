@@ -1590,9 +1590,9 @@ build naming the handler, the provider and the supported handlers (Python's
 | `ladybug` / `kuzu` | graph | `ladybug`, `kuzu` | `{system_root}/databases/{owner_id}/{dataset_id}.lbug` (`.pkl` for `kuzu`) | — |
 | `lancedb` | vector | `lancedb` | `{system_root}/databases/{owner_id}/{dataset_id}.lance.db` | — |
 | `memory` | both | `mock`, `brute-force` | a fresh in-memory engine | — |
-| `pgvector` (default for `pgvector`) | vector | `pgvector` | database `"{dataset_id}"` on the vector server, with the `vector` extension | `CREATEDB`, and the right to `CREATE EXTENSION vector` in a new database |
+| `pgvector` (default for `pgvector`) | vector | `pgvector` | database `"{dataset_id}"` on the vector server, with the `vector` extension | `CREATEDB`, and the right to `CREATE EXTENSION vector` in a new database; Postgres 13+ |
 | `pgvector_shared` | vector | `pgvector` | schema `ds_{dataset_id hex}` in the **relational** database, `search_path = ds_…, public` | `CREATE` on the relational database (and `vector` installed there, or the right to install it) |
-| `postgres_graph` (default for `postgres`) | graph | `postgres`, `postgresql` | database `"{dataset_id}"` on the graph server | `CREATEDB` |
+| `postgres_graph` (default for `postgres`) | graph | `postgres`, `postgresql` | database `"{dataset_id}"` on the graph server | `CREATEDB`; Postgres 13+ |
 | `postgres_graph_shared` | graph | `postgres`, `postgresql` | schema `ds_{dataset_id hex}` in the **relational** database, `search_path = ds_…` | `CREATE` on the relational database |
 
 The Postgres handlers are compiled with the `pgvector` / `pggraph` features.
@@ -1604,9 +1604,12 @@ therefore need a Postgres relational database. `CREATE DATABASE` runs on the
 server's `postgres` maintenance database. Creation is idempotent and
 serialized on the advisory locks Python takes, so concurrent first uses (in
 any process) converge on one database. Deleting a dataset drops its database
-(`DROP DATABASE … WITH (FORCE)`, Postgres 13+, which terminates sessions
-other processes still hold on it, as Python does) or its schema
-(`DROP SCHEMA … CASCADE`).
+(`DROP DATABASE … WITH (FORCE)`, which terminates sessions other processes
+still hold on it, as Python does) or its schema (`DROP SCHEMA … CASCADE`).
+Drops take the same advisory locks as creation, so a delete never interleaves
+with another process's first bind of the same dataset. **The dedicated
+handlers (`pgvector`, `postgres_graph`) need Postgres 13 or later** for
+`WITH (FORCE)`; there is no fallback for older servers.
 
 `ConfigManager::set_application_access_control` and
 `HandleState::with_application_access_control()` are no longer needed for the

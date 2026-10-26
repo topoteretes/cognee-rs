@@ -246,6 +246,13 @@ pub(crate) async fn create_database_if_not_exists(
 /// process still holds are terminated (`WITH (FORCE)`), as Python's handler
 /// terminates them before dropping. A dataset being deleted is not one anyone
 /// may keep using.
+///
+/// Needs Postgres 13 or later (`DROP DATABASE … WITH (FORCE)`).
+///
+/// The drop holds the session advisory lock [`create_database_if_not_exists`]
+/// takes, so it never interleaves with another process's existence check and
+/// `CREATE DATABASE` of the same name: a concurrent first bind either finishes
+/// creating before the drop, or creates afresh after it.
 pub(crate) async fn drop_database_if_exists(
     server: &Url,
     name: &str,
@@ -254,16 +261,23 @@ pub(crate) async fn drop_database_if_exists(
     let admin = database_url(server, MAINTENANCE_DATABASE, None, None)?;
     let db = connect(&admin).await?;
     let failed = sql_error("DROP DATABASE", name);
+    db.execute(statement(ACQUIRE_LOCK, name))
+        .await
+        .map_err(&failed)?;
     // `WITH (FORCE)` (Postgres 13+) terminates the sessions still connected:
     // another process's engine pool would otherwise fail the drop with "being
     // accessed by other users". Python terminates them with
     // `pg_terminate_backend` before dropping, to the same effect.
-    db.execute_unprepared(&format!(
-        "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-        quote_ident(name)
-    ))
-    .await
-    .map_err(&failed)?;
+    let dropped = db
+        .execute_unprepared(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            quote_ident(name)
+        ))
+        .await;
+    // Release before reporting, as in `create_database_if_not_exists`.
+    let released = db.execute(statement(RELEASE_LOCK, name)).await;
+    dropped.map_err(&failed)?;
+    released.map_err(&failed)?;
     db.close().await.map_err(&failed)
 }
 
@@ -326,19 +340,30 @@ pub(crate) async fn create_schema_if_not_exists(
 /// Drop `schema` and everything in it from the database `database` connects
 /// to: one statement, so a dataset's tables go together (Python
 /// `drop_pg_schema_if_exists`).
+///
+/// Runs in a transaction holding the advisory lock schema creation takes
+/// ([`provision_in_database`], keyed on the database name), so a concurrent
+/// first bind's `CREATE SCHEMA` lands either before the drop or after it,
+/// never half way through.
 pub(crate) async fn drop_schema_if_exists(
     database: &Url,
     schema: &str,
 ) -> Result<(), ComponentError> {
     validate_schema_name(schema)?;
+    let name = database_of(database).to_string();
     let failed = sql_error("DROP SCHEMA", schema);
     let db = connect(database).await?;
-    db.execute_unprepared(&format!(
+    let txn = db.begin().await.map_err(&failed)?;
+    txn.execute(statement(ACQUIRE_XACT_LOCK, &name))
+        .await
+        .map_err(&failed)?;
+    txn.execute_unprepared(&format!(
         "DROP SCHEMA IF EXISTS {} CASCADE",
         quote_ident(schema)
     ))
     .await
     .map_err(&failed)?;
+    txn.commit().await.map_err(&failed)?;
     db.close().await.map_err(&failed)
 }
 
