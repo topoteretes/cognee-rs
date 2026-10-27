@@ -42,10 +42,7 @@ use crate::retrievers::graph_core::{
     GraphPrompts, GraphRetrieverCore, complete, ranked_edge_to_item,
 };
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
-use crate::utils::{
-    render_edges_context, render_graph_user_prompt, resolve_system_prompt,
-    skip_completion_on_empty_context,
-};
+use crate::utils::{render_edges_context, skip_completion_on_empty_context};
 
 /// System prompt for splitting a question into sub-questions.
 ///
@@ -145,7 +142,14 @@ fn merge_deduplicated_edges(
                 edge.relationship_name.clone(),
             );
             match index_of.get(&key) {
-                Some(&at) => merged[at].1.push([subquery_index, rank]),
+                // A triplet repeated within one sub-question's results keeps
+                // its best rank only, so it is rendered once for that answer.
+                Some(&at) => {
+                    let positions = &mut merged[at].1;
+                    if !positions.iter().any(|[idx, _]| *idx == subquery_index) {
+                        positions.push([subquery_index, rank]);
+                    }
+                }
                 None => {
                     index_of.insert(key, merged.len());
                     merged.push((edge, vec![[subquery_index, rank]]));
@@ -317,16 +321,16 @@ impl GraphCompletionDecompositionRetriever {
     /// answered over its own triplets, without the session history.
     async fn answer_subquery(
         &self,
-        system_prompt: &str,
         subquery: &str,
         context: &SearchContext,
+        params: &SearchParams,
     ) -> Result<String, SearchError> {
-        let user_prompt = render_graph_user_prompt(
-            self.prompts.user_prompt_template.as_deref(),
+        let messages = self.prompts.messages(
             subquery,
             &render_edges_context(context),
-        );
-        let messages = vec![Message::system(system_prompt), Message::user(user_prompt)];
+            &SessionContext::default(),
+            params,
+        )?;
         Ok(self
             .llm
             .generate(messages, self.generation_options.clone())
@@ -341,25 +345,19 @@ impl GraphCompletionDecompositionRetriever {
         &self,
         query: &str,
         context: &SearchContext,
+        combined_context: String,
         params: &SearchParams,
     ) -> Result<String, SearchError> {
         match DecompositionMode::parse(params.decomposition_mode.as_deref())? {
-            DecompositionMode::CombinedTripletsContext => Ok(render_edges_context(context)),
+            DecompositionMode::CombinedTripletsContext => Ok(combined_context),
             DecompositionMode::AnswerPerSubquery => {
-                let system_prompt = resolve_system_prompt(
-                    params
-                        .system_prompt
-                        .as_deref()
-                        .or(self.prompts.system_prompt.as_deref()),
-                    params
-                        .system_prompt_path
-                        .as_deref()
-                        .or(self.prompts.system_prompt_path.as_deref()),
-                )?;
                 let (subqueries, per_subquery) = split_by_subquery(query, context);
-                let answers = try_join_all(subqueries.iter().zip(&per_subquery).map(
-                    |(subquery, items)| self.answer_subquery(&system_prompt, subquery, items),
-                ))
+                let answers = try_join_all(
+                    subqueries
+                        .iter()
+                        .zip(&per_subquery)
+                        .map(|(subquery, items)| self.answer_subquery(subquery, items, params)),
+                )
                 .await?;
                 Ok(build_subquery_answer_context(&subqueries, &answers))
             }
@@ -376,10 +374,13 @@ impl GraphCompletionDecompositionRetriever {
         session: &SessionContext,
         params: &SearchParams,
     ) -> Result<Option<Vec<Message>>, SearchError> {
-        if render_edges_context(context).is_empty() {
+        let combined_context = render_edges_context(context);
+        if combined_context.is_empty() {
             return Ok(None);
         }
-        let final_context = self.final_context(query, context, params).await?;
+        let final_context = self
+            .final_context(query, context, combined_context, params)
+            .await?;
         self.prompts
             .messages(query, &final_context, session, params)
             .map(Some)
@@ -766,6 +767,28 @@ mod tests {
                 vec![],
             ]
         );
+    }
+
+    /// A triplet repeated within one sub-question's results keeps its best
+    /// rank and is rendered once for that sub-question.
+    #[test]
+    fn a_triplet_repeated_in_one_subquery_is_kept_once() {
+        let subqueries: Vec<String> = ["one"].map(String::from).to_vec();
+        let merged = merge_deduplicated_edges(
+            &subqueries,
+            vec![vec![
+                ranked("a", "b", "r"),
+                ranked("b", "c", "r"),
+                ranked("a", "b", "r"),
+            ]],
+        );
+        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            merged[0].payload[DECOMPOSITION_PAYLOAD_KEY]["positions"],
+            json!([[0, 0]])
+        );
+        let (_, per_subquery) = split_by_subquery("q", &merged);
+        assert_eq!(per_subquery[0].len(), 2);
     }
 
     /// A context the retriever did not build is one sub-question: the query.

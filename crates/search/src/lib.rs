@@ -1,4 +1,4 @@
-//! Unified search orchestration across 16 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
+//! Unified search orchestration across 18 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
 
 /// Graph retrieval strategies and helpers.
 pub mod graph_retrieval;

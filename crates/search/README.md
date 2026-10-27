@@ -1,6 +1,6 @@
 # cognee-search
 
-Unified search orchestration across 16 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more) for the cognee `search` stage.
+Unified search orchestration across 18 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more) for the cognee `search` stage.
 
 Part of [cognee-rs](https://github.com/topoteretes/cognee-rs) — see the [project README](../../README.md) for an architecture overview and how the pieces fit together.
 
