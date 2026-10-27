@@ -7,6 +7,7 @@ public enum SearchType {
     RAG_COMPLETION,
     TRIPLET_COMPLETION,
     GRAPH_COMPLETION,
+    GRAPH_COMPLETION_DECOMPOSITION,
     GRAPH_SUMMARY_COMPLETION,
     CYPHER,
     NATURAL_LANGUAGE,
@@ -17,6 +18,7 @@ public enum SearchType {
     TEMPORAL,
     CODING_RULES,
     CHUNKS_LEXICAL,
+    GRAPH_REPORT,
     HYBRID_COMPLETION;
 
     /** Wire string (identical to {@link #name()}). */

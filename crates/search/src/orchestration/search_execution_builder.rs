@@ -12,9 +12,10 @@ use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry};
 use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
-    GraphCompletionCotRetriever, GraphCompletionRetriever, GraphSummaryCompletionRetriever,
-    HybridBudget, HybridRetriever, LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef,
-    SummariesRetriever, TemporalHybridRetriever, TripletRetriever,
+    GraphCompletionCotRetriever, GraphCompletionDecompositionRetriever, GraphCompletionRetriever,
+    GraphReportRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
+    LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
+    TemporalHybridRetriever, TripletRetriever,
 };
 use crate::types::SearchType;
 
@@ -232,6 +233,26 @@ impl SearchBuilder {
         );
 
         retrievers.insert(
+            SearchType::GraphCompletionDecomposition,
+            Arc::new(
+                GraphCompletionDecompositionRetriever::new(
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&llm),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .with_neighbor_cap(tuning.triplet_neighbor_cap),
+            ),
+        );
+
+        retrievers.insert(
             SearchType::GraphSummaryCompletion,
             Arc::new(
                 GraphSummaryCompletionRetriever::new(
@@ -340,6 +361,18 @@ impl SearchBuilder {
                 Arc::clone(&graph_db),
                 None,
                 false,
+                None,
+            )),
+        );
+
+        retrievers.insert(
+            SearchType::GraphReport,
+            // Python wires GRAPH_REPORT to `GraphReportRetriever(top_n=top_k)`
+            // (`get_search_type_retriever_instance.py:394`); the request's
+            // `top_k` is read per search.
+            Arc::new(GraphReportRetriever::new(
+                Arc::clone(&graph_db),
+                Arc::clone(&llm),
                 None,
             )),
         );
@@ -1098,6 +1131,32 @@ mod tests {
         }
     }
 
+    /// GRAPH_COMPLETION_DECOMPOSITION and GRAPH_REPORT are standard search
+    /// types (SDK-1062), served by their own retrievers.
+    #[test]
+    fn decomposition_and_report_are_standard_retrievers() {
+        use super::{SearchTuning, StandardEngines};
+
+        let retrievers = SearchBuilder::standard_retrievers(
+            StandardEngines {
+                vector_db: Arc::new(TestVectorDb),
+                embedding_engine: Arc::new(TestEmbedding),
+                graph_db: Arc::new(TestGraphDb),
+                llm: Arc::new(TestLlm),
+            },
+            &SearchTuning::default(),
+        );
+        for search_type in [
+            SearchType::GraphCompletionDecomposition,
+            SearchType::GraphReport,
+        ] {
+            let retriever = retrievers
+                .get(&search_type)
+                .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
+            assert_eq!(retriever.search_type(), search_type);
+        }
+    }
+
     /// `with_tuning` must reach every standard retriever that consumes a
     /// knob: each is wired by a hand-written builder call, so a dropped one
     /// would silently fall back to the default for that search type.
@@ -1147,6 +1206,7 @@ mod tests {
             (SearchType::GraphCompletion, &capped),
             (SearchType::GraphCompletionCot, &capped),
             (SearchType::GraphCompletionContextExtension, &capped),
+            (SearchType::GraphCompletionDecomposition, &capped),
             (SearchType::GraphSummaryCompletion, &capped),
             (SearchType::Temporal, &hybrid),
             (SearchType::Cypher, &cypher),

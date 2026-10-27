@@ -54,11 +54,9 @@ that support it, or call the corresponding method directly on a
 
 Notes on unsupported upstream types
 ------------------------------------
-The upstream ``cognee`` SDK also defines ``SearchType.AGENTIC_COMPLETION``
-and ``SearchType.GRAPH_COMPLETION_DECOMPOSITION``.  These are **not yet
-supported** by the Rust core and therefore absent from :class:`SearchType`.
-Passing the string values ``"AGENTIC_COMPLETION"`` or
-``"GRAPH_COMPLETION_DECOMPOSITION"`` raises
+The upstream ``cognee`` SDK also defines ``SearchType.AGENTIC_COMPLETION``.
+It is **not yet supported** by the Rust core and therefore absent from
+:class:`SearchType`.  Passing the string value ``"AGENTIC_COMPLETION"`` raises
 :exc:`~cognee_py.CogneeValidationError` with a descriptive message.
 """
 

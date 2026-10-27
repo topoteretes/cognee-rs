@@ -14,7 +14,7 @@ minimal ``tracing_subscriber::Registry`` that forwards every Rust
 
 
 class SearchType(str, Enum):
-    """Enumeration of the 16 supported search strategy types.
+    """Enumeration of the 18 supported search strategy types.
 
     Inherits from ``str`` so values compare equal to their string forms and
     can be passed wherever a plain string search-type is accepted.  Matches
@@ -29,9 +29,8 @@ class SearchType(str, Enum):
         from cognee_py import SearchType
         result = await cognee.search("query", {"search_type": SearchType.CHUNKS})
 
-    The two upstream types ``AGENTIC_COMPLETION`` and
-    ``GRAPH_COMPLETION_DECOMPOSITION`` are **not yet supported** by the Rust
-    core.  Passing either raises :exc:`CogneeValidationError` at runtime.
+    The upstream type ``AGENTIC_COMPLETION`` is **not yet supported** by the
+    Rust core.  Passing it raises :exc:`CogneeValidationError` at runtime.
     """
 
     # Ensure str() and f-strings return the bare value (e.g. "CHUNKS"), not
@@ -46,6 +45,7 @@ class SearchType(str, Enum):
     GRAPH_COMPLETION = "GRAPH_COMPLETION"
     GRAPH_COMPLETION_COT = "GRAPH_COMPLETION_COT"
     GRAPH_COMPLETION_CONTEXT_EXTENSION = "GRAPH_COMPLETION_CONTEXT_EXTENSION"
+    GRAPH_COMPLETION_DECOMPOSITION = "GRAPH_COMPLETION_DECOMPOSITION"
     GRAPH_SUMMARY_COMPLETION = "GRAPH_SUMMARY_COMPLETION"
     TRIPLET_COMPLETION = "TRIPLET_COMPLETION"
     RAG_COMPLETION = "RAG_COMPLETION"
@@ -58,6 +58,7 @@ class SearchType(str, Enum):
     FEEDBACK = "FEEDBACK"
     CODING_RULES = "CODING_RULES"
     CHUNKS_LEXICAL = "CHUNKS_LEXICAL"
+    GRAPH_REPORT = "GRAPH_REPORT"
     HYBRID_COMPLETION = "HYBRID_COMPLETION"
 
 

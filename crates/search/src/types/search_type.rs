@@ -9,6 +9,7 @@ pub enum SearchType {
     RagCompletion,
     TripletCompletion,
     GraphCompletion,
+    GraphCompletionDecomposition,
     GraphSummaryCompletion,
     Cypher,
     NaturalLanguage,
@@ -19,6 +20,7 @@ pub enum SearchType {
     Temporal,
     CodingRules,
     ChunksLexical,
+    GraphReport,
     #[default]
     HybridCompletion,
 }
@@ -45,6 +47,22 @@ mod tests {
     fn deserializes_python_compatible_names() {
         let parsed: SearchType = serde_json::from_str("\"CHUNKS_LEXICAL\"").unwrap();
         assert_eq!(parsed, SearchType::ChunksLexical);
+    }
+
+    #[test]
+    fn decomposition_and_report_use_python_names() {
+        for (search_type, name) in [
+            (
+                SearchType::GraphCompletionDecomposition,
+                "GRAPH_COMPLETION_DECOMPOSITION",
+            ),
+            (SearchType::GraphReport, "GRAPH_REPORT"),
+        ] {
+            let value = serde_json::to_value(search_type).unwrap();
+            assert_eq!(value, serde_json::Value::String(name.to_string()));
+            let parsed: SearchType = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed, search_type);
+        }
     }
 
     #[test]

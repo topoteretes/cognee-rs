@@ -97,6 +97,8 @@ def test_search_type_importable():
     assert st.CODING_RULES == "CODING_RULES"
     assert st.CHUNKS_LEXICAL == "CHUNKS_LEXICAL"
     assert st.HYBRID_COMPLETION == "HYBRID_COMPLETION"
+    assert st.GRAPH_COMPLETION_DECOMPOSITION == "GRAPH_COMPLETION_DECOMPOSITION"
+    assert st.GRAPH_REPORT == "GRAPH_REPORT"
 
 
 def test_search_type_in_all():

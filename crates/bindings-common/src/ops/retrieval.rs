@@ -46,14 +46,15 @@ use crate::{HandleState, SdkError};
 /// Uses `serde_json::from_value` so the exact path matches what the HTTP
 /// server uses and is guaranteed to stay in sync with the serde attribute.
 ///
-/// Returns `SdkError::Validation` on unknown string, listing all 16 valid values.
+/// Returns `SdkError::Validation` on unknown string, listing all 18 valid values.
 pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| {
         SdkError::Validation(format!(
             "unknown SearchType '{s}'. Valid values: SUMMARIES, CHUNKS, RAG_COMPLETION, \
-             TRIPLET_COMPLETION, GRAPH_COMPLETION, GRAPH_SUMMARY_COMPLETION, CYPHER, \
-             NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, GRAPH_COMPLETION_CONTEXT_EXTENSION, \
-             FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, CHUNKS_LEXICAL, HYBRID_COMPLETION"
+             TRIPLET_COMPLETION, GRAPH_COMPLETION, GRAPH_COMPLETION_DECOMPOSITION, \
+             GRAPH_SUMMARY_COMPLETION, CYPHER, NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, \
+             GRAPH_COMPLETION_CONTEXT_EXTENSION, FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, \
+             CHUNKS_LEXICAL, GRAPH_REPORT, HYBRID_COMPLETION"
         ))
     })
 }

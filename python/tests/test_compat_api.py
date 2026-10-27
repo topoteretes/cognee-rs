@@ -98,24 +98,23 @@ def test_search_type_reexported_from_compat():
     assert cognee.SearchType is cp.SearchType
 
 
-def test_all_16_types_present():
-    """All 16 Rust-backed search types must be present in SearchType."""
+def test_all_18_types_present():
+    """All 18 Rust-backed search types must be present in SearchType."""
     expected = {
         "GRAPH_COMPLETION", "GRAPH_COMPLETION_COT", "GRAPH_COMPLETION_CONTEXT_EXTENSION",
         "GRAPH_SUMMARY_COMPLETION", "TRIPLET_COMPLETION", "RAG_COMPLETION",
         "CHUNKS", "SUMMARIES", "TEMPORAL", "CYPHER", "NATURAL_LANGUAGE",
         "FEELING_LUCKY", "FEEDBACK", "CODING_RULES", "CHUNKS_LEXICAL",
-        "HYBRID_COMPLETION",
+        "GRAPH_COMPLETION_DECOMPOSITION", "GRAPH_REPORT", "HYBRID_COMPLETION",
     }
     present = {m.name for m in cp.SearchType}
     assert expected <= present, f"missing: {expected - present}"
 
 
 def test_unsupported_types_absent():
-    """AGENTIC_COMPLETION and GRAPH_COMPLETION_DECOMPOSITION must NOT be present."""
+    """AGENTIC_COMPLETION must NOT be present."""
     names = {m.name for m in cp.SearchType}
     assert "AGENTIC_COMPLETION" not in names
-    assert "GRAPH_COMPLETION_DECOMPOSITION" not in names
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,13 @@ pub struct SearchParams {
     /// TEMPORAL search gathers before the time-window rerank cuts them to
     /// `top_k` (Python's `candidate_top_k`). Default when `None`: `top_k * 4`.
     pub candidate_top_k: Option<usize>,
+
+    /// (GraphCompletionDecomposition) How the sub-questions feed the answer:
+    /// `"answer_per_subquery"` (answer each sub-question, then answer over
+    /// those answers) or `"combined_triplets_context"` (answer once over the
+    /// merged triplets). Python's `retriever_specific_config.decomposition_mode`.
+    /// Default when `None`: `"answer_per_subquery"`.
+    pub decomposition_mode: Option<String>,
 }
 
 impl SearchParams {
@@ -244,6 +251,12 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("candidate_top_k"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
+            decomposition_mode: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("decomposition_mode"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
         }
     }
 }
@@ -324,6 +337,22 @@ mod tests {
         assert_eq!(params.include_global_context_index, Some(true));
         assert_eq!(params.global_context_index_top_k, Some(4));
         assert_eq!(params.candidate_top_k, Some(12));
+    }
+
+    #[test]
+    fn decomposition_mode_extracted_from_retriever_specific_config() {
+        let json = r#"{
+            "query_text": "test",
+            "retriever_specific_config": {"decomposition_mode": "combined_triplets_context"}
+        }"#;
+        let req: SearchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            SearchParams::from(&req).decomposition_mode.as_deref(),
+            Some("combined_triplets_context")
+        );
+
+        let req: SearchRequest = serde_json::from_str(r#"{"query_text": "test"}"#).unwrap();
+        assert_eq!(SearchParams::from(&req).decomposition_mode, None);
     }
 
     #[test]
