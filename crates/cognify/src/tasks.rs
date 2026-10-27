@@ -67,7 +67,7 @@ use crate::failure::{
 use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
     ArtifactProducers, Expansion, GraphEdgePair, GraphNodePair, TimestampNode,
-    deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
+    deduplicate_nodes_and_edges, expand_extracted_graphs, partition_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::rollback;
@@ -1048,7 +1048,7 @@ pub async fn extract_graph_from_data(
         // LLM-free path. Same batching, the same ordering guarantee, the same
         // per-chunk failure records and the same FailFast abort as the LLM
         // loop below, so the abort-time partition and everything from
-        // `retrieve_existing_edges` down is reused unchanged.
+        // expansion down is reused unchanged.
         let outcome = extract_graphs_via_backend(
             backend.0.as_ref(),
             &chunks_for_extraction,
@@ -1112,7 +1112,7 @@ pub async fn extract_graph_from_data(
             //
             // Completion order is not input order, so each future carries its index
             // and the batch is re-sorted below. Order still matters downstream:
-            // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
+            // `all_graphs` feeds expansion and edge dedup, and the failure
             // records below must be deterministic for a given input. Same shape as
             // `SummaryExtractor::summarize_chunks`.
             //
@@ -1300,14 +1300,6 @@ pub async fn extract_graph_from_data(
             }
         };
 
-    // Database deduplication — query for existing edges.
-    //
-    // Borrow the graphs out of `all_graphs` rather than deep-cloning every one
-    // of them (SDK-507): the callee only reads three `&str` fields per edge, so
-    // a second full copy of every extracted graph bought nothing.
-    let existing_edges_set =
-        retrieve_existing_edges(graph_db.as_ref(), all_graphs.iter().map(|(_, g)| g)).await?;
-
     // Merge and deduplicate graphs (with DB awareness).
     //
     // The string-form `user_id` is the best label we have at this
@@ -1351,7 +1343,6 @@ pub async fn extract_graph_from_data(
     let Expansion {
         nodes,
         edges,
-        claimed_existing_edges,
         producers,
         stats: edge_resolution,
         timestamps,
@@ -1361,12 +1352,19 @@ pub async fn extract_graph_from_data(
         input.dataset_id,
         &chunk_node_sets,
         &chunk_importance_weights,
-        &existing_edges_set,
         ontology_resolver.as_ref(),
         user_label_owned.as_deref(),
         task_rank,
     )
     .await;
+
+    // Database deduplication: which of the edges just produced the graph
+    // already holds. Asked on the identities expansion stores the edges under,
+    // so the lookup cannot drift from what was written (#75, #76). The ones it
+    // holds are not written again but are still claimed — see
+    // `partition_existing_edges`.
+    let (edges, claimed_existing_edges) =
+        partition_existing_edges(graph_db.as_ref(), edges).await?;
 
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
@@ -9907,12 +9905,11 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = NoOpOntologyResolver::new();
 
-        let (_nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
+        let (_nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
             &HashMap::new(),
-            &HashSet::new(),
             &resolver,
             None,
             None,
@@ -9951,12 +9948,11 @@ mod tests {
             }],
         };
 
-        let (nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(Uuid::new_v4(), graph)],
             Uuid::new_v4(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashSet::new(),
             &NoOpOntologyResolver::new(),
             None,
             None,
