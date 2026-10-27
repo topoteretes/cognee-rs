@@ -118,14 +118,16 @@ re-encrypted the streams, every page came back empty and the loader reported
 success; with AES it failed with `Decryption(InvalidCipherTextLength)`.
 
 Two more are read by the unit tests in `src/loaders/pdf/pure_rust.rs`, which
-pin when an empty extraction is an error:
+pin which empty extractions are errors (no pages) and which are not (pages
+without text):
 
 - `sample.encrypted-inline-rc4-128.pdf` is `mutool clean -E rc4-128` output
   left as is, with `/Encrypt` inline in the trailer. `lopdf` does not decrypt
   that form (see below), and `pdf-extract` returns zero pages for it.
 - `blank.encrypted-rc4-128.pdf` is a blank one-page document (from
   `mutool create` with only a `%%MediaBox 0 0 612 792` line), encrypted like
-  the others: it decrypts fine and has no text.
+  the others: it decrypts fine and has no text, so it extracts to `""`. A test
+  also empties its page tree in place to get a decrypted file with no pages.
 
 `sample.encrypted-user-password-rc4-128.pdf` is the opposite case: the user
 password is `secret`, which the loader cannot supply, so extraction must fail
