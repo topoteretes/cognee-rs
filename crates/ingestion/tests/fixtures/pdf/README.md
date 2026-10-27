@@ -117,6 +117,16 @@ decrypted a second time (see `encrypted.rs`). With RC4 that second pass
 re-encrypted the streams, every page came back empty and the loader reported
 success; with AES it failed with `Decryption(InvalidCipherTextLength)`.
 
+Two more are read by the unit tests in `src/loaders/pdf/pure_rust.rs`, which
+pin when an empty extraction is an error:
+
+- `sample.encrypted-inline-rc4-128.pdf` is `mutool clean -E rc4-128` output
+  left as is, with `/Encrypt` inline in the trailer. `lopdf` does not decrypt
+  that form (see below), and `pdf-extract` returns zero pages for it.
+- `blank.encrypted-rc4-128.pdf` is a blank one-page document (from
+  `mutool create` with only a `%%MediaBox 0 0 612 792` line), encrypted like
+  the others: it decrypts fine and has no text.
+
 `sample.encrypted-user-password-rc4-128.pdf` is the opposite case: the user
 password is `secret`, which the loader cannot supply, so extraction must fail
 rather than yield empty text or ciphertext.
@@ -149,6 +159,10 @@ for alg in rc4-128 aes-128 aes-256; do
 done
 mutool clean -z -E rc4-128 -O cognee-owner -U secret -P -4 sample.pdf /tmp/user.pdf
 python3 indirect_encrypt.py /tmp/user.pdf > sample.encrypted-user-password-rc4-128.pdf
+mutool clean -z -E rc4-128 -O cognee-owner -U "" -P -4 sample.pdf sample.encrypted-inline-rc4-128.pdf
+printf '%%%%MediaBox 0 0 612 792\n' > /tmp/blank.txt && mutool create -o /tmp/blank.pdf /tmp/blank.txt
+mutool clean -z -E rc4-128 -O cognee-owner -U "" -P -4 /tmp/blank.pdf /tmp/blank-enc.pdf
+python3 indirect_encrypt.py /tmp/blank-enc.pdf > blank.encrypted-rc4-128.pdf
 ```
 
 ```python
