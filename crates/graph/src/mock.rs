@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -45,6 +46,9 @@ pub struct MockGraphDB {
     /// checkpoint, or a pool waiting on a connection that will not come back —
     /// which is what makes a bounded teardown's *ordering* observable.
     hang_on_close: bool,
+    /// Answer of [`GraphDBTrait::supports_truth_state`]; `true` unless a test
+    /// stands in for a backend without truth-state support.
+    supports_truth_state: Arc<AtomicBool>,
 }
 
 impl MockGraphDB {
@@ -59,6 +63,7 @@ impl MockGraphDB {
             add_edges_error: Arc::new(Mutex::new(None)),
             delete_nodes_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
+            supports_truth_state: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -73,6 +78,12 @@ impl MockGraphDB {
             hang_on_close: true,
             ..Self::new()
         }
+    }
+
+    /// Set what [`GraphDBTrait::supports_truth_state`] answers, so a test can
+    /// stand in for a backend without truth-state support.
+    pub fn set_supports_truth_state(&self, supported: bool) {
+        self.supports_truth_state.store(supported, Ordering::SeqCst);
     }
 
     /// Inject an error that will be returned from subsequent
@@ -809,6 +820,10 @@ impl GraphDBTrait for MockGraphDB {
             }
         }
         Ok(crate::TemporalAnchors::from_rows(direct, via, &chunk_set))
+    }
+
+    async fn supports_truth_state(&self) -> GraphDBResult<bool> {
+        Ok(self.supports_truth_state.load(Ordering::SeqCst))
     }
 
     async fn get_node_truth_state(

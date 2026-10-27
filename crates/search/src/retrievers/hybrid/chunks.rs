@@ -5,10 +5,10 @@
 //! chunk↔summary pairs, ranks with RRF, backfills source chunks and summary
 //! text, and returns the top chunks plus a `chunk_id -> summary_text` map.
 //!
-//! This task **receives** an already-computed `query_vector` (the future
-//! retriever task, P1-09, embeds the query once and passes it down), so there
-//! is no embedding call here; the Phase-2 truth-subspace parameters are
-//! intentionally absent (locked deferral).
+//! It **receives** an already-computed `query_vector` (the retriever embeds
+//! the query once and passes it down), so there is no embedding call here. The
+//! truth-subspace inputs (`use_truth_weight`, the query's truth coordinates,
+//! per-chunk truth state and the live epoch) are passed through to ranking.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

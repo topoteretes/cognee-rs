@@ -641,5 +641,9 @@ describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
     expect(Array.isArray(result.stagesRun)).toBe(true);
     expect(typeof result.feedbackEntriesProcessed).toBe("number");
     expect(typeof result.sessionsPersisted).toBe("number");
+    // Without session ids the truth stage reports the orchestrator's skip reason.
+    const truth = result.stages.find((s) => s.stage === "build_truth_subspace");
+    expect(truth?.status).toBe("skipped");
+    expect(truth?.reason).toBe("no_session_ids");
   });
 });

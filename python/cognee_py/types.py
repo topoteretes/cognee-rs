@@ -326,6 +326,21 @@ class MemifyResult(TypedDict):
     prior_pipeline_run_id: str | None
 
 
+class ImproveStageResult(TypedDict):
+    """What one improve stage did (Python core's ``StageResult``).
+
+    A nested record, so it keeps its wire keys (``durationMs``) in both the
+    native and the snake_case view.
+    """
+
+    stage: str
+    status: str  # "completed" | "already_completed" | "skipped" | "errored"
+    reason: str | None
+    error: str | None
+    counts: dict[str, int]
+    durationMs: int
+
+
 class ImproveResult(TypedDict):
     """Result of :meth:`Cognee.improve` (snake_case view).
 
@@ -333,6 +348,8 @@ class ImproveResult(TypedDict):
     """
 
     stages_run: list[str]
+    # Per-stage records; only ``build_truth_subspace`` reports one so far.
+    stages: list[ImproveStageResult]
     memify_result: MemifyResult | None
     feedback_entries_processed: int
     feedback_entries_applied: int
@@ -370,4 +387,5 @@ __all__ = [
     "PruneResult",
     "MemifyResult",
     "ImproveResult",
+    "ImproveStageResult",
 ]

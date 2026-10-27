@@ -937,6 +937,12 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok(out)
     }
 
+    /// Native batch truth-state read/write (`get_node_truth_state` /
+    /// `set_node_truth_state` below).
+    async fn supports_truth_state(&self) -> GraphDBResult<bool> {
+        Ok(true)
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],

@@ -587,9 +587,13 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,
  *                    "alreadyCompleted":bool,"priorPipelineRunId":null|"<uuid>"}
  *
- *   ImproveResult — {"stagesRun":[…],"memifyResult":…,
+ *   ImproveResult — {"stagesRun":[…],"stages":[ImproveStage…],"memifyResult":…,
  *                    "feedbackEntriesProcessed":N,"feedbackEntriesApplied":N,
  *                    "sessionsPersisted":N,"edgesSynced":N}
+ *
+ *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
+ *                    "skipped"|"errored","reason":null|"…","error":null|"…",
+ *                    "counts":{"…":N},"durationMs":N}
  *
  * NOTE: MemifyTask callbacks (extraction_tasks / enrichment_tasks) are not
  * exposed in v1 (TS parity scope).  Reserved post-parity extension:

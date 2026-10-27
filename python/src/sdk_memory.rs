@@ -216,7 +216,7 @@ impl PyCognee {
     /// ``tenant`` (UUID str).
     ///
     /// Returns a dict with camelCase keys:
-    /// ``stagesRun``, ``memifyResult``, ``feedbackEntriesProcessed``,
+    /// ``stagesRun``, ``stages``, ``memifyResult``, ``feedbackEntriesProcessed``,
     /// ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
     fn improve<'py>(
         &self,

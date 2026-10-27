@@ -436,8 +436,26 @@ pub async fn run_improve(
         .map(memify_result_json)
         .unwrap_or(serde_json::Value::Null);
 
+    // Per-stage records, Python's `ImproveResult.stages`. Only the truth
+    // stage reports one so far.
+    let stages: Vec<serde_json::Value> = result
+        .stages
+        .iter()
+        .map(|stage| {
+            json!({
+                "stage": stage.stage,
+                "status": stage.status.as_str(),
+                "reason": stage.reason,
+                "error": stage.error,
+                "counts": stage.counts,
+                "durationMs": stage.duration_ms,
+            })
+        })
+        .collect();
+
     Ok(json!({
         "stagesRun": result.stages_run,
+        "stages": stages,
         "memifyResult": memify_json,
         "feedbackEntriesProcessed": result.feedback_entries_processed,
         "feedbackEntriesApplied": result.feedback_entries_applied,

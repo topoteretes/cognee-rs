@@ -8,6 +8,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ImproveResult(
         @JsonProperty("stagesRun") List<String> stagesRun,
+        @JsonProperty("stages") List<ImproveStageResult> stages,
         @JsonProperty("memifyResult") MemifyResult memifyResult,
         @JsonProperty("feedbackEntriesProcessed") long feedbackEntriesProcessed,
         @JsonProperty("feedbackEntriesApplied") long feedbackEntriesApplied,

@@ -562,9 +562,24 @@ export interface CogneeImproveOptions {
   tenant?: string;
 }
 
+/** What one improve stage did (Python's `StageResult`). */
+export interface CogneeImproveStage {
+  stage: string;
+  status: "completed" | "already_completed" | "skipped" | "errored";
+  /** Why the stage was skipped; set whenever `status` is `"skipped"`. */
+  reason: string | null;
+  error: string | null;
+  /** Integer counts the stage reported, keyed as the stage names them. */
+  counts: Record<string, number>;
+  /** Wall time of the stage's run; 0 for a stage its gate skipped. */
+  durationMs: number;
+}
+
 /** Result of `cogneeImprove`. Hand-built from `ImproveResult` (not Serialize). */
 export interface CogneeImproveResult {
   stagesRun: string[];
+  /** Per-stage records; only `build_truth_subspace` reports one so far. */
+  stages: CogneeImproveStage[];
   memifyResult: CogneeMemifyResult | null;
   feedbackEntriesProcessed: number;
   feedbackEntriesApplied: number;

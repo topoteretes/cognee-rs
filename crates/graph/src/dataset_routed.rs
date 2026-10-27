@@ -285,6 +285,13 @@ impl GraphDBTrait for DatasetRoutedGraphDB {
             .await
     }
 
+    /// The scoped dataset's engine answers. When it cannot be resolved the
+    /// error is returned, so the build reports the stage `errored` instead of
+    /// skipping it as unsupported or mistaking it for an empty graph.
+    async fn supports_truth_state(&self) -> GraphDBResult<bool> {
+        self.engine().await?.supports_truth_state().await
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],
@@ -427,6 +434,40 @@ mod tests {
 
     fn node(id: &str) -> Value {
         json!({"id": id, "name": id, "type": "Entity"})
+    }
+
+    #[tokio::test]
+    async fn truth_state_probe_forwards_to_the_scoped_engine() {
+        let resolver = Arc::new(PerDataset::default());
+        let graph = DatasetRoutedGraphDB::new(resolver.clone());
+        let (supported, unsupported) = (Uuid::new_v4(), Uuid::new_v4());
+        let mock = MockGraphDB::new();
+        mock.set_supports_truth_state(false);
+        resolver
+            .engines
+            .lock()
+            .unwrap()
+            .insert(unsupported, Arc::new(mock) as Arc<dyn GraphDBTrait>);
+
+        assert!(
+            dataset_scope::with_dataset(supported, graph.supports_truth_state())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !dataset_scope::with_dataset(unsupported, graph.supports_truth_state())
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Outside every dataset scope the engine cannot be resolved; the probe
+    /// returns that error rather than guessing an answer.
+    #[tokio::test]
+    async fn truth_state_probe_errors_outside_a_dataset_scope() {
+        let graph = DatasetRoutedGraphDB::new(Arc::new(PerDataset::default()));
+        let error = graph.supports_truth_state().await.unwrap_err();
+        assert!(error.to_string().contains("no dataset scope"), "{error}");
     }
 
     #[tokio::test]

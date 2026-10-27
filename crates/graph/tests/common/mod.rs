@@ -838,6 +838,9 @@ pub async fn test_properties_json_round_trip(db: &dyn GraphDBTrait) {
 // -- node truth state --------------------------------------------------------
 
 pub async fn test_node_truth_state_round_trip(db: &dyn GraphDBTrait) {
+    // Every backend that runs this suite stores truth state natively, so it
+    // must say so: `build_truth_subspace` skips a backend that does not.
+    assert!(db.supports_truth_state().await.unwrap());
     db.delete_graph().await.unwrap();
 
     let a = TestNode::new("ts_a", "A", "T", 0);

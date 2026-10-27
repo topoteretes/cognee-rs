@@ -103,7 +103,10 @@ pub struct SearchParams {
     /// Target default when `None`: `true`.
     pub use_importance_weight: Option<bool>,
 
-    /// (HybridCompletion, reserved/inert — Phase 2) Whether to weight by truth score.
+    /// (HybridCompletion) Whether to re-rank the chunk lane by truth-subspace
+    /// alignment with the query. Applies only when exactly one dataset is in
+    /// scope and its chunks carry coordinates at the live centroid epoch (built
+    /// by `improve(build_truth_subspace=true)`); fails open to baseline ranking.
     /// Target default when `None`: `false`.
     pub use_truth_weight: Option<bool>,
 

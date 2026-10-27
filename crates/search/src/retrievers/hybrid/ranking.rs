@@ -1,11 +1,10 @@
 //! Chunk-lane fusion + importance-weight scoring.
 //!
-//! Port of `cognee/modules/retrieval/hybrid/ranking.py`, **Phase-1 subset
-//! only**. The Python function also threads `use_truth_weight` / `q_coords` /
-//! `truth_state_by_id` / `current_truth_epoch` for the Phase-2 truth-subspace
-//! boost; per the locked Phase-2 deferral those parameters are intentionally
-//! absent here and will be added by the Phase-2 task without touching this
-//! code path.
+//! Port of `cognee/modules/retrieval/hybrid/ranking.py`, including the
+//! truth-subspace boost (`use_truth_weight` / `q_coords` / `truth_state_by_id`
+//! / `current_truth_epoch`, see [`rank_chunk_summary_pairs`]). Python's
+//! per-user `personal_weights` / `personal_influence` factor is not ported:
+//! Rust has no user-preference store to source it from yet.
 //!
 //! # Divergence: the default fusion is no longer rank-only RRF
 //!

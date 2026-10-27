@@ -1428,12 +1428,18 @@ weighs `1.0`. The default of `0.75` is the centre of the measured plateau — th
 summary lane searches a *derivative* of the same documents the chunk lane
 searches, so it is a second opinion rather than an independent channel.
 
-**Reserved (Phase 2, inert).** These keys are parsed and stored but have no
-effect in Phase 1 — passing `true` must behave identically to the default:
+**Truth weighting.** `use_truth_weight` (default `false`) re-ranks the chunk
+lane by truth-subspace alignment with the query. It needs exactly one dataset
+in scope and chunk coordinates at the live centroid epoch, which
+`improve(build_truth_subspace=true)` builds from the session's distilled
+learnings; with neither, ranking stays at baseline. A failed build keeps the
+previous epoch live and reports the `build_truth_subspace` stage as `errored`;
+a graph backend without truth-state support (`GraphDBTrait::supports_truth_state`)
+reports it as `skipped` / `backend_unsupported`.
 
-- `use_truth_weight` (default `false`) — truth-subspace weighting is Phase 2
-  only; the Python `build_truth_subspace` path runs on `improve()`, not
-  implemented on the Rust side yet.
+**Reserved (inert).** These keys are parsed and stored but have no effect yet —
+passing `true` must behave identically to the default:
+
 - `include_global_context_index` (default `false`) and
   `global_context_index_top_k` (default `3`) — the global-context lane depends
   on a `GlobalContextSummary` node type and global-context utilities not yet

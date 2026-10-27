@@ -54,6 +54,7 @@ export type {
   CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
+  CogneeImproveStage,
   CogneeForgetTarget,
   CogneeForgetResult,
   CogneeUpdateOptions,

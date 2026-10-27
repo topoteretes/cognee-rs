@@ -116,7 +116,7 @@ cognee-rs/
 
 **cognee-config-core** — The configuration boundary, and the machinery for component-owned config sections (`config_section!`, `ConfigSection`, `ConfigSchema`, `unknown_key`). `EnvSource` (a read-only view of an environment), `ProcessEnv` (the one sanctioned read of the process env; constructing it is clippy-banned outside a declared boundary), `MapEnv` (an in-memory source for tests), and `load_dotenv` (`dotenv` feature). A leaf crate with no `cognee-*` dependencies. See [configuration.md § Configuration model](configuration.md#configuration-model).
 
-**cognee-truth-subspace** — Pure alignment math (cosine projection, query-relevance-weighted truth scoring, stable id signatures) for the Phase-2 hybrid-retriever truth-subspace re-ranking feature. No I/O; consumed by cognee-search once `use_truth_weight`/`build_truth_subspace` land.
+**cognee-truth-subspace** — Pure alignment math (cosine projection, query-relevance-weighted truth scoring, stable id signatures) for the Phase-2 hybrid-retriever truth-subspace re-ranking feature. No I/O; consumed by cognee-search (`use_truth_weight`) and by `improve()`'s `build_truth_subspace` stage in cognee-cognify.
 
 **cognee-test-utils** — Test helpers and mock implementations for integration tests.
 

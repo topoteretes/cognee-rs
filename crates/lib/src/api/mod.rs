@@ -26,7 +26,10 @@ pub mod user;
 pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
-pub use improve::{ImproveParams, ImproveResult, improve};
+pub use improve::{
+    ImproveParams, ImproveResult, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS,
+    REASON_OPT_IN_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+};
 pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{

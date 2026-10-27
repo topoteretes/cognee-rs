@@ -12,7 +12,9 @@
 //! Each stage is wrapped in a warning-only handler so that a failure in one
 //! stage does not abort subsequent stages (matches Python semantics).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cognee_cognify::memify::sync_graph_session::DEFAULT_MAX_LINES;
 use cognee_cognify::{
@@ -36,11 +38,137 @@ use uuid::Uuid;
 
 use super::error::ApiError;
 
+/// Name of the truth-subspace stage, as Python's `BuildTruthSubspaceStage.name`.
+pub const TRUTH_SUBSPACE_STAGE: &str = "build_truth_subspace";
+
+/// Skip reason of a session-fed stage run without session ids (Python
+/// `REASON_NO_SESSION_IDS`, `cognee/modules/improve/result.py`).
+pub const REASON_NO_SESSION_IDS: &str = "no_session_ids";
+/// Skip reason of an opt-in stage the caller did not opt into (Python
+/// `REASON_OPT_IN_DISABLED`, `cognee/modules/improve/stages.py`).
+pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
+pub use cognee_cognify::REASON_BACKEND_UNSUPPORTED;
+
+/// Status of one improve stage — Python's `StageStatus`
+/// (`cognee/modules/improve/result.py`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageStatus {
+    Completed,
+    AlreadyCompleted,
+    Skipped,
+    Errored,
+}
+
+impl StageStatus {
+    /// The wire name Python uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::AlreadyCompleted => "already_completed",
+            Self::Skipped => "skipped",
+            Self::Errored => "errored",
+        }
+    }
+}
+
+/// What one improve stage did in one run — Python's `StageResult`
+/// (`cognee/modules/improve/result.py:47-60`).
+///
+/// Only the `build_truth_subspace` stage reports one so far; the other stages
+/// still report through [`ImproveResult::stages_run`] and their counters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageResult {
+    pub stage: String,
+    pub status: StageStatus,
+    /// Why the stage was skipped; set whenever `status` is `Skipped`.
+    pub reason: Option<String>,
+    pub error: Option<String>,
+    pub counts: BTreeMap<String, i64>,
+    /// Wall time of the stage's run; `0` for a stage its gate skipped.
+    pub duration_ms: u64,
+}
+
+impl StageResult {
+    pub fn skipped(stage: &str, reason: &str) -> Self {
+        Self::new(stage, StageStatus::Skipped, Some(reason.to_string()), None)
+    }
+
+    pub fn errored(stage: &str, error: impl Into<String>) -> Self {
+        Self::new(stage, StageStatus::Errored, None, Some(error.into()))
+    }
+
+    pub fn completed(stage: &str) -> Self {
+        Self::new(stage, StageStatus::Completed, None, None)
+    }
+
+    fn new(
+        stage: &str,
+        status: StageStatus,
+        reason: Option<String>,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            stage: stage.to_string(),
+            status,
+            reason,
+            error,
+            counts: BTreeMap::new(),
+            duration_ms: 0,
+        }
+    }
+}
+
+/// Map a truth-subspace build onto its stage result, as Python's
+/// `BuildTruthSubspaceStage.run` does (`cognee/modules/improve/stages.py:491-520`).
+///
+/// The build fails open — a failed centroid commit or chunk write comes back
+/// as `Errored` instead of an error — so the status is translated rather than
+/// reported as completed, which would hide the failure. Counts are the
+/// build's integer fields.
+fn truth_subspace_stage_result(build: &cognee_cognify::TruthSubspaceResult) -> StageResult {
+    use cognee_cognify::TruthBuildStatus;
+
+    let counts = || {
+        BTreeMap::from([
+            ("anchors".to_string(), build.anchors as i64),
+            ("nodes_scored".to_string(), build.nodes_scored as i64),
+            ("nodes_skipped".to_string(), build.nodes_skipped as i64),
+            ("truth_epoch".to_string(), build.truth_epoch),
+        ])
+    };
+    match build.status {
+        TruthBuildStatus::Errored => StageResult {
+            counts: counts(),
+            ..StageResult::errored(
+                TRUTH_SUBSPACE_STAGE,
+                build
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "truth subspace build errored".to_string()),
+            )
+        },
+        // Normally unreachable: the stage gate checks the same capability
+        // first. Reachable by a mid-run capability change; the mapping should
+        // not lie about it.
+        TruthBuildStatus::Skipped => StageResult::skipped(
+            TRUTH_SUBSPACE_STAGE,
+            build.reason.as_deref().unwrap_or("skipped"),
+        ),
+        TruthBuildStatus::Completed => StageResult {
+            counts: counts(),
+            ..StageResult::completed(TRUTH_SUBSPACE_STAGE)
+        },
+    }
+}
+
 /// Result of an `improve()` operation.
 #[derive(Debug, Clone, Default)]
 pub struct ImproveResult {
     /// Names of stages that were executed.
     pub stages_run: Vec<String>,
+    /// Per-stage results, Python's `ImproveResult.stages`. Only the
+    /// `build_truth_subspace` stage reports here so far (see [`StageResult`]).
+    pub stages: Vec<StageResult>,
     /// Result of the memify (triplet embedding) stage, if it ran.
     pub memify_result: Option<MemifyResult>,
     /// Number of feedback QA entries that were processed (Stage 1).
@@ -617,19 +745,33 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
 
     // ---- Stage 2d: Build Truth Subspace (opt-in) ----
     //
-    // Phase-2 join point. Mirrors Python's `build_truth_subspace` stage
-    // (improve.py:207-221). Gated on `has_sessions && build_truth_subspace`, so
-    // it is fully inert (zero graph/vector I/O) unless the caller opts in. Never
-    // aborts improve() — `build_truth_subspace` is infallible and internal
-    // failures merely warn.
-    if has_sessions && build_truth_subspace {
+    // Mirrors Python's `BuildTruthSubspaceStage`
+    // (`cognee/modules/improve/stages.py:478-520`) and the orchestrator's gate
+    // order (`cognee/modules/improve/stage.py`): no session ids, then the
+    // opt-in flag, then the backend's truth-state support. Fully inert (zero
+    // graph/vector I/O) unless the caller opts in. Non-fatal: a failed build is
+    // recorded as an errored stage and never aborts improve().
+    let truth_stage = if !has_sessions {
+        StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_NO_SESSION_IDS)
+    } else if !build_truth_subspace {
+        StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_OPT_IN_DISABLED)
+    } else {
         #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
         let sids = session_ids
             .as_ref()
             .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        if let Some(database) = db.as_ref() {
+        let started_at = Instant::now();
+        // Python times every stage whose `run()` was entered
+        // (`cognee/modules/improve/stage.py`), whatever it returned; only a
+        // gate skip (here: `backend_unsupported`) carries no duration.
+        let mut timed = true;
+        let mut stage = match db.as_ref() {
+            None => {
+                warn!("improve stage 2d: relational database required; not building");
+                StageResult::errored(TRUTH_SUBSPACE_STAGE, "relational database required")
+            }
             // Resolve the dataset the same way Stage 4 does.
-            match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
+            Some(database) => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
                 &**database,
                 &dataset_name,
                 owner_id,
@@ -637,33 +779,76 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             )
             .await
             {
+                // Python's build returns its empty result for a dataset it
+                // cannot resolve, which the stage reports as completed.
+                Ok(None) => {
+                    warn!("improve stage 2d: dataset not found; nothing to build");
+                    truth_subspace_stage_result(&cognee_cognify::TruthSubspaceResult::default())
+                }
+                Err(e) => {
+                    warn!("improve stage 2d: dataset lookup failed (non-fatal): {e}");
+                    StageResult::errored(
+                        TRUTH_SUBSPACE_STAGE,
+                        format!("dataset lookup failed: {e}"),
+                    )
+                }
                 Ok(Some(ds)) => {
-                    let ts = cognee_cognify::build_truth_subspace(
+                    // Probe inside the dataset's scope: a per-dataset router
+                    // answers for that dataset's engine.
+                    let supported = cognee_models::dataset_scope::with_dataset(
                         ds.id,
-                        sids,
-                        Arc::clone(&graph_db),
-                        Arc::clone(&vector_db),
-                        Arc::clone(&embedding_engine),
-                        cognee_cognify::DEFAULT_K,
+                        graph_db.supports_truth_state(),
                     )
                     .await;
-                    info!(
-                        anchors = ts.anchors,
-                        nodes_scored = ts.nodes_scored,
-                        truth_epoch = ts.truth_epoch,
-                        "improve stage 2d (build_truth_subspace) complete"
-                    );
-                    result.stages_run.push("build_truth_subspace".to_string());
+                    match supported {
+                        Ok(true) => {
+                            let ts = cognee_cognify::build_truth_subspace(
+                                ds.id,
+                                sids,
+                                Arc::clone(&graph_db),
+                                Arc::clone(&vector_db),
+                                Arc::clone(&embedding_engine),
+                                cognee_cognify::DEFAULT_K,
+                            )
+                            .await;
+                            info!(
+                                status = ts.status.as_str(),
+                                anchors = ts.anchors,
+                                nodes_scored = ts.nodes_scored,
+                                nodes_skipped = ts.nodes_skipped,
+                                truth_epoch = ts.truth_epoch,
+                                error = ts.error.as_deref().unwrap_or(""),
+                                "improve stage 2d (build_truth_subspace) finished"
+                            );
+                            result.stages_run.push(TRUTH_SUBSPACE_STAGE.to_string());
+                            truth_subspace_stage_result(&ts)
+                        }
+                        // The dataset's engine could not be reached: Python's
+                        // `get_graph_engine()` raising inside `run()`.
+                        Err(e) => {
+                            warn!("improve stage 2d: graph engine unavailable: {e}");
+                            StageResult::errored(
+                                TRUTH_SUBSPACE_STAGE,
+                                format!("graph engine unavailable: {e}"),
+                            )
+                        }
+                        Ok(false) => {
+                            timed = false;
+                            info!(
+                                "improve stage 2d: graph backend has no truth-state support; skipping"
+                            );
+                            StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_BACKEND_UNSUPPORTED)
+                        }
+                    }
                 }
-                Ok(None) => warn!("improve stage 2d: dataset not found; skipping"),
-                Err(e) => {
-                    warn!("improve stage 2d: dataset lookup failed (non-fatal): {e}")
-                }
-            }
-        } else {
-            warn!("improve stage 2d: relational database required; skipping build_truth_subspace");
+            },
+        };
+        if timed {
+            stage.duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         }
-    }
+        stage
+    };
+    result.stages.push(truth_stage);
 
     // ---- Stage 3: Default Enrichment (always) ----
     let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
@@ -888,5 +1073,83 @@ mod tests {
         assert_eq!(result.sessions_distilled, 0);
         assert_eq!(result.lessons_published, 0);
         assert_eq!(result.edges_synced, 0);
+        assert!(result.stages.is_empty());
+    }
+
+    fn build(status: cognee_cognify::TruthBuildStatus) -> cognee_cognify::TruthSubspaceResult {
+        cognee_cognify::TruthSubspaceResult {
+            anchors: 3,
+            nodes_scored: 5,
+            nodes_skipped: 2,
+            signature: "sig".to_string(),
+            truth_epoch: 4,
+            status,
+            reason: None,
+            error: None,
+        }
+    }
+
+    // Python `BuildTruthSubspaceStage.run`: the build's integer fields become
+    // the stage counts.
+    #[test]
+    fn completed_build_maps_to_a_completed_stage_with_counts() {
+        let stage =
+            truth_subspace_stage_result(&build(cognee_cognify::TruthBuildStatus::Completed));
+        assert_eq!(stage.stage, TRUTH_SUBSPACE_STAGE);
+        assert_eq!(stage.status, StageStatus::Completed);
+        assert_eq!((stage.reason, stage.error), (None, None));
+        let counts: Vec<(&str, i64)> = stage.counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(
+            counts,
+            [
+                ("anchors", 3),
+                ("nodes_scored", 5),
+                ("nodes_skipped", 2),
+                ("truth_epoch", 4)
+            ]
+        );
+    }
+
+    // A fail-open build that comes back errored must not be reported as
+    // completed: the stage carries its error and counts.
+    #[test]
+    fn errored_build_maps_to_an_errored_stage() {
+        let mut errored = build(cognee_cognify::TruthBuildStatus::Errored);
+        errored.error = Some("centroid upsert failed: down".to_string());
+        let stage = truth_subspace_stage_result(&errored);
+        assert_eq!(stage.status, StageStatus::Errored);
+        assert_eq!(stage.error.as_deref(), Some("centroid upsert failed: down"));
+        assert_eq!(stage.counts.get("nodes_scored"), Some(&5));
+
+        // Without an error text, Python's default message.
+        let bare = truth_subspace_stage_result(&build(cognee_cognify::TruthBuildStatus::Errored));
+        assert_eq!(bare.error.as_deref(), Some("truth subspace build errored"));
+    }
+
+    #[test]
+    fn skipped_build_maps_to_a_skipped_stage_with_its_reason() {
+        let mut skipped = build(cognee_cognify::TruthBuildStatus::Skipped);
+        skipped.reason = Some(REASON_BACKEND_UNSUPPORTED.to_string());
+        let stage = truth_subspace_stage_result(&skipped);
+        assert_eq!(stage.status, StageStatus::Skipped);
+        assert_eq!(stage.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
+        assert!(stage.counts.is_empty());
+    }
+
+    #[test]
+    fn stage_status_names_match_python() {
+        let names: Vec<&str> = [
+            StageStatus::Completed,
+            StageStatus::AlreadyCompleted,
+            StageStatus::Skipped,
+            StageStatus::Errored,
+        ]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+        assert_eq!(
+            names,
+            ["completed", "already_completed", "skipped", "errored"]
+        );
     }
 }

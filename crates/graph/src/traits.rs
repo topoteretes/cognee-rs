@@ -592,6 +592,31 @@ pub trait GraphDBTrait: Send + Sync {
         Ok(out)
     }
 
+    /// Whether this backend stores per-node truth-subspace state natively.
+    ///
+    /// The Rust counterpart of Python's `GraphCapabilities.supports_truth_state`
+    /// (`cognee/modules/improve/capabilities.py`): `build_truth_subspace` probes
+    /// it before any embedding call and skips with `backend_unsupported` when it
+    /// is `false`. Defaults to `false` because a backend must opt in, exactly as
+    /// a Python adapter must override the interface stubs. A backend returns
+    /// `true` once it overrides [`get_node_truth_state`] and
+    /// [`set_node_truth_state`] with a real batch implementation; a wrapper that
+    /// delegates to an inner engine must forward this probe too, or the truth
+    /// build silently skips on it.
+    ///
+    /// Async and fallible because a routing wrapper ([`DatasetRoutedGraphDB`])
+    /// only knows its answer once it has resolved the scoped dataset's engine.
+    /// An `Err` means that engine could not be reached at all — not that it
+    /// lacks support — and the build reports it as `errored`, as Python does
+    /// when `get_graph_engine()` raises.
+    ///
+    /// [`get_node_truth_state`]: GraphDBTrait::get_node_truth_state
+    /// [`set_node_truth_state`]: GraphDBTrait::set_node_truth_state
+    /// [`DatasetRoutedGraphDB`]: crate::DatasetRoutedGraphDB
+    async fn supports_truth_state(&self) -> GraphDBResult<bool> {
+        Ok(false)
+    }
+
     /// Batch-fetch per-node truth-subspace state for the given node IDs.
     ///
     /// Unlike [`get_node_feedback_weights`], which omits nodes lacking the

@@ -373,7 +373,7 @@ async fn feedback_handles_edge_ids_on_mock() {
 /// `set_edge_feedback_weights`. This lets us exercise the *success* edge path
 /// that the plain mock cannot (its default edge-weight read returns an empty
 /// map, forcing `applied == 0`). Delegation shape mirrors the
-/// `NodeLoadFailGraph` double in `build_truth_subspace.rs`.
+/// `ScriptedGraph` double in `build_truth_subspace.rs`.
 struct EdgeStoreGraph {
     inner: MockGraphDB,
     edge_weights: Mutex<HashMap<EdgeKey, f64>>,

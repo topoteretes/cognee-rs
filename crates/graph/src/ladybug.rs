@@ -2496,6 +2496,12 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(out)
     }
 
+    /// Native batch truth-state read/write (`get_node_truth_state` /
+    /// `set_node_truth_state` below), as Python's Ladybug adapter.
+    async fn supports_truth_state(&self) -> GraphDBResult<bool> {
+        Ok(true)
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],

@@ -14,7 +14,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee::api::improve::{ImproveParams, improve};
+use cognee::api::improve::{
+    ImproveParams, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED,
+    StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+};
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
 use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
@@ -195,6 +198,10 @@ async fn improve_without_sessions_runs_only_memify() {
     .unwrap();
 
     assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    // The session-fed truth stage reports the orchestrator's gate reason.
+    let stage = truth_stage(&r);
+    assert_eq!(stage.status, StageStatus::Skipped);
+    assert_eq!(stage.reason.as_deref(), Some(REASON_NO_SESSION_IDS));
     assert!(r.memify_result.is_some());
 }
 
@@ -356,6 +363,84 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
         "build_truth_subspace must be recorded when opted in with a resolvable dataset; got {:?}",
         r.stages_run
     );
+    // The stage record mirrors Python's `BuildTruthSubspaceStage`: an empty
+    // session distils no learnings, so the build completes with nothing built.
+    let stage = truth_stage(&r);
+    assert_eq!(stage.status, StageStatus::Completed, "{stage:?}");
+    assert_eq!(stage.reason, None);
+    assert_eq!(stage.error, None);
+    assert_eq!(stage.counts.get("anchors"), Some(&0));
+    assert_eq!(stage.counts.get("nodes_skipped"), Some(&0));
+}
+
+/// The one truth-stage record an `improve()` run reports.
+fn truth_stage(r: &cognee::api::ImproveResult) -> &StageResult {
+    let mut stages = r.stages.iter().filter(|s| s.stage == TRUTH_SUBSPACE_STAGE);
+    let stage = stages.next().expect("a build_truth_subspace stage record");
+    assert!(stages.next().is_none(), "exactly one truth stage record");
+    stage
+}
+
+/// With the flag set but a graph backend that cannot store truth state, the
+/// stage is skipped with `backend_unsupported` before the build runs — Python's
+/// `BuildTruthSubspaceStage.gate` (`stages.py:484-489`).
+#[tokio::test]
+async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
+    let h = make_harness().await;
+    h.graph_db.set_supports_truth_state(false);
+    let owner = Uuid::new_v4();
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    let config = CognifyConfig::default();
+
+    cognee_database::ops::datasets::create_dataset(
+        h.db.as_ref(),
+        Dataset::new(
+            "ds_truth_unsupported".to_string(),
+            owner,
+            None,
+            Uuid::new_v4(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let r = improve(ImproveParams {
+        dataset_name: "ds_truth_unsupported".to_string(),
+        session_ids: Some(vec!["truth_unsupported_session".to_string()]),
+        node_name: None,
+        owner_id: owner,
+        tenant_id: None,
+        feedback_alpha: 0.1,
+        llm,
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(h.db.clone()),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        add_pipeline: Some(&h.add_pipeline),
+        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        cognify_config: &config,
+        extraction_tasks: None,
+        enrichment_tasks: None,
+        data: None,
+        build_global_context_index: false,
+        build_truth_subspace: true,
+        run_in_background: false,
+    })
+    .await
+    .unwrap();
+
+    let stage = truth_stage(&r);
+    assert_eq!(stage.status, StageStatus::Skipped);
+    assert_eq!(stage.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
+    assert!(
+        !r.stages_run.contains(&TRUTH_SUBSPACE_STAGE.to_string()),
+        "a skipped build never ran; got {:?}",
+        r.stages_run
+    );
 }
 
 /// Companion to [`improve_records_build_truth_subspace_when_opted_in`]: with the
@@ -410,6 +495,9 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
         "build_truth_subspace must be absent when the flag is false; got {:?}",
         r.stages_run
     );
+    let stage = truth_stage(&r);
+    assert_eq!(stage.status, StageStatus::Skipped);
+    assert_eq!(stage.reason.as_deref(), Some(REASON_OPT_IN_DISABLED));
 }
 
 /// Stage 3b (`global_context_index`) is opt-in. With the flag set, not running
