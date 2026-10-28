@@ -66,10 +66,10 @@ async fn make_pipeline(
 }
 
 // ---------------------------------------------------------------------------
-// Sub-test A — File deduplication (identical content, different filenames)
+// Sub-test A — Identical file content in two datasets: two dataset-scoped rows
 // ---------------------------------------------------------------------------
 
-async fn impl_file_deduplication_same_content_yields_one_record(db_url: &str) {
+async fn impl_file_same_content_in_two_datasets_yields_two_records(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
     let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
@@ -91,10 +91,13 @@ async fn impl_file_deduplication_same_content_yields_one_record(db_url: &str) {
         .await
         .expect("add file 2");
 
-    assert_eq!(
+    // Rows are dataset-scoped (Python `ingest_data`): another dataset gets
+    // its own row and uuid4 id; only the content hash is shared.
+    assert_ne!(
         result1[0].id, result2[0].id,
-        "identical content should yield the same data_id"
+        "identical content in another dataset is another row"
     );
+    assert_eq!(result1[0].content_hash, result2[0].content_hash);
 
     let all_data_count = ops::datasets::list_datasets_by_owner(&database, owner)
         .await
@@ -120,29 +123,27 @@ async fn impl_file_deduplication_same_content_yields_one_record(db_url: &str) {
 
     assert_eq!(ds1_data.len(), 1);
     assert_eq!(ds2_data.len(), 1);
-    assert_eq!(
-        ds1_data[0].id, ds2_data[0].id,
-        "both datasets should reference the same data_id"
-    );
+    assert_eq!(ds1_data[0].id, result1[0].id);
+    assert_eq!(ds2_data[0].id, result2[0].id);
 }
 
 #[tokio::test]
-async fn file_deduplication_same_content_yields_one_record_sqlite() {
+async fn file_same_content_in_two_datasets_yields_two_records_sqlite() {
     let dir = TempDir::new().expect("tempdir for url");
     let url = sqlite_db_url(&dir);
-    impl_file_deduplication_same_content_yields_one_record(&url).await;
+    impl_file_same_content_in_two_datasets_yields_two_records(&url).await;
 }
 
 #[tokio::test]
-async fn file_deduplication_same_content_yields_one_record_pg() {
+async fn file_same_content_in_two_datasets_yields_two_records_pg() {
     let Some(url) = cognee_test_utils::pg_test_url() else {
         return;
     };
-    impl_file_deduplication_same_content_yields_one_record(&url).await;
+    impl_file_same_content_in_two_datasets_yields_two_records(&url).await;
 }
 
 // ---------------------------------------------------------------------------
-// Sub-test B — Inline text deduplication across two add() calls
+// Sub-test B — Inline text added to two datasets across two add() calls
 // ---------------------------------------------------------------------------
 
 async fn impl_text_deduplication_across_two_calls(db_url: &str) {
@@ -169,9 +170,9 @@ async fn impl_text_deduplication_across_two_calls(db_url: &str) {
         .await
         .expect("add text 2");
 
-    assert_eq!(
+    assert_ne!(
         result1[0].id, result2[0].id,
-        "same text should deduplicate to the same data_id"
+        "the same text in another dataset is another row"
     );
     assert!(
         result1[0].name.starts_with("text_"),
@@ -188,10 +189,12 @@ async fn impl_text_deduplication_across_two_calls(db_url: &str) {
         .unwrap()
         .unwrap();
 
-    let link_count = ops::data::count_data_dataset_links(&database, result1[0].id)
-        .await
-        .expect("count links");
-    assert_eq!(link_count, 2, "data should be linked to 2 datasets");
+    for row in [&result1[0], &result2[0]] {
+        let link_count = ops::data::count_data_dataset_links(&database, row.id)
+            .await
+            .expect("count links");
+        assert_eq!(link_count, 1, "a row belongs to exactly one dataset");
+    }
 
     let ds1_data = ops::datasets::get_dataset_data(&database, ds1.id)
         .await
@@ -199,7 +202,8 @@ async fn impl_text_deduplication_across_two_calls(db_url: &str) {
     let ds2_data = ops::datasets::get_dataset_data(&database, ds2.id)
         .await
         .unwrap();
-    assert_eq!(ds1_data[0].id, ds2_data[0].id);
+    assert_eq!(ds1_data[0].id, result1[0].id);
+    assert_eq!(ds2_data[0].id, result2[0].id);
 }
 
 #[tokio::test]
@@ -295,200 +299,83 @@ async fn cross_owner_isolation_same_content_different_owners_pg() {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-test D — Binary file deduplication
+// Sub-test D — Binary file content in two datasets
+// ---------------------------------------------------------------------------
+// Sub-test E — Deleting a dataset deletes only its own row
 // ---------------------------------------------------------------------------
 
-async fn impl_binary_file_deduplication(db_url: &str) {
-    let dir = TempDir::new().expect("tempdir");
-    let (pipeline, database, _storage) = make_pipeline(&dir, db_url).await;
-    let owner = Uuid::new_v4();
-
-    let binary_content: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF];
-
-    let mut bin1 = NamedTempFile::new().expect("bin tmp 1");
-    bin1.write_all(binary_content).expect("write bin 1");
-    let bin1_path = bin1.path().to_str().unwrap().to_string();
-
-    let mut bin2 = NamedTempFile::new().expect("bin tmp 2");
-    bin2.write_all(binary_content).expect("write bin 2");
-    let bin2_path = bin2.path().to_str().unwrap().to_string();
-
-    let result1 = pipeline
-        .add(
-            vec![DataInput::FilePath(bin1_path)],
-            "bin_dataset1",
-            owner,
-            None,
-        )
-        .await
-        .expect("add bin 1");
-    let result2 = pipeline
-        .add(
-            vec![DataInput::FilePath(bin2_path)],
-            "bin_dataset2",
-            owner,
-            None,
-        )
-        .await
-        .expect("add bin 2");
-
-    assert_eq!(
-        result1[0].id, result2[0].id,
-        "identical binary content should deduplicate"
-    );
-
-    let all_datasets = ops::datasets::list_datasets_by_owner(&database, owner)
-        .await
-        .expect("list datasets");
-    assert_eq!(all_datasets.len(), 2);
-
-    let link_count = ops::data::count_data_dataset_links(&database, result1[0].id)
-        .await
-        .expect("count links");
-    assert_eq!(
-        link_count, 2,
-        "binary data should be linked to both datasets"
-    );
-}
-
-#[tokio::test]
-async fn binary_file_deduplication_sqlite() {
-    let dir = TempDir::new().expect("tempdir for url");
-    let url = sqlite_db_url(&dir);
-    impl_binary_file_deduplication(&url).await;
-}
-
-#[tokio::test]
-async fn binary_file_deduplication_pg() {
-    let Some(url) = cognee_test_utils::pg_test_url() else {
-        return;
-    };
-    impl_binary_file_deduplication(&url).await;
-}
-
-// ---------------------------------------------------------------------------
-// Sub-test E — Dataset link counting and cascade deletion
-// ---------------------------------------------------------------------------
-
+/// The same content in three datasets is three rows. Deleting a dataset
+/// deletes its own row and leaves the other datasets' rows and their stored
+/// files alone. (`LocalStorage` names every stored file uniquely; the shared
+/// content-addressed file case is covered by the delete crate's
+/// `shared_file_is_kept_until_its_last_row_is_deleted`.)
 async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
     let (pipeline, database, storage) = make_pipeline(&dir, db_url).await;
     let owner = Uuid::new_v4();
 
-    let r1 = pipeline
-        .add(
-            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
-            "ds1",
-            owner,
-            None,
-        )
-        .await
-        .expect("add ds1");
-    pipeline
-        .add(
-            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
-            "ds2",
-            owner,
-            None,
-        )
-        .await
-        .expect("add ds2");
-    pipeline
-        .add(
-            vec![DataInput::Text(QUANTUM_TEXT.to_string())],
-            "ds3",
-            owner,
-            None,
-        )
-        .await
-        .expect("add ds3");
-
-    let data_id = r1[0].id;
-
-    let link_count = ops::data::count_data_dataset_links(&database, data_id)
-        .await
-        .expect("count links before delete");
-    assert_eq!(link_count, 3, "data should be linked to 3 datasets");
+    let mut rows = Vec::new();
+    for name in ["ds1", "ds2", "ds3"] {
+        let added = pipeline
+            .add(
+                vec![DataInput::Text(QUANTUM_TEXT.to_string())],
+                name,
+                owner,
+                None,
+            )
+            .await
+            .expect("add");
+        rows.push(added[0].clone());
+    }
 
     let delete_svc = DeleteService::new(
         storage.clone() as Arc<dyn StorageTrait>,
         database.clone() as Arc<dyn DeleteDb>,
     );
+    let delete = |name: &str| DeleteRequest {
+        scope: DeleteScope::Dataset {
+            owner_id: owner,
+            dataset_name: name.to_string(),
+            tenant_id: None,
+        },
+        mode: DeleteMode::Soft,
+        memory_only: false,
+    };
 
-    let result1 = delete_svc
-        .execute(&DeleteRequest {
-            scope: DeleteScope::Dataset {
-                owner_id: owner,
-                dataset_name: "ds1".to_string(),
-                tenant_id: None,
-            },
-            mode: DeleteMode::Soft,
-            memory_only: false,
-        })
-        .await
-        .expect("delete ds1");
-
-    assert_eq!(result1.deleted_datasets, 1);
-    assert_eq!(
-        result1.deleted_data, 0,
-        "data should not be deleted while still linked to other datasets"
-    );
-
-    let data_still_exists = ops::data::get_data(&database, data_id)
-        .await
-        .expect("get data after ds1 delete");
-    assert!(
-        data_still_exists.is_some(),
-        "data record should survive deletion of one dataset"
-    );
-
-    let remaining_links = ops::data::count_data_dataset_links(&database, data_id)
-        .await
-        .expect("count links after ds1 delete");
-    assert_eq!(remaining_links, 2);
-
-    let result2 = delete_svc
-        .execute(&DeleteRequest {
-            scope: DeleteScope::Dataset {
-                owner_id: owner,
-                dataset_name: "ds2".to_string(),
-                tenant_id: None,
-            },
-            mode: DeleteMode::Soft,
-            memory_only: false,
-        })
-        .await
-        .expect("delete ds2");
-
-    assert_eq!(result2.deleted_datasets, 1);
-    assert_eq!(result2.deleted_data, 0, "data still linked to ds3");
-
-    let result3 = delete_svc
-        .execute(&DeleteRequest {
-            scope: DeleteScope::Dataset {
-                owner_id: owner,
-                dataset_name: "ds3".to_string(),
-                tenant_id: None,
-            },
-            mode: DeleteMode::Soft,
-            memory_only: false,
-        })
-        .await
-        .expect("delete ds3");
-
-    assert_eq!(result3.deleted_datasets, 1);
-    assert_eq!(
-        result3.deleted_data, 1,
-        "data record should be deleted when last link is removed"
-    );
-
-    let data_gone = ops::data::get_data(&database, data_id)
-        .await
-        .expect("get data after all deletes");
-    assert!(
-        data_gone.is_none(),
-        "data record should be gone after all links removed"
-    );
+    for (i, name) in ["ds1", "ds2", "ds3"].into_iter().enumerate() {
+        let result = delete_svc.execute(&delete(name)).await.expect("delete");
+        assert_eq!(result.deleted_datasets, 1);
+        assert_eq!(result.deleted_data, 1, "the dataset's own row is deleted");
+        assert!(
+            ops::data::get_data(&database, rows[i].id)
+                .await
+                .expect("get data")
+                .is_none()
+        );
+        assert!(
+            !storage
+                .exists(&rows[i].raw_data_location)
+                .await
+                .expect("exists"),
+            "the deleted row's own file goes with it"
+        );
+        for later in &rows[i + 1..] {
+            assert!(
+                ops::data::get_data(&database, later.id)
+                    .await
+                    .expect("get data")
+                    .is_some(),
+                "other datasets' rows are untouched"
+            );
+            assert!(
+                storage
+                    .exists(&later.raw_data_location)
+                    .await
+                    .expect("exists"),
+                "other datasets' files are untouched"
+            );
+        }
+    }
 }
 
 #[tokio::test]

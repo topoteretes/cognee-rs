@@ -52,6 +52,15 @@ impl IngestDb for DefaultsOnly<'_> {
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
         IngestDb::get_data(self.0, id).await
     }
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError> {
+        IngestDb::find_data_in_dataset(self.0, dataset_id, content_hash, owner_id, tenant_id).await
+    }
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         IngestDb::create_data(self.0, d).await
     }

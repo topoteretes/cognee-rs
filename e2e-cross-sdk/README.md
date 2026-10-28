@@ -87,7 +87,7 @@ passed, it means those five did.
 
 **The CLI/DB comparison is the strong kind.** `test_*_parity`, `test_cross_*`
 and `test_readd_*` shell out to both CLIs and compare SQLite state directly,
-with exact equality on content hashes, UUIDs and row counts — there is no
+with exact equality on content hashes, dataset UUIDs and row counts — there is no
 tolerance/ignore list anywhere in that path. (The HTTP lane that left compared
 JSON responses through an ignore set that stripped every `id` field; that
 weaker shape is gone from this repo along with it.)
@@ -98,6 +98,11 @@ weaker shape is gone from this repo along with it.)
   `owner_id`/`tenant_id` out of Python's SQLite and passes them to the Rust CLI,
   so UUID5 agreement proves the hash function agrees on identical inputs — not
   that both sides derive the same inputs.
+- **Data ids are random in both SDKs.** A new `data` row gets a `uuid4` and
+  dedup is a lookup by `(content_hash, dataset_id, owner_id, tenant_id)`
+  (Python `ingest_data.py:364-389`), so `data.id` is never compared across SDKs;
+  the tests compare content hashes, dataset membership and the uuid4 shape
+  instead (SDK-1039 D7).
 - **"Both absent" scores as agreement.** Tests that accept a missing result on
   both sides convert *neither side implements this* into a pass. Prefer
   `xfail(strict=True)` keyed to a tracked gap.

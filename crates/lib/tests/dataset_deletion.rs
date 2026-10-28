@@ -199,7 +199,8 @@ async fn shared_data_preserved_on_partial_delete() {
     let storage = Arc::new(MockStorage::new());
     let owner_id = Uuid::new_v4();
 
-    // Create two datasets manually and attach the same data record to both.
+    // Two datasets, each with its own dataset-scoped row of the same
+    // content; both rows point at one stored file.
     let ds_a = Dataset::new("dataset_A".to_string(), owner_id, None, Uuid::new_v4());
     let ds_b = Dataset::new("dataset_B".to_string(), owner_id, None, Uuid::new_v4());
     let ds_a_id = ds_a.id;
@@ -212,24 +213,22 @@ async fn shared_data_preserved_on_partial_delete() {
         .await
         .unwrap();
     let data_id = Uuid::new_v4();
-    let data = Data::builder(
-        data_id,
-        "shared.txt",
-        &location,
-        "file://shared.txt",
-        "txt",
-        "text/plain",
-        "shared_hash",
-        owner_id,
-    )
-    .build();
-    ops::data::create_data(&db, data).await.unwrap();
-    ops::datasets::attach_data_to_dataset(&db, ds_a_id, data_id)
-        .await
-        .unwrap();
-    ops::datasets::attach_data_to_dataset(&db, ds_b_id, data_id)
-        .await
-        .unwrap();
+    let a_row_id = Uuid::new_v4();
+    for (row_id, dataset_id) in [(a_row_id, ds_a_id), (data_id, ds_b_id)] {
+        let data = Data::builder(
+            row_id,
+            "shared.txt",
+            &location,
+            "file://shared.txt",
+            "txt",
+            "text/plain",
+            "shared_hash",
+            owner_id,
+        )
+        .dataset_id(dataset_id)
+        .build();
+        ops::data::create_data(&db, data).await.unwrap();
+    }
 
     // Delete dataset A only.
     let svc = DeleteService::new(
@@ -250,12 +249,10 @@ async fn shared_data_preserved_on_partial_delete() {
         .expect("delete should succeed");
 
     assert_eq!(result.deleted_datasets, 1);
-    assert_eq!(
-        result.deleted_data, 0,
-        "data must NOT be deleted while still linked to dataset_B"
-    );
+    assert_eq!(result.deleted_data, 1, "dataset_A's own row is deleted");
+    assert!(ops::data::get_data(&db, a_row_id).await.unwrap().is_none());
 
-    // The Data record should still exist.
+    // dataset_B's row should still exist.
     let still_exists = ops::data::get_data(&db, data_id).await.unwrap();
     assert!(
         still_exists.is_some(),

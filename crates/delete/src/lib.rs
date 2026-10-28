@@ -764,11 +764,12 @@ impl DeleteService {
         }
 
         // ------------------------------------------------------------------
-        // Phase 0: Pipeline status cleanup (while junction rows still exist)
+        // Phase 0: Pipeline status cleanup (while rows are still attached)
         // ------------------------------------------------------------------
         // Clear pipeline_status JSON entries for datasets about to be deleted.
-        // This must run before junction rows (dataset_data) are removed, since
-        // the junction is needed to find related Data records.
+        // This must run before the rows are detached (`data.dataset_id`
+        // cleared), since that column is how the dataset's Data records are
+        // found.
 
         for dataset in &targets.datasets_to_delete {
             let count = self
@@ -948,6 +949,26 @@ impl DeleteService {
             let data = self.database.get_data(*data_id).await.map_err(|error| {
                 DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
             })?;
+
+            // Stored files are content-addressed, so the rows of the same
+            // content in other datasets share this one: remove it only when
+            // this row is its last reference (Python
+            // `remove_data_file_if_unreferenced`).
+            let data = match data {
+                Some(data) => {
+                    let references = self
+                        .database
+                        .count_data_location_references(&data.raw_data_location)
+                        .await
+                        .map_err(|error| {
+                            DeleteError::Runtime(format!(
+                                "Failed to count references to the file of data {data_id}: {error}"
+                            ))
+                        })?;
+                    (references <= 1).then_some(data)
+                }
+                None => None,
+            };
 
             if let Some(data) = data {
                 match self.storage.delete(&data.raw_data_location).await {
@@ -2908,41 +2929,53 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn shared_data_not_deleted_while_linked_to_another_dataset() {
-        let (svc, storage, db) = make_service().await;
-        let owner = Uuid::new_v4();
-
-        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
+    /// Two datasets, each with its own dataset-scoped row of the same
+    /// content, both pointing at one content-addressed stored file (as the
+    /// rows of a Python-compatible file store do). Returns the rows' ids and
+    /// the shared location.
+    async fn seed_same_content_in_two_datasets(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner: Uuid,
+        names: [&str; 2],
+    ) -> ([Uuid; 2], [Uuid; 2], String) {
         let location = storage
             .store(b"shared content", "shared.txt")
             .await
             .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
+        let mut dataset_ids = [Uuid::nil(); 2];
+        let mut data_ids = [Uuid::nil(); 2];
+        for (i, name) in names.into_iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            dataset_ids[i] = ds.id;
+            ops::datasets::create_dataset(db, ds).await.unwrap();
+            data_ids[i] = Uuid::new_v4();
+            let data = Data::builder(
+                data_ids[i],
+                "shared.txt",
+                location.clone(),
+                "file://shared.txt",
+                "txt",
+                "text/plain",
+                "shared_hash",
+                owner,
+            )
+            .dataset_id(dataset_ids[i])
+            .build();
+            ops::data::create_data(db, data).await.unwrap();
+        }
+        (dataset_ids, data_ids, location)
+    }
+
+    /// Rows are dataset-scoped: deleting a dataset deletes its own row and
+    /// leaves the other dataset's row of the same content alone, and the
+    /// content-addressed file they share stays while that row references it.
+    #[tokio::test]
+    async fn shared_data_not_deleted_while_linked_to_another_dataset() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, [row1, row2], location) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["dataset1", "dataset2"]).await;
 
         let result = svc
             .execute(&DeleteRequest {
@@ -2958,83 +2991,46 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        assert_eq!(
-            result.deleted_data, 0,
-            "data must not be deleted while still linked to dataset2"
+        assert_eq!(result.deleted_data, 1, "dataset1's own row is deleted");
+        assert!(ops::data::get_data(&db, row1).await.unwrap().is_none());
+        assert!(
+            ops::data::get_data(&db, row2).await.unwrap().is_some(),
+            "dataset2's row must survive"
         );
-
-        let data_still_there = ops::data::get_data(&db, data_id).await.unwrap();
-        assert!(data_still_there.is_some(), "data record must survive");
+        assert!(
+            storage.exists(&location).await.unwrap(),
+            "the shared file stays while dataset2's row references it"
+        );
     }
 
+    /// The shared file goes with the last row that references it (Python
+    /// `remove_data_file_if_unreferenced`).
     #[tokio::test]
     async fn data_deleted_when_last_dataset_link_removed() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
+        let (_, [_, row2], location) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["dataset1", "dataset2"]).await;
 
-        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
-        let location = storage
-            .store(b"shared content", "shared.txt")
-            .await
-            .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
-
-        svc.execute(&DeleteRequest {
-            scope: DeleteScope::Dataset {
-                owner_id: owner,
-                dataset_name: "dataset1".to_string(),
-                tenant_id: None,
-            },
-            mode: DeleteMode::Soft,
-            memory_only: false,
-        })
-        .await
-        .expect("delete dataset1");
-
-        let result = svc
-            .execute(&DeleteRequest {
+        for name in ["dataset1", "dataset2"] {
+            svc.execute(&DeleteRequest {
                 scope: DeleteScope::Dataset {
                     owner_id: owner,
-                    dataset_name: "dataset2".to_string(),
+                    dataset_name: name.to_string(),
                     tenant_id: None,
                 },
                 mode: DeleteMode::Soft,
                 memory_only: false,
             })
             .await
-            .expect("delete dataset2");
+            .expect("delete dataset");
+        }
 
-        assert_eq!(
-            result.deleted_data, 1,
-            "data must be deleted when last link is removed"
+        assert!(ops::data::get_data(&db, row2).await.unwrap().is_none());
+        assert!(
+            !storage.exists(&location).await.unwrap(),
+            "the file is removed with its last reference"
         );
-
-        let data_gone = ops::data::get_data(&db, data_id).await.unwrap();
-        assert!(data_gone.is_none(), "data record must be gone");
     }
 
     #[tokio::test]
@@ -5696,44 +5692,18 @@ mod tests {
         // the data survives deletion.
     }
 
+    /// Deleting a dataset clears the status of its own rows only. A row of
+    /// another dataset whose `pipeline_status` names both datasets (as a row
+    /// forked by the dataset-scoping migration does) is not touched, as in
+    /// Python, where `delete_dataset` reaches only `Data.dataset_id` rows.
     #[tokio::test]
     async fn test_dataset_deletion_clears_pipeline_status_data_survives() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
+        let ([ds1_id, ds2_id], [_, row2], _) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["ps_ds1", "ps_ds2"]).await;
 
-        // Create two datasets sharing one data item
-        let ds1 = Dataset::new("ps_ds1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("ps_ds2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
-        let location = storage
-            .store(b"shared content", "shared.txt")
-            .await
-            .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
-
-        // Set pipeline_status with entries for both datasets
+        // Both rows carry status entries for both datasets.
         let ds1_hex = cognee_database::uuid_hex::to_hex(ds1_id);
         let ds2_hex = cognee_database::uuid_hex::to_hex(ds2_id);
         let status_json = serde_json::json!({
@@ -5742,12 +5712,18 @@ mod tests {
                 ds2_hex.clone(): "DATA_ITEM_PROCESSING_COMPLETED"
             }
         });
-        let data_record = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
-        let updated_data = Data {
-            pipeline_status: Some(status_json.to_string()),
-            ..data_record
-        };
-        ops::data::update_data(&db, updated_data).await.unwrap();
+        for dataset_id in [ds1_id, ds2_id] {
+            for row in ops::datasets::get_dataset_data(&db, dataset_id)
+                .await
+                .unwrap()
+            {
+                let updated_data = Data {
+                    pipeline_status: Some(status_json.to_string()),
+                    ..row
+                };
+                ops::data::update_data(&db, updated_data).await.unwrap();
+            }
+        }
 
         // Delete dataset 1 only
         let result = svc
@@ -5764,28 +5740,16 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        assert_eq!(
-            result.deleted_data, 0,
-            "data should survive because it's still linked to ds2"
-        );
+        assert_eq!(result.deleted_data, 1, "ps_ds1's own row is deleted");
         assert_eq!(result.cleared_pipeline_statuses, 1);
 
-        // Verify pipeline_status: ds1 entry should be removed, ds2 entry should remain
-        let data_after = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        // ps_ds2's row survives with its status as it was.
+        let data_after = ops::data::get_data(&db, row2).await.unwrap().unwrap();
         let status_after: serde_json::Value =
             serde_json::from_str(data_after.pipeline_status.as_deref().unwrap_or("{}")).unwrap();
-        let cognify_obj = status_after
-            .get("cognify_pipeline")
-            .and_then(|v| v.as_object())
-            .expect("cognify_pipeline should still exist");
-
-        assert!(
-            !cognify_obj.contains_key(&ds1_hex),
-            "ds1 entry should be removed from pipeline_status"
-        );
-        assert!(
-            cognify_obj.contains_key(&ds2_hex),
-            "ds2 entry should remain in pipeline_status"
+        assert_eq!(
+            status_after, status_json,
+            "another dataset's row is untouched"
         );
     }
 

@@ -29,7 +29,7 @@ use cognee_vector::VectorDB;
 
 use crate::content_hasher::HashAlgorithm;
 use crate::dataset_locks::DatasetLocks;
-use crate::id_generation::{generate_data_id, generate_dataset_id};
+use crate::id_generation::generate_dataset_id;
 use crate::loader_registry::get_loader_name;
 use crate::loaders::{LoaderOutput, LoaderRegistry};
 use crate::url_resolver::UrlMetadata;
@@ -83,6 +83,10 @@ pub struct ProcessedInput {
     /// MD5 of the EXTRACTED-text file (Python parity, `ingest_data.py:195`).
     /// Equals `content_hash` only when extracted text == raw bytes (plain text).
     pub raw_content_hash: String,
+    /// The id a **new** row gets: a random `uuid4`, as in Python's `add`
+    /// (`ingest_data.py`). When the dataset already holds this content for
+    /// the same owner and tenant, [`persist_data`] reuses that row and its id
+    /// instead, so the returned [`Data::id`] is the one to use.
     pub data_id: Uuid,
     pub storage_location: String,
     pub label: Option<String>,
@@ -207,8 +211,8 @@ pub async fn process_input(
         .await?;
 
     // Finalise hash — content-only, no owner_id (Python compatible). For
-    // non-URL inputs this is the MD5 of the RAW original bytes; `data_id` is
-    // derived from it. Both are SACRED and must not change.
+    // non-URL inputs this is the MD5 of the RAW original bytes. It is SACRED
+    // and must not change: it names the stored file and is the dedup key.
     let collected = Arc::try_unwrap(raw_bytes)
         .map_err(|_| "Failed to unwrap bytes")?
         .into_inner();
@@ -218,7 +222,10 @@ pub async fn process_input(
         .map_err(|_| "Failed to unwrap size counter")?
         .into_inner();
 
-    let data_id = generate_data_id(&content_hash, owner_id, tenant_id);
+    // The id a new row gets: a random uuid4, as in Python's `add`
+    // (`ingest_data.py:364-389`). `persist_data` swaps it for the existing
+    // row's id when the dataset already holds this content.
+    let data_id = Uuid::new_v4();
 
     // Store the artifact + compute `raw_content_hash` (MD5 of the stored
     // extracted-text file — Python parity, ingest_data.py:195).
@@ -342,8 +349,10 @@ pub async fn process_input(
 // ---------------------------------------------------------------------------
 
 /// Persist a [`ProcessedInput`] as a [`Data`] record: resolve or create the
-/// dataset, deduplicate by content hash, create the record if new, and attach
-/// it to the dataset.
+/// dataset, then reuse the row that already holds this content in that
+/// dataset for the same owner and tenant, or create a new dataset-scoped row
+/// with the input's fresh `uuid4` (Python `ingest_data`: dedup by
+/// `(content_hash, dataset_id, owner, tenant)`).
 ///
 /// Dataset resolution uses a deterministic UUID5 ID so the lookup + optional
 /// `INSERT OR IGNORE` is idempotent and cheap — safe to call once per item.
@@ -352,7 +361,7 @@ pub async fn process_input(
 #[instrument(
     name = "ingestion.persist_data",
     skip(processed, database),
-    fields(data_id = %processed.data_id)
+    fields(new_data_id = %processed.data_id)
 )]
 pub async fn persist_data(
     processed: &ProcessedInput,
@@ -427,7 +436,7 @@ pub async fn persist_data_with_acl(
 #[instrument(
     name = "ingestion.persist_data_with_acl",
     skip(processed, database, acl_db, dataset_locks),
-    fields(data_id = %processed.data_id)
+    fields(new_data_id = %processed.data_id)
 )]
 #[allow(
     clippy::too_many_arguments,
@@ -557,18 +566,19 @@ pub async fn persist_data_with_acl_and_locks(
     // `add` into one dataset behind a single file at a time.
     drop(dataset_guard);
 
-    let data_id = processed.data_id;
-
-    // Serialize the read-modify-write of this data row against every other
-    // `persist_data*` call for the same `data_id` in this process. The re-add
-    // refresh below derives the `external_metadata` it writes from the row it
-    // read here; without the lock two concurrent re-adds of the same content
-    // with different node sets could interleave read-read-write-write, so the
-    // later write would merge into a stale snapshot — dropping whatever the
-    // other wrote to the metadata — and the two calls would each return a row
-    // the store no longer holds. Under the lock every refresh reads the row
-    // the previous one wrote, and the `node_set` column and the metadata key
-    // it writes are always derived from that one read.
+    // Serialize the dedup lookup and the read-modify-write of this content's
+    // row against every other `persist_data*` call for the same content in
+    // the same dataset (and owner, tenant) in this process. Without it two
+    // concurrent adds of the same content could both miss the lookup and
+    // create two rows. The re-add refresh below also derives the
+    // `external_metadata` it writes from the row it read here; without the
+    // lock two concurrent re-adds with different node sets could interleave
+    // read-read-write-write, so the later write would merge into a stale
+    // snapshot — dropping whatever the other wrote to the metadata — and the
+    // two calls would each return a row the store no longer holds. Under the
+    // lock every refresh reads the row the previous one wrote, and the
+    // `node_set` column and the metadata key it writes are always derived
+    // from that one read.
     //
     // In-process only, like `DatasetLocks` (and keyed the same way): two
     // processes re-adding the same content to a shared database can still
@@ -579,10 +589,23 @@ pub async fn persist_data_with_acl_and_locks(
     // compare-and-swap on `updated_at`, which neither SQLite nor the
     // `IngestDb` trait offers today; it is not worth a cross-process lock for
     // a refresh whose inputs are the caller's own re-add.
-    let _data_guard = data_id_locks().lock(data_id).await;
+    let _data_guard = data_id_locks()
+        .lock(content_lock_key(
+            dataset.id,
+            &processed.content_hash,
+            owner_id,
+            tenant_id,
+        ))
+        .await;
 
-    if let Some(mut existing_data) = database.get_data(data_id).await? {
-        database.attach_data_to_dataset(dataset.id, data_id).await?;
+    // Dedup is a lookup, not an identity (Python `identify_many`): the row
+    // holding this content in this dataset for this owner and tenant, if any.
+    // The same content in another dataset is another row.
+    if let Some(mut existing_data) = database
+        .find_data_in_dataset(dataset.id, &processed.content_hash, owner_id, tenant_id)
+        .await?
+    {
+        let data_id = existing_data.id;
         // Python's `ingest_data` update branch rewrites the existing row's
         // `node_set` and `external_metadata` from the re-add's values. Only
         // the node set is refreshed here (the rest of the row stays as
@@ -651,6 +674,7 @@ pub async fn persist_data_with_acl_and_locks(
         return Ok(existing_data);
     }
 
+    let data_id = processed.data_id;
     let external_metadata = match node_set {
         Some(names) => {
             with_node_set_in_external_metadata(processed.external_metadata.as_deref(), names)
@@ -669,6 +693,7 @@ pub async fn persist_data_with_acl_and_locks(
         processed.content_hash.clone(),
         processed.owner_id,
     )
+    .dataset_id(dataset.id)
     .original_extension(processed.original_extension.clone())
     .original_mime_type(processed.original_mime_type.clone())
     .loader_engine(processed.loader_engine.clone())
@@ -693,8 +718,6 @@ pub async fn persist_data_with_acl_and_locks(
 
     let saved_data = database.create_data(data).await?;
 
-    database.attach_data_to_dataset(dataset.id, data_id).await?;
-
     info!(data_id = %data_id, is_duplicate = false, "input processed");
     Ok(saved_data)
 }
@@ -703,18 +726,35 @@ pub async fn persist_data_with_acl_and_locks(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// The process-wide per-`data_id` locks [`persist_data_with_acl_and_locks`]
-/// holds across its read-modify-write of one data row.
+/// The process-wide per-content locks [`persist_data_with_acl_and_locks`]
+/// holds across its dedup lookup and its read-modify-write of one data row,
+/// keyed by [`content_lock_key`].
 ///
 /// Process-wide rather than an `AddPipeline` option: the race it closes —
 /// two concurrent re-adds of the same content — needs no server to happen
 /// (any embedder can run two `add`s at once), and every `persist_data*` entry
 /// point must take the same lock for it to mean anything. Contention is only
-/// ever between calls for the same `data_id`. A registry of its own, separate
-/// from any [`DatasetLocks`] a caller wires for datasets.
+/// ever between calls for the same content in the same dataset. A registry of
+/// its own, separate from any [`DatasetLocks`] a caller wires for datasets.
 fn data_id_locks() -> &'static DatasetLocks {
     static LOCKS: std::sync::LazyLock<DatasetLocks> = std::sync::LazyLock::new(DatasetLocks::new);
     &LOCKS
+}
+
+/// The [`data_id_locks`] key of one content in one dataset: the dedup scope
+/// of `find_data_in_dataset` — `(dataset, content_hash, owner, tenant)` —
+/// folded into a `uuid5`, since the registry is keyed by `Uuid`.
+fn content_lock_key(
+    dataset_id: Uuid,
+    content_hash: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Uuid {
+    let tenant = tenant_id.map_or_else(|| "None".to_string(), |t| t.to_string());
+    Uuid::new_v5(
+        &cognee_utils::NAMESPACE_OID,
+        format!("{dataset_id}:{content_hash}:{owner_id}:{tenant}").as_bytes(),
+    )
 }
 
 /// Resolve the MIME type for a file extension.
@@ -2224,7 +2264,7 @@ mod tests {
             result1[0].content_hash, result2[0].content_hash,
             "content hash is owner-independent"
         );
-        // But data_id differs because owner_id is mixed into UUID5 seed
+        // But the rows differ: each owner's dataset holds its own row
         assert_ne!(result1[0].id, result2[0].id, "data_id must differ by owner");
     }
 
@@ -2613,8 +2653,9 @@ mod tests {
     }
 
     /// Text-path no-regression: the stored artifact is byte-identical to the
-    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, and the
-    /// content hash / data_id match the pinned Python-compatible values.
+    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, the
+    /// content hash matches the pinned Python-compatible value, and the new
+    /// row's id is a uuid4.
     #[tokio::test]
     async fn test_text_path_no_regression_hashes_and_stored_bytes() {
         use cognee_storage::LocalStorage;
@@ -2638,12 +2679,13 @@ mod tests {
         .await
         .unwrap();
 
-        // content_hash + data_id derived from RAW bytes — SACRED, must not change.
+        // content_hash derived from RAW bytes — SACRED, must not change. The
+        // data id is a random uuid4, as in Python's `add` (no content in it).
         assert_eq!(processed.content_hash, HELLO_WORLD_MD5);
         assert_eq!(
-            processed.data_id,
-            generate_data_id(HELLO_WORLD_MD5, owner_id, None),
-            "data_id must remain uuid5(content_hash + owner + tenant)"
+            processed.data_id.get_version_num(),
+            4,
+            "a new row's data_id is a uuid4, as in Python"
         );
 
         // For plain text the extracted text equals the raw bytes.
@@ -3402,6 +3444,9 @@ mod tests {
         )
         .node_set(python_column)
         .external_metadata(python_metadata)
+        // Rows are dataset-scoped: the row Python wrote belongs to the
+        // dataset the re-add targets, whose id is derived from its name.
+        .dataset_id(generate_dataset_id("python_row_ds", owner_id, None))
         .build();
         cognee_database::IngestDb::create_data(&db, row)
             .await
@@ -3454,8 +3499,7 @@ mod tests {
     enum AfterRead {
         /// Write `token_count` and the cognify completion marker.
         WriteOtherColumns,
-        /// Delete the row once it has been attached (the dataset link goes
-        /// with it, `ON DELETE CASCADE`).
+        /// Delete the row right after the pipeline's dedup lookup read it.
         DeleteRow,
         /// Track how many calls are between their read and their refresh at
         /// once, yielding after the read so an unserialized second call would
@@ -3487,9 +3531,27 @@ mod tests {
             IngestDb::list_datasets_by_owner(&*self.inner, owner_id).await
         }
         async fn get_data(&self, id: Uuid) -> Result<Option<Data>, cognee_database::DatabaseError> {
+            IngestDb::get_data(&*self.inner, id).await
+        }
+        /// The pipeline's read of an existing row is its dedup lookup.
+        async fn find_data_in_dataset(
+            &self,
+            dataset_id: Uuid,
+            content_hash: &str,
+            owner_id: Uuid,
+            tenant_id: Option<Uuid>,
+        ) -> Result<Option<Data>, cognee_database::DatabaseError> {
             use std::sync::atomic::Ordering;
-            let snapshot = IngestDb::get_data(&*self.inner, id).await?;
-            if snapshot.is_some() {
+            let snapshot = IngestDb::find_data_in_dataset(
+                &*self.inner,
+                dataset_id,
+                content_hash,
+                owner_id,
+                tenant_id,
+            )
+            .await?;
+            if let Some(row) = &snapshot {
+                let id = row.id;
                 match &self.hook {
                     AfterRead::WriteOtherColumns => {
                         ops::data::update_data_token_count(&self.inner, id, 42).await?;
@@ -3500,7 +3562,9 @@ mod tests {
                         )
                         .await?;
                     }
-                    AfterRead::DeleteRow => {}
+                    AfterRead::DeleteRow => {
+                        ops::data::delete_data(&self.inner, id).await?;
+                    }
                     AfterRead::CountOverlap {
                         in_flight,
                         max_in_flight,
@@ -3535,11 +3599,7 @@ mod tests {
             dataset_id: Uuid,
             data_id: Uuid,
         ) -> Result<(), cognee_database::DatabaseError> {
-            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await?;
-            if matches!(self.hook, AfterRead::DeleteRow) {
-                ops::data::delete_data(&self.inner, data_id).await?;
-            }
-            Ok(())
+            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await
         }
         async fn update_last_accessed(
             &self,

@@ -6,7 +6,10 @@ use uuid::Uuid;
 /// Fields match the Python cognee `data` table schema for cross-SDK compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Data {
-    /// Unique identifier for this data record (UUID v5, deterministic from content hash)
+    /// Unique identifier for this data record: a random `uuid4` minted when
+    /// the row is created, as in Python (`ingest_data.py`). It carries no
+    /// content information; re-adding the same content to the same dataset
+    /// reuses the row (dedup by `content_hash`, `dataset_id`, owner, tenant).
     pub id: Uuid,
     /// Display name derived from the source (filename, URL, or `text_<md5>.txt` for inline text)
     pub name: String,
@@ -56,6 +59,18 @@ pub struct Data {
     pub last_accessed: Option<DateTime<Utc>>,
     /// Importance weight for ranking (0.0 to 1.0). Influences relevance scoring.
     pub importance_weight: Option<f64>,
+    /// The dataset that owns this row. Rows are dataset-scoped, as in Python
+    /// (`Data.dataset_id`): the same content in two datasets is two rows with
+    /// two ids. `None` only for a row that belongs to no dataset (one detached
+    /// by a delete that is about to remove it, or a legacy orphan).
+    #[serde(default)]
+    pub dataset_id: Option<Uuid>,
+    /// The pre-scoping id this row descends from. Written only by the
+    /// migration that split rows shared by several datasets
+    /// (`m20261028_000001_dataset_scoped_data`, Python alembic
+    /// `d6e8f0a2b4c6`); `None` for every row whose id never changed.
+    #[serde(default)]
+    pub legacy_id: Option<Uuid>,
 }
 
 impl Data {
@@ -91,6 +106,7 @@ impl Data {
             node_set: None,
             importance_weight: None,
             data_size: -1,
+            dataset_id: None,
         }
     }
 }
@@ -115,6 +131,7 @@ pub struct DataBuilder {
     node_set: Option<String>,
     importance_weight: Option<f64>,
     data_size: i64,
+    dataset_id: Option<Uuid>,
 }
 
 impl DataBuilder {
@@ -158,6 +175,11 @@ impl DataBuilder {
         self.importance_weight = Some(w);
         self
     }
+    /// The dataset that owns the row (see [`Data::dataset_id`]).
+    pub fn dataset_id(mut self, v: Uuid) -> Self {
+        self.dataset_id = Some(v);
+        self
+    }
 
     pub fn build(self) -> Data {
         Data {
@@ -186,6 +208,8 @@ impl DataBuilder {
             data_size: self.data_size,
             last_accessed: None,
             importance_weight: self.importance_weight,
+            dataset_id: self.dataset_id,
+            legacy_id: None,
         }
     }
 }

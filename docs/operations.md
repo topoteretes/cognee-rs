@@ -74,8 +74,11 @@ raw data ──add──▶ stored + deduplicated ──cognify──▶ knowled
 
 Streams input, computes a content hash, deduplicates, and persists the data plus
 metadata. Accepts text, file paths, and HTTP(S) URLs (fetched and routed by MIME
-type). Deterministic UUID5 IDs make the same content + owner reproducible across
-SDKs. Pipeline: [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
+type). As in Python, `data` rows are dataset-scoped: a new row gets a random
+`uuid4` id, and re-adding content dedups only within the same dataset, owner
+and tenant (by content hash), so the same content in two datasets is two rows.
+Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
+[`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
 
 ### cognify (knowledge-graph extraction)
 
