@@ -95,8 +95,6 @@ class CognifyOpts(TypedDict, total=False):
     chunk_overlap: int
     summarization: bool
     temporal_cognify: bool
-    #: Index ``"source → relation → target"`` triplet embeddings.
-    triplet: bool
 
 
 class SearchOpts(TypedDict, total=False):

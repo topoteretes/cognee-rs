@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Cognify no longer embeds triplets (SDK-1039).** Python stopped writing the
+  `Triplet_text` collection in SDK-1115, so `CognifyConfig::embed_triplets`,
+  `CognifyConfig::with_triplet_embeddings`, `IndexedFieldsStats::triplet_count`,
+  the `triplet` cognify option of every binding (Python, TS, Java, C; an unknown
+  option is only warned about, so existing callers keep running) and the
+  `cognee_cognify::triplet_creation` module (`create_triplets_from_graph`,
+  `create_triplets_from_graph_with_timestamps`) are removed. `cognee_models::Triplet`
+  stays, and so does the delete-side cleanup: deleting data still removes the
+  legacy `Triplet_text` rows an earlier version wrote, and search on a database
+  that holds one keeps working. `memify` still writes triplets until its own
+  removal lands.
+
 - **`TRIPLET_COMPLETION` and `TripletRetriever` are removed (SDK-1039).**
   Python deprecated triplet search in SDK-1115 and removes it in the next
   release; Rust goes straight to the removed state, with no
@@ -28,8 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type everywhere: serde/`SearchRequest` deserialization, the binding
   `parse_search_type` (validation error) and the CLI `--query-type` (invalid
   value). A database that still holds a `Triplet_text` vector collection keeps
-  serving every other search type. Cognify/memify still write triplet
-  embeddings until the follow-up removals land.
+  serving every other search type.
 
   **Migration.** Use `GRAPH_COMPLETION` (what Python's deprecation shim answers
   with) or `HYBRID_COMPLETION`.

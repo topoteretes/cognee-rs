@@ -43,7 +43,7 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent, Triplet,
+    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
     classify_documents as model_classify_documents,
 };
 use cognee_ontology::OntologyResolver;
@@ -2353,7 +2353,9 @@ pub async fn summarize_text(
 /// Generate embeddings and index all data points in vector DB (Task 5).
 ///
 /// Generates embeddings for chunks, entities (name + description), summaries,
-/// and optionally triplets. Creates vector collections and indexes points.
+/// entity types, edge types and documents, then creates the vector collections
+/// and indexes the points. No triplets: Python stopped embedding them in
+/// SDK-1115, and so did Rust (SDK-1039).
 ///
 /// Writes the provenance records (nodes/edges) to the relational database
 /// *before* the first graph or vector write, mirroring Python's
@@ -2583,8 +2585,7 @@ pub async fn add_data_points(
 
     // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
     // `source_*` provenance keys are populated before they are vector-indexed
-    // (collection `EdgeType_relationship_name`) and before the Triplet payloads
-    // copy those keys from the originating EdgeType (gap-05/08 §4.4, below).
+    // (collection `EdgeType_relationship_name`).
     // The LLM-derived edge-type names trace back to the entity-extraction task,
     // so the `source_pipeline` / `source_task` literals match.
     //
@@ -2651,17 +2652,14 @@ pub async fn add_data_points(
     let mut indexed_fields = index_data_points(
         &input.chunks,
         &input.entities,
-        &input.timestamps,
         &input.summaries,
         &input.documents,
-        &input.edges,
         &edge_types,
         input.dataset_id,
         input.user_id,
         input.tenant_id,
         Arc::clone(&embedding_engine),
         Arc::clone(&vector_db),
-        config,
         &embeddings,
     )
     .await?;
@@ -2669,8 +2667,6 @@ pub async fn add_data_points(
         let dynamic_node_values: Vec<&DynamicDataPoint> = dynamic_nodes.values().copied().collect();
         let dynamic_embeddings = index_dynamic_graph(
             &dynamic_node_values,
-            &dynamic_edges,
-            &edge_types,
             input.dataset_id,
             input.user_id,
             input.tenant_id,
@@ -2703,15 +2699,12 @@ pub async fn add_data_points(
     })
 }
 
-/// Vector-index runtime custom DataPoints and, when enabled, their field
-/// triplets, inside a bulk-load scope of their own handled exactly like
+/// Vector-index runtime custom DataPoints inside a bulk-load scope of their own handled exactly like
 /// [`index_data_points`]': a store that rejects the hint is written without
 /// it, and the scope is finished on success and failure alike.
 #[allow(clippy::too_many_arguments)]
 async fn index_dynamic_graph(
     nodes: &[&DynamicDataPoint],
-    edges: &[EdgeData],
-    edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
@@ -2728,8 +2721,7 @@ async fn index_dynamic_graph(
         }
     };
     let indexed = index_dynamic_graph_points(
-        nodes, edges, edge_types, dataset_id, user_id, tenant_id, &engine, &vector_db, config,
-        stats,
+        nodes, dataset_id, user_id, tenant_id, &engine, &vector_db, config, stats,
     )
     .await;
     if let Some(bulk) = bulk
@@ -2741,12 +2733,10 @@ async fn index_dynamic_graph(
 }
 
 /// The body of [`index_dynamic_graph`]: one `{type}_{field}` collection per
-/// declared index field (Python `index_data_points`), then the triplets.
+/// declared index field (Python `index_data_points`).
 #[allow(clippy::too_many_arguments)]
 async fn index_dynamic_graph_points(
     nodes: &[&DynamicDataPoint],
-    edges: &[EdgeData],
-    edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
@@ -2826,48 +2816,6 @@ async fn index_dynamic_graph_points(
         stats.record(data_type, field, entries.len());
     }
 
-    // Field edges only, as the default path indexes its semantic edges and not
-    // the structural ones. Node text and relationship text follow Python's
-    // `_create_triplets_from_graph`: every index field, and the edge's
-    // stamped `edge_text`.
-    if config.embed_triplets && !edges.is_empty() {
-        let node_map: HashMap<Uuid, (String, String)> = nodes
-            .iter()
-            .map(|node| (node.base.id, (node.label(), node.embeddable_text())))
-            .collect();
-        let edge_pairs: Vec<GraphEdgePair> = edges
-            .iter()
-            .filter_map(|(source, target, relationship, properties)| {
-                let mut pair = GraphEdgePair::new(
-                    Uuid::parse_str(source).ok()?,
-                    Uuid::parse_str(target).ok()?,
-                    relationship.clone(),
-                );
-                if let Some(text) = properties
-                    .get("edge_text")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    pair.properties
-                        .insert("edge_text".to_string(), text.to_string());
-                }
-                Some(pair)
-            })
-            .collect();
-        let triplets =
-            crate::triplet_creation::create_triplets_from_node_texts(&node_map, &edge_pairs);
-        if !triplets.is_empty() {
-            index_triplet_points(
-                &triplets,
-                &edge_pairs,
-                edge_types,
-                engine,
-                vector_db,
-                window,
-            )
-            .await?;
-            stats.triplet_count += triplets.len();
-        }
-    }
     Ok(retained)
 }
 
@@ -6028,17 +5976,14 @@ async fn reuse_or_embed(
 async fn index_data_points(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
-    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
-    edges: &[GraphEdgePair],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
-    config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
 ) -> Result<IndexedFieldsStats, CognifyError> {
     // Each collection used to be embedded, built and written in one piece, so
@@ -6059,17 +6004,14 @@ async fn index_data_points(
     let indexed = index_data_points_windowed(
         chunks,
         entities,
-        timestamps,
         summaries,
         documents,
-        edges,
         edge_types,
         dataset_id,
         user_id,
         tenant_id,
         engine,
         Arc::clone(&vector_db),
-        config,
         precomputed_embeddings,
         window,
     )
@@ -6080,129 +6022,6 @@ async fn index_data_points(
         warn!(error = %e, "index_data_points: vector store failed to finish its bulk load");
     }
     indexed
-}
-
-/// Write `triplets` to the `Triplet`/`text` collection in windows, copying
-/// each one's `source_*` provenance from the [`EdgeType`] its edge's retrieval
-/// text keys. `edges` are the edges the triplets were built from.
-async fn index_triplet_points(
-    triplets: &[Triplet],
-    edges: &[GraphEdgePair],
-    edge_types: &[EdgeType],
-    engine: &Arc<dyn EmbeddingEngine>,
-    vector_db: &Arc<dyn VectorDB>,
-    window: usize,
-) -> Result<(), CognifyError> {
-    if !vector_db
-        .has_collection("Triplet", "text")
-        .await
-        .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
-    {
-        vector_db
-            .create_collection("Triplet", "text", engine.dimension())
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-    }
-
-    // Index the EdgeType DataPoints so each triplet payload can
-    // inherit its originating edge's provenance (`source_*`) keys per
-    // gap-05/08 §4.4. Triplet itself has no embedded `DataPoint`, so we
-    // narrow the dump to just the five `source_*` keys to avoid
-    // colliding with Triplet's own flat fields (id, type, etc.).
-    //
-    // EdgeTypes are now keyed on each edge's *retrieval text*
-    // (`edge_retrieval_text`: nonblank `edge_text`, else
-    // `relationship_name`) to match Python's `generate_edge_id`, but a
-    // Triplet only carries the bare `relationship_name`. We therefore
-    // map each triplet's (source, target, relationship) tuple to its
-    // edge's retrieval text via the source edges, then look up the
-    // EdgeType by that text — so the provenance copy survives the
-    // Part-3 keying change even when edges carry a description.
-    //
-    // The lookup is keyed on the EdgeType's **derived point id**, not
-    // on its `relationship_name`, because `build_edge_types` folds
-    // spellings that normalize alike onto one DataPoint (SDK-778):
-    // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
-    // `edge_types`, so a raw-text key would miss for every edge that
-    // spelled the relation differently from the survivor and silently
-    // drop that triplet's `source_*` provenance. Routing both sides
-    // through `deterministic_id` makes the lookup follow the same
-    // collapse the writer applied.
-    let edge_type_by_id: std::collections::HashMap<Uuid, &EdgeType> =
-        edge_types.iter().map(|et| (et.base.id, et)).collect();
-    let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
-        .iter()
-        .map(|e| {
-            (
-                (
-                    e.source_entity_id,
-                    e.target_entity_id,
-                    e.relationship_name.as_str(),
-                ),
-                edge_retrieval_text(e),
-            )
-        })
-        .collect();
-
-    announce_index_write(vector_db, "Triplet", "text", triplets.len()).await?;
-    for triplet_window in triplets.chunks(window) {
-        let triplet_texts: Vec<_> = triplet_window.iter().map(|t| t.text.as_str()).collect();
-        let triplet_vectors = engine
-            .embed(&triplet_texts)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
-
-        let triplet_points: Vec<VectorPoint> = triplet_window
-            .iter()
-            .zip(triplet_vectors)
-            .map(|(triplet, vector)| {
-                let mut point = VectorPoint::new(triplet.id, vector)
-                    .with_metadata("type", json!("Triplet"))
-                    .with_metadata("field", json!("text"))
-                    // The embedded text itself, as Python's Triplet
-                    // payload carries it.
-                    .with_metadata("text", json!(triplet.text.clone()))
-                    .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
-                    .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                    .with_metadata("relationship", json!(triplet.relationship_name.clone()));
-
-                // Triplet special case (gap-05/08 §4.4): copy only the
-                // five `source_*` keys from the originating EdgeType's
-                // DataPoint, so Triplet's own flat fields are not
-                // overwritten.
-                let edge_type = edge_text_by_triple
-                    .get(&(
-                        triplet.source_entity_id,
-                        triplet.target_entity_id,
-                        triplet.relationship_name.as_str(),
-                    ))
-                    .filter(|text| !text.is_empty())
-                    .and_then(|text| edge_type_by_id.get(&EdgeType::deterministic_id(text)));
-                if let Some(edge_type) = edge_type {
-                    for (k, v) in edge_type.base.vector_metadata() {
-                        if matches!(
-                            k.as_str(),
-                            "source_pipeline"
-                                | "source_task"
-                                | "source_user"
-                                | "source_node_set"
-                                | "source_content_hash"
-                        ) {
-                            point = point.with_metadata(k, v);
-                        }
-                    }
-                }
-                point
-            })
-            .collect();
-
-        vector_db
-            .index_points("Triplet", "text", &triplet_points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-    }
-
-    Ok(())
 }
 
 /// Announce `points` points to `data_type`/`field_name`, the total the
@@ -6225,17 +6044,14 @@ async fn announce_index_write(
 async fn index_data_points_windowed(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
-    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
-    edges: &[GraphEdgePair],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
-    config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
     window: usize,
 ) -> Result<IndexedFieldsStats, CognifyError> {
@@ -6528,21 +6344,6 @@ async fn index_data_points_windowed(
 
         stats.record("TextSummary", "text", summaries.len());
         info!("Indexed {} summaries", summaries.len());
-    }
-
-    // 4. Index triplets (if enabled in config)
-    if config.embed_triplets && !edges.is_empty() && !entities.is_empty() {
-        use crate::triplet_creation::create_triplets_from_graph_with_timestamps;
-
-        let triplets = create_triplets_from_graph_with_timestamps(entities, timestamps, edges);
-
-        if !triplets.is_empty() {
-            index_triplet_points(&triplets, edges, edge_types, &engine, &vector_db, window).await?;
-            stats.triplet_count = triplets.len();
-            info!("Indexed {} triplets", triplets.len());
-        }
-    } else if config.embed_triplets {
-        info!("Triplet embedding enabled but no edges/entities to index");
     }
 
     // 5. Index EdgeType.relationship_name field
@@ -7889,47 +7690,6 @@ mod tests {
             survivors.iter().next().map(String::as_str),
             Some("IS_A"),
             "the survivor must be the lexicographically first spelling"
-        );
-    }
-
-    /// The triplet-provenance lookup in `generate_embeddings` must survive the
-    /// fold.
-    ///
-    /// That lookup maps a triplet's edge back to the `EdgeType` whose `source_*`
-    /// keys it inherits. It used to key on `EdgeType::relationship_name`, which
-    /// was safe only while *every* spelling had its own DataPoint. Once
-    /// `build_edge_types` collapses them, a raw-text key misses for every edge
-    /// that spelled the relation differently from the survivor, and the
-    /// triplet's provenance is silently dropped. Keying on the derived id
-    /// instead makes the lookup follow the same collapse — which is what this
-    /// pins.
-    #[test]
-    fn every_edge_text_resolves_to_its_folded_edge_type() {
-        let dataset = Uuid::new_v4();
-        let texts = ["Alice knows Bob", "alice knows bob", "ALICE KNOWS BOB"];
-        let edge_types = build_edge_types(texts.iter().map(|t| t.to_string()), dataset);
-        assert_eq!(edge_types.len(), 1, "all three spellings share one id");
-
-        let by_id: HashMap<Uuid, &EdgeType> =
-            edge_types.iter().map(|et| (et.base.id, et)).collect();
-        let by_text: HashMap<&str, &EdgeType> = edge_types
-            .iter()
-            .map(|et| (et.relationship_name.as_str(), et))
-            .collect();
-
-        for text in texts {
-            assert!(
-                by_id.contains_key(&EdgeType::deterministic_id(text)),
-                "id-keyed lookup must resolve {text:?} to the folded EdgeType"
-            );
-        }
-        // The old raw-text key resolves only the surviving spelling — the other
-        // two would silently lose their provenance.
-        assert_eq!(
-            texts.iter().filter(|t| by_text.contains_key(**t)).count(),
-            1,
-            "raw-text keying is expected to miss after the fold; that is why \
-             the lookup was moved onto the derived id"
         );
     }
 
@@ -9462,7 +9222,6 @@ mod tests {
         )];
 
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default(); // embed_triplets = false
 
         // 2 chunks + 2 entities + 1 summary = 5 texts.
         let embeddings = generate_embeddings(&chunks, &entities, &summaries, engine_dyn.clone())
@@ -9474,9 +9233,7 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
-            &[],
             &summaries,
-            &[],
             &[],
             &[],
             dataset_id,
@@ -9484,7 +9241,6 @@ mod tests {
             None,
             engine_dyn,
             vector,
-            &config,
             &embeddings,
         )
         .await
@@ -9645,27 +9401,23 @@ mod tests {
 
         let (chunks, entities, summaries, documents) = windowing_fixture();
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
         let run = |window: usize| {
-            let (chunks, entities, summaries, documents, config) =
-                (&chunks, &entities, &summaries, &documents, &config);
+            let (chunks, entities, summaries, documents) =
+                (&chunks, &entities, &summaries, &documents);
             async move {
                 let store = Arc::new(RecordingVectorDb::new());
                 let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
                 index_data_points_windowed(
                     chunks,
                     entities,
-                    &[],
                     summaries,
                     documents,
-                    &[],
                     &[],
                     dataset_id,
                     None,
                     None,
                     engine,
                     store.clone(),
-                    config,
                     &[],
                     window,
                 )
@@ -9742,17 +9494,14 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
-            &[],
             &summaries,
             &documents,
-            &[],
             &[],
             Uuid::new_v4(),
             None,
             None,
             Arc::new(MockEmbeddingEngine::new(8)),
             store.clone(),
-            &CognifyConfig::default(),
             &[],
         )
         .await
@@ -9794,7 +9543,6 @@ mod tests {
         let summary_id = summaries[0].base.id;
 
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
 
         let embeddings = generate_embeddings(&chunks, &[], &summaries, engine_dyn.clone())
             .await
@@ -9803,9 +9551,7 @@ mod tests {
         index_data_points(
             &chunks,
             &[],
-            &[],
             &summaries,
-            &[],
             &[],
             &[],
             dataset_id,
@@ -9813,7 +9559,6 @@ mod tests {
             None,
             engine_dyn,
             vector,
-            &config,
             &embeddings,
         )
         .await
@@ -9854,14 +9599,11 @@ mod tests {
             &[],
             &[],
             &[],
-            &[],
-            &[],
             Uuid::new_v4(),
             None,
             None,
             engine,
             vector,
-            &CognifyConfig::default(),
             &embeddings,
         )
         .await
@@ -9910,7 +9652,6 @@ mod tests {
 
         let overlap = chunks.len() + entities.len() + summaries.len();
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
 
         // Runs generate_embeddings + index_data_points on one counting engine
         // and returns (embed calls, texts embedded). `reuse = false` passes an
@@ -9921,7 +9662,6 @@ mod tests {
             entities: &[GraphNodePair],
             summaries: &[TextSummary],
             dataset_id: Uuid,
-            config: &CognifyConfig,
         ) -> (usize, usize) {
             let engine = Arc::new(MockEmbeddingEngine::new(8));
             let engine_dyn: Arc<dyn EmbeddingEngine> = engine.clone();
@@ -9934,9 +9674,7 @@ mod tests {
             index_data_points(
                 chunks,
                 entities,
-                &[],
                 summaries,
-                &[],
                 &[],
                 &[],
                 dataset_id,
@@ -9944,7 +9682,6 @@ mod tests {
                 None,
                 engine_dyn,
                 vector,
-                config,
                 precomputed,
             )
             .await
@@ -9953,9 +9690,9 @@ mod tests {
         }
 
         let (before_calls, before_texts) =
-            measure(false, &chunks, &entities, &summaries, dataset_id, &config).await;
+            measure(false, &chunks, &entities, &summaries, dataset_id).await;
         let (after_calls, after_texts) =
-            measure(true, &chunks, &entities, &summaries, dataset_id, &config).await;
+            measure(true, &chunks, &entities, &summaries, dataset_id).await;
 
         println!(
             "\n  Embedding work per cognify ({} chunks / {} entities / {} summaries):",
@@ -10090,7 +9827,6 @@ mod tests {
             Some(Uuid::new_v4()),
             &CognifyConfig {
                 retain_embeddings: true,
-                embed_triplets: true,
                 ..CognifyConfig::default()
             },
         )
@@ -10172,23 +9908,14 @@ mod tests {
                 && row.label.as_deref() == Some("contains")
         }));
 
-        let triplet_id = Triplet::new(
-            company_id,
-            person_id,
-            "employees".to_string(),
-            String::new(),
-        )
-        .id;
-        let triplet = vector_db
-            .get_payload("Triplet", "text", triplet_id)
-            .expect("dynamic relationship should be searchable as a triplet");
-        assert_eq!(
-            triplet.get("text"),
-            Some(&json!(format!("Acme-›{employees_text}-›Alice")))
-        );
+        // Python no longer writes `Triplet_text` (SDK-1115): no triplet
+        // collection, whatever the graph holds.
         assert!(
-            triplet.contains_key("source_task"),
-            "provenance copied from the EdgeType"
+            !vector_db
+                .has_collection("Triplet", "text")
+                .await
+                .expect("collection lookup"),
+            "cognify must not write a Triplet collection"
         );
     }
 

@@ -413,7 +413,6 @@ void cg_sdk_add(const CgSdk*        sdk,
  *                      overlap >= chunk size. Kept for API compat.)
  *   "summarization"  — boolean
  *   "temporalCognify"— boolean
- *   "triplet"        — boolean
  *   "graphSchema"    — a custom graph model's JSON Schema, as an object or a
  *                      JSON string (alias "graphModel"); {} means the
  *                      default KnowledgeGraph. Not with temporalCognify.

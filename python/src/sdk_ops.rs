@@ -134,7 +134,7 @@ impl PyCognee {
     ///
     /// Supported ``opts`` keys:
     /// ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-    /// ``temporalCognify``, ``triplet``, ``graphSchema`` (a custom graph
+    /// ``temporalCognify``, ``graphSchema`` (a custom graph
     /// model's JSON Schema, as a dict or a JSON string; alias
     /// ``graphModel``), ``graphSpec`` (the same model in the spec DSL, as a
     /// dict or a JSON string) and ``chunkAttachment`` (``"direct"`` or

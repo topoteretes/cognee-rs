@@ -138,10 +138,6 @@ pub struct IndexedFieldsStats {
     ///
     /// E.g. `"DocumentChunk_text" -> 42`, `"Entity_name" -> 7`.
     pub field_counts: HashMap<String, usize>,
-
-    /// Number of triplets indexed (triplets are not standard DataPoints,
-    /// so they are tracked separately).
-    pub triplet_count: usize,
 }
 
 impl IndexedFieldsStats {

@@ -40,8 +40,6 @@ pub mod temporal_extraction;
 pub mod temporal_hints;
 
 pub use temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
-/// Triplet creation module.
-pub mod triplet_creation;
 
 pub use config::{
     ChunkAttachment, ChunkStrategy, CognifyConfig, ConfigError, CustomChunker, ExtractionStrategy,
@@ -103,7 +101,4 @@ pub use tasks::{
     make_classify_documents_task, make_extract_chunks_task, make_extract_graph_and_summarize_task,
     make_extract_graph_and_summarize_task_with_rank, make_extract_graph_task,
     make_extract_temporal_events_task, make_summarize_text_task, summarize_text,
-};
-pub use triplet_creation::{
-    create_triplets_from_graph, create_triplets_from_graph_with_timestamps,
 };

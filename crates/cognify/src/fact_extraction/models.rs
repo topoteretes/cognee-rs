@@ -186,6 +186,9 @@ pub struct Edge {
     /// Type of relationship (snake_case, e.g., "works_at", "founded", "located_in")
     pub relationship_name: String,
 
+    // The doc comment below is part of the LLM's JSON schema (schemars), so the
+    // replay cassettes hash it: "+ Triplet" is stale since cognify stopped
+    // embedding triplets (SDK-1039), but rewording it means re-recording.
     /// Concrete one-sentence fact expressed by this edge, using endpoint names.
     /// Mirrors Python `KnowledgeGraph.Edge.description` (data_models.py:62-71).
     /// Becomes the `edge_text` graph-edge property, feeding EdgeType + Triplet

@@ -157,7 +157,6 @@ await c.cognify("my-dataset");
 await c.cognify("my-dataset", {
   chunkSize: 512,
   summarization: true,
-  triplet: true,       // also index triplet embeddings
 });
 
 // With a custom graph model (its JSON Schema, as an object or a JSON string)

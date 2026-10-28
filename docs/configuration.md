@@ -1193,7 +1193,7 @@ variant is reachable only in code, via
 `CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
 configuration surface because what it leaves behind is permanent. A run that
 wrote graph edges and then died before the vector stage leaves those edges in
-the graph with no `Triplet_text` and no `EdgeType_relationship_name` point. The
+the graph with no `EdgeType_relationship_name` point. The
 retry does not repair them: the completion marker is unset, so the item is
 processed again, but `retrieve_existing_edges` finds the orphaned edges and
 expansion skips every edge already in the graph — so no row and no vector is

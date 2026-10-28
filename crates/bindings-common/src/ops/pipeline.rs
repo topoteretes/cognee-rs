@@ -88,7 +88,6 @@ pub const COGNIFY_OPT_KEYS: &[&str] = &[
     "chunkOverlap",
     "summarization",
     "temporalCognify",
-    "triplet",
     "graphBackend",
     "extractor",
     "graphSchema",
@@ -190,9 +189,6 @@ pub fn apply_cognify_opts(
     }
     if let Some(b) = opt_bool(opts, "temporalCognify")? {
         cfg = cfg.with_temporal_cognify(b);
-    }
-    if let Some(b) = opt_bool(opts, "triplet")? {
-        cfg = cfg.with_triplet_embeddings(b);
     }
     let schema = match (
         opt_value(opts, "graphSchema"),

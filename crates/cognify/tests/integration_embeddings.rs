@@ -511,12 +511,12 @@ async fn test_entity_name_indexing() {
     println!("✓ Entity name-only indexing working correctly (Python-compatible)");
 }
 #[tokio::test]
-async fn test_triplet_embeddings_disabled_by_default() {
+async fn test_cognify_writes_no_triplet_collection() {
     if !test_utils::llm_env_available() {
         eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
         return;
     }
-    // Test that triplet embeddings are disabled by default (Phase 3 feature)
+    // Cognify no longer embeds triplets (Python removed them, SDK-1115).
 
     let llm = create_adapter_from_env();
 
@@ -530,7 +530,6 @@ async fn test_triplet_embeddings_disabled_by_default() {
     let graph_db = Arc::new(MockGraphDB::new());
     let vector_db = Arc::new(MockVectorDB::new());
 
-    // Create config with DEFAULT settings (triplet embeddings should be disabled)
     // These tests read the vectors themselves, which a run keeps only on
     // request (SDK-711).
     let config = CognifyConfig::default().with_retained_embeddings(true);
@@ -588,129 +587,12 @@ async fn test_triplet_embeddings_disabled_by_default() {
         }
     };
 
-    // Verify triplets were NOT indexed (default config has embed_triplets=false)
-    assert_eq!(
-        result.indexed_fields.triplet_count, 0,
-        "Triplets should NOT be indexed by default"
+    assert!(
+        !result.edges.is_empty(),
+        "the fixture must yield edges, or the assertion below proves nothing"
     );
-
-    // Verify Triplet collection was NOT created
     assert!(
         !vector_db.has_collection("Triplet", "text").await.unwrap(),
-        "Triplet collection should not exist when embed_triplets=false"
+        "cognify must not write a Triplet collection"
     );
-
-    println!("✓ Phase 3: Triplet embeddings correctly disabled by default");
-}
-
-#[tokio::test]
-async fn test_triplet_embeddings_enabled() {
-    if !test_utils::llm_env_available() {
-        eprintln!("skipping: live LLM credentials (OPENAI_URL/OPENAI_TOKEN) not set");
-        return;
-    }
-    // Test that triplet embeddings work when explicitly enabled (Phase 3 feature)
-
-    let llm = create_adapter_from_env();
-
-    let Some((embedding_engine, _embedding_dims)) =
-        cognee_test_utils::create_test_embedding_engine().await
-    else {
-        return;
-    };
-
-    let storage = Arc::new(MockStorage::new());
-    let graph_db = Arc::new(MockGraphDB::new());
-    let vector_db = Arc::new(MockVectorDB::new());
-
-    // Create config that ENABLES triplet embeddings (Phase 3)
-    let config = CognifyConfig::default().with_triplet_embeddings(true);
-
-    // Create test data with relationship-heavy content
-    let text = "Steve Jobs founded Apple Inc. in 1976. \
-                Apple Inc. is a technology company based in California. \
-                Tim Cook became CEO of Apple Inc. after Steve Jobs.";
-
-    let id = Uuid::new_v4();
-    let owner_id = Uuid::new_v4();
-    let location = format!("test-data-{id}");
-
-    let stored_location = storage
-        .store(text.as_bytes(), &location)
-        .await
-        .expect("Failed to store text");
-
-    let data_item = Data::builder(
-        id,
-        "company.txt",
-        stored_location,
-        "company.txt",
-        "txt",
-        "text/plain",
-        "test-hash",
-        owner_id,
-    )
-    .build();
-
-    // Run cognify pipeline
-    let dataset_id = Uuid::new_v4();
-    let result: CognifyResult = match cognify(
-        vec![data_item],
-        dataset_id,
-        None,
-        None,
-        None,
-        llm,
-        storage.clone(),
-        graph_db,
-        vector_db.clone(),
-        embedding_engine,
-        make_in_memory_db().await,
-        Arc::new(cognee_database::NoopPipelineRunRepository::new())
-            as Arc<dyn cognee_database::PipelineRunRepository>,
-        make_thread_pool(),
-        Arc::new(NoOpOntologyResolver::new()),
-        &config,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            eprintln!("⚠️  Skipping test: Cognify pipeline failed: {e}");
-            return;
-        }
-    };
-
-    println!("✓ Indexed fields stats:");
-    println!("  - Chunks: {}", result.indexed_fields.chunk_text_count());
-    println!(
-        "  - Entity names: {}",
-        result.indexed_fields.entity_name_count()
-    );
-    println!(
-        "  - Summaries: {}",
-        result.indexed_fields.summary_text_count()
-    );
-    println!("  - Triplets: {}", result.indexed_fields.triplet_count);
-
-    // Verify triplets WERE indexed (config has embed_triplets=true)
-    if !result.edges.is_empty() && !result.entities.is_empty() {
-        assert!(
-            result.indexed_fields.triplet_count > 0,
-            "Triplets should be indexed when embed_triplets=true and edges exist"
-        );
-
-        // Verify Triplet collection was created
-        assert!(
-            vector_db.has_collection("Triplet", "text").await.unwrap(),
-            "Triplet collection should exist when embed_triplets=true"
-        );
-
-        println!(
-            "✓ Phase 3: Triplet embeddings correctly enabled and indexed {} triplets",
-            result.indexed_fields.triplet_count
-        );
-    } else {
-        println!("⚠️  No edges extracted - cannot verify triplet indexing");
-    }
 }

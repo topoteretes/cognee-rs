@@ -179,9 +179,7 @@ async fn test_hard_mode_sweeps_orphan_entities() {
     let doc1_data_id = data_items_1[0].id;
 
     // ── Cognify both documents together ─────────────────────────────────────
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     let dataset =
         ops::datasets::get_dataset_by_name_in_tenant(&database, "orphan_sweep_ds", owner_id, None)
@@ -363,9 +361,7 @@ async fn test_soft_mode_preserves_orphan_entities() {
     let doc1_data_id = data_items_1[0].id;
 
     // ── Cognify both documents together ─────────────────────────────────────
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     let dataset =
         ops::datasets::get_dataset_by_name_in_tenant(&database, "soft_sweep_ds", owner_id, None)

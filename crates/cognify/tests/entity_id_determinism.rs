@@ -117,7 +117,6 @@ async fn test_entity_ids_are_stable_across_cognify_runs() {
     // determinism question askable at all.
     let config = CognifyConfig::default()
         .with_summarization(false)
-        .with_triplet_embeddings(false)
         .with_incremental_loading(false);
 
     let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)

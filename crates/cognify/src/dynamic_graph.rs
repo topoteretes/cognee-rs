@@ -121,7 +121,7 @@ pub struct DynamicDataPoint {
     /// instance holds it: an enum member prints `Role.lead_dev`, a boolean
     /// `True`, a `date-time` the `datetime` text, a list its `repr`, a scalar
     /// `$defs` value `root=...`. A schema default Pydantic left unvalidated
-    /// prints as the raw JSON value. Edge labels and triplet text use these.
+    /// prints as the raw JSON value. Edge labels use these.
     pub property_strs: BTreeMap<String, String>,
     /// Fields to vector-index, copied from the compiled model.
     pub index_fields: Vec<String>,

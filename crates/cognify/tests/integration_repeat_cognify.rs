@@ -415,9 +415,7 @@ impl Harness {
 
 /// Keep the graph focused and the run cheap — no summaries or triplet embeddings.
 fn base_config() -> CognifyConfig {
-    CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false)
+    CognifyConfig::default().with_summarization(false)
 }
 
 /// The regression test for this issue: a second wave of data added to an
