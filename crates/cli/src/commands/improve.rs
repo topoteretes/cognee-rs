@@ -106,6 +106,7 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
 
         let result = improve(ImproveParams {
             dataset_name: dataset_name.clone(),
+            dataset_id: None,
             session_ids,
             node_name,
             owner_id,
@@ -133,15 +134,18 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .await
         .map_err(|error| CliError::Runtime(format!("Improve failed: {error}")))?;
 
-        info!(
-            stages_run = ?result.stages_run,
-            feedback_processed = result.feedback_entries_processed,
-            feedback_applied = result.feedback_entries_applied,
-            sessions_persisted = result.sessions_persisted,
-            edges_synced = result.edges_synced,
-            triplets = result.memify_result.as_ref().map(|m| m.triplet_count).unwrap_or(0),
-            "improve completed"
-        );
+        for stage in &result.stages {
+            info!(
+                stage = %stage.stage,
+                status = stage.status.as_str(),
+                reason = stage.reason.as_deref().unwrap_or(""),
+                error = stage.error.as_deref().unwrap_or(""),
+                counts = ?stage.counts,
+                duration_ms = stage.duration_ms,
+                "improve stage"
+            );
+        }
+        info!(status = result.status().as_str(), "improve completed");
 
         Ok(())
     })

@@ -59,6 +59,17 @@ pub enum ApiError {
     #[error("Improve error: {0}")]
     Improve(String),
 
+    /// The fatal `persist_session_qa` stage errored and stopped the run.
+    /// Carries the partial result (the stages before the abort, the rest
+    /// skipped) as Python attaches it to the raised error. `budget_exhausted`
+    /// says the stage failed on an exhausted LLM budget, which the HTTP layer
+    /// answers with 402 instead of 409.
+    #[error("{}", improve_aborted_message(result, *budget_exhausted))]
+    ImproveAborted {
+        result: Box<crate::api::improve::ImproveResult>,
+        budget_exhausted: bool,
+    },
+
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
@@ -71,6 +82,20 @@ pub enum ApiError {
 
     #[error("Background task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+}
+
+/// Python's `_abort_run` message for a fatal stage that errored.
+fn improve_aborted_message(
+    result: &crate::api::improve::ImproveResult,
+    budget_exhausted: bool,
+) -> String {
+    let stage = crate::api::improve::StageKind::PersistSessionQa.name();
+    let error = result.error.as_deref().unwrap_or("unknown error");
+    if budget_exhausted {
+        format!("improve: fatal stage '{stage}' stopped on an exhausted LLM budget: {error}")
+    } else {
+        format!("improve: fatal stage '{stage}' errored: {error}")
+    }
 }
 
 impl From<cognee_delete::DeleteError> for ApiError {

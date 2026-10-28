@@ -837,8 +837,8 @@ pub struct ImproveArgs {
     #[arg(long = "session-id")]
     pub session_id: Vec<String>,
 
-    /// Restrict the enrichment (memify) pass to these graph node names.
-    /// Repeatable.
+    /// Deprecated and ignored: it scoped the removed triplet-enrichment
+    /// (memify) stage. Kept so existing invocations still parse. Repeatable.
     #[arg(long = "node-name")]
     pub node_name: Vec<String>,
 

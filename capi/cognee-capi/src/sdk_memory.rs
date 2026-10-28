@@ -206,9 +206,9 @@ pub unsafe extern "C" fn cg_sdk_memify(
 ///   `"feedbackAlpha"` (float, default 0.1), `"tenant"` (UUID string).
 ///
 /// On success `result_json` is a JSON object:
-///   `{"stagesRun":[…],"stages":[…],"memifyResult":…,"feedbackEntriesProcessed":N,
-///     "feedbackEntriesApplied":N,"sessionsPersisted":N,"edgesSynced":N}`
-///   where each `stages` entry is `{"stage":"…","status":"…","reason":…,
+///   `{"datasetId":…,"datasetName":"…","sessionIds":[…],"stages":[…],
+///     "background":bool,"finished":bool,"error":…,"status":"…"}`
+///   with one `stages` entry per improve stage, in registry order, each `{"stage":"…","status":"…","reason":…,
 ///   "error":…,"counts":{…},"durationMs":N}`.
 ///
 /// Async (D4, R1): callback fires on a tokio worker thread.

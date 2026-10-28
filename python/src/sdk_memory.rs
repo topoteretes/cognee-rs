@@ -208,7 +208,7 @@ impl PyCognee {
     /// .. code-block:: python
     ///
     ///     result = await cognee.improve({"datasetName": "my_ds"})
-    ///     print(result["stagesRun"])
+    ///     print(result["status"], [s["stage"] for s in result["stages"]])
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
@@ -216,8 +216,9 @@ impl PyCognee {
     /// ``tenant`` (UUID str).
     ///
     /// Returns a dict with camelCase keys:
-    /// ``stagesRun``, ``stages``, ``memifyResult``, ``feedbackEntriesProcessed``,
-    /// ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
+    /// ``datasetId``, ``datasetName``, ``sessionIds``, ``stages`` (one per
+    /// improve stage, in order), ``background``, ``finished``, ``error``,
+    /// ``status``.
     fn improve<'py>(
         &self,
         py: Python<'py>,

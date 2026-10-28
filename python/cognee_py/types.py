@@ -347,14 +347,15 @@ class ImproveResult(TypedDict):
     The native method returns the same data with camelCase keys.
     """
 
-    stages_run: list[str]
-    # Per-stage records; only ``build_truth_subspace`` reports one so far.
+    dataset_id: str | None
+    dataset_name: str
+    session_ids: list[str]
+    # One record per improve stage, in registry order.
     stages: list[ImproveStageResult]
-    memify_result: MemifyResult | None
-    feedback_entries_processed: int
-    feedback_entries_applied: int
-    sessions_persisted: int
-    edges_synced: int
+    background: bool
+    finished: bool
+    error: str | None
+    status: str  # "completed" | "errored" | "skipped" | "running"
 
 
 __all__ = [

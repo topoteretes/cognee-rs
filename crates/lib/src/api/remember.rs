@@ -584,6 +584,7 @@ async fn remember_session(
     if self_improvement {
         let improve_result = improve(crate::api::improve::ImproveParams {
             dataset_name: dataset_name.to_string(),
+            dataset_id: None,
             session_ids: Some(vec![session_id.to_string()]),
             node_name: None,
             owner_id,
@@ -614,10 +615,14 @@ async fn remember_session(
         })
         .await;
 
+        // A fatal-stage abort (`ApiError::ImproveAborted`) is an error like
+        // any other here: session-improve failures are non-fatal to remember.
         match improve_result {
-            Ok(_) => {
+            Ok(result) => {
                 info!(
                     session_id = session_id,
+                    status = result.status().as_str(),
+                    stages = %result.stage_summary(),
                     "remember: session bridged to permanent graph"
                 );
             }

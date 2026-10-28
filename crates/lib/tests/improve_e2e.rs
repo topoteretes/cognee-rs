@@ -3,20 +3,23 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! End-to-end tests for `improve()` orchestrator.
+//! End-to-end tests for the `improve()` orchestrator.
 //!
-//! These tests exercise the stage-gate logic (which stages run based on the
-//! presence of `session_ids` and available backends) using mock
-//! storage/graph/vector/embedding/LLM backends. They do NOT exercise the full
-//! LLM-driven cognify pipeline — that is covered by the per-stage integration
-//! tests in `cognee-cognify`.
+//! Each run reports one `StageResult` per registry stage, in Python's order;
+//! these tests assert the per-stage status/reason lists for the gate paths
+//! (sessions, opt-ins, backend capabilities, a missing LLM) and the failure
+//! rules (fatal abort, budget exhaustion), using mock
+//! storage/graph/vector/embedding/LLM backends.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee::api::ApiError;
 use cognee::api::improve::{
-    ImproveParams, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED,
-    StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+    DEFAULT_STAGES, ImproveParams, ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE,
+    REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED, REASON_NO_LLM_CONFIGURED,
+    REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
+    REASON_PERSONALIZATION_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
@@ -47,6 +50,8 @@ use uuid::Uuid;
 struct SchemaDispatchLlm {
     /// Statement the writer emits when it accepts (must be non-empty to publish).
     accepted_statement: String,
+    /// The curator answers HTTP 402 (an exhausted LLM budget) instead.
+    curator_out_of_budget: bool,
 }
 
 #[async_trait]
@@ -79,6 +84,10 @@ impl cognee_llm::Llm for SchemaDispatchLlm {
                 "entities": ["TerraScout"],
                 "why_learned": "learned while asking how indexing works",
             }))
+        } else if schema.contains("working_statement") && self.curator_out_of_budget {
+            Err(LlmError::PaymentRequired(
+                "credit balance too low".to_string(),
+            ))
         } else if schema.contains("working_statement") {
             // Curator (`CuratorBatchOutput`) → one proposed lesson.
             Ok(serde_json::json!({
@@ -100,6 +109,8 @@ impl cognee_llm::Llm for SchemaDispatchLlm {
     }
 }
 
+// A single-session run takes a process-wide improve lock keyed by the session
+// id, so every test uses its own session ids.
 struct Harness {
     _temp: TempDir,
     _sess_dir: TempDir,
@@ -161,18 +172,21 @@ async fn make_harness() -> Harness {
     }
 }
 
-#[tokio::test]
-async fn improve_without_sessions_runs_only_memify() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_memify".to_string(),
-        session_ids: None,
+/// The parameters of a run against the harness: every backend present, no
+/// opt-ins. Tests override what they exercise.
+fn params<'a>(
+    h: &'a Harness,
+    config: &'a CognifyConfig,
+    dataset_name: &str,
+    session_ids: Option<Vec<String>>,
+    llm: Arc<dyn cognee_llm::Llm>,
+) -> ImproveParams<'a> {
+    ImproveParams {
+        dataset_name: dataset_name.to_string(),
+        dataset_id: None,
+        session_ids,
         node_name: None,
-        owner_id: owner,
+        owner_id: Uuid::new_v4(),
         tenant_id: None,
         feedback_alpha: 0.1,
         llm,
@@ -186,185 +200,301 @@ async fn improve_without_sessions_runs_only_memify() {
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
+        cognify_config: config,
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
-    // The session-fed truth stage reports the orchestrator's gate reason.
-    let stage = truth_stage(&r);
-    assert_eq!(stage.status, StageStatus::Skipped);
-    assert_eq!(stage.reason.as_deref(), Some(REASON_NO_SESSION_IDS));
-    assert!(r.memify_result.is_some());
+    }
 }
 
-#[tokio::test]
-async fn improve_skips_stage1_when_session_backends_missing() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    // Provide session_ids but no session_store/manager — stages 1, 2, 4
-    // should all be skipped (with warnings), Stage 3 still runs.
-    // Stage 2b (persist_trace_steps) is gated on `has_sessions` so its name IS
-    // pushed to stages_run even when it skips/no-ops due to missing backends,
-    // matching Python's convention of recording every attempted stage.
-    let r = improve(ImproveParams {
-        dataset_name: "ds_nosess".to_string(),
-        session_ids: Some(vec!["s1".to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: None,
-        session_manager: None,
-        add_pipeline: None,
-        checkpoint_store: None,
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(
-        r.stages_run,
-        vec!["persist_trace_steps".to_string(), "memify".to_string()],
-        "with sessions, persist_trace_steps is always recorded even when backends are missing"
-    );
+fn mock_llm() -> Arc<dyn cognee_llm::Llm> {
+    Arc::new(MockLlm::empty())
 }
 
-/// Stage 2c is default-off in the "no lesson" sense: a session with no Q&A
-/// gates at `NoQaEntries`, so `distill_sessions` is NOT pushed onto
-/// `stages_run` (Python parity: pushed only when a lesson is published). This
-/// proves the zero-change guarantee — providing a session that yields nothing
-/// does not add the stage.
-#[tokio::test]
-async fn improve_omits_distill_sessions_when_no_qa() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    // Session id with no Q&A entries → persist skips, distill gates NoQaEntries.
-    let r = improve(ImproveParams {
-        dataset_name: "ds_noqa".to_string(),
-        session_ids: Some(vec!["empty_session".to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
+fn schema_llm(curator_out_of_budget: bool) -> Arc<dyn cognee_llm::Llm> {
+    Arc::new(SchemaDispatchLlm {
+        accepted_statement: "TerraScout indexes data nightly.".to_string(),
+        curator_out_of_budget,
     })
-    .await
-    .unwrap();
+}
 
+/// `(stage, status, reason)` per recorded stage.
+fn statuses(r: &ImproveResult) -> Vec<(&str, StageStatus, Option<&str>)> {
+    r.stages
+        .iter()
+        .map(|s| (s.stage.as_str(), s.status, s.reason.as_deref()))
+        .collect()
+}
+
+fn stage<'r>(r: &'r ImproveResult, name: &str) -> &'r StageResult {
+    r.stage(name)
+        .unwrap_or_else(|| panic!("no {name} stage in {:?}", r.stages))
+}
+
+async fn seed_qa(h: &Harness, owner: Uuid, session_id: &str) {
+    h.session_store
+        .create_qa_entry(
+            session_id,
+            Some(&owner.to_string()),
+            "How does TerraScout index data?",
+            "TerraScout indexes nightly.",
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+async fn create_dataset(h: &Harness, name: &str, owner: Uuid) -> Uuid {
+    let id = Uuid::new_v4();
+    IngestDb::create_dataset(&*h.db, Dataset::new(name.to_string(), owner, None, id))
+        .await
+        .unwrap();
+    id
+}
+
+/// Without session ids every session-fed stage is skipped with
+/// `no_session_ids` and, with nothing opted in, the two graph stages with
+/// `opt_in_disabled`: the run is `skipped` (Python `test_improve_router`
+/// all-skipped case).
+#[tokio::test]
+async fn improve_without_sessions_skips_every_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let r = improve(params(&h, &config, "ds_none", None, mock_llm()))
+        .await
+        .unwrap();
+
+    let expected: Vec<(&str, StageStatus, Option<&str>)> = DEFAULT_STAGES
+        .iter()
+        .map(|s| {
+            let reason = if s.needs_sessions() {
+                REASON_NO_SESSION_IDS
+            } else {
+                REASON_OPT_IN_DISABLED
+            };
+            (s.name(), StageStatus::Skipped, Some(reason))
+        })
+        .collect();
+    assert_eq!(statuses(&r), expected);
     assert!(
-        !r.stages_run.contains(&"distill_sessions".to_string()),
-        "distill_sessions must be absent when the session has no Q&A; got {:?}",
-        r.stages_run
+        r.stages
+            .iter()
+            .all(|s| s.duration_ms == 0 && s.run.is_none())
     );
-    assert_eq!(r.sessions_distilled, 0);
-    assert_eq!(r.lessons_published, 0);
-    // The always-run stages are still present (proving the pipeline itself ran).
-    assert!(r.stages_run.contains(&"persist_trace_steps".to_string()));
-    assert!(r.stages_run.contains(&"memify".to_string()));
+    assert_eq!(r.status(), ImproveStatus::Skipped);
+    assert!(r.finished && !r.background);
+    assert_eq!(r.dataset_name, "ds_none");
+    assert!(r.session_ids.is_empty());
+    assert_eq!(r.dataset_id, None, "no stage created the dataset");
 }
 
-/// Stage 2d (`build_truth_subspace`) is opt-in. With sessions present, the flag
-/// set, and the dataset resolvable, the stage runs and records its name — the
-/// true branch that no other test in this file exercises. `build_truth_subspace`
-/// is infallible and runs even against an empty graph, so an empty session +
-/// `MockLlm::empty` is sufficient to drive it. Mirrors Python's
-/// `build_truth_subspace` opt-in gate (improve.py:207-221).
+/// With a session that has no Q&A, every session stage reports what it did:
+/// nothing to persist, no trace steps, no lessons. The not-yet-ported stages
+/// are skipped with their reasons.
+#[tokio::test]
+async fn improve_with_an_empty_session_reports_every_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let r = improve(params(
+        &h,
+        &config,
+        "ds_empty_session",
+        Some(vec!["empty_session".to_string()]),
+        mock_llm(),
+    ))
+    .await
+    .unwrap();
+
+    use StageStatus::*;
+    assert_eq!(
+        statuses(&r),
+        vec![
+            ("feedback_weights", Completed, None),
+            ("persist_session_qa", Completed, None),
+            (
+                "persist_agent_traces",
+                AlreadyCompleted,
+                Some(REASON_NO_NEW_TRACE_STEPS)
+            ),
+            ("extract_agent_context", Skipped, Some(REASON_NOT_PORTED)),
+            ("distill_sessions", Completed, None),
+            (
+                "update_user_preferences",
+                Skipped,
+                Some(REASON_PERSONALIZATION_DISABLED)
+            ),
+            (
+                "build_truth_subspace",
+                Skipped,
+                Some(REASON_OPT_IN_DISABLED)
+            ),
+            ("review_conflicts", Skipped, Some(REASON_OPT_IN_DISABLED)),
+            (
+                "global_context_index",
+                Skipped,
+                Some(REASON_OPT_IN_DISABLED)
+            ),
+        ]
+    );
+    assert_eq!(r.status(), ImproveStatus::Completed);
+    assert_eq!(r.session_ids, ["empty_session"]);
+
+    let counts = |name: &str| stage(&r, name).counts.clone();
+    assert_eq!(counts("feedback_weights").get("sessions"), Some(&1));
+    assert_eq!(
+        counts("feedback_weights").get("entries_processed"),
+        Some(&0)
+    );
+    assert_eq!(counts("persist_session_qa").get("sessions"), Some(&1));
+    assert_eq!(
+        counts("persist_session_qa").get("sessions_persisted"),
+        Some(&0)
+    );
+    assert_eq!(counts("distill_sessions").get("documents"), Some(&0));
+    assert_eq!(counts("distill_sessions").get("sessions_failed"), Some(&0));
+}
+
+/// Empty session ids count as none (Python filters them out).
+#[tokio::test]
+async fn improve_drops_empty_session_ids() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let r = improve(params(
+        &h,
+        &config,
+        "ds_blank_ids",
+        Some(vec![String::new()]),
+        mock_llm(),
+    ))
+    .await
+    .unwrap();
+    assert!(r.session_ids.is_empty());
+    assert_eq!(
+        stage(&r, "feedback_weights").reason.as_deref(),
+        Some(REASON_NO_SESSION_IDS)
+    );
+}
+
+/// A backend that does not store feedback weights skips the stage with
+/// `backend_unsupported` (Python `FeedbackWeightsStage.gate`).
+#[tokio::test]
+async fn improve_skips_feedback_weights_on_an_unsupported_backend() {
+    let h = make_harness().await;
+    h.graph_db.set_supports_feedback_weights(false);
+    let config = CognifyConfig::default();
+    let r = improve(params(
+        &h,
+        &config,
+        "ds_fw_unsupported",
+        Some(vec!["fw_unsupported_session".to_string()]),
+        mock_llm(),
+    ))
+    .await
+    .unwrap();
+    let fw = stage(&r, "feedback_weights");
+    assert_eq!(fw.status, StageStatus::Skipped);
+    assert_eq!(fw.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
+    assert_eq!(fw.duration_ms, 0);
+}
+
+/// Without a usable LLM the stages that draft text with one are skipped with
+/// `no_llm_configured`; the session bridging itself still runs.
+#[tokio::test]
+async fn improve_without_an_llm_skips_the_llm_stages() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(cognee_llm::UnconfiguredLlm::new("openai"));
+    let r = improve(params(
+        &h,
+        &config,
+        "ds_keyless",
+        Some(vec!["keyless_session".to_string()]),
+        llm,
+    ))
+    .await
+    .unwrap();
+    for name in ["extract_agent_context", "distill_sessions"] {
+        let s = stage(&r, name);
+        assert_eq!(s.status, StageStatus::Skipped, "{name}");
+        assert_eq!(
+            s.reason.as_deref(),
+            Some(REASON_NO_LLM_CONFIGURED),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        stage(&r, "persist_session_qa").status,
+        StageStatus::Completed
+    );
+}
+
+/// The fatal stage stops the run: missing session backends error
+/// `feedback_weights` (non-fatal, recorded) and then `persist_session_qa`,
+/// which aborts with the partial result and the rest skipped
+/// `aborted_by_fatal_stage` (Python `test_fatal_stage_stops_run_and_raises_with_partial_result`).
+#[tokio::test]
+async fn improve_aborts_when_the_fatal_stage_errors() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let mut p = params(
+        &h,
+        &config,
+        "ds_nosess",
+        Some(vec!["aborted_session".to_string()]),
+        mock_llm(),
+    );
+    p.session_store = None;
+    p.session_manager = None;
+    p.add_pipeline = None;
+
+    let error = improve(p).await.unwrap_err();
+    let ApiError::ImproveAborted {
+        result,
+        budget_exhausted,
+    } = &error
+    else {
+        panic!("expected ImproveAborted, got {error:?}");
+    };
+    assert!(!budget_exhausted);
+    assert!(
+        error
+            .to_string()
+            .starts_with("improve: fatal stage 'persist_session_qa' errored: "),
+        "{error}"
+    );
+    let recorded = statuses(result);
+    assert_eq!(recorded.len(), DEFAULT_STAGES.len());
+    assert_eq!(recorded[0].1, StageStatus::Errored);
+    assert_eq!(recorded[1].1, StageStatus::Errored);
+    for (_, status, reason) in &recorded[2..] {
+        assert_eq!(*status, StageStatus::Skipped);
+        assert_eq!(*reason, Some(REASON_ABORTED_BY_FATAL_STAGE));
+    }
+    assert_eq!(result.error, result.stages[1].error);
+    assert_eq!(result.status(), ImproveStatus::Errored);
+}
+
+/// Stage 7 (`build_truth_subspace`) is opt-in. With sessions present, the flag
+/// set, and the dataset resolvable, the stage runs: an empty session distils
+/// no learnings, so the build completes with nothing built.
 #[tokio::test]
 async fn improve_records_build_truth_subspace_when_opted_in() {
     let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
-
-    // Stage 2d resolves the dataset by name (Ok(Some(ds)) is required to run);
-    // create it directly so the only variable under test is the opt-in flag.
-    cognee_database::ops::datasets::create_dataset(
-        h.db.as_ref(),
-        Dataset::new("ds_truth".to_string(), owner, None, Uuid::new_v4()),
-    )
-    .await
-    .unwrap();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_truth".to_string(),
-        session_ids: Some(vec!["truth_optin_session".to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: true,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    assert!(
-        r.stages_run.contains(&"build_truth_subspace".to_string()),
-        "build_truth_subspace must be recorded when opted in with a resolvable dataset; got {:?}",
-        r.stages_run
+    let mut p = params(
+        &h,
+        &config,
+        "ds_truth",
+        Some(vec!["truth_optin_session".to_string()]),
+        mock_llm(),
     );
-    // The stage record mirrors Python's `BuildTruthSubspaceStage`: an empty
-    // session distils no learnings, so the build completes with nothing built.
+    create_dataset(&h, "ds_truth", p.owner_id).await;
+    p.build_truth_subspace = true;
+    let r = improve(p).await.unwrap();
+
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Completed, "{stage:?}");
     assert_eq!(stage.reason, None);
@@ -374,7 +504,7 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
 }
 
 /// The one truth-stage record an `improve()` run reports.
-fn truth_stage(r: &cognee::api::ImproveResult) -> &StageResult {
+fn truth_stage(r: &ImproveResult) -> &StageResult {
     let mut stages = r.stages.iter().filter(|s| s.stage == TRUTH_SUBSPACE_STAGE);
     let stage = stages.next().expect("a build_truth_subspace stage record");
     assert!(stages.next().is_none(), "exactly one truth stage record");
@@ -382,381 +512,164 @@ fn truth_stage(r: &cognee::api::ImproveResult) -> &StageResult {
 }
 
 /// With the flag set but a graph backend that cannot store truth state, the
-/// stage is skipped with `backend_unsupported` before the build runs — Python's
-/// `BuildTruthSubspaceStage.gate` (`stages.py:484-489`).
+/// stage is skipped with `backend_unsupported` by its gate, before the build
+/// runs — Python's `BuildTruthSubspaceStage.gate`.
 #[tokio::test]
 async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
     let h = make_harness().await;
     h.graph_db.set_supports_truth_state(false);
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
-
-    cognee_database::ops::datasets::create_dataset(
-        h.db.as_ref(),
-        Dataset::new(
-            "ds_truth_unsupported".to_string(),
-            owner,
-            None,
-            Uuid::new_v4(),
-        ),
-    )
-    .await
-    .unwrap();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_truth_unsupported".to_string(),
-        session_ids: Some(vec!["truth_unsupported_session".to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: true,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
+    let mut p = params(
+        &h,
+        &config,
+        "ds_truth_unsupported",
+        Some(vec!["truth_unsupported_session".to_string()]),
+        mock_llm(),
+    );
+    create_dataset(&h, "ds_truth_unsupported", p.owner_id).await;
+    p.build_truth_subspace = true;
+    let r = improve(p).await.unwrap();
 
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Skipped);
     assert_eq!(stage.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
-    assert!(
-        !r.stages_run.contains(&TRUTH_SUBSPACE_STAGE.to_string()),
-        "a skipped build never ran; got {:?}",
-        r.stages_run
-    );
+    assert_eq!(stage.duration_ms, 0, "a gated stage never ran");
 }
 
-/// Companion to [`improve_records_build_truth_subspace_when_opted_in`]: with the
-/// flag `false` the stage is inert and its name is never pushed, even though the
-/// dataset exists and sessions are present. Proves the opt-in gate is the only
-/// thing that enables Stage 2d.
-#[tokio::test]
-async fn improve_omits_build_truth_subspace_when_disabled() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    cognee_database::ops::datasets::create_dataset(
-        h.db.as_ref(),
-        Dataset::new("ds_truth_off".to_string(), owner, None, Uuid::new_v4()),
-    )
-    .await
-    .unwrap();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_truth_off".to_string(),
-        session_ids: Some(vec!["truth_optout_session".to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    assert!(
-        !r.stages_run.contains(&"build_truth_subspace".to_string()),
-        "build_truth_subspace must be absent when the flag is false; got {:?}",
-        r.stages_run
-    );
-    let stage = truth_stage(&r);
-    assert_eq!(stage.status, StageStatus::Skipped);
-    assert_eq!(stage.reason.as_deref(), Some(REASON_OPT_IN_DISABLED));
-}
-
-/// Stage 3b (`global_context_index`) is opt-in. With the flag set, not running
-/// in background, a `session_manager` present, and >= 1 graph edge, the stage
-/// formats the edges into the session graph-context and records its name.
-/// Mirrors Python `test_improve_global_context_index_opt_in`
-/// (test_improve_global_context_index.py:56-92).
+/// Stage 9 (`global_context_index`) is opt-in and needs no sessions. With
+/// >= 1 graph edge, the stage formats the edges into the global session
+/// graph-context.
 #[tokio::test]
 async fn improve_records_global_context_index_when_opted_in() {
     let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
-
-    // Seed exactly one edge so `get_graph_data()` returns a non-empty edge set
-    // and the stage takes its store-and-record branch.
     h.graph_db
         .add_edge("node_a", "node_b", "related_to", None)
         .await
         .unwrap();
+    let mut p = params(&h, &config, "ds_gcidx", None, mock_llm());
+    let owner = p.owner_id;
+    p.build_global_context_index = true;
+    let r = improve(p).await.unwrap();
 
-    let r = improve(ImproveParams {
-        dataset_name: "ds_gcidx".to_string(),
-        session_ids: None,
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: true,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
+    let gci = stage(&r, "global_context_index");
+    assert_eq!(gci.status, StageStatus::Completed);
+    assert_eq!(r.status(), ImproveStatus::Completed);
 
-    assert!(
-        r.stages_run.contains(&"global_context_index".to_string()),
-        "global_context_index must be recorded when opted in with >= 1 edge; got {:?}",
-        r.stages_run
-    );
-
-    // The formatted edge line is stored under the synthetic global-context key so
-    // any session can read it; assert the exact "src → rel → tgt" rendering.
     let stored = h
         .session_manager
         .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
         .await
         .unwrap();
+    assert_eq!(stored, Some("node_a → related_to → node_b".to_string()));
+}
+
+/// A background run (dispatched by its host) runs the same stages, the
+/// global context index included, and says it was a background run.
+#[tokio::test]
+async fn improve_runs_global_context_index_in_background() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    h.graph_db
+        .add_edge("node_a", "node_b", "related_to", None)
+        .await
+        .unwrap();
+    let mut p = params(&h, &config, "ds_gcidx_bg", None, mock_llm());
+    p.build_global_context_index = true;
+    p.run_in_background = true;
+    let r = improve(p).await.unwrap();
+
+    assert!(r.background && r.finished);
     assert_eq!(
-        stored,
-        Some("node_a → related_to → node_b".to_string()),
-        "the seeded edge must be formatted into the stored global context"
+        stage(&r, "global_context_index").status,
+        StageStatus::Completed
     );
 }
 
-/// Companion: in background mode Stage 3b is skipped even with the flag set and
-/// edges present, because ordered background pipeline chaining is unsupported.
-/// The stage name is NOT recorded and no global context is stored. Mirrors
-/// Python `test_improve_skips_global_context_index_in_background`
-/// (test_improve_global_context_index.py:95-121).
+/// `distill_sessions` publishes a lesson through the full curate → accept →
+/// publish → cognify path, and reports it in its counts.
 #[tokio::test]
-async fn improve_skips_global_context_index_in_background() {
+async fn improve_reports_distilled_lessons() {
     let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
-
-    h.graph_db
-        .add_edge("node_a", "node_b", "related_to", None)
-        .await
-        .unwrap();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_gcidx_bg".to_string(),
-        session_ids: None,
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: true,
-        build_truth_subspace: false,
-        run_in_background: true,
-    })
-    .await
-    .unwrap();
-
-    assert!(
-        !r.stages_run.contains(&"global_context_index".to_string()),
-        "global_context_index must be skipped in background mode; got {:?}",
-        r.stages_run
-    );
-    let stored = h
-        .session_manager
-        .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
-        .await
-        .unwrap();
-    assert!(
-        stored.is_none(),
-        "no global context should be stored in background mode; got {stored:?}"
-    );
-}
-
-/// Stage 2c (`distill_sessions`) is recorded by the orchestrator ONLY when a
-/// session actually publishes >= 1 lesson (improve.py:200-201 / distill.rs
-/// conditional push). Seed a session with Q&A and drive the full curate →
-/// accept → publish → cognify path via the schema-dispatch LLM so a lesson is
-/// published; then run `improve()` (not the standalone distill fn) and assert
-/// the orchestrator records the stage AND aggregates the counts.
-#[tokio::test]
-async fn improve_records_distill_sessions_when_lessons_published() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let user_id = owner.to_string();
     let session_id = "distill_optin_session";
-    let config = CognifyConfig::default();
-
-    // Seed one Q&A turn — Gate 1 (`NoQaEntries`) needs non-empty content.
-    h.session_store
-        .create_qa_entry(
-            session_id,
-            Some(&user_id),
-            "How does TerraScout index data?",
-            "TerraScout indexes nightly.",
-            None,
-        )
-        .await
-        .unwrap();
-
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(SchemaDispatchLlm {
-        accepted_statement: "TerraScout indexes data nightly.".to_string(),
-    });
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_distill".to_string(),
-        session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    assert!(
-        r.stages_run.contains(&"distill_sessions".to_string()),
-        "distill_sessions must be recorded when a lesson is published; got {:?}",
-        r.stages_run
+    let p = params(
+        &h,
+        &config,
+        "ds_distill",
+        Some(vec![session_id.to_string()]),
+        schema_llm(false),
     );
+    seed_qa(&h, p.owner_id, session_id).await;
+    let r = improve(p).await.unwrap();
+
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
+    assert!(distill.counts["documents"] > 0, "{distill:?}");
+    assert_eq!(distill.counts.get("sessions_completed"), Some(&1));
     assert!(
-        r.sessions_distilled > 0,
-        "at least one session must be distilled; got {}",
-        r.sessions_distilled
-    );
-    assert!(
-        r.lessons_published > 0,
-        "at least one lesson must be published; got {}",
-        r.lessons_published
+        r.dataset_id.is_some(),
+        "persist_session_qa created the dataset"
     );
 }
 
-/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the memify
-/// stage reads the dataset's own graph: with routing engines that fail
-/// outside a dataset scope, it still runs.
+/// An exhausted LLM budget in a non-fatal stage ends the run there: the
+/// stage is errored and every later stage is skipped `budget_exhausted`,
+/// without an error (Python `test_improve_budget_exhaustion.py`).
 #[tokio::test]
-async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
+async fn improve_stops_on_an_exhausted_llm_budget() {
     let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let dataset_id = Uuid::new_v4();
-    IngestDb::create_dataset(
-        &*h.db,
-        Dataset::new("ds_per_dataset".to_string(), owner, None, dataset_id),
-    )
-    .await
-    .unwrap();
-    let stores = cognee_test_utils::PerDatasetMocks::new();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
+    let session_id = "budget_session";
+    let p = params(
+        &h,
+        &config,
+        "ds_budget",
+        Some(vec![session_id.to_string()]),
+        schema_llm(true),
+    );
+    seed_qa(&h, p.owner_id, session_id).await;
+    let r = improve(p).await.unwrap();
 
-    let r = improve(ImproveParams {
-        dataset_name: "ds_per_dataset".to_string(),
-        session_ids: None,
-        node_name: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: stores.graph_db(),
-        vector_db: stores.vector_db(),
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Errored, "{distill:?}");
+    assert_eq!(distill.counts.get("sessions_failed"), Some(&1));
+    let after: Vec<_> = statuses(&r).into_iter().skip(5).collect();
+    assert_eq!(after.len(), 4);
+    for (name, status, reason) in after {
+        assert_eq!(status, StageStatus::Skipped, "{name}");
+        assert_eq!(reason, Some(REASON_BUDGET_EXHAUSTED), "{name}");
+    }
+    assert_eq!(r.error, None);
+    assert_eq!(r.status(), ImproveStatus::Errored);
+}
 
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the graph
+/// stages read the dataset's own graph: with routing engines that fail
+/// outside a dataset scope, the global context index still runs.
+#[tokio::test]
+async fn improve_runs_the_graph_stages_in_the_dataset_under_per_dataset_storage() {
+    let h = make_harness().await;
+    let stores = cognee_test_utils::PerDatasetMocks::new();
+    let config = CognifyConfig::default();
+    let mut p = params(&h, &config, "ds_per_dataset", None, mock_llm());
+    let dataset_id = create_dataset(&h, "ds_per_dataset", p.owner_id).await;
+    p.graph_db = stores.graph_db();
+    p.vector_db = stores.vector_db();
+    p.build_global_context_index = true;
+    let r = improve(p).await.unwrap();
+
+    assert_eq!(
+        stage(&r, "global_context_index").status,
+        StageStatus::Completed
+    );
+    assert_eq!(r.dataset_id, Some(dataset_id));
     assert_eq!(
         stores.graph_datasets(),
         vec![dataset_id],
-        "memify read the dataset's graph"
+        "the stages read the dataset's graph"
     );
 }

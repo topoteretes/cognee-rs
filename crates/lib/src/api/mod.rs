@@ -9,7 +9,7 @@
 //! - [`prune`] -- Selective backend cleanup
 //! - [`recall`] -- Smart search with session routing
 //! - [`remember`] -- One-call add + cognify + optional improve
-//! - [`improve`] -- Bidirectional session-graph bridge
+//! - [`improve`] -- Staged self-improvement orchestrator
 
 pub mod datasets;
 pub mod error;
@@ -27,8 +27,10 @@ pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{
-    ImproveParams, ImproveResult, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS,
-    REASON_OPT_IN_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+    DEFAULT_STAGES, ImproveParams, ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE,
+    REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG,
+    REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED, StageKind, StageResult, StageStatus,
+    TRUTH_SUBSPACE_STAGE, improve,
 };
 pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};

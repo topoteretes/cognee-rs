@@ -151,8 +151,8 @@ pub fn cognee_memify(mut cx: FunctionContext) -> JsResult<JsPromise> {
 ///
 /// opts: `{ datasetName, sessionIds?, nodeName?, feedbackAlpha?, tenant? }`
 ///
-/// `ImproveResult` does NOT derive `Serialize` → hand-built JSON (done in the
-/// shared `run_improve` in bindings-common).
+/// The camelCase result JSON is built by the shared `run_improve` in
+/// bindings-common (`improve_result_json`).
 pub fn cognee_improve(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);

@@ -872,9 +872,9 @@ class Cognee:
         *opts* must contain ``"datasetName"`` (camelCase) or
         ``"dataset_name"`` (normalised).
 
-        Returns a dict with camelCase keys: ``stagesRun``, ``stages``,
-        ``memifyResult``, ``feedbackEntriesProcessed``,
-        ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
+        Returns a dict with camelCase keys: ``datasetId``, ``datasetName``,
+        ``sessionIds``, ``stages`` (one per improve stage, in order),
+        ``background``, ``finished``, ``error``, ``status``.
         """
         ...
 

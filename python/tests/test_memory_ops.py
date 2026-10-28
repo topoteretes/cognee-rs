@@ -237,7 +237,8 @@ async def test_improve_result_keys(tmp_path):
     await c.add({"type": "text", "text": "Fact for improve."}, "improve_ds")
     result = await c.improve({"datasetName": "improve_ds"})
     assert isinstance(result, dict)
-    for key in ("stagesRun", "stages", "memifyResult", "feedbackEntriesProcessed",
-                "feedbackEntriesApplied", "sessionsPersisted", "edgesSynced"):
+    for key in ("datasetId", "datasetName", "sessionIds", "stages", "background",
+                "finished", "error", "status"):
         assert key in result, f"missing key: {key}"
-    assert isinstance(result["stagesRun"], list)
+    assert isinstance(result["stages"], list)
+    assert result["stages"][0]["stage"] == "feedback_weights"

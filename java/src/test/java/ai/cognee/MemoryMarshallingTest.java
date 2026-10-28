@@ -27,6 +27,19 @@ class MemoryMarshallingTest {
     }
 
     @Test
+    void improveResultDeserializes() {
+        String canned = "{\"datasetId\":null,\"datasetName\":\"ds\",\"sessionIds\":[\"s1\"],"
+                + "\"stages\":[{\"stage\":\"feedback_weights\",\"status\":\"completed\","
+                + "\"reason\":null,\"error\":null,\"counts\":{\"sessions\":1},\"durationMs\":3}],"
+                + "\"background\":false,\"finished\":true,\"error\":null,\"status\":\"completed\"}";
+        ImproveResult r = Json.fromJson(canned, ImproveResult.class);
+        assertEquals("ds", r.datasetName());
+        assertEquals("completed", r.status());
+        assertEquals("feedback_weights", r.stages().get(0).stage());
+        assertEquals(1L, r.stages().get(0).counts().get("sessions"));
+    }
+
+    @Test
     void improveOptionsRequiresDatasetName() {
         // Happy path: a supplied datasetName serializes.
         JsonNode n = Json.tree(new ImproveOptions("ds").feedbackAlpha(0.2).toJson());

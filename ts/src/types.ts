@@ -570,7 +570,7 @@ export interface CogneeMemifyResult {
 export interface CogneeImproveOptions {
   datasetName: string;
   sessionIds?: string[];
-  /** Node name filter for the memify stage. */
+  /** Deprecated: scoped the removed memify stage; ignored. */
   nodeName?: string[];
   feedbackAlpha?: number;
   tenant?: string;
@@ -580,7 +580,8 @@ export interface CogneeImproveOptions {
 export interface CogneeImproveStage {
   stage: string;
   status: "completed" | "already_completed" | "skipped" | "errored";
-  /** Why the stage was skipped; set whenever `status` is `"skipped"`. */
+  /** Why the stage was skipped (set whenever `status` is `"skipped"`) or had
+   * nothing to do (`"already_completed"`). */
   reason: string | null;
   error: string | null;
   /** Integer counts the stage reported, keyed as the stage names them. */
@@ -589,16 +590,20 @@ export interface CogneeImproveStage {
   durationMs: number;
 }
 
-/** Result of `cogneeImprove`. Hand-built from `ImproveResult` (not Serialize). */
+/** Result of `cogneeImprove` (Python's `ImproveResult`, camelCase keys). */
 export interface CogneeImproveResult {
-  stagesRun: string[];
-  /** Per-stage records; only `build_truth_subspace` reports one so far. */
+  /** The dataset the run worked on; null when it does not exist. */
+  datasetId: string | null;
+  datasetName: string;
+  sessionIds: string[];
+  /** One record per improve stage, in registry order. */
   stages: CogneeImproveStage[];
-  memifyResult: CogneeMemifyResult | null;
-  feedbackEntriesProcessed: number;
-  feedbackEntriesApplied: number;
-  sessionsPersisted: number;
-  edgesSynced: number;
+  background: boolean;
+  finished: boolean;
+  /** Set when a fatal stage aborted the run. */
+  error: string | null;
+  /** Summary of the stages. */
+  status: "completed" | "errored" | "skipped" | "running";
 }
 
 /** Target for `cogneeForget`. */

@@ -13,7 +13,8 @@
 //! ## Input wire shapes (opts / entry keys are camelCase)
 //!
 //! The argument objects below use camelCase keys. Result shapes differ by op:
-//! `memify` / `improve` are hand-built as camelCase (see [`memify_result_json`]),
+//! `memify` / `improve` are hand-built as camelCase (see [`memify_result_json`]
+//! and [`improve_result_json`]),
 //! but `remember` / `remember_entry` pass the `RememberResult` struct straight
 //! through `serde_json::to_value`, so their result keys are **snake_case** —
 //! deliberately, to preserve Python-SDK wire parity (Python's
@@ -52,12 +53,25 @@
 //! {"datasetName":"...", "sessionIds":["..."], "nodeName":["..."],
 //!  "feedbackAlpha":0.1, "tenant":"<uuid>"}
 //! ```
+//!
+//! ### `improve` result
+//! ```json
+//! {"datasetId":"<uuid>"|null, "datasetName":"...", "sessionIds":["..."],
+//!  "stages":[{"stage":"feedback_weights", "status":"completed"|"already_completed"|
+//!             "skipped"|"errored", "reason":...|null, "error":...|null,
+//!             "counts":{"sessions":1}, "durationMs":N}, ...],
+//!  "background":false, "finished":true, "error":null,
+//!  "status":"completed"|"errored"|"skipped"|"running"}
+//! ```
+//!
+//! `stages` holds one entry per improve stage, in registry order. A fatal
+//! `persist_session_qa` failure is an error, not a result.
 
 use std::sync::Arc;
 
 use serde_json::json;
 
-use cognee::api::{ImproveParams, remember, remember_entry};
+use cognee::api::{ImproveParams, ImproveResult, remember, remember_entry};
 use cognee::cognify::{MemifyConfig, run_memify};
 use cognee::database::PipelineRunRepository;
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
@@ -420,6 +434,7 @@ pub async fn run_improve(
 
     let result = cognee::api::improve(ImproveParams {
         dataset_name,
+        dataset_id: None,
         session_ids,
         node_name,
         owner_id,
@@ -449,14 +464,13 @@ pub async fn run_improve(
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
-    let memify_json = result
-        .memify_result
-        .as_ref()
-        .map(memify_result_json)
-        .unwrap_or(serde_json::Value::Null);
+    Ok(improve_result_json(&result))
+}
 
-    // Per-stage records, Python's `ImproveResult.stages`. Only the truth
-    // stage reports one so far.
+/// Serialise an [`ImproveResult`] to the binding wire shape: Python's
+/// `ImproveResult` with camelCase keys, one entry per stage in registry order
+/// and the computed `status`.
+pub fn improve_result_json(result: &ImproveResult) -> serde_json::Value {
     let stages: Vec<serde_json::Value> = result
         .stages
         .iter()
@@ -472,13 +486,45 @@ pub async fn run_improve(
         })
         .collect();
 
-    Ok(json!({
-        "stagesRun": result.stages_run,
+    json!({
+        "datasetId": result.dataset_id.map(|id| id.to_string()),
+        "datasetName": result.dataset_name,
+        "sessionIds": result.session_ids,
         "stages": stages,
-        "memifyResult": memify_json,
-        "feedbackEntriesProcessed": result.feedback_entries_processed,
-        "feedbackEntriesApplied": result.feedback_entries_applied,
-        "sessionsPersisted": result.sessions_persisted,
-        "edgesSynced": result.edges_synced,
-    }))
+        "background": result.background,
+        "finished": result.finished,
+        "error": result.error,
+        "status": result.status().as_str(),
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use cognee::api::StageResult;
+
+    #[test]
+    fn improve_result_json_is_camel_case_with_the_computed_status() {
+        let mut result = ImproveResult::new("docs", vec!["s1".to_string()]);
+        result
+            .stages
+            .push(StageResult::skipped("review_conflicts", "opt_in_disabled"));
+        let wire = improve_result_json(&result);
+        assert_eq!(
+            wire,
+            json!({
+                "datasetId": null,
+                "datasetName": "docs",
+                "sessionIds": ["s1"],
+                "stages": [{"stage": "review_conflicts", "status": "skipped",
+                            "reason": "opt_in_disabled", "error": null, "counts": {},
+                            "durationMs": 0}],
+                "background": false,
+                "finished": true,
+                "error": null,
+                "status": "skipped",
+            })
+        );
+    }
 }

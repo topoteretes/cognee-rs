@@ -1,254 +1,106 @@
-//! Bidirectional session-graph bridge — `improve()`.
+//! `improve()`: the staged orchestrator of the self-improvement loop —
+//! Python's `cognee.api.v1.improve.improve()`.
 //!
-//! Multi-stage pipeline matching Python `cognee.api.v1.improve.improve()`:
-//! 1. Apply feedback weights from session Q&A entries to graph nodes/edges.
-//! 2. Persist session Q&A text into the permanent knowledge graph (Stage 2),
-//!    then persist agent trace steps (Stage 2b), then distill each session's
-//!    Q&A into curated, entity-anchored lesson documents tagged with the
-//!    `session_learnings` node-set (Stage 2c).
-//! 3. Default enrichment: reuse `memify()` for triplet embeddings.
-//! 4. Sync recent graph edges into the session's `graph_context`.
+//! A run is one gated stage after another, in registry order
+//! ([`DEFAULT_STAGES`]): `feedback_weights`, `persist_session_qa`,
+//! `persist_agent_traces`, `extract_agent_context`, `distill_sessions`,
+//! `update_user_preferences`, `build_truth_subspace`, `review_conflicts`,
+//! `global_context_index`. Every stage reports a [`StageResult`] on the
+//! returned [`ImproveResult`].
 //!
-//! Each stage is wrapped in a warning-only handler so that a failure in one
-//! stage does not abort subsequent stages (matches Python semantics).
+//! Gates apply in order: `disabled_by_config`, then `no_session_ids` for a
+//! session-fed stage, then the stage's own gate. The run fails open — a
+//! stage's failure is recorded and the next stage still runs — except for:
+//!
+//! - the one fatal stage, `persist_session_qa` (losing session Q&A would be
+//!   data loss): it stops the run, the remaining stages are skipped with
+//!   `aborted_by_fatal_stage` (or `budget_exhausted`), and `improve()` returns
+//!   [`ApiError::ImproveAborted`] carrying the partial result;
+//! - an exhausted LLM budget in a non-fatal stage: every later stage would
+//!   fail the same way, so they are skipped with `budget_exhausted` and the
+//!   run ends there, without an error.
 
-use std::collections::BTreeMap;
+mod result;
+mod stages;
+
 use std::sync::Arc;
 use std::time::Instant;
 
-use cognee_cognify::memify::sync_graph_session::DEFAULT_MAX_LINES;
-use cognee_cognify::{
-    CognifyConfig, MemifyConfig, MemifyResult, apply_feedback_weights_pipeline,
-    distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph, run_memify,
-    sync_graph_to_session,
-};
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
+use cognee_cognify::CognifyConfig;
+use cognee_database::{CheckpointStore, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_ingestion::{AddParams, AddPipeline};
+use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
-use cognee_models::DataInput;
-use cognee_models::dataset_scope::maybe_with_dataset;
 use cognee_ontology::OntologyResolver;
 use cognee_session::{ImproveLockGuard, SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
-use tracing::{info, warn};
+use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
 use super::error::ApiError;
+use stages::{GraphCapabilities, ImproveStages, StageExecutor, StageRun};
 
-/// Name of the truth-subspace stage, as Python's `BuildTruthSubspaceStage.name`.
-pub const TRUTH_SUBSPACE_STAGE: &str = "build_truth_subspace";
-
-/// Skip reason of a session-fed stage run without session ids (Python
-/// `REASON_NO_SESSION_IDS`, `cognee/modules/improve/result.py`).
-pub const REASON_NO_SESSION_IDS: &str = "no_session_ids";
-/// Skip reason of an opt-in stage the caller did not opt into (Python
-/// `REASON_OPT_IN_DISABLED`, `cognee/modules/improve/stages.py`).
-pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
-pub use cognee_cognify::REASON_BACKEND_UNSUPPORTED;
-
-/// Status of one improve stage — Python's `StageStatus`
-/// (`cognee/modules/improve/result.py`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StageStatus {
-    Completed,
-    AlreadyCompleted,
-    Skipped,
-    Errored,
-}
-
-impl StageStatus {
-    /// The wire name Python uses.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::AlreadyCompleted => "already_completed",
-            Self::Skipped => "skipped",
-            Self::Errored => "errored",
-        }
-    }
-}
-
-/// What one improve stage did in one run — Python's `StageResult`
-/// (`cognee/modules/improve/result.py:47-60`).
-///
-/// Only the `build_truth_subspace` stage reports one so far; the other stages
-/// still report through [`ImproveResult::stages_run`] and their counters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct StageResult {
-    pub stage: String,
-    pub status: StageStatus,
-    /// Why the stage was skipped; set whenever `status` is `Skipped`.
-    pub reason: Option<String>,
-    pub error: Option<String>,
-    pub counts: BTreeMap<String, i64>,
-    /// Wall time of the stage's run; `0` for a stage its gate skipped.
-    pub duration_ms: u64,
-}
-
-impl StageResult {
-    pub fn skipped(stage: &str, reason: &str) -> Self {
-        Self::new(stage, StageStatus::Skipped, Some(reason.to_string()), None)
-    }
-
-    pub fn errored(stage: &str, error: impl Into<String>) -> Self {
-        Self::new(stage, StageStatus::Errored, None, Some(error.into()))
-    }
-
-    pub fn completed(stage: &str) -> Self {
-        Self::new(stage, StageStatus::Completed, None, None)
-    }
-
-    fn new(
-        stage: &str,
-        status: StageStatus,
-        reason: Option<String>,
-        error: Option<String>,
-    ) -> Self {
-        Self {
-            stage: stage.to_string(),
-            status,
-            reason,
-            error,
-            counts: BTreeMap::new(),
-            duration_ms: 0,
-        }
-    }
-}
-
-/// Map a truth-subspace build onto its stage result, as Python's
-/// `BuildTruthSubspaceStage.run` does (`cognee/modules/improve/stages.py:491-520`).
-///
-/// The build fails open — a failed centroid commit or chunk write comes back
-/// as `Errored` instead of an error — so the status is translated rather than
-/// reported as completed, which would hide the failure. Counts are the
-/// build's integer fields.
-fn truth_subspace_stage_result(build: &cognee_cognify::TruthSubspaceResult) -> StageResult {
-    use cognee_cognify::TruthBuildStatus;
-
-    let counts = || {
-        BTreeMap::from([
-            ("anchors".to_string(), build.anchors as i64),
-            ("nodes_scored".to_string(), build.nodes_scored as i64),
-            ("nodes_skipped".to_string(), build.nodes_skipped as i64),
-            ("truth_epoch".to_string(), build.truth_epoch),
-        ])
-    };
-    match build.status {
-        TruthBuildStatus::Errored => StageResult {
-            counts: counts(),
-            ..StageResult::errored(
-                TRUTH_SUBSPACE_STAGE,
-                build
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "truth subspace build errored".to_string()),
-            )
-        },
-        // Normally unreachable: the stage gate checks the same capability
-        // first. Reachable by a mid-run capability change; the mapping should
-        // not lie about it.
-        TruthBuildStatus::Skipped => StageResult::skipped(
-            TRUTH_SUBSPACE_STAGE,
-            build.reason.as_deref().unwrap_or("skipped"),
-        ),
-        TruthBuildStatus::Completed => StageResult {
-            counts: counts(),
-            ..StageResult::completed(TRUTH_SUBSPACE_STAGE)
-        },
-    }
-}
-
-/// Result of an `improve()` operation.
-#[derive(Debug, Clone, Default)]
-pub struct ImproveResult {
-    /// Names of stages that were executed.
-    pub stages_run: Vec<String>,
-    /// Per-stage results, Python's `ImproveResult.stages`. Only the
-    /// `build_truth_subspace` stage reports here so far (see [`StageResult`]).
-    pub stages: Vec<StageResult>,
-    /// Result of the memify (triplet embedding) stage, if it ran.
-    pub memify_result: Option<MemifyResult>,
-    /// Number of feedback QA entries that were processed (Stage 1).
-    pub feedback_entries_processed: usize,
-    /// Number of feedback QA entries whose graph updates all applied cleanly.
-    pub feedback_entries_applied: usize,
-    /// Number of sessions whose Q&A text was persisted to the graph (Stage 2).
-    pub sessions_persisted: usize,
-    /// Number of sessions that produced >= 1 distilled lesson (Stage 2c).
-    pub sessions_distilled: usize,
-    /// Total number of distilled lesson documents published (Stage 2c).
-    pub lessons_published: usize,
-    /// Total number of edges newly synced into session contexts (Stage 4).
-    pub edges_synced: usize,
-}
+pub use result::{
+    ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED,
+    REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_SESSION_IDS, StageResult,
+    StageStatus,
+};
+pub use stages::{
+    DEFAULT_STAGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NOT_PORTED,
+    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
+    REMOVED_STAGE_NAMES, StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
+};
 
 /// Parameters for [`improve`].
 ///
 /// All fields are required at construction time — `Default` is intentionally
 /// not derived because several fields (`owner_id`, the engine handles, and
-/// `cognify_config`) have no sensible default value. This forces every caller
-/// to think about each dependency. Callers that omit optional behavior should
-/// pass `None` explicitly for the `Option<...>` fields.
-///
-/// LIB-04 (Decision 8) introduced this struct to replace the previous 18
-/// positional parameters. E-05 (this commit) extended it with three v2
-/// power-user fields — `extraction_tasks`, `enrichment_tasks`, `data` —
-/// matching Python's `ImprovePayloadDTO` field-for-field. They are pure-data
-/// fields and currently informational: the orchestrator does not yet branch
-/// on them, but they are accepted by the constructor so callers (especially
-/// the HTTP layer) can plumb the raw payload through without dropping fields.
+/// `cognify_config`) have no sensible default value. Callers that omit
+/// optional behavior pass `None` explicitly for the `Option<...>` fields.
 pub struct ImproveParams<'a> {
-    /// Dataset name to operate on (Stage 2 persistence + Stage 4 lookup).
+    /// Dataset name to operate on.
     pub dataset_name: String,
-    /// Session ids that drive Stages 1, 2, and 4. `None` or empty skips them.
+    /// The dataset's id when the caller already resolved it (an HTTP request
+    /// naming a dataset by id, possibly one shared with the caller). `None`
+    /// resolves `dataset_name` among the owner's own datasets.
+    pub dataset_id: Option<Uuid>,
+    /// Session ids that feed the session stages. `None` or empty skips them
+    /// with `no_session_ids`; empty ids are dropped.
     pub session_ids: Option<Vec<String>>,
-    /// Optional graph node-name filter applied to the memify (Stage 3) pass.
+    /// Deprecated in Python (SDK-1115): it only scoped the removed triplet
+    /// stage and the deprecated custom tasks. Ignored.
     pub node_name: Option<Vec<String>>,
     /// Owner UUID under which graph/session reads and writes are scoped.
     pub owner_id: Uuid,
     /// Optional tenant UUID for multi-tenant deployments.
     pub tenant_id: Option<Uuid>,
-    /// Mixing factor for feedback weight propagation (Stage 1).
+    /// Mixing factor of the `feedback_weights` stage.
     pub feedback_alpha: f64,
 
-    /// Optional list of extraction-task identifiers (Python parity:
-    /// `extraction_tasks: Optional[List[str]]`). Currently informational —
-    /// reserved for future power-user overrides matching Python's
-    /// `ImproveKwargs.extraction_tasks`.
+    /// Deprecated in Python (SDK-1115): custom extraction tasks, which Python
+    /// runs as a trailing `custom_tasks` stage. Not supported; ignored.
     pub extraction_tasks: Option<Vec<String>>,
-    /// Optional list of enrichment-task identifiers (Python parity:
-    /// `enrichment_tasks: Optional[List[str]]`). Currently informational.
+    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
     pub enrichment_tasks: Option<Vec<String>>,
-    /// Optional inline text payload (Python parity: `data: Optional[str]`).
-    /// Currently informational; reserved for future power-user overrides.
+    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
     pub data: Option<String>,
 
-    /// When `true` and not running in background, build the global context
-    /// index (graph summary) after Stage 3.
-    ///
-    /// Mirrors Python's `build_global_context_index` parameter.
-    /// Default `false` (opt-in) — matches Python parity.
+    /// Opt in to the `global_context_index` stage (Python's
+    /// `build_global_context_index`). Default `false`.
     pub build_global_context_index: bool,
 
-    /// When `true` and sessions are present, build/refresh the truth-subspace
-    /// centroid slots and per-chunk alignment (Stage 2d, Phase-2 join point).
-    ///
-    /// Mirrors Python's `build_truth_subspace` parameter. Default `false`
-    /// (opt-in) — the entire truth-subspace path is inert unless this is set.
+    /// Opt in to the `build_truth_subspace` stage (Python's
+    /// `build_truth_subspace`). Default `false`.
     pub build_truth_subspace: bool,
 
-    /// When `true`, treat this as a background run: skips stages that
-    /// require the prior stage to have completed synchronously (e.g. the
-    /// global context index and the sync-graph stage).
-    ///
-    /// Background dispatch is handled by the host (HTTP server or CLI);
-    /// this flag is used only for stage-skipping logic parity with Python.
+    /// The host dispatched this run in the background; reported on
+    /// [`ImproveResult::background`]. Background dispatch itself is the
+    /// host's (HTTP server, CLI): this function always runs to completion.
     pub run_in_background: bool,
 
-    /// LLM handle (used by Stage 2 cognify-of-session-text).
+    /// LLM handle (session persistence and distillation).
     pub llm: Arc<dyn Llm>,
     /// File storage handle.
     pub storage: Arc<dyn StorageTrait>,
@@ -261,27 +113,22 @@ pub struct ImproveParams<'a> {
     /// Ontology resolver handle.
     pub ontology_resolver: Arc<dyn OntologyResolver>,
 
-    /// Metadata DB connection. Required for Stage 4 (dataset lookup).
+    /// Metadata DB connection: dataset lookup and the cognify-backed stages.
     pub db: Option<Arc<dyn RelationalDb>>,
-    /// Session backing store. Required for Stages 1 and 2.
+    /// Session backing store. Required by the session stages.
     pub session_store: Option<Arc<dyn SessionStore>>,
-    /// Session manager. Required for Stages 1 and 4.
+    /// Session manager. Required by the session stages.
     pub session_manager: Option<Arc<SessionManager>>,
-    /// Add pipeline (borrowed). Required for Stage 2.
+    /// Add pipeline (borrowed). Required by the cognify-backed stages.
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Checkpoint store. Required for Stage 4.
+    /// Checkpoint store. Unused since the graph-to-session sync stage was
+    /// removed; reserved for the stage watermarks (SDK-1044 step 4).
     pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
 
-    /// Borrowed cognify configuration used by Stage 2 persistence.
+    /// Borrowed cognify configuration of the cognify-backed stages.
     pub cognify_config: &'a CognifyConfig,
 }
 
-/// Bidirectional session-graph bridge.
-///
-/// Background dispatch is a host-side concern — this function is strictly
-/// synchronous. Stage 4 always runs when sessions are present.
-///
-/// All inputs are passed via [`ImproveParams`] (see Decision 8 / LIB-04).
 /// The id of the owner's dataset `name` in `tenant`, or `None` when there is
 /// no relational database or no such dataset. Names resolve among the owner's
 /// own datasets only, as Python's `get_dataset_ids` does; a failed lookup is
@@ -302,11 +149,147 @@ async fn dataset_id_by_name(
     Ok(dataset.map(|ds| ds.id))
 }
 
+/// How the stage loop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopEnd {
+    /// Every stage was recorded (some possibly `budget_exhausted`-skipped).
+    Finished,
+    /// The fatal stage errored; the rest were skipped.
+    Aborted { budget_exhausted: bool },
+}
+
+/// The run-level gates every stage shares, then the stage's own — Python's
+/// `evaluate_gate` (`cognee/modules/improve/stage.py`).
+fn gate_reason<E: StageExecutor>(
+    stage: StageKind,
+    has_sessions: bool,
+    stages_disabled: &[String],
+    executor: &E,
+) -> Option<&'static str> {
+    if stages_disabled.iter().any(|name| name == stage.name()) {
+        return Some(REASON_DISABLED_BY_CONFIG);
+    }
+    if stage.needs_sessions() && !has_sessions {
+        return Some(REASON_NO_SESSION_IDS);
+    }
+    executor.gate(stage)
+}
+
+/// Record `stages` as skipped with `reason`, in order.
+fn skip_stages(result: &mut ImproveResult, stages: &[StageKind], reason: &str) {
+    result.stages.extend(
+        stages
+            .iter()
+            .map(|s| StageResult::skipped(s.name(), reason)),
+    );
+}
+
+/// One [`StageResult`] per stage, in order — Python's `execute_stages`
+/// (`cognee/api/v1/improve/improve.py:242-280`).
+///
+/// A gated stage is skipped with its reason and no duration; a stage that
+/// runs is timed. A fatal stage that errors skips the rest (with
+/// `aborted_by_fatal_stage`, or `budget_exhausted` when that is why it
+/// failed), sets [`ImproveResult::error`] and ends the loop as
+/// [`LoopEnd::Aborted`]. A non-fatal stage that errored on an exhausted LLM
+/// budget skips the rest with `budget_exhausted` and ends it as
+/// [`LoopEnd::Finished`].
+async fn execute_stages<E: StageExecutor>(
+    stages: &[StageKind],
+    has_sessions: bool,
+    stages_disabled: &[String],
+    executor: &mut E,
+    result: &mut ImproveResult,
+) -> LoopEnd {
+    for (index, &stage) in stages.iter().enumerate() {
+        let run = match gate_reason(stage, has_sessions, stages_disabled, executor) {
+            Some(reason) => StageRun::from(StageResult::skipped(stage.name(), reason)),
+            None => {
+                let started_at = Instant::now();
+                let mut run = executor.run(stage).await;
+                run.result.duration_ms =
+                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                run
+            }
+        };
+        let errored = run.result.status == StageStatus::Errored;
+        let budget_exhausted = errored && run.budget_exhausted;
+        if errored {
+            warn!(
+                stage = stage.name(),
+                error = run.result.error.as_deref().unwrap_or(""),
+                "improve: stage errored"
+            );
+        }
+        let error = run.result.error.clone();
+        result.stages.push(run.result);
+        let remaining = &stages[index + 1..];
+
+        if stage.fatal() && errored {
+            let reason = if budget_exhausted {
+                REASON_BUDGET_EXHAUSTED
+            } else {
+                REASON_ABORTED_BY_FATAL_STAGE
+            };
+            skip_stages(result, remaining, reason);
+            result.error = Some(error.unwrap_or_else(|| format!("{} errored", stage.name())));
+            warn!(
+                stage = stage.name(),
+                "improve: fatal stage failed, run stopped"
+            );
+            return LoopEnd::Aborted { budget_exhausted };
+        }
+        if budget_exhausted {
+            skip_stages(result, remaining, REASON_BUDGET_EXHAUSTED);
+            warn!(
+                stage = stage.name(),
+                remaining = remaining.len(),
+                "improve: LLM budget exhausted; run stopped, remaining stages skipped"
+            );
+            break;
+        }
+    }
+    LoopEnd::Finished
+}
+
+/// Run the improve stages over a dataset and report what each one did.
+///
+/// Returns [`ApiError::ImproveAborted`] — carrying the partial result — when
+/// the fatal `persist_session_qa` stage errors, and an error when the dataset
+/// lookup itself fails. Every other stage failure is reported on the result.
 pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiError> {
+    let session_ids: Vec<String> = params
+        .session_ids
+        .iter()
+        .flatten()
+        .filter(|id| !id.is_empty())
+        .cloned()
+        .collect();
+    // Mirrors Python's `cognee.api.improve` span (gap 03 / task 03-07).
+    let span = tracing::info_span!(
+        "cognee.api.improve",
+        dataset = %params.dataset_name,
+        session_count = session_ids.len(),
+        run_in_background = params.run_in_background,
+    );
+    run_improve(params, session_ids).instrument(span).await
+}
+
+async fn run_improve(
+    params: ImproveParams<'_>,
+    session_ids: Vec<String>,
+) -> Result<ImproveResult, ApiError> {
     let ImproveParams {
         dataset_name,
-        session_ids,
-        node_name,
+        dataset_id,
+        session_ids: _,
+        // Deprecated options (SDK-1115), ignored as Python ignores them
+        // without custom tasks.
+        node_name: _,
+        extraction_tasks: _,
+        enrichment_tasks: _,
+        data: _,
+        checkpoint_store: _,
         owner_id,
         tenant_id,
         feedback_alpha,
@@ -320,836 +303,392 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         session_store,
         session_manager,
         add_pipeline,
-        checkpoint_store,
         cognify_config,
         build_global_context_index,
         build_truth_subspace,
         run_in_background,
-        // E-05 v2 power-user fields — currently informational; the orchestrator
-        // does not yet branch on them. Accepting them here keeps the struct
-        // shape Python-parity-aligned for HTTP plumbing.
-        extraction_tasks: _extraction_tasks,
-        enrichment_tasks: _enrichment_tasks,
-        data: _data,
     } = params;
 
-    // ---- Improve lock (parity with Python session_lock.py:136-150) ----
-    //
-    // When exactly one session is targeted, acquire a per-session lock so
-    // that concurrent `improve()` calls on the same session don't duplicate
-    // work (e.g. auto-improve + idle-watcher + SessionEnd firing at once).
-    // Multi-session improves skip the lock — the pattern is rare and locking
-    // N sessions atomically is messy (matches Python comment verbatim).
-    //
-    // The guard holds a `String`, not a `MutexGuard`, so it is Send-safe
-    // across `.await` points.
-    let _improve_guard = if let Some(ref sids) = session_ids {
-        if sids.len() == 1 {
-            match ImproveLockGuard::acquire(&sids[0]) {
-                Some(g) => Some(g),
-                None => {
-                    info!(
-                        session_id = %sids[0],
-                        "improve: session already being improved, skipping"
-                    );
-                    // Parity with Python `return {}` — return empty result.
-                    return Ok(ImproveResult::default());
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let mut result = ImproveResult::new(dataset_name.clone(), session_ids.clone());
+    result.background = run_in_background;
 
-    let mut result = ImproveResult::default();
-    let has_sessions = session_ids.as_ref().is_some_and(|ids| !ids.is_empty());
-
-    // Wrap the body in a `cognee.api.improve` OTEL span for parity with
-    // Python's `cognee.api.v1.improve.improve()` (gap 03 / task 03-07).
-    // Attribute names mirror the analytics payload below and the Python
-    // span's verbose names (`dataset`, `session_count`, `run_in_background`).
-    let session_count = session_ids.as_ref().map(|v| v.len()).unwrap_or(0);
-    let span = tracing::info_span!(
-        "cognee.api.improve",
-        dataset = %dataset_name,
-        session_count = session_count,
-        run_in_background = false,
-    );
-    let _enter = span.enter();
-
-    // Mirrors Python `send_telemetry("cognee.improve", ...)` from
-    // cognee/api/v1/improve/improve.py:91.
-    #[cfg(feature = "telemetry")]
-    {
-        cognee_telemetry::send_telemetry(
-            "cognee.improve",
-            owner_id,
-            Some(serde_json::json!({
-                "dataset": dataset_name.clone(),
-                "session_count": session_count,
-                "session_ids": session_ids.clone(),
-                "run_in_background": false,
-                "cognee_version": env!("CARGO_PKG_VERSION"),
-            })),
-        );
-    }
-
-    // The dataset the graph-reading stages (1, 3, 3b) run in. Under per-dataset
-    // storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the graph they read and write
-    // is that dataset's own, as Python's memify runs in the dataset's database
-    // context. Stages 2–2d scope themselves (add, cognify, truth subspace). A
-    // dataset that does not exist yet has no graph to weight; stage 2 may
-    // create it, so the later stages look it up again.
-    let stage1_dataset =
-        dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
-
-    // ---- Stage 1: Apply Feedback Weights ----
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        match (session_store.as_ref(), session_manager.as_ref()) {
-            (Some(store), Some(mgr)) => {
-                match maybe_with_dataset(
-                    stage1_dataset,
-                    apply_feedback_weights_pipeline(
-                        sids,
-                        owner_id,
-                        feedback_alpha,
-                        &*graph_db,
-                        Arc::clone(store),
-                        Arc::clone(mgr),
-                    ),
-                )
-                .await
-                {
-                    Ok(r) => {
-                        info!(
-                            processed = r.processed,
-                            applied = r.applied,
-                            skipped = r.skipped,
-                            "improve stage 1 (feedback_weights) complete"
-                        );
-                        result.feedback_entries_processed = r.processed;
-                        result.feedback_entries_applied = r.applied;
-                        result.stages_run.push("apply_feedback_weights".to_string());
-                    }
-                    Err(e) => {
-                        warn!("improve stage 1 (feedback_weights) failed (non-fatal): {e}");
-                    }
-                }
-            }
-            _ => {
-                warn!(
-                    "improve stage 1: session_store and session_manager are required; skipping feedback_weights"
-                );
-            }
-        }
-    }
-
-    // ---- Stage 2: Persist Session Q&A to Graph ----
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        // LIB-06-03: `persist_sessions_in_knowledge_graph` now requires
-        // `Arc<dyn RelationalDb>` and `Arc<dyn CpuPool>`.
-        let stage2_db = db.clone();
-        match (session_store.as_ref(), add_pipeline, stage2_db) {
-            (Some(store), Some(pipeline), Some(database)) => {
-                let thread_pool: Arc<dyn cognee_core::CpuPool> =
-                    match cognee_core::RayonThreadPool::with_default_threads() {
-                        Ok(pool) => Arc::new(pool),
-                        Err(e) => {
-                            warn!(
-                                "improve stage 2: failed to construct thread pool: {e}; skipping persist_sessions"
-                            );
-                            return Ok(result);
-                        }
-                    };
-                let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                    Arc::clone(&database).pipeline_runs();
-                match persist_sessions_in_knowledge_graph(
-                    sids,
-                    &dataset_name,
-                    owner_id,
-                    tenant_id,
-                    Arc::clone(store),
-                    pipeline,
-                    Arc::clone(&llm),
-                    Arc::clone(&storage),
-                    Arc::clone(&graph_db),
-                    Arc::clone(&vector_db),
-                    Arc::clone(&embedding_engine),
-                    database,
-                    pipeline_run_repo,
-                    thread_pool,
-                    Arc::clone(&ontology_resolver),
-                    cognify_config,
-                )
-                .await
-                {
-                    Ok(r) => {
-                        info!(
-                            persisted = r.sessions_persisted,
-                            skipped = r.sessions_skipped,
-                            failed = r.sessions_failed,
-                            "improve stage 2 (persist_sessions) complete"
-                        );
-                        result.sessions_persisted = r.sessions_persisted;
-                        result.stages_run.push("persist_sessions".to_string());
-                    }
-                    Err(e) => {
-                        warn!("improve stage 2 (persist_sessions) failed (non-fatal): {e}");
-                    }
-                }
-            }
-            _ => {
-                warn!(
-                    "improve stage 2: session_store, add_pipeline, and the relational database are required; skipping persist_sessions"
-                );
-            }
-        }
-    }
-
-    // ---- Stage 2b: Persist Agent Trace Steps ----
-    //
-    // Mirrors Python's `_persist_session_traces` (improve.py:166-176).
-    // Reads `session_feedback` from each trace step and cognifies it into the
-    // permanent graph so that the plugin's tool-call activity reaches permanent
-    // memory — not just QA entries.
-    //
-    // Scoped-down 0.1.0 implementation: collects trace `session_feedback` text
-    // (the per-step LLM-generated feedback string) and runs it through the
-    // add→cognify path with node_set `"agent_trace_feedbacks"`.
-    //
-    // TODO(parity): Python's `persist_agent_trace_feedbacks_in_knowledge_graph_pipeline`
-    // uses per-step metadata (origin_function, status, method_params). The full
-    // parity pass should introduce a dedicated `persist_trace_feedbacks_in_knowledge_graph`
-    // function in cognee-cognify that preserves per-step provenance.
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-
-        // Collect all trace feedback texts across the sessions.
-        let mut trace_texts: Vec<String> = Vec::new();
-        if let Some(mgr) = session_manager.as_ref() {
-            let user_id_str = owner_id.to_string();
-            for sid in sids {
-                match mgr
-                    .get_agent_trace_session(&user_id_str, Some(sid), None)
-                    .await
-                {
-                    Ok(steps) => {
-                        for step in &steps {
-                            if !step.session_feedback.is_empty() {
-                                trace_texts.push(format!(
-                                    "Session: {sid}\nFunction: {}\nStatus: {}\nFeedback: {}",
-                                    step.origin_function, step.status, step.session_feedback,
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            session_id = sid,
-                            "improve stage 2b: could not read trace steps (non-fatal): {e}"
-                        );
-                    }
-                }
-            }
-        }
-
-        if !trace_texts.is_empty() {
-            let stage2b_db = db.clone();
-            let combined_text = trace_texts.join("\n\n");
-            match (add_pipeline, stage2b_db) {
-                (Some(pipeline), Some(database)) => {
-                    match cognee_core::RayonThreadPool::with_default_threads() {
-                        Ok(pool) => {
-                            let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                            let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                                Arc::clone(&database).pipeline_runs();
-                            let add_params = AddParams {
-                                node_set: Some(vec!["agent_trace_feedbacks".to_string()]),
-                                ..Default::default()
-                            };
-                            match pipeline
-                                .add_with_params(
-                                    vec![DataInput::Text(combined_text)],
-                                    &dataset_name,
-                                    owner_id,
-                                    tenant_id,
-                                    &add_params,
-                                )
-                                .await
-                                .map_err(|e| e.to_string())
-                            {
-                                Ok(data_rows) if !data_rows.is_empty() => {
-                                    // Resolve dataset_id the same way persist_sessions does.
-                                    let dataset_id_opt =
-                                        cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-                                            &*database,
-                                            &dataset_name,
-                                            owner_id,
-                                            tenant_id,
-                                        )
-                                        .await
-                                        .ok()
-                                        .flatten()
-                                        .map(|ds| ds.id);
-                                    if let Some(dataset_id) = dataset_id_opt {
-                                        match cognee_cognify::tasks::cognify(
-                                            data_rows,
-                                            dataset_id,
-                                            Some(owner_id),
-                                            None,
-                                            tenant_id,
-                                            Arc::clone(&llm),
-                                            Arc::clone(&storage),
-                                            Arc::clone(&graph_db),
-                                            Arc::clone(&vector_db),
-                                            Arc::clone(&embedding_engine),
-                                            Arc::clone(&database),
-                                            pipeline_run_repo,
-                                            thread_pool,
-                                            Arc::clone(&ontology_resolver),
-                                            cognify_config,
-                                        )
-                                        .await
-                                        {
-                                            Ok(_) => {
-                                                info!(
-                                                    trace_items = trace_texts.len(),
-                                                    "improve stage 2b (persist_trace_steps) complete"
-                                                );
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "improve stage 2b: cognify of trace steps failed (non-fatal): {e}"
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        warn!(
-                                            "improve stage 2b: dataset lookup returned None; trace steps not cognified"
-                                        );
-                                    }
-                                }
-                                Ok(_) => {
-                                    warn!(
-                                        "improve stage 2b: add returned no rows; trace steps not cognified"
-                                    );
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "improve stage 2b: add of trace text failed (non-fatal): {e}"
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("improve stage 2b: rayon pool init failed (non-fatal): {e}");
-                        }
-                    }
-                }
-                _ => {
-                    warn!(
-                        "improve stage 2b: add_pipeline and the relational database are required; trace steps not cognified"
-                    );
-                }
-            }
-        }
-        // Always push the stage name so stages_run stays consistent with Python,
-        // even when no traces were present or cognification was skipped/failed.
-        result.stages_run.push("persist_trace_steps".to_string());
-    }
-
-    // ---- Stage 2c: Distill Sessions into Learnings ----
-    //
-    // Mirrors Python's `_distill_sessions` (improve.py:190-201). Each session's
-    // Q&A is curated into durable, entity-anchored lesson documents tagged with
-    // the `session_learnings` node-set and cognified into the graph. Fail-open
-    // per session; a session with no non-empty Q&A yields nothing.
-    //
-    // Scope cut vs. Python (locked): only Q&A is consumed — there is no
-    // `SessionContextEntry` gated-guidance corpus in Rust — and Python's stage
-    // 2b2 (`_extract_agent_context`) is intentionally NOT ported.
-    //
-    // Unlike Stage 2b, the stage name is pushed onto `stages_run` ONLY when a
-    // lesson was actually published (Python improve.py:200-201).
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        let stage2c_db = db.clone();
-        match (session_store.as_ref(), add_pipeline, stage2c_db) {
-            (Some(store), Some(pipeline), Some(database)) => {
-                match cognee_core::RayonThreadPool::with_default_threads() {
-                    Ok(pool) => {
-                        let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                        let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                            Arc::clone(&database).pipeline_runs();
-                        let r = distill_sessions_in_knowledge_graph(
-                            sids,
-                            &dataset_name,
-                            owner_id,
-                            tenant_id,
-                            Arc::clone(store),
-                            pipeline,
-                            Arc::clone(&llm),
-                            Arc::clone(&storage),
-                            Arc::clone(&graph_db),
-                            Arc::clone(&vector_db),
-                            Arc::clone(&embedding_engine),
-                            database,
-                            pipeline_run_repo,
-                            thread_pool,
-                            Arc::clone(&ontology_resolver),
-                            cognify_config,
-                        )
-                        .await;
-                        info!(
-                            sessions_distilled = r.sessions_distilled,
-                            lessons_published = r.lessons_published,
-                            "improve stage 2c (distill_sessions) complete"
-                        );
-                        result.sessions_distilled = r.sessions_distilled;
-                        result.lessons_published = r.lessons_published;
-                        // Conditional push: only when a lesson was published.
-                        if r.sessions_distilled > 0 {
-                            result.stages_run.push("distill_sessions".to_string());
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "improve stage 2c: rayon pool init failed (non-fatal): {e}; skipping distill_sessions"
-                        );
-                    }
-                }
-            }
-            _ => {
-                warn!(
-                    "improve stage 2c: session_store, add_pipeline, and the relational database are required; skipping distill_sessions"
-                );
-            }
-        }
-    }
-
-    // ---- Stage 2d: Build Truth Subspace (opt-in) ----
-    //
-    // Mirrors Python's `BuildTruthSubspaceStage`
-    // (`cognee/modules/improve/stages.py:478-520`) and the orchestrator's gate
-    // order (`cognee/modules/improve/stage.py`): no session ids, then the
-    // opt-in flag, then the backend's truth-state support. Fully inert (zero
-    // graph/vector I/O) unless the caller opts in. Non-fatal: a failed build is
-    // recorded as an errored stage and never aborts improve().
-    let truth_stage = if !has_sessions {
-        StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_NO_SESSION_IDS)
-    } else if !build_truth_subspace {
-        StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_OPT_IN_DISABLED)
-    } else {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        let started_at = Instant::now();
-        // Python times every stage whose `run()` was entered
-        // (`cognee/modules/improve/stage.py`), whatever it returned; only a
-        // gate skip (here: `backend_unsupported`) carries no duration.
-        let mut timed = true;
-        let mut stage = match db.as_ref() {
+    // Single-session improve lock (Python `session_lock.py`, before its
+    // waiting rework, which lands in SDK-1044 step 4): a concurrent improve of
+    // the same session returns without running any stage.
+    let _improve_guard = match session_ids.as_slice() {
+        [sid] => match ImproveLockGuard::acquire(sid) {
+            Some(guard) => Some(guard),
             None => {
-                warn!("improve stage 2d: relational database required; not building");
-                StageResult::errored(TRUTH_SUBSPACE_STAGE, "relational database required")
-            }
-            // Resolve the dataset the same way Stage 4 does.
-            Some(database) => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-                &**database,
-                &dataset_name,
-                owner_id,
-                tenant_id,
-            )
-            .await
-            {
-                // Python's build returns its empty result for a dataset it
-                // cannot resolve, which the stage reports as completed.
-                Ok(None) => {
-                    warn!("improve stage 2d: dataset not found; nothing to build");
-                    truth_subspace_stage_result(&cognee_cognify::TruthSubspaceResult::default())
-                }
-                Err(e) => {
-                    warn!("improve stage 2d: dataset lookup failed (non-fatal): {e}");
-                    StageResult::errored(
-                        TRUTH_SUBSPACE_STAGE,
-                        format!("dataset lookup failed: {e}"),
-                    )
-                }
-                Ok(Some(ds)) => {
-                    // Probe inside the dataset's scope: a per-dataset router
-                    // answers for that dataset's engine.
-                    let supported = cognee_models::dataset_scope::with_dataset(
-                        ds.id,
-                        graph_db.supports_truth_state(),
-                    )
-                    .await;
-                    match supported {
-                        Ok(true) => {
-                            let ts = cognee_cognify::build_truth_subspace(
-                                ds.id,
-                                sids,
-                                Arc::clone(&graph_db),
-                                Arc::clone(&vector_db),
-                                Arc::clone(&embedding_engine),
-                                cognee_cognify::DEFAULT_K,
-                            )
-                            .await;
-                            info!(
-                                status = ts.status.as_str(),
-                                anchors = ts.anchors,
-                                nodes_scored = ts.nodes_scored,
-                                nodes_skipped = ts.nodes_skipped,
-                                truth_epoch = ts.truth_epoch,
-                                error = ts.error.as_deref().unwrap_or(""),
-                                "improve stage 2d (build_truth_subspace) finished"
-                            );
-                            result.stages_run.push(TRUTH_SUBSPACE_STAGE.to_string());
-                            truth_subspace_stage_result(&ts)
-                        }
-                        // The dataset's engine could not be reached: Python's
-                        // `get_graph_engine()` raising inside `run()`.
-                        Err(e) => {
-                            warn!("improve stage 2d: graph engine unavailable: {e}");
-                            StageResult::errored(
-                                TRUTH_SUBSPACE_STAGE,
-                                format!("graph engine unavailable: {e}"),
-                            )
-                        }
-                        Ok(false) => {
-                            timed = false;
-                            info!(
-                                "improve stage 2d: graph backend has no truth-state support; skipping"
-                            );
-                            StageResult::skipped(TRUTH_SUBSPACE_STAGE, REASON_BACKEND_UNSUPPORTED)
-                        }
-                    }
-                }
-            },
-        };
-        if timed {
-            stage.duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        }
-        stage
-    };
-    result.stages.push(truth_stage);
-
-    // ---- Stage 3: Default Enrichment (always) ----
-    let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
-    let memify_config = if let Some(names) = node_name {
-        MemifyConfig::default().with_node_name_filter(names)
-    } else {
-        MemifyConfig::default()
-    };
-    match db.as_ref() {
-        Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
-            Ok(pool) => {
-                let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                    Arc::clone(database).pipeline_runs();
-                match maybe_with_dataset(
-                    later_dataset,
-                    run_memify(
-                        Arc::clone(&graph_db),
-                        Arc::clone(&vector_db),
-                        Arc::clone(&embedding_engine),
-                        thread_pool,
-                        Arc::clone(database),
-                        pipeline_run_repo,
-                        None,
-                        Some(owner_id),
-                        tenant_id,
-                        &memify_config,
-                    ),
-                )
-                .await
-                {
-                    Ok(mr) => {
-                        info!(
-                            triplets = mr.triplet_count,
-                            "improve stage 3 (memify) complete"
-                        );
-                        result.memify_result = Some(mr);
-                        result.stages_run.push("memify".to_string());
-                    }
-                    Err(e) => {
-                        warn!("improve stage 3 (memify) failed (non-fatal): {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("improve stage 3 (memify) failed (non-fatal): rayon pool init: {e}");
+                info!(session_id = %sid, "improve: session already being improved, skipping");
+                return Ok(result);
             }
         },
-        None => {
-            warn!(
-                "improve stage 3: a relational database connection is required by the LIB-06 \
-                 executor-routed memify; skipping memify"
-            );
-        }
+        _ => None,
+    };
+
+    // Mirrors Python `send_telemetry("cognee.improve", ...)`.
+    #[cfg(feature = "telemetry")]
+    cognee_telemetry::send_telemetry(
+        "cognee.improve",
+        owner_id,
+        Some(serde_json::json!({
+            "dataset": dataset_name.clone(),
+            "session_count": session_ids.len(),
+            "session_ids": session_ids.clone(),
+            "run_in_background": run_in_background,
+            "cognee_version": env!("CARGO_PKG_VERSION"),
+        })),
+    );
+
+    // Under per-dataset storage the graph the stages read and write is the
+    // dataset's own. A dataset that does not exist yet has no graph to
+    // weight; `persist_session_qa` may create it, so the later stages look it
+    // up again.
+    let dataset_id = match dataset_id {
+        Some(id) => Some(id),
+        None => dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?,
+    };
+    let capabilities = GraphCapabilities::probe(&*graph_db, dataset_id).await;
+
+    let has_sessions = !session_ids.is_empty();
+    let mut stages = ImproveStages {
+        dataset_name,
+        owner_id,
+        tenant_id,
+        session_ids,
+        feedback_alpha,
+        build_truth_subspace,
+        build_global_context_index,
+        capabilities,
+        dataset_id,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        ontology_resolver,
+        db,
+        session_store,
+        session_manager,
+        add_pipeline,
+        cognify_config,
+    };
+    // `disabled_by_config` is wired to the improve settings in SDK-1044 step 3.
+    let end = execute_stages(&DEFAULT_STAGES, has_sessions, &[], &mut stages, &mut result).await;
+    result.dataset_id = match stages.dataset_id {
+        Some(id) => Some(id),
+        // A stage may have created the dataset without looking it up.
+        None => dataset_id_by_name(
+            stages.db.as_ref(),
+            &stages.dataset_name,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        .unwrap_or(None),
+    };
+    info!(
+        status = result.status().as_str(),
+        stages = %result.stage_summary(),
+        "improve: run finished"
+    );
+
+    match end {
+        LoopEnd::Finished => Ok(result),
+        LoopEnd::Aborted { budget_exhausted } => Err(ApiError::ImproveAborted {
+            result: Box::new(result),
+            budget_exhausted,
+        }),
     }
-
-    // ---- Stage 3b: Global Context Index (opt-in) ----
-    //
-    // Mirrors Python's `_build_global_context_index` (improve.py:201-213).
-    // When `build_global_context_index` is `true` and not running in background:
-    // build a graph summary and store it in the session graph-context so the
-    // search side can prepend it as background knowledge.
-    //
-    // Partial 0.1.0 implementation: retrieves graph summaries already stored as
-    // TextSummary nodes and concatenates them as the global context. Python's full
-    // implementation (`global_context_index_pipeline`) also builds bucket and root
-    // summaries via an LLM pass.
-    // TODO(parity): implement bucket/root summary indexing via a dedicated
-    // `global_context_index_pipeline` function in cognee-cognify that mirrors
-    // Python's `bucketing_strategy="graph"` / `max_bucket_size=4` pass.
-    if build_global_context_index {
-        if run_in_background {
-            warn!(
-                "improve stage 3b: global context index skipped in background mode \
-                 because ordered background pipeline chaining is not supported"
-            );
-        } else if let Some(sm) = session_manager.as_ref() {
-            // Partial 0.1.0: read all graph edges via `get_graph_data()` and format
-            // as "source_id → relationship → target_id" lines, then store as the
-            // global context so any session can prepend it as background knowledge.
-            // TODO(parity): replace with a full `global_context_index_pipeline` that
-            // uses LLM bucket/root summarisation (`bucketing_strategy="graph"`,
-            // `max_bucket_size=4`) matching Python's `_build_global_context_index`.
-            match maybe_with_dataset(later_dataset, graph_db.get_graph_data()).await {
-                Ok((_nodes, edges)) if !edges.is_empty() => {
-                    let global_context = edges
-                        .iter()
-                        .map(|(src, tgt, rel, _props)| format!("{src} → {rel} → {tgt}"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let user_id_str = owner_id.to_string();
-                    // Store under a synthetic global-context key so any session can read it.
-                    let global_session_key = "_global_context_index";
-                    match sm
-                        .set_graph_context(
-                            Some(global_session_key),
-                            Some(&user_id_str),
-                            &global_context,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            info!(
-                                edges = edges.len(),
-                                "improve stage 3b (global_context_index) complete"
-                            );
-                            result.stages_run.push("global_context_index".to_string());
-                        }
-                        Err(e) => {
-                            warn!(
-                                "improve stage 3b: failed to store global context (non-fatal): {e}"
-                            );
-                        }
-                    }
-                }
-                Ok(_) => {
-                    info!("improve stage 3b: graph has no edges; skipping global_context_index");
-                }
-                Err(e) => {
-                    warn!("improve stage 3b: failed to load graph data (non-fatal): {e}");
-                }
-            }
-        } else {
-            warn!("improve stage 3b: session_manager is required; skipping global_context_index");
-        }
-    }
-
-    // ---- Stage 4: Sync Graph to Session Cache ----
-    //
-    // Stage 4 always runs when sessions are present (background dispatch is host-side).
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        match (
-            db.as_ref(),
-            session_manager.as_ref(),
-            checkpoint_store.as_ref(),
-        ) {
-            (Some(dbc), Some(mgr), Some(ckstore)) => {
-                // Stage 4 requires a dataset UUID. Resolve from the name.
-                let dataset_id_opt = cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-                    &**dbc,
-                    &dataset_name,
-                    owner_id,
-                    tenant_id,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|ds| ds.id);
-                let Some(dataset_id) = dataset_id_opt else {
-                    warn!(
-                        dataset_name = %dataset_name,
-                        "improve stage 4: dataset not found; skipping sync_graph_to_session"
-                    );
-                    return Ok(result);
-                };
-
-                let user_id_str = owner_id.to_string();
-                let mut total_synced = 0usize;
-                let mut any_ran = false;
-                for sid in sids {
-                    match sync_graph_to_session(
-                        &user_id_str,
-                        sid,
-                        dataset_id,
-                        dbc.as_ref(),
-                        mgr.as_ref(),
-                        ckstore.as_ref(),
-                        DEFAULT_MAX_LINES,
-                    )
-                    .await
-                    {
-                        Ok(r) => {
-                            info!(
-                                session_id = sid,
-                                synced = r.synced,
-                                total = r.total,
-                                "improve stage 4: session synced"
-                            );
-                            total_synced += r.synced;
-                            any_ran = true;
-                        }
-                        Err(e) => {
-                            warn!(
-                                session_id = sid,
-                                "improve stage 4 failed for session (non-fatal): {e}"
-                            );
-                        }
-                    }
-                }
-                result.edges_synced = total_synced;
-                if any_ran {
-                    result.stages_run.push("sync_graph_to_session".to_string());
-                }
-            }
-            _ => {
-                warn!(
-                    "improve stage 4: db, session_manager, and checkpoint_store are required; skipping sync_graph_to_session"
-                );
-            }
-        }
-    }
-
-    Ok(result)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
+    //! The stage loop, ported from Python's
+    //! `cognee/tests/unit/api/v1/improve/test_improve_orchestration.py` and
+    //! `test_improve_budget_exhaustion.py`, over scripted stages.
+
+    use std::collections::HashMap;
+    use std::future::Future;
+
     use super::*;
 
-    #[test]
-    fn improve_result_default_fields() {
-        let result = ImproveResult::default();
-        assert!(result.stages_run.is_empty());
-        assert!(result.memify_result.is_none());
-        assert_eq!(result.feedback_entries_processed, 0);
-        assert_eq!(result.feedback_entries_applied, 0);
-        assert_eq!(result.sessions_persisted, 0);
-        assert_eq!(result.sessions_distilled, 0);
-        assert_eq!(result.lessons_published, 0);
-        assert_eq!(result.edges_synced, 0);
-        assert!(result.stages.is_empty());
+    /// A scripted stage outcome.
+    #[derive(Clone)]
+    enum Script {
+        Complete,
+        Error(&'static str),
+        BudgetError,
+        Gate(&'static str),
     }
 
-    fn build(status: cognee_cognify::TruthBuildStatus) -> cognee_cognify::TruthSubspaceResult {
-        cognee_cognify::TruthSubspaceResult {
-            anchors: 3,
-            nodes_scored: 5,
-            nodes_skipped: 2,
-            signature: "sig".to_string(),
-            truth_epoch: 4,
-            status,
-            reason: None,
-            error: None,
+    #[derive(Default)]
+    struct Scripted {
+        scripts: HashMap<StageKind, Script>,
+        calls: Vec<&'static str>,
+    }
+
+    impl Scripted {
+        fn with(mut self, stage: StageKind, script: Script) -> Self {
+            self.scripts.insert(stage, script);
+            self
+        }
+
+        fn script(&self, stage: StageKind) -> Script {
+            self.scripts
+                .get(&stage)
+                .cloned()
+                .unwrap_or(Script::Complete)
         }
     }
 
-    // Python `BuildTruthSubspaceStage.run`: the build's integer fields become
-    // the stage counts.
-    #[test]
-    fn completed_build_maps_to_a_completed_stage_with_counts() {
-        let stage =
-            truth_subspace_stage_result(&build(cognee_cognify::TruthBuildStatus::Completed));
-        assert_eq!(stage.stage, TRUTH_SUBSPACE_STAGE);
-        assert_eq!(stage.status, StageStatus::Completed);
-        assert_eq!((stage.reason, stage.error), (None, None));
-        let counts: Vec<(&str, i64)> = stage.counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    impl StageExecutor for Scripted {
+        fn gate(&self, stage: StageKind) -> Option<&'static str> {
+            match self.script(stage) {
+                Script::Gate(reason) => Some(reason),
+                _ => None,
+            }
+        }
+
+        fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send {
+            self.calls.push(stage.name());
+            let run = match self.script(stage) {
+                Script::Complete | Script::Gate(_) => StageResult::completed(stage.name()).into(),
+                Script::Error(error) => StageResult::errored(stage.name(), error).into(),
+                Script::BudgetError => StageRun {
+                    result: StageResult::errored(stage.name(), "LLM payment required: 402"),
+                    budget_exhausted: true,
+                },
+            };
+            std::future::ready(run)
+        }
+    }
+
+    async fn run_loop(
+        executor: &mut Scripted,
+        has_sessions: bool,
+        disabled: &[&str],
+    ) -> (ImproveResult, LoopEnd) {
+        let disabled: Vec<String> = disabled.iter().map(|s| s.to_string()).collect();
+        let mut result = ImproveResult::new("docs", vec![]);
+        let end = execute_stages(
+            &DEFAULT_STAGES,
+            has_sessions,
+            &disabled,
+            executor,
+            &mut result,
+        )
+        .await;
+        (result, end)
+    }
+
+    fn statuses(result: &ImproveResult) -> Vec<(&str, StageStatus, Option<&str>)> {
+        result
+            .stages
+            .iter()
+            .map(|s| (s.stage.as_str(), s.status, s.reason.as_deref()))
+            .collect()
+    }
+
+    // test_stages_run_in_registry_order_and_result_lists_each
+    #[tokio::test]
+    async fn stages_run_in_registry_order_and_result_lists_each() {
+        let mut executor = Scripted::default();
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        let names: Vec<&str> = DEFAULT_STAGES.iter().map(|s| s.name()).collect();
+        assert_eq!(executor.calls, names);
         assert_eq!(
-            counts,
-            [
-                ("anchors", 3),
-                ("nodes_scored", 5),
-                ("nodes_skipped", 2),
-                ("truth_epoch", 4)
-            ]
+            result
+                .stages
+                .iter()
+                .map(|s| s.stage.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert!(
+            result
+                .stages
+                .iter()
+                .all(|s| s.status == StageStatus::Completed)
+        );
+        assert_eq!(result.status(), ImproveStatus::Completed);
+        assert!(result.finished);
+        assert_eq!(end, LoopEnd::Finished);
+    }
+
+    // test_gate_reasons: disabled_by_config, then no_session_ids, then the
+    // stage's own gate.
+    #[tokio::test]
+    async fn gate_reasons_apply_in_order() {
+        let mut executor = Scripted::default()
+            .with(
+                StageKind::FeedbackWeights,
+                Script::Gate("backend_unsupported"),
+            )
+            .with(
+                StageKind::ReviewConflicts,
+                Script::Gate(REASON_OPT_IN_DISABLED),
+            );
+        let (result, _) = run_loop(
+            &mut executor,
+            false,
+            &["global_context_index", "feedback_weights"],
+        )
+        .await;
+        // A disabled stage wins over every other gate.
+        assert_eq!(
+            result.stage("feedback_weights").unwrap().reason.as_deref(),
+            Some(REASON_DISABLED_BY_CONFIG)
+        );
+        assert_eq!(
+            result
+                .stage("global_context_index")
+                .unwrap()
+                .reason
+                .as_deref(),
+            Some(REASON_DISABLED_BY_CONFIG)
+        );
+        // Session-fed stages without sessions.
+        for stage in DEFAULT_STAGES.iter().filter(|s| s.needs_sessions()).skip(1) {
+            let recorded = result.stage(stage.name()).unwrap();
+            assert_eq!(recorded.status, StageStatus::Skipped);
+            assert_eq!(recorded.reason.as_deref(), Some(REASON_NO_SESSION_IDS));
+            assert_eq!(recorded.duration_ms, 0);
+        }
+        // The stage's own gate.
+        assert_eq!(
+            result.stage("review_conflicts").unwrap().reason.as_deref(),
+            Some(REASON_OPT_IN_DISABLED)
+        );
+        // Nothing ran: every stage was gated.
+        assert!(executor.calls.is_empty());
+        assert_eq!(result.status(), ImproveStatus::Skipped);
+    }
+
+    // test_session_stage_runs_when_session_ids_given; the graph-only stages
+    // run without sessions.
+    #[tokio::test]
+    async fn graph_only_stages_run_without_sessions() {
+        let mut executor = Scripted::default();
+        let (result, _) = run_loop(&mut executor, false, &[]).await;
+        assert_eq!(executor.calls, ["review_conflicts", "global_context_index"]);
+        assert_eq!(result.status(), ImproveStatus::Completed);
+    }
+
+    // test_fatal_stage_stops_run_and_raises_with_partial_result
+    #[tokio::test]
+    async fn fatal_stage_stops_run_with_partial_result() {
+        let mut executor =
+            Scripted::default().with(StageKind::PersistSessionQa, Script::Error("persist failed"));
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(
+            end,
+            LoopEnd::Aborted {
+                budget_exhausted: false
+            }
+        );
+        assert_eq!(executor.calls, ["feedback_weights", "persist_session_qa"]);
+        let recorded = statuses(&result);
+        assert_eq!(recorded.len(), DEFAULT_STAGES.len());
+        assert_eq!(
+            recorded[0],
+            ("feedback_weights", StageStatus::Completed, None)
+        );
+        assert_eq!(
+            recorded[1],
+            ("persist_session_qa", StageStatus::Errored, None)
+        );
+        assert_eq!(result.stages[1].error.as_deref(), Some("persist failed"));
+        for (_, status, reason) in &recorded[2..] {
+            assert_eq!(*status, StageStatus::Skipped);
+            assert_eq!(*reason, Some(REASON_ABORTED_BY_FATAL_STAGE));
+        }
+        assert_eq!(result.error.as_deref(), Some("persist failed"));
+        assert_eq!(result.status(), ImproveStatus::Errored);
+    }
+
+    // test_errored_non_fatal_stage_records_and_continues
+    #[tokio::test]
+    async fn errored_non_fatal_stage_records_and_continues() {
+        let mut executor =
+            Scripted::default().with(StageKind::FeedbackWeights, Script::Error("nope"));
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(end, LoopEnd::Finished);
+        assert_eq!(executor.calls.len(), DEFAULT_STAGES.len());
+        assert_eq!(result.stages[0].status, StageStatus::Errored);
+        assert_eq!(result.stages[0].error.as_deref(), Some("nope"));
+        assert_eq!(result.stages[1].status, StageStatus::Completed);
+        assert!(result.error.is_none());
+        assert_eq!(result.status(), ImproveStatus::Errored);
+    }
+
+    // test_improve_budget_exhaustion: a non-fatal stage on an exhausted
+    // budget skips the rest and ends the run without an error.
+    #[tokio::test]
+    async fn budget_exhaustion_in_a_non_fatal_stage_skips_the_rest() {
+        let mut executor =
+            Scripted::default().with(StageKind::DistillSessions, Script::BudgetError);
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(end, LoopEnd::Finished);
+        assert_eq!(executor.calls.last(), Some(&"distill_sessions"));
+        let distill = result.stage("distill_sessions").unwrap();
+        assert_eq!(distill.status, StageStatus::Errored);
+        let after: Vec<_> = statuses(&result).into_iter().skip(5).collect();
+        assert_eq!(after.len(), 4);
+        for (_, status, reason) in after {
+            assert_eq!(status, StageStatus::Skipped);
+            assert_eq!(reason, Some(REASON_BUDGET_EXHAUSTED));
+        }
+        assert!(result.error.is_none());
+        assert_eq!(result.status(), ImproveStatus::Errored);
+    }
+
+    // A budget error in the fatal stage aborts, with the remaining stages
+    // skipped as budget_exhausted (Python `_abort_run(reason=...)`).
+    #[tokio::test]
+    async fn budget_exhaustion_in_the_fatal_stage_aborts_with_budget_reason() {
+        let mut executor =
+            Scripted::default().with(StageKind::PersistSessionQa, Script::BudgetError);
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(
+            end,
+            LoopEnd::Aborted {
+                budget_exhausted: true
+            }
+        );
+        assert!(
+            result.stages[2..]
+                .iter()
+                .all(|s| s.reason.as_deref() == Some(REASON_BUDGET_EXHAUSTED))
         );
     }
 
-    // A fail-open build that comes back errored must not be reported as
-    // completed: the stage carries its error and counts.
-    #[test]
-    fn errored_build_maps_to_an_errored_stage() {
-        let mut errored = build(cognee_cognify::TruthBuildStatus::Errored);
-        errored.error = Some("centroid upsert failed: down".to_string());
-        let stage = truth_subspace_stage_result(&errored);
-        assert_eq!(stage.status, StageStatus::Errored);
-        assert_eq!(stage.error.as_deref(), Some("centroid upsert failed: down"));
-        assert_eq!(stage.counts.get("nodes_scored"), Some(&5));
-
-        // Without an error text, Python's default message.
-        let bare = truth_subspace_stage_result(&build(cognee_cognify::TruthBuildStatus::Errored));
-        assert_eq!(bare.error.as_deref(), Some("truth subspace build errored"));
-    }
-
-    #[test]
-    fn skipped_build_maps_to_a_skipped_stage_with_its_reason() {
-        let mut skipped = build(cognee_cognify::TruthBuildStatus::Skipped);
-        skipped.reason = Some(REASON_BACKEND_UNSUPPORTED.to_string());
-        let stage = truth_subspace_stage_result(&skipped);
-        assert_eq!(stage.status, StageStatus::Skipped);
-        assert_eq!(stage.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
-        assert!(stage.counts.is_empty());
-    }
-
-    #[test]
-    fn stage_status_names_match_python() {
-        let names: Vec<&str> = [
-            StageStatus::Completed,
-            StageStatus::AlreadyCompleted,
-            StageStatus::Skipped,
-            StageStatus::Errored,
-        ]
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-        assert_eq!(
-            names,
-            ["completed", "already_completed", "skipped", "errored"]
-        );
+    // A budget signal on a stage that did not error is not an exhaustion.
+    #[tokio::test]
+    async fn a_budget_flag_without_an_error_is_ignored() {
+        struct FlaggedButCompleted;
+        impl StageExecutor for FlaggedButCompleted {
+            fn gate(&self, _: StageKind) -> Option<&'static str> {
+                None
+            }
+            fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send {
+                std::future::ready(StageRun {
+                    result: StageResult::completed(stage.name()),
+                    budget_exhausted: true,
+                })
+            }
+        }
+        let mut result = ImproveResult::new("docs", vec![]);
+        let end = execute_stages(
+            &DEFAULT_STAGES,
+            true,
+            &[],
+            &mut FlaggedButCompleted,
+            &mut result,
+        )
+        .await;
+        assert_eq!(end, LoopEnd::Finished);
+        assert_eq!(result.status(), ImproveStatus::Completed);
     }
 }

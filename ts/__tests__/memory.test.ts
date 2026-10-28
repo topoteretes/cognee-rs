@@ -144,9 +144,9 @@ describe("memory ops (Tier-A — no LLM)", () => {
           datasetName: "improve_test_ds",
         });
         expect(typeof result).toBe("object");
-        expect(Array.isArray(result.stagesRun)).toBe(true);
-        expect(typeof result.feedbackEntriesProcessed).toBe("number");
-        expect(typeof result.sessionsPersisted).toBe("number");
+        expect(Array.isArray(result.stages)).toBe(true);
+        expect(result.datasetName).toBe("improve_test_ds");
+        expect(result.status).toBe("skipped");
       } finally {
         cleanup(h.tmpDir);
       }
@@ -246,14 +246,23 @@ describeMaybe("memory ops (Tier-B — live LLM)", () => {
   );
 
   it(
-    "cogneeImprove returns ImproveResult with stagesRun array",
+    "cogneeImprove returns ImproveResult with one entry per stage",
     async () => {
       const result = await native.cogneeImprove(handle, {
         datasetName: "mem_b_ds",
       });
-      expect(Array.isArray(result.stagesRun)).toBe(true);
-      expect(typeof result.feedbackEntriesProcessed).toBe("number");
-      expect(typeof result.sessionsPersisted).toBe("number");
+      expect(result.stages.map((s) => s.stage)).toEqual([
+        "feedback_weights",
+        "persist_session_qa",
+        "persist_agent_traces",
+        "extract_agent_context",
+        "distill_sessions",
+        "update_user_preferences",
+        "build_truth_subspace",
+        "review_conflicts",
+        "global_context_index",
+      ]);
+      expect(typeof result.finished).toBe("boolean");
     },
     120_000
   );

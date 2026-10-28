@@ -588,9 +588,11 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,
  *                    "alreadyCompleted":bool,"priorPipelineRunId":null|"<uuid>"}
  *
- *   ImproveResult — {"stagesRun":[…],"stages":[ImproveStage…],"memifyResult":…,
- *                    "feedbackEntriesProcessed":N,"feedbackEntriesApplied":N,
- *                    "sessionsPersisted":N,"edgesSynced":N}
+ *   ImproveResult — {"datasetId":null|"<uuid>","datasetName":"…",
+ *                    "sessionIds":[…],"stages":[ImproveStage…],
+ *                    "background":bool,"finished":bool,"error":null|"…",
+ *                    "status":"completed"|"errored"|"skipped"|"running"}
+ *                    One stage per improve stage, in registry order.
  *
  *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
  *                    "skipped"|"errored","reason":null|"…","error":null|"…",
