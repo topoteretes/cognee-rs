@@ -110,6 +110,15 @@ pub trait SearchRetriever: Send + Sync {
         Ok(None)
     }
 
+    /// The `only_context` result when
+    /// [`completion_messages`](Self::completion_messages) builds no prompt.
+    /// `None` (the default) returns the context items. A retriever whose
+    /// Python context is text rather than objects returns that text, since
+    /// Python's `only_context` result is the context itself.
+    fn only_context_output(&self, _context: &SearchContext) -> Option<SearchOutput> {
+        None
+    }
+
     /// Process multiple queries in sequence and return their contexts.
     ///
     /// Default: loops over [`get_context`]. Override for efficient batching.

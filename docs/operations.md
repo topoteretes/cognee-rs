@@ -265,7 +265,8 @@ defaults, computed here), entity-to-entity edges across different node sets, and
 EXTRACTED vs DERIVED edge counts, followed by LLM-suggested questions. `NodeSet`
 containers and `belongs_to_set` edges are left out and parallel edges count once,
 as in Python's `nx.DiGraph`. Its context is one item holding the Markdown report and
-the structured hubs, connections and counts. An empty graph gets a fixed report, not
+the structured hubs, connections and counts; an `only_context` search answers the bare
+report text, as Python's does. An empty graph gets a fixed report, not
 `NotFound`. Python computes PageRank only when `scipy` is installed (it is not a
 cognee dependency) and otherwise ranks by degree alone, so its PageRank column reads
 `0.0000` on a default install; Rust always computes it.

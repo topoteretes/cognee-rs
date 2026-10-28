@@ -1116,10 +1116,12 @@ impl SearchOrchestrator {
 
             // Python's `SearchResultPayload.result`: the user prompt when one
             // was built (the system prompt travels separately), else the
-            // context.
+            // context — as the retriever's Python counterpart represents it.
             let result = match &user_prompt {
                 Some(prompt) => SearchOutput::Text(prompt.clone()),
-                None => SearchOutput::Items(output_context.clone()),
+                None => retriever
+                    .only_context_output(&output_context)
+                    .unwrap_or_else(|| SearchOutput::Items(output_context.clone())),
             };
             let mut response = prepare_search_result(
                 search_type,
