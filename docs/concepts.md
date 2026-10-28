@@ -98,6 +98,17 @@ requires a `cognee` built with its `session-fs` / `session-redis` feature. Those
 features register the store factory and its `session.fs` / `session.redis` config
 section; enabling `cognee-session/fs` or `cognee-session/redis` alone does neither.
 
+Next to its Q&A entries and agent trace steps, a session keeps a list of
+**session-context rows** (Python's session context): JSON objects with a `"kind"`
+field. `"context"` rows are active guidance entries (`SessionContextEntry`:
+goals, rules, preferences, lessons); other kinds are feedback records or
+internal state rows, such as the `StateRowWatermark` rows the improve stages use
+to remember how far they got. Only `"context"` rows are ever rendered
+(`coerce_active_context_entries`). `SessionManager::{get,create,update}_session_context_entry`
+read and write them on every store (`session_context_entries` table,
+`{session_id}.context.json` file, `session_context:{user}:{session}` Redis list);
+deleting or pruning a session removes them.
+
 ### Node Sets
 
 A **node set** is a tag attached to ingested data and the DataPoints derived from

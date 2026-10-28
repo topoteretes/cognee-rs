@@ -76,7 +76,7 @@ cognee-rs/
 
 **cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 18 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends vector search over chunks/summaries/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
 
-**cognee-session** — Session management and QA-history storage. Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `RelationalSessionStore` (over any `SessionQaDb`; formerly `SeaOrmSessionStore`).
+**cognee-session** — Session management and QA-history storage, plus the per-session context rows (`SessionContextEntry`, `StateRowWatermark`). Trait: `SessionStore`. Impls: `FsSessionStore`, `RedisSessionStore`, `RelationalSessionStore` (over any `SessionQaDb`; formerly `SeaOrmSessionStore`).
 
 **cognee-embedding** — Text vectorization engine. Trait: `EmbeddingEngine`. Impls: `OnnxEmbeddingEngine` (local ONNX Runtime, BGE-Small-v1.5), `OpenAICompatibleEmbeddingEngine` (OpenAI/Azure/vLLM/llama.cpp/TEI via HTTP), `OllamaEmbeddingEngine`, `BedrockEmbeddingEngine` (AWS Bedrock InvokeModel — Titan + Cohere families, `bedrock` feature), `MockEmbeddingEngine`. `EmbeddingConfig::from_env()` + `create_engine()` factory select the provider. See [configuration.md](configuration.md#embedding).
 

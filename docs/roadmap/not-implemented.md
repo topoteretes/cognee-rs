@@ -96,7 +96,9 @@ Partial stages:
   *neither* SDK — a shared future enhancement rather than a parity gap.
 
 - **`persist_session_qa` / `distill_sessions`** — no Q&A or distillation watermark yet
-  (SDK-1047 / SDK-1049): every run persists and distills the sessions' full Q&A, and
+  (SDK-1047 / SDK-1049): the watermark rows exist (`cognee_session::SESSION_PERSIST_WATERMARK`,
+  `distill_watermark`, on the session-context store) but no stage reads or advances them yet, so
+  every run persists and distills the sessions' full Q&A, and
   `distill_sessions` reports no `entries_uncurated` count.
 
 ## HTTP server
