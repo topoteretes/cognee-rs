@@ -1011,7 +1011,10 @@ impl SearchOrchestrator {
         }
 
         let merged = merge_dataset_results(request, results.clone());
+        // An `only_context` result is a preview (a prompt or the context), not
+        // an answer: nothing is written, as in the single-store run.
         match &merged.result {
+            _ if request.only_context() => {}
             SearchOutput::Text(answer) => {
                 self.save_session_turn(request, answer, merged_context(&merged).as_deref())
                     .await;
@@ -1117,11 +1120,18 @@ impl SearchOrchestrator {
             // Python's `SearchResultPayload.result`: the user prompt when one
             // was built (the system prompt travels separately), else the
             // context — as the retriever's Python counterpart represents it.
-            let result = match &user_prompt {
-                Some(prompt) => SearchOutput::Text(prompt.clone()),
-                None => retriever
-                    .only_context_output(&output_context)
-                    .unwrap_or_else(|| SearchOutput::Items(output_context.clone())),
+            // A miss stays the bare (empty) context.
+            let context_output = if user_prompt.is_none() && !output_context.is_empty() {
+                retriever
+                    .only_context_output(&request.query_text, &output_context, &params)
+                    .await?
+            } else {
+                None
+            };
+            let result = match (&user_prompt, context_output) {
+                (Some(prompt), _) => SearchOutput::Text(prompt.clone()),
+                (None, Some(output)) => output,
+                (None, None) => SearchOutput::Items(output_context.clone()),
             };
             let mut response = prepare_search_result(
                 search_type,
@@ -1559,6 +1569,20 @@ impl MergeValue for serde_json::Value {
 
 /// One output from several datasets' outputs, in dataset order.
 fn merge_outputs(outputs: Vec<SearchOutput>) -> SearchOutput {
+    // A dataset without searchable memory answers an empty `Items`
+    // placeholder. It has nothing to merge, so it must not decide the shape
+    // of the other datasets' answers (a text answer next to it would
+    // otherwise fall through to "the first dataset's": the empty one).
+    let is_placeholder =
+        |output: &SearchOutput| matches!(output, SearchOutput::Items(items) if items.is_empty());
+    let outputs: Vec<SearchOutput> = if outputs.iter().all(is_placeholder) {
+        outputs
+    } else {
+        outputs
+            .into_iter()
+            .filter(|output| !is_placeholder(output))
+            .collect()
+    };
     if outputs
         .iter()
         .all(|output| matches!(output, SearchOutput::Items(_)))
@@ -2201,6 +2225,87 @@ mod tests {
             }
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    /// Under per-dataset storage an `only_context` text result (GRAPH_REPORT's
+    /// bare report) survives a dataset without data searched before it, and
+    /// is not written to the session: a preview is not an answer.
+    #[tokio::test]
+    async fn per_dataset_only_context_text_survives_an_empty_dataset_and_writes_no_turn() {
+        struct ReportIn(uuid::Uuid);
+
+        #[async_trait]
+        impl SearchRetriever for ReportIn {
+            fn search_type(&self) -> SearchType {
+                SearchType::GraphReport
+            }
+
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
+                if cognee_models::dataset_scope::current_dataset() == Some(self.0) {
+                    return Ok(vec![crate::types::SearchItem {
+                        id: None,
+                        score: None,
+                        payload: json!({ "report": "the report" }),
+                    }]);
+                }
+                Err(SearchError::NotFound("graph is empty".to_string()))
+            }
+
+            async fn get_completion(
+                &self,
+                _query: &str,
+                _context: Option<SearchContext>,
+                _session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<SearchOutput, SearchError> {
+                Ok(SearchOutput::Text("an answer".to_string()))
+            }
+
+            async fn only_context_output(
+                &self,
+                _query: &str,
+                context: &SearchContext,
+                _params: &SearchParams,
+            ) -> Result<Option<SearchOutput>, SearchError> {
+                Ok(context[0].payload["report"]
+                    .as_str()
+                    .map(|report| SearchOutput::Text(report.to_string())))
+            }
+        }
+
+        let (empty, full) = (Uuid::new_v4(), Uuid::new_v4());
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(cognee_session::FsSessionStore::new(
+            dir.path().join("sessions"),
+        ));
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(ReportIn(full)));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_session_manager(Arc::new(cognee_session::SessionManager::new(store.clone())));
+
+        let mut request = echo_request(SearchType::GraphReport, &[empty, full]);
+        request.only_context = Some(true);
+        request.session_id = Some("preview".to_string());
+        let response = orchestrator.search(&request).await.unwrap();
+
+        assert!(
+            matches!(&response.result, SearchOutput::Texts(texts) if texts == &["the report"]),
+            "{:?}",
+            response.result
+        );
+        use cognee_session::SessionStore;
+        assert!(
+            store
+                .get_all_qa_entries("preview", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

@@ -110,13 +110,20 @@ pub trait SearchRetriever: Send + Sync {
         Ok(None)
     }
 
-    /// The `only_context` result when
+    /// The `only_context` result for a non-empty `context` when
     /// [`completion_messages`](Self::completion_messages) builds no prompt.
     /// `None` (the default) returns the context items. A retriever whose
     /// Python context is text rather than objects returns that text, since
-    /// Python's `only_context` result is the context itself.
-    fn only_context_output(&self, _context: &SearchContext) -> Option<SearchOutput> {
-        None
+    /// Python's `only_context` result is the context itself. Wrappers that
+    /// delegate to another retriever forward it as they forward
+    /// `completion_messages`.
+    async fn only_context_output(
+        &self,
+        _query: &str,
+        _context: &SearchContext,
+        _params: &SearchParams,
+    ) -> Result<Option<SearchOutput>, SearchError> {
+        Ok(None)
     }
 
     /// Process multiple queries in sequence and return their contexts.

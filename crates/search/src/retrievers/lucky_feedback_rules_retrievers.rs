@@ -311,6 +311,18 @@ impl SearchRetriever for FeelingLuckyRetriever {
             .completion_messages(query, context, session, params)
             .await
     }
+
+    async fn only_context_output(
+        &self,
+        query: &str,
+        context: &SearchContext,
+        params: &SearchParams,
+    ) -> Result<Option<SearchOutput>, SearchError> {
+        self.select_retriever(query)
+            .await?
+            .only_context_output(query, context, params)
+            .await
+    }
 }
 
 pub struct FeedbackRetriever {
@@ -1205,6 +1217,94 @@ mod tests {
             .expect("the selected retriever builds a prompt");
 
         assert_eq!(messages[1].content, "graph prompt");
+        assert_eq!(
+            llm.plain_responses.lock().unwrap().len(),
+            1,
+            "the selector must be asked once per search"
+        );
+    }
+
+    /// The selected retriever's `only_context` output passes through (a
+    /// GRAPH_REPORT pick answers its bare report), from the same pick.
+    #[tokio::test]
+    async fn feeling_lucky_forwards_the_selected_retrievers_context_output() {
+        struct ReportStub;
+
+        #[async_trait]
+        impl SearchRetriever for ReportStub {
+            fn search_type(&self) -> SearchType {
+                SearchType::GraphReport
+            }
+
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
+                Ok(vec![crate::types::SearchItem {
+                    id: None,
+                    score: None,
+                    payload: serde_json::json!({ "report": "the report" }),
+                }])
+            }
+
+            async fn get_completion(
+                &self,
+                _query: &str,
+                _context: Option<SearchContext>,
+                _session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<SearchOutput, SearchError> {
+                Ok(SearchOutput::Text("report and questions".to_string()))
+            }
+
+            async fn only_context_output(
+                &self,
+                _query: &str,
+                _context: &SearchContext,
+                _params: &SearchParams,
+            ) -> Result<Option<SearchOutput>, SearchError> {
+                Ok(Some(SearchOutput::Text("the report".to_string())))
+            }
+        }
+
+        let llm = Arc::new(TestLlm {
+            plain_responses: Mutex::new(VecDeque::from([
+                "GRAPH_REPORT".to_string(),
+                "RAG_COMPLETION".to_string(),
+            ])),
+            feedback_response: None,
+        });
+        let retriever = FeelingLuckyRetriever::new(
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            HashMap::from([
+                (
+                    SearchType::RagCompletion,
+                    Arc::new(FixedRetriever {
+                        kind: SearchType::RagCompletion,
+                        text: "rag prompt".to_string(),
+                    }) as SearchRetrieverRef,
+                ),
+                (
+                    SearchType::GraphReport,
+                    Arc::new(ReportStub) as SearchRetrieverRef,
+                ),
+            ]),
+            Some(SearchType::RagCompletion),
+            None,
+        );
+
+        let params = SearchParams::default();
+        let context = retriever.get_context("overview", &params).await.unwrap();
+        let output = retriever
+            .only_context_output("overview", &context, &params)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(&output, Some(SearchOutput::Text(text)) if text == "the report"),
+            "{output:?}"
+        );
         assert_eq!(
             llm.plain_responses.lock().unwrap().len(),
             1,
