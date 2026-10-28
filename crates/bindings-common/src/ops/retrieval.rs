@@ -559,10 +559,10 @@ mod tests {
         let err = parse_search_type("TRIPLET_COMPLETION").expect_err("removed type");
         let message = err.to_string();
         assert!(message.contains("unknown SearchType"), "{message}");
-        assert!(
-            !message.contains("Valid values: SUMMARIES, CHUNKS, RAG_COMPLETION, TRIPLET"),
-            "{message}"
-        );
+        let (_, valid) = message
+            .split_once("Valid values:")
+            .expect("the error lists the valid values");
+        assert!(!valid.contains("TRIPLET"), "{message}");
     }
 
     /// The `recall` op reads its opts key by key, so an unrecognised
