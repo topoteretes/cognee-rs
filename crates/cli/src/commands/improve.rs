@@ -27,6 +27,12 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             settings.default_user_id
         ))
     })?;
+    // Fail before any work on a bad `improve.*` value (an
+    // IMPROVE_STAGES_DISABLED typo, an out-of-range alpha).
+    let improve_config = settings
+        .improve_config()
+        .map_err(|error| CliError::Validation(error.to_string()))?;
+    let personalization_enabled = settings.personalization_enabled;
     drop(settings);
 
     let tenant_id = super::parse_tenant_id(args.tenant_id.as_deref())?;
@@ -112,6 +118,8 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             owner_id,
             tenant_id,
             feedback_alpha: args.feedback_alpha,
+            config: improve_config,
+            personalization_enabled,
             extraction_tasks: None,
             enrichment_tasks: None,
             data: None,

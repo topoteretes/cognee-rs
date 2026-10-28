@@ -9,10 +9,12 @@
 //! (a) The function signature has no `run_in_background` parameter.
 //! (b) `RememberResult` has no `inner` / `await_completion()` member.
 //! (c) Calling `remember(...)` for permanent mode returns `RememberStatus::Completed`.
-//! (d) Calling with a `session_id` runs inline improve() and returns `SessionStored`.
+//! (d) Calling with a `session_id` returns `SessionStored` with the improve
+//!     launched as a detached background task.
 
 use std::sync::Arc;
 
+use cognee::api::ImproveConfig;
 use cognee::api::remember::{RememberResult, RememberStatus, remember};
 use cognee_cognify::CognifyConfig;
 use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
@@ -37,9 +39,9 @@ use uuid::Uuid;
 
 /// Verify the function signature at type level.
 /// If `run_in_background` were still present, this function would not compile
-/// because `remember` would take 19 arguments, not 18.
+/// because `remember` would take 21 arguments, not 20.
 fn _assert_signature() {
-    // This is a compile-time only check: remember() must accept exactly 18
+    // This is a compile-time only check: remember() must accept exactly 20
     // positional arguments (no run_in_background between self_improvement and
     // owner_id). The test passes if this file compiles.
     let _ = remember; // just reference it to ensure it is imported
@@ -144,6 +146,7 @@ fn remember_result_has_no_inner_field_in_json() {
         entry_id: None,
         cognify_result: None,
         memify_result: None,
+        improve_launched: false,
     };
     let json = r.to_dict();
     let obj = json.as_object().expect("object");
@@ -180,6 +183,8 @@ async fn remember_session_returns_session_stored() {
         Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
+        Some(ImproveConfig::default()),
+        false,
     )
     .await
     .expect("remember session");
@@ -190,11 +195,11 @@ async fn remember_session_returns_session_stored() {
 }
 
 // ---------------------------------------------------------------------------
-// (d) Session-mode with self_improvement=true runs improve() inline
+// (d) Session-mode with self_improvement=true detaches improve()
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn remember_session_self_improvement_inline() {
+async fn remember_session_self_improvement_detached() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
 
@@ -217,11 +222,15 @@ async fn remember_session_self_improvement_inline() {
         Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
+        Some(ImproveConfig::default()),
+        false,
     )
     .await
-    .expect("remember session with inline improve");
+    .expect("remember session with background improve");
 
-    // Synchronous: always terminal on return.
+    // The session write is terminal on return; the improve runs detached.
     assert_eq!(result.status, RememberStatus::SessionStored);
     assert!(result.done());
+    assert!(result.improve_launched);
+    assert!(cognee::wait_for_background_tasks(None).await);
 }

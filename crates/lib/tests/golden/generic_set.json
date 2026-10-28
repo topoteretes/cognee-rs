@@ -3694,6 +3694,66 @@
     "err": "TypeMismatch",
     "key": "default_dataset_name"
   },
+  "default_feedback_influence <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- -1": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- 0": {
+    "ok": {}
+  },
+  "default_feedback_influence <- 1": {
+    "ok": {
+      "default_feedback_influence": 1.0
+    }
+  },
+  "default_feedback_influence <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- 70000": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- [1]": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- false": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- null": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- true": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
+  "default_feedback_influence <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "default_feedback_influence"
+  },
   "default_system_prompt_path <- \"\"": {
     "ok": {
       "default_system_prompt_path": ""
@@ -8011,6 +8071,634 @@
   "huggingface_tokenizer <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "huggingface_tokenizer"
+  },
+  "improve.auto_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "improve.auto_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- true": {
+    "ok": {}
+  },
+  "improve.auto_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.debounce_entries <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- -1": {
+    "ok": {
+      "improve.debounce_entries": -1
+    }
+  },
+  "improve.debounce_entries <- 0": {
+    "ok": {
+      "improve.debounce_entries": 0
+    }
+  },
+  "improve.debounce_entries <- 1": {
+    "ok": {}
+  },
+  "improve.debounce_entries <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- 5000000000": {
+    "ok": {
+      "improve.debounce_entries": 5000000000
+    }
+  },
+  "improve.debounce_entries <- 70000": {
+    "ok": {
+      "improve.debounce_entries": 70000
+    }
+  },
+  "improve.debounce_entries <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_entries <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_entries"
+  },
+  "improve.debounce_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- -1": {
+    "ok": {
+      "improve.debounce_seconds": -1.0
+    }
+  },
+  "improve.debounce_seconds <- 0": {
+    "ok": {}
+  },
+  "improve.debounce_seconds <- 1": {
+    "ok": {
+      "improve.debounce_seconds": 1.0
+    }
+  },
+  "improve.debounce_seconds <- 1.5": {
+    "ok": {
+      "improve.debounce_seconds": 1.5
+    }
+  },
+  "improve.debounce_seconds <- 5000000000": {
+    "ok": {
+      "improve.debounce_seconds": 5000000000.0
+    }
+  },
+  "improve.debounce_seconds <- 70000": {
+    "ok": {
+      "improve.debounce_seconds": 70000.0
+    }
+  },
+  "improve.debounce_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.debounce_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.debounce_seconds"
+  },
+  "improve.distill_max_batches_per_run <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- -1": {
+    "ok": {
+      "improve.distill_max_batches_per_run": -1
+    }
+  },
+  "improve.distill_max_batches_per_run <- 0": {
+    "ok": {}
+  },
+  "improve.distill_max_batches_per_run <- 1": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 1
+    }
+  },
+  "improve.distill_max_batches_per_run <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- 5000000000": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 5000000000
+    }
+  },
+  "improve.distill_max_batches_per_run <- 70000": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 70000
+    }
+  },
+  "improve.distill_max_batches_per_run <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.distill_max_batches_per_run <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.distill_max_batches_per_run"
+  },
+  "improve.effective_date_key <- \"\"": {
+    "ok": {
+      "improve.effective_date_key": ""
+    }
+  },
+  "improve.effective_date_key <- \"1\"": {
+    "ok": {
+      "improve.effective_date_key": "1"
+    }
+  },
+  "improve.effective_date_key <- \"s\"": {
+    "ok": {
+      "improve.effective_date_key": "s"
+    }
+  },
+  "improve.effective_date_key <- \"true\"": {
+    "ok": {
+      "improve.effective_date_key": "true"
+    }
+  },
+  "improve.effective_date_key <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.effective_date_key <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.effective_date_key"
+  },
+  "improve.feedback_alpha <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- -1": {
+    "ok": {
+      "improve.feedback_alpha": -1.0
+    }
+  },
+  "improve.feedback_alpha <- 0": {
+    "ok": {
+      "improve.feedback_alpha": 0.0
+    }
+  },
+  "improve.feedback_alpha <- 1": {
+    "ok": {
+      "improve.feedback_alpha": 1.0
+    }
+  },
+  "improve.feedback_alpha <- 1.5": {
+    "ok": {
+      "improve.feedback_alpha": 1.5
+    }
+  },
+  "improve.feedback_alpha <- 5000000000": {
+    "ok": {
+      "improve.feedback_alpha": 5000000000.0
+    }
+  },
+  "improve.feedback_alpha <- 70000": {
+    "ok": {
+      "improve.feedback_alpha": 70000.0
+    }
+  },
+  "improve.feedback_alpha <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.feedback_alpha <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.feedback_alpha"
+  },
+  "improve.review_conflicts <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- false": {
+    "ok": {}
+  },
+  "improve.review_conflicts <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.review_conflicts <- true": {
+    "ok": {
+      "improve.review_conflicts": true
+    }
+  },
+  "improve.review_conflicts <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.review_conflicts"
+  },
+  "improve.stages_disabled <- \"\"": {
+    "ok": {}
+  },
+  "improve.stages_disabled <- \"1\"": {
+    "ok": {
+      "improve.stages_disabled": "1"
+    }
+  },
+  "improve.stages_disabled <- \"s\"": {
+    "ok": {
+      "improve.stages_disabled": "s"
+    }
+  },
+  "improve.stages_disabled <- \"true\"": {
+    "ok": {
+      "improve.stages_disabled": "true"
+    }
+  },
+  "improve.stages_disabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.stages_disabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.stages_disabled"
+  },
+  "improve.trace_window_steps <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- -1": {
+    "ok": {
+      "improve.trace_window_steps": -1
+    }
+  },
+  "improve.trace_window_steps <- 0": {
+    "ok": {}
+  },
+  "improve.trace_window_steps <- 1": {
+    "ok": {
+      "improve.trace_window_steps": 1
+    }
+  },
+  "improve.trace_window_steps <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- 5000000000": {
+    "ok": {
+      "improve.trace_window_steps": 5000000000
+    }
+  },
+  "improve.trace_window_steps <- 70000": {
+    "ok": {
+      "improve.trace_window_steps": 70000
+    }
+  },
+  "improve.trace_window_steps <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_window_steps <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_window_steps"
+  },
+  "improve.trace_windows_per_run <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- -1": {
+    "ok": {
+      "improve.trace_windows_per_run": -1
+    }
+  },
+  "improve.trace_windows_per_run <- 0": {
+    "ok": {}
+  },
+  "improve.trace_windows_per_run <- 1": {
+    "ok": {
+      "improve.trace_windows_per_run": 1
+    }
+  },
+  "improve.trace_windows_per_run <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- 5000000000": {
+    "ok": {
+      "improve.trace_windows_per_run": 5000000000
+    }
+  },
+  "improve.trace_windows_per_run <- 70000": {
+    "ok": {
+      "improve.trace_windows_per_run": 70000
+    }
+  },
+  "improve.trace_windows_per_run <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- false": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- true": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
+  },
+  "improve.trace_windows_per_run <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.trace_windows_per_run"
   },
   "llm.anthropic.base_url <- \"\"": {
     "ok": {
@@ -13122,6 +13810,128 @@
     "err": "TypeMismatch",
     "key": "otel_traces_sampler_arg"
   },
+  "personalization_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- false": {
+    "ok": {}
+  },
+  "personalization_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_enabled <- true": {
+    "ok": {
+      "personalization_enabled": true
+    }
+  },
+  "personalization_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "personalization_enabled"
+  },
+  "personalization_influence <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- -1": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- 0": {
+    "ok": {
+      "personalization_influence": 0.0
+    }
+  },
+  "personalization_influence <- 1": {
+    "ok": {
+      "personalization_influence": 1.0
+    }
+  },
+  "personalization_influence <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- 70000": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- [1]": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- false": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- null": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- true": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
+  "personalization_influence <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "personalization_influence"
+  },
   "pgvector_hnsw_ef_construction <- \"\"": {
     "err": "TypeMismatch",
     "key": "pgvector_hnsw_ef_construction"
@@ -13376,6 +14186,128 @@
   "pgvector_maintenance_workers <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "pgvector_maintenance_workers"
+  },
+  "preference_alpha <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- -1": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- 0": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- 1": {
+    "ok": {
+      "preference_alpha": 1.0
+    }
+  },
+  "preference_alpha <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- 70000": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- [1]": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- false": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- null": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- true": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_alpha <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "preference_alpha"
+  },
+  "preference_beta <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- -1": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- 0": {
+    "ok": {
+      "preference_beta": 0.0
+    }
+  },
+  "preference_beta <- 1": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- 70000": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- [1]": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- false": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- null": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- true": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
+  },
+  "preference_beta <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "preference_beta"
   },
   "raise_incremental_loading_errors <- \"\"": {
     "err": "TypeMismatch",

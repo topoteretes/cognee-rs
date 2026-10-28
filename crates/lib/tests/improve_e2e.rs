@@ -16,9 +16,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee::api::ApiError;
 use cognee::api::improve::{
-    DEFAULT_STAGES, ImproveParams, ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE,
-    REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED, REASON_NO_LLM_CONFIGURED,
-    REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
+    DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
+    REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED,
+    REASON_DISABLED_BY_CONFIG, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS,
+    REASON_NO_SESSION_IDS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
     REASON_PERSONALIZATION_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
 use cognee::models::Dataset;
@@ -188,7 +189,9 @@ fn params<'a>(
         node_name: None,
         owner_id: Uuid::new_v4(),
         tenant_id: None,
-        feedback_alpha: 0.1,
+        feedback_alpha: None,
+        config: cognee::api::ImproveConfig::default(),
+        personalization_enabled: false,
         llm,
         storage: Arc::clone(&h.storage),
         graph_db: h.graph_db.clone() as Arc<_>,
@@ -671,5 +674,137 @@ async fn improve_runs_the_graph_stages_in_the_dataset_under_per_dataset_storage(
         stores.graph_datasets(),
         vec![dataset_id],
         "the stages read the dataset's graph"
+    );
+}
+
+/// `improve.stages_disabled` skips the named stages with
+/// `disabled_by_config`, ahead of every other gate (Python
+/// `test_improve_orchestration` / `test_stage_gates`
+/// `test_disabled_by_config_wins_over_everything`).
+#[tokio::test]
+async fn stages_disabled_by_config_are_skipped_first() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let mut p = params(
+        &h,
+        &config,
+        "ds_disabled",
+        Some(vec!["disabled_session".to_string()]),
+        mock_llm(),
+    );
+    p.config = ImproveConfig {
+        stages_disabled: vec![
+            "feedback_weights".to_string(),
+            "distill_sessions".to_string(),
+            // A graph-only stage the caller opted into: the config still wins.
+            "global_context_index".to_string(),
+        ],
+        ..ImproveConfig::default()
+    };
+    p.build_global_context_index = true;
+    let r = improve(p).await.unwrap();
+    for name in [
+        "feedback_weights",
+        "distill_sessions",
+        "global_context_index",
+    ] {
+        let s = stage(&r, name);
+        assert_eq!(s.status, StageStatus::Skipped, "{name}");
+        assert_eq!(
+            s.reason.as_deref(),
+            Some(REASON_DISABLED_BY_CONFIG),
+            "{name}"
+        );
+        assert_eq!(s.duration_ms, 0, "{name}");
+    }
+    assert_eq!(
+        stage(&r, "persist_session_qa").status,
+        StageStatus::Completed
+    );
+    assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
+}
+
+/// An invalid configuration fails the run before any stage, loudly: a
+/// disabled fatal stage, an unknown stage name, an out-of-range alpha.
+#[tokio::test]
+async fn improve_rejects_an_invalid_configuration_before_any_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let bad_configs = [
+        ImproveConfig {
+            stages_disabled: vec!["persist_session_qa".to_string()],
+            ..ImproveConfig::default()
+        },
+        ImproveConfig {
+            stages_disabled: vec!["persist_sesion_qa".to_string()],
+            ..ImproveConfig::default()
+        },
+        ImproveConfig {
+            feedback_alpha: 0.0,
+            ..ImproveConfig::default()
+        },
+    ];
+    for bad in bad_configs {
+        let mut p = params(&h, &config, "ds_bad_config", None, mock_llm());
+        p.config = bad.clone();
+        let err = improve(p).await.unwrap_err();
+        assert!(
+            matches!(err, ApiError::InvalidArgument(_)),
+            "{bad:?}: {err}"
+        );
+    }
+    let mut p = params(&h, &config, "ds_bad_alpha", None, mock_llm());
+    p.feedback_alpha = Some(1.5);
+    let err = improve(p).await.unwrap_err();
+    assert!(err.to_string().contains("feedback_alpha"), "{err}");
+}
+
+/// `personalization_enabled` opens the `update_user_preferences` gate; the
+/// stage is not ported yet, so it reports `not_ported` instead of
+/// `personalization_disabled`.
+#[tokio::test]
+async fn personalization_enabled_opens_the_user_preferences_gate() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let mut p = params(
+        &h,
+        &config,
+        "ds_personal",
+        Some(vec!["personal_session".to_string()]),
+        mock_llm(),
+    );
+    p.personalization_enabled = true;
+    let r = improve(p).await.unwrap();
+    assert_eq!(
+        stage(&r, "update_user_preferences").reason.as_deref(),
+        Some(REASON_NOT_PORTED)
+    );
+}
+
+/// `improve.review_conflicts` opts every run into `review_conflicts`; the
+/// stage then applies its own gates (no LLM), and is not ported past them.
+#[tokio::test]
+async fn review_conflicts_config_opts_in() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let opted_in = || ImproveConfig {
+        review_conflicts: true,
+        ..ImproveConfig::default()
+    };
+    let mut p = params(&h, &config, "ds_review", None, mock_llm());
+    p.config = opted_in();
+    let r = improve(p).await.unwrap();
+    assert_eq!(
+        stage(&r, "review_conflicts").reason.as_deref(),
+        Some(REASON_NOT_PORTED)
+    );
+
+    let keyless: Arc<dyn cognee_llm::Llm> = Arc::new(cognee_llm::UnconfiguredLlm::new("openai"));
+    let mut p = params(&h, &config, "ds_review_keyless", None, keyless);
+    p.config = opted_in();
+    let r = improve(p).await.unwrap();
+    assert_eq!(
+        stage(&r, "review_conflicts").reason.as_deref(),
+        Some(REASON_NO_LLM_CONFIGURED)
     );
 }

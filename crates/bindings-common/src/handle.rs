@@ -368,6 +368,16 @@ impl HandleState {
         // racing to warm a pool that is about to be closed underneath it.
         if mark_closed {
             self.closed.store(true, Ordering::Release);
+            // A session `remember` launches its improve as a detached task
+            // that still uses the engines `cm.close()` is about to close, and
+            // a short-lived embedder exits right after `close()`. Wait for it
+            // (and every other task in the process-wide background registry).
+            // The implicit `release` does not wait: it closes only what no
+            // in-flight task holds.
+            if cognee::pending_background_tasks() > 0 {
+                tracing::info!("close: waiting for background tasks to finish");
+                cognee::wait_for_background_tasks(None).await;
+            }
         }
         // Clear the cached bundle: it holds an `Arc` clone of the connection, and
         // dropping it is what lets `release` leave the handle re-warmable rather

@@ -125,6 +125,12 @@ where
 
     let outcome = runtime.block_on(async move {
         let outcome = future.await;
+        // A session `remember` launches its improve as a detached task on this
+        // runtime; shutting the runtime down below would cancel it. Wait for it
+        // (and anything else in the background-task registry) first, without a
+        // bound: before detaching, the CLI ran that improve inline, so the exit
+        // waited for it all the same.
+        drain_background_tasks().await;
         // Release whether the command succeeded or not: a failed run has usually
         // opened the database too. Unless a caller deferred it — see
         // `defer_teardown`.
@@ -155,6 +161,17 @@ where
 
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
     outcome
+}
+
+/// Wait for the detached tasks this command launched (the automatic improve
+/// of a session `remember`). Must run before the components are closed: the
+/// tasks still use them.
+async fn drain_background_tasks() {
+    let pending = cognee::pending_background_tasks();
+    if pending > 0 {
+        tracing::info!(pending, "waiting for background tasks to finish");
+        cognee::wait_for_background_tasks(None).await;
+    }
 }
 
 /// Close the components and flush telemetry, in that order, on the current

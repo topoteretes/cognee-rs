@@ -211,6 +211,10 @@ pub(crate) struct ImproveStages<'a> {
     pub feedback_alpha: f64,
     pub build_truth_subspace: bool,
     pub build_global_context_index: bool,
+    /// Opt in to `review_conflicts` (`improve.review_conflicts`).
+    pub review_conflicts: bool,
+    /// The cognee-wide `personalization_enabled` setting.
+    pub personalization_enabled: bool,
     pub capabilities: GraphCapabilities,
     /// The resolved dataset, once it exists; a session-persisting stage may
     /// create it mid-run, so a `None` is looked up again on demand.
@@ -251,9 +255,12 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::DistillSessions if !self.llm.is_configured() => {
                 Some(REASON_NO_LLM_CONFIGURED)
             }
-            // Personalization is off by default and not configurable yet
-            // (SDK-1044 step 3); the stage itself is ported in step 6.
-            StageKind::UpdateUserPreferences => Some(REASON_PERSONALIZATION_DISABLED),
+            StageKind::UpdateUserPreferences => Some(if self.personalization_enabled {
+                // TODO(SDK-1044 step 6): port the preference update.
+                REASON_NOT_PORTED
+            } else {
+                REASON_PERSONALIZATION_DISABLED
+            }),
             StageKind::BuildTruthSubspace if !self.build_truth_subspace => {
                 Some(REASON_OPT_IN_DISABLED)
             }
@@ -261,7 +268,13 @@ impl StageExecutor for ImproveStages<'_> {
                 Some(REASON_BACKEND_UNSUPPORTED)
             }
             // Conflict review is opt-in and not ported yet (SDK-1038).
-            StageKind::ReviewConflicts => Some(REASON_OPT_IN_DISABLED),
+            StageKind::ReviewConflicts => Some(if !self.review_conflicts {
+                REASON_OPT_IN_DISABLED
+            } else if !self.llm.is_configured() {
+                REASON_NO_LLM_CONFIGURED
+            } else {
+                REASON_NOT_PORTED
+            }),
             StageKind::GlobalContextIndex if !self.build_global_context_index => {
                 Some(REASON_OPT_IN_DISABLED)
             }

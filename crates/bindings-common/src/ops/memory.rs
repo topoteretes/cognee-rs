@@ -274,6 +274,13 @@ pub async fn run_remember(
         super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?
     });
 
+    let (improve_config, personalization_enabled) = {
+        let settings = state.cm.settings();
+        (
+            settings.auto_improve_config(),
+            settings.personalization_enabled,
+        )
+    };
     let result = remember(
         inputs,
         dataset_name,
@@ -293,6 +300,8 @@ pub async fn run_remember(
         Some(svc.checkpoint_store.clone()),
         svc.ontology_resolver.clone(),
         cognify_config,
+        improve_config,
+        personalization_enabled,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
@@ -420,10 +429,15 @@ pub async fn run_improve(
         })
     });
 
-    let feedback_alpha = opts
-        .get("feedbackAlpha")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.1);
+    // Explicit wins; otherwise `improve()` uses `improve.feedback_alpha`.
+    let feedback_alpha = opts.get("feedbackAlpha").and_then(|v| v.as_f64());
+    let (improve_config, personalization_enabled) = {
+        let settings = state.cm.settings();
+        let config = settings
+            .improve_config()
+            .map_err(|e| SdkError::Validation(e.to_string()))?;
+        (config, settings.personalization_enabled)
+    };
 
     let tenant_id = opts_tenant(opts)?;
 
@@ -440,6 +454,8 @@ pub async fn run_improve(
         owner_id,
         tenant_id,
         feedback_alpha,
+        config: improve_config,
+        personalization_enabled,
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,

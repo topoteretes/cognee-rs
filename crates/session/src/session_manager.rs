@@ -233,6 +233,17 @@ impl SessionManager {
             .await
     }
 
+    /// Every Q&A entry of a session, oldest first (Python's
+    /// `SessionManager.get_session` without `last_n`).
+    pub async fn get_session(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<Vec<SessionQAEntry>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store.get_all_qa_entries(resolved_id, user_id).await
+    }
+
     /// Delete all entries for a session, its session-context rows included.
     pub async fn delete_session(
         &self,

@@ -20,6 +20,7 @@
 //!   fail the same way, so they are skipped with `budget_exhausted` and the
 //!   run ends there, without an error.
 
+mod config;
 mod result;
 mod stages;
 
@@ -42,6 +43,10 @@ use uuid::Uuid;
 use super::error::ApiError;
 use stages::{GraphCapabilities, ImproveStages, StageExecutor, StageRun};
 
+pub use config::{
+    DEFAULT_FEEDBACK_ALPHA, ImproveConfig, ImproveConfigError, parse_stages_disabled,
+    validate_feedback_alpha, validate_stages_disabled,
+};
 pub use result::{
     ImproveResult, ImproveStatus, REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED,
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_SESSION_IDS, StageResult,
@@ -76,8 +81,18 @@ pub struct ImproveParams<'a> {
     pub owner_id: Uuid,
     /// Optional tenant UUID for multi-tenant deployments.
     pub tenant_id: Option<Uuid>,
-    /// Mixing factor of the `feedback_weights` stage.
-    pub feedback_alpha: f64,
+    /// Learning rate of the `feedback_weights` stage, in (0, 1]. `None` uses
+    /// [`ImproveConfig::feedback_alpha`] (Python: an explicit
+    /// `feedback_alpha` wins over `IMPROVE_FEEDBACK_ALPHA`).
+    pub feedback_alpha: Option<f64>,
+    /// The improve settings (`improve.*`, usually
+    /// [`Settings::improve_config`](crate::config::Settings::improve_config)):
+    /// `stages_disabled`, the default `feedback_alpha`, `review_conflicts`.
+    /// Checked again before the first stage.
+    pub config: ImproveConfig,
+    /// The cognee-wide `personalization_enabled` setting: gates
+    /// `update_user_preferences`.
+    pub personalization_enabled: bool,
 
     /// Deprecated in Python (SDK-1115): custom extraction tasks, which Python
     /// runs as a trailing `custom_tasks` stage. Not supported; ignored.
@@ -265,8 +280,10 @@ async fn execute_stages<E: StageExecutor>(
 /// Run the improve stages over a dataset and report what each one did.
 ///
 /// Returns [`ApiError::ImproveAborted`] — carrying the partial result — when
-/// the fatal `persist_session_qa` stage errors, and an error when the dataset
-/// lookup itself fails. Every other stage failure is reported on the result.
+/// the fatal `persist_session_qa` stage errors, [`ApiError::InvalidArgument`]
+/// when the improve configuration or `feedback_alpha` is invalid (before any
+/// stage runs), and an error when the dataset lookup itself fails. Every
+/// other stage failure is reported on the result.
 pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiError> {
     let session_ids: Vec<String> = params
         .session_ids
@@ -303,6 +320,8 @@ async fn run_improve(
         owner_id,
         tenant_id,
         feedback_alpha,
+        config,
+        personalization_enabled,
         llm,
         storage,
         graph_db,
@@ -318,6 +337,15 @@ async fn run_improve(
         build_truth_subspace,
         run_in_background,
     } = params;
+
+    // Fail loudly rather than skip silently in the loop (Python re-validates
+    // on every run): a typo in `stages_disabled` would disable nothing, and
+    // the fatal stage must not be bypassable by configuration.
+    config
+        .validate()
+        .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+    let feedback_alpha = validate_feedback_alpha(feedback_alpha.unwrap_or(config.feedback_alpha))
+        .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
 
     let mut result = ImproveResult::new(dataset_name.clone(), session_ids.clone());
     result.background = run_in_background;
@@ -369,6 +397,9 @@ async fn run_improve(
         feedback_alpha,
         build_truth_subspace,
         build_global_context_index,
+        // The argument and IMPROVE_REVIEW_CONFLICTS are both opt-ins.
+        review_conflicts: config.review_conflicts,
+        personalization_enabled,
         capabilities,
         dataset_id,
         llm,
@@ -383,8 +414,14 @@ async fn run_improve(
         add_pipeline,
         cognify_config,
     };
-    // `disabled_by_config` is wired to the improve settings in SDK-1044 step 3.
-    let end = execute_stages(&DEFAULT_STAGES, has_sessions, &[], &mut stages, &mut result).await;
+    let end = execute_stages(
+        &DEFAULT_STAGES,
+        has_sessions,
+        &config.stages_disabled,
+        &mut stages,
+        &mut result,
+    )
+    .await;
     result.dataset_id = match stages.dataset_id {
         Some(id) => Some(id),
         // A stage may have created the dataset without looking it up.

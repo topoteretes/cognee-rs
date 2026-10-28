@@ -829,6 +829,62 @@ config_section! {
 }
 
 config_section! {
+    /// The self-improvement loop (`improve()`): Python's `ImproveConfig`
+    /// (`cognee/modules/improve/config.py`, env prefix `IMPROVE_`). An engine
+    /// section, registered with the kind sections. The values are checked when
+    /// they are resolved (`Settings::improve_config`), not here.
+    pub struct ImproveSettings in "improve" {
+        /// Run `improve()` automatically after a session `remember()` (the
+        /// kill switch of the automatic improve). A value that is not a
+        /// recognised boolean is ignored with a warning.
+        pub auto_enabled: StrictBool = StrictBool(true) => {
+            env: ["IMPROVE_AUTO_ENABLED"], alias: [], secret: false,
+        },
+        /// Opt in to the `review_conflicts` stage for every run.
+        pub review_conflicts: StrictBool = StrictBool(false) => {
+            env: ["IMPROVE_REVIEW_CONFLICTS"], alias: [], secret: false,
+        },
+        /// Document metadata key holding a source's effective date.
+        pub effective_date_key: String = "effective_date".to_string() => {
+            env: ["IMPROVE_EFFECTIVE_DATE_KEY"], alias: [], secret: false,
+        },
+        /// Auto-improve debounce: run only after this many new session entries
+        /// (>= 0; 0 turns the entry trigger off, 1 fires on every call).
+        pub debounce_entries: i64 = 1 => {
+            env: ["IMPROVE_DEBOUNCE_ENTRIES"], alias: [], secret: false,
+        },
+        /// Auto-improve debounce: or after this many seconds (>= 0; 0 turns
+        /// the time trigger off).
+        pub debounce_seconds: f64 = 0.0 => {
+            env: ["IMPROVE_DEBOUNCE_SECONDS"], alias: [], secret: false,
+        },
+        /// Comma-separated stage names skipped with `disabled_by_config`. The
+        /// fatal `persist_session_qa` cannot be disabled; an unknown name is
+        /// an error.
+        pub stages_disabled: String = String::new() => {
+            env: ["IMPROVE_STAGES_DISABLED"], alias: [], secret: false,
+        },
+        /// Learning rate of the `feedback_weights` stage, in (0, 1], when a
+        /// run does not pass its own.
+        pub feedback_alpha: f64 = 0.1 => {
+            env: ["IMPROVE_FEEDBACK_ALPHA"], alias: [], secret: false,
+        },
+        /// Agent trace steps per persisted document (>= 0; 0 = all pending).
+        pub trace_window_steps: i64 = 0 => {
+            env: ["IMPROVE_TRACE_WINDOW_STEPS"], alias: [], secret: false,
+        },
+        /// Agent trace documents one run may cognify (>= 0; 0 = drain).
+        pub trace_windows_per_run: i64 = 0 => {
+            env: ["IMPROVE_TRACE_WINDOWS_PER_RUN"], alias: [], secret: false,
+        },
+        /// Curator batches per distillation run (>= 0; 0 = uncapped).
+        pub distill_max_batches_per_run: i64 = 0 => {
+            env: ["IMPROVE_DISTILL_MAX_BATCHES_PER_RUN"], alias: [], secret: false,
+        },
+    }
+}
+
+config_section! {
     /// Search and retrieval. An engine section, registered with the kind
     /// sections.
     pub struct SearchSettings in "search" {

@@ -409,6 +409,7 @@ impl ComponentRegistry {
             // Engine sections: settings of the pipelines rather than of a
             // pluggable component.
             <crate::sections::CognifySettings as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::ImproveSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::SearchSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::HybridSearchSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),

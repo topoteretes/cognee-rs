@@ -34,6 +34,7 @@
     "data_root_directory",
     "db_sslmode",
     "default_dataset_name",
+    "default_feedback_influence",
     "default_system_prompt_path",
     "default_user_email",
     "default_user_id",
@@ -72,6 +73,16 @@
     "graph_extraction.backend",
     "graph_model",
     "graph_prompt_path",
+    "improve.auto_enabled",
+    "improve.debounce_entries",
+    "improve.debounce_seconds",
+    "improve.distill_max_batches_per_run",
+    "improve.effective_date_key",
+    "improve.feedback_alpha",
+    "improve.review_conflicts",
+    "improve.stages_disabled",
+    "improve.trace_window_steps",
+    "improve.trace_windows_per_run",
     "llm.anthropic.base_url",
     "llm.api_key",
     "llm.api_version",
@@ -120,6 +131,10 @@
     "otel_span_processor",
     "otel_traces_sampler",
     "otel_traces_sampler_arg",
+    "personalization_enabled",
+    "personalization_influence",
+    "preference_alpha",
+    "preference_beta",
     "relational.host",
     "relational.migration_url",
     "relational.name",
@@ -182,6 +197,11 @@
     "db_sslmode",
     "default_system_prompt_path",
     "auto_feedback",
+    "default_feedback_influence",
+    "preference_alpha",
+    "preference_beta",
+    "personalization_enabled",
+    "personalization_influence",
     "default_user_email",
     "default_user_password",
     "enable_access_control",
@@ -287,6 +307,16 @@
     "cognify.data_per_batch",
     "cognify.extraction_strategy",
     "cognify.cascade_rounds",
+    "improve.auto_enabled",
+    "improve.review_conflicts",
+    "improve.effective_date_key",
+    "improve.debounce_entries",
+    "improve.debounce_seconds",
+    "improve.stages_disabled",
+    "improve.feedback_alpha",
+    "improve.trace_window_steps",
+    "improve.trace_windows_per_run",
+    "improve.distill_max_batches_per_run",
     "search.allow_cypher_query",
     "search.triplet_neighbor_cap",
     "search.hybrid.max_context_tokens",
@@ -3372,6 +3402,53 @@
     "err": true
   },
   "set default_dataset_name <- {\"a\":1}": {
+    "err": true
+  },
+  "set default_feedback_influence <- \"\"": {
+    "err": true
+  },
+  "set default_feedback_influence <- \"1\"": {
+    "err": true
+  },
+  "set default_feedback_influence <- \"s\"": {
+    "err": true
+  },
+  "set default_feedback_influence <- \"true\"": {
+    "err": true
+  },
+  "set default_feedback_influence <- -1": {
+    "err": true
+  },
+  "set default_feedback_influence <- 0": {
+    "ok": {}
+  },
+  "set default_feedback_influence <- 1": {
+    "ok": {
+      "default_feedback_influence": 1.0
+    }
+  },
+  "set default_feedback_influence <- 1.5": {
+    "err": true
+  },
+  "set default_feedback_influence <- 5000000000": {
+    "err": true
+  },
+  "set default_feedback_influence <- 70000": {
+    "err": true
+  },
+  "set default_feedback_influence <- [1]": {
+    "err": true
+  },
+  "set default_feedback_influence <- false": {
+    "err": true
+  },
+  "set default_feedback_influence <- null": {
+    "err": true
+  },
+  "set default_feedback_influence <- true": {
+    "err": true
+  },
+  "set default_feedback_influence <- {\"a\":1}": {
     "err": true
   },
   "set default_system_prompt_path <- \"\"": {
@@ -6907,6 +6984,528 @@
     "err": true
   },
   "set huggingface_tokenizer <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"1\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"s\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"true\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- -1": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 0": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 1": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 1.5": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 5000000000": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 70000": {
+    "err": true
+  },
+  "set improve.auto_enabled <- [1]": {
+    "err": true
+  },
+  "set improve.auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "set improve.auto_enabled <- null": {
+    "err": true
+  },
+  "set improve.auto_enabled <- true": {
+    "ok": {}
+  },
+  "set improve.auto_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.debounce_entries <- \"\"": {
+    "err": true
+  },
+  "set improve.debounce_entries <- \"1\"": {
+    "err": true
+  },
+  "set improve.debounce_entries <- \"s\"": {
+    "err": true
+  },
+  "set improve.debounce_entries <- \"true\"": {
+    "err": true
+  },
+  "set improve.debounce_entries <- -1": {
+    "ok": {
+      "improve.debounce_entries": -1
+    }
+  },
+  "set improve.debounce_entries <- 0": {
+    "ok": {
+      "improve.debounce_entries": 0
+    }
+  },
+  "set improve.debounce_entries <- 1": {
+    "ok": {}
+  },
+  "set improve.debounce_entries <- 1.5": {
+    "err": true
+  },
+  "set improve.debounce_entries <- 5000000000": {
+    "ok": {
+      "improve.debounce_entries": 5000000000
+    }
+  },
+  "set improve.debounce_entries <- 70000": {
+    "ok": {
+      "improve.debounce_entries": 70000
+    }
+  },
+  "set improve.debounce_entries <- [1]": {
+    "err": true
+  },
+  "set improve.debounce_entries <- false": {
+    "err": true
+  },
+  "set improve.debounce_entries <- null": {
+    "err": true
+  },
+  "set improve.debounce_entries <- true": {
+    "err": true
+  },
+  "set improve.debounce_entries <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- \"\"": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- \"1\"": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- \"s\"": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- \"true\"": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- -1": {
+    "ok": {
+      "improve.debounce_seconds": -1.0
+    }
+  },
+  "set improve.debounce_seconds <- 0": {
+    "ok": {}
+  },
+  "set improve.debounce_seconds <- 1": {
+    "ok": {
+      "improve.debounce_seconds": 1.0
+    }
+  },
+  "set improve.debounce_seconds <- 1.5": {
+    "ok": {
+      "improve.debounce_seconds": 1.5
+    }
+  },
+  "set improve.debounce_seconds <- 5000000000": {
+    "ok": {
+      "improve.debounce_seconds": 5000000000.0
+    }
+  },
+  "set improve.debounce_seconds <- 70000": {
+    "ok": {
+      "improve.debounce_seconds": 70000.0
+    }
+  },
+  "set improve.debounce_seconds <- [1]": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- false": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- null": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- true": {
+    "err": true
+  },
+  "set improve.debounce_seconds <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- \"\"": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- \"1\"": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- \"s\"": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- \"true\"": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- -1": {
+    "ok": {
+      "improve.distill_max_batches_per_run": -1
+    }
+  },
+  "set improve.distill_max_batches_per_run <- 0": {
+    "ok": {}
+  },
+  "set improve.distill_max_batches_per_run <- 1": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 1
+    }
+  },
+  "set improve.distill_max_batches_per_run <- 1.5": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- 5000000000": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 5000000000
+    }
+  },
+  "set improve.distill_max_batches_per_run <- 70000": {
+    "ok": {
+      "improve.distill_max_batches_per_run": 70000
+    }
+  },
+  "set improve.distill_max_batches_per_run <- [1]": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- false": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- null": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- true": {
+    "err": true
+  },
+  "set improve.distill_max_batches_per_run <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.effective_date_key <- \"\"": {
+    "ok": {
+      "improve.effective_date_key": ""
+    }
+  },
+  "set improve.effective_date_key <- \"1\"": {
+    "ok": {
+      "improve.effective_date_key": "1"
+    }
+  },
+  "set improve.effective_date_key <- \"s\"": {
+    "ok": {
+      "improve.effective_date_key": "s"
+    }
+  },
+  "set improve.effective_date_key <- \"true\"": {
+    "ok": {
+      "improve.effective_date_key": "true"
+    }
+  },
+  "set improve.effective_date_key <- -1": {
+    "err": true
+  },
+  "set improve.effective_date_key <- 0": {
+    "err": true
+  },
+  "set improve.effective_date_key <- 1": {
+    "err": true
+  },
+  "set improve.effective_date_key <- 1.5": {
+    "err": true
+  },
+  "set improve.effective_date_key <- 5000000000": {
+    "err": true
+  },
+  "set improve.effective_date_key <- 70000": {
+    "err": true
+  },
+  "set improve.effective_date_key <- [1]": {
+    "err": true
+  },
+  "set improve.effective_date_key <- false": {
+    "err": true
+  },
+  "set improve.effective_date_key <- null": {
+    "err": true
+  },
+  "set improve.effective_date_key <- true": {
+    "err": true
+  },
+  "set improve.effective_date_key <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- \"\"": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- \"1\"": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- \"s\"": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- \"true\"": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- -1": {
+    "ok": {
+      "improve.feedback_alpha": -1.0
+    }
+  },
+  "set improve.feedback_alpha <- 0": {
+    "ok": {
+      "improve.feedback_alpha": 0.0
+    }
+  },
+  "set improve.feedback_alpha <- 1": {
+    "ok": {
+      "improve.feedback_alpha": 1.0
+    }
+  },
+  "set improve.feedback_alpha <- 1.5": {
+    "ok": {
+      "improve.feedback_alpha": 1.5
+    }
+  },
+  "set improve.feedback_alpha <- 5000000000": {
+    "ok": {
+      "improve.feedback_alpha": 5000000000.0
+    }
+  },
+  "set improve.feedback_alpha <- 70000": {
+    "ok": {
+      "improve.feedback_alpha": 70000.0
+    }
+  },
+  "set improve.feedback_alpha <- [1]": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- false": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- null": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- true": {
+    "err": true
+  },
+  "set improve.feedback_alpha <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.review_conflicts <- \"\"": {
+    "err": true
+  },
+  "set improve.review_conflicts <- \"1\"": {
+    "err": true
+  },
+  "set improve.review_conflicts <- \"s\"": {
+    "err": true
+  },
+  "set improve.review_conflicts <- \"true\"": {
+    "err": true
+  },
+  "set improve.review_conflicts <- -1": {
+    "err": true
+  },
+  "set improve.review_conflicts <- 0": {
+    "err": true
+  },
+  "set improve.review_conflicts <- 1": {
+    "err": true
+  },
+  "set improve.review_conflicts <- 1.5": {
+    "err": true
+  },
+  "set improve.review_conflicts <- 5000000000": {
+    "err": true
+  },
+  "set improve.review_conflicts <- 70000": {
+    "err": true
+  },
+  "set improve.review_conflicts <- [1]": {
+    "err": true
+  },
+  "set improve.review_conflicts <- false": {
+    "ok": {}
+  },
+  "set improve.review_conflicts <- null": {
+    "err": true
+  },
+  "set improve.review_conflicts <- true": {
+    "ok": {
+      "improve.review_conflicts": true
+    }
+  },
+  "set improve.review_conflicts <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.stages_disabled <- \"\"": {
+    "ok": {}
+  },
+  "set improve.stages_disabled <- \"1\"": {
+    "ok": {
+      "improve.stages_disabled": "1"
+    }
+  },
+  "set improve.stages_disabled <- \"s\"": {
+    "ok": {
+      "improve.stages_disabled": "s"
+    }
+  },
+  "set improve.stages_disabled <- \"true\"": {
+    "ok": {
+      "improve.stages_disabled": "true"
+    }
+  },
+  "set improve.stages_disabled <- -1": {
+    "err": true
+  },
+  "set improve.stages_disabled <- 0": {
+    "err": true
+  },
+  "set improve.stages_disabled <- 1": {
+    "err": true
+  },
+  "set improve.stages_disabled <- 1.5": {
+    "err": true
+  },
+  "set improve.stages_disabled <- 5000000000": {
+    "err": true
+  },
+  "set improve.stages_disabled <- 70000": {
+    "err": true
+  },
+  "set improve.stages_disabled <- [1]": {
+    "err": true
+  },
+  "set improve.stages_disabled <- false": {
+    "err": true
+  },
+  "set improve.stages_disabled <- null": {
+    "err": true
+  },
+  "set improve.stages_disabled <- true": {
+    "err": true
+  },
+  "set improve.stages_disabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- \"\"": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- \"1\"": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- \"s\"": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- \"true\"": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- -1": {
+    "ok": {
+      "improve.trace_window_steps": -1
+    }
+  },
+  "set improve.trace_window_steps <- 0": {
+    "ok": {}
+  },
+  "set improve.trace_window_steps <- 1": {
+    "ok": {
+      "improve.trace_window_steps": 1
+    }
+  },
+  "set improve.trace_window_steps <- 1.5": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- 5000000000": {
+    "ok": {
+      "improve.trace_window_steps": 5000000000
+    }
+  },
+  "set improve.trace_window_steps <- 70000": {
+    "ok": {
+      "improve.trace_window_steps": 70000
+    }
+  },
+  "set improve.trace_window_steps <- [1]": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- false": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- null": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- true": {
+    "err": true
+  },
+  "set improve.trace_window_steps <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- \"\"": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- \"1\"": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- \"s\"": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- \"true\"": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- -1": {
+    "ok": {
+      "improve.trace_windows_per_run": -1
+    }
+  },
+  "set improve.trace_windows_per_run <- 0": {
+    "ok": {}
+  },
+  "set improve.trace_windows_per_run <- 1": {
+    "ok": {
+      "improve.trace_windows_per_run": 1
+    }
+  },
+  "set improve.trace_windows_per_run <- 1.5": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- 5000000000": {
+    "ok": {
+      "improve.trace_windows_per_run": 5000000000
+    }
+  },
+  "set improve.trace_windows_per_run <- 70000": {
+    "ok": {
+      "improve.trace_windows_per_run": 70000
+    }
+  },
+  "set improve.trace_windows_per_run <- [1]": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- false": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- null": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- true": {
+    "err": true
+  },
+  "set improve.trace_windows_per_run <- {\"a\":1}": {
     "err": true
   },
   "set llm.anthropic.base_url <- \"\"": {
@@ -11091,6 +11690,102 @@
   "set otel_traces_sampler_arg <- {\"a\":1}": {
     "err": true
   },
+  "set personalization_enabled <- \"\"": {
+    "err": true
+  },
+  "set personalization_enabled <- \"1\"": {
+    "err": true
+  },
+  "set personalization_enabled <- \"s\"": {
+    "err": true
+  },
+  "set personalization_enabled <- \"true\"": {
+    "err": true
+  },
+  "set personalization_enabled <- -1": {
+    "err": true
+  },
+  "set personalization_enabled <- 0": {
+    "err": true
+  },
+  "set personalization_enabled <- 1": {
+    "err": true
+  },
+  "set personalization_enabled <- 1.5": {
+    "err": true
+  },
+  "set personalization_enabled <- 5000000000": {
+    "err": true
+  },
+  "set personalization_enabled <- 70000": {
+    "err": true
+  },
+  "set personalization_enabled <- [1]": {
+    "err": true
+  },
+  "set personalization_enabled <- false": {
+    "ok": {}
+  },
+  "set personalization_enabled <- null": {
+    "err": true
+  },
+  "set personalization_enabled <- true": {
+    "ok": {
+      "personalization_enabled": true
+    }
+  },
+  "set personalization_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set personalization_influence <- \"\"": {
+    "err": true
+  },
+  "set personalization_influence <- \"1\"": {
+    "err": true
+  },
+  "set personalization_influence <- \"s\"": {
+    "err": true
+  },
+  "set personalization_influence <- \"true\"": {
+    "err": true
+  },
+  "set personalization_influence <- -1": {
+    "err": true
+  },
+  "set personalization_influence <- 0": {
+    "ok": {
+      "personalization_influence": 0.0
+    }
+  },
+  "set personalization_influence <- 1": {
+    "ok": {
+      "personalization_influence": 1.0
+    }
+  },
+  "set personalization_influence <- 1.5": {
+    "err": true
+  },
+  "set personalization_influence <- 5000000000": {
+    "err": true
+  },
+  "set personalization_influence <- 70000": {
+    "err": true
+  },
+  "set personalization_influence <- [1]": {
+    "err": true
+  },
+  "set personalization_influence <- false": {
+    "err": true
+  },
+  "set personalization_influence <- null": {
+    "err": true
+  },
+  "set personalization_influence <- true": {
+    "err": true
+  },
+  "set personalization_influence <- {\"a\":1}": {
+    "err": true
+  },
   "set pgvector_hnsw_ef_construction <- \"\"": {
     "err": true
   },
@@ -11301,6 +11996,100 @@
     "err": true
   },
   "set pgvector_maintenance_workers <- {\"a\":1}": {
+    "err": true
+  },
+  "set preference_alpha <- \"\"": {
+    "err": true
+  },
+  "set preference_alpha <- \"1\"": {
+    "err": true
+  },
+  "set preference_alpha <- \"s\"": {
+    "err": true
+  },
+  "set preference_alpha <- \"true\"": {
+    "err": true
+  },
+  "set preference_alpha <- -1": {
+    "err": true
+  },
+  "set preference_alpha <- 0": {
+    "err": true
+  },
+  "set preference_alpha <- 1": {
+    "ok": {
+      "preference_alpha": 1.0
+    }
+  },
+  "set preference_alpha <- 1.5": {
+    "err": true
+  },
+  "set preference_alpha <- 5000000000": {
+    "err": true
+  },
+  "set preference_alpha <- 70000": {
+    "err": true
+  },
+  "set preference_alpha <- [1]": {
+    "err": true
+  },
+  "set preference_alpha <- false": {
+    "err": true
+  },
+  "set preference_alpha <- null": {
+    "err": true
+  },
+  "set preference_alpha <- true": {
+    "err": true
+  },
+  "set preference_alpha <- {\"a\":1}": {
+    "err": true
+  },
+  "set preference_beta <- \"\"": {
+    "err": true
+  },
+  "set preference_beta <- \"1\"": {
+    "err": true
+  },
+  "set preference_beta <- \"s\"": {
+    "err": true
+  },
+  "set preference_beta <- \"true\"": {
+    "err": true
+  },
+  "set preference_beta <- -1": {
+    "err": true
+  },
+  "set preference_beta <- 0": {
+    "ok": {
+      "preference_beta": 0.0
+    }
+  },
+  "set preference_beta <- 1": {
+    "err": true
+  },
+  "set preference_beta <- 1.5": {
+    "err": true
+  },
+  "set preference_beta <- 5000000000": {
+    "err": true
+  },
+  "set preference_beta <- 70000": {
+    "err": true
+  },
+  "set preference_beta <- [1]": {
+    "err": true
+  },
+  "set preference_beta <- false": {
+    "err": true
+  },
+  "set preference_beta <- null": {
+    "err": true
+  },
+  "set preference_beta <- true": {
+    "err": true
+  },
+  "set preference_beta <- {\"a\":1}": {
     "err": true
   },
   "set raise_incremental_loading_errors <- \"\"": {
@@ -14743,6 +15532,13 @@
       "relational.port": 1
     }
   },
+  "unset default_feedback_influence": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset default_system_prompt_path": {
     "ok": {
       "chunk_size": 7,
@@ -15220,6 +16016,76 @@
     }
   },
   "unset huggingface_tokenizer": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.auto_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.debounce_entries": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.debounce_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.distill_max_batches_per_run": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.effective_date_key": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.feedback_alpha": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.review_conflicts": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.stages_disabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.trace_window_steps": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.trace_windows_per_run": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -15798,6 +16664,20 @@
       "relational.port": 1
     }
   },
+  "unset personalization_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset personalization_influence": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset pgvector_hnsw_ef_construction": {
     "ok": {
       "chunk_size": 7,
@@ -15820,6 +16700,20 @@
     }
   },
   "unset pgvector_maintenance_workers": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset preference_alpha": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset preference_beta": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

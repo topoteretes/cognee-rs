@@ -61,10 +61,10 @@ pub use registry::{
 };
 pub use sections::{
     AnthropicConfig, AwsConfig, CognifySettings, EmbeddingConfig, FsSessionConfig, GraphConfig,
-    GraphExtractionConfig, HybridSearchSettings, LOCAL_EMBEDDING, LlmConfig, OllamaEmbeddingConfig,
-    OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig, OpenAiCompatibleEmbeddingConfig,
-    RedisSessionConfig, RelationalConfig, SearchSettings, SessionConfig, StorageConfig,
-    VectorConfig,
+    GraphExtractionConfig, HybridSearchSettings, ImproveSettings, LOCAL_EMBEDDING, LlmConfig,
+    OllamaEmbeddingConfig, OnnxEmbeddingConfig, OntologyConfig, OpenAiCompatibleConfig,
+    OpenAiCompatibleEmbeddingConfig, RedisSessionConfig, RelationalConfig, SearchSettings,
+    SessionConfig, StorageConfig, VectorConfig,
 };
 pub use traits::{
     EmbeddingFactory, GraphDbFactory, GraphExtractorFactory, LlmFactory, OntologyResolverFactory,

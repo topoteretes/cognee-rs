@@ -152,14 +152,44 @@ mod kind {
             .ok_or_else(|| mismatch(key, "expected a positive integer (u32)"))
     }
 
-    #[allow(
-        dead_code,
-        reason = "used by the `opt_f64` row kind; no row needs it today"
-    )]
     pub(super) fn as_f64(key: &str, value: &Value) -> Result<f64, ConfigError> {
         value
             .as_f64()
             .ok_or_else(|| mismatch(key, "expected a number"))
+    }
+
+    /// A number accepted only where `in_range` holds; `why` names the env
+    /// var and the range, as Python's `BaseConfig` validator does.
+    pub(super) fn ranged_f64(
+        key: &str,
+        value: &Value,
+        in_range: fn(f64) -> bool,
+        why: &str,
+    ) -> Result<f64, ConfigError> {
+        let n = as_f64(key, value)?;
+        if in_range(n) {
+            Ok(n)
+        } else {
+            Err(mismatch(key, &format!("{why}, got {n}")))
+        }
+    }
+
+    /// [`ranged_f64`] from env: a value that does not parse, or is out of
+    /// range, is ignored with a warning and leaves the field untouched.
+    pub(super) fn overlay_ranged_f64(
+        field: &mut f64,
+        env: &dyn EnvSource,
+        names: &[&str],
+        in_range: fn(f64) -> bool,
+        why: &str,
+    ) {
+        let Some(raw) = first_set(env, names) else {
+            return;
+        };
+        match raw.trim().parse::<f64>() {
+            Ok(n) if in_range(n) => *field = n,
+            _ => tracing::warn!(value = raw, "{why}; ignored"),
+        }
     }
 
     pub(super) fn as_bool(key: &str, value: &Value) -> Result<bool, ConfigError> {
@@ -253,6 +283,30 @@ macro_rules! row {
     (@secret secret) => {
         true
     };
+}
+
+/// A number setting accepted only in a range:
+/// `ranged_f64!(field, env ["VAR"], "(0, 1]", |v| …)`. Out of range is an
+/// error from the setter and ignored with a warning from env.
+macro_rules! ranged_f64 {
+    ($f:ident, env [$env:literal], $range:literal, $in_range:expr) => {{
+        const ROW_ENV: &[&str] = &[$env];
+        const WHY: &str = concat!($env, " must be in ", $range);
+        KeySpec {
+            key: stringify!($f),
+            key_aliases: &[],
+            env: ROW_ENV,
+            secret: false,
+            persisted: true,
+            overlay: |s, env| kind::overlay_ranged_f64(&mut s.$f, env, ROW_ENV, $in_range, WHY),
+            set: |s, key, v| {
+                s.$f = kind::ranged_f64(key, &v, $in_range, WHY)?;
+                Ok(())
+            },
+            get: |s| serde_json::to_value(s.$f).unwrap_or(Value::Null),
+            reset: |s, d| s.$f = d.$f,
+        }
+    }};
 }
 
 use kind::{as_bool, as_string};
@@ -380,6 +434,26 @@ static KEYS: &[KeySpec] = &[
     // `cache_backend`, `session_ttl_seconds` and `enable_caching` are aliases
     // of the `session` section's `store`, `ttl_seconds` and `caching`.
     row!(auto_feedback: bool, env ["AUTO_FEEDBACK"]),
+    // -- Feedback & personalization (Python's `BaseConfig`) -------------------
+    ranged_f64!(
+        default_feedback_influence,
+        env["DEFAULT_FEEDBACK_INFLUENCE"],
+        "[0, 1]",
+        |v| (0.0..=1.0).contains(&v)
+    ),
+    ranged_f64!(preference_alpha, env["PREFERENCE_ALPHA"], "(0, 1]", |v| v
+        > 0.0
+        && v <= 1.0),
+    ranged_f64!(preference_beta, env["PREFERENCE_BETA"], "[0, 1)", |v| (0.0
+        ..1.0)
+        .contains(&v)),
+    row!(personalization_enabled: bool, env ["PERSONALIZATION_ENABLED"]),
+    ranged_f64!(
+        personalization_influence,
+        env["PERSONALIZATION_INFLUENCE"],
+        "[0, 1]",
+        |v| (0.0..=1.0).contains(&v)
+    ),
     // -- Authentication / ACL -----------------------------------------------
     row!(default_user_email: str, env ["DEFAULT_USER_EMAIL"]),
     row!(default_user_password: str secret, env ["DEFAULT_USER_PASSWORD"]),
@@ -871,5 +945,130 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{}: {e}", spec.key));
             assert_eq!((spec.get)(&s), value, "{}", spec.key);
         }
+    }
+
+    // Ported from Python's
+    // `cognee/tests/unit/modules/user_preferences/test_config_validation.py`:
+    // the personalization knobs are range-checked when set.
+    const PERSONALIZATION_KNOBS: [(&str, &str); 4] = [
+        ("preference_alpha", "PREFERENCE_ALPHA"),
+        ("preference_beta", "PREFERENCE_BETA"),
+        ("personalization_influence", "PERSONALIZATION_INFLUENCE"),
+        ("default_feedback_influence", "DEFAULT_FEEDBACK_INFLUENCE"),
+    ];
+
+    #[test]
+    fn out_of_range_personalization_knob_is_rejected() {
+        use crate::config::ConfigManager;
+        let cases: [(&str, f64); 10] = [
+            ("preference_alpha", 0.0),
+            ("preference_alpha", -0.1),
+            ("preference_alpha", 1.5),
+            ("preference_beta", 1.0),
+            ("preference_beta", -0.1),
+            ("preference_beta", 1.5),
+            ("personalization_influence", -0.1),
+            ("personalization_influence", 1.5),
+            ("default_feedback_influence", -0.1),
+            ("default_feedback_influence", 1.5),
+        ];
+        for (key, value) in cases {
+            let cm = ConfigManager::new(Settings::default());
+            let before = cm.get(key);
+            let err = cm.set(key, Value::from(value)).unwrap_err();
+            let env = PERSONALIZATION_KNOBS
+                .iter()
+                .find(|(k, _)| *k == key)
+                .unwrap()
+                .1;
+            assert!(err.to_string().contains(env), "{key}={value}: {err}");
+            assert_eq!(cm.get(key), before, "{key} unchanged");
+
+            // From env the value is ignored, keeping the default.
+            let mut s = Settings::default();
+            s.overlay_from(&crate::config::MapEnv::new().with(env, value.to_string()));
+            assert_eq!(
+                serde_json::to_value(&s).unwrap()[key],
+                serde_json::to_value(Settings::default()).unwrap()[key],
+                "{env}={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn personalization_knob_boundary_values_are_accepted() {
+        use crate::config::ConfigManager;
+        let cases: [(&str, f64); 8] = [
+            ("preference_alpha", 1.0),
+            ("preference_alpha", 0.01),
+            ("preference_beta", 0.0),
+            ("preference_beta", 0.99),
+            ("personalization_influence", 0.0),
+            ("personalization_influence", 1.0),
+            ("default_feedback_influence", 0.0),
+            ("default_feedback_influence", 1.0),
+        ];
+        for (key, value) in cases {
+            let cm = ConfigManager::new(Settings::default());
+            cm.set(key, Value::from(value)).unwrap();
+            assert_eq!(cm.get(key), Some(Value::from(value)), "{key}");
+        }
+    }
+
+    #[test]
+    fn personalization_defaults_and_env() {
+        let d = Settings::default();
+        assert_eq!(d.preference_alpha, 0.3);
+        assert_eq!(d.preference_beta, 0.02);
+        assert_eq!(d.personalization_influence, 0.3);
+        assert_eq!(d.default_feedback_influence, 0.0);
+        assert!(!d.personalization_enabled);
+
+        let mut s = Settings::default();
+        s.overlay_from(
+            &crate::config::MapEnv::new()
+                .with("PERSONALIZATION_ENABLED", "true")
+                .with("PREFERENCE_ALPHA", " 0.5 ")
+                .with("PREFERENCE_BETA", "0.1")
+                .with("PERSONALIZATION_INFLUENCE", "0.7")
+                .with("DEFAULT_FEEDBACK_INFLUENCE", "0.2"),
+        );
+        assert!(s.personalization_enabled);
+        assert_eq!(s.preference_alpha, 0.5);
+        assert_eq!(s.preference_beta, 0.1);
+        assert_eq!(s.personalization_influence, 0.7);
+        assert_eq!(s.default_feedback_influence, 0.2);
+    }
+
+    /// `Settings::improve_config` resolves the `improve` section and fails on
+    /// a value Python's `ImproveConfig` rejects.
+    #[test]
+    fn improve_config_resolves_the_improve_section() {
+        let mut s = Settings::default();
+        assert_eq!(
+            s.improve_config().unwrap(),
+            crate::api::ImproveConfig::default()
+        );
+        s.sections
+            .insert("improve.feedback_alpha".into(), Value::from(0.5));
+        s.sections.insert(
+            "improve.stages_disabled".into(),
+            Value::from("review_conflicts, distill_sessions"),
+        );
+        let config = s.improve_config().unwrap();
+        assert_eq!(config.feedback_alpha, 0.5);
+        assert_eq!(
+            config.stages_disabled,
+            ["review_conflicts", "distill_sessions"]
+        );
+        assert!(s.auto_improve_config().is_some());
+
+        s.sections.insert(
+            "improve.stages_disabled".into(),
+            Value::from("persist_session_qa"),
+        );
+        assert!(s.improve_config().is_err());
+        // The automatic improve is skipped instead of failing.
+        assert!(s.auto_improve_config().is_none());
     }
 }
