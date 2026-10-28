@@ -127,15 +127,13 @@ async fn dataset_is_cached(
 /// appending one here would put a fabricated id at the head of the dataset's
 /// trail — exactly what carrying the real id exists to avoid.
 ///
-/// `data_ids` is the dataset's items as this loop found them, which is what it
-/// has to hand before the run. When completion markers skip part of the
-/// dataset it is a superset of what the run actually processed; the executor's
-/// own rows, written from the filtered input, carry the exact set.
+/// `run_info` follows Python's `COMPLETED` shape: `{}` for a clean run (no
+/// data items since COG-6089), plus the Rust-only failure summary when files
+/// are still outstanding.
 async fn record_dataset_run(
     database: &dyn RelationalDb,
     user_id: Uuid,
     dataset_id: Uuid,
-    data_ids: &[Uuid],
     result: &CognifyResult,
 ) -> Result<(), CognifyError> {
     if result.already_completed {
@@ -143,11 +141,9 @@ async fn record_dataset_run(
     }
     let pipeline_run_id = result.pipeline_run_id.unwrap_or_else(Uuid::new_v4);
     let run_info = if result.failures.is_empty() {
-        // A clean run's row keeps exactly the shape it had before this
-        // change.
-        None
+        Some(cognee_core::pipeline_run_registry::run_info_for_completed())
     } else {
-        Some(rollback::run_info_with_failures(data_ids, &result.failures))
+        Some(rollback::run_info_with_failures(&result.failures))
     };
     let run = PipelineRun {
         id: Uuid::new_v4(),
@@ -235,10 +231,6 @@ pub async fn cognify_datasets(
             "Running cognify for dataset"
         );
 
-        // Captured before the items move into the run: the row appended below
-        // names them, the way the executor's own rows do.
-        let data_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
-
         let result = cognify(
             data_items,
             dataset.id,
@@ -259,7 +251,7 @@ pub async fn cognify_datasets(
         .await?;
 
         // --- Record successful pipeline run ---
-        record_dataset_run(&*database, user_id, dataset.id, &data_ids, &result).await?;
+        record_dataset_run(&*database, user_id, dataset.id, &result).await?;
 
         results.push(result);
     }
@@ -357,10 +349,6 @@ pub async fn cognify_dataset_refs(
             "Running cognify for dataset"
         );
 
-        // Captured before the items move into the run: the row appended below
-        // names them, the way the executor's own rows do.
-        let data_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
-
         let result = cognify(
             data_items,
             dataset.id,
@@ -380,7 +368,7 @@ pub async fn cognify_dataset_refs(
         )
         .await?;
 
-        record_dataset_run(&*database, user_id, dataset.id, &data_ids, &result).await?;
+        record_dataset_run(&*database, user_id, dataset.id, &result).await?;
 
         results.push(result);
     }

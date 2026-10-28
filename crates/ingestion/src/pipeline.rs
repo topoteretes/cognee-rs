@@ -1424,9 +1424,8 @@ pub fn build_add_pipeline_with_acl(
 
 /// Internal builder used by both [`build_add_pipeline_with_acl`] and the
 /// executor-routed [`AddPipeline::add_with_params`]. Threads
-/// [`AddParamsInjection`] into the persist task and attaches a
-/// `data_id_fn` so the executor's `run_info["data"]` carrier is populated
-/// for the
+/// [`AddParamsInjection`] into the persist task. The run's `pipeline_runs`
+/// trail is written by the
 /// [`cognee_core::pipeline_run_registry::DbPipelineWatcher`] wired by
 /// [`AddPipeline::with_pipeline_run_repo`] (gap 08-07).
 #[allow(clippy::too_many_arguments)]
@@ -1442,9 +1441,9 @@ fn build_add_pipeline_internal(
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
     // the pipeline input (`DataInput`), which has no UUID until
-    // `persist_data` runs. Return `None` here; the executor's run_info
-    // `data_ids` stays empty (the watcher maps it to Python's `"None"`).
-    // Gap-08 task 07 revisits this once the watcher is real.
+    // `persist_data` runs, so it returns `None` and no item is ever skipped
+    // as already completed. (`run_info` carries no data items either way,
+    // as in Python since COG-6089.)
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
@@ -1601,7 +1600,7 @@ impl AddPipeline {
         self
     }
 
-    /// Attach the `PipelineRunRepository` used to persist the four-state
+    /// Attach the `PipelineRunRepository` used to persist the
     /// `pipeline_runs` trail (gap 08-07).
     ///
     /// Embedded callers pass `Arc::new(NoopPipelineRunRepository::new())`
@@ -1733,7 +1732,7 @@ impl AddPipeline {
             .collect();
 
         // ── Run the executor (gap 08-07 Decision 11: DbPipelineWatcher
-        //    persists the four-state `pipeline_runs` trail; defaults to a
+        //    persists the `pipeline_runs` trail; defaults to a
         //    no-op repo when the caller hasn't attached one). ───────────────
         let pipeline_run_repo = self
             .pipeline_run_repo

@@ -255,8 +255,9 @@ pub trait PipelineRunRepository: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Restart-orphan reset: rewrite any row stuck in `INITIATED` / `STARTED`
-    /// without a more recent successor to `ERRORED` with the given `reason`.
+    /// Restart-orphan reset: rewrite any row stuck in `STARTED` (or, from an
+    /// older writer, `INITIATED`) without a more recent successor to `ERRORED`,
+    /// with `run_info = {"error": reason}` — Python's ERRORED shape.
     ///
     /// Returns the number of rows rewritten.
     ///

@@ -38,7 +38,7 @@ use super::improve::{ImproveResult, improve};
 /// wire parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RememberStatus {
-    /// Pipeline has been initiated/started but has not yet finished.
+    /// Pipeline has started but has not yet finished.
     ///
     /// Currently unused by the synchronous SDK [`remember`] (which always
     /// returns a terminal state). Exists for symmetry with
@@ -61,7 +61,7 @@ impl From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus {
     fn from(s: cognee_core::pipeline::PipelineRunStatus) -> Self {
         use cognee_core::pipeline::PipelineRunStatus;
         match s {
-            PipelineRunStatus::Initiated | PipelineRunStatus::Started => Self::Started,
+            PipelineRunStatus::Started => Self::Started,
             PipelineRunStatus::Completed => Self::Completed,
             PipelineRunStatus::Errored => Self::Errored,
         }
@@ -378,7 +378,7 @@ async fn run_permanent_inner(
     );
 
     // Cognify.
-    // Gap 08-07: persist the four-state `pipeline_runs` trail through the
+    // Gap 08-07: persist the `pipeline_runs` trail through the
     // real SeaORM repo when a database is available; embedded callers fall
     // back to the no-op repo.
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
@@ -963,10 +963,6 @@ mod tests {
         use cognee_core::pipeline::PipelineRunStatus;
         // Exhaustive match — adding a variant to PipelineRunStatus forces
         // this test to be updated.
-        assert_eq!(
-            RememberStatus::from(PipelineRunStatus::Initiated),
-            RememberStatus::Started
-        );
         assert_eq!(
             RememberStatus::from(PipelineRunStatus::Started),
             RememberStatus::Started

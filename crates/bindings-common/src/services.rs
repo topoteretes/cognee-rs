@@ -353,8 +353,7 @@ impl CogneeServices {
             Arc::clone(&database) as Arc<dyn DeleteDb>,
         )
         .with_graph_db(Arc::clone(&graph_db))
-        .with_vector_db(Arc::clone(&vector_db))
-        .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+        .with_vector_db(Arc::clone(&vector_db));
         // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
         // dataset drops its own databases.
         if let Some(dataset_storage) = cm

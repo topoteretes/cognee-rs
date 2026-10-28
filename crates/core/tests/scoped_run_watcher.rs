@@ -64,7 +64,6 @@ fn fake_run(run_id: Uuid, status: CoreStatus) -> PipelineRunInfo {
         user_id: None,
         tenant_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
         status,
         started_at: chrono::Utc::now(),
         completed_at: None,
@@ -72,75 +71,66 @@ fn fake_run(run_id: Uuid, status: CoreStatus) -> PipelineRunInfo {
 }
 
 // ---------------------------------------------------------------------------
-// `on_pipeline_run_initiated` writes a DB row with `run_info = {}` and does
-// NOT broadcast a `RunEvent` (locked decision 13).
+// The trail is STARTED then a terminal row, with Python's `run_info` shapes:
+// STARTED `{}`, COMPLETED `{}`, ERRORED `{"error": …}`. No INITIATED row and
+// no `data` key (Python `dc0b4ad6a`, `a88402500` / COG-6089).
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn initiated_writes_db_row_with_empty_run_info_and_no_event() {
-    let (repo, db) = make_repo().await;
-    let run_id = Uuid::new_v4();
-    let ds = Uuid::new_v4();
-    // Pre-create the dataset row so the FK constraint passes.
-    create_dataset(&db, ds).await;
-    let (watcher, mut rx) = make_watcher(run_id, Arc::clone(&repo));
-
-    let mut run = fake_run(run_id, CoreStatus::Initiated);
-    run.dataset_id = Some(ds);
-    run.pipeline_name = "initiated_test".to_string();
-
-    watcher.on_pipeline_run_initiated(&run).await;
-
-    // No RunEvent should fire for INITIATED.
-    assert!(
-        rx.try_recv().is_err(),
-        "INITIATED must not broadcast a RunEvent (decision 13)"
-    );
-
-    // Verify the latest DB row is Initiated.
-    let statuses = repo
-        .latest_status(&[ds], "initiated_test")
-        .await
-        .expect("latest_status");
-    assert_eq!(statuses.get(&ds).cloned(), Some(DbStatus::Initiated));
+async fn trail(
+    repo: &Arc<dyn PipelineRunRepository>,
+    ds: Uuid,
+) -> Vec<(DbStatus, serde_json::Value)> {
+    let mut rows = repo.list_recent(Some(ds), 10).await.expect("list_recent");
+    // `list_recent` is by `created_at DESC` — reverse to chronological order.
+    rows.reverse();
+    rows.into_iter()
+        .map(|r| (r.status, r.run_info.expect("run_info is always written")))
+        .collect()
 }
 
-// ---------------------------------------------------------------------------
-// INITIATED row is written BEFORE STARTED row when both hooks fire.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn initiated_row_precedes_started_row() {
+async fn completed_trail_is_started_then_completed_with_empty_run_info() {
     let (repo, db) = make_repo().await;
     let run_id = Uuid::new_v4();
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
     let (watcher, _rx) = make_watcher(run_id, Arc::clone(&repo));
 
-    let mut run = fake_run(run_id, CoreStatus::Initiated);
+    let mut run = fake_run(run_id, CoreStatus::Started);
     run.dataset_id = Some(ds);
-    run.pipeline_name = "order_test".to_string();
-
-    watcher.on_pipeline_run_initiated(&run).await;
-    run.status = CoreStatus::Started;
     watcher.on_pipeline_run_started(&run).await;
+    run.status = CoreStatus::Completed;
+    watcher.on_pipeline_run_completed(&run, 1).await;
 
-    let recent = repo.list_recent(None, 10).await.expect("list_recent");
+    assert_eq!(
+        trail(&repo, ds).await,
+        vec![
+            (DbStatus::Started, serde_json::json!({})),
+            (DbStatus::Completed, serde_json::json!({})),
+        ]
+    );
+}
 
-    let mut rows: Vec<_> = recent
-        .into_iter()
-        .filter(|r| r.pipeline_name == "order_test")
-        .collect();
-    // list_recent is by `created_at DESC` — reverse to chronological order.
-    rows.reverse();
-    assert_eq!(rows.len(), 2, "expected INITIATED + STARTED rows");
-    assert_eq!(rows[0].status, DbStatus::Initiated);
-    assert_eq!(rows[1].status, DbStatus::Started);
-    assert!(
-        rows[0].created_at <= rows[1].created_at,
-        "INITIATED ({:?}) must precede STARTED ({:?})",
-        rows[0].created_at,
-        rows[1].created_at,
+#[tokio::test]
+async fn errored_trail_carries_only_the_error() {
+    let (repo, db) = make_repo().await;
+    let run_id = Uuid::new_v4();
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let (watcher, _rx) = make_watcher(run_id, Arc::clone(&repo));
+
+    let mut run = fake_run(run_id, CoreStatus::Started);
+    run.dataset_id = Some(ds);
+    watcher.on_pipeline_run_started(&run).await;
+    run.status = CoreStatus::Errored;
+    watcher.on_pipeline_run_errored(&run, "boom").await;
+
+    assert_eq!(
+        trail(&repo, ds).await,
+        vec![
+            (DbStatus::Started, serde_json::json!({})),
+            (DbStatus::Errored, serde_json::json!({"error": "boom"})),
+        ]
     );
 }
 

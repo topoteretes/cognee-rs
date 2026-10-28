@@ -98,7 +98,7 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             cognee::core::RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
-        // Gap 08-07: persist the four-state `pipeline_runs` trail through
+        // Gap 08-07: persist the `pipeline_runs` trail through
         // both phases.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
