@@ -89,8 +89,8 @@ pub trait VectorDB: Send + Sync {
     /// ```ignore
     /// let points = vec![
     ///     VectorPoint::new(chunk_id, embedding)
-    ///         .with_metadata("type", json!("DocumentChunk"))
-    ///         .with_metadata("field", json!("text")),
+    ///         .with_metadata("type", json!("IndexSchema"))
+    ///         .with_metadata("text", json!("chunk text")),
     /// ];
     /// vector_db.index_points("DocumentChunk", "text", &points).await?;
     /// ```
