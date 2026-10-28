@@ -292,4 +292,87 @@ mod tests {
             assert_eq!(route_query(query).search_type, expected, "{query:?}");
         }
     }
+
+    #[test]
+    fn an_unmatched_query_gets_the_default_decision() {
+        let expected = RouteDecision {
+            search_type: ROUTER_FALLBACK_TYPE,
+            rule: "default",
+        };
+        assert_eq!(route_query("Tell me something"), expected);
+    }
+
+    #[test]
+    fn a_matched_query_names_its_rule() {
+        assert_eq!(route_query("\"polonium and radium\"").rule, "quoted_phrase");
+        assert_eq!(
+            route_query("Show me the coding rules").rule,
+            "coding_rules_intent"
+        );
+        assert_eq!(
+            route_query("What happened in 1898?").rule,
+            "time_scoped_question"
+        );
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_ignored() {
+        let decision = route_query("   \"polonium and radium\"  ");
+        assert_eq!(decision.search_type, ChunksLexical);
+    }
+
+    #[test]
+    fn no_coding_rules_without_an_explicit_phrase() {
+        let queries = [
+            "hook PreToolUse gate.py emergency exit",
+            "Where is def recover() mentioned in the incident notes?",
+            "Describe the import process for customer records",
+            "What does the return policy say?",
+            "Find the async workflow in the operations guide",
+            "Find the await keyword mentioned in the incident notes",
+            "Which runbook mentions class Parser(",
+            "Which runbook mentions function restore_state(",
+            "What class of animal is a dolphin?",
+            "What is the function of the liver?",
+            "Run the linter on the billing module",
+            "Refactor the payment flow",
+        ];
+        for query in queries {
+            assert_ne!(route_query(query).search_type, CodingRules, "{query:?}");
+        }
+    }
+
+    #[test]
+    fn cypher_is_never_auto_routed() {
+        let queries = [
+            // Valid Cypher, including statements that mutate or destroy.
+            "MATCH (n) DETACH DELETE n",
+            "MATCH (n:Person) RETURN n.name",
+            "CREATE (x:Note {t: 1}) RETURN x",
+            "MERGE (a:Tag {name: 'x'}) RETURN a",
+            "MATCH (n:User) SET n.admin = true RETURN n",
+            "MATCH (n:Doc) REMOVE n.secret RETURN n",
+            "OPTIONAL MATCH (n:Person) RETURN n",
+            "UNWIND [1, 2, 3] AS x RETURN x",
+            "MATCH (a)--(b) RETURN a",
+            // Prose that merely looks Cypher-ish.
+            "RETURN POLICY FOR DAMAGED GOODS",
+            "MERGE CONFLICT in the deploy branch",
+            "Run diff --( format on the file",
+        ];
+        for query in queries {
+            assert_ne!(
+                route_query(query).search_type,
+                SearchType::Cypher,
+                "{query:?}"
+            );
+        }
+    }
+
+    /// A known limitation: a preposition before a four-digit count reads as a
+    /// year. TEMPORAL then finds no time window and answers as plain hybrid.
+    #[test]
+    fn a_four_digit_quantity_after_a_preposition_reads_as_a_year() {
+        assert_eq!(route_query("What is in 2048 bytes?").search_type, Temporal);
+    }
 }
