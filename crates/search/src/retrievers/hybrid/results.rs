@@ -70,12 +70,14 @@ pub(crate) fn result_id(item: &SearchItem) -> Option<String> {
 
 /// Whether `result_payload` satisfies the requested node-set filter.
 ///
-/// Port of `results.py:35-51`. **Divergence from Python:** Rust's
-/// `belongs_to_set` entries are either bare strings (dataset-membership form
-/// emitted by `DataPoint::new`) or `NodeSet` objects
-/// (`{"id","name","type":"NodeSet"}`, emitted by `classify_documents`), so the
-/// entry→name step reads a string entry as-is, reads `.name` off an object entry
-/// (skipping it if absent/non-string), and skips anything else. `"AND"` requires
+/// Port of `results.py:35-51`. Rows cognify writes since SDK-1039 hold
+/// node-set names as bare strings, as Python's `IndexSchema` rows do
+/// (`cognee_models::index_schema_payload`). **Divergence from Python:** rows
+/// written before then may also hold `NodeSet` objects
+/// (`{"id","name","type":"NodeSet"}`) and a bare dataset-id string (from
+/// `DataPoint::new`), so the entry→name step reads a string entry as-is, reads
+/// `.name` off an object entry (skipping it if absent/non-string), and skips
+/// anything else. `"AND"` requires
 /// `requested ⊆ payload_sets`; anything else (including garbage) is OR — a
 /// non-empty intersection — matching Python's operator handling exactly.
 pub(crate) fn payload_matches_node_filter(

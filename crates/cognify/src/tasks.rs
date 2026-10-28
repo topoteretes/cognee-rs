@@ -3786,7 +3786,9 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 ///   back.
 /// * Since the adapter-side fold landed (#256) nothing errors, but only one
 ///   occurrence survives on every backend and `number_of_edges` then holds just
-///   that one spelling's share of the count instead of the total.
+///   that one spelling's share of the count instead of the total. (The vector
+///   payload no longer stores the count since SDK-1039; the `EdgeType` still
+///   carries it, as Python's does.)
 ///
 /// So the fold happens here, at the producer, where the counts are still
 /// available to add up. This mirrors the `first_seen` collapse in
