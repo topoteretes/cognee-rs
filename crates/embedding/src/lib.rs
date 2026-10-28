@@ -30,7 +30,7 @@ pub mod download;
 pub mod onnx;
 
 pub use config::EmbeddingConfig;
-pub use engine::EmbeddingEngine;
+pub use engine::{EmbeddingEngine, embed_in_batches};
 pub use error::{EmbeddingError, EmbeddingResult};
 pub use mock::{MockEmbeddingEngine, MockVectorMode};
 pub use ollama::OllamaEmbeddingEngine;

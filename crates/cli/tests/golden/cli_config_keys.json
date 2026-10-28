@@ -43,6 +43,7 @@
     "embedding.dimensions",
     "embedding.endpoint",
     "embedding.max_completion_tokens",
+    "embedding.max_concurrent_data_points",
     "embedding.max_sequence_length",
     "embedding.mock",
     "embedding.model",
@@ -236,6 +237,7 @@
     "embedding.endpoint",
     "embedding.api_key",
     "embedding.batch_size",
+    "embedding.max_concurrent_data_points",
     "embedding.max_sequence_length",
     "embedding.max_completion_tokens",
     "embedding.rate_limit_enabled",
@@ -3839,6 +3841,57 @@
   "set embedding.max_completion_tokens <- {\"a\":1}": {
     "err": true
   },
+  "set embedding.max_concurrent_data_points <- \"\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"1\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"s\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"true\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- -1": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "set embedding.max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "set embedding.max_concurrent_data_points <- 1.5": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 5000000000": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "set embedding.max_concurrent_data_points <- [1]": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- false": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- null": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- true": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- {\"a\":1}": {
+    "err": true
+  },
   "set embedding.max_sequence_length <- \"\"": {
     "err": true
   },
@@ -4761,6 +4814,57 @@
     "err": true
   },
   "set embedding_max_completion_tokens <- {\"a\":1}": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"1\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"s\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"true\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- -1": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "set embedding_max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "set embedding_max_concurrent_data_points <- 1.5": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 5000000000": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "set embedding_max_concurrent_data_points <- [1]": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- false": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- null": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- true": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- {\"a\":1}": {
     "err": true
   },
   "set embedding_max_sequence_length <- \"\"": {
@@ -14806,6 +14910,13 @@
       "relational.port": 1
     }
   },
+  "unset embedding.max_concurrent_data_points": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset embedding.max_sequence_length": {
     "ok": {
       "chunk_size": 7,
@@ -14926,6 +15037,13 @@
     }
   },
   "unset embedding_max_completion_tokens": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset embedding_max_concurrent_data_points": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

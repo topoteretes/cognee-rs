@@ -776,6 +776,7 @@ impl Settings {
                 endpoint,
                 api_key,
                 batch_size: embedding.batch_size as usize,
+                max_concurrent_data_points: embedding.max_concurrent_data_points as usize,
                 rate_limit_enabled: embedding.rate_limit_enabled,
                 rate_limit_requests: embedding.rate_limit_requests,
                 rate_limit_interval: embedding.rate_limit_interval,

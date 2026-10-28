@@ -4261,6 +4261,69 @@
     "err": "TypeMismatch",
     "key": "embedding.max_completion_tokens"
   },
+  "embedding.max_concurrent_data_points <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "embedding.max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "embedding.max_concurrent_data_points <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "embedding.max_concurrent_data_points <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
   "embedding.max_sequence_length <- \"\"": {
     "err": "TypeMismatch",
     "key": "embedding.max_sequence_length"
@@ -5388,6 +5451,69 @@
   "embedding_max_completion_tokens <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "embedding_max_completion_tokens"
+  },
+  "embedding_max_concurrent_data_points <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "embedding_max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "embedding_max_concurrent_data_points <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "embedding_max_concurrent_data_points <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
   },
   "embedding_max_sequence_length <- \"\"": {
     "err": "TypeMismatch",
