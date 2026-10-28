@@ -315,7 +315,7 @@ pub struct CognifyConfig {
     /// vectors themselves, as the embedding integration tests do.
     pub retain_embeddings: bool,
 
-    /// Batch size for embedding generation (all types: chunks, entities, summaries, triplets).
+    /// Batch size for embedding generation (all types: chunks, entities, summaries, edge types).
     /// Python default: varies by provider (36 for OpenAI, 100 for others)
     /// Controls how many texts are embedded in a single API call
     pub embedding_batch_size: usize,

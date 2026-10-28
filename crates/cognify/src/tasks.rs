@@ -2353,7 +2353,9 @@ pub async fn summarize_text(
 /// Generate embeddings and index all data points in vector DB (Task 5).
 ///
 /// Generates embeddings for chunks, entities (name + description), summaries,
-/// (Python no longer embeds triplets, so neither does this). Creates vector collections and indexes points.
+/// entity types, edge types and documents, then creates the vector collections
+/// and indexes the points. No triplets: Python stopped embedding them in
+/// SDK-1115, and so did Rust (SDK-1039).
 ///
 /// Writes the provenance records (nodes/edges) to the relational database
 /// *before* the first graph or vector write, mirroring Python's

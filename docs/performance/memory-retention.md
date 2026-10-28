@@ -295,7 +295,7 @@ for.
 
 * **Live extraction past 50 documents.** Everything beyond that is
   structure-only until the large cassette is re-recorded. Entities add their
-  own collections (`Entity_name`, `EntityType_name`, `Triplet_text`) to the
+  own collections (`Entity_name`, `EntityType_name`) to the
   same windowed path, but the graph side of a coherent corpus is unmeasured.
 * **pgvector.** The attribution is on LanceDB; the Postgres write path has its
   own batching and was not profiled.
