@@ -14,32 +14,120 @@ use crate::types::SearchType;
 /// The search type for a query no rule matched.
 pub const ROUTER_FALLBACK_TYPE: SearchType = SearchType::HybridCompletion;
 
-/// A routing decision: the chosen search type and the rule that picked it.
+/// A routing decision: the chosen search type, the rule that picked it, and
+/// whether the search must run with `only_context`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RouteDecision {
     pub search_type: SearchType,
-    /// The matched rule's name, or `"default"` when no rule matched.
+    /// The matched rule's name, `"default"` when no rule matched, or
+    /// `"pinned"` for a caller's explicit type.
     pub rule: &'static str,
+    /// Set when no LLM can write the answer: the search returns the context
+    /// it would have answered from.
+    pub only_context: bool,
 }
 
-/// Route `query` by the first rule whose pattern matches it.
-pub fn route_query(query: &str) -> RouteDecision {
-    let query = query.trim();
-    let decision = RULES
-        .iter()
-        .find(|rule| rule.pattern.is_match(query))
-        .map_or(
-            RouteDecision {
-                search_type: ROUTER_FALLBACK_TYPE,
-                rule: "default",
-            },
-            |rule| RouteDecision {
-                search_type: rule.search_type,
-                rule: rule.name,
-            },
-        );
+/// What the deployment can run. The default allows everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutingConstraints {
+    /// An LLM can make calls (see `ComponentManager::llm_available`).
+    pub llm_available: bool,
+    /// Cypher queries are allowed (`search.allow_cypher_query`).
+    pub cypher_allowed: bool,
+}
+
+impl Default for RoutingConstraints {
+    fn default() -> Self {
+        Self {
+            llm_available: true,
+            cypher_allowed: true,
+        }
+    }
+}
+
+/// Routed types that never call an LLM: with no LLM they run as they are. A
+/// new LLM-free rule target belongs here, or a keyless install sends it to
+/// the fallback.
+pub const LLM_FREE_TYPES: [SearchType; 2] = [SearchType::ChunksLexical, SearchType::CodingRules];
+
+/// Types whose only LLM call writes the final answer: with no LLM they run
+/// with `only_context` and return the context instead.
+pub const COMPLETION_ONLY_TYPES: [SearchType; 3] = [
+    SearchType::HybridCompletion,
+    SearchType::GraphCompletion,
+    SearchType::RagCompletion,
+];
+
+/// Types that run the query as Cypher, directly or after an LLM writes it.
+pub const CYPHER_TYPES: [SearchType; 2] = [SearchType::Cypher, SearchType::NaturalLanguage];
+
+/// Route `query` by the first rule whose pattern matches it, then resolve that
+/// pick against what the deployment can run.
+pub fn route_query(query: &str, constraints: &RoutingConstraints) -> RouteDecision {
+    let decision = constrain(match_rules(query), constraints);
     debug!(rule = decision.rule, search_type = ?decision.search_type, "query_router: routed");
     decision
+}
+
+/// The decision for a query no rule matched.
+pub fn default_route(constraints: &RoutingConstraints) -> RouteDecision {
+    constrain(unconstrained(ROUTER_FALLBACK_TYPE, "default"), constraints)
+}
+
+/// The decision for a caller's explicit type: never rerouted, but with no LLM
+/// a completion type runs with `only_context` instead of failing.
+pub fn pinned_route(search_type: SearchType, constraints: &RoutingConstraints) -> RouteDecision {
+    RouteDecision {
+        search_type,
+        rule: "pinned",
+        only_context: !constraints.llm_available && COMPLETION_ONLY_TYPES.contains(&search_type),
+    }
+}
+
+/// Resolve a rule's pick against what the deployment can run. Applied after
+/// the rules, so the rules look at the query text only.
+pub fn constrain(decision: RouteDecision, constraints: &RoutingConstraints) -> RouteDecision {
+    let mut search_type = decision.search_type;
+    if !constraints.cypher_allowed && CYPHER_TYPES.contains(&search_type) {
+        debug!(
+            ?search_type,
+            "query_router: Cypher queries are disabled; using the fallback"
+        );
+        search_type = ROUTER_FALLBACK_TYPE;
+    }
+    if constraints.llm_available || LLM_FREE_TYPES.contains(&search_type) {
+        return unconstrained(search_type, decision.rule);
+    }
+    if !COMPLETION_ONLY_TYPES.contains(&search_type) {
+        debug!(
+            ?search_type,
+            "query_router: no LLM for retrieval; using the fallback"
+        );
+        search_type = ROUTER_FALLBACK_TYPE;
+    }
+    RouteDecision {
+        search_type,
+        rule: decision.rule,
+        only_context: true,
+    }
+}
+
+fn match_rules(query: &str) -> RouteDecision {
+    let query = query.trim();
+    RULES
+        .iter()
+        .find(|rule| rule.pattern.is_match(query))
+        .map_or(unconstrained(ROUTER_FALLBACK_TYPE, "default"), |rule| {
+            unconstrained(rule.search_type, rule.name)
+        })
+}
+
+fn unconstrained(search_type: SearchType, rule: &'static str) -> RouteDecision {
+    RouteDecision {
+        search_type,
+        rule,
+        only_context: false,
+    }
 }
 
 struct Rule {
@@ -142,6 +230,10 @@ mod tests {
     use super::*;
 
     use SearchType::{ChunksLexical, CodingRules, HybridCompletion, Temporal};
+
+    fn route(query: &str) -> RouteDecision {
+        route_query(query, &RoutingConstraints::default())
+    }
 
     /// Python's golden table (`test_query_router.py`).
     const GOLDEN: &[(&str, SearchType)] = &[
@@ -247,7 +339,7 @@ mod tests {
     #[test]
     fn golden_routes() {
         for &(query, expected) in GOLDEN {
-            assert_eq!(route_query(query).search_type, expected, "{query:?}");
+            assert_eq!(route(query).search_type, expected, "{query:?}");
         }
     }
 
@@ -265,7 +357,7 @@ mod tests {
 
     #[test]
     fn shape_rules_win_over_intent_rules() {
-        assert_eq!(route_query("\"coding rules\"").rule, "quoted_phrase");
+        assert_eq!(route("\"coding rules\"").rule, "quoted_phrase");
     }
 
     #[test]
@@ -289,7 +381,7 @@ mod tests {
             ("What is the plan for 2000 andrew?", HybridCompletion),
         ];
         for (query, expected) in cases {
-            assert_eq!(route_query(query).search_type, expected, "{query:?}");
+            assert_eq!(route(query).search_type, expected, "{query:?}");
         }
     }
 
@@ -298,26 +390,24 @@ mod tests {
         let expected = RouteDecision {
             search_type: ROUTER_FALLBACK_TYPE,
             rule: "default",
+            only_context: false,
         };
-        assert_eq!(route_query("Tell me something"), expected);
+        assert_eq!(route("Tell me something"), expected);
     }
 
     #[test]
     fn a_matched_query_names_its_rule() {
-        assert_eq!(route_query("\"polonium and radium\"").rule, "quoted_phrase");
+        assert_eq!(route("\"polonium and radium\"").rule, "quoted_phrase");
         assert_eq!(
-            route_query("Show me the coding rules").rule,
+            route("Show me the coding rules").rule,
             "coding_rules_intent"
         );
-        assert_eq!(
-            route_query("What happened in 1898?").rule,
-            "time_scoped_question"
-        );
+        assert_eq!(route("What happened in 1898?").rule, "time_scoped_question");
     }
 
     #[test]
     fn surrounding_whitespace_is_ignored() {
-        let decision = route_query("   \"polonium and radium\"  ");
+        let decision = route("   \"polonium and radium\"  ");
         assert_eq!(decision.search_type, ChunksLexical);
     }
 
@@ -338,7 +428,7 @@ mod tests {
             "Refactor the payment flow",
         ];
         for query in queries {
-            assert_ne!(route_query(query).search_type, CodingRules, "{query:?}");
+            assert_ne!(route(query).search_type, CodingRules, "{query:?}");
         }
     }
 
@@ -361,11 +451,7 @@ mod tests {
             "Run diff --( format on the file",
         ];
         for query in queries {
-            assert_ne!(
-                route_query(query).search_type,
-                SearchType::Cypher,
-                "{query:?}"
-            );
+            assert_ne!(route(query).search_type, SearchType::Cypher, "{query:?}");
         }
     }
 
@@ -373,6 +459,89 @@ mod tests {
     /// year. TEMPORAL then finds no time window and answers as plain hybrid.
     #[test]
     fn a_four_digit_quantity_after_a_preposition_reads_as_a_year() {
-        assert_eq!(route_query("What is in 2048 bytes?").search_type, Temporal);
+        assert_eq!(route("What is in 2048 bytes?").search_type, Temporal);
+    }
+
+    const NO_LLM: RoutingConstraints = RoutingConstraints {
+        llm_available: false,
+        cypher_allowed: true,
+    };
+
+    fn decision(search_type: SearchType, rule: &'static str, only_context: bool) -> RouteDecision {
+        RouteDecision {
+            search_type,
+            rule,
+            only_context,
+        }
+    }
+
+    #[test]
+    fn with_no_llm_the_default_is_hybrid_as_only_context() {
+        let expected = decision(HybridCompletion, "default", true);
+        assert_eq!(
+            route_query("Where was Marie Curie born?", &NO_LLM),
+            expected
+        );
+        assert_eq!(default_route(&NO_LLM), expected);
+    }
+
+    #[test]
+    fn with_no_llm_llm_free_rules_keep_their_types() {
+        assert_eq!(
+            route_query("\"polonium and radium\"", &NO_LLM),
+            decision(ChunksLexical, "quoted_phrase", false)
+        );
+        assert_eq!(
+            route_query("show me the coding rules", &NO_LLM),
+            decision(CodingRules, "coding_rules_intent", false)
+        );
+    }
+
+    #[test]
+    fn with_no_llm_completion_only_types_run_as_only_context() {
+        for search_type in COMPLETION_ONLY_TYPES {
+            let picked = constrain(decision(search_type, "r", false), &NO_LLM);
+            assert_eq!(picked, decision(search_type, "r", true));
+            let pinned = pinned_route(search_type, &NO_LLM);
+            assert_eq!(pinned, decision(search_type, "pinned", true));
+        }
+    }
+
+    #[test]
+    fn with_no_llm_a_temporal_pick_goes_to_the_fallback() {
+        assert_eq!(
+            route_query("What happened in 1898?", &NO_LLM),
+            decision(ROUTER_FALLBACK_TYPE, "time_scoped_question", true)
+        );
+    }
+
+    #[test]
+    fn with_cypher_disabled_no_cypher_type_is_emitted() {
+        let no_cypher = RoutingConstraints {
+            llm_available: true,
+            cypher_allowed: false,
+        };
+        for search_type in CYPHER_TYPES {
+            let picked = constrain(decision(search_type, "r", false), &no_cypher);
+            assert_eq!(picked, decision(ROUTER_FALLBACK_TYPE, "r", false));
+        }
+        let neither = RoutingConstraints {
+            llm_available: false,
+            cypher_allowed: false,
+        };
+        let picked = constrain(decision(SearchType::Cypher, "r", false), &neither);
+        assert_eq!(picked, decision(ROUTER_FALLBACK_TYPE, "r", true));
+    }
+
+    #[test]
+    fn a_pinned_type_is_never_rerouted() {
+        assert_eq!(
+            pinned_route(Temporal, &NO_LLM),
+            decision(Temporal, "pinned", false)
+        );
+        assert_eq!(
+            pinned_route(HybridCompletion, &RoutingConstraints::default()),
+            decision(HybridCompletion, "pinned", false)
+        );
     }
 }
