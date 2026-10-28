@@ -3,7 +3,7 @@
 Documentation hub. Start here, or jump from the [project README](../README.md).
 cognee-rust is a Rust AI-memory pipeline. The primary surface is the **memory
 API** — `remember` / `recall` / `improve` / `forget` — which composes the
-lower-level pipeline `add → cognify → memify → search`.
+lower-level pipeline `add → cognify → search`.
 
 API/type detail is rendered from the source by rustdoc — build it with
 `cargo doc --no-deps --open`. These pages link to it rather than restating
@@ -28,11 +28,11 @@ signatures.
 ### Getting started & concepts
 - **[getting-started.md](getting-started.md)** — install/build, configure an LLM, and your first `remember` / `recall`.
 - **[concepts.md](concepts.md)** — the three stores, building blocks (DataPoints, Tasks, Pipelines), and key terminology (Datasets, Sessions, Node Sets, Ontologies, Loaders & Chunkers).
-- **[guides/](guides/README.md)** — focused how-tos: custom prompts, custom graph/summary schema, ontology grounding, temporal cognify, memify node filtering.
+- **[guides/](guides/README.md)** — focused how-tos: custom prompts, custom graph/summary schema, ontology grounding, temporal cognify.
 
 ### Overview & operations
 - **[architecture.md](architecture.md)** — workspace layout, crate-by-crate breakdown, design patterns, key dependencies, and the rustdoc guide. (Single source shared with `.claude/CLAUDE.md`.)
-- **[operations.md](operations.md)** — the memory API (`remember`/`recall`/`improve`/`forget`) and the lower-level pipeline (`add`/`cognify`/`memify`/`search`), plus `delete`/`update`/`prune`/`visualize`, and how each maps onto the interfaces.
+- **[operations.md](operations.md)** — the memory API (`remember`/`recall`/`improve`/`forget`) and the lower-level pipeline (`add`/`cognify`/`search`), plus `delete`/`update`/`prune`/`visualize`, and how each maps onto the interfaces.
 
 ### Configuration
 - **[configuration.md](configuration.md)** — canonical config reference: resolution order, every env var grouped by subsystem, the `ConfigManager` runtime API, and the CLI `config` subcommand. Logging lives here too.

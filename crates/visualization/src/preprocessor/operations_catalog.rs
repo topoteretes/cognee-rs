@@ -12,7 +12,7 @@
 //!
 //! Curated from the Python implementation:
 //!   * `cognee/api/v1/cognify/cognify.py`
-//!   * `cognee/modules/memify/memify.py` + `cognee/memify_pipelines/*`
+//!   * `cognee/modules/memify/run_memify_tasks.py` + `cognee/memify_pipelines/*`
 //!   * `cognee/api/v1/improve/improve.py`
 //!   * `cognee/api/v1/forget/forget.py`
 //!   * `cognee/tasks/codingagents/coding_rule_associations.py`
@@ -180,15 +180,6 @@ pub static OPERATIONS: &[Operation] = &[
         ],
     },
     Operation {
-        name: "memify",
-        label: "memify (triplets)",
-        kind: "pipeline",
-        scope: "whole",
-        pipeline_name: Some("memify_pipeline"),
-        summary: "Default enrichment: builds triplet embeddings over the graph.",
-        effects: &[Effect::new("enriches", "Entity")],
-    },
-    Operation {
         name: "persist_sessions",
         label: "persist sessions",
         kind: "pipeline",
@@ -346,7 +337,6 @@ mod tests {
             names,
             vec![
                 "cognify",
-                "memify",
                 "persist_sessions",
                 "persist_agent_trace_feedbacks",
                 "apply_feedback_weights",
@@ -393,7 +383,7 @@ mod tests {
     #[test]
     fn json_omits_absent_optional_keys() {
         let catalog = get_operations_catalog();
-        assert_eq!(catalog.len(), 13);
+        assert_eq!(catalog.len(), 12);
 
         let cognify = &catalog[0];
         assert_eq!(cognify["name"], "cognify");

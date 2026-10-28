@@ -589,7 +589,7 @@ pub async fn persist_data_with_acl_and_locks(
         // stored), and only when the call supplies one: a re-add without a
         // node set leaves the stored tags alone. The write is skipped when
         // the row already carries this set, which is the common re-add
-        // (memify's session persist re-adds under one fixed set). "Carries"
+        // (improve's session persist re-adds under one fixed set). "Carries"
         // is decided on the parsed JSON, not the stored text: a row Python
         // wrote spells the same set `["a", "b"]` (json.dumps spacing) and may
         // order metadata keys differently, and must not be rewritten on every

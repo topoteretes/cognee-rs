@@ -53,9 +53,6 @@ pub enum ApiError {
     #[error("Vector error: {0}")]
     Vector(#[from] cognee_vector::VectorDBError),
 
-    #[error("Memify error: {0}")]
-    Memify(String),
-
     #[error("Improve error: {0}")]
     Improve(String),
 

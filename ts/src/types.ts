@@ -549,29 +549,10 @@ export type CogneeMemoryEntry =
       feedbackScore?: number;
     };
 
-/** Options accepted by `cogneeMemify`. */
-export interface CogneeMemifyOptions {
-  tripletBatchSize?: number;
-  nodeTypeFilter?: string;
-  nodeNameFilter?: string[];
-  nodeNameFilterOperator?: string;
-}
-
-/** Result of `cogneeMemify`. Hand-built from `MemifyResult` (not Serialize). */
-export interface CogneeMemifyResult {
-  tripletCount: number;
-  indexedCount: number;
-  batchCount: number;
-  alreadyCompleted: boolean;
-  priorPipelineRunId: string | null;
-}
-
 /** Options accepted by `cogneeImprove`. */
 export interface CogneeImproveOptions {
   datasetName: string;
   sessionIds?: string[];
-  /** Deprecated: scoped the removed memify stage; ignored. */
-  nodeName?: string[];
   feedbackAlpha?: number;
   tenant?: string;
 }

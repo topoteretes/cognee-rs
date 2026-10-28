@@ -2,7 +2,7 @@
 
 What cognee-rust *does*. The primary surface is the **memory API** —
 **`remember`**, **`recall`**, **`improve`**, **`forget`** — four high-level
-operations that compose the lower-level pipeline (`add → cognify → memify →
+operations that compose the lower-level pipeline (`add → cognify →
 search`). Every operation is reachable from each interface (CLI, language
 bindings, HTTP server) — see [tools/](tools/README.md). API/type detail lives in
 rustdoc (`cargo doc --no-deps --open`); this page is the conceptual map.
@@ -38,7 +38,7 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   `ops::lifecycle::wait_for_background_tasks`). A detached task that panics is
   logged at `error`.
 - **Permanent graph memory** — omit `--session-id` and the input is persisted as
-  permanent, graph-backed memory. Its self-improvement pass (memify) follows
+  permanent, graph-backed memory. Its self-improvement pass (`improve()`) follows
   the same gate: off when `improve.auto_enabled` is off or an `improve.*`
   setting is invalid, as Python's `self_improvement and auto_improve_enabled()`.
 
@@ -54,8 +54,7 @@ preposition before an absolute date → `TEMPORAL`, anything else →
 rules search that finds nothing, is retried as `HYBRID_COMPLETION`. With no
 LLM API key, recall still routes: `CHUNKS_LEXICAL` and `CODING_RULES` run as
 they are, and any other routed type falls back to `HYBRID_COMPLETION`; it and an
-explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION`, `RAG_COMPLETION` or
-`TRIPLET_COMPLETION` return
+explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION` or `RAG_COMPLETION` return
 their context instead of an answer (`only_context`). No rule routes to
 `CYPHER` or `NATURAL_LANGUAGE`; requested explicitly with
 `ALLOW_CYPHER_QUERY=false`, they are refused. When no graph was ever built for
@@ -82,7 +81,10 @@ Stages named in `improve.stages_disabled` (`IMPROVE_STAGES_DISABLED`, a
 comma-separated list) are skipped first, with `disabled_by_config`; an unknown
 name, or the fatal `persist_session_qa`, makes the configuration invalid and
 the run fails before any stage. `feedback_alpha` defaults to
-`improve.feedback_alpha` (0.1).
+`improve.feedback_alpha` (0.1). Triplet enrichment (memify) is gone, as in
+Python (SDK-1115), and so are the deprecated custom-task and scoping options
+(`extraction_tasks`, `enrichment_tasks`, `data`, `node_name`, `node_type`,
+`vector_db_config`, `graph_db_config`); over REST they are ignored.
 
 The run fails open — a failed stage is recorded and the next one runs —
 except that a failure in `persist_session_qa` (losing session Q&A would be data
@@ -143,8 +145,8 @@ later one skipping; runs on different datasets and sessions do not wait. The
 dataset lock is Python's one `dataset_lock` registry: `cognee_core::DatasetLocks::global()`
 is the default of `add` (`AddPipeline`), dataset-scoped deletes
 (`DeleteService`) and `improve` (`ImproveParams::dataset_locks`, else the add
-pipeline's registry, else the global one), and `cognify` and `memify` always
-hold it for their run, so in one process those writers queue per dataset. A
+pipeline's registry, else the global one), and `cognify` always
+holds it for its run, so in one process those writers queue per dataset. A
 host with its own registry wires it into the add pipeline, the delete service
 and `improve`; the HTTP server shares the global one. The stages' own adds and
 cognifies re-enter the improve's hold. A dataset that does not exist yet is
@@ -327,14 +329,6 @@ Both branches share one marker key, matching Python, so **a `cognify()` and a
 temporal `cognify()` over the same dataset are no-ops for each other**. Turn
 incremental loading off to build both graphs over one dataset.
 
-### memify (graph enrichment)
-
-Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`
-objects from every edge (`"source → relationship → target"`), embeds them, and
-indexes them into the `Triplet`/`text` vector collection. The
-`TripletCompletion` search type was removed, as in Python (SDK-1039). Pipeline:
-[`cognee-cognify`](../crates/cognify/) (`memify()`).
-
 ### search (retrieval)
 
 Unified orchestration across 17 retrieval strategies selected by `SearchType`
@@ -447,7 +441,6 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | add | `cognee-cli add` | `POST /api/v1/add` | `add()` |
 | cognify | `cognee-cli cognify` | `POST /api/v1/cognify` | `cognify()` |
 | add + cognify | `cognee-cli add-and-cognify` | _(two calls)_ | — |
-| memify | `cognee-cli memify` | `POST /api/v1/memify` | `memify()` |
 | search | `cognee-cli search` | `POST /api/v1/search` | `search()` |
 | delete | `cognee-cli delete` | `POST /api/v1/delete` | `delete*()` |
 | update | _(via run-sequence)_ | `POST /api/v1/update` | `update()` |

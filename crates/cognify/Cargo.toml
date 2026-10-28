@@ -77,11 +77,6 @@ path = "tests/global_context_index.rs"
 required-features = ["testing"]
 
 [[test]]
-name = "integration_memify"
-path = "tests/integration_memify.rs"
-required-features = ["testing"]
-
-[[test]]
 name = "memify_distill_sessions"
 path = "tests/memify_distill_sessions.rs"
 required-features = ["testing"]

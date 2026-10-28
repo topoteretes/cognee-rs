@@ -12,7 +12,7 @@
 //!
 //! Permanent-mode end-to-end tests (which require a full cognify pipeline)
 //! are covered by the per-stage integration tests in `cognee-cognify`
-//! (`memify_persist_sessions`, `e2e_full_pipeline_memify`, etc.). Here we
+//! (`memify_persist_sessions`, etc.). Here we
 //! exercise the orchestration surface using mock backends.
 
 use std::sync::Arc;

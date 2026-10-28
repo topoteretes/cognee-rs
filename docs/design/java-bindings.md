@@ -177,7 +177,7 @@ one `sdk_*.rs` shim file):
 
 | Java accessor | Ops (from `bindings-common`) |
 |---|---|
-| top-level | `warm`, `add`, `cognify`, `addAndCognify`, `search`, `recall`, `memify`, `remember`, `improve`, `forget`, `update`, `prune*` |
+| top-level | `warm`, `add`, `cognify`, `addAndCognify`, `search`, `recall`, `remember`, `improve`, `forget`, `update`, `prune*` |
 | `cognee.datasets()` | `list`, `listData`, `has`, `status`, `empty`, `deleteData`, `deleteAll` |
 | `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback`, `getGraphContext`, `setGraphContext` |
 | `cognee.notebooks()` | `list`, `create`, `update`, `delete` |
@@ -374,7 +374,7 @@ java/
    `CONFIG_TYPE_MISMATCH` test.
 3. **Core ops:** `warm`, `add`, `cognify`, `search`, `addAndCognify` with the
    full async upcall machinery (§6) — this phase de-risks everything else.
-4. **Remaining op groups:** datasets, sessions, memory (`memify`/`remember`/
+4. **Remaining op groups:** datasets, sessions, memory (`remember`/
    `improve`/`forget`/`update`), notebooks/users/admin, visualization,
    logging/telemetry statics.
 5. **Typed results + polish:** POJOs/records for all payloads, Javadoc,
