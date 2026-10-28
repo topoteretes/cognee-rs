@@ -12,11 +12,6 @@ use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
 use crate::utils::{handle_embedding_response, sanitize_embedding_inputs};
 
-/// Maximum number of sub-batch HTTP requests issued concurrently from a single
-/// `embed` call. Bounds in-flight work against provider rate limits while still
-/// overlapping network latency across sub-batches.
-const MAX_CONCURRENT_BATCHES: usize = 8;
-
 // ─── Response types ───────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -69,6 +64,9 @@ pub struct OpenAICompatibleEmbeddingEngine {
     model: String,
     dimensions: usize,
     batch_size: usize,
+    /// Sub-batch requests in flight from one `embed` call:
+    /// `max(1, embedding.max_concurrent_data_points / batch_size)`.
+    max_concurrent_batches: usize,
     max_sequence_length: usize,
 }
 
@@ -111,6 +109,10 @@ impl OpenAICompatibleEmbeddingEngine {
             model: config.model.clone(),
             dimensions: config.dimensions,
             batch_size: config.batch_size,
+            max_concurrent_batches: crate::config::concurrent_batches(
+                config.max_concurrent_data_points,
+                config.batch_size,
+            ),
             max_sequence_length: config.max_completion_tokens,
         })
     }
@@ -203,7 +205,7 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
             return Ok(Vec::new());
         }
 
-        // Dispatch sub-batches concurrently (bounded by MAX_CONCURRENT_BATCHES).
+        // Dispatch sub-batches concurrently (bounded by `max_concurrent_batches`).
         // `try_collect` over `buffer_unordered` aborts on the first failure —
         // cancelling in-flight retries instead of waiting them out — and the
         // batch index restores input order afterwards.
@@ -216,7 +218,7 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
             .collect();
 
         let mut indexed: Vec<(usize, Vec<Vec<f32>>)> = stream::iter(batch_futures)
-            .buffer_unordered(MAX_CONCURRENT_BATCHES)
+            .buffer_unordered(self.max_concurrent_batches)
             .try_collect()
             .await?;
 
@@ -236,6 +238,10 @@ impl EmbeddingEngine for OpenAICompatibleEmbeddingEngine {
 
     fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    fn max_concurrent_batches(&self) -> usize {
+        self.max_concurrent_batches
     }
 
     fn max_sequence_length(&self) -> usize {
@@ -359,6 +365,7 @@ mod tests {
             model: "text-embedding-3-small".to_string(),
             dimensions: 1536,
             batch_size: 10,
+            max_concurrent_data_points: 150,
             ..EmbeddingConfig::default()
         };
         let engine = OpenAICompatibleEmbeddingEngine::new(&config)
@@ -369,12 +376,34 @@ mod tests {
     }
 
     #[test]
+    fn concurrency_is_max_concurrent_data_points_over_batch_size() {
+        let engine_for = |batch_size, max_concurrent_data_points| {
+            OpenAICompatibleEmbeddingEngine::new(&EmbeddingConfig {
+                batch_size,
+                max_concurrent_data_points,
+                ..EmbeddingConfig::default()
+            })
+            .expect("builds")
+        };
+        // Defaults: 150 / 32 = 4.
+        let default =
+            OpenAICompatibleEmbeddingEngine::new(&EmbeddingConfig::default()).expect("builds");
+        assert_eq!(default.batch_size(), 32);
+        assert_eq!(default.max_concurrent_batches(), 4);
+        assert_eq!(engine_for(10, 150).max_concurrent_batches(), 15);
+        assert_eq!(engine_for(150, 150).max_concurrent_batches(), 1);
+        // A batch larger than the budget still runs one batch.
+        assert_eq!(engine_for(500, 150).max_concurrent_batches(), 1);
+    }
+
+    #[test]
     fn test_new_with_custom_endpoint() {
         let config = EmbeddingConfig {
             endpoint: Some("http://localhost:8080/v1/embeddings".to_string()),
             model: "my-model".to_string(),
             dimensions: 384,
             batch_size: 5,
+            max_concurrent_data_points: 150,
             ..EmbeddingConfig::default()
         };
         let engine = OpenAICompatibleEmbeddingEngine::new(&config)

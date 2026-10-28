@@ -2763,8 +2763,7 @@ async fn index_dynamic_graph_points(
                 .iter()
                 .map(|(_, text)| text.as_str())
                 .collect();
-            let vectors = engine
-                .embed(&texts)
+            let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &texts)
                 .await
                 .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
             let points: Vec<VectorPoint> = window_entries
@@ -5859,8 +5858,7 @@ async fn generate_embeddings(
 
     if !chunks.is_empty() {
         let chunk_texts: Vec<_> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let chunk_vectors = engine
-            .embed(&chunk_texts)
+        let chunk_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &chunk_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -5876,8 +5874,7 @@ async fn generate_embeddings(
 
     if !entities.is_empty() {
         let entity_names: Vec<_> = entities.iter().map(|e| e.entity.name.as_str()).collect();
-        let entity_vectors = engine
-            .embed(&entity_names)
+        let entity_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &entity_names)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -5893,8 +5890,7 @@ async fn generate_embeddings(
 
     if !summaries.is_empty() {
         let summary_texts: Vec<_> = summaries.iter().map(|s| s.text.as_str()).collect();
-        let summary_vectors = engine
-            .embed(&summary_texts)
+        let summary_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &summary_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -5931,8 +5927,7 @@ async fn reuse_or_embed(
     let fresh = if missing_texts.is_empty() {
         Vec::new()
     } else {
-        engine
-            .embed(&missing_texts)
+        cognee_embedding::embed_in_batches(engine.as_ref(), &missing_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?
     };
@@ -6232,8 +6227,7 @@ async fn index_data_points_windowed(
                 .await?;
             for type_window in unique_entity_types.chunks(window) {
                 let type_names: Vec<_> = type_window.iter().map(|et| et.name.as_str()).collect();
-                let vectors = engine
-                    .embed(&type_names)
+                let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &type_names)
                     .await
                     .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -6340,8 +6334,7 @@ async fn index_data_points_windowed(
                 .iter()
                 .map(|et| et.relationship_name.as_str())
                 .collect();
-            let vectors = engine
-                .embed(&names)
+            let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &names)
                 .await
                 .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -6405,8 +6398,7 @@ async fn index_data_points_windowed(
             announce_index_write(&vector_db, type_name, "name", docs.len()).await?;
             for doc_window in docs.chunks(window) {
                 let names: Vec<&str> = doc_window.iter().map(|d| d.name.as_str()).collect();
-                let vectors = engine
-                    .embed(&names)
+                let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &names)
                     .await
                     .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -9345,6 +9337,65 @@ mod tests {
             .map(|_| test_document_with_metadata(Uuid::new_v4(), None))
             .collect();
         (chunks, entities, summaries, documents)
+    }
+
+    /// SDK-1039 P7 (extraction-v-01): the engine's configured batch size drives
+    /// how cognify batches embedding requests, whatever the index window is.
+    #[tokio::test]
+    async fn index_data_points_embeds_in_batches_of_the_engine_batch_size() {
+        use cognee_embedding::{EmbeddingResult, MockEmbeddingEngine};
+
+        struct BatchRecorder {
+            inner: MockEmbeddingEngine,
+            sizes: std::sync::Mutex<Vec<usize>>,
+        }
+        #[async_trait::async_trait]
+        impl EmbeddingEngine for BatchRecorder {
+            async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+                // lock poison is unrecoverable
+                self.sizes.lock().expect("lock").push(texts.len());
+                self.inner.embed(texts).await
+            }
+            fn dimension(&self) -> usize {
+                self.inner.dimension()
+            }
+            fn batch_size(&self) -> usize {
+                self.inner.batch_size()
+            }
+            fn max_sequence_length(&self) -> usize {
+                self.inner.max_sequence_length()
+            }
+        }
+
+        let (chunks, entities, summaries, documents) = windowing_fixture();
+        let recorder = Arc::new(BatchRecorder {
+            inner: MockEmbeddingEngine::with_batch_size(8, 3),
+            sizes: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine: Arc<dyn EmbeddingEngine> = recorder.clone();
+        // A window far larger than the batch size: only the batch size may cut.
+        index_data_points_windowed(
+            &chunks,
+            &entities,
+            &summaries,
+            &documents,
+            &[],
+            Uuid::new_v4(),
+            engine,
+            Arc::new(RecordingVectorDb::new()),
+            &[],
+            1000,
+        )
+        .await
+        .unwrap();
+
+        let sizes = recorder.sizes.lock().expect("lock").clone();
+        assert!(!sizes.is_empty());
+        assert!(
+            sizes.iter().all(|n| (1..=3).contains(n)),
+            "every embed() call carries at most the engine batch size, got {sizes:?}"
+        );
+        assert!(sizes.contains(&3), "full batches are used: {sizes:?}");
     }
 
     /// SDK-507: a collection is embedded and written in windows, each

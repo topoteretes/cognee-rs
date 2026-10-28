@@ -3848,6 +3848,36 @@
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"a\\\":1}\"": {},
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":true}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"  \"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"-1\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"0\"": {
+    "embedding.max_concurrent_data_points": 0
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"1\"": {
+    "embedding.max_concurrent_data_points": 1
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"1.5\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"42\"": {
+    "embedding.max_concurrent_data_points": 42
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"5000000000\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"70000\"": {
+    "embedding.max_concurrent_data_points": 70000
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"TRUE\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"[1]\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"abc\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"false\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"no\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"on\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"require\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"true\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"v\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"yes\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"a\\\":1}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"  \"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"-1\"": {},

@@ -311,9 +311,15 @@ config_section! {
         pub api_key: String = String::new() => {
             env: ["EMBEDDING_API_KEY", "LLM_API_KEY"], alias: ["embedding_api_key"], secret: true,
         },
-        /// Texts per embedding request.
-        pub batch_size: u32 = 36 => {
+        /// Texts per embedding request (Python's `embedding_batch_size`).
+        pub batch_size: u32 = 32 => {
             env: ["EMBEDDING_BATCH_SIZE"], alias: ["embedding_batch_size"], secret: false,
+        },
+        /// Data points allowed in flight to the embedder; concurrent batches
+        /// are `max(1, max_concurrent_data_points / batch_size)` (Python's
+        /// `embedding_max_concurrent_data_points`).
+        pub max_concurrent_data_points: u32 = 150 => {
+            env: ["EMBEDDING_MAX_CONCURRENT_DATA_POINTS"], alias: ["embedding_max_concurrent_data_points"], secret: false,
         },
         /// Maximum input tokens per text for the local ONNX provider
         /// (`onnx`/`fastembed`): it truncates input and is the embedding term

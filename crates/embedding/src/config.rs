@@ -9,6 +9,20 @@ use crate::ollama::OllamaEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
 
+/// Python's `embedding_max_concurrent_data_points` default.
+pub const DEFAULT_MAX_CONCURRENT_DATA_POINTS: usize = 150;
+
+fn default_max_concurrent_data_points() -> usize {
+    DEFAULT_MAX_CONCURRENT_DATA_POINTS
+}
+
+/// Concurrent embedding batches for a data-point budget: Python's
+/// `max(1, embedding_max_concurrent_data_points // batch_size)`
+/// (`index_data_points.py:57-71`). A `batch_size` of 0 is treated as 1.
+pub fn concurrent_batches(max_concurrent_data_points: usize, batch_size: usize) -> usize {
+    (max_concurrent_data_points / batch_size.max(1)).max(1)
+}
+
 #[cfg(feature = "onnx")]
 use crate::onnx::OnnxEmbeddingEngine;
 #[cfg(feature = "onnx")]
@@ -288,7 +302,7 @@ impl OnnxEmbeddingConfig {
 /// - `EMBEDDING_API_KEY` — API key (fallback: `LLM_API_KEY`)
 /// - `EMBEDDING_API_VERSION` — API version string
 /// - `EMBEDDING_MAX_COMPLETION_TOKENS` — maximum tokens (default: 8191)
-/// - `EMBEDDING_BATCH_SIZE` — texts per embedding request (default: 36)
+/// - `EMBEDDING_BATCH_SIZE` — texts per embedding request (default: 32)
 /// - `EMBEDDING_ONNX_BATCH_SIZE` — ONNX inference batch size (default: 32; `onnx` feature only)
 /// - `HUGGINGFACE_TOKENIZER` — HuggingFace tokenizer identifier
 ///
@@ -318,14 +332,22 @@ pub struct EmbeddingConfig {
     /// Maximum tokens for completion requests (default: 8191).
     pub max_completion_tokens: usize,
 
-    /// Number of texts to send in a single embedding request (default: 36).
+    /// Number of texts to send in a single embedding request (default: 32).
     ///
-    /// Matches the Python SDK and stays within the small client-batch limits of
-    /// the self-hosted servers this adapter targets (e.g. TEI defaults to 32).
-    /// Raise it via `EMBEDDING_BATCH_SIZE` for providers that accept larger
-    /// batches. For the OpenAI-compatible engine, up to `MAX_CONCURRENT_BATCHES`
-    /// sub-batches are also dispatched concurrently.
+    /// Matches the Python SDK (`embedding_batch_size`, lowered from 36 to 32
+    /// because Text Embeddings Inference rejects more than 32 inputs per
+    /// request). Raise it via `EMBEDDING_BATCH_SIZE` for providers that accept
+    /// larger batches.
     pub batch_size: usize,
+
+    /// Data points allowed in flight to the embedder (default: 150).
+    ///
+    /// Concurrent batches = `max(1, max_concurrent_data_points / batch_size)`,
+    /// see [`concurrent_batches`]. Matches Python's
+    /// `embedding_max_concurrent_data_points`. The Ollama engine stays
+    /// sequential.
+    #[serde(default = "default_max_concurrent_data_points")]
+    pub max_concurrent_data_points: usize,
 
     /// If true, use mock embeddings regardless of `provider`.
     /// Overrides `provider` to `Mock`. Set via `MOCK_EMBEDDING=true`.
@@ -374,6 +396,7 @@ impl std::fmt::Debug for EmbeddingConfig {
             api_version,
             max_completion_tokens,
             batch_size,
+            max_concurrent_data_points,
             mock,
             mock_mode,
             #[cfg(feature = "onnx")]
@@ -391,6 +414,7 @@ impl std::fmt::Debug for EmbeddingConfig {
             .field("api_version", api_version)
             .field("max_completion_tokens", max_completion_tokens)
             .field("batch_size", batch_size)
+            .field("max_concurrent_data_points", max_concurrent_data_points)
             .field("mock", mock)
             .field("mock_mode", mock_mode);
         #[cfg(feature = "onnx")]
@@ -452,7 +476,8 @@ impl Default for EmbeddingConfig {
             api_key: None,
             api_version: None,
             max_completion_tokens: 8191,
-            batch_size: 36,
+            batch_size: 32,
+            max_concurrent_data_points: DEFAULT_MAX_CONCURRENT_DATA_POINTS,
             mock: false,
             mock_mode: MockVectorMode::default(),
             #[cfg(feature = "onnx")]
@@ -755,7 +780,15 @@ mod tests {
         let config = EmbeddingConfig::default();
         assert_eq!(config.provider, EmbeddingProvider::Onnx);
         assert_eq!(config.dimensions, 384);
-        assert_eq!(config.batch_size, 36);
+        assert_eq!(config.batch_size, 32);
+        assert_eq!(config.max_concurrent_data_points, 150);
+        assert_eq!(concurrent_batches(150, 32), 4);
+        assert_eq!(concurrent_batches(150, 36), 4);
+        assert_eq!(concurrent_batches(150, 10), 15);
+        assert_eq!(concurrent_batches(150, 150), 1);
+        assert_eq!(concurrent_batches(150, 151), 1);
+        assert_eq!(concurrent_batches(0, 32), 1);
+        assert_eq!(concurrent_batches(150, 0), 150);
         assert_eq!(config.max_completion_tokens, 8191);
         assert!(!config.mock);
     }

@@ -686,7 +686,8 @@ each key is accepted as an alias, shown in brackets.
 | `EMBEDDING_API_KEY` (falls back to `LLM_API_KEY`) | `embedding.api_key` (`embedding_api_key`) | _(empty)_ |
 | `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding.max_sequence_length` (`embedding_max_sequence_length`) | `512` (local ONNX/fastembed only; remote providers use `EMBEDDING_MAX_COMPLETION_TOKENS`) |
 | `EMBEDDING_MAX_COMPLETION_TOKENS` | `embedding.max_completion_tokens` (`embedding_max_completion_tokens`) | `8191` (input-token limit of a remote embedding API; the embedding term of the chunk-size auto-calculation for remote providers) |
-| `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
+| `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `32` (texts per embedding request, Python's `embedding_batch_size`; cognify cuts every index window into batches of this size. 32 is the most that Text Embeddings Inference accepts per request; raise it for providers that allow larger batches) |
+| `EMBEDDING_MAX_CONCURRENT_DATA_POINTS` | `embedding.max_concurrent_data_points` (`embedding_max_concurrent_data_points`) | `150` (data points allowed in flight to the embedder, Python's `embedding_max_concurrent_data_points`; concurrent batches = `max(1, max_concurrent_data_points / batch_size)`, i.e. 4 by default. Applies to the OpenAI-compatible and Bedrock engines; the Ollama engine stays sequential) |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `embedding.rate_limit_*` (`embedding_rate_limit_*`) | `false` / `60` / `60` |
 | `MOCK_EMBEDDING` | `embedding.mock` (`mock_embedding`) | _(empty)_. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |
 

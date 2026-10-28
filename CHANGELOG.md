@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Embedding batch size defaults to 32 and drives batching (SDK-1039).**
+  `embedding.batch_size` (`EMBEDDING_BATCH_SIZE`) drops from 36 to 32, Python's
+  `embedding_batch_size`, because Text Embeddings Inference rejects more than 32
+  inputs per request. Cognify now cuts every embedding call into batches of the
+  engine's batch size (`cognee_embedding::embed_in_batches`). New key
+  `embedding.max_concurrent_data_points` (`EMBEDDING_MAX_CONCURRENT_DATA_POINTS`,
+  default 150) bounds the batches in flight at
+  `max(1, max_concurrent_data_points / batch_size)`, replacing the fixed 8 of the
+  OpenAI-compatible and Bedrock engines; Ollama stays sequential. The dead
+  `CognifyConfig.embedding_batch_size` field and `with_embedding_batch_size`
+  builder are removed (they were never read; set `embedding.batch_size`).
+  `EmbeddingConfig` and `EmbeddingInputs` gain `max_concurrent_data_points`.
+
 - **Vector payloads have Python's `IndexSchema` shape (SDK-1039).** Every row
   cognify and `edge-reindex` write is built by the new
   `cognee_models::index_schema_payload`: `id`, `text` (the indexed value; EdgeType
