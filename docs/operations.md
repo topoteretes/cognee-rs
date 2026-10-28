@@ -99,6 +99,26 @@ and `improve`; the HTTP server shares the global one. The stages' own adds and
 cognifies re-enter the improve's hold. A dataset that does not exist yet is
 held by the id an `add` of it would create.
 
+`global_context_index` (opt-in, `build_global_context_index`) builds the
+dataset's global context index with Python's default `from_entities` method,
+which makes no LLM call: one `GlobalContextSummary` bucket per document
+naming the entities it is distinctively about (tf·idf over the dataset's
+chunks, up to 20) and up to 40 relation lines among them, plus a root of
+three lines (`Topics:`, `Entities:`, `Documents:`). Ids are Python's uuid5
+ids, so the text and ids match Python's byte for byte. Each run computes the
+whole index, writes only the nodes whose text changed (graph node, vector in
+`GlobalContextSummary_text`, `summarized_in` edge to the root and
+`summarizes` edge to the document) and deletes the index nodes it did not
+compute; the nodes' ownership rows name the dataset, so deleting the
+dataset removes them. Its count `nodes_written` is the nodes it wrote. The
+opt-in LLM method (vector-placed buckets of `TextSummary` nodes, levels, LLM
+bucket and root summaries with Python's prompts) is
+`cognee_cognify::build_global_context_index` with
+`GlobalContextIndexMethod::Llm`; `improve()` does not use it, as Python's stage
+does not. A graph completion search with `include_global_context_index`
+prepends the root and the `global_context_index_top_k` (3) nearest bucket
+summaries to its context (`World summary:` / `Relevant areas:`).
+
 `global_context_index` reports `already_completed` (`no_writes_since_last_improve`)
 when no `pipeline_runs` row other than a `search`, a `recall` or a host's
 `improve_pipeline` record was written since it last ran. A delete records a

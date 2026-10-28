@@ -91,15 +91,18 @@ is read (the `update_user_preferences` gate); `preference_alpha`, `preference_be
 
 Partial stages:
 
-- **`global_context_index`** — opt-in via `build_global_context_index`. The current implementation
-  reads all graph edges via `get_graph_data()`, formats them as `"source → relationship → target"`
-  lines, and stores the result in the session's graph-context slot (keyed
-  `"_global_context_index"`). Python's `from_entities` bucket/root summaries are not implemented
-  yet (SDK-1044 step 5). Its `already_completed` watermark is: unlike Python, which narrows the
+- **`global_context_index`** — opt-in via `build_global_context_index`; builds Python's
+  default `from_entities` index. Differences: a document's name comes from its data item
+  (`name`, else the basename of `raw_data_location`) because Rust chunks carry no
+  `document_name`; the LLM method ports only the default `bucketing_strategy="vector"`
+  (the experimental graph bucketing is not ported); index edges are not stamped with a
+  dataset source ref (Rust's ownership ledger is relational; the nodes' rows carry the
+  dataset). Its `already_completed` watermark: unlike Python, which narrows the
   change check to the dataset under backend access control, every dataset's pipeline runs count.
   A host's `improve_pipeline` rows never count: an improve counts through the `improve` row it
   records after a stage that may have written, so an index-only improve is not a change (Python
-  counts every non-noop improve).
+  counts every non-noop improve). The hybrid retriever's global-context channel is not wired yet
+  (SDK-1045); graph completion's is.
 
 - **`persist_agent_traces`** — trace steps whose `session_feedback` field is non-empty are
   collected and run through the standard `add → cognify` path (tagged to the

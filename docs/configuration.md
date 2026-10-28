@@ -1445,9 +1445,9 @@ reports it as `skipped` / `backend_unsupported`.
 passing `true` must behave identically to the default:
 
 - `include_global_context_index` (default `false`) and
-  `global_context_index_top_k` (default `3`) — the global-context lane depends
-  on a `GlobalContextSummary` node type and global-context utilities not yet
-  ported to Rust.
+  `global_context_index_top_k` (default `3`) — inert for `HYBRID_COMPLETION`
+  until SDK-1045. `GRAPH_COMPLETION` reads them: it prepends the global
+  context index `improve(build_global_context_index=true)` built.
 
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
