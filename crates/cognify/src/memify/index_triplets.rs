@@ -22,8 +22,7 @@ pub struct IndexResult {
 /// in batches (using `EmbeddingEngine::batch_size()`), and upserts vectors.
 ///
 /// Metadata on each `VectorPoint` matches the existing cognify triplet
-/// indexing (tasks.rs) so that `TripletRetriever` works with triplets from
-/// both cognify and memify.
+/// indexing (tasks.rs), so triplets from both paths look the same.
 pub async fn index_triplets(
     triplets: &[Triplet],
     vector_db: &dyn VectorDB,
@@ -74,7 +73,7 @@ pub async fn index_triplets(
             .zip(vectors)
             .map(|(triplet, vector)| {
                 // Metadata MUST match cognify's add_data_points() so
-                // TripletRetriever works consistently.
+                // the two paths stay consistent.
                 //
                 // TODO(gap-05/08 §4.7): unlike cognify's `add_data_points`
                 // path, memify walks edges directly via the graph DB
@@ -90,8 +89,7 @@ pub async fn index_triplets(
                     .with_metadata("type", json!("Triplet"))
                     .with_metadata("field", json!("text"))
                     // The embedded text itself, as Python's Triplet payload
-                    // carries it: TripletRetriever renders its context from
-                    // this key.
+                    // carries it.
                     .with_metadata("text", json!(triplet.text.clone()))
                     .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
                     .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
@@ -229,7 +227,7 @@ mod tests {
         assert_eq!(meta.get("type").unwrap(), &json!("Triplet"));
         assert_eq!(meta.get("field").unwrap(), &json!("text"));
         // The embedded text rides in the payload, as in Python's Triplet
-        // payload: TripletRetriever renders its context from it.
+        // payload.
         assert_eq!(meta.get("text").unwrap(), &json!(triplet_text));
         assert_eq!(
             meta.get("source_id").unwrap(),

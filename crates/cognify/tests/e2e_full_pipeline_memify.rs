@@ -3,7 +3,7 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! End-to-end test: add -> cognify -> memify -> search (TripletCompletion) -> delete -> verify.
+//! End-to-end test: add -> cognify -> memify -> search (Chunks) -> delete -> verify.
 //!
 //! Exercises the full 6-stage pipeline with real backends:
 //! SQLite (metadata), Ladybug (graph), Qdrant (vector), LocalStorage (files),
@@ -275,7 +275,7 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         memify_result.triplet_count
     );
 
-    // ── Step 4: Search (TripletCompletion) ───────────────────────────────────
+    // ── Step 4: Search (Chunks) ───────────────────────────────────
     let orchestrator = SearchBuilder::new(
         vector_db.clone() as Arc<dyn VectorDB>,
         embedding_engine.clone() as Arc<dyn EmbeddingEngine>,
@@ -289,17 +289,6 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
     let query = cognify_result.entities[0].entity.name.clone();
     println!("Step 4: Searching for {query:?}");
 
-    let triplet_response = orchestrator
-        .search(&make_request(&query, SearchType::TripletCompletion))
-        .await
-        .expect("search TripletCompletion");
-    assert!(
-        is_non_empty(&triplet_response),
-        "TripletCompletion should return non-empty result after memify"
-    );
-    println!("Step 4 OK: TripletCompletion returned non-empty result");
-
-    // Also verify a basic search type still works alongside triplet search
     let chunks_response = orchestrator
         .search(&make_request(&query, SearchType::Chunks))
         .await

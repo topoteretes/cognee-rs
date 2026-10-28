@@ -197,16 +197,16 @@ incremental loading off to build both graphs over one dataset.
 
 Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`
 objects from every edge (`"source → relationship → target"`), embeds them, and
-indexes them into the `Triplet`/`text` vector collection for
-`SearchType::TripletCompletion`. Pipeline:
+indexes them into the `Triplet`/`text` vector collection. The
+`TripletCompletion` search type was removed, as in Python (SDK-1039). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`memify()`).
 
 ### search (retrieval)
 
-Unified orchestration across 18 retrieval strategies selected by `SearchType`
+Unified orchestration across 17 retrieval strategies selected by `SearchType`
 ([`crates/search/src/types/search_type.rs`](../crates/search/src/types/search_type.rs)):
 `GraphCompletion`, `GraphCompletionCot`, `GraphCompletionContextExtension`,
-`GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `TripletCompletion`, `RagCompletion`, `Chunks`,
+`GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `RagCompletion`, `Chunks`,
 `Summaries`, `Temporal`, `Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`,
 `CodingRules`, `ChunksLexical`, `HybridCompletion` (default; combines vector search over
 chunks/summaries/entities/edge-facts and

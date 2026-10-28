@@ -13,7 +13,6 @@ mod lexical_retriever;
 mod lucky_feedback_rules_retrievers;
 mod summaries_retriever;
 mod temporal_hybrid;
-mod triplet_retriever;
 
 pub use advanced_graph_retrievers::{
     GraphCompletionContextExtensionRetriever, GraphCompletionCotRetriever,
@@ -46,4 +45,3 @@ pub use summaries_retriever::SummariesRetriever;
 pub use temporal_hybrid::{
     TemporalDiagnostics, TemporalFallbackReason, TemporalHybridRetriever, TemporalRetrieval,
 };
-pub use triplet_retriever::TripletRetriever;

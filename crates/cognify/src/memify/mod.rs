@@ -1,8 +1,8 @@
 //! Memify pipeline -- graph enrichment via triplet embedding.
 //!
 //! Reads an existing knowledge graph and creates searchable vector
-//! embeddings for triplets (subject-relationship-object), enabling
-//! `SearchType::TripletCompletion` queries.
+//! embeddings for triplets (subject-relationship-object). Triplet search
+//! (`TRIPLET_COMPLETION`) has been removed, as in Python (SDK-1115).
 //!
 //! # Usage
 //!

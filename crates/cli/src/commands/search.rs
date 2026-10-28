@@ -157,7 +157,6 @@ fn requires_llm(search_type: SearchType) -> bool {
         SearchType::GraphCompletion
             | SearchType::HybridCompletion
             | SearchType::RagCompletion
-            | SearchType::TripletCompletion
             | SearchType::GraphSummaryCompletion
             | SearchType::GraphCompletionContextExtension
             | SearchType::GraphCompletionCot

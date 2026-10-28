@@ -985,6 +985,21 @@ mod tests {
         assert!(parse(&["cognee-cli", "search", "q", "--no-telemetry"]).no_telemetry);
     }
 
+    /// `TRIPLET_COMPLETION` was removed (SDK-1039): `search` and `recall`
+    /// reject it as an unknown `--query-type` value.
+    #[test]
+    fn triplet_completion_is_an_unknown_query_type() {
+        for cmd in ["search", "recall"] {
+            let err = Cli::try_parse_from(["cognee-cli", cmd, "q", "-t", "TRIPLET_COMPLETION"])
+                .expect_err("TRIPLET_COMPLETION must not parse");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::InvalidValue,
+                "{cmd}: {err}"
+            );
+        }
+    }
+
     /// Config-file logging keys fill only what the logging env left unset.
     #[test]
     fn lower_logging_settings_fills_only_unset_values() {

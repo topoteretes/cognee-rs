@@ -15,7 +15,7 @@ use crate::retrievers::{
     GraphCompletionCotRetriever, GraphCompletionDecompositionRetriever, GraphCompletionRetriever,
     GraphReportRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
     LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
-    TemporalHybridRetriever, TripletRetriever,
+    TemporalHybridRetriever,
 };
 use crate::types::SearchType;
 
@@ -187,20 +187,6 @@ impl SearchBuilder {
         retrievers.insert(
             SearchType::RagCompletion,
             Arc::new(CompletionRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
-        );
-
-        retrievers.insert(
-            SearchType::TripletCompletion,
-            Arc::new(TripletRetriever::new(
                 Arc::clone(&vector_db),
                 Arc::clone(&embedding_engine),
                 Arc::clone(&llm),

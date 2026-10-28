@@ -252,8 +252,8 @@ result = await cognee.search(
 )
 ```
 
-All 18 search types are supported (via `SearchType` enum):
-`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`,
+All 17 search types are supported (via `SearchType` enum):
+`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`,
 `GRAPH_COMPLETION_DECOMPOSITION`, `GRAPH_SUMMARY_COMPLETION`, `CYPHER`,
 `NATURAL_LANGUAGE`, `GRAPH_COMPLETION_COT`, `GRAPH_COMPLETION_CONTEXT_EXTENSION`,
 `FEELING_LUCKY`, `FEEDBACK`, `TEMPORAL`, `CODING_RULES`, `CHUNKS_LEXICAL`,
@@ -287,7 +287,7 @@ await cognee.remember(
 #### memify
 
 Index triplet embeddings from the existing knowledge graph.
-Enables `TripletCompletion` search. Idempotent.
+Idempotent. Triplet search (`TRIPLET_COMPLETION`) was removed, as in Python.
 
 ```python
 await cognee.memify()

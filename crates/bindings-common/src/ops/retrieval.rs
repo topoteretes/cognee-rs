@@ -46,12 +46,12 @@ use crate::{HandleState, SdkError};
 /// Uses `serde_json::from_value` so the exact path matches what the HTTP
 /// server uses and is guaranteed to stay in sync with the serde attribute.
 ///
-/// Returns `SdkError::Validation` on unknown string, listing all 18 valid values.
+/// Returns `SdkError::Validation` on unknown string, listing all 17 valid values.
 pub fn parse_search_type(s: &str) -> Result<SearchType, SdkError> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| {
         SdkError::Validation(format!(
             "unknown SearchType '{s}'. Valid values: SUMMARIES, CHUNKS, RAG_COMPLETION, \
-             TRIPLET_COMPLETION, GRAPH_COMPLETION, GRAPH_COMPLETION_DECOMPOSITION, \
+             GRAPH_COMPLETION, GRAPH_COMPLETION_DECOMPOSITION, \
              GRAPH_SUMMARY_COMPLETION, CYPHER, NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, \
              GRAPH_COMPLETION_CONTEXT_EXTENSION, FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, \
              CHUNKS_LEXICAL, GRAPH_REPORT, HYBRID_COMPLETION"
@@ -551,6 +551,19 @@ mod tests {
 
     const ID_A: &str = "11111111-1111-4111-8111-111111111111";
     const ID_B: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// `TRIPLET_COMPLETION` was removed (SDK-1039); it is an unknown type, and
+    /// the error does not list it among the valid values.
+    #[test]
+    fn parse_search_type_rejects_triplet_completion() {
+        let err = parse_search_type("TRIPLET_COMPLETION").expect_err("removed type");
+        let message = err.to_string();
+        assert!(message.contains("unknown SearchType"), "{message}");
+        let (_, valid) = message
+            .split_once("Valid values:")
+            .expect("the error lists the valid values");
+        assert!(!valid.contains("TRIPLET"), "{message}");
+    }
 
     /// The `recall` op reads its opts key by key, so an unrecognised
     /// `datasetIds` used to vanish silently and the recall ran unscoped —

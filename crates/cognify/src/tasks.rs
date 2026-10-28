@@ -6160,8 +6160,7 @@ async fn index_triplet_points(
                     .with_metadata("type", json!("Triplet"))
                     .with_metadata("field", json!("text"))
                     // The embedded text itself, as Python's Triplet
-                    // payload carries it: TripletRetriever renders
-                    // its context from this key.
+                    // payload carries it.
                     .with_metadata("text", json!(triplet.text.clone()))
                     .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
                     .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
