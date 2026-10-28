@@ -441,9 +441,21 @@ mod tests {
         )
         .build();
         ingest.create_data(data.clone()).await.unwrap();
-        for ds in [tenanted.id, untenanted.id] {
-            ingest.attach_data_to_dataset(ds, data.id).await.unwrap();
-        }
+        ingest
+            .attach_data_to_dataset(untenanted.id, data.id)
+            .await
+            .unwrap();
+        // Rows are dataset-scoped: the same content in the same-named T1
+        // dataset is a row of its own.
+        let t1_data = Data {
+            id: Uuid::new_v4(),
+            ..data.clone()
+        };
+        ingest.create_data(t1_data.clone()).await.unwrap();
+        ingest
+            .attach_data_to_dataset(tenanted.id, t1_data.id)
+            .await
+            .unwrap();
         let delete_service = DeleteService::new(
             Arc::new(cognee_storage::MockStorage::new()) as Arc<dyn StorageTrait>,
             db.clone() as Arc<dyn DeleteDb>,
@@ -465,8 +477,8 @@ mod tests {
             ids(DeleteDb::get_dataset_data(db.as_ref(), tenanted.id)
                 .await
                 .unwrap()),
-            vec![data.id],
-            "the same-named T1 dataset keeps its link"
+            vec![t1_data.id],
+            "the same-named T1 dataset keeps its row"
         );
     }
 

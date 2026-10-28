@@ -29,18 +29,17 @@ pub struct Model {
     pub data_size: i64,
     pub last_accessed: Option<DateTimeUtc>,
     pub importance_weight: Option<f64>,
+    /// The owning dataset (Python `Data.dataset_id`). No foreign key, as in
+    /// Python: the delete path removes a dataset's rows itself.
+    #[sea_orm(indexed)]
+    pub dataset_id: Option<String>,
+    /// Pre-scoping id of a row split off a shared legacy row by
+    /// `m20261028_000001_dataset_scoped_data` (Python `Data.legacy_id`).
+    #[sea_orm(indexed)]
+    pub legacy_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
-
-impl Related<super::dataset::Entity> for Entity {
-    fn to() -> RelationDef {
-        super::dataset_data::Relation::Dataset.def()
-    }
-    fn via() -> Option<RelationDef> {
-        Some(super::dataset_data::Relation::Data.def().rev())
-    }
-}
 
 impl ActiveModelBehavior for ActiveModel {}

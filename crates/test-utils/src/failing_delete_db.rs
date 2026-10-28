@@ -45,6 +45,10 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::list_datasets_for_data(self.inner.as_ref(), data_id).await
     }
 
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
+        DeleteDb::count_data_location_references(self.inner.as_ref(), location).await
+    }
+
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {
         DeleteDb::get_dataset_data(self.inner.as_ref(), dataset_id).await
     }

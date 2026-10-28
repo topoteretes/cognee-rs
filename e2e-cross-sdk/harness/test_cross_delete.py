@@ -109,5 +109,5 @@ def test_python_add_rust_delete_relational(tmp_path):
         f"Rust delete left {len(dataset_rows)} dataset row(s) in Python-created DB"
     )
     assert len(junction_rows) == 0, (
-        f"Rust delete left {len(junction_rows)} dataset_data row(s) in Python-created DB"
+        f"Rust delete left {len(junction_rows)} dataset membership(s) in Python-created DB"
     )
