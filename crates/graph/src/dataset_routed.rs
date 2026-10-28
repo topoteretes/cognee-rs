@@ -292,6 +292,10 @@ impl GraphDBTrait for DatasetRoutedGraphDB {
         self.engine().await?.supports_truth_state().await
     }
 
+    async fn supports_feedback_weights(&self) -> GraphDBResult<bool> {
+        self.engine().await?.supports_feedback_weights().await
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],
@@ -459,6 +463,32 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn feedback_weights_probe_forwards_to_the_scoped_engine() {
+        let resolver = Arc::new(PerDataset::default());
+        let graph = DatasetRoutedGraphDB::new(resolver.clone());
+        let (supported, unsupported) = (Uuid::new_v4(), Uuid::new_v4());
+        let mock = MockGraphDB::new();
+        mock.set_supports_feedback_weights(false);
+        resolver
+            .engines
+            .lock()
+            .unwrap()
+            .insert(unsupported, Arc::new(mock) as Arc<dyn GraphDBTrait>);
+
+        assert!(
+            dataset_scope::with_dataset(supported, graph.supports_feedback_weights())
+                .await
+                .unwrap()
+        );
+        assert!(
+            !dataset_scope::with_dataset(unsupported, graph.supports_feedback_weights())
+                .await
+                .unwrap()
+        );
+        assert!(graph.supports_feedback_weights().await.is_err());
     }
 
     /// Outside every dataset scope the engine cannot be resolved; the probe

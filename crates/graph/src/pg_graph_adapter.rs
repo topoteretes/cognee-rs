@@ -943,6 +943,12 @@ impl GraphDBTrait for PgGraphAdapter {
         Ok(true)
     }
 
+    /// Native feedback-weight writes (`set_node_feedback_weights` /
+    /// `set_edge_feedback_weights`).
+    async fn supports_feedback_weights(&self) -> GraphDBResult<bool> {
+        Ok(true)
+    }
+
     async fn get_node_truth_state(
         &self,
         node_ids: &[String],

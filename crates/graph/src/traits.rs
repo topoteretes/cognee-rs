@@ -617,6 +617,25 @@ pub trait GraphDBTrait: Send + Sync {
         Ok(false)
     }
 
+    /// Whether this backend stores feedback weights natively — the improve
+    /// orchestrator's `feedback_weights` stage gate (Python's
+    /// `GraphCapabilities.supports_feedback_weights`,
+    /// `cognee/modules/improve/capabilities.py`).
+    ///
+    /// Every backend inherits [`set_node_feedback_weights`] and
+    /// [`set_edge_feedback_weights`], so support cannot be inferred from them;
+    /// a backend opts in here once it overrides both with a real
+    /// implementation. Defaults to `false`. A wrapper that delegates to an
+    /// inner engine must forward this probe, as for
+    /// [`supports_truth_state`](GraphDBTrait::supports_truth_state), whose
+    /// error semantics it shares.
+    ///
+    /// [`set_node_feedback_weights`]: GraphDBTrait::set_node_feedback_weights
+    /// [`set_edge_feedback_weights`]: GraphDBTrait::set_edge_feedback_weights
+    async fn supports_feedback_weights(&self) -> GraphDBResult<bool> {
+        Ok(false)
+    }
+
     /// Batch-fetch per-node truth-subspace state for the given node IDs.
     ///
     /// Unlike [`get_node_feedback_weights`], which omits nodes lacking the
@@ -1525,6 +1544,14 @@ mod tests {
             .await
             .unwrap();
         assert!(db.has_node("c1").await.unwrap());
+    }
+
+    /// A backend must opt in to both improve capabilities.
+    #[tokio::test]
+    async fn default_capability_probes_report_unsupported() {
+        let db = DefaultImplDb::default();
+        assert!(!db.supports_truth_state().await.unwrap());
+        assert!(!db.supports_feedback_weights().await.unwrap());
     }
 
     #[tokio::test]

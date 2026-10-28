@@ -49,6 +49,9 @@ pub struct MockGraphDB {
     /// Answer of [`GraphDBTrait::supports_truth_state`]; `true` unless a test
     /// stands in for a backend without truth-state support.
     supports_truth_state: Arc<AtomicBool>,
+    /// Answer of [`GraphDBTrait::supports_feedback_weights`]; `true` unless a
+    /// test stands in for a backend without feedback-weight support.
+    supports_feedback_weights: Arc<AtomicBool>,
 }
 
 impl MockGraphDB {
@@ -64,6 +67,7 @@ impl MockGraphDB {
             delete_nodes_error: Arc::new(Mutex::new(None)),
             hang_on_close: false,
             supports_truth_state: Arc::new(AtomicBool::new(true)),
+            supports_feedback_weights: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -84,6 +88,13 @@ impl MockGraphDB {
     /// stand in for a backend without truth-state support.
     pub fn set_supports_truth_state(&self, supported: bool) {
         self.supports_truth_state.store(supported, Ordering::SeqCst);
+    }
+
+    /// Set what [`GraphDBTrait::supports_feedback_weights`] answers, so a test
+    /// can stand in for a backend without feedback-weight support.
+    pub fn set_supports_feedback_weights(&self, supported: bool) {
+        self.supports_feedback_weights
+            .store(supported, Ordering::SeqCst);
     }
 
     /// Inject an error that will be returned from subsequent
@@ -824,6 +835,10 @@ impl GraphDBTrait for MockGraphDB {
 
     async fn supports_truth_state(&self) -> GraphDBResult<bool> {
         Ok(self.supports_truth_state.load(Ordering::SeqCst))
+    }
+
+    async fn supports_feedback_weights(&self) -> GraphDBResult<bool> {
+        Ok(self.supports_feedback_weights.load(Ordering::SeqCst))
     }
 
     async fn get_node_truth_state(
