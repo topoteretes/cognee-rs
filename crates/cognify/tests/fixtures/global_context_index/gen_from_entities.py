@@ -1,8 +1,13 @@
-"""Run Python's from_entities pure functions (origin/dev) on a synthetic graph."""
-import json, re, subprocess, sys, types, random
-from uuid import UUID, uuid5, NAMESPACE_OID
+"""Run Python's from_entities pure functions (origin/dev) on a synthetic graph.
 
-PY = "/Users/dmytro/dev/cognee/cognee"
+Usage: python3 gen_from_entities.py <path to a cognee checkout> > from_entities.json
+"""
+import json, re, subprocess, sys, types, random
+from uuid import uuid5, NAMESPACE_OID
+
+if len(sys.argv) != 2:
+    sys.exit("usage: gen_from_entities.py <path to a cognee checkout>")
+PY = sys.argv[1]
 def src(path):
     return subprocess.check_output(["git", "-C", PY, "show", f"origin/dev:{path}"], text=True)
 
@@ -86,13 +91,6 @@ nodes.append(["other-ds-node", {"type": "GlobalContextSummary", "dataset_id": "o
 
 document_names = {did: " ".join(docs[k].split()) or None for k, did in doc_ids.items()}
 # Python reads names from chunks; build the chunk property the same way for its run.
-for node_id, props in nodes:
-    if props.get("type") == "DocumentChunk" and props.get("document_id") in document_names:
-        name = document_names[props["document_id"]]
-        if name:
-            props_py = dict(props, document_name=name)
-        else:
-            props_py = props
 py_nodes = []
 for node_id, props in nodes:
     if props.get("type") == "DocumentChunk" and document_names.get(props.get("document_id")):
