@@ -673,18 +673,21 @@ async fn list_recent_returns_rows_in_desc_order() {
 // ---------------------------------------------------------------------------
 //
 // The unit-level run_info helpers are exercised inline in
-// `crates/core/src/pipeline_run_registry/data_info.rs`. The tests below
+// `crates/core/src/pipeline_run_registry/run_info.rs`. The tests below
 // confirm that the persisted JSON makes a full round-trip through SeaORM
 // (write → read) preserving Python-parity byte shape, and that the
-// four-state lifecycle / dataset_id=None / reset-helper paths behave as
-// locked decisions 1, 4, 5, 7 mandate.
+// lifecycle / dataset_id=None / reset-helper paths behave as locked
+// decisions 1, 4, 5, 7 mandate. No pipeline run writes `INITIATED` any more
+// (Python `dc0b4ad6a`); the round-trips below still start from one because
+// the stored-row enum keeps it for legacy rows and the explicit re-arm API.
 
 // ---------------------------------------------------------------------------
-// (08-09) Four-state lifecycle round-trip — Initiated → Started → Completed
+// (08-09) Lifecycle round-trip from a legacy INITIATED row — Initiated →
+// Started → Completed
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn four_state_lifecycle_round_trip_completed() {
+async fn lifecycle_round_trip_from_legacy_initiated_completed() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
@@ -732,11 +735,12 @@ async fn four_state_lifecycle_round_trip_completed() {
 }
 
 // ---------------------------------------------------------------------------
-// (08-09) Four-state lifecycle round-trip — Initiated → Started → Errored
+// (08-09) Lifecycle round-trip from a legacy INITIATED row — Initiated →
+// Started → Errored
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn four_state_lifecycle_round_trip_errored() {
+async fn lifecycle_round_trip_from_legacy_initiated_errored() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
