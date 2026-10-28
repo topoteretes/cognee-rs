@@ -1,4 +1,4 @@
-//! Unified search orchestration across 18 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
+//! Unified search orchestration across 17 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
 
 /// Graph retrieval strategies and helpers.
 pub mod graph_retrieval;
@@ -38,7 +38,7 @@ pub use retrievers::{
     GraphCompletionRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
     LexicalRetriever, LexicalScorer, NaturalLanguageRetriever, SearchRetriever, SearchRetrieverRef,
     SummariesRetriever, TemporalDiagnostics, TemporalFallbackReason, TemporalHybridRetriever,
-    TemporalRetrieval, TripletRetriever,
+    TemporalRetrieval,
 };
 pub use types::{
     FeedbackDetectionResult, Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge,

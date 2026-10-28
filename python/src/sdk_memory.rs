@@ -176,8 +176,8 @@ impl PyCognee {
 
     /// Build triplet embeddings over the entire knowledge graph.
     ///
-    /// Idempotent — safe to re-run. Needed before ``SearchType.TRIPLET_COMPLETION``
-    /// will return results.
+    /// Idempotent — safe to re-run. Triplet search (``TRIPLET_COMPLETION``) was
+    /// removed, as in Python, so these embeddings are not searched.
     ///
     /// .. code-block:: python
     ///

@@ -582,7 +582,7 @@ export class Cognee {
   /**
    * Search the knowledge graph.
    *
-   * `opts.searchType` defaults to `"HYBRID_COMPLETION"`. All 15
+   * `opts.searchType` defaults to `"HYBRID_COMPLETION"`. All 17
    * SCREAMING_SNAKE_CASE variants are supported.
    */
   async search(
@@ -654,7 +654,7 @@ export class Cognee {
   /**
    * Index triplet embeddings from the existing knowledge graph.
    *
-   * Idempotent (re-runnable). Enables `SearchType::TripletCompletion`.
+   * Idempotent (re-runnable). Writes `Triplet_text` embeddings (triplet search itself was removed, as in Python).
    */
   async memify(opts?: CogneeMemifyOptions): Promise<CogneeMemifyResult> {
     try {

@@ -98,11 +98,11 @@ def test_search_type_reexported_from_compat():
     assert cognee.SearchType is cp.SearchType
 
 
-def test_all_18_types_present():
-    """All 18 Rust-backed search types must be present in SearchType."""
+def test_all_17_types_present():
+    """All 17 Rust-backed search types must be present in SearchType."""
     expected = {
         "GRAPH_COMPLETION", "GRAPH_COMPLETION_COT", "GRAPH_COMPLETION_CONTEXT_EXTENSION",
-        "GRAPH_SUMMARY_COMPLETION", "TRIPLET_COMPLETION", "RAG_COMPLETION",
+        "GRAPH_SUMMARY_COMPLETION", "RAG_COMPLETION",
         "CHUNKS", "SUMMARIES", "TEMPORAL", "CYPHER", "NATURAL_LANGUAGE",
         "FEELING_LUCKY", "FEEDBACK", "CODING_RULES", "CHUNKS_LEXICAL",
         "GRAPH_COMPLETION_DECOMPOSITION", "GRAPH_REPORT", "HYBRID_COMPLETION",

@@ -4,7 +4,7 @@
  *
  * Tests (no network, no LLM required — MOCK_EMBEDDING=true):
  *
- *   1. String-mapping check — all 18 valid SearchType strings are accepted
+ *   1. String-mapping check — all 17 valid SearchType strings are accepted
  *      (not rejected as CG_ERR_SDK_VALIDATION); an invalid string IS rejected.
  *      This sub-test does NOT execute live searches; it just verifies that
  *      parse_search_type accepts all 18 known values and rejects unknowns.
@@ -176,7 +176,7 @@ int main(void)
 
     /* ── Test 1: SearchType string-mapping check ─────────────────────────── */
     /*
-     * This is a string-mapping sub-test only: verify that all 18 valid
+     * This is a string-mapping sub-test only: verify that all 17 valid
      * SearchType strings are NOT rejected as CG_ERR_SDK_VALIDATION (14), and
      * that an invalid string IS rejected as CG_ERR_SDK_VALIDATION.
      *
@@ -198,12 +198,11 @@ int main(void)
         cg_string_destroy(result);
         printf("  invalid searchType → CG_ERR_SDK_VALIDATION  OK\n");
 
-        /* 1b: all 18 valid strings must NOT yield CG_ERR_SDK_VALIDATION. */
+        /* 1b: all 17 valid strings must NOT yield CG_ERR_SDK_VALIDATION. */
         const char *search_types[] = {
             "SUMMARIES",
             "CHUNKS",
             "RAG_COMPLETION",
-            "TRIPLET_COMPLETION",
             "GRAPH_COMPLETION",
             "GRAPH_COMPLETION_DECOMPOSITION",
             "GRAPH_SUMMARY_COMPLETION",
@@ -235,7 +234,7 @@ int main(void)
                    st_code == CG_OK ? ", CG_OK" : "");
             cg_string_destroy(st_result);
         }
-        printf("  all 18 searchType strings accepted (not CG_ERR_SDK_VALIDATION)  OK\n");
+        printf("  all 17 searchType strings accepted (not CG_ERR_SDK_VALIDATION)  OK\n");
     }
 
     /* ── Test 2: cg_sdk_search non-LLM type → CG_OK, well-formed JSON ──── */

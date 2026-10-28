@@ -157,7 +157,7 @@ await c.cognify("my-dataset");
 await c.cognify("my-dataset", {
   chunkSize: 512,
   summarization: true,
-  triplet: true,       // also index triplet embeddings (enables TripletCompletion search)
+  triplet: true,       // also index triplet embeddings
 });
 
 // With a custom graph model (its JSON Schema, as an object or a JSON string)
@@ -213,8 +213,8 @@ const result = await c.search("summarise recent events", {
 });
 ```
 
-All 18 search types are supported (SCREAMING_SNAKE_CASE):
-`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`,
+All 17 search types are supported (SCREAMING_SNAKE_CASE):
+`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`,
 `GRAPH_COMPLETION_DECOMPOSITION`, `GRAPH_SUMMARY_COMPLETION`, `CYPHER`,
 `NATURAL_LANGUAGE`, `GRAPH_COMPLETION_COT`, `GRAPH_COMPLETION_CONTEXT_EXTENSION`,
 `FEELING_LUCKY`, `FEEDBACK`, `TEMPORAL`, `CODING_RULES`, `CHUNKS_LEXICAL`,
@@ -247,7 +247,7 @@ await c.remember({ type: "text", text: "…" }, "my-dataset", {
 ### memify
 
 Index triplet embeddings from the existing knowledge graph.
-Enables `TripletCompletion` search. Idempotent.
+Idempotent. Triplet search (`TRIPLET_COMPLETION`) was removed, as in Python.
 
 ```ts
 await c.memify();

@@ -19,7 +19,7 @@
  * What it does
  * ------------
  * 1. Adds text and runs the cognify pipeline to build a knowledge graph.
- * 2. Runs memify to create triplet embeddings (enables TripletCompletion search).
+ * 2. Runs memify to create triplet embeddings.
  * 3. Demonstrates recall() with session-first routing.
  * 4. Shows remember(), the single-call add+cognify shortcut.
  */
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   // ── Step 3: memify ─────────────────────────────────────────────────────────
   //
   // Builds triplet embeddings from all edges in the knowledge graph.
-  // After memify, you can use searchType: "TRIPLET_COMPLETION" in search.
+  // GRAPH_COMPLETION search does not depend on memify.
   // Idempotent — safe to call multiple times.
   console.log("\nRunning memify (builds triplet embeddings)...");
   const memifyResult = await cognee.memify();
@@ -101,10 +101,10 @@ async function main(): Promise<void> {
   //
   // recall() routes the query through session history first, then falls back
   // to graph search.  scope controls which sources are checked.
-  console.log("\nRecalling with TRIPLET_COMPLETION search type...");
+  console.log("\nRecalling with GRAPH_COMPLETION search type...");
   const recallResult = await cognee.recall(
     "What fields did Marie Curie work in?",
-    { searchType: "TRIPLET_COMPLETION", topK: 5 }
+    { searchType: "GRAPH_COMPLETION", topK: 5 }
   );
   console.log(
     `Recall: searchTypeUsed=${recallResult.searchTypeUsed}, ` +

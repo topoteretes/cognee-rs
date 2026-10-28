@@ -72,11 +72,6 @@ url.workspace = true
 # opt out of that (`autotests` stays at its edition-2018+ default of `true`).
 
 [[test]]
-name = "e2e_memify"
-path = "tests/e2e_memify.rs"
-required-features = ["testing"]
-
-[[test]]
 name = "integration_memify"
 path = "tests/integration_memify.rs"
 required-features = ["testing"]

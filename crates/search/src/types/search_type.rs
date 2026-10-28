@@ -7,7 +7,6 @@ pub enum SearchType {
     Summaries,
     Chunks,
     RagCompletion,
-    TripletCompletion,
     GraphCompletion,
     GraphCompletionDecomposition,
     GraphSummaryCompletion,

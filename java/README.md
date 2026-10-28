@@ -111,9 +111,9 @@ Inputs are built with the `DataInput` factories: `DataInput.text(String)`,
 `DataInput.file(String path)`, `DataInput.url(String)`, and
 `DataInput.binary(byte[] bytes, String name)`. Per-op options use fluent
 builders (`SearchOptions`, `CognifyOptions`, `RecallOptions`, …); pass `null`
-(or use the no-option overloads) to accept defaults. All 15 `SearchType` values
+(or use the no-option overloads) to accept defaults. All 17 `SearchType` values
 are supported (SCREAMING_SNAKE_CASE, e.g. `GRAPH_COMPLETION`, `SUMMARIES`,
-`CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`, `CYPHER`, …).
+`CHUNKS`, `RAG_COMPLETION`, `CYPHER`, …).
 
 Structured results whose payloads are open-ended (`SearchResponse`,
 `RecallResult`, `ForgetResult`, …) expose the parsed Jackson tree via `raw()`
