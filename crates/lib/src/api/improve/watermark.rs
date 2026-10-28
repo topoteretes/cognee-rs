@@ -367,7 +367,7 @@ mod tests {
 
         // A repository without the count (the trait default) fails.
         f.stamp(Utc::now()).await;
-        let noop = cognee_database::NoopPipelineRunRepository::default();
+        let noop = cognee_database::NoopPipelineRunRepository;
         let changed = has_dataset_changed_since_last_improve(
             Some(&*f.checkpoints),
             Some(&noop),
