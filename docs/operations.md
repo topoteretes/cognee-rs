@@ -82,7 +82,24 @@ result, and an exhausted LLM budget skips every later stage with
 `no_llm_configured` when none is configured. `extract_agent_context`,
 `update_user_preferences` (gated by `personalization_enabled`) and
 `review_conflicts` (opt-in via `improve.review_conflicts`) are not
-ported yet and always report a skip reason. rustdoc: `api::improve`.
+ported yet and always report a skip reason.
+
+A run holds its dataset's lock for its whole length, then a claim on every
+session it targets (`session:{user_id}:{session_id}`), and releases both once
+it ends. Both wait, with no timeout: improves that share a dataset or a session
+run one after the other, as pipeline runs on one dataset do, instead of the
+later one skipping; runs on different datasets and sessions do not wait. The
+dataset lock is the one `add` and delete take (`ImproveParams::dataset_locks`,
+else the add pipeline's registry, else a process-wide one), and the stages'
+own adds re-enter it. A dataset that does not exist yet is held by the id an
+`add` of it would create.
+
+`global_context_index` reports `already_completed` (`no_writes_since_last_improve`)
+when no `pipeline_runs` row other than a `search` / `recall` was written since
+it last ran. A run that did not end `errored` stamps the stage's start in the
+checkpoint store (`improve_stage:{stage}:{dataset_id}`); without a checkpoint
+store or a relational database, or on any error reading them, the stage runs.
+rustdoc: `api::improve`.
 
 ### forget
 
