@@ -58,14 +58,6 @@ use crate::engine::EmbeddingEngine;
 use crate::error::{EmbeddingError, EmbeddingResult};
 use crate::utils::{handle_embedding_response, l2_normalize, sanitize_embedding_inputs};
 
-/// Maximum number of InvokeModel requests in flight from a single `embed` call.
-///
-/// The Titan families take one text per request (litellm's
-/// `_single_func_embeddings` loop), so a 36-text batch is 36 requests; this
-/// bounds them against Bedrock's per-account throttle. Mirrors the
-/// OpenAI-compatible engine's `MAX_CONCURRENT_BATCHES`.
-const MAX_CONCURRENT_REQUESTS: usize = 8;
-
 /// Per-request HTTP timeout, matching the sibling HTTP embedding engines.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -148,6 +140,11 @@ pub struct BedrockEmbeddingEngine {
     transport: Arc<dyn BedrockTransport>,
     dimensions: usize,
     batch_size: usize,
+    /// InvokeModel requests in flight from one Titan `embed` call (one request
+    /// per text, litellm's `_single_func_embeddings` loop), bounding them
+    /// against Bedrock's per-account throttle:
+    /// `max(1, embedding.max_concurrent_data_points / batch_size)`.
+    max_concurrent_requests: usize,
     max_sequence_length: usize,
     retry_budget: Duration,
 }
@@ -217,6 +214,10 @@ impl BedrockEmbeddingEngine {
             transport,
             dimensions: config.dimensions,
             batch_size: config.batch_size,
+            max_concurrent_requests: crate::config::concurrent_batches(
+                config.max_concurrent_data_points,
+                config.batch_size,
+            ),
             max_sequence_length: config.max_completion_tokens,
             retry_budget: DEFAULT_RETRY_BUDGET,
         })
@@ -346,7 +347,7 @@ impl BedrockEmbeddingEngine {
         // cancelling in-flight retries instead of waiting them out — and the
         // index restores input order afterwards.
         let mut indexed: Vec<(usize, Vec<f32>)> = stream::iter(requests)
-            .buffer_unordered(MAX_CONCURRENT_REQUESTS)
+            .buffer_unordered(self.max_concurrent_requests)
             .try_collect()
             .await?;
         indexed.sort_by_key(|(index, _)| *index);
@@ -414,6 +415,16 @@ impl EmbeddingEngine for BedrockEmbeddingEngine {
     /// does batch, so the configured value is the honest answer for it.
     fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    /// The Titan families already fan out `max_concurrent_requests` requests
+    /// inside one `embed` call, so a caller must not multiply that by running
+    /// batches concurrently; Cohere batches on the wire and takes the budget.
+    fn max_concurrent_batches(&self) -> usize {
+        match self.family {
+            BedrockEmbeddingFamily::Cohere => self.max_concurrent_requests,
+            _ => 1,
+        }
     }
 
     fn max_sequence_length(&self) -> usize {
@@ -537,6 +548,7 @@ mod tests {
             endpoint: Some(server_url.to_string()),
             api_key: Some("bedrock-api-key".to_string()),
             batch_size: 36,
+            max_concurrent_data_points: 150,
             ..EmbeddingConfig::default()
         };
         config.aws.region = Some("us-east-1".to_string());
@@ -1008,5 +1020,26 @@ mod tests {
         assert_eq!(engine.dimension(), 1024);
         assert_eq!(engine.batch_size(), 12);
         assert_eq!(engine.max_sequence_length(), 8191);
+    }
+
+    #[tokio::test]
+    async fn concurrency_is_max_concurrent_data_points_over_batch_size() {
+        let mut config = config_for("http://127.0.0.1:1", "cohere.embed-english-v3", 1024);
+        config.batch_size = 32;
+        config.max_concurrent_data_points = 150;
+        let cohere = BedrockEmbeddingEngine::new(&config).await.expect("builds");
+        assert_eq!(cohere.max_concurrent_requests, 4);
+        assert_eq!(cohere.max_concurrent_batches(), 4);
+
+        config.max_concurrent_data_points = 10;
+        let engine = BedrockEmbeddingEngine::new(&config).await.expect("builds");
+        assert_eq!(engine.max_concurrent_requests, 1, "never below one");
+
+        // Titan fans out inside one call, so callers add no batch concurrency.
+        let mut titan = config_for("http://127.0.0.1:1", "amazon.titan-embed-text-v2:0", 1024);
+        titan.batch_size = 32;
+        let titan = BedrockEmbeddingEngine::new(&titan).await.expect("builds");
+        assert_eq!(titan.max_concurrent_requests, 4);
+        assert_eq!(titan.max_concurrent_batches(), 1);
     }
 }

@@ -315,11 +315,6 @@ pub struct CognifyConfig {
     /// vectors themselves, as the embedding integration tests do.
     pub retain_embeddings: bool,
 
-    /// Batch size for embedding generation (all types: chunks, entities, summaries, edge types).
-    /// Python default: varies by provider (36 for OpenAI, 100 for others)
-    /// Controls how many texts are embedded in a single API call
-    pub embedding_batch_size: usize,
-
     /// Vector collection name prefix.
     /// Python default: Uses type names directly ("Entity", "DocumentChunk", etc.)
     /// Allows customization for multi-tenant or versioned deployments
@@ -595,7 +590,6 @@ impl Default for CognifyConfig {
             enable_summarization: true,
 
             retain_embeddings: false,
-            embedding_batch_size: 100,
             vector_collection_prefix: String::new(),
 
             incremental_loading: true,
@@ -709,12 +703,6 @@ impl CognifyConfig {
     /// see [`Self::retain_embeddings`].
     pub fn with_retained_embeddings(mut self, retain: bool) -> Self {
         self.retain_embeddings = retain;
-        self
-    }
-
-    /// Set embedding batch size.
-    pub fn with_embedding_batch_size(mut self, batch_size: usize) -> Self {
-        self.embedding_batch_size = batch_size;
         self
     }
 
@@ -979,12 +967,6 @@ impl CognifyConfig {
             ));
         }
 
-        if self.embedding_batch_size == 0 {
-            return Err(ConfigError::InvalidParameter(
-                "embedding_batch_size must be greater than 0".to_string(),
-            ));
-        }
-
         if self.data_per_batch == 0 {
             return Err(ConfigError::InvalidParameter(
                 "data_per_batch must be greater than 0".to_string(),
@@ -1180,7 +1162,6 @@ mod tests {
         assert!(config.enable_summarization);
 
         // Embedding defaults
-        assert_eq!(config.embedding_batch_size, 100);
         assert_eq!(config.vector_collection_prefix, "");
 
         // Incremental defaults
@@ -1260,12 +1241,6 @@ mod tests {
             ..Default::default()
         };
         assert!(config1.validate().is_err());
-
-        let config2 = CognifyConfig {
-            embedding_batch_size: 0,
-            ..Default::default()
-        };
-        assert!(config2.validate().is_err());
     }
 
     #[test]

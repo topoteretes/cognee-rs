@@ -350,6 +350,12 @@ impl EmbeddingEngine for OllamaEmbeddingEngine {
         self.batch_size
     }
 
+    /// Ollama's `embed` chunks by `batch_size` sequentially, so callers do not
+    /// add concurrency on top.
+    fn max_concurrent_batches(&self) -> usize {
+        1
+    }
+
     fn max_sequence_length(&self) -> usize {
         self.max_completion_tokens
     }
@@ -477,6 +483,7 @@ mod tests {
             api_version: None,
             max_completion_tokens: 8191,
             batch_size: 10,
+            max_concurrent_data_points: 150,
             mock: false,
             mock_mode: Default::default(),
             #[cfg(feature = "onnx")]
@@ -760,6 +767,7 @@ mod tests {
 
         let config = EmbeddingConfig {
             batch_size: 0,
+            max_concurrent_data_points: 150,
             ..config_for(&server.url())
         };
         let engine = OllamaEmbeddingEngine::new(&config).unwrap();

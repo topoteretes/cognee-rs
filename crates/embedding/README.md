@@ -207,7 +207,8 @@ pub struct EmbeddingConfig {
     pub api_key: Option<String>,            // EMBEDDING_API_KEY / LLM_API_KEY
     pub api_version: Option<String>,        // e.g. Azure API version
     pub max_completion_tokens: usize,       // default 8191
-    pub batch_size: usize,                  // default 36
+    pub batch_size: usize,                  // default 32 (Python parity)
+    pub max_concurrent_data_points: usize,  // default 150; concurrent batches = max(1, this / batch_size)
     pub mock: bool,                         // force mock zero vectors
     #[cfg(feature = "onnx")]
     pub onnx: OnnxEmbeddingConfig,          // ONNX-only settings
