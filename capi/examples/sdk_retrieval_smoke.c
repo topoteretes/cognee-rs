@@ -7,7 +7,7 @@
  *   1. String-mapping check — all 17 valid SearchType strings are accepted
  *      (not rejected as CG_ERR_SDK_VALIDATION); an invalid string IS rejected.
  *      This sub-test does NOT execute live searches; it just verifies that
- *      parse_search_type accepts all 18 known values and rejects unknowns.
+ *      parse_search_type accepts all 17 known values and rejects unknowns.
  *      (Mirrors the TS locked SearchType ↔ string test.)
  *
  *   2. Valid cg_sdk_search with a non-LLM search type (CHUNKS_LEXICAL) against
