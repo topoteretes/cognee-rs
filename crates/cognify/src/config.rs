@@ -328,7 +328,15 @@ pub struct CognifyConfig {
     /// Enable pipeline-level caching.
     /// When true, skips datasets whose latest pipeline run status is `Completed`.
     /// Requires a database connection to be provided.
-    /// Python parameter: use_pipeline_cache (default: False)
+    ///
+    /// Deleting a dataset or forgetting its memory does **not** re-arm the
+    /// cache: no `INITIATED` reset row is written any more (Python
+    /// `dc0b4ad6a`, which removed this gate altogether). A caller that opts in
+    /// must call `cognee::reset_dataset_pipeline_run_status` after such a
+    /// delete, or the next cognify of that dataset is a cache hit. Deleting
+    /// individual data items does invalidate it (their `pipeline_runs` rows go).
+    ///
+    /// Python parameter: use_pipeline_cache (default: False; removed upstream)
     pub use_pipeline_cache: bool,
 
     /// Enable temporal graph construction.

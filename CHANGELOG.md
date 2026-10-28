@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_info_for_errored` takes only the error, and `run_info_for_started` /
   `run_info_for_completed` are new. The stored-row enum keeps `Initiated` to
   read old rows, and the explicit `reset_pipeline_run_status` re-arm API (for
-  the opt-in pipeline cache) still writes it.
+  the opt-in pipeline cache) still writes it. A caller that sets
+  `CognifyConfig::use_pipeline_cache` must now call
+  `reset_dataset_pipeline_run_status` itself after a dataset delete or a
+  memory-only forget, or the next cognify of that dataset is a cache hit.
 
 - **`data` rows are dataset-scoped, with `uuid4` ids, as in Python (SDK-1039).**
   A new `data` row gets a random `uuid4` id (it was
