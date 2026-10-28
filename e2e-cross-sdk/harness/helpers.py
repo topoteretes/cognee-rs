@@ -260,41 +260,40 @@ def run_python_cli(
             else:
                 i += 1
 
-        # Python SDK: cognee.prune.prune_data() removes all data,
-        # cognee.prune.prune_system(metadata=True) removes system tables.
-        # For --all we call both; for dataset-scoped we call prune_data
-        # with the dataset filter.
+        # Mirror Python's own `cognee-cli delete`
+        # (cognee/cli/commands/delete_command.py): `--all` is
+        # `datasets.delete_all()`, `--dataset-name` is `datasets.empty_dataset()`
+        # on the dataset of that name. The harness used to call
+        # `prune.prune_data()` + `prune.prune_system(metadata=True)` instead,
+        # which wipes the relational database (later queries hit "no such
+        # table: data") and has no dataset-scoped form at all
+        # (`prune_data()` takes no arguments), so neither matched what a Python
+        # user's delete does.
         if delete_all:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data()\n"
-                f"    await cognee.prune.prune_system(metadata=True)\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
-            )
+            body = "    await cognee.datasets.delete_all()\n"
         elif dataset_name:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data(dataset_name={dataset_name!r})\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
+            body = (
+                "    from cognee.modules.data.methods import get_datasets_by_name\n"
+                "    from cognee.modules.users.methods import get_default_user\n"
+                "    user = await get_default_user()\n"
+                f"    found = await get_datasets_by_name({dataset_name!r}, user_id=user.id)\n"
+                "    if not found:\n"
+                f"        raise SystemExit('no dataset named {dataset_name}')\n"
+                "    await cognee.datasets.empty_dataset(dataset_id=found[0].id, user=user)\n"
             )
         else:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data()\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
+            raise ValueError(
+                "Python delete needs --all or --dataset-name, as Python's CLI does"
             )
+        script = (
+            f"import asyncio, cognee\n"
+            f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+            f"cognee.config.system_root_directory({str(py_system)!r})\n"
+            f"async def main():\n"
+            f"{body}"
+            f"    print('OK')\n"
+            f"asyncio.run(main())\n"
+        )
     elif command == "search":
         # Parse: search <query> -t <TYPE> -d <dataset> -k <top_k>
         query_text = args[1]
@@ -322,7 +321,9 @@ def run_python_cli(
         # ``cognee.search`` returns one of several shapes depending on whether
         # backend access control is enabled, whether ``verbose=True``, and
         # (for single-dataset CHUNKS/SUMMARIES) whether a list-of-lists gets
-        # unwrapped.  We flatten everything to a list of strings here so the
+        # unwrapped. CHUNKS/SUMMARIES now come back as the stored vector
+        # payload itself (an ``IndexSchema`` dump), whose content is
+        # ``text``. We flatten everything to a list of strings here so the
         # parity tests can do substring / len assertions uniformly.
         script = (
             f"import asyncio, json, cognee\n"
@@ -330,7 +331,7 @@ def run_python_cli(
             f"cognee.config.system_root_directory({str(py_system)!r})\n"
             f"def _extract(item):\n"
             f"    if isinstance(item, dict):\n"
-            f"        return item.get('search_result') or item.get('text_result') or item.get('context_result')\n"
+            f"        return item.get('search_result') or item.get('text_result') or item.get('context_result') or item.get('text')\n"
             f"    return item\n"
             f"async def main():\n"
             f"    results = await cognee.search(\n"
@@ -578,6 +579,72 @@ def query_edges(conn: sqlite3.Connection) -> list[dict]:
     rows = query_rows(conn, "SELECT * FROM edges")
     rows.sort(key=lambda r: r.get("relationship_name", ""))
     return rows
+
+
+_GRAPH_START = ">>>GRAPH<<<"
+_GRAPH_END = ">>>END<<<"
+
+
+def python_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
+    """Read Python cognee's graph through its own graph engine.
+
+    Returns ``(nodes, edges)`` in the shape ``query_nodes`` / ``query_edges``
+    give for a relational store, so a test compares the two SDKs with one code
+    path:
+
+    * a node is ``{"id", "type", "node_type", "label", **properties}``, with
+      ``id`` normalised as ``query_rows`` does;
+    * an edge is ``{"source_node_id", "destination_node_id",
+      "relationship_name", **properties}``.
+
+    Why not the relational ``nodes`` / ``edges`` tables: Python writes those
+    only as the rollback ledger of a graph backend that cannot hold provenance
+    itself. On Ladybug (``GRAPH_DATABASE_PROVIDER=kuzu`` here)
+    ``add_data_points`` marks the empty graph as provenance-carrying and skips
+    the ledger (``mark_graph_provenance_if_empty`` in
+    ``cognee/tasks/storage/add_data_points.py``), so after cognify those tables
+    are empty and every Python-side node or edge count read from them was 0.
+    """
+    script = (
+        "import asyncio, json\n"
+        "from cognee.infrastructure.databases.graph import get_graph_engine\n"
+        "async def main():\n"
+        "    engine = await get_graph_engine()\n"
+        "    nodes, edges = await engine.get_graph_data()\n"
+        "    out = {\n"
+        "        'nodes': [{'id': str(i), **(p or {})} for i, p in nodes],\n"
+        "        'edges': [{'source_node_id': str(s), 'destination_node_id': str(t),\n"
+        "                   'relationship_name': r, **(p or {})} for s, t, r, p in edges],\n"
+        "    }\n"
+        f"    print({_GRAPH_START!r} + json.dumps(out, default=str) + {_GRAPH_END!r})\n"
+        "asyncio.run(main())\n"
+    )
+    result = run_python_script(workdir, script, check=False)
+    out = result.stdout
+    start, end = out.find(_GRAPH_START), out.find(_GRAPH_END)
+    if result.returncode != 0 or start == -1 or end < start:
+        raise RuntimeError(
+            f"Reading Python's graph failed (exit {result.returncode}):\n"
+            f"--- stdout ---\n{out}\n--- stderr ---\n{result.stderr}"
+        )
+    graph = json.loads(out[start + len(_GRAPH_START) : end])
+
+    nodes = []
+    for n in graph["nodes"]:
+        n["id"] = _normalize_uuid(n["id"])
+        n.setdefault("type", None)
+        n["node_type"] = n["type"]
+        n.setdefault("label", n.get("name"))
+        nodes.append(n)
+    nodes.sort(key=lambda r: (r.get("type") or "", r.get("label") or ""))
+
+    edges = []
+    for e in graph["edges"]:
+        e["source_node_id"] = _normalize_uuid(e["source_node_id"])
+        e["destination_node_id"] = _normalize_uuid(e["destination_node_id"])
+        edges.append(e)
+    edges.sort(key=lambda r: r.get("relationship_name") or "")
+    return nodes, edges
 
 
 # ── DB path resolvers ────────────────────────────────────────────────────────

@@ -88,13 +88,14 @@ COPY cognee/pyproject.toml cognee/uv.lock cognee/README.md ./
 
 # Install deps without the project itself.
 #
-# `--extra dlt` matters for parity, not just coverage: cognee registers
-# `dlt_csv_loader` only when the optional `dlt` extra is installed
-# (pyproject.toml:176). Without it, Python falls back to the same
-# `csv_loader` Rust uses, the two sides agree, and a real routing
-# divergence — Python routes CSV through the DLT_SOURCE cognify route,
-# Rust has no route concept at all — is masked by the harness's own
-# environment rather than by the code under test.
+# `--extra dlt`: older pins (up to 1.5.x) made dlt optional, and cognee
+# registers `dlt_csv_loader` only when dlt is importable. Without it, Python
+# falls back to the same `csv_loader` Rust uses, the two sides agree, and a
+# real routing divergence — Python routes CSV through the DLT_SOURCE cognify
+# route, Rust has no route concept at all — is masked by the harness's own
+# environment rather than by the code under test. From the current pin on,
+# dlt is a core dependency and `dlt` is an empty extra kept for
+# compatibility, so the flag is a no-op there but stays valid.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev --no-editable --extra dlt
 
