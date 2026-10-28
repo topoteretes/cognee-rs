@@ -359,9 +359,13 @@ impl Settings {
         reason = "config boundary: Settings is resolved from the process env here"
     )]
     pub fn overlay_from_env_with_schema(&mut self, schema: &ConfigSchema) {
-        // Load .env (no-op if absent or if the vars are already in the environment).
-        cognee_config_core::load_dotenv();
-        self.overlay_from_with_schema(&cognee_config_core::ProcessEnv::new(), schema);
+        // Load .env unless the process opted out via COGNEE_DISABLE_DOTENV
+        // (no-op if the file is absent or the vars are already set).
+        // `ProcessEnv::get` reads the live process env at call time, so one
+        // instance sees both the pre-load opt-out and the just-loaded vars.
+        let env = cognee_config_core::ProcessEnv::new();
+        cognee_config_core::load_dotenv_unless_disabled(&env);
+        self.overlay_from_with_schema(&env, schema);
     }
 
     /// The typed component config section `T`: its values from

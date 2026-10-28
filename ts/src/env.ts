@@ -2,8 +2,13 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import dotenv from "dotenv";
 
-const disabled = process.env.COGNEE_DISABLE_DOTENV;
-if (disabled === "1" || disabled === "true") {
+const disabled = process.env.COGNEE_DISABLE_DOTENV?.trim().toLowerCase();
+if (
+  disabled === "1" ||
+  disabled === "true" ||
+  disabled === "yes" ||
+  disabled === "on"
+) {
   // Opt out explicitly for hosts that manage env loading themselves.
 } else {
   const cwd = process.cwd();
