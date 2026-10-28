@@ -14,6 +14,12 @@
 //! API; nothing calls them implicitly (pipeline runs, add and delete write no
 //! `INITIATED` row). Removing both is a separate parity change.
 //!
+//! A caller that opts into the cache must call
+//! [`reset_dataset_pipeline_run_status`] itself after deleting a dataset or
+//! forgetting its memory: those paths no longer append a reset row, so the
+//! dataset's last `COMPLETED` row would otherwise make the next cognify a
+//! cache hit.
+//!
 //! See [docs/telemetry/08/05-reset-helpers.md](../../../docs/telemetry/08/05-reset-helpers.md)
 //! for the full design.
 
