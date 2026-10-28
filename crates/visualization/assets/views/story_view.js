@@ -14,7 +14,15 @@ if (!nodes || nodes.length === 0) {
 }
 
 // ── Helpers ──
-function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
+// Restrict a color to the formats this view produces before it lands in a
+// style="..." attribute — a graph-supplied `color` field is not trusted.
+function safeCssColor(c){
+  c=String(c||"");
+  if(/^#[0-9a-fA-F]{3,8}$/.test(c))return c;
+  if(/^(rgb|hsl)a?\([0-9.,%\s-]+\)$/.test(c))return c;
+  return"#DBD8D8";
+}
 function truncate(s,n){if(!s)return"";return s.length>n?s.slice(0,n)+"\u2026":s}
 function hexToRgb(hex){
   if(!hex)return[219,216,216];
@@ -527,7 +535,7 @@ function updateLegend(){
   if(entries.length>8)entries=entries.slice(0,8);
   var typeItems=entries.map(function(t){
     return '<span class="legend-item"><span class="legend-dot" style="background:'+
-      colorSource(t)+'"></span>'+esc(t)+'</span>';
+      safeCssColor(colorSource(t))+'"></span>'+esc(t)+'</span>';
   }).join("");
   // Ontology and importance sections — explain the encodings we layer
   // on top of the color (green ring = ontology_valid, radius = importance).
@@ -1045,7 +1053,7 @@ function inspectorOverviewLine(n){
     return "Global context bucket.";
   }
   if(stage==="schema"){
-    return "Schema element ("+esc(n.type||"")+").";
+    return "Schema element ("+(n.type||"")+").";
   }
   return null;
 }
@@ -1055,13 +1063,13 @@ function showNodeInfo(n){
 
   // Header
   var html='<div class="panel-header">';
-  html+='<span class="panel-type" style="background:'+n.color+'22;color:'+n.color+'">'+esc(n.type||"Node")+"</span>";
+  html+='<span class="panel-type" style="background:'+safeCssColor(n.color)+'22;color:'+safeCssColor(n.color)+'">'+esc(n.type||"Node")+"</span>";
   html+='<span class="panel-title">'+esc(truncate(n.name||n.id,40))+"</span></div>";
 
-  // Plain-English overview
+  // Plain-English overview — plain text, escaped once here at the sink.
   var overview=inspectorOverviewLine(n);
   if(overview){
-    html+='<div class="inspector-overview" style="font-size:12px;color:var(--text);line-height:1.5;margin-top:6px;padding-bottom:8px">'+overview+"</div>";
+    html+='<div class="inspector-overview" style="font-size:12px;color:var(--text);line-height:1.5;margin-top:6px;padding-bottom:8px">'+esc(overview)+"</div>";
   }
 
   // Description text (if the node carries one)
@@ -1205,10 +1213,10 @@ function showEdgeInfo(e){
   var tName=e.target.name||e.target.id;
   html+='<div class="panel-row"><span class="k">From</span><span class="v">'+esc(truncate(sName,30))+"</span></div>";
   html+='<div class="panel-row"><span class="k">To</span><span class="v">'+esc(truncate(tName,30))+"</span></div>";
-  if(e.weight!=null)html+='<div class="panel-row"><span class="k">Weight</span><span class="v">'+e.weight+"</span></div>";
+  if(e.weight!=null)html+='<div class="panel-row"><span class="k">Weight</span><span class="v">'+esc(String(e.weight))+"</span></div>";
   if(e.all_weights&&Object.keys(e.all_weights).length>0){
     Object.keys(e.all_weights).forEach(function(k){
-      html+='<div class="panel-row"><span class="k">w:'+esc(k)+'</span><span class="v">'+e.all_weights[k]+"</span></div>";
+      html+='<div class="panel-row"><span class="k">w:'+esc(k)+'</span><span class="v">'+esc(String(e.all_weights[k]))+"</span></div>";
     });
   }
   if(e.relationship_type)html+='<div class="panel-row"><span class="k">Type</span><span class="v">'+esc(e.relationship_type)+"</span></div>";

@@ -24,6 +24,15 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  // Restrict a color to the formats this view produces before it lands in a
+  // style="..." attribute — a graph-supplied `color` field is not trusted.
+  function safeCssColor(c) {
+    c = String(c || '');
+    if (/^#[0-9a-fA-F]{3,8}$/.test(c)) return c;
+    if (/^(rgb|hsl)a?\([0-9.,%\s-]+\)$/.test(c)) return c;
+    return '#8a8a8a';
+  }
+
   // ── Pure view decisions (no DOM, no d3) ──────────────────────────────────
 
   // Linear map with no clamping — matches d3.scaleLinear's default extrapolation.
@@ -329,7 +338,7 @@
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;padding:1px 0;';
     row.innerHTML = '<span style="width:10px;height:10px;border-radius:50%;background:'
-      + color + ';display:inline-block;flex:0 0 auto;"></span>'
+      + safeCssColor(color) + ';display:inline-block;flex:0 0 auto;"></span>'
       + '<span>' + esc(truncate(text, 30)) + '</span>';
     row.addEventListener('click', onClick);
     return row;
