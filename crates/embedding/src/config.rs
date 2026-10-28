@@ -306,6 +306,10 @@ impl OnnxEmbeddingConfig {
 /// - `EMBEDDING_ONNX_BATCH_SIZE` — ONNX inference batch size (default: 32; `onnx` feature only)
 /// - `HUGGINGFACE_TOKENIZER` — HuggingFace tokenizer identifier
 ///
+/// `max_concurrent_data_points` is read only through the `embedding` config
+/// section (`EMBEDDING_MAX_CONCURRENT_DATA_POINTS`); `from_env` leaves the
+/// default of 150.
+///
 /// `Debug` is hand-written so `api_key` never reaches a log line: it prints as
 /// `***REDACTED***` when set and `None` when unset.
 #[derive(Clone, Serialize, Deserialize)]
@@ -736,8 +740,12 @@ impl EmbeddingConfig {
             EmbeddingProvider::Bedrock => Err(crate::error::EmbeddingError::NotImplemented(
                 "Bedrock embedding engine requires the `bedrock` crate feature".to_string(),
             )),
+            // The mock takes the configured batch size, as Python's mocked
+            // engine reports `embedding_batch_size`, so callers that cut by
+            // `batch_size()` (cognify's `embed_in_batches`) batch as configured.
             EmbeddingProvider::Mock => Ok(Arc::new(
-                MockEmbeddingEngine::new(self.dimensions).with_mode(self.mock_mode),
+                MockEmbeddingEngine::with_batch_size(self.dimensions, self.batch_size.max(1))
+                    .with_mode(self.mock_mode),
             )),
         }
     }
@@ -756,6 +764,27 @@ impl EmbeddingConfig {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    /// SDK-1039 P7: the mock engine reports the configured
+    /// `embedding.batch_size`, so cognify batches by it under `MOCK_EMBEDDING`.
+    #[tokio::test]
+    async fn mock_engine_reports_the_configured_batch_size() {
+        let config = EmbeddingConfig {
+            provider: EmbeddingProvider::Mock,
+            dimensions: 8,
+            batch_size: 3,
+            ..EmbeddingConfig::default()
+        };
+        let engine = config.create_engine().await.expect("mock engine builds");
+        assert_eq!(engine.batch_size(), 3);
+        let default = EmbeddingConfig {
+            provider: EmbeddingProvider::Mock,
+            ..EmbeddingConfig::default()
+        };
+        let engine = default.create_engine().await.expect("mock engine builds");
+        assert_eq!(engine.batch_size(), 32);
+        assert_eq!(engine.max_concurrent_batches(), 4);
+    }
 
     /// `{:?}` never prints the API key.
     #[test]
