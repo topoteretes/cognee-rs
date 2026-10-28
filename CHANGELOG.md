@@ -382,8 +382,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   halves remain separately available for a caller who wants to fuse one of them
   against a different sibling, via the new `TypedTask::try_parallel` in
   `cognee-core`. Provenance is unaffected: entities still stamp
-  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"` (changed to `"extract_graph_and_summarize"` in SDK-1039),
-  both at `topological_rank` 3.
+  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"`
+  (changed to `"extract_graph_and_summarize"` in SDK-1039), both at
+  `topological_rank` 3.
 
   Three behavioural consequences, all three shared with Python: the stage's
   peak in-flight LLM calls is now the sum of the two `max_parallel_extractions`

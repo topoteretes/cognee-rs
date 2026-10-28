@@ -6893,12 +6893,13 @@ pub fn make_extract_graph_task_with_rank(
 /// without that caveat; it is withdrawn. If the sibling is not extraction,
 /// leave `graph_backend` unset on the config this task is built from.
 ///
-/// In-body provenance stamping: stamps every emitted `TextSummary`
-/// with `source_task = "extract_graph_and_summarize"`, as Python does. Nothing else is stamped here: the
-/// carried-forward chunks, documents and entities this used to walk all belong
-/// to the sibling branch now, and every one of those stamps was already an
-/// idempotent no-op — upstream stages had filled the same fields in, under the
-/// same pipeline name, the same user label and the same rank 3.
+/// In-body provenance stamping: stamps every emitted `TextSummary` with
+/// `source_task = "extract_graph_and_summarize"`, as Python does. Nothing
+/// else is stamped here: the carried-forward chunks, documents and entities
+/// this used to walk all belong to the sibling branch now, and every one of
+/// those stamps was already an idempotent no-op — upstream stages had filled
+/// the same fields in, under the same pipeline name, the same user label and
+/// the same rank 3.
 pub fn make_summarize_text_task(
     llm: Arc<dyn Llm>,
     config: CognifyConfig,
