@@ -14,6 +14,7 @@ mod edge_type;
 mod embedding;
 mod entity;
 mod entity_type;
+mod global_context_summary;
 pub mod has_datapoint;
 mod internal_node;
 /// Memory entry types for typed `remember()` dispatch.
@@ -38,6 +39,7 @@ pub use edge_type::EdgeType;
 pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
+pub use global_context_summary::GlobalContextSummary;
 pub use has_datapoint::HasDataPoint;
 pub use internal_node::{INTERNAL_PROPERTY, is_internal_node, marks_internal};
 pub use memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
