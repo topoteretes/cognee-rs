@@ -40,7 +40,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         ));
     }
 
-    // `--no-improve` flips the default-on self-improvement (memify) pass.
+    // `--no-improve` flips the default-on self-improvement (`improve`) pass.
     let self_improvement = !args.no_improve;
 
     let inputs = args

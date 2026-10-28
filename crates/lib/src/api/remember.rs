@@ -1,7 +1,7 @@
 //! One-call add + cognify + optional improve -- `remember()`.
 //!
-//! Composition of `add()` -> `cognify()` -> optionally `improve()` (via `memify`),
-//! with session-mode support.
+//! Composition of `add()` -> `cognify()` -> optionally `improve()`, with
+//! session-mode support.
 //!
 //! Equivalent to Python's `cognee.api.v1.remember.remember()`.
 
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cognee_cognify::cognify;
-use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
+use cognee_cognify::{CognifyConfig, CognifyResult};
 use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use super::auto_improve_debounce::session_improve_due;
 use super::error::ApiError;
-use super::improve::{ImproveConfig, ImproveParams, improve};
+use super::improve::{ImproveConfig, ImproveParams, ImproveResult, improve};
 
 /// Status of a remember operation.
 ///
@@ -111,8 +111,11 @@ pub struct RememberResult {
     pub entry_id: Option<String>,
     #[serde(skip)]
     pub cognify_result: Option<CognifyResult>,
+    /// Result of the automatic `improve()` run, when one ran in permanent
+    /// mode. `None` when `self_improvement=false` or the run failed; a failure
+    /// is reported in [`Self::error`].
     #[serde(skip)]
-    pub memify_result: Option<MemifyResult>,
+    pub improve_result: Option<ImproveResult>,
     /// Session mode: the automatic improve was launched as a detached
     /// background task (Python's `RememberResult._task` being set). `false`
     /// when it is off, debounced, or the improve settings are invalid. Await
@@ -201,9 +204,10 @@ fn auto_improve_config(
 /// **Permanent Memory Mode** (no `session_id`):
 /// 1. `add()` to ingest data.
 /// 2. `cognify()` to extract knowledge graph.
-/// 3. If `self_improvement=true` and `improve_config.auto_enabled`, `memify()`
-///    to enrich with triplet embeddings. `IMPROVE_AUTO_ENABLED=false` is the
-///    kill switch on both paths, as in Python (`remember.py`:
+/// 3. If `self_improvement=true` and `improve_config.auto_enabled`, `improve()`
+///    on the dataset (as Python's `remember(self_improvement=True)` does;
+///    memify is not involved). `IMPROVE_AUTO_ENABLED=false` is the kill switch
+///    on both paths, as in Python (`remember.py`:
 ///    `self_improvement and auto_improve_enabled()`).
 ///
 /// **Session Memory Mode** (with `session_id`):
@@ -314,11 +318,13 @@ pub async fn remember(
     // The same kill switch as the session path: an explicit
     // `self_improvement = true` does not override `auto_enabled = false`, and
     // invalid improve settings skip the self-improvement, never the ingestion.
-    let self_improvement = auto_improve_config(self_improvement, improve_config).is_some();
+    let improve_config = auto_improve_config(self_improvement, improve_config);
     remember_permanent_blocking(
         data,
         dataset_name,
-        self_improvement,
+        improve_config,
+        personalization,
+        auto_feedback,
         owner_id,
         tenant_id,
         &add_pipeline,
@@ -328,6 +334,9 @@ pub async fn remember(
         vector_db,
         embedding_engine,
         db,
+        session_store,
+        session_manager,
+        checkpoint_store,
         ontology_resolver,
         &cognify_config,
         start,
@@ -347,14 +356,17 @@ struct PermanentOutcome {
     items_processed: usize,
     content_hash: Option<String>,
     cognify_result: CognifyResult,
-    memify_result: Option<MemifyResult>,
+    improve_result: Option<ImproveResult>,
+    improve_error: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_permanent_inner(
     data: Vec<DataInput>,
     dataset_name: &str,
-    self_improvement: bool,
+    improve_config: Option<ImproveConfig>,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     add_pipeline: &AddPipeline,
@@ -364,6 +376,9 @@ async fn run_permanent_inner(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<dyn RelationalDb>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PermanentOutcome, ApiError> {
@@ -398,11 +413,6 @@ async fn run_permanent_inner(
     // Python's unauthenticated-run behaviour.
     let user_email: Option<String> = None;
 
-    // Clone the optional DB handle so memify (which now requires it per
-    // LIB-06 Decision 1) can still reach the relational connection after
-    // cognify consumes its copy.
-    let db_for_memify = db.clone();
-
     // LIB-06-03: `cognify()` now requires `Arc<dyn RelationalDb>` and an
     // `Arc<dyn CpuPool>` (Decision 1).
     let database = db
@@ -424,66 +434,67 @@ async fn run_permanent_inner(
         Some(owner_id),
         user_email,
         tenant_id,
-        llm,
-        storage,
+        Arc::clone(&llm),
+        Arc::clone(&storage),
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         database,
         Arc::clone(&pipeline_run_repo),
         thread_pool,
-        ontology_resolver,
+        Arc::clone(&ontology_resolver),
         cognify_config,
     )
     .await
     .map_err(|e| ApiError::Cognify(e.to_string()))?;
 
-    // Optional self-improvement via memify.
-    let memify_result = if self_improvement {
-        let config = MemifyConfig::default();
-        match db_for_memify {
-            Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
-                Ok(pool) => {
-                    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                        Arc::clone(&database).pipeline_runs();
-                    match run_memify(
-                        Arc::clone(&graph_db),
-                        Arc::clone(&vector_db),
-                        Arc::clone(&embedding_engine),
-                        thread_pool,
-                        database,
-                        pipeline_run_repo,
-                        Some(dataset_id),
-                        Some(owner_id),
-                        tenant_id,
-                        &config,
-                    )
-                    .await
-                    {
-                        Ok(r) => Some(r),
-                        Err(e) => {
-                            warn!("memify phase failed (non-fatal): {e}");
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("memify phase skipped (non-fatal): rayon pool init: {e}");
-                    None
-                }
-            },
-            None => {
-                warn!(
-                    "memify phase skipped: a relational database connection is required by the \
-                     LIB-06 executor-routed memify"
-                );
-                None
+    // Optional self-improvement via improve() on the dataset, as Python's
+    // `remember(self_improvement=True)` does. Failures are non-fatal: the
+    // data is already stored, so the error is reported on the result.
+    let mut improve_result = None;
+    let mut improve_error = None;
+    if let Some(config) = improve_config {
+        match improve(ImproveParams {
+            dataset_name: dataset_name.to_string(),
+            dataset_id: None,
+            session_ids: None,
+            node_name: None,
+            owner_id,
+            tenant_id,
+            feedback_alpha: None,
+            config,
+            personalization,
+            auto_feedback,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            ontology_resolver,
+            db,
+            session_store,
+            session_manager,
+            add_pipeline: Some(add_pipeline),
+            checkpoint_store,
+            dataset_locks: None,
+            cognify_config,
+            extraction_tasks: None,
+            enrichment_tasks: None,
+            data: None,
+            build_global_context_index: false,
+            build_truth_subspace: false,
+            run_in_background: false,
+        })
+        .await
+        {
+            Ok(r) => improve_result = Some(r),
+            Err(e) => {
+                let msg = e.to_string();
+                warn!("remember: improve failed (non-fatal): {msg}");
+                improve_error = Some(msg);
             }
         }
-    } else {
-        None
-    };
+    }
 
     Ok(PermanentOutcome {
         dataset_id,
@@ -492,7 +503,8 @@ async fn run_permanent_inner(
         items_processed,
         content_hash: content_hash_first,
         cognify_result,
-        memify_result,
+        improve_result,
+        improve_error,
     })
 }
 
@@ -500,7 +512,9 @@ async fn run_permanent_inner(
 async fn remember_permanent_blocking(
     data: Vec<DataInput>,
     dataset_name: &str,
-    self_improvement: bool,
+    improve_config: Option<ImproveConfig>,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     add_pipeline: &AddPipeline,
@@ -510,6 +524,9 @@ async fn remember_permanent_blocking(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<dyn RelationalDb>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -517,7 +534,9 @@ async fn remember_permanent_blocking(
     let outcome = run_permanent_inner(
         data,
         dataset_name,
-        self_improvement,
+        improve_config,
+        personalization,
+        auto_feedback,
         owner_id,
         tenant_id,
         add_pipeline,
@@ -527,6 +546,9 @@ async fn remember_permanent_blocking(
         vector_db,
         embedding_engine,
         db,
+        session_store,
+        session_manager,
+        checkpoint_store,
         ontology_resolver,
         cognify_config,
     )
@@ -544,11 +566,11 @@ async fn remember_permanent_blocking(
         content_hash: outcome.content_hash,
         items_processed: outcome.items_processed,
         items: outcome.items,
-        error: None,
+        error: outcome.improve_error,
         entry_type: None,
         entry_id: None,
         cognify_result: Some(outcome.cognify_result),
-        memify_result: outcome.memify_result,
+        improve_result: outcome.improve_result,
         improve_launched: false,
     })
 }
@@ -663,7 +685,7 @@ async fn remember_session(
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        memify_result: None,
+        improve_result: None,
         improve_launched,
     })
 }
@@ -1069,7 +1091,7 @@ pub async fn remember_entry(
         entry_type: Some(entry_type_str.to_string()),
         entry_id,
         cognify_result: None,
-        memify_result: None,
+        improve_result: None,
         improve_launched: false,
     })
 }
@@ -1240,9 +1262,9 @@ mod tests {
         let obj = v.as_object().expect("object");
         assert!(obj.contains_key("status"));
         assert!(obj.contains_key("dataset_name"));
-        // cognify_result / memify_result are #[serde(skip)]
+        // cognify_result / improve_result are #[serde(skip)]
         assert!(!obj.contains_key("cognify_result"));
-        assert!(!obj.contains_key("memify_result"));
+        assert!(!obj.contains_key("improve_result"));
     }
 
     #[test]
@@ -1269,7 +1291,7 @@ mod tests {
             entry_type: None,
             entry_id: None,
             cognify_result: None,
-            memify_result: None,
+            improve_result: None,
             improve_launched: false,
         }
     }
