@@ -315,9 +315,9 @@ async fn display_and_to_dict_on_session_result() {
         obj.get("dataset_name").and_then(|v| v.as_str()),
         Some("ds_display")
     );
-    // cognify_result, memify_result are #[serde(skip)] — absent.
+    // cognify_result, improve_result are #[serde(skip)] — absent.
     assert!(!obj.contains_key("cognify_result"));
-    assert!(!obj.contains_key("memify_result"));
+    assert!(!obj.contains_key("improve_result"));
     // inner is gone from the struct entirely.
     assert!(!obj.contains_key("inner"));
 }

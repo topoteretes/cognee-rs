@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that holds one keeps working. `memify` still writes triplets until its own
   removal lands.
 
+- **`remember(self_improvement=true)` runs `improve()`, not memify (SDK-1039).**
+  In permanent mode the self-improvement step now calls `improve()` on the
+  dataset, as Python's `remember` does; session mode already did.
+  `RememberResult::memify_result` is replaced by `RememberResult::improve_result`
+  (`Option<ImproveResult>`, not serialised), and an `improve()` failure is
+  reported in `RememberResult::error` instead of being logged and dropped.
+
 - **`TRIPLET_COMPLETION` and `TripletRetriever` are removed (SDK-1039).**
   Python deprecated triplet search in SDK-1115 and removes it in the next
   release; Rust goes straight to the removed state, with no

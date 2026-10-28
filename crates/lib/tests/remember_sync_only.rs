@@ -121,6 +121,15 @@ fn mock_llm() -> Arc<dyn cognee_llm::Llm> {
     Arc::new(MockLlm::empty())
 }
 
+/// An LLM that can serve a full permanent-mode cognify: an empty extracted
+/// graph for every chunk and a canned summary.
+fn cognify_llm() -> Arc<dyn cognee_llm::Llm> {
+    Arc::new(
+        MockLlm::new(vec![r#"{"nodes":[],"edges":[]}"#.to_string(); 8])
+            .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // (b) RememberResult has no `inner` in its JSON serialization
 // ---------------------------------------------------------------------------
@@ -143,7 +152,7 @@ fn remember_result_has_no_inner_field_in_json() {
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        memify_result: None,
+        improve_result: None,
     };
     let json = r.to_dict();
     let obj = json.as_object().expect("object");
@@ -224,4 +233,68 @@ async fn remember_session_self_improvement_inline() {
     // Synchronous: always terminal on return.
     assert_eq!(result.status, RememberStatus::SessionStored);
     assert!(result.done());
+}
+
+/// SDK-1039 P3: permanent mode with `self_improvement=true` runs `improve()`
+/// on the dataset (as Python does), not memify. The improve result is
+/// attached to the `RememberResult`.
+#[tokio::test]
+async fn remember_permanent_self_improvement_runs_improve() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    let result = remember(
+        vec![DataInput::Text("Alice works at Acme.".to_string())],
+        "ds_permanent_improve",
+        None,
+        /* self_improvement= */ true,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        cognify_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Some(h.checkpoint_store.clone() as Arc<_>),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+    )
+    .await
+    .expect("permanent remember with self-improvement");
+
+    assert_eq!(result.status, RememberStatus::Completed);
+    assert!(result.error.is_none(), "improve error: {:?}", result.error);
+    assert!(
+        result.improve_result.is_some(),
+        "self_improvement=true must run improve()"
+    );
+
+    // Without self-improvement no improve run is attached.
+    let result = remember(
+        vec![DataInput::Text("Bob works at Initech.".to_string())],
+        "ds_permanent_no_improve",
+        None,
+        /* self_improvement= */ false,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        cognify_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Some(h.checkpoint_store.clone() as Arc<_>),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+    )
+    .await
+    .expect("permanent remember without self-improvement");
+    assert!(result.improve_result.is_none());
 }
