@@ -195,12 +195,11 @@ export interface CogneeCognifyResult {
 // Phase 4 types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** All 18 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
+/** All 17 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
 export type SearchTypeString =
   | "SUMMARIES"
   | "CHUNKS"
   | "RAG_COMPLETION"
-  | "TRIPLET_COMPLETION"
   | "GRAPH_COMPLETION"
   | "GRAPH_COMPLETION_DECOMPOSITION"
   | "GRAPH_SUMMARY_COMPLETION"
