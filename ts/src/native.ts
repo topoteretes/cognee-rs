@@ -153,7 +153,7 @@ export interface NativeBindings {
   // Memory ops (Phase 5): remember / remember_entry / memify / improve.
   //
   // `cogneeRemember` is a one-call add+cognify+optional-improve composite.
-  // opts.selfImprovement triggers a memify pass after cognify.
+  // opts.selfImprovement runs improve() after cognify.
   // opts.sessionId switches to session-memory mode (no graph writes).
   //
   // `cogneeRememberEntry` stores a typed MemoryEntry in a session. The

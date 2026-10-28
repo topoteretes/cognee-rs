@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   //
   // remember() ingests the inputs and extracts a knowledge graph in one call —
   // the high-level equivalent of add() followed by cognify(). Pass
-  // { selfImprovement: true } to also run a memify pass, or { sessionId } to
+  // { selfImprovement: true } to also run improve(), or { sessionId } to
   // store into session memory instead of the graph.
   const datasetName = "demo";
   console.log(`\nRemembering text snippets in dataset "${datasetName}"...`);

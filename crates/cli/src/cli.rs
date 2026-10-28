@@ -742,7 +742,7 @@ pub struct RememberArgs {
     #[arg(long = "session-id")]
     pub session_id: Option<String>,
 
-    /// Skip the self-improvement (memify) pass that normally runs after
+    /// Skip the self-improvement (`improve`) pass that normally runs after
     /// cognify. By default self-improvement is ON (Python parity:
     /// `self_improvement=True`).
     #[arg(long = "no-improve", default_value_t = false)]
