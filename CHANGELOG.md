@@ -18,6 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`TRIPLET_COMPLETION` and `TripletRetriever` are removed (SDK-1039).**
+  Python deprecated triplet search in SDK-1115 and removes it in the next
+  release; Rust goes straight to the removed state, with no
+  `TRIPLET_COMPLETION → GRAPH_COMPLETION` alias. `SearchType::TripletCompletion`,
+  `cognee_search::TripletRetriever` and its `SearchBuilder` registration are
+  gone, and the Python, TS, Java and C `SearchType` lists drop the value
+  (17 search types remain). `"TRIPLET_COMPLETION"` is now an unknown search
+  type everywhere: serde/`SearchRequest` deserialization, the binding
+  `parse_search_type` (validation error) and the CLI `--query-type` (invalid
+  value). A database that still holds a `Triplet_text` vector collection keeps
+  serving every other search type. Cognify/memify still write triplet
+  embeddings until the follow-up removals land.
+
+  **Migration.** Use `GRAPH_COMPLETION` (what Python's deprecation shim answers
+  with) or `HYBRID_COMPLETION`.
+
 - **Delete lock hook, search scoping accessor, pipeline-runs listing +
   `pipeline_runs.user_id`.** Python serializes deletes against pipeline runs
   with one per-dataset lock (`dataset_lock.py`, cognee 37f788bd2); its
