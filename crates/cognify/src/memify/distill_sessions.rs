@@ -202,6 +202,16 @@ pub struct DistillSessionsResult {
     pub sessions_distilled: usize,
     /// Total number of lesson documents published across all sessions.
     pub lessons_published: usize,
+    /// Number of sessions whose distillation failed (Python's
+    /// `sessions_failed` count of `DistillSessionsStage`).
+    pub sessions_failed: usize,
+    /// The last session failure, rendered; `Some` whenever
+    /// `sessions_failed > 0`.
+    pub last_error: Option<String>,
+    /// A session failed because the LLM budget is exhausted. The loop stops
+    /// there: every later session would fail the same way (Python's
+    /// `DistillSessionsStage.run` breaks on `LLMPaymentRequiredError`).
+    pub budget_exhausted: bool,
 }
 
 /// Error type for [`distill_session`].
@@ -220,6 +230,32 @@ pub enum DistillError {
     /// creates it).
     #[error("Dataset '{0}' not found after add")]
     DatasetNotFound(String),
+    /// A curator or writer call reported an exhausted LLM budget (HTTP 402).
+    /// Raised instead of failing open, as Python re-raises
+    /// `LLMPaymentRequiredError`: every later call would fail the same way.
+    #[error("LLM budget exhausted: {0}")]
+    PaymentRequired(String),
+}
+
+impl DistillError {
+    /// The distillation stopped on an exhausted LLM budget — directly, or in
+    /// the cognify of the published lessons.
+    pub fn is_budget_exhausted(&self) -> bool {
+        match self {
+            Self::PaymentRequired(_) => true,
+            Self::Cognify(e) => e.is_budget_exhausted(),
+            _ => false,
+        }
+    }
+}
+
+/// The message of an LLM error that signals an exhausted budget; `None` for
+/// any other error, which the callers fail open on.
+fn payment_required(error: &cognee_llm::LlmError) -> Option<String> {
+    match error {
+        cognee_llm::LlmError::PaymentRequired(message) => Some(message.clone()),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,16 +309,20 @@ const CURATOR_PROMPT: &str = include_str!("prompts/session_distillation_curator_
 /// `session_distillation_writer_system.txt`.
 const WRITER_PROMPT: &str = include_str!("prompts/session_distillation_writer_system.txt");
 
-/// One curator call over one batch slice. Fail-open → `vec![]`.
-async fn curate_batch(llm: &dyn Llm, batch_text: &str) -> Vec<ProposedLesson> {
+/// One curator call over one batch slice. Fail-open → `vec![]`, except for an
+/// exhausted LLM budget, which is returned as the error.
+async fn curate_batch(llm: &dyn Llm, batch_text: &str) -> Result<Vec<ProposedLesson>, String> {
     match llm
         .create_structured_output::<CuratorBatchOutput>(batch_text, CURATOR_PROMPT, None)
         .await
     {
-        Ok(output) => output.lessons,
+        Ok(output) => Ok(output.lessons),
         Err(e) => {
+            if let Some(message) = payment_required(&e) {
+                return Err(message);
+            }
             warn!("distill: curator batch failed open: {e}");
-            Vec::new()
+            Ok(Vec::new())
         }
     }
 }
@@ -293,13 +333,16 @@ async fn curate_batch(llm: &dyn Llm, batch_text: &str) -> Vec<ProposedLesson> {
 /// Uses `.collect()` (not `try_collect`) because each future returns a
 /// `Vec<ProposedLesson>` directly and never a `Result` — one failed batch must
 /// not abort the stream (fail-open).
-async fn propose_lessons(llm: &Arc<dyn Llm>, entries: &[SessionQAEntry]) -> Vec<ProposedLesson> {
+async fn propose_lessons(
+    llm: &Arc<dyn Llm>,
+    entries: &[SessionQAEntry],
+) -> Result<Vec<ProposedLesson>, DistillError> {
     let batches = build_curator_batches(entries);
     if batches.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let per_batch: Vec<Vec<ProposedLesson>> = stream::iter(batches)
+    let per_batch: Vec<Result<Vec<ProposedLesson>, String>> = stream::iter(batches)
         .map(|batch| {
             let llm = Arc::clone(llm);
             async move { curate_batch(llm.as_ref(), &batch).await }
@@ -308,7 +351,11 @@ async fn propose_lessons(llm: &Arc<dyn Llm>, entries: &[SessionQAEntry]) -> Vec<
         .collect()
         .await;
 
-    per_batch.into_iter().flatten().collect()
+    let mut proposed = Vec::new();
+    for batch in per_batch {
+        proposed.extend(batch.map_err(DistillError::PaymentRequired)?);
+    }
+    Ok(proposed)
 }
 
 // ---------------------------------------------------------------------------
@@ -456,23 +503,27 @@ fn build_writer_input(
     sections.join("\n\n")
 }
 
-/// One writer/rejecter call for one proposed lesson. Fail-open → `None`.
+/// One writer/rejecter call for one proposed lesson. Fail-open → `None`,
+/// except for an exhausted LLM budget, which is returned as the error.
 async fn write_or_reject(
     llm: &dyn Llm,
     lesson: &ProposedLesson,
     members: &[String],
     prior_lessons: &[String],
     glossary: &[String],
-) -> Option<WrittenLesson> {
+) -> Result<Option<WrittenLesson>, String> {
     let text_input = build_writer_input(lesson, members, prior_lessons, glossary);
     match llm
         .create_structured_output::<WrittenLesson>(&text_input, WRITER_PROMPT, None)
         .await
     {
-        Ok(written) => Some(written),
+        Ok(written) => Ok(Some(written)),
         Err(e) => {
+            if let Some(message) = payment_required(&e) {
+                return Err(message);
+            }
             warn!("distill: writer call failed open: {e}");
-            None
+            Ok(None)
         }
     }
 }
@@ -492,7 +543,7 @@ async fn evaluate_proposed_lesson(
     vector_db: &dyn VectorDB,
     embedding_engine: &dyn EmbeddingEngine,
     lesson: &ProposedLesson,
-) -> Option<WrittenLesson> {
+) -> Result<Option<WrittenLesson>, String> {
     let members: Vec<String> = Vec::new();
 
     let (prior_lessons, glossary) = tokio::join!(
@@ -531,8 +582,8 @@ async fn accept_proposed_lessons(
     vector_db: &Arc<dyn VectorDB>,
     embedding_engine: &Arc<dyn EmbeddingEngine>,
     proposed: Vec<ProposedLesson>,
-) -> Vec<WrittenLesson> {
-    let decisions: Vec<Option<WrittenLesson>> = stream::iter(proposed)
+) -> Result<Vec<WrittenLesson>, DistillError> {
+    let decisions: Vec<Result<Option<WrittenLesson>, String>> = stream::iter(proposed)
         .map(|lesson| {
             let llm = Arc::clone(llm);
             let vector_db = Arc::clone(vector_db);
@@ -551,11 +602,16 @@ async fn accept_proposed_lessons(
         .collect()
         .await;
 
-    decisions
-        .into_iter()
-        .flatten()
-        .filter(|lesson| lesson.accept && !lesson.statement.trim().is_empty())
-        .collect()
+    let mut accepted = Vec::new();
+    for decision in decisions {
+        if let Some(lesson) = decision.map_err(DistillError::PaymentRequired)?
+            && lesson.accept
+            && !lesson.statement.trim().is_empty()
+        {
+            accepted.push(lesson);
+        }
+    }
+    Ok(accepted)
 }
 
 // ---------------------------------------------------------------------------
@@ -707,7 +763,7 @@ pub async fn distill_session(
     }
 
     // Gate 2: curator proposed nothing → NoProposedLessons.
-    let proposed = propose_lessons(&llm, &entries).await;
+    let proposed = propose_lessons(&llm, &entries).await?;
     if proposed.is_empty() {
         return Ok(DistillationResult {
             session_id: session_id.to_string(),
@@ -718,7 +774,7 @@ pub async fn distill_session(
     }
 
     // Gate 3: every proposed lesson rejected → NoAcceptedLessons.
-    let accepted = accept_proposed_lessons(&llm, &vector_db, &embedding_engine, proposed).await;
+    let accepted = accept_proposed_lessons(&llm, &vector_db, &embedding_engine, proposed).await?;
     if accepted.is_empty() {
         return Ok(DistillationResult {
             session_id: session_id.to_string(),
@@ -821,6 +877,13 @@ pub async fn distill_sessions_in_knowledge_graph(
                     session_id = sid,
                     "distill: session distillation failed (non-fatal): {e}"
                 );
+                result.sessions_failed += 1;
+                result.last_error = Some(e.to_string());
+                if e.is_budget_exhausted() {
+                    // Every later session would fail the same way.
+                    result.budget_exhausted = true;
+                    break;
+                }
             }
         }
     }

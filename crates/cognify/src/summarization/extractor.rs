@@ -52,12 +52,12 @@ async fn summarize_one(
         None => llm
             .create_structured_output(text, system_prompt, options)
             .await
-            .map_err(|e| CognifyError::LlmError(e.to_string())),
+            .map_err(CognifyError::from_llm),
         Some(schema) => {
             let raw: serde_json::Value = llm
                 .create_structured_output_raw(text, system_prompt, schema, options)
                 .await
-                .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+                .map_err(CognifyError::from_llm)?;
             let summary = raw.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
                 CognifyError::LlmError(
                     "summary_schema output missing string `summary` field".to_string(),

@@ -248,7 +248,7 @@ impl FactExtractor {
             .llm
             .create_structured_output(text, system_prompt, Some(extraction_options()))
             .await
-            .map_err(|e| CognifyError::LlmError(e.to_string()))?;
+            .map_err(CognifyError::from_llm)?;
 
         debug!("Extracted model {}", std::any::type_name::<M>());
         Ok(result)
@@ -473,11 +473,10 @@ impl FactExtractor {
             )
             .await
             .map_err(|e| {
-                let ce = CognifyError::LlmError(e.to_string());
                 if matches!(e, LlmError::RateLimitExceeded(_)) {
-                    GroupError::RateLimited(ce)
+                    GroupError::RateLimited(CognifyError::from_llm(e))
                 } else {
-                    GroupError::Other(ce)
+                    GroupError::Other(CognifyError::from_llm(e))
                 }
             })?;
 

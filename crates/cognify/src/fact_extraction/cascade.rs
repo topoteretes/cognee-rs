@@ -161,7 +161,7 @@ async fn ask<T: super::GraphModel>(
         }),
     )
     .await
-    .map_err(|e| CognifyError::LlmError(e.to_string()))
+    .map_err(CognifyError::from_llm)
 }
 
 impl super::GraphModel for PotentialNodes {}

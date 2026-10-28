@@ -1984,7 +1984,7 @@ pub async fn extract_dynamic_graphs_from_data(
                                 &validator,
                             )
                             .await
-                            .map_err(|error| CognifyError::LlmError(error.to_string()))?;
+                            .map_err(CognifyError::from_llm)?;
                         schema
                             .materialize(&answer, dataset_id)
                             .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))

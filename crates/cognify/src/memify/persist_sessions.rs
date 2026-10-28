@@ -15,7 +15,9 @@
 //!    relationships.
 //!
 //! Empty sessions are silently skipped; individual session failures do not
-//! abort the loop (matches Python's try/except per-session).
+//! abort the loop but are counted (and the last one kept) so the improve
+//! orchestrator can report the stage errored. An exhausted LLM budget stops
+//! the loop.
 
 use std::sync::Arc;
 
@@ -62,8 +64,29 @@ pub struct PersistSessionsResult {
     pub sessions_persisted: usize,
     /// Number of sessions that were skipped (empty).
     pub sessions_skipped: usize,
-    /// Number of sessions that failed to persist (non-fatal; logged).
+    /// Number of sessions that failed to persist (logged; the improve
+    /// orchestrator reports the stage errored when this is non-zero).
     pub sessions_failed: usize,
+    /// The last session failure, rendered; `Some` whenever
+    /// `sessions_failed > 0`.
+    pub last_error: Option<String>,
+    /// A session's cognify stopped on an exhausted LLM budget. The loop stops
+    /// there: every later session would fail the same way.
+    pub budget_exhausted: bool,
+}
+
+impl PersistSessionsResult {
+    fn fail(&mut self, error: String) {
+        self.sessions_failed += 1;
+        self.last_error = Some(error);
+    }
+}
+
+impl PersistSessionsError {
+    /// Whether this error signals an exhausted LLM budget.
+    pub fn is_budget_exhausted(&self) -> bool {
+        matches!(self, Self::Cognify(e) if e.is_budget_exhausted())
+    }
 }
 
 /// Concatenate all Q&A entries of a session into a single string.
@@ -152,14 +175,14 @@ pub async fn persist_sessions_in_knowledge_graph(
             Ok(v) => v,
             Err(e) => {
                 warn!(session_id = sid, "persist_sessions: add failed: {e}");
-                result.sessions_failed += 1;
+                result.fail(format!("session {sid}: add failed: {e}"));
                 continue;
             }
         };
 
         if add_result.is_empty() {
             warn!(session_id = sid, "persist_sessions: add returned no rows");
-            result.sessions_failed += 1;
+            result.fail(format!("session {sid}: add returned no rows"));
             continue;
         }
 
@@ -183,7 +206,9 @@ pub async fn persist_sessions_in_knowledge_graph(
                     dataset_name = dataset_name,
                     "persist_sessions: dataset lookup returned None"
                 );
-                result.sessions_failed += 1;
+                result.fail(format!(
+                    "session {sid}: dataset '{dataset_name}' not found after add"
+                ));
                 continue;
             }
             Err(e) => {
@@ -191,7 +216,7 @@ pub async fn persist_sessions_in_knowledge_graph(
                     session_id = sid,
                     "persist_sessions: dataset lookup failed: {e}"
                 );
-                result.sessions_failed += 1;
+                result.fail(format!("session {sid}: dataset lookup failed: {e}"));
                 continue;
             }
         };
@@ -220,11 +245,13 @@ pub async fn persist_sessions_in_knowledge_graph(
                 result.sessions_persisted += 1;
             }
             Err(e) => {
-                warn!(
-                    session_id = sid,
-                    "persist_sessions: cognify failed (non-fatal): {e}"
-                );
-                result.sessions_failed += 1;
+                warn!(session_id = sid, "persist_sessions: cognify failed: {e}");
+                result.fail(format!("session {sid}: cognify failed: {e}"));
+                if e.is_budget_exhausted() {
+                    // Every later session would fail the same way.
+                    result.budget_exhausted = true;
+                    break;
+                }
             }
         }
     }
