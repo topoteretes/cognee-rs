@@ -301,11 +301,13 @@ fi
 if [[ $ALL -eq 1 ]]; then
     # Python bytecode caches are scattered; sweep them in one pass.
     pycache_kb=0
-    while IFS= read -r d; do
+    # NUL-delimited: a directory name containing newlines must stay one entry —
+    # newline-splitting would feed an arbitrary fragment to `rm -rf`.
+    while IFS= read -r -d '' d; do
         sz=$(size_kb "$d")
         pycache_kb=$((pycache_kb + ${sz:-0}))
         [[ $DRY_RUN -eq 1 ]] || rm -rf -- "$d"
-    done < <(find python e2e-cross-sdk scripts -type d -name __pycache__ -prune 2>/dev/null)
+    done < <(find python e2e-cross-sdk scripts -type d -name __pycache__ -prune -print0 2>/dev/null)
     if [[ $pycache_kb -gt 0 ]]; then
         printf '%s  %-34s %s\n' \
             "$([[ $DRY_RUN -eq 1 ]] && echo 'WOULD REMOVE' || echo 'REMOVE      ')" \
