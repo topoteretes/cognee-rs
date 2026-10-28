@@ -99,8 +99,6 @@ pub fn run(args: EdgeReindexArgs, cm: Arc<ComponentManager>) -> Result<(), CliEr
         let options = EdgeReindexOptions {
             apply: args.apply,
             dataset_id,
-            user_id: None,
-            tenant_id: None,
             resume_after: args.resume_after.clone(),
             limit: args.limit.map(|n| n as usize),
         };

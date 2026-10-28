@@ -238,26 +238,6 @@ impl DataPoint {
         self.touch();
     }
 
-    /// Canonical vector-store payload keys for this DataPoint.
-    ///
-    /// Mirrors Python's `DataPoint.model_dump()` payload shape: every
-    /// pydantic-equivalent field flows into the metadata map. Keys with
-    /// `None` values are omitted (consistent with the
-    /// `skip_serializing_if = "Option::is_none"` annotations on the
-    /// struct).
-    ///
-    /// Used by the cognify pipeline when constructing
-    /// `VectorPoint` payloads to keep the Rust shape byte-comparable to
-    /// Python's for the cross-SDK parity tests. Note: the `data_type`
-    /// field carries `#[serde(rename = "type")]`, so the resulting map
-    /// uses the JSON key `"type"` (matching Python).
-    pub fn vector_metadata(&self) -> HashMap<String, serde_json::Value> {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::Object(map)) => map.into_iter().collect(),
-            _ => HashMap::new(),
-        }
-    }
-
     /// Update the timestamp to current time.
     pub fn touch(&mut self) {
         self.updated_at = Utc::now().timestamp_millis();
@@ -441,43 +421,6 @@ mod tests {
 
         let parsed: DataPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.source_content_hash.as_deref(), Some("md5:abcdef"));
-    }
-
-    #[test]
-    fn vector_metadata_includes_all_set_source_fields() {
-        let mut dp = DataPoint::new("Entity", None);
-        dp.source_pipeline = Some("cognify_pipeline".into());
-        dp.source_task = Some("classify_documents".into());
-        dp.source_user = Some("alice@example.com".into());
-        dp.source_node_set = Some("entity_nodes".into());
-        dp.source_content_hash = Some("md5:abcdef".into());
-
-        let m = dp.vector_metadata();
-        assert_eq!(
-            m.get("source_pipeline").unwrap(),
-            &json!("cognify_pipeline")
-        );
-        assert_eq!(m.get("source_task").unwrap(), &json!("classify_documents"));
-        assert_eq!(m.get("source_user").unwrap(), &json!("alice@example.com"));
-        assert_eq!(m.get("source_node_set").unwrap(), &json!("entity_nodes"));
-        assert_eq!(m.get("source_content_hash").unwrap(), &json!("md5:abcdef"));
-        // `data_type` round-trips as the JSON key `"type"` because of
-        // `#[serde(rename = "type")]` on the struct field.
-        assert_eq!(m.get("type").unwrap(), &json!("Entity"));
-        assert_eq!(m.get("version").unwrap(), &json!(1));
-        assert!(m.contains_key("created_at"));
-        assert!(m.contains_key("updated_at"));
-    }
-
-    #[test]
-    fn vector_metadata_omits_none_source_fields() {
-        let dp = DataPoint::new("Entity", None);
-        let m = dp.vector_metadata();
-        assert!(!m.contains_key("source_pipeline"));
-        assert!(!m.contains_key("source_task"));
-        assert!(!m.contains_key("source_user"));
-        assert!(!m.contains_key("source_node_set"));
-        assert!(!m.contains_key("source_content_hash"));
     }
 
     #[test]

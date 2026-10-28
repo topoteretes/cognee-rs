@@ -43,8 +43,8 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent,
-    classify_documents as model_classify_documents,
+    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, IndexRefs, TemporalEvent,
+    classify_documents as model_classify_documents, index_schema_payload,
 };
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
@@ -2595,10 +2595,9 @@ pub async fn add_data_points(
     // `task_rank: None` — Python's `create_edge_type_datapoints`
     // (`index_graph_edges.py:50`) builds these objects locally and never
     // returns them from `add_data_points`, so no stamper ever assigns them a
-    // rank and they reach the vector payload with the `0` sentinel. Stamping
-    // a rank here would put a non-Python value in the persisted
-    // `EdgeType_relationship_name` payload (`DataPoint::vector_metadata`
-    // serialises `topological_rank` unconditionally).
+    // rank. The vector payload does not carry a rank either way: it is
+    // Python's `IndexSchema` row, whose `topological_rank` is always the `0`
+    // default (`cognee_models::index_schema_payload`).
     //
     // DLT-derived edges (`extract_dlt_fk_edges`) construct
     // `GraphEdgePair` instances rather than DataPoints; they carry no
@@ -2656,8 +2655,6 @@ pub async fn add_data_points(
         &input.documents,
         &edge_types,
         input.dataset_id,
-        input.user_id,
-        input.tenant_id,
         Arc::clone(&embedding_engine),
         Arc::clone(&vector_db),
         &embeddings,
@@ -2668,8 +2665,6 @@ pub async fn add_data_points(
         let dynamic_embeddings = index_dynamic_graph(
             &dynamic_node_values,
             input.dataset_id,
-            input.user_id,
-            input.tenant_id,
             embedding_engine,
             vector_db,
             config,
@@ -2706,8 +2701,6 @@ pub async fn add_data_points(
 async fn index_dynamic_graph(
     nodes: &[&DynamicDataPoint],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     config: &CognifyConfig,
@@ -2720,10 +2713,8 @@ async fn index_dynamic_graph(
             None
         }
     };
-    let indexed = index_dynamic_graph_points(
-        nodes, dataset_id, user_id, tenant_id, &engine, &vector_db, config, stats,
-    )
-    .await;
+    let indexed =
+        index_dynamic_graph_points(nodes, dataset_id, &engine, &vector_db, config, stats).await;
     if let Some(bulk) = bulk
         && let Err(e) = bulk.finish().await
     {
@@ -2738,8 +2729,6 @@ async fn index_dynamic_graph(
 async fn index_dynamic_graph_points(
     nodes: &[&DynamicDataPoint],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: &Arc<dyn EmbeddingEngine>,
     vector_db: &Arc<dyn VectorDB>,
     config: &CognifyConfig,
@@ -2790,17 +2779,15 @@ async fn index_dynamic_graph_points(
                             vector.clone(),
                         ));
                     }
-                    let mut metadata = node.base.vector_metadata();
-                    metadata.extend(node.properties.clone());
-                    metadata.insert("field".to_string(), json!(field));
-                    metadata.insert("text".to_string(), json!(text));
-                    metadata.insert("dataset_id".to_string(), json!(dataset_id.to_string()));
-                    if let Some(user_id) = user_id {
-                        metadata.insert("user_id".to_string(), json!(user_id.to_string()));
-                    }
-                    if let Some(tenant_id) = tenant_id {
-                        metadata.insert("tenant_id".to_string(), json!(tenant_id.to_string()));
-                    }
+                    // Python's `IndexSchema` row: the custom model's own
+                    // properties stay on the graph node, never in the payload,
+                    // except the reference scalars `getattr` would find.
+                    let metadata = index_schema_payload(
+                        &node.base,
+                        text.clone(),
+                        &dynamic_index_refs(&node.properties),
+                        Some(dataset_id),
+                    );
                     VectorPoint {
                         id: node.base.id,
                         vector,
@@ -3799,7 +3786,9 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 ///   back.
 /// * Since the adapter-side fold landed (#256) nothing errors, but only one
 ///   occurrence survives on every backend and `number_of_edges` then holds just
-///   that one spelling's share of the count instead of the total.
+///   that one spelling's share of the count instead of the total. (The vector
+///   payload no longer stores the count since SDK-1039; the `EdgeType` still
+///   carries it, as Python's does.)
 ///
 /// So the fold happens here, at the producer, where the counts are still
 /// available to add up. This mirrors the `first_seen` collapse in
@@ -5962,6 +5951,43 @@ async fn reuse_or_embed(
         .collect()
 }
 
+/// A document's display name, as Python's chunkers stamp it on
+/// `DocumentChunk.document_name`: `name or basename(raw_data_location)`
+/// (`TextChunker.py:18`).
+fn document_display_name(doc: &Document) -> &str {
+    if !doc.name.is_empty() {
+        return &doc.name;
+    }
+    doc.raw_data_location
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(doc.raw_data_location.as_str())
+}
+
+/// The `IndexSchema` reference scalars a custom (dynamic) model carries as its
+/// own properties. Python copies them with `getattr(data_point, name, None)`
+/// (`LanceDBAdapter.py:1696-1701`), so a custom model that declares e.g. a
+/// `document_id` field gets it in the payload; any other model gets `null`.
+fn dynamic_index_refs(properties: &serde_json::Map<String, serde_json::Value>) -> IndexRefs<'_> {
+    let uuid = |key: &str| {
+        properties
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| Uuid::parse_str(s).ok())
+    };
+    let text = |key: &str| properties.get(key).and_then(serde_json::Value::as_str);
+    IndexRefs {
+        document_id: uuid("document_id"),
+        document_name: text("document_name"),
+        chunk_index: properties
+            .get("chunk_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok()),
+        source_chunk_id: uuid("source_chunk_id"),
+        external_metadata: text("external_metadata"),
+    }
+}
+
 /// Index data points in vector database.
 ///
 /// Every collection is written in windows of
@@ -5980,8 +6006,6 @@ async fn index_data_points(
     documents: &[Document],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
@@ -6008,8 +6032,6 @@ async fn index_data_points(
         documents,
         edge_types,
         dataset_id,
-        user_id,
-        tenant_id,
         engine,
         Arc::clone(&vector_db),
         precomputed_embeddings,
@@ -6048,8 +6070,6 @@ async fn index_data_points_windowed(
     documents: &[Document],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
@@ -6069,6 +6089,13 @@ async fn index_data_points_windowed(
     let precomputed: std::collections::HashMap<Uuid, &[f32]> = precomputed_embeddings
         .iter()
         .map(|e| (e.data_point_id, e.vector.as_slice()))
+        .collect();
+
+    // Display names of the chunks' documents, as Python's chunkers stamp
+    // `DocumentChunk.document_name` (`name or basename(raw_data_location)`).
+    let document_names: HashMap<Uuid, &str> = documents
+        .iter()
+        .map(|doc| (doc.base.id, document_display_name(doc)))
         .collect();
 
     // 1. Index DocumentChunk.text field
@@ -6094,32 +6121,26 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(chunk, vector)| {
-                    let mut point = VectorPoint::new(chunk.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    //    Provides `type`, `belongs_to_set`, all source_* keys, etc.
-                    for (k, v) in chunk.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row. The text is moved into the
+                    // payload as the one copy we have to make (SDK-507).
+                    // `external_metadata` stays null: Rust chunks do not carry
+                    // their document's metadata yet (SDK-1057).
+                    let refs = IndexRefs {
+                        document_id: Some(chunk.document_id),
+                        document_name: document_names.get(&chunk.document_id).copied(),
+                        chunk_index: Some(chunk.chunk_index),
+                        ..IndexRefs::default()
+                    };
+                    VectorPoint {
+                        id: chunk.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &chunk.base,
+                            chunk.text.clone(),
+                            &refs,
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("text"))
-                        // `json!(expr)` routes a non-literal through `to_value`,
-                        // which serialises the clone into a *second* String before
-                        // dropping the first. Constructing the node directly moves
-                        // the one copy we have to make (SDK-507).
-                        .with_metadata("text", serde_json::Value::String(chunk.text.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                        .with_metadata("document_id", json!(chunk.document_id.to_string()))
-                        .with_metadata("chunk_index", json!(chunk.chunk_index));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6159,49 +6180,20 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(entity, vector)| {
-                    let mut point = VectorPoint::new(entity.entity.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in entity.entity.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row: `text` is the name. The
+                    // entity's type and description are not in it (D1: Python
+                    // shows a description only for fact-reviewed entities, read
+                    // from the graph, never from the payload).
+                    VectorPoint {
+                        id: entity.entity.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &entity.entity.base,
+                            entity.entity.name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    //    `text` is the indexed value, as Python's `IndexSchema`
-                    //    writes it for every collection (`text=getattr(dp,
-                    //    index_field)`). `name` lives on the outer `Entity`, not
-                    //    the base, so step 1 never carries it; without `text` the
-                    //    hybrid retriever has nothing to call the entity but its id.
-                    point = point
-                        .with_metadata("field", json!("name"))
-                        .with_metadata(
-                            "text",
-                            serde_json::Value::String(entity.entity.name.clone()),
-                        )
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    // An untyped entity (blank extracted type) has no type name.
-                    if let Some(entity_type) = &entity.entity_type {
-                        point = point.with_metadata("entity_type", json!(entity_type.name.clone()));
-                    }
-                    // `description` diverges from Python, whose `IndexSchema` row
-                    // carries only `text`. The hybrid retriever renders it as the
-                    // line under `### {name}` — a slot the prompt template keeps
-                    // but neither SDK filled, so an entity's description reached
-                    // the prompt only as repeated per-chunk "Document chunk
-                    // mentions …" bullets (Python) or not at all (Rust). Skipped
-                    // when it merely repeats the name, as an ontology
-                    // individual's does.
-                    let description = entity.entity.description.trim();
-                    if !description.is_empty() && description != entity.entity.name.trim() {
-                        point = point.with_metadata("description", json!(description));
-                    }
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6248,27 +6240,15 @@ async fn index_data_points_windowed(
                 let points: Vec<VectorPoint> = type_window
                     .iter()
                     .zip(vectors)
-                    .map(|(et, vector)| {
-                        let mut point = VectorPoint::new(et.base.id, vector);
-
-                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                        for (k, v) in et.base.vector_metadata() {
-                            point = point.with_metadata(k, v);
-                        }
-
-                        // 2. Context-specific keys not present on the DataPoint.
-                        //    `text` as for `Entity` above: Python's `IndexSchema`.
-                        point = point
-                            .with_metadata("field", json!("name"))
-                            .with_metadata("text", serde_json::Value::String(et.name.clone()))
-                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                        if let Some(uid) = user_id {
-                            point = point.with_metadata("user_id", json!(uid.to_string()));
-                        }
-                        if let Some(tid) = tenant_id {
-                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                        }
-                        point
+                    .map(|(et, vector)| VectorPoint {
+                        id: et.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &et.base,
+                            et.name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     })
                     .collect();
 
@@ -6306,33 +6286,22 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(summary, vector)| {
-                    let mut point = VectorPoint::new(summary.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in summary.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row; `source_chunk_id` pairs the
+                    // summary with its chunk in hybrid search.
+                    let refs = IndexRefs {
+                        source_chunk_id: summary.source_chunk_id,
+                        ..IndexRefs::default()
+                    };
+                    VectorPoint {
+                        id: summary.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &summary.base,
+                            summary.text.clone(),
+                            &refs,
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("text"))
-                        // See the chunk-text note above — one copy, not two.
-                        .with_metadata("text", serde_json::Value::String(summary.text.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(made_from) = summary.made_from {
-                        point = point.with_metadata("chunk_id", json!(made_from.to_string()));
-                    }
-                    if let Some(source_chunk_id) = summary.source_chunk_id {
-                        point = point
-                            .with_metadata("source_chunk_id", json!(source_chunk_id.to_string()));
-                    }
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6380,26 +6349,17 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(et, vector)| {
-                    let mut point = VectorPoint::new(et.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in et.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row: the retrieval text is `text`.
+                    VectorPoint {
+                        id: et.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &et.base,
+                            et.relationship_name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("relationship_name"))
-                        .with_metadata("relationship_name", json!(et.relationship_name.clone()))
-                        .with_metadata("number_of_edges", json!(et.number_of_edges))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6454,25 +6414,22 @@ async fn index_data_points_windowed(
                     .iter()
                     .zip(vectors)
                     .map(|(doc, vector)| {
-                        let mut point = VectorPoint::new(doc.base.id, vector);
-
-                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                        for (k, v) in doc.base.vector_metadata() {
-                            point = point.with_metadata(k, v);
+                        // Python's `IndexSchema` row: `text` is the name, and
+                        // `external_metadata` is the document's own JSON text.
+                        let refs = IndexRefs {
+                            external_metadata: doc.external_metadata.as_deref(),
+                            ..IndexRefs::default()
+                        };
+                        VectorPoint {
+                            id: doc.base.id,
+                            vector,
+                            metadata: index_schema_payload(
+                                &doc.base,
+                                doc.name.clone(),
+                                &refs,
+                                Some(dataset_id),
+                            ),
                         }
-
-                        // 2. Context-specific keys not present on the DataPoint.
-                        point = point
-                            .with_metadata("field", json!("name"))
-                            .with_metadata("name", json!(doc.name.clone()))
-                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                        if let Some(uid) = user_id {
-                            point = point.with_metadata("user_id", json!(uid.to_string()));
-                        }
-                        if let Some(tid) = tenant_id {
-                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                        }
-                        point
                     })
                     .collect();
 
@@ -9237,8 +9194,6 @@ mod tests {
             &[],
             &[],
             dataset_id,
-            None,
-            None,
             engine_dyn,
             vector,
             &embeddings,
@@ -9414,8 +9369,6 @@ mod tests {
                     documents,
                     &[],
                     dataset_id,
-                    None,
-                    None,
                     engine,
                     store.clone(),
                     &[],
@@ -9475,9 +9428,18 @@ mod tests {
         ];
         for (data_type, field, ids) in stored {
             for id in ids {
-                let a = windowed.inner.get_payload(data_type, field, id);
+                // `created_at` / `updated_at` are the write time, as in Python's
+                // `IndexSchema`, so they differ between the two runs.
+                let untimed = |payload: Option<HashMap<String, serde_json::Value>>| {
+                    payload.map(|mut p| {
+                        p.remove("created_at");
+                        p.remove("updated_at");
+                        p
+                    })
+                };
+                let a = untimed(windowed.inner.get_payload(data_type, field, id));
                 assert!(a.is_some(), "{data_type}_{field} {id} was not written");
-                assert_eq!(a, whole.inner.get_payload(data_type, field, id));
+                assert_eq!(a, untimed(whole.inner.get_payload(data_type, field, id)));
             }
         }
     }
@@ -9498,8 +9460,6 @@ mod tests {
             &documents,
             &[],
             Uuid::new_v4(),
-            None,
-            None,
             Arc::new(MockEmbeddingEngine::new(8)),
             store.clone(),
             &[],
@@ -9517,11 +9477,12 @@ mod tests {
         assert!(!log.contains(&"abandon".to_string()));
     }
 
-    // The TextSummary vector payload must carry both `chunk_id` (back-compat)
-    // and the new `source_chunk_id` key with identical string values, so the
-    // hybrid pairing algorithm can join a summary hit to its source chunk.
+    // The TextSummary vector payload carries `source_chunk_id`, so the hybrid
+    // pairing algorithm can join a summary hit to its source chunk. The old
+    // Rust-only `chunk_id` copy is gone (SDK-1039): Python's `IndexSchema` row
+    // has no such key, and nothing reads it.
     #[tokio::test]
-    async fn summary_payload_carries_chunk_id_and_source_chunk_id() {
+    async fn summary_payload_carries_source_chunk_id_only() {
         use cognee_embedding::MockEmbeddingEngine;
         use cognee_vector::MockVectorDB;
 
@@ -9555,8 +9516,6 @@ mod tests {
             &[],
             &[],
             dataset_id,
-            None,
-            None,
             engine_dyn,
             vector,
             &embeddings,
@@ -9569,9 +9528,8 @@ mod tests {
             .expect("summary point must be indexed");
 
         let expected = json!(chunk_id.to_string());
-        assert_eq!(payload.get("chunk_id"), Some(&expected));
         assert_eq!(payload.get("source_chunk_id"), Some(&expected));
-        assert_eq!(payload.get("chunk_id"), payload.get("source_chunk_id"));
+        assert!(!payload.contains_key("chunk_id"), "{payload:?}");
     }
 
     // Entity and EntityType vector payloads carry the indexed name as `text`,
@@ -9600,8 +9558,6 @@ mod tests {
             &[],
             &[],
             Uuid::new_v4(),
-            None,
-            None,
             engine,
             vector,
             &embeddings,
@@ -9618,6 +9574,233 @@ mod tests {
             .get_payload("EntityType", "name", type_id)
             .expect("entity type point must be indexed");
         assert_eq!(type_payload.get("text"), Some(&json!("Generic")));
+    }
+
+    /// Rows a real Python run stored, one per collection (see the fixture
+    /// directory's README). The pgvector dump is the full `IndexSchema` dump,
+    /// `metadata` included, which is what the payload builder emits before an
+    /// adapter applies its own write rules.
+    fn python_index_schema_rows() -> serde_json::Map<String, serde_json::Value> {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/index_schema/python_pgvector_payloads.json"
+        ))
+        .unwrap();
+        fixture["collections"].as_object().unwrap().clone()
+    }
+
+    fn json_kind(value: &serde_json::Value) -> &'static str {
+        match value {
+            serde_json::Value::Null => "null",
+            serde_json::Value::Bool(_) => "bool",
+            serde_json::Value::Number(_) => "number",
+            serde_json::Value::String(_) => "string",
+            serde_json::Value::Array(_) => "array",
+            serde_json::Value::Object(_) => "object",
+        }
+    }
+
+    /// SDK-1039 part B: every cognify index site writes Python's stored
+    /// `IndexSchema` row — the same key set, `null` where Python has `null`, the
+    /// same IndexSchema defaults — plus only the documented Rust-only keys.
+    #[tokio::test]
+    async fn every_index_site_writes_python_index_schema_rows() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let mock = Arc::new(MockVectorDB::new());
+        let vector: Arc<dyn VectorDB> = mock.clone();
+
+        let doc_id = Uuid::new_v4();
+        let document =
+            test_document_with_metadata(doc_id, Some(r#"{"source": "fixture"}"#.to_string()));
+        let mut chunk = test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.");
+        // Provenance the pipeline stamps on the source point; IndexSchema rows
+        // carry their defaults instead.
+        chunk.base.source_pipeline = Some("cognify_pipeline".into());
+        chunk.base.source_task = Some("extract_chunks_from_documents".into());
+        chunk.base.topological_rank = Some(2);
+        chunk.base.version = 4;
+        chunk.base.importance_weight = Some(0.7);
+        chunk.base.belongs_to_set = Some(vec![
+            json!({"id": Uuid::new_v4().to_string(), "name": "fixture_set", "type": "NodeSet"}),
+        ]);
+        let entities = vec![test_entity("Alice", Uuid::new_v4())];
+        let mut summary = TextSummary::new(
+            chunk.base.id,
+            "Alice is employed by Acme.".to_string(),
+            None,
+            "mock-model".to_string(),
+        );
+        summary.base.importance_weight = Some(0.7);
+        let mut document = document;
+        document.base.importance_weight = Some(0.7);
+        let dataset_id = Uuid::new_v4();
+        let edge_type = EdgeType::new_deterministic("works_at", Some(dataset_id));
+
+        index_data_points(
+            std::slice::from_ref(&chunk),
+            &entities,
+            std::slice::from_ref(&summary),
+            std::slice::from_ref(&document),
+            std::slice::from_ref(&edge_type),
+            dataset_id,
+            engine,
+            vector,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let ids = [
+            ("DocumentChunk_text", chunk.base.id),
+            ("Entity_name", entities[0].entity.base.id),
+            (
+                "EntityType_name",
+                entities[0].entity_type.as_ref().unwrap().base.id,
+            ),
+            ("TextSummary_text", summary.base.id),
+            ("EdgeType_relationship_name", edge_type.base.id),
+            ("TextDocument_name", doc_id),
+        ];
+        let python = python_index_schema_rows();
+        assert_eq!(python.len(), ids.len(), "a collection is not covered");
+
+        for (collection, id) in ids {
+            let (data_type, field) = collection.split_once('_').unwrap();
+            let rust = mock
+                .get_payload(data_type, field, id)
+                .unwrap_or_else(|| panic!("{collection} was not written"));
+            let py = python[collection].as_object().unwrap();
+
+            let mut rust_keys: Vec<&str> = rust.keys().map(String::as_str).collect();
+            rust_keys.sort_unstable();
+            let mut expected: Vec<&str> = py
+                .keys()
+                .map(String::as_str)
+                .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS.iter().copied())
+                .collect();
+            expected.sort_unstable();
+            assert_eq!(rust_keys, expected, "{collection}: key set");
+            assert_eq!(rust["dataset_id"], json!(dataset_id.to_string()));
+
+            for (key, py_value) in py {
+                // Rust chunks do not carry their document's external metadata
+                // yet (SDK-1057), so the chunk row has `null` there.
+                if collection == "DocumentChunk_text" && key == "external_metadata" {
+                    assert_eq!(rust[key], serde_json::Value::Null);
+                    continue;
+                }
+                assert_eq!(
+                    json_kind(&rust[key]),
+                    json_kind(py_value),
+                    "{collection}.{key}: {} vs Python {py_value}",
+                    rust[key]
+                );
+            }
+            // The IndexSchema defaults, and the values copied from fixtures
+            // built alike on both sides (importance 0.7 on the document, chunk
+            // and summary; the 0.5 default elsewhere).
+            for key in [
+                "type",
+                "version",
+                "topological_rank",
+                "ontology_valid",
+                "ontology_uri",
+                "source_pipeline",
+                "source_task",
+                "source_node_set",
+                "source_user",
+                "source_content_hash",
+                "feedback_weight",
+                "metadata",
+                "chunk_index",
+                "belongs_to_set",
+                "importance_weight",
+            ] {
+                assert_eq!(rust[key], py[key], "{collection}.{key}");
+            }
+        }
+
+        let row = |collection: &str, id: Uuid| {
+            let (data_type, field) = collection.split_once('_').unwrap();
+            mock.get_payload(data_type, field, id).unwrap()
+        };
+        let chunk_row = row("DocumentChunk_text", chunk.base.id);
+        assert_eq!(chunk_row["text"], json!("Alice works at Acme."));
+        assert_eq!(chunk_row["document_id"], json!(doc_id.to_string()));
+        assert_eq!(chunk_row["document_name"], json!("test.txt"));
+        assert_eq!(
+            row("EdgeType_relationship_name", edge_type.base.id)["text"],
+            json!("works_at")
+        );
+        assert_eq!(
+            row("TextSummary_text", summary.base.id)["source_chunk_id"],
+            json!(chunk.base.id.to_string())
+        );
+        let document_row = row("TextDocument_name", doc_id);
+        assert_eq!(document_row["text"], json!("test.txt"));
+        assert_eq!(
+            document_row["external_metadata"],
+            json!(r#"{"source": "fixture"}"#)
+        );
+    }
+
+    /// The dynamic (custom graph model) site writes the same row: the model's
+    /// own properties are not merged in, and a reference scalar it declares is
+    /// copied as Python's `getattr` would.
+    #[tokio::test]
+    async fn dynamic_model_rows_are_index_schema_rows() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let mock = Arc::new(MockVectorDB::new());
+        let vector: Arc<dyn VectorDB> = mock.clone();
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("Person", None);
+        base.source_task = Some("extract_graph_from_data".into());
+        let mut properties = serde_json::Map::new();
+        properties.insert("name".into(), json!("Alice"));
+        properties.insert("age".into(), json!(42));
+        properties.insert("document_id".into(), json!(doc_id.to_string()));
+        let node = DynamicDataPoint {
+            occurrence_id: Uuid::new_v4(),
+            base,
+            properties,
+            property_strs: BTreeMap::new(),
+            index_fields: vec!["name".into()],
+            transparent: false,
+        };
+        let dataset_id = Uuid::new_v4();
+        let mut stats = IndexedFieldsStats::default();
+        index_dynamic_graph_points(
+            &[&node],
+            dataset_id,
+            &engine,
+            &vector,
+            &CognifyConfig::default(),
+            &mut stats,
+        )
+        .await
+        .unwrap();
+
+        let row = mock.get_payload("Person", "name", node.base.id).unwrap();
+        let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        let mut expected: Vec<&str> = cognee_models::INDEX_SCHEMA_KEYS
+            .iter()
+            .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS)
+            .copied()
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        assert_eq!(row["text"], json!("Alice"));
+        assert_eq!(row["type"], json!("IndexSchema"));
+        assert_eq!(row["source_task"], serde_json::Value::Null);
+        assert_eq!(row["document_id"], json!(doc_id.to_string()));
+        assert!(!row.contains_key("age"));
     }
 
     // Prints a before/after embedding-work comparison for a realistic fixture.
@@ -9678,8 +9861,6 @@ mod tests {
                 &[],
                 &[],
                 dataset_id,
-                None,
-                None,
                 engine_dyn,
                 vector,
                 precomputed,
@@ -10319,10 +10500,18 @@ mod tests {
                 "{data_type}_{field}"
             );
         }
+        // The same rows either way, up to their write time.
+        let untimed = |payload: Option<HashMap<String, serde_json::Value>>| {
+            payload.map(|mut p| {
+                p.remove("created_at");
+                p.remove("updated_at");
+                p
+            })
+        };
         for chunk in &chunks {
             assert_eq!(
-                dropped_store.get_payload("DocumentChunk", "text", chunk.base.id),
-                kept_store.get_payload("DocumentChunk", "text", chunk.base.id),
+                untimed(dropped_store.get_payload("DocumentChunk", "text", chunk.base.id)),
+                untimed(kept_store.get_payload("DocumentChunk", "text", chunk.base.id)),
             );
         }
     }
@@ -12293,10 +12482,12 @@ mod tests {
             );
         }
 
+        // The Entity_name row is Python's `IndexSchema` row: the name as
+        // `text`, and no description (SDK-1039, D1).
         let payload = vector
             .get_payload("Entity", "name", entity_id)
             .expect("Entity_name row");
-        assert_eq!(payload["description"], json!("A curious girl."));
+        assert!(!payload.contains_key("description"), "{payload:?}");
     }
 
     /// A semantic edge's ledger row must hash the *sanitized* relationship

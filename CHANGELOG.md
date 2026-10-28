@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Vector payloads have Python's `IndexSchema` shape (SDK-1039).** Every row
+  cognify and `edge-reindex` write is built by the new
+  `cognee_models::index_schema_payload`: `id`, `text` (the indexed value; EdgeType
+  and Document rows now carry it too), `document_id`, `document_name`,
+  `chunk_index`, `source_chunk_id`, `importance_weight` (copied from the source
+  point), `external_metadata`, `belongs_to_set` (node-set names), the base fields
+  at their IndexSchema defaults (`type = "IndexSchema"`, `version = 1`,
+  `topological_rank = 0`, `source_* = null`, …) and `metadata`, plus one
+  Rust-only key, `dataset_id`. Absent values are `null`, not omitted. The LanceDB
+  adapter no longer stores the `metadata` key, as Python's LanceDB adapter does;
+  pgvector keeps it. Dropped keys: `field`, `user_id`, `tenant_id`, Entity
+  `entity_type` and `description`, TextSummary `chunk_id`, EdgeType
+  `relationship_name` and `number_of_edges`, Document `name`, and a custom
+  model's own properties. `DataPoint::vector_metadata()` and
+  `EdgeReindexOptions::{user_id, tenant_id}` are removed. Hybrid search no longer
+  shows an entity description line, as Python does for every entity whose facts
+  were not reviewed. Rows written by earlier versions stay readable (no
+  migration): facts fall back to `relationship_name`, and an old `description`
+  key is ignored.
+
 - **Cognify no longer embeds triplets (SDK-1039).** Python stopped writing the
   `Triplet_text` collection in SDK-1115, so `CognifyConfig::embed_triplets`,
   `CognifyConfig::with_triplet_embeddings`, `IndexedFieldsStats::triplet_count`,
