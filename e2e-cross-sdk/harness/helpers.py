@@ -322,7 +322,8 @@ def run_python_cli(
         # backend access control is enabled, whether ``verbose=True``, and
         # (for single-dataset CHUNKS/SUMMARIES) whether a list-of-lists gets
         # unwrapped. CHUNKS/SUMMARIES now come back as the stored vector
-        # payload itself (an ``IndexSchema`` dump), whose content is ``text``.  We flatten everything to a list of strings here so the
+        # payload itself (an ``IndexSchema`` dump), whose content is
+        # ``text``. We flatten everything to a list of strings here so the
         # parity tests can do substring / len assertions uniformly.
         script = (
             f"import asyncio, json, cognee\n"
