@@ -8,7 +8,7 @@
 //!
 //! (b) With sessions supplied, every stage is recorded in registry order.
 //! (c) Without sessions, every stage is recorded as skipped.
-//! (d) A session already being improved runs no stage.
+//! (d) An improve of a session another run holds waits, then runs every stage.
 
 use std::sync::Arc;
 
@@ -23,7 +23,9 @@ use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
 use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee_session::{FsSessionStore, ImproveLockGuard, SessionManager, SessionStore};
+use cognee_session::{
+    FsSessionStore, SessionManager, SessionStore, acquire_improve_lock_many, improve_lock_keys,
+};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockLlm;
 use cognee_vector::MockVectorDB;
@@ -128,6 +130,7 @@ async fn improve_with_sessions_records_every_stage_in_order() {
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        dataset_locks: None,
         cognify_config: &config,
         extraction_tasks: None,
         enrichment_tasks: None,
@@ -192,6 +195,7 @@ async fn improve_without_sessions_skips_every_stage() {
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        dataset_locks: None,
         cognify_config: &config,
         extraction_tasks: None,
         enrichment_tasks: None,
@@ -214,12 +218,12 @@ async fn improve_without_sessions_skips_every_stage() {
 }
 
 // ---------------------------------------------------------------------------
-// (d) improve() returns a result with no stages when the single target
-//     session is already being improved (lock held by another caller).
+// (d) improve() waits while another run holds its session, then runs every
+//     stage (Python `test_improve_queue.py`).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn improve_skips_when_locked() {
+async fn improve_waits_for_a_held_session_then_runs_every_stage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
@@ -227,12 +231,10 @@ async fn improve_skips_when_locked() {
 
     let session_id = "locked-session";
 
-    // Simulate another caller already holding the improve lock for this session.
-    let _held_guard = ImproveLockGuard::acquire(session_id)
-        .expect("should be able to acquire lock when no other holder exists");
+    // Another run holds this session's claim.
+    let held = acquire_improve_lock_many(improve_lock_keys([session_id], &owner.to_string())).await;
 
-    // Now try to improve the same session — it should no-op.
-    let r = improve(ImproveParams {
+    let run = improve(ImproveParams {
         dataset_name: "ds_locked".to_string(),
         dataset_id: None,
         session_ids: Some(vec![session_id.to_string()]),
@@ -253,6 +255,7 @@ async fn improve_skips_when_locked() {
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        dataset_locks: None,
         cognify_config: &config,
         extraction_tasks: None,
         enrichment_tasks: None,
@@ -260,22 +263,19 @@ async fn improve_skips_when_locked() {
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
-    })
-    .await
-    .unwrap();
+    });
+    tokio::pin!(run);
 
-    // When skipped due to lock, improve() records no stage.
-    assert!(
-        r.stages.is_empty(),
-        "improve should run no stages when locked; got {:?}",
-        r.stages
-    );
+    // It waits instead of skipping (Python's #5566 queue).
+    let waited = tokio::time::timeout(std::time::Duration::from_millis(200), &mut run).await;
+    assert!(waited.is_err(), "the run must wait for the held session");
 
-    // After the held guard drops, the same session can be improved again.
-    drop(_held_guard);
-    let guard2 = ImproveLockGuard::acquire(session_id);
-    assert!(
-        guard2.is_some(),
-        "lock should be releaseable and re-acquirable after the held guard drops"
-    );
+    // Released: it runs every stage.
+    drop(held);
+    let r = tokio::time::timeout(std::time::Duration::from_secs(30), run)
+        .await
+        .expect("the run proceeds once the session is released")
+        .unwrap();
+    assert_eq!(r.stages.len(), DEFAULT_STAGES.len(), "{:?}", r.stages);
+    assert!(r.finished);
 }

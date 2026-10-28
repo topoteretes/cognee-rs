@@ -137,6 +137,8 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             session_manager: Some(session_manager),
             add_pipeline: Some(&add_pipeline),
             checkpoint_store: Some(checkpoint_store),
+            // The add pipeline's registry (none here), else the process-wide one.
+            dataset_locks: None,
             cognify_config: &cognify_config,
         })
         .await;

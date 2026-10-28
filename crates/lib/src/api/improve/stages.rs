@@ -10,12 +10,13 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use chrono::Utc;
 use cognee_cognify::{
     CognifyConfig, apply_feedback_weights_pipeline, distill_sessions_in_knowledge_graph,
     persist_sessions_in_knowledge_graph,
 };
 use cognee_core::CpuPool;
-use cognee_database::{PipelineRunRepository, RelationalDb};
+use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -29,7 +30,10 @@ use cognee_vector::VectorDB;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::result::{REASON_BACKEND_UNSUPPORTED, StageResult};
+use super::result::{REASON_BACKEND_UNSUPPORTED, StageResult, StageStatus};
+use super::watermark::{
+    REASON_NO_WRITES_SINCE_LAST_IMPROVE, StageStamp, has_dataset_changed_since_last_improve,
+};
 
 /// Skip reason of `extract_agent_context` without a usable session manager.
 pub const REASON_SESSION_MANAGER_UNAVAILABLE: &str = "session_manager_unavailable";
@@ -158,6 +162,9 @@ pub(crate) struct StageRun {
     /// The stage errored because the LLM budget is exhausted (Python's
     /// `StageResult.budget_exhausted`).
     pub budget_exhausted: bool,
+    /// The watermark to save once the run is known not to have errored
+    /// (Python's `StageResult.run_info_stamp`).
+    pub stamp: Option<StageStamp>,
 }
 
 impl From<StageResult> for StageRun {
@@ -165,6 +172,18 @@ impl From<StageResult> for StageRun {
         Self {
             result,
             budget_exhausted: false,
+            stamp: None,
+        }
+    }
+}
+
+impl StageRun {
+    /// A run that errored on an exhausted LLM budget when `budget_exhausted`.
+    pub fn with_budget(result: StageResult, budget_exhausted: bool) -> Self {
+        Self {
+            result,
+            budget_exhausted,
+            stamp: None,
         }
     }
 }
@@ -229,6 +248,8 @@ pub(crate) struct ImproveStages<'a> {
     pub session_store: Option<Arc<dyn SessionStore>>,
     pub session_manager: Option<Arc<SessionManager>>,
     pub add_pipeline: Option<&'a AddPipeline>,
+    /// Where the stage watermarks live.
+    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     pub cognify_config: &'a CognifyConfig,
 }
 
@@ -289,7 +310,7 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::PersistAgentTraces => self.persist_agent_traces().await,
             StageKind::DistillSessions => self.distill_sessions().await,
             StageKind::BuildTruthSubspace => self.build_truth_subspace().await.into(),
-            StageKind::GlobalContextIndex => self.global_context_index().await.into(),
+            StageKind::GlobalContextIndex => self.global_context_index().await,
             // Their gates always skip them (see `gate`).
             StageKind::ExtractAgentContext
             | StageKind::UpdateUserPreferences
@@ -418,17 +439,17 @@ impl ImproveStages<'_> {
                     ("sessions_persisted", count(r.sessions_persisted)),
                 ];
                 match r.last_error {
-                    Some(error) if r.sessions_failed > 0 => StageRun {
-                        result: StageResult::errored(STAGE, error).with_counts(counts),
-                        budget_exhausted: r.budget_exhausted,
-                    },
+                    Some(error) if r.sessions_failed > 0 => StageRun::with_budget(
+                        StageResult::errored(STAGE, error).with_counts(counts),
+                        r.budget_exhausted,
+                    ),
                     _ => StageResult::completed(STAGE).with_counts(counts).into(),
                 }
             }
-            Err(e) => StageRun {
-                budget_exhausted: e.is_budget_exhausted(),
-                result: StageResult::errored(STAGE, e.to_string()),
-            },
+            Err(e) => StageRun::with_budget(
+                StageResult::errored(STAGE, e.to_string()),
+                e.is_budget_exhausted(),
+            ),
         }
     }
 
@@ -602,10 +623,10 @@ impl ImproveStages<'_> {
             ("sessions_failed", count(r.sessions_failed)),
         ];
         match r.last_error {
-            Some(error) if r.sessions_failed > 0 => StageRun {
-                result: StageResult::errored(STAGE, error).with_counts(counts),
-                budget_exhausted: r.budget_exhausted,
-            },
+            Some(error) if r.sessions_failed > 0 => StageRun::with_budget(
+                StageResult::errored(STAGE, error).with_counts(counts),
+                r.budget_exhausted,
+            ),
             _ => StageResult::completed(STAGE).with_counts(counts).into(),
         }
     }
@@ -645,10 +666,59 @@ impl ImproveStages<'_> {
 
     /// Stage 9: the global context index (opt-in).
     ///
+    /// `already_completed` (`no_writes_since_last_improve`) when only reads
+    /// ran since its last build, which a completed run stamps (see
+    /// [`super::watermark`]).
+    async fn global_context_index(&mut self) -> StageRun {
+        const KIND: StageKind = StageKind::GlobalContextIndex;
+        // Captured before the change check and the build, so a write racing
+        // this run stays visible to the next run's check.
+        let started_at = Utc::now();
+        let dataset_id = match self.dataset_id().await {
+            Ok(id) => id,
+            Err(e) => return StageResult::errored(KIND.name(), e).into(),
+        };
+        let unchanged = match dataset_id {
+            Some(id) => {
+                let runs = self.db.clone().map(|db| db.pipeline_runs());
+                // Rust has no notion of whether datasets share one graph here,
+                // so every dataset's runs count (Python narrows that to the
+                // dataset under backend access control).
+                !has_dataset_changed_since_last_improve(
+                    self.checkpoint_store.as_deref(),
+                    runs.as_deref(),
+                    KIND,
+                    id,
+                    true,
+                )
+                .await
+            }
+            None => false,
+        };
+        let result = if unchanged {
+            StageResult::already_completed(KIND.name(), REASON_NO_WRITES_SINCE_LAST_IMPROVE)
+        } else {
+            self.build_global_context_index().await
+        };
+        let stamp = match (dataset_id, result.status) {
+            (Some(id), StageStatus::Completed | StageStatus::AlreadyCompleted) => {
+                Some(StageStamp::new(KIND, id, started_at))
+            }
+            _ => None,
+        };
+        StageRun {
+            result,
+            budget_exhausted: false,
+            stamp,
+        }
+    }
+
+    /// The global context index build.
+    ///
     /// Partial port: stores the graph's `source → relationship → target`
     /// lines as a global session graph-context. Python's pipeline (bucket and
     /// root summaries) lands in SDK-1044 step 5.
-    async fn global_context_index(&mut self) -> StageResult {
+    async fn build_global_context_index(&mut self) -> StageResult {
         const STAGE: &str = StageKind::GlobalContextIndex.name();
         let Some(manager) = self.session_manager.as_ref() else {
             return StageResult::errored(STAGE, "session manager is required");

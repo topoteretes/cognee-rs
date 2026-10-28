@@ -19,11 +19,14 @@ use cognee::api::improve::{
     DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
     REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED,
     REASON_DISABLED_BY_CONFIG, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS,
-    REASON_NO_SESSION_IDS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
-    REASON_PERSONALIZATION_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+    REASON_NO_SESSION_IDS, REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED,
+    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, StageKind, StageResult, StageStatus,
+    TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
 };
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
+use cognee_core::DatasetLocks;
+use cognee_database::CheckpointStore;
 use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
@@ -110,8 +113,8 @@ impl cognee_llm::Llm for SchemaDispatchLlm {
     }
 }
 
-// A single-session run takes a process-wide improve lock keyed by the session
-// id, so every test uses its own session ids.
+// A run claims its sessions in a process-wide registry keyed by owner and
+// session id; owners are random, so runs of different tests never queue.
 struct Harness {
     _temp: TempDir,
     _sess_dir: TempDir,
@@ -203,6 +206,7 @@ fn params<'a>(
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        dataset_locks: None,
         cognify_config: config,
         extraction_tasks: None,
         enrichment_tasks: None,
@@ -807,4 +811,277 @@ async fn review_conflicts_config_opts_in() {
         stage(&r, "review_conflicts").reason.as_deref(),
         Some(REASON_NO_LLM_CONFIGURED)
     );
+}
+
+// ---------------------------------------------------------------------------
+// The stage watermark (`already_completed: no_writes_since_last_improve`).
+// ---------------------------------------------------------------------------
+
+async fn log_write(h: &Harness, dataset_id: Uuid) {
+    use cognee_database::{PipelineRunStatus, RelationalDb};
+    Arc::clone(&h.db)
+        .pipeline_runs()
+        .log_pipeline_run(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "cognify_pipeline",
+            Some(dataset_id),
+            PipelineRunStatus::Completed,
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+/// A completed `global_context_index` stamps its start; the next run with no
+/// write since reports `already_completed`; a write makes it run again
+/// (Python `GlobalContextIndexStage`, `graph_changes.py`).
+#[tokio::test]
+async fn global_context_index_is_already_completed_without_writes_since_last_improve() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let dataset_id = create_dataset(&h, "ds_watermark", owner).await;
+    let run = || {
+        let mut p = params(&h, &config, "ds_watermark", None, mock_llm());
+        p.owner_id = owner;
+        p.build_global_context_index = true;
+        improve(p)
+    };
+
+    let first = run().await.unwrap();
+    assert_eq!(
+        stage(&first, "global_context_index").status,
+        StageStatus::Completed
+    );
+    let stamp = h
+        .checkpoint_store
+        .load(&stage_watermark_key(
+            StageKind::GlobalContextIndex,
+            dataset_id,
+        ))
+        .await
+        .unwrap();
+    assert!(stamp.is_some(), "a completed run stamps the stage");
+
+    let second = run().await.unwrap();
+    let gci = stage(&second, "global_context_index");
+    assert_eq!(gci.status, StageStatus::AlreadyCompleted);
+    assert_eq!(
+        gci.reason.as_deref(),
+        Some(REASON_NO_WRITES_SINCE_LAST_IMPROVE)
+    );
+    assert_eq!(second.status(), ImproveStatus::Completed);
+
+    log_write(&h, dataset_id).await;
+    let third = run().await.unwrap();
+    assert_eq!(
+        stage(&third, "global_context_index").status,
+        StageStatus::Completed
+    );
+}
+
+/// A run that ends errored saves no stamp, so the next run builds again.
+#[tokio::test]
+async fn an_errored_run_does_not_stamp_the_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let dataset_id = create_dataset(&h, "ds_watermark_err", owner).await;
+
+    // The stage needs the session manager: without one it errors.
+    let mut p = params(&h, &config, "ds_watermark_err", None, mock_llm());
+    p.owner_id = owner;
+    p.build_global_context_index = true;
+    p.session_manager = None;
+    let r = improve(p).await.unwrap();
+    assert_eq!(
+        stage(&r, "global_context_index").status,
+        StageStatus::Errored
+    );
+    assert_eq!(r.status(), ImproveStatus::Errored);
+    let stamp = h
+        .checkpoint_store
+        .load(&stage_watermark_key(
+            StageKind::GlobalContextIndex,
+            dataset_id,
+        ))
+        .await
+        .unwrap();
+    assert!(stamp.is_none(), "an errored run saves no stamp");
+}
+
+// ---------------------------------------------------------------------------
+// The waiting dataset lock and session claim (Python `test_improve_queue.py`).
+// ---------------------------------------------------------------------------
+
+const SHORT: std::time::Duration = std::time::Duration::from_millis(200);
+const LONG: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn locked_add_pipeline(h: &Harness, locks: &Arc<DatasetLocks>) -> AddPipeline {
+    let ingest_db: Arc<dyn IngestDb> = h.db.clone();
+    AddPipeline::new(Arc::clone(&h.storage), ingest_db)
+        .with_thread_pool(Arc::new(
+            cognee::core::RayonThreadPool::with_default_threads().unwrap(),
+        ))
+        .with_graph_db(h.graph_db.clone() as Arc<dyn cognee_graph::GraphDBTrait>)
+        .with_vector_db(h.vector_db.clone() as Arc<dyn cognee_vector::VectorDB>)
+        .with_database(h.db.clone())
+        .with_dataset_locks(Arc::clone(locks))
+}
+
+/// An improve on a dataset another run holds waits, then runs every stage —
+/// whether it targets another session, the same one, or none
+/// (`test_an_overlapping_improve_waits_then_runs_every_stage`).
+#[tokio::test]
+async fn an_overlapping_improve_waits_then_runs_every_stage() {
+    for sessions in [Some(vec!["queue_other".to_string()]), None] {
+        let h = make_harness().await;
+        let config = CognifyConfig::default();
+        let locks = Arc::new(DatasetLocks::new());
+        let owner = Uuid::new_v4();
+        let dataset_id = create_dataset(&h, "ds_queue", owner).await;
+        let holder = locks.lock(dataset_id).await;
+
+        let mut p = params(&h, &config, "ds_queue", sessions.clone(), mock_llm());
+        p.owner_id = owner;
+        p.dataset_locks = Some(Arc::clone(&locks));
+        let run = improve(p);
+        tokio::pin!(run);
+        assert!(
+            tokio::time::timeout(SHORT, &mut run).await.is_err(),
+            "{sessions:?}: the run waits for the dataset"
+        );
+
+        drop(holder);
+        let r = tokio::time::timeout(LONG, run).await.unwrap().unwrap();
+        assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
+        assert_eq!(r.dataset_id, Some(dataset_id));
+    }
+}
+
+/// A dataset that does not exist yet is held by the identity an `add` of it
+/// would lock.
+#[tokio::test]
+async fn an_improve_of_a_new_dataset_holds_its_identity() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let locks = Arc::new(DatasetLocks::new());
+    let owner = Uuid::new_v4();
+    let holder = locks
+        .lock(cognee_ingestion::generate_dataset_id(
+            "ds_new_queue",
+            owner,
+            None,
+        ))
+        .await;
+    let mut p = params(&h, &config, "ds_new_queue", None, mock_llm());
+    p.owner_id = owner;
+    p.dataset_locks = Some(Arc::clone(&locks));
+    let run = improve(p);
+    tokio::pin!(run);
+    assert!(tokio::time::timeout(SHORT, &mut run).await.is_err());
+    drop(holder);
+    tokio::time::timeout(LONG, run).await.unwrap().unwrap();
+}
+
+/// `test_improves_on_different_datasets_do_not_wait`.
+#[tokio::test]
+async fn improves_on_different_datasets_do_not_wait() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let locks = Arc::new(DatasetLocks::new());
+    let owner = Uuid::new_v4();
+    let held = create_dataset(&h, "ds_held", owner).await;
+    create_dataset(&h, "ds_free", owner).await;
+    let _holder = locks.lock(held).await;
+
+    let mut p = params(&h, &config, "ds_free", None, mock_llm());
+    p.owner_id = owner;
+    p.dataset_locks = Some(Arc::clone(&locks));
+    let r = tokio::time::timeout(LONG, improve(p))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
+}
+
+/// A run queued behind the dataset is let in when the run ahead of it is
+/// cancelled while it waits for a session
+/// (`test_a_cancelled_holder_lets_the_next_improve_run`).
+#[tokio::test]
+async fn a_cancelled_run_lets_the_next_improve_run() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let locks = Arc::new(DatasetLocks::new());
+    let owner = Uuid::new_v4();
+    create_dataset(&h, "ds_cancel", owner).await;
+    // The first run takes the dataset, then waits on a session someone holds.
+    let _session = cognee_session::acquire_improve_lock_many(cognee_session::improve_lock_keys(
+        ["cancel_held"],
+        &owner.to_string(),
+    ))
+    .await;
+
+    let mut first = params(
+        &h,
+        &config,
+        "ds_cancel",
+        Some(vec!["cancel_held".to_string()]),
+        mock_llm(),
+    );
+    first.owner_id = owner;
+    first.dataset_locks = Some(Arc::clone(&locks));
+    // Boxed so that dropping it drops the run itself.
+    let mut first = Box::pin(improve(first));
+    assert!(tokio::time::timeout(SHORT, &mut first).await.is_err());
+
+    let mut second = params(&h, &config, "ds_cancel", None, mock_llm());
+    second.owner_id = owner;
+    second.dataset_locks = Some(Arc::clone(&locks));
+    let second = improve(second);
+    tokio::pin!(second);
+    assert!(
+        tokio::time::timeout(SHORT, &mut second).await.is_err(),
+        "the second run queues behind the first on the dataset"
+    );
+
+    // Cancelling the first releases the dataset it held.
+    drop(first);
+    let r = tokio::time::timeout(LONG, second).await.unwrap().unwrap();
+    assert_eq!(r.stages.len(), DEFAULT_STAGES.len());
+}
+
+/// The stages' `add` calls re-enter the dataset lock the run holds — through
+/// the registry named on the params, and through the add pipeline's own when
+/// none is named — instead of waiting on it forever.
+#[tokio::test]
+async fn the_stage_adds_ride_on_the_run_dataset_hold() {
+    for name_the_registry in [true, false] {
+        let h = make_harness().await;
+        let config = CognifyConfig::default();
+        let locks = Arc::new(DatasetLocks::new());
+        let pipeline = locked_add_pipeline(&h, &locks);
+        let session_id = format!("reentrant_session_{name_the_registry}");
+        let mut p = params(
+            &h,
+            &config,
+            "ds_reentrant",
+            Some(vec![session_id.clone()]),
+            schema_llm(false),
+        );
+        p.add_pipeline = Some(&pipeline);
+        if name_the_registry {
+            p.dataset_locks = Some(Arc::clone(&locks));
+        }
+        seed_qa(&h, p.owner_id, &session_id).await;
+        let r = tokio::time::timeout(LONG, improve(p))
+            .await
+            .expect("a stage add must not wait on the run's own hold")
+            .unwrap();
+        let persist = stage(&r, "persist_session_qa");
+        assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+        assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+        assert!(r.dataset_id.is_some(), "the stage created the dataset");
+    }
 }

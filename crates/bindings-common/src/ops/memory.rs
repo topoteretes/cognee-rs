@@ -473,6 +473,8 @@ pub async fn run_improve(
         session_manager: Some(svc.session_manager.clone()),
         add_pipeline: Some(svc.add_pipeline.as_ref()),
         checkpoint_store: Some(svc.checkpoint_store.clone()),
+        // The add pipeline's registry (none here), else the process-wide one.
+        dataset_locks: None,
         cognify_config: &cognify_config,
     })
     .await

@@ -786,6 +786,8 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             session_manager,
             add_pipeline: Some(add_pipeline.as_ref()),
             checkpoint_store,
+            // The add pipeline's registry, else the process-wide one.
+            dataset_locks: None,
             cognify_config: &cognify_config,
             extraction_tasks: None,
             enrichment_tasks: None,
