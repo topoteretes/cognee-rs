@@ -15,6 +15,8 @@ mod embedding;
 mod entity;
 mod entity_type;
 pub mod has_datapoint;
+/// Vector payloads in the shape of Python's `IndexSchema`.
+pub mod index_schema;
 mod internal_node;
 /// Memory entry types for typed `remember()` dispatch.
 pub mod memory;
@@ -39,6 +41,10 @@ pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
 pub use has_datapoint::HasDataPoint;
+pub use index_schema::{
+    INDEX_SCHEMA_KEYS, INDEX_SCHEMA_METADATA_KEY, INDEX_SCHEMA_TYPE, IndexRefs,
+    RUST_ONLY_PAYLOAD_KEYS, index_schema_payload,
+};
 pub use internal_node::{INTERNAL_PROPERTY, is_internal_node, marks_internal};
 pub use memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 pub use permission::permissions;

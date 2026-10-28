@@ -142,39 +142,46 @@ async fn apply_writes_one_point_per_distinct_retrieval_text() {
         "all three deterministic ids must be retrievable"
     );
 
-    // And each carries the right relationship_name and per-text edge count.
+    // And each carries its retrieval text as `text`, in Python's `IndexSchema`
+    // shape (SDK-1039): no `relationship_name` / `number_of_edges` keys, and
+    // no `dataset_id` on this dataset-less whole-graph repair.
     for (text, id) in expected_ids() {
         let hit = found
             .iter()
             .find(|h| h.id == id)
             .unwrap_or_else(|| panic!("no point for {text:?} at id {id}"));
         assert_eq!(
-            hit.metadata.get("relationship_name").unwrap(),
-            &json!(text),
-            "relationship_name payload for {text:?}"
+            hit.metadata.get("text"),
+            Some(&json!(text)),
+            "text payload for {text:?}"
         );
+        assert_eq!(hit.metadata.get("type"), Some(&json!("IndexSchema")));
+        for absent in ["relationship_name", "number_of_edges", "dataset_id"] {
+            assert!(
+                !hit.metadata.contains_key(absent),
+                "{absent} in the payload for {text:?}"
+            );
+        }
     }
 
-    // number_of_edges is the per-text fan-out, not 1 and not the edge total.
-    let counts: HashMap<String, i64> = found
-        .iter()
-        .map(|h| {
-            (
-                h.metadata
-                    .get("relationship_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap()
-                    .to_string(),
-                h.metadata
-                    .get("number_of_edges")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap(),
-            )
-        })
+    // Exactly the key set of the row a real Python run stored for an EdgeType
+    // (golden fixture; `MockVectorDB` keeps `metadata`, as pgvector does).
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/index_schema/python_pgvector_payloads.json"
+    ))
+    .unwrap();
+    let mut python_keys: Vec<&str> = fixture["collections"]["EdgeType_relationship_name"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
         .collect();
-    assert_eq!(counts.get("Alice works at Acme"), Some(&3));
-    assert_eq!(counts.get("Bob knows Carol"), Some(&2));
-    assert_eq!(counts.get("located_in"), Some(&1));
+    python_keys.sort_unstable();
+    for hit in &found {
+        let mut keys: Vec<&str> = hit.metadata.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, python_keys);
+    }
 }
 
 /// Dry-run is the default, and it must be genuinely free: no writes, and — the
@@ -641,7 +648,7 @@ async fn dataset_id_is_metadata_only_and_not_part_of_the_id() {
 /// outright when a row repeats (SQLSTATE 21000), so a duplicate here aborts a
 /// real `--apply` run and writes nothing for the batch.
 #[tokio::test]
-async fn texts_colliding_on_one_point_id_are_written_once_with_summed_counts() {
+async fn texts_colliding_on_one_point_id_are_written_once() {
     let graph = MockGraphDB::new();
     let edges = vec![
         edge("a", "b", "works at", None),
@@ -686,9 +693,9 @@ async fn texts_colliding_on_one_point_id_are_written_once_with_summed_counts() {
         .expect("retrieve");
     assert_eq!(stored.len(), 1, "exactly one row for the collapsed id");
     assert_eq!(
-        stored[0].metadata.get("number_of_edges"),
-        Some(&json!(3)),
-        "the collapsed row must carry all three edges, not one spelling's share"
+        vector.collection_size(DATA_TYPE, FIELD).await.unwrap(),
+        2,
+        "one row per point id, the collapsed one included"
     );
 }
 

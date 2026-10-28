@@ -33,8 +33,12 @@ provenance fields (`source_pipeline`, `source_task`, `source_node_set`,
 `source_content_hash`). Typed graph nodes — `Entity`, `EntityType`, `EdgeType`,
 `DocumentChunk`, etc. — embed a DataPoint as their `base`, exposed through the
 `HasDataPoint` trait so provenance stamping can walk any node uniformly. When a
-DataPoint is indexed, its serialized form becomes the vector-store payload
-(`vector_metadata()`), keeping the on-disk shape comparable to Python's.
+DataPoint is indexed, its vector-store payload has the shape of Python's
+`IndexSchema` (`index_schema_payload()`): the indexed `text`, a few reference
+scalars (`document_id`, `chunk_index`, `source_chunk_id`, …) and the base fields
+at their IndexSchema defaults, plus the Rust-only `dataset_id` that
+dataset-scoped search filters on. LanceDB stores it without the `metadata` key,
+as Python's LanceDB adapter does; pgvector keeps it.
 Python's serialization and versioning helpers are mirrored as `to_json_string()`
 / `from_json()`, `to_dict()` / `from_dict()` and `update_version()` (bumps
 `version` and refreshes `updated_at`).

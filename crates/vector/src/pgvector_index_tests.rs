@@ -2736,3 +2736,66 @@ async fn a_collection_that_vanishes_mid_load_does_not_poison_the_rest() {
     )
     .await;
 }
+
+/// SDK-1039, D2: pgvector keeps the `IndexSchema` `metadata` key, as Python's
+/// pgvector adapter does (`PGVectorAdapter.py:573`), so a stored row has exactly
+/// the key set of the row a real Python run stored, plus the Rust-only
+/// `dataset_id`. The LanceDB twin is
+/// `lancedb_adapter::tests::stored_index_schema_rows_match_python_lancedb_rows`.
+#[tokio::test]
+async fn stored_index_schema_rows_match_python_pgvector_rows() {
+    with_temp_db(
+        "stored_index_schema_rows_match_python_pgvector_rows",
+        |url| async move {
+            let fixture: serde_json::Value = serde_json::from_str(include_str!(
+                "../../cognify/tests/fixtures/index_schema/python_pgvector_payloads.json"
+            ))
+            .unwrap();
+            let adapter = PgVectorAdapter::new(&url, 3).await.unwrap();
+            for (collection, python_row) in fixture["collections"].as_object().unwrap() {
+                let (data_type, field) = collection.split_once('_').unwrap();
+                adapter
+                    .create_collection(data_type, field, 3)
+                    .await
+                    .unwrap();
+                let source = cognee_models::DataPoint::new(data_type, None);
+                let point = crate::VectorPoint {
+                    id: source.id,
+                    vector: vec![1.0, 0.0, 0.0],
+                    metadata: cognee_models::index_schema_payload(
+                        &source,
+                        "text".to_string(),
+                        &cognee_models::IndexRefs::default(),
+                        Some(uuid::Uuid::new_v4()),
+                    ),
+                };
+                adapter
+                    .index_points(data_type, field, std::slice::from_ref(&point))
+                    .await
+                    .unwrap();
+                let stored = adapter
+                    .retrieve(data_type, field, &[source.id])
+                    .await
+                    .unwrap();
+                let mut stored_keys: Vec<&str> =
+                    stored[0].metadata.keys().map(String::as_str).collect();
+                stored_keys.sort_unstable();
+                let mut python_keys: Vec<&str> = python_row
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS.iter().copied())
+                    .collect();
+                python_keys.sort_unstable();
+                assert_eq!(stored_keys, python_keys, "{collection}");
+                assert_eq!(
+                    stored[0].metadata.get("metadata"),
+                    Some(&serde_json::json!({"index_fields": ["text"]})),
+                    "{collection}"
+                );
+            }
+        },
+    )
+    .await;
+}

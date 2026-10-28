@@ -207,9 +207,15 @@ fn reachable_edge_type_ids(connections_by_entity_id: &Connections) -> HashSet<St
 /// Port of `_entity_from_result` (`entities.py:165-177`). `name` falls back
 /// `name` → `text` → `id`, never empty. `text` is where the indexer puts the
 /// entity's name, as Python's `IndexSchema` does; a row written before the
-/// indexer carried it resolves to its id. `description` is read as Python
-/// reads it, but only Rust's indexer writes it (Python's `IndexSchema` row has
-/// no such key), so on a Python-written store it is always empty.
+/// indexer carried it resolves to its id.
+///
+/// `description` is never read from the payload (SDK-1039, D1). Python fills
+/// it from the graph seed, and only for entities whose facts were reviewed
+/// (`conflicts_reviewed_at`, `entities.py:129-159`, SDK-880); Rust has no fact
+/// review, so no entity qualifies and the description line is absent, as it
+/// is in Python for every unreviewed entity. Rows Rust wrote before SDK-1039
+/// still carry a `description` key; ignoring it keeps their output the same as
+/// for new rows.
 fn entity_from_result(item: &SearchItem) -> EntityResult {
     let result_payload = payload(item);
     let entity_id = result_id(item).unwrap_or_default();
@@ -228,7 +234,7 @@ fn entity_from_result(item: &SearchItem) -> EntityResult {
     EntityResult {
         id: entity_id,
         name,
-        description: result_payload.get("description").and_then(display_value),
+        description: None,
         entity_type: entity_type(result_payload),
         edges: vec![],
         covered_edge_type_ids: vec![],
@@ -243,10 +249,11 @@ fn entity_from_result(item: &SearchItem) -> EntityResult {
 /// type; else `None`.
 ///
 /// Python suppresses `"IndexSchema"`, the class every one of its vector rows
-/// is written as. A Rust row's `type` is the indexed DataPoint's class instead
-/// — `"Entity"` on `Entity_name` — so that is suppressed too. Neither side's
-/// payload carries a domain type under these keys, so the header is
-/// `### {name}` on both.
+/// is written as, and so do Rust's rows since SDK-1039. A Rust row written
+/// before then carries the indexed DataPoint's class instead — `"Entity"` on
+/// `Entity_name` — so that is suppressed too (D6: old payloads stay readable).
+/// Neither side's payload carries a domain type under these keys, so the
+/// header is `### {name}` on both.
 fn entity_type(result_payload: &Value) -> Option<String> {
     for key in ["is_a", "type"] {
         if let Some(value) = result_payload.get(key)
@@ -1388,8 +1395,12 @@ mod tests {
         assert!(entities[0].covered_edge_type_ids.is_empty());
     }
 
+    /// SDK-1039, D1: a payload `description` — which rows Rust wrote before
+    /// SDK-1039 carry — is not read. The entity shows no description line, as
+    /// Python's does for every entity whose facts were not reviewed, and the
+    /// chunk mention stays a bullet instead of being folded into that line.
     #[tokio::test]
-    async fn a_chunk_mention_repeating_the_description_line_is_covered_not_shown() {
+    async fn a_payload_description_is_not_shown() {
         let mention = "Document chunk mentions Alice: A curious girl.";
         let graph = graph_with_repeated_mentions(mention).await;
         let hits = vec![entity_hit(json!({
@@ -1399,21 +1410,13 @@ mod tests {
         }))];
 
         let (entities, _) = build_entities(&graph, &hits, 5, &HashMap::new(), None, "OR").await;
+        assert_eq!(entities[0].description, None);
         let bullets: Vec<&str> = entities[0].edges.iter().map(|e| e.text.as_str()).collect();
-        assert_eq!(bullets, ["Alice works at Acme."]);
-        // Its id is reported once per dropped edge; the facts lane only needs it
-        // in the set, so repeats are harmless.
-        let mention_id = cognee_models::EdgeType::deterministic_id(mention).to_string();
-        assert!(
-            entities[0]
-                .covered_edge_type_ids
-                .iter()
-                .all(|id| *id == mention_id)
-        );
-        assert!(!entities[0].covered_edge_type_ids.is_empty());
+        assert_eq!(bullets, [mention, "Alice works at Acme."]);
+        assert!(entities[0].covered_edge_type_ids.is_empty());
         assert_eq!(
             format_entity(&entities[0]),
-            "### Alice\nA curious girl.\n- Alice works at Acme."
+            format!("### Alice\n- {mention}\n- Alice works at Acme.")
         );
     }
 
