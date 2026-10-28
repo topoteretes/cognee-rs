@@ -1,9 +1,10 @@
 """Cross-SDK add parity tests for image and audio inputs.
 
-Both SDKs are tested against **deterministic** assertions only — no LLM or
-API key is required.  The ``add`` operation stores raw bytes as-is and records
-metadata derived from the file extension.  LLM-based content extraction
-(vision / Whisper) happens during ``cognify``, not ``add``.
+Both SDKs are tested against **deterministic** assertions only.  The ``add``
+operation stores raw bytes as-is and records metadata derived from the file
+extension.  Note that Python's audio loader transcribes during ``add``
+(Whisper via the configured LLM key), so the audio tests need a key on the
+Python side even though nothing they assert depends on the transcript.
 
 Verified assertions per media type:
 - ``content_hash``   — MD5 of raw bytes is identical in both SDKs
@@ -52,8 +53,13 @@ def _make_minimal_png() -> bytes:
 
 
 def _make_minimal_wav() -> bytes:
-    """Return a minimal valid WAV file containing ~0.05 s of silence (mono, 16-bit, 8 kHz)."""
-    num_samples = 400   # 0.05 s at 8 kHz
+    """Return a minimal valid WAV file containing 0.5 s of silence (mono, 16-bit, 8 kHz).
+
+    At least 0.1 s: Python transcribes audio during ``add`` (its loader runs
+    at ingest), and OpenAI's transcription endpoint rejects shorter files with
+    "Audio file is too short. Minimum audio length is 0.1 seconds."
+    """
+    num_samples = 4000   # 0.5 s at 8 kHz
     sample_rate = 8000
     num_channels = 1
     bits_per_sample = 16

@@ -361,15 +361,17 @@ def test_add_multiple_items(python_add_result, synced_rust_workspace):
         rust_args.extend(["--tenant-id", tenant_id])
     run_rust_cli(rust_ws, rust_args)
 
-    # Query only the multi_test dataset's data via junction table
+    # Query only the multi_test dataset's data. Membership is modelled
+    # differently (see helpers.query_dataset_membership): Python dropped the
+    # dataset_data junction table for a data.dataset_id column, Rust keeps the
+    # junction table.
     py_conn = open_db(python_db_path(py_ws))
     rust_conn = open_db(rust_db_path(rust_ws))
 
     py_data = query_rows(
         py_conn,
         f"SELECT d.* FROM data d "
-        f"JOIN dataset_data dd ON d.id = dd.data_id "
-        f"JOIN datasets ds ON dd.dataset_id = ds.id "
+        f"JOIN datasets ds ON d.dataset_id = ds.id "
         f"WHERE ds.name = '{ds}' ORDER BY d.name",
     )
     rust_data = query_rows(

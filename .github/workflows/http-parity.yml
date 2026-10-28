@@ -69,11 +69,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: topoteretes/cognee
-          # Bumped from b9014c1: that commit predates `cognee/modules/migration`
-          # entirely, so the COGX suites below could only ever skip. This SHA
-          # (cognee 1.5.3) is the one the Rust COGX exporter was validated
-          # against — its loader reproduces the archive's node ids and edges.
-          ref: 690c0ec023719a2a277dc893cdecfec1ca8012cc
+          # cognee 1.6.5 on `dev` (2026-10-27). Bumped from 690c0ec (1.5.3,
+          # 2026-08-24) for SDK-1039: that pin predated Python's SDK-1115
+          # (triplet embedding, TRIPLET_COMPLETION and memify removed) and the
+          # default embedding batch size of 32, both of which the Rust SDK now
+          # follows. The pyproject's wheel package list (`cognee`,
+          # `cognee_db_workers`, `kuzu`) and the `dlt` extra (now an empty
+          # alias, dlt is a core dependency) still match the Dockerfile's
+          # python-builder stage at this SHA.
+          ref: 1d3ed15b1d7faf93af3ae7efff8167d164ee0847
           path: cognee
 
       # docker-compose.yml declares `env_file: ../.env`; missing files abort
