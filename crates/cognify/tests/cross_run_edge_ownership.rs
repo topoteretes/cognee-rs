@@ -30,7 +30,7 @@ use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Triplet;
 use cognee_test_utils::MockLlm;
-use cognee_vector::VectorDB;
+use cognee_vector::{VectorDB, VectorPoint};
 use rollback_harness::{Harness, canned_graph_response, extraction_config};
 use uuid::Uuid;
 
@@ -42,13 +42,6 @@ fn clean_llm(files: usize) -> Arc<dyn cognee_llm::Llm> {
     Arc::new(MockLlm::new(vec![canned_graph_response(); files * 2 + 4]))
 }
 
-/// The harness fixture with triplet embeddings on, so the shared edge actually
-/// gets the `Triplet_text` point whose survival the delete test turns on. They
-/// are off by default (Python parity), which would leave nothing to observe.
-fn triplet_indexing_config() -> cognee_cognify::CognifyConfig {
-    extraction_config().with_triplet_embeddings(true)
-}
-
 /// Two files, one per run. Both yield the same `Alice -works_at-> Acme` edge,
 /// so the second run's copy is the one the DB dedup filter keeps out of the
 /// graph write.
@@ -58,11 +51,11 @@ async fn two_runs_over_one_shared_edge() -> (Harness, Uuid, Uuid) {
     let second = harness.add_file("Carol also works at Acme.").await;
 
     harness
-        .run_over(&triplet_indexing_config(), &[first], clean_llm(1))
+        .run_over(&extraction_config(), &[first], clean_llm(1))
         .await
         .expect("run 1 completes");
     harness
-        .run_over(&triplet_indexing_config(), &[second], clean_llm(1))
+        .run_over(&extraction_config(), &[second], clean_llm(1))
         .await
         .expect("run 2 completes");
 
@@ -143,6 +136,26 @@ async fn deleting_the_first_file_leaves_the_shared_edge_for_the_second() {
     )
     .id;
 
+    // Cognify no longer writes `Triplet_text` (SDK-1115), so seed the point an
+    // earlier version would have written for the shared edge: databases that
+    // predate the removal still hold them, and the delete must keep treating
+    // them as it treats the edge's other vectors.
+    harness
+        .vector_db
+        .create_collection("Triplet", "text", 4)
+        .await
+        .expect("create the legacy Triplet collection");
+    harness
+        .vector_db
+        .index_points(
+            "Triplet",
+            "text",
+            &[VectorPoint::new(triplet_id, vec![1.0, 0.0, 0.0, 0.0])
+                .with_metadata("type", serde_json::json!("Triplet"))],
+        )
+        .await
+        .expect("seed the legacy Triplet point");
+
     let before = harness
         .vector_db
         .retrieve("Triplet", "text", &[triplet_id])
@@ -151,7 +164,7 @@ async fn deleting_the_first_file_leaves_the_shared_edge_for_the_second() {
     assert_eq!(
         before.len(),
         1,
-        "cognify indexed the shared edge, so there is something for the delete to take"
+        "the seeded legacy point is there for the delete to take"
     );
 
     let service = DeleteService::new(

@@ -120,8 +120,8 @@ pub enum RollbackScope {
     /// A library-level escape hatch, and deliberately **not selectable from
     /// configuration** — the config parser has no spelling for it — because
     /// what it leaves behind is permanent. A run that wrote graph edges and
-    /// died before the vector stage leaves those edges with no `Triplet_text`
-    /// and no `EdgeType_relationship_name` point. The retry does not repair
+    /// died before the vector stage leaves those edges with no
+    /// `EdgeType_relationship_name` point. The retry does not repair
     /// them: the completion marker is unset, so the item is processed again,
     /// but [`crate::graph_integration::retrieve_existing_edges`] finds the
     /// orphaned edges and `expansion.rs` skips every edge already in the

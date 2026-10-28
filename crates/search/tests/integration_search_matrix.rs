@@ -190,10 +190,8 @@ async fn test_search_type_matrix() {
         "Graph should be empty before cognify"
     );
 
-    // ── Step 5: Cognify with triplet embeddings enabled ──────────────────────
-    let config = CognifyConfig::default()
-        .with_summarization(true)
-        .with_triplet_embeddings(true);
+    // ── Step 5: Cognify ──────────────────────
+    let config = CognifyConfig::default().with_summarization(true);
 
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
         cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),
@@ -228,16 +226,11 @@ async fn test_search_type_matrix() {
 
     assert!(!result.entities.is_empty(), "Entities should be extracted");
     assert!(!result.edges.is_empty(), "Edges should be extracted");
-    assert!(
-        result.indexed_fields.triplet_count > 0,
-        "Triplets should be indexed when embed_triplets=true"
-    );
     println!(
-        "✓ Cognify: {} chunks, {} entities, {} edges, {} triplets",
+        "✓ Cognify: {} chunks, {} entities, {} edges",
         result.chunks.len(),
         result.entities.len(),
         result.edges.len(),
-        result.indexed_fields.triplet_count
     );
 
     // ── Step 6: Graph non-empty after cognify ────────────────────────────────
@@ -246,23 +239,14 @@ async fn test_search_type_matrix() {
         "Graph should be non-empty after cognify"
     );
 
-    // ── Step 7: Graph/vector consistency check ───────────────────────────────
-    // The graph contains both LLM-extracted edges and structural edges
-    // (contains, is_part_of, has_type, etc.), but triplet embeddings are only
-    // created for LLM-extracted edges.  Compare the cognify result's triplet
-    // count against the vector collection size.
-    let triplet_size = vector_db
-        .collection_size("Triplet", "text")
-        .await
-        .expect("collection_size Triplet");
-    assert_eq!(
-        result.indexed_fields.triplet_count, triplet_size,
-        "Cognify triplet count ({}) should equal Triplet vector collection size ({})",
-        result.indexed_fields.triplet_count, triplet_size
-    );
-    println!(
-        "✓ Graph/vector consistency: {} triplets indexed = {} triplet vectors",
-        result.indexed_fields.triplet_count, triplet_size
+    // ── Step 7: Cognify wrote no Triplet collection ──────────────────────────
+    // Python no longer embeds triplets (SDK-1115), and neither does Rust.
+    assert!(
+        !vector_db
+            .has_collection("Triplet", "text")
+            .await
+            .expect("has_collection Triplet"),
+        "cognify must not write a Triplet collection"
     );
 
     // ── Steps 8–11: Search matrix ────────────────────────────────────────────

@@ -32,8 +32,6 @@ export interface CogneeCognifyOptions {
   chunkOverlap?: number;
   summarization?: boolean;
   temporalCognify?: boolean;
-  /** Index `"source → relation → target"` triplet embeddings. */
-  triplet?: boolean;
   /**
    * A custom graph model's JSON Schema (an object, or a string holding one),
    * extracted instead of the default `KnowledgeGraph` — Python's `graph_model`.

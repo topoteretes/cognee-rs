@@ -102,10 +102,8 @@ async fn test_delete_preview_counts_match_execution() {
     assert_eq!(data_items.len(), 2, "Expected 2 ingested data items");
     println!("Ingested {} data item(s)", data_items.len());
 
-    // ── Step 2: Cognify (summarization=false, triplet_embeddings=false) ─────
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    // ── Step 2: Cognify (summarization=false) ─────
+    let config = CognifyConfig::default().with_summarization(false);
 
     let dataset =
         ops::datasets::get_dataset_by_name_in_tenant(&database, dataset_name, owner_id, None)

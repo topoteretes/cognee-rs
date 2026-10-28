@@ -190,9 +190,7 @@ async fn test_search_returns_empty_for_deleted_doc_and_non_empty_for_remaining()
 
     // ── Step 2: Cognify both documents together ─────────────────────────
     let all_items = [germany_data, quantum_data].concat();
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
         cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),

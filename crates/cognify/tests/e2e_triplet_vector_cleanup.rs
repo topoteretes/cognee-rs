@@ -5,7 +5,8 @@
 )]
 //! E2E test: triplet vector points are cleaned up after data-scope deletion.
 //!
-//! Two documents in separate datasets are cognified and memified. After
+//! Cognify no longer writes `Triplet_text` (SDK-1115), so this seeds the legacy
+//! points an earlier version would have written for two datasets' edges. After
 //! deleting one document's data, the Triplet vector collection should lose
 //! only that document's triplet points while preserving the other's.
 //!
@@ -13,19 +14,19 @@
 
 use std::sync::Arc;
 
-use cognee_cognify::memify::{MemifyConfig, memify};
 use cognee_cognify::{CognifyConfig, cognify};
+use cognee_database::ops::graph_storage::get_edges_by_dataset;
 use cognee_database::{DatabaseConnection, DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
-use cognee_models::DataInput;
+use cognee_models::{DataInput, Triplet};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockVectorDB;
-use cognee_vector::VectorDB;
+use cognee_vector::{VectorDB, VectorPoint};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -82,9 +83,7 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
 
     let owner_id = Uuid::nil();
     let ontology = Arc::new(NoOpOntologyResolver::new());
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false); // memify will create triplets
+    let config = CognifyConfig::default().with_summarization(false);
 
     // ── Step 1: Ingest two documents ────────────────────────────────────
     let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
@@ -191,74 +190,68 @@ async fn test_triplet_vector_cleanup_after_data_delete() {
 
     println!("Step 2 OK: Both datasets cognified");
 
-    // ── Step 3: Memify both datasets ────────────────────────────────────
-    let memify_config = MemifyConfig::default();
-    let memify_pool: Arc<dyn cognee_core::CpuPool> =
-        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("rayon pool"));
-
-    let memify_ai = memify(
-        Arc::clone(&graph_db),
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        Arc::clone(&memify_pool),
-        database.clone(),
-        Arc::new(cognee_database::NoopPipelineRunRepository::new())
-            as Arc<dyn cognee_database::PipelineRunRepository>,
-        Some(ds_ai.id),
-        None,
-        None,
-        &memify_config,
-    )
-    .await
-    .expect("memify ds_ai");
-
-    let memify_q = memify(
-        Arc::clone(&graph_db),
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        memify_pool,
-        database.clone(),
-        Arc::new(cognee_database::NoopPipelineRunRepository::new())
-            as Arc<dyn cognee_database::PipelineRunRepository>,
-        Some(ds_q.id),
-        None,
-        None,
-        &memify_config,
-    )
-    .await
-    .expect("memify ds_quantum");
-
+    // ── Step 3: Seed legacy `Triplet_text` points ───────────────────────
+    // Cognify no longer embeds triplets (SDK-1115), but databases written by
+    // earlier versions still hold them, and a delete must keep removing them.
+    // Seed one point per ownership edge, under the id earlier versions wrote
+    // (`Triplet::new`), so each dataset owns some.
+    vector_db
+        .create_collection("Triplet", "text", embedding_engine.dimension())
+        .await
+        .expect("create the legacy Triplet collection");
+    let mut seeded_ai = 0;
+    let mut seeded_q = 0;
+    for (dataset_id, seeded) in [(ds_ai.id, &mut seeded_ai), (ds_q.id, &mut seeded_q)] {
+        let rows = get_edges_by_dataset(&database, dataset_id)
+            .await
+            .expect("ledger edges of the dataset");
+        let mut ids = std::collections::BTreeSet::new();
+        for row in rows
+            .iter()
+            .filter(|row| row.relationship_name != "contains")
+        {
+            ids.insert(
+                Triplet::new(
+                    row.source_node_id,
+                    row.destination_node_id,
+                    row.relationship_name.clone(),
+                    String::new(),
+                )
+                .id,
+            );
+        }
+        let texts: Vec<String> = ids
+            .iter()
+            .map(|id| format!("legacy triplet {id}"))
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let vectors = embedding_engine.embed(&refs).await.expect("embed");
+        let points: Vec<VectorPoint> = ids
+            .iter()
+            .zip(vectors)
+            .map(|(id, vector)| {
+                VectorPoint::new(*id, vector).with_metadata("type", serde_json::json!("Triplet"))
+            })
+            .collect();
+        vector_db
+            .index_points("Triplet", "text", &points)
+            .await
+            .expect("seed legacy triplets");
+        *seeded = points.len();
+    }
+    assert!(seeded_ai > 0, "ds_ai should own edges to seed triplets for");
     assert!(
-        memify_ai.triplet_count > 0,
-        "ds_ai should have triplets after memify"
+        seeded_q > 0,
+        "ds_quantum should own edges to seed triplets for"
     );
-    assert!(
-        memify_q.triplet_count > 0,
-        "ds_quantum should have triplets after memify"
-    );
-
-    println!(
-        "Step 3 OK: Memified — ds_ai: {} triplets, ds_quantum: {} triplets",
-        memify_ai.triplet_count, memify_q.triplet_count,
-    );
+    println!("Step 3 OK: Seeded legacy triplets — ds_ai: {seeded_ai}, ds_quantum: {seeded_q}");
 
     // ── Step 4: Verify Triplet collection exists and has points ─────────
-    assert!(
-        vector_db
-            .has_collection("Triplet", "text")
-            .await
-            .expect("has_collection"),
-        "Triplet:text collection should exist after memify"
-    );
-
     let pre_triplet_count = vector_db
         .collection_size("Triplet", "text")
         .await
         .expect("collection_size pre-delete");
-    let expected_total = memify_ai.triplet_count + memify_q.triplet_count;
-    println!(
-        "Step 4: Triplet collection has {pre_triplet_count} points (expected ~{expected_total})",
-    );
+    println!("Step 4: Triplet collection has {pre_triplet_count} points");
     assert!(
         pre_triplet_count > 0,
         "Triplet collection should have points"

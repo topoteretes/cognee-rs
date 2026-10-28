@@ -133,9 +133,7 @@ async fn test_shared_entity_graph_delete() {
     println!("Step 1 OK: Ingested 2 documents into ds_ai and ds_ml");
 
     // ── Step 2: Cognify both datasets ───────────────────────────────────
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     let result_ai = match cognify(
         data_ai,

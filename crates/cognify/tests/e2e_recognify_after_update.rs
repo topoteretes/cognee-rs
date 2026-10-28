@@ -251,9 +251,7 @@ async fn test_recognify_after_content_update() {
     let dataset_name = "update_test";
     let ontology: Arc<dyn cognee_ontology::OntologyResolver> =
         Arc::new(NoOpOntologyResolver::new());
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     // ── Step 1: Ingest text_v1 (Alice at TechCorp) ─────────────────────────
     let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)

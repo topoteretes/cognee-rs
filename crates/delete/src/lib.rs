@@ -7245,99 +7245,47 @@ mod tests {
         );
     }
 
-    /// The delete path *recomputes* the `Triplet` point id from the ledger
-    /// row; cognify *wrote* that point from the extracted graph. Nothing but
-    /// this test holds the two formulas together, and a recompute that drifts
-    /// issues a delete for a point that was never written while the real one
-    /// survives forever — the failure mode this corner of the crate exists to
-    /// prevent.
+    /// The delete path *recomputes* the legacy `Triplet` point id from the
+    /// ledger row. Cognify no longer writes `Triplet_text` (SDK-1115), but
+    /// databases written by earlier versions still hold those rows, and a
+    /// recompute that drifts from `Triplet::new` would issue a delete for a
+    /// point that was never written while the real one survives forever.
     ///
-    /// Asserted against a triplet cognify itself builds, not against the
-    /// formula restated here, so the two crates cannot drift apart silently.
-    /// `triplet_creation::test_triplet_with_edge_text_property` pins the same
-    /// identity from the writing side; this is the deleting side of that pair.
+    /// The ledger row is the shape cognify's `semantic_edge_provenance_rows`
+    /// writes for a non-`contains` edge: `relationship_name` holds the
+    /// relationship name, never the description, and the description rides
+    /// along in `attributes.edge_text`. The description stays out of the id.
     #[test]
-    fn triplet_vector_id_recomputes_the_point_cognify_wrote() {
-        use cognee_cognify::triplet_creation::create_triplets_from_graph;
-        use cognee_cognify::{GraphEdgePair, GraphNodePair};
-        use cognee_models::{DataPoint, Entity, EntityType};
+    fn triplet_vector_id_recomputes_the_legacy_triplet_point_id() {
+        let source = Uuid::new_v4();
+        let target = Uuid::new_v4();
 
-        fn node(name: &str) -> GraphNodePair {
-            GraphNodePair {
-                entity: Entity {
-                    base: DataPoint::new("Entity", None),
-                    name: name.to_string(),
-                    is_a: None,
-                    description: format!("description of {name}"),
-                },
-                entity_type: Some(EntityType {
-                    base: DataPoint::new("EntityType", None),
-                    name: "Generic".to_string(),
-                    description: "Generic type".to_string(),
-                }),
-            }
-        }
-
-        /// The ledger row cognify's `semantic_edge_provenance_rows` writes for
-        /// a non-`contains` edge: `relationship_name` holds the relationship
-        /// name — never the description — and the description rides along in
-        /// `attributes.edge_text`.
-        fn ledger_row(edge: &GraphEdgePair) -> GraphEdge {
-            GraphEdge {
+        for edge_text in ["employed by since 2019", ""] {
+            let row = GraphEdge {
                 id: Uuid::new_v4(),
                 slug: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
                 data_id: Uuid::new_v4(),
                 dataset_id: Uuid::new_v4(),
                 pipeline_run_id: None,
-                source_node_id: edge.source_entity_id,
-                destination_node_id: edge.target_entity_id,
-                relationship_name: edge.relationship_name.clone(),
-                label: Some(edge.relationship_name.clone()),
-                attributes: serde_json::to_value(&edge.properties).ok(),
+                source_node_id: source,
+                destination_node_id: target,
+                relationship_name: "works_at".to_string(),
+                label: Some("works_at".to_string()),
+                attributes: Some(serde_json::json!({ "edge_text": edge_text })),
                 created_at: chrono::Utc::now(),
-            }
+            };
+            assert_eq!(
+                triplet_vector_id(&row),
+                Triplet::new(
+                    source,
+                    target,
+                    "works_at".to_string(),
+                    "any text".to_string()
+                )
+                .id,
+                "the delete must name the point `Triplet::new` derived (edge_text={edge_text:?})"
+            );
         }
-
-        let alice = node("Alice");
-        let acme = node("Acme");
-        let nodes = [alice.clone(), acme.clone()];
-
-        let mut described =
-            GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
-        described.add_property("edge_text", "employed by since 2019");
-
-        let written = create_triplets_from_graph(&nodes, std::slice::from_ref(&described));
-        assert_eq!(written.len(), 1);
-        assert!(
-            written[0].text.contains("employed by since 2019"),
-            "the description reaches the embedded text — otherwise the twin \
-             assertion below proves nothing"
-        );
-        assert_eq!(
-            triplet_vector_id(&ledger_row(&described)),
-            written[0].id,
-            "the delete must name the Triplet point cognify actually wrote for \
-             a described edge"
-        );
-
-        // Twin: the same edge without a description. Cognify keys it on the
-        // relationship name, and the delete path — which only ever sees that
-        // name in the ledger column — must land on the same point for both.
-        let mut bare = GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
-        bare.add_property("edge_text", "");
-
-        let undescribed = create_triplets_from_graph(&nodes, std::slice::from_ref(&bare));
-        assert_eq!(undescribed.len(), 1);
-        assert_eq!(
-            triplet_vector_id(&ledger_row(&bare)),
-            undescribed[0].id,
-            "and the point cognify wrote for an undescribed edge"
-        );
-        assert_eq!(
-            written[0].id, undescribed[0].id,
-            "a described and an undescribed edge between the same endpoints \
-             key one point: the description stays out of the id on both sides"
-        );
     }
 }
