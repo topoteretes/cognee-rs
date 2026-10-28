@@ -192,7 +192,6 @@ pub mod prelude {
         recall, remember, update,
     };
     pub use crate::cognify::{CognifyConfig, cognify};
-    pub use crate::cognify::{MemifyConfig, MemifyResult, run_memify};
     pub use crate::core::{
         AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
         NoopWatcher, Pipeline, PipelineWatcher, ProgressToken, RayonThreadPool, RetryDelay,

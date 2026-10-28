@@ -546,29 +546,10 @@ export type CogneeMemoryEntry =
       feedbackScore?: number;
     };
 
-/** Options accepted by `cogneeMemify`. */
-export interface CogneeMemifyOptions {
-  tripletBatchSize?: number;
-  nodeTypeFilter?: string;
-  nodeNameFilter?: string[];
-  nodeNameFilterOperator?: string;
-}
-
-/** Result of `cogneeMemify`. Hand-built from `MemifyResult` (not Serialize). */
-export interface CogneeMemifyResult {
-  tripletCount: number;
-  indexedCount: number;
-  batchCount: number;
-  alreadyCompleted: boolean;
-  priorPipelineRunId: string | null;
-}
-
 /** Options accepted by `cogneeImprove`. */
 export interface CogneeImproveOptions {
   datasetName: string;
   sessionIds?: string[];
-  /** Node name filter for the memify stage. */
-  nodeName?: string[];
   feedbackAlpha?: number;
   tenant?: string;
 }
@@ -591,7 +572,6 @@ export interface CogneeImproveResult {
   stagesRun: string[];
   /** Per-stage records; only `build_truth_subspace` reports one so far. */
   stages: CogneeImproveStage[];
-  memifyResult: CogneeMemifyResult | null;
   feedbackEntriesProcessed: number;
   feedbackEntriesApplied: number;
   sessionsPersisted: number;

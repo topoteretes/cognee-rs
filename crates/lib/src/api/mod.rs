@@ -1,7 +1,7 @@
 //! High-level API functions for Cognee-Rust.
 //!
 //! These are the top-level convenience functions that compose the lower-level
-//! pipeline primitives (add, cognify, search, delete, memify) into
+//! pipeline primitives (add, cognify, search, delete) into
 //! user-friendly operations matching the Python SDK.
 //!
 //! - [`forget`] -- Unified deletion API

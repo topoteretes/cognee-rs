@@ -1,5 +1,5 @@
 //! Python-facing wrappers for memory operations:
-//! `remember`, `remember_entry`, `memify`, and `improve`.
+//! `remember`, `remember_entry`, and `improve`.
 //!
 //! Each function converts Python arguments to `serde_json::Value` via the
 //! shared `crate::json` helpers, delegates to the shared async op in
@@ -65,22 +65,6 @@ pub fn py_sdk_remember_entry<'py>(
             memory::run_remember_entry(&handle, entry_json, &dataset, &session, &opts_json)
                 .await
                 .map_err(sdk_error_to_py)?;
-        crate::gil::attach_or_err(|py| serde_to_py(py, &result))
-    })
-}
-
-/// Async body for `PyCognee.memify`.
-pub fn py_sdk_memify<'py>(
-    py: Python<'py>,
-    handle: Arc<HandleState>,
-    opts: Option<Bound<'py, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let opts_json = opts_to_camel_json(opts)?;
-
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = memory::run_memify_op(&handle, &opts_json)
-            .await
-            .map_err(sdk_error_to_py)?;
         crate::gil::attach_or_err(|py| serde_to_py(py, &result))
     })
 }
@@ -174,32 +158,6 @@ impl PyCognee {
         )
     }
 
-    /// Build triplet embeddings over the entire knowledge graph.
-    ///
-    /// Idempotent — safe to re-run. Triplet search (``TRIPLET_COMPLETION``) was
-    /// removed, as in Python, so these embeddings are not searched.
-    ///
-    /// .. code-block:: python
-    ///
-    ///     result = await cognee.memify()
-    ///     print(result["tripletCount"])
-    ///
-    /// Supported ``opts`` keys (snake_case spellings accepted too):
-    /// ``tripletBatchSize``, ``nodeTypeFilter``, ``nodeNameFilter`` (list of str),
-    /// ``nodeNameFilterOperator`` (``"AND"`` | ``"OR"``).
-    ///
-    /// Returns a dict with camelCase keys:
-    /// ``tripletCount``, ``indexedCount``, ``batchCount``,
-    /// ``alreadyCompleted``, ``priorPipelineRunId``.
-    #[pyo3(signature = (opts=None))]
-    fn memify<'py>(
-        &self,
-        py: Python<'py>,
-        opts: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        py_sdk_memify(py, Arc::clone(&self.inner), opts)
-    }
-
     /// Apply graph improvement based on session feedback.
     ///
     /// ``opts`` must be a dict containing at least ``"datasetName"``
@@ -212,11 +170,10 @@ impl PyCognee {
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
-    /// ``nodeName`` (list of str), ``feedbackAlpha`` (float, default 0.1),
-    /// ``tenant`` (UUID str).
+    /// ``feedbackAlpha`` (float, default 0.1), ``tenant`` (UUID str).
     ///
     /// Returns a dict with camelCase keys:
-    /// ``stagesRun``, ``stages``, ``memifyResult``, ``feedbackEntriesProcessed``,
+    /// ``stagesRun``, ``stages``, ``feedbackEntriesProcessed``,
     /// ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
     fn improve<'py>(
         &self,

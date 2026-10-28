@@ -52,12 +52,13 @@ pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 6.5;
 ///
 /// Mirrors Python's dynamic enumeration of all DataPoint subclass index collections
 /// (graph_completion_retriever.py:88-99). Python reflects over every DataPoint
-/// subclass at query time and includes `Triplet_text` when memify has populated it.
+/// subclass at query time and includes a `Triplet_text` collection when the store holds one (an older
+/// version wrote it; cognify and memify no longer do, SDK-1115).
 /// Rust uses a static list that covers the same set; the per-collection
 /// `has_collection` guard below ensures collections absent from the store are skipped.
 ///
-/// `Triplet_text` is included so that after `memify` runs, triplet vectors influence
-/// graph search ranking exactly as they do in Python.
+/// `Triplet_text` stays listed so a store that still holds the collection is read
+/// the way Python reads it.
 ///
 /// Note on Triplet point IDs: Triplet vector points are identified by
 /// `generate_node_id(start_id + relationship_name + end_id)`, which is NOT the same
@@ -355,7 +356,7 @@ pub async fn brute_force_triplet_search(
 ///
 /// One deliberate saving over Python: `Triplet_text` is not searched. Its point
 /// ids are never graph node ids, so its rows cannot change any ranking, and an
-/// unlimited read of it — about one row per edge once memify has run — per
+/// unlimited read of it — about one row per edge when the legacy collection exists — per
 /// query would be pure I/O.
 ///
 /// That makes it far more expensive than a single search on a large store.
@@ -1148,7 +1149,7 @@ mod penalty_default_tests {
         assert!(
             has_triplet_text,
             "SEARCH_COLLECTIONS must include (\"Triplet\", \"text\") to match Python's \
-             dynamic enumeration of DataPoint index collections after memify"
+             dynamic enumeration of DataPoint index collections"
         );
     }
 

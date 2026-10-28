@@ -77,7 +77,7 @@ cognee-cli forget -d main_dataset       # delete one dataset
 ## 4. The lower-level pipeline
 
 `remember`/`recall` are convenience wrappers. For fine-grained control use the
-explicit stages — `add → cognify → search` (plus `memify` for enrichment):
+explicit stages — `add → cognify → search`:
 
 ```bash
 cognee-cli add "some text" -d my_dataset
@@ -93,4 +93,4 @@ Each stage and its flags are documented in [operations.md](operations.md).
 - [configuration.md](configuration.md) — every env var and `config` key.
 - [tools/cli.md](tools/cli.md) — the full CLI command reference.
 - [guides/](guides/README.md) — focused how-tos (custom prompts, ontology,
-  temporal cognify, memify scoping, custom schemas).
+  temporal cognify, custom schemas).

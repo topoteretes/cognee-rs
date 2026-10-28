@@ -22,9 +22,8 @@ pub struct Model {
     /// matching every other `dataset_id` column in this schema.
     #[sea_orm(primary_key, auto_increment = false)]
     pub dataset_id: String,
-    /// Claimed pipeline name (`cognify_pipeline`, `temporal-cognify`,
-    /// `memify_pipeline`), so cognify and memify on one dataset do not
-    /// exclude each other.
+    /// Claimed pipeline name (`cognify_pipeline`, `temporal-cognify`), so cognify and
+    /// temporal cognify on one dataset do not exclude each other.
     #[sea_orm(primary_key, auto_increment = false)]
     pub pipeline_name: String,
     /// Identifies the holder, so a release only ever removes its own claim and

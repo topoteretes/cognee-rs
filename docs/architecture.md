@@ -24,7 +24,7 @@ cognee-rs/
 │   ├── database/               # Relational DB abstraction (RelationalDb and its domain traits)
 │   ├── ingestion/              # Ingest pipeline + content hashing + URL crawler
 │   ├── chunking/               # Text chunking (word→sentence→paragraph→TextChunker)
-│   ├── cognify/                # Full cognify pipeline + memify enrichment pipeline
+│   ├── cognify/                # Full cognify pipeline + improve-stage building blocks
 │   ├── search/                 # Search pipeline with multiple retrieval strategies
 │   ├── session/                # Session management and session store
 │   ├── embedding/              # Multi-provider embedding engine (ONNX, OpenAI, Ollama, Bedrock, Mock)
@@ -72,7 +72,7 @@ cognee-rs/
 
 **cognee-chunking** — Text chunking strategies ported from the Python chunking hierarchy (word → sentence → paragraph). Main entry point: `ExtractTextChunksPipeline`. Trait: `TokenCounter`. Impls: `WordCounter` (whitespace fallback), `HuggingFaceTokenCounter` (BPE/WordPiece, behind `hf-tokenizer`), `TikTokenCounter` (cl100k_base BPE, behind `tiktoken`). `TokenCounterKind::resolve()` auto-selects the counter based on `EMBEDDING_PROVIDER` and `COGNEE_TOKEN_COUNTER`.
 
-**cognee-cognify** — Knowledge-graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Run orchestration's failure policy — which scope a finished run sweeps, which items it marks complete, and what its run record says — lives in the `rollback` module and calls into `cognee-delete`'s `RunSweeper`. Also houses the **memify** sub-module (`MemifyConfig`, `MemifyResult`, `memify()`): reads the existing graph, creates triplet embeddings, indexes them (the `TripletCompletion` search type was removed, as in Python).
+**cognee-cognify** — Knowledge-graph extraction pipeline: classify documents, chunk text, extract entities/relationships via LLM, summarize, store to graph and vector DBs. Entry points: `cognify()` / `cognify_datasets()`; main types: `CognifyConfig`, `CognifyInput`, `CognifyResult`, `FactExtractor`, `SummaryExtractor`. Run orchestration's failure policy — which scope a finished run sweeps, which items it marks complete, and what its run record says — lives in the `rollback` module and calls into `cognee-delete`'s `RunSweeper`. Also houses the `memify` sub-module, now only the improve stages (`apply_feedback_weights_pipeline`, `persist_sessions_in_knowledge_graph`, `distill_sessions_in_knowledge_graph`, `build_truth_subspace`, `sync_graph_to_session`); the public memify pipeline and triplet embedding are removed, as in Python (SDK-1115).
 
 **cognee-search** — Unified search orchestration across multiple retrieval strategies. Main types: `SearchBuilder`, `SearchOrchestrator`. `SearchType` enum defines 17 search modes with corresponding retriever implementations; the newest, `HybridCompletion`, blends vector search over chunks/summaries/entities/edge-facts, and 1-hop graph-neighborhood expansion, then answers via LLM completion.
 
@@ -176,7 +176,7 @@ from `cognee` (the facade) and follow the re-exports.
 | Public SDK facade | `cognee` | `api` module, `ConfigManager` |
 | Ingest | `cognee-ingestion` | `AddPipeline` |
 | Chunking | `cognee-chunking` | `TokenCounter`, `text_chunker` |
-| Cognify / memify | `cognee-cognify` | `cognify`, `memify`, `CognifyConfig` |
+| Cognify | `cognee-cognify` | `cognify`, `CognifyConfig` |
 | Search | `cognee-search` | `SearchBuilder`, `SearchType`, `HybridRetriever` |
 | Embedding | `cognee-embedding` | `EmbeddingEngine`, `EmbeddingConfig` |
 | LLM | `cognee-llm` | `Llm`, `OpenAIAdapter`, `AnthropicAdapter`, `BedrockAdapter` |

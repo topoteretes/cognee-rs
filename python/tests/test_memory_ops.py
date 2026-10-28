@@ -1,4 +1,4 @@
-"""Tests for PyCognee.remember, .remember_entry, .memify, and .improve (T7).
+"""Tests for PyCognee.remember, .remember_entry, and .improve (T7).
 
 Environment requirements:
 - ``MOCK_EMBEDDING=true`` — avoids downloading an ONNX model; required for
@@ -61,46 +61,6 @@ async def _make_cognee(tmp_path) -> cp.Cognee:
     c = cp.Cognee(settings)
     await c.warm()
     return c
-
-
-# ---------------------------------------------------------------------------
-# memify() — runs on empty graph; requires MOCK_EMBEDDING + LLM_API_KEY only.
-# ---------------------------------------------------------------------------
-
-@SKIP_IF_NO_BASE
-@pytest.mark.asyncio
-async def test_memify_empty_graph(tmp_path):
-    """memify() on an empty graph returns a dict with the expected camelCase keys."""
-    c = await _make_cognee(tmp_path)
-    result = await c.memify()
-    assert isinstance(result, dict)
-    # Must have at least one of the expected top-level keys (all camelCase).
-    assert "tripletCount" in result or "alreadyCompleted" in result, (
-        f"unexpected memify result shape: {result}"
-    )
-
-
-@SKIP_IF_NO_BASE
-@pytest.mark.asyncio
-async def test_memify_result_keys(tmp_path):
-    """memify() result contains all expected camelCase keys."""
-    c = await _make_cognee(tmp_path)
-    result = await c.memify()
-    for key in ("tripletCount", "indexedCount", "batchCount", "alreadyCompleted",
-                "priorPipelineRunId"):
-        assert key in result, f"missing key: {key}"
-    assert isinstance(result["alreadyCompleted"], bool)
-    assert isinstance(result["tripletCount"], int)
-
-
-@SKIP_IF_NO_BASE
-@pytest.mark.asyncio
-async def test_memify_with_opts(tmp_path):
-    """memify() accepts an opts dict without raising."""
-    c = await _make_cognee(tmp_path)
-    result = await c.memify(opts={"tripletBatchSize": 10})
-    assert isinstance(result, dict)
-    assert "tripletCount" in result
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +197,7 @@ async def test_improve_result_keys(tmp_path):
     await c.add({"type": "text", "text": "Fact for improve."}, "improve_ds")
     result = await c.improve({"datasetName": "improve_ds"})
     assert isinstance(result, dict)
-    for key in ("stagesRun", "stages", "memifyResult", "feedbackEntriesProcessed",
+    for key in ("stagesRun", "stages", "feedbackEntriesProcessed",
                 "feedbackEntriesApplied", "sessionsPersisted", "edgesSynced"):
         assert key in result, f"missing key: {key}"
     assert isinstance(result["stagesRun"], list)

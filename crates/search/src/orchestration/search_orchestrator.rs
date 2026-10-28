@@ -1353,8 +1353,8 @@ impl SearchOrchestrator {
             Some(String::new())
         };
 
-        // Collect node/edge IDs from the retrieved context items so the memify
-        // pipeline can trace which graph elements produced the answer.
+        // Collect node/edge IDs from the retrieved context items so the feedback
+        // stage can trace which graph elements produced the answer.
         // Items from graph-traversal retrievers carry `source_id`/`target_id`
         // payload fields; pure-RAG items carry neither.
         let used_graph_element_ids = build_used_graph_element_ids(context);

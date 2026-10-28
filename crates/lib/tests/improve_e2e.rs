@@ -162,16 +162,15 @@ async fn make_harness() -> Harness {
 }
 
 #[tokio::test]
-async fn improve_without_sessions_runs_only_memify() {
+async fn improve_without_sessions_runs_no_stage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
 
     let r = improve(ImproveParams {
-        dataset_name: "ds_memify".to_string(),
+        dataset_name: "ds_no_sessions".to_string(),
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -187,9 +186,6 @@ async fn improve_without_sessions_runs_only_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -197,12 +193,13 @@ async fn improve_without_sessions_runs_only_memify() {
     .await
     .unwrap();
 
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    // Python has no triplet-enrichment stage (SDK-1115), and neither does Rust:
+    // without sessions and without the opt-in global index, nothing runs.
+    assert!(r.stages_run.is_empty(), "got {:?}", r.stages_run);
     // The session-fed truth stage reports the orchestrator's gate reason.
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Skipped);
     assert_eq!(stage.reason.as_deref(), Some(REASON_NO_SESSION_IDS));
-    assert!(r.memify_result.is_some());
 }
 
 #[tokio::test]
@@ -213,14 +210,13 @@ async fn improve_skips_stage1_when_session_backends_missing() {
     let config = CognifyConfig::default();
 
     // Provide session_ids but no session_store/manager — stages 1, 2, 4
-    // should all be skipped (with warnings), Stage 3 still runs.
+    // should all be skipped (with warnings), the remaining stages still run.
     // Stage 2b (persist_trace_steps) is gated on `has_sessions` so its name IS
     // pushed to stages_run even when it skips/no-ops due to missing backends,
     // matching Python's convention of recording every attempted stage.
     let r = improve(ImproveParams {
         dataset_name: "ds_nosess".to_string(),
         session_ids: Some(vec!["s1".to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -236,9 +232,6 @@ async fn improve_skips_stage1_when_session_backends_missing() {
         add_pipeline: None,
         checkpoint_store: None,
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -248,7 +241,7 @@ async fn improve_skips_stage1_when_session_backends_missing() {
 
     assert_eq!(
         r.stages_run,
-        vec!["persist_trace_steps".to_string(), "memify".to_string()],
+        vec!["persist_trace_steps".to_string()],
         "with sessions, persist_trace_steps is always recorded even when backends are missing"
     );
 }
@@ -269,7 +262,6 @@ async fn improve_omits_distill_sessions_when_no_qa() {
     let r = improve(ImproveParams {
         dataset_name: "ds_noqa".to_string(),
         session_ids: Some(vec!["empty_session".to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -285,9 +277,6 @@ async fn improve_omits_distill_sessions_when_no_qa() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -304,7 +293,6 @@ async fn improve_omits_distill_sessions_when_no_qa() {
     assert_eq!(r.lessons_published, 0);
     // The always-run stages are still present (proving the pipeline itself ran).
     assert!(r.stages_run.contains(&"persist_trace_steps".to_string()));
-    assert!(r.stages_run.contains(&"memify".to_string()));
 }
 
 /// Stage 2d (`build_truth_subspace`) is opt-in. With sessions present, the flag
@@ -332,7 +320,6 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
     let r = improve(ImproveParams {
         dataset_name: "ds_truth".to_string(),
         session_ids: Some(vec!["truth_optin_session".to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -348,9 +335,6 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: true,
         run_in_background: false,
@@ -407,7 +391,6 @@ async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
     let r = improve(ImproveParams {
         dataset_name: "ds_truth_unsupported".to_string(),
         session_ids: Some(vec!["truth_unsupported_session".to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -423,9 +406,6 @@ async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: true,
         run_in_background: false,
@@ -464,7 +444,6 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
     let r = improve(ImproveParams {
         dataset_name: "ds_truth_off".to_string(),
         session_ids: Some(vec!["truth_optout_session".to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -480,9 +459,6 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -522,7 +498,6 @@ async fn improve_records_global_context_index_when_opted_in() {
     let r = improve(ImproveParams {
         dataset_name: "ds_gcidx".to_string(),
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -538,9 +513,6 @@ async fn improve_records_global_context_index_when_opted_in() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: true,
         build_truth_subspace: false,
         run_in_background: false,
@@ -588,7 +560,6 @@ async fn improve_skips_global_context_index_in_background() {
     let r = improve(ImproveParams {
         dataset_name: "ds_gcidx_bg".to_string(),
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -604,9 +575,6 @@ async fn improve_skips_global_context_index_in_background() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: true,
         build_truth_subspace: false,
         run_in_background: true,
@@ -663,7 +631,6 @@ async fn improve_records_distill_sessions_when_lessons_published() {
     let r = improve(ImproveParams {
         dataset_name: "ds_distill".to_string(),
         session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -679,9 +646,6 @@ async fn improve_records_distill_sessions_when_lessons_published() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -706,11 +670,11 @@ async fn improve_records_distill_sessions_when_lessons_published() {
     );
 }
 
-/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the memify
-/// stage reads the dataset's own graph: with routing engines that fail
-/// outside a dataset scope, it still runs.
+/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the global
+/// context index stage reads the dataset's own graph: with routing engines that
+/// fail outside a dataset scope, it still runs.
 #[tokio::test]
-async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
+async fn improve_reads_the_graph_in_the_dataset_under_per_dataset_storage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
@@ -727,7 +691,6 @@ async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
     let r = improve(ImproveParams {
         dataset_name: "ds_per_dataset".to_string(),
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -743,20 +706,18 @@ async fn improve_runs_memify_in_the_dataset_under_per_dataset_storage() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
-        build_global_context_index: false,
+        build_global_context_index: true,
         build_truth_subspace: false,
         run_in_background: false,
     })
     .await
     .unwrap();
 
-    assert_eq!(r.stages_run, vec!["memify".to_string()]);
+    // The dataset's graph has no edges, so the index stage records nothing.
+    assert!(r.stages_run.is_empty(), "got {:?}", r.stages_run);
     assert_eq!(
         stores.graph_datasets(),
         vec![dataset_id],
-        "memify read the dataset's graph"
+        "the stage read the dataset's graph"
     );
 }

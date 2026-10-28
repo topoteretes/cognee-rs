@@ -73,7 +73,7 @@ fn config_value(config_home: &TempDir, key: &str) -> serde_json::Value {
 ///
 /// Only `api_key`, `api_url` and `llm_model` are required; the two embedding
 /// paths are optional. A named struct rather than a tuple both for
-/// `clippy::type_complexity` and to match `LlmEnv` in `cli_memify.rs`.
+/// `clippy::type_complexity`.
 struct LiveCliEnv {
     api_key: String,
     api_url: String,

@@ -24,7 +24,6 @@ pub enum Commands {
     Cognify(CognifyArgs),
     #[command(name = "add-and-cognify")]
     AddAndCognify(AddAndCognifyArgs),
-    Memify(MemifyArgs),
     Search(SearchArgs),
     Remember(RememberArgs),
     Recall(RecallArgs),
@@ -70,7 +69,7 @@ impl Commands {
             Commands::Cognify(args) => args.llm_max_retries,
             Commands::AddAndCognify(args) => args.llm_max_retries,
             Commands::Search(args) => args.llm_max_retries,
-            // `memify` / `remember` / `recall` / `improve` also drive LLM work
+            // `remember` / `recall` / `improve` also drive LLM work
             // but do not declare the flag. Adding it to them is a separate
             // change — this one wires the flag that already exists. `RunSequence`
             // is `None` by design: its steps carry their own flags and are
@@ -236,14 +235,14 @@ pub struct PipelineUnblockArgs {
     pub dataset: String,
 
     /// Pipeline to inspect: `cognify_pipeline`, `temporal-cognify` or
-    /// `memify_pipeline`. Each claims a dataset under its own name, so they
+    /// `temporal-cognify`. Each claims a dataset under its own name, so they
     /// never exclude each other.
     ///
-    /// Omit to check all three. Defaulting to one would answer "nothing is
+    /// Omit to check both. Defaulting to one would answer "nothing is
     /// blocking" for a dataset wedged on another, and the failing run's error
     /// does not tell an operator which name to pass.
     ///
-    /// Required with `--clear`: clearing all three would retire a run on
+    /// Required with `--clear`: clearing both would retire a run on
     /// another pipeline that is alive and mid-flight.
     #[arg(long = "pipeline")]
     pub pipeline: Option<String>,
@@ -356,32 +355,6 @@ pub struct EdgeReindexArgs {
     /// reports the orphans after the cursor, not the graph's total.
     #[arg(long = "resume-after")]
     pub resume_after: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct MemifyArgs {
-    /// Dataset(s) to run memify on. If empty, runs on all datasets for the current owner.
-    #[arg(long = "datasets", short = 'd')]
-    pub datasets: Vec<String>,
-
-    /// Filter to specific node type in the graph (e.g., "Entity").
-    #[arg(long = "node-type")]
-    pub node_type: Option<String>,
-
-    /// Filter to specific node names (OR logic).
-    #[arg(long = "node-name")]
-    pub node_names: Vec<String>,
-
-    /// Triplet extraction/embedding batch size.
-    #[arg(long = "batch-size", default_value_t = 100)]
-    pub batch_size: usize,
-
-    /// Tenant to run as; without `--datasets`, memify runs on the owner's datasets
-    /// in this tenant. Datasets are matched by strict tenant equality: a dataset
-    /// added with `--tenant-id T` is found only with `--tenant-id T`; without the
-    /// flag only tenant-less datasets are reachable.
-    #[arg(long = "tenant-id")]
-    pub tenant_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -635,7 +608,7 @@ pub fn lower_logging_settings(cfg: &mut cognee_logging::LoggingConfig, settings:
 /// its whole human-facing surface through `tracing` — not only diagnostics but
 /// progress lines like "Cognify completed." — so switching those too would
 /// relocate all of it to stderr. That is a UX decision well beyond fixing a
-/// broken machine contract, and ten `cli_e2e`/`cli_memify` assertions pin the
+/// broken machine contract, and ten `cli_e2e` assertions pin the
 /// current placement as intended behaviour. The faithful end state is Python's
 /// (`cognee/cli/logging_utils.py` puts its handler on stderr in every mode,
 /// with data via `echo`), and getting there means routing CLI messages through
@@ -825,7 +798,7 @@ pub struct ForgetArgs {
 ///
 /// Mirrors the Python `cognee.improve()` SDK function. Runs the four-stage
 /// session-graph bridge: apply feedback weights, persist session Q&A to the
-/// graph, default enrichment (memify), and sync graph edges back into sessions.
+/// graph, distill lessons, and sync graph edges back into sessions.
 #[derive(Debug, Args)]
 pub struct ImproveArgs {
     /// Dataset name; defaults to the `default_dataset_name` setting
@@ -836,11 +809,6 @@ pub struct ImproveArgs {
     /// Session id(s) to bridge into the permanent graph. Repeatable.
     #[arg(long = "session-id")]
     pub session_id: Vec<String>,
-
-    /// Restrict the enrichment (memify) pass to these graph node names.
-    /// Repeatable.
-    #[arg(long = "node-name")]
-    pub node_name: Vec<String>,
 
     /// Mixing factor for feedback weight propagation (Stage 1).
     #[arg(long = "feedback-alpha", default_value_t = 0.1)]
@@ -1000,6 +968,18 @@ mod tests {
         }
     }
 
+    /// The public `memify` command was removed (SDK-1039, Python SDK-1115), and
+    /// `improve` no longer takes the node-name scope that only fed memify.
+    #[test]
+    fn memify_command_and_improve_node_name_are_removed() {
+        let err = Cli::try_parse_from(["cognee-cli", "memify"])
+            .expect_err("memify must not parse as a subcommand");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        let err = Cli::try_parse_from(["cognee-cli", "improve", "--node-name", "Alice"])
+            .expect_err("improve --node-name must not parse");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
     /// Config-file logging keys fill only what the logging env left unset.
     #[test]
     fn lower_logging_settings_fills_only_unset_values() {
@@ -1035,7 +1015,7 @@ mod tests {
     }
 
     /// `--tenant-id` reaches every dataset command — `search`, `recall`,
-    /// `cognify`, `memify`, `add-and-cognify`, `pipeline-unblock`, `delete` —
+    /// `cognify`, `add-and-cognify`, `pipeline-unblock`, `delete` —
     /// (symmetric with `add` / `remember` / `improve`), so CLI-written tenanted
     /// data stays reachable under strict tenant matching.
     #[test]
@@ -1056,10 +1036,6 @@ mod tests {
         match parse(&["cognee-cli", "cognify", "--tenant-id", t]).command {
             Commands::Cognify(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),
             other => panic!("expected cognify, got {other:?}"),
-        }
-        match parse(&["cognee-cli", "memify", "--tenant-id", t]).command {
-            Commands::Memify(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),
-            other => panic!("expected memify, got {other:?}"),
         }
         match parse(&["cognee-cli", "add-and-cognify", "x", "--tenant-id", t]).command {
             Commands::AddAndCognify(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),
@@ -1244,7 +1220,7 @@ mod console_stream_tests {
     #[test]
     fn human_output_and_other_commands_keep_stdout() {
         // Not a fallback. The CLI routes progress lines like "Cognify
-        // completed." through tracing too, and ten cli_e2e/cli_memify
+        // completed." through tracing too, and ten cli_e2e
         // assertions pin those on stdout. Moving them is a UX change, not part
         // of fixing a broken machine contract.
         for args in [

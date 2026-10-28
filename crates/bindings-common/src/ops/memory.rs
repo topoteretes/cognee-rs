@@ -1,4 +1,4 @@
-//! Shared async memory operations: `remember`, `remember_entry`, `memify`, `improve`.
+//! Shared async memory operations: `remember`, `remember_entry`, `improve`.
 //!
 //! These functions contain the pure-Rust async logic that is shared between
 //! every language binding surface (C API, Neon JS, Python). Each function takes
@@ -13,7 +13,7 @@
 //! ## Input wire shapes (opts / entry keys are camelCase)
 //!
 //! The argument objects below use camelCase keys. Result shapes differ by op:
-//! `memify` / `improve` are hand-built as camelCase (see [`memify_result_json`]),
+//! `improve` is hand-built as camelCase,
 //! but `remember` / `remember_entry` pass the `RememberResult` struct straight
 //! through `serde_json::to_value`, so their result keys are **snake_case** —
 //! deliberately, to preserve Python-SDK wire parity (Python's
@@ -41,15 +41,9 @@
 //! {"type":"feedback", "qaId":"...", "feedbackText":"...", "feedbackScore":N}
 //! ```
 //!
-//! ### `memify` opts
-//! ```json
-//! {"tripletBatchSize":N, "nodeTypeFilter":"...", "nodeNameFilter":["..."],
-//!  "nodeNameFilterOperator":"AND"|"OR"}
-//! ```
-//!
 //! ### `improve` opts (required: `datasetName`)
 //! ```json
-//! {"datasetName":"...", "sessionIds":["..."], "nodeName":["..."],
+//! {"datasetName":"...", "sessionIds":["..."],
 //!  "feedbackAlpha":0.1, "tenant":"<uuid>"}
 //! ```
 
@@ -58,8 +52,6 @@ use std::sync::Arc;
 use serde_json::json;
 
 use cognee::api::{ImproveParams, remember, remember_entry};
-use cognee::cognify::{MemifyConfig, run_memify};
-use cognee::database::PipelineRunRepository;
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
@@ -75,21 +67,6 @@ use crate::{HandleState, SdkError};
 /// of this parser existed, all silently treating a present non-string `tenant`
 /// as absent, and a fix to one would not have reached the others.
 use super::pipeline::opts_tenant;
-
-// ---------------------------------------------------------------------------
-// MemifyResult JSON helper (MemifyResult does not derive Serialize).
-// ---------------------------------------------------------------------------
-
-/// Serialise a [`cognee::cognify::MemifyResult`] to a camelCase JSON value.
-pub fn memify_result_json(r: &cognee::cognify::MemifyResult) -> serde_json::Value {
-    json!({
-        "tripletCount": r.triplet_count,
-        "indexedCount": r.index_result.indexed_count,
-        "batchCount": r.index_result.batch_count,
-        "alreadyCompleted": r.already_completed,
-        "priorPipelineRunId": r.prior_pipeline_run_id.map(|id| id.to_string()),
-    })
-}
 
 // ---------------------------------------------------------------------------
 // MemoryEntry marshalling.
@@ -324,56 +301,6 @@ pub async fn run_remember_entry(
         .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
 }
 
-/// Run the memify pipeline: create triplet embeddings for all graph edges.
-///
-/// Idempotent — safe to re-run.  `opts` may be `serde_json::Value::Null`
-/// when no options were provided.
-pub async fn run_memify_op(
-    state: &HandleState,
-    opts: &serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-
-    let mut config = MemifyConfig::default();
-    if let Some(n) = opts.get("tripletBatchSize").and_then(|v| v.as_u64()) {
-        config = config.with_triplet_batch_size(n as usize);
-    }
-    if let Some(s) = opts.get("nodeTypeFilter").and_then(|v| v.as_str()) {
-        config = config.with_node_type_filter(s.to_string());
-    }
-    if let Some(arr) = opts.get("nodeNameFilter").and_then(|v| v.as_array()) {
-        let names: Vec<String> = arr
-            .iter()
-            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-            .collect();
-        config = config.with_node_name_filter(names);
-    }
-    if let Some(op) = opts.get("nodeNameFilterOperator").and_then(|v| v.as_str()) {
-        config = config.with_node_name_filter_operator(op.to_string());
-    }
-
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-        Arc::clone(&svc.database).pipeline_runs();
-
-    let result = run_memify(
-        svc.graph_db.clone(),
-        svc.vector_db.clone(),
-        svc.embedding_engine.clone(),
-        svc.cpu_pool(),
-        svc.database.clone(),
-        pipeline_run_repo,
-        None,
-        Some(owner_id),
-        None,
-        &config,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("memify failed: {e}")))?;
-
-    Ok(memify_result_json(&result))
-}
-
 /// Apply graph improvement based on session feedback.
 ///
 /// `opts` must contain `"datasetName"` (required); all other fields are
@@ -398,14 +325,6 @@ pub async fn run_improve(
         })
     });
 
-    let node_name: Option<Vec<String>> = opts.get("nodeName").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
-
     let feedback_alpha = opts
         .get("feedbackAlpha")
         .and_then(|v| v.as_f64())
@@ -421,13 +340,9 @@ pub async fn run_improve(
     let result = cognee::api::improve(ImproveParams {
         dataset_name,
         session_ids,
-        node_name,
         owner_id,
         tenant_id,
         feedback_alpha,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -449,12 +364,6 @@ pub async fn run_improve(
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
-    let memify_json = result
-        .memify_result
-        .as_ref()
-        .map(memify_result_json)
-        .unwrap_or(serde_json::Value::Null);
-
     // Per-stage records, Python's `ImproveResult.stages`. Only the truth
     // stage reports one so far.
     let stages: Vec<serde_json::Value> = result
@@ -475,7 +384,6 @@ pub async fn run_improve(
     Ok(json!({
         "stagesRun": result.stages_run,
         "stages": stages,
-        "memifyResult": memify_json,
         "feedbackEntriesProcessed": result.feedback_entries_processed,
         "feedbackEntriesApplied": result.feedback_entries_applied,
         "sessionsPersisted": result.sessions_persisted,

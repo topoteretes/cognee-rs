@@ -8,7 +8,7 @@
 //! (a) Signature has no `run_in_background`.
 //! (b) When sessions are supplied, all four stages run (or gracefully skip
 //!     when backends are missing).
-//! (c) When sessions are not supplied, only Stage 3 (memify) runs.
+//! (c) When sessions are not supplied, no stage runs.
 
 use std::sync::Arc;
 
@@ -86,19 +86,17 @@ async fn make_harness() -> Harness {
 // ---------------------------------------------------------------------------
 // (a) Compile-time check: ImproveParams exhaustive construction
 //
-// `ImproveParams` now has 23 fields (18 from LIB-04, three v2 fields from E-05:
-// extraction_tasks, enrichment_tasks, data; and two new parity fields:
-// build_global_context_index, run_in_background). The struct literal below must
-// list every field so the compiler catches future additions.
+// The struct literal below must list every `ImproveParams` field so the
+// compiler catches future additions.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// (b) With sessions supplied, stage 3 (memify) always runs; stage 1/2/4 may
-//     skip gracefully when the dataset does not yet exist in the graph.
+// (b) With sessions supplied, the session stages are recorded; they may skip
+//     gracefully when the dataset does not yet exist in the graph.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn improve_with_sessions_runs_at_least_memify() {
+async fn improve_with_sessions_records_trace_stage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
@@ -116,7 +114,6 @@ async fn improve_with_sessions_runs_at_least_memify() {
     let r = improve(ImproveParams {
         dataset_name: "ds_with_sessions".to_string(),
         session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -132,9 +129,6 @@ async fn improve_with_sessions_runs_at_least_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -142,20 +136,20 @@ async fn improve_with_sessions_runs_at_least_memify() {
     .await
     .unwrap();
 
-    // Stage 3 (memify) always runs.
+    // persist_trace_steps is always recorded when sessions are supplied.
     assert!(
-        r.stages_run.contains(&"memify".to_string()),
-        "expected memify stage; got {:?}",
+        r.stages_run.contains(&"persist_trace_steps".to_string()),
+        "expected persist_trace_steps stage; got {:?}",
         r.stages_run
     );
 }
 
 // ---------------------------------------------------------------------------
-// (c) Without sessions, only Stage 3 runs
+// (c) Without sessions, no stage runs
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn improve_without_sessions_runs_only_memify() {
+async fn improve_without_sessions_runs_no_stage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
@@ -164,7 +158,6 @@ async fn improve_without_sessions_runs_only_memify() {
     let r = improve(ImproveParams {
         dataset_name: "ds_no_sess".to_string(),
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -180,9 +173,6 @@ async fn improve_without_sessions_runs_only_memify() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -190,12 +180,11 @@ async fn improve_without_sessions_runs_only_memify() {
     .await
     .unwrap();
 
-    assert_eq!(
-        r.stages_run,
-        vec!["memify".to_string()],
-        "without sessions only stage 3 should run"
+    assert!(
+        r.stages_run.is_empty(),
+        "without sessions no stage should run; got {:?}",
+        r.stages_run
     );
-    assert!(r.memify_result.is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +209,6 @@ async fn improve_skips_when_locked() {
     let r = improve(ImproveParams {
         dataset_name: "ds_locked".to_string(),
         session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -236,9 +224,6 @@ async fn improve_skips_when_locked() {
         add_pipeline: Some(&h.add_pipeline),
         checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,

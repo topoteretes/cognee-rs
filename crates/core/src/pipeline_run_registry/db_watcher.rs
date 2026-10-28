@@ -2,7 +2,7 @@
 //! through [`PipelineRunRepository`] without an in-memory event channel.
 //!
 //! Used by library convenience functions (`cognee_cognify::cognify`,
-//! `cognee_cognify::memify::memify`, `cognee_ingestion::AddPipeline::add`)
+//! `cognee_ingestion::AddPipeline::add`)
 //! that do not flow through the http-server's `DefaultPipelineRunRegistry`
 //! but still want the four-state audit trail (gap 08-07, locked decision 11).
 //!

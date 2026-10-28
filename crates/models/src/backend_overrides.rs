@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Per-call backend configuration overrides.
 ///
 /// Mirrors Python's `vector_db_config` / `graph_db_config` parameters on
-/// `add()`, `cognify()`, and `memify()`. When present, the pipeline should
+/// `add()` and `cognify()`. When present, the pipeline should
 /// use the specified backend configuration instead of the default.
 ///
 /// For now the configuration is stored as a flat provider name + params map.

@@ -12,8 +12,8 @@ use crate::error::CliError;
 #[cfg(feature = "visualization")]
 use super::visualize;
 use super::{
-    add, add_and_cognify, cognify, config, delete, export, forget, improve, memify, recall,
-    remember, search,
+    add, add_and_cognify, cognify, config, delete, export, forget, improve, recall, remember,
+    search,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -28,7 +28,6 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Add(args) => add::run(args, Arc::clone(cm)),
         Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
         Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
-        Commands::Memify(args) => memify::run(args, Arc::clone(cm)),
         Commands::Search(args) => search::run(args, Arc::clone(cm)),
         Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
         Commands::Recall(args) => recall::run(args, Arc::clone(cm)),

@@ -24,7 +24,7 @@ use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_session::{FsSessionStore, SessionManager, SessionStore};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockLlm;
-use cognee_vector::MockVectorDB;
+use cognee_vector::{MockVectorDB, VectorDB};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -271,6 +271,21 @@ async fn remember_permanent_self_improvement_runs_improve() {
     assert!(
         result.improve_result.is_some(),
         "self_improvement=true must run improve()"
+    );
+    // improve() has no memify/triplet stage (SDK-1115), so nothing wrote the
+    // `Triplet_text` collection.
+    let improve = result.improve_result.as_ref().expect("improve ran");
+    assert!(
+        !improve.stages_run.iter().any(|stage| stage == "memify"),
+        "improve must not report a memify stage: {:?}",
+        improve.stages_run
+    );
+    assert!(
+        !h.vector_db
+            .has_collection("Triplet", "text")
+            .await
+            .expect("has_collection"),
+        "remember(self_improvement) must not write Triplet_text"
     );
 
     // Without self-improvement no improve run is attached.

@@ -26,8 +26,6 @@ import type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeForgetTarget,
@@ -652,21 +650,8 @@ export class Cognee {
   }
 
   /**
-   * Index triplet embeddings from the existing knowledge graph.
-   *
-   * Idempotent (re-runnable). Writes `Triplet_text` embeddings (triplet search itself was removed, as in Python).
-   */
-  async memify(opts?: CogneeMemifyOptions): Promise<CogneeMemifyResult> {
-    try {
-      return await native.cogneeMemify(this._handle, opts);
-    } catch (e) {
-      throw wrapNativeError(e);
-    }
-  }
-
-  /**
-   * Run the four-stage session-graph bridge pipeline:
-   * session collection → memify → feedback integration → edge synchronisation.
+   * Run the session-graph bridge pipeline: feedback integration → session
+   * persistence and distillation → edge synchronisation.
    */
   async improve(opts: CogneeImproveOptions): Promise<CogneeImproveResult> {
     try {

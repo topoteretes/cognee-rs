@@ -854,18 +854,6 @@ class Cognee:
         """
         ...
 
-    async def memify(
-        self,
-        opts: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        """Build triplet embeddings over the entire knowledge graph.
-
-        Idempotent.  Returns a dict with camelCase keys: ``tripletCount``,
-        ``indexedCount``, ``batchCount``, ``alreadyCompleted``,
-        ``priorPipelineRunId``.
-        """
-        ...
-
     async def improve(self, opts: dict[str, Any]) -> dict[str, Any]:
         """Apply graph improvement based on session feedback.
 
@@ -873,8 +861,7 @@ class Cognee:
         ``"dataset_name"`` (normalised).
 
         Returns a dict with camelCase keys: ``stagesRun``, ``stages``,
-        ``memifyResult``, ``feedbackEntriesProcessed``,
-        ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
+        ``feedbackEntriesProcessed``, ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
         """
         ...
 

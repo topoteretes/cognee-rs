@@ -7,7 +7,6 @@ Single-user, local command-line interface over the cognee pipeline (`add` → `c
 - `add` — ingest text and/or files into a dataset.
 - `cognify` — extract a knowledge graph from ingested data.
 - `add-and-cognify` — ingest then cognify in one call.
-- `memify` — run the self-improvement (memory enrichment) pass over the graph.
 - `search` — query the knowledge graph (graph/RAG completion, chunks, summaries, code, cypher, temporal).
 - `remember` — one-call store (add + cognify + improve).
 - `recall` — smart memory query with auto-routed search type.

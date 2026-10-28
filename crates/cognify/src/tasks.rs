@@ -4947,7 +4947,7 @@ pub(crate) fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -
 /// Returns [`CognifyError::OutputTypeMismatch`] when the downcast fails — a
 /// programmer error indicating the pipeline's last task does not emit
 /// `CognifyResult`. Mirrors `cognee_ingestion::pipeline::extract_data_outputs`
-/// (LIB-06-01) and `cognee_cognify::memify::extract_memify_outputs` (LIB-06-02).
+/// (LIB-06-01).
 fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult, CognifyError> {
     let mut first = outputs
         .into_iter()

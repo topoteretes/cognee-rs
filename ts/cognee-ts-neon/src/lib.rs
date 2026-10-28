@@ -70,10 +70,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeSearch", sdk_retrieval::cognee_search)?;
     cx.export_function("cogneeRecall", sdk_retrieval::cognee_recall)?;
 
-    // Memory ops (Phase 5): remember / remember_entry / memify / improve.
+    // Memory ops (Phase 5): remember / remember_entry / improve.
     cx.export_function("cogneeRemember", sdk_memory::cognee_remember)?;
     cx.export_function("cogneeRememberEntry", sdk_memory::cognee_remember_entry)?;
-    cx.export_function("cogneeMemify", sdk_memory::cognee_memify)?;
     cx.export_function("cogneeImprove", sdk_memory::cognee_improve)?;
 
     // Data ops (Phase 5): forget / update / prune.
