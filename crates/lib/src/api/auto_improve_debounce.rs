@@ -279,7 +279,7 @@ mod tests {
     //! Ported from Python's
     //! `cognee/tests/unit/api/v1/remember/test_remember_auto_improve_debounce.py`
     //! (the decision and state-row cases; the `remember()` cases are in
-    //! `crates/lib/tests/remember_auto_improve.rs`).
+    //! `crates/lib/tests/remember_tests.rs`).
 
     use std::sync::Arc;
 

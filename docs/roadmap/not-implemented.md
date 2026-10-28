@@ -76,8 +76,9 @@ each. Not yet ported — they report a skip reason instead of running:
   `no_llm_configured` by its gates). Ported in SDK-1044 step 6.
 - **`update_user_preferences`** — skipped `personalization_disabled`, or `not_ported` once
   `personalization_enabled` is on. Ported in SDK-1044 step 6.
-- **`review_conflicts`** — skipped `opt_in_disabled` unless opted in (argument or
-  `improve.review_conflicts`), then `no_llm_configured` or `not_ported` (SDK-1038).
+- **`review_conflicts`** — skipped `opt_in_disabled` unless opted in with
+  `improve.review_conflicts` (there is no per-call argument yet), then `no_llm_configured` or
+  `not_ported` (SDK-1038).
 
 Improve settings that exist but are not read by any stage yet: `improve.trace_window_steps`,
 `improve.trace_windows_per_run` (SDK-1047), `improve.distill_max_batches_per_run` (SDK-1049) and

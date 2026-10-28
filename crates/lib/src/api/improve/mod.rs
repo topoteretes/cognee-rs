@@ -397,7 +397,8 @@ async fn run_improve(
         feedback_alpha,
         build_truth_subspace,
         build_global_context_index,
-        // The argument and IMPROVE_REVIEW_CONFLICTS are both opt-ins.
+        // `improve.review_conflicts` (IMPROVE_REVIEW_CONFLICTS) opts in; Rust has
+        // no per-call `review_conflicts` argument yet.
         review_conflicts: config.review_conflicts,
         personalization_enabled,
         capabilities,

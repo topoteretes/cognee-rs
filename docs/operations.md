@@ -77,7 +77,7 @@ result, and an exhausted LLM budget skips every later stage with
 `budget_exhausted`. The stages that draft text with an LLM are skipped with
 `no_llm_configured` when none is configured. `extract_agent_context`,
 `update_user_preferences` (gated by `personalization_enabled`) and
-`review_conflicts` (opt-in, also via `improve.review_conflicts`) are not
+`review_conflicts` (opt-in via `improve.review_conflicts`) are not
 ported yet and always report a skip reason. rustdoc: `api::improve`.
 
 ### forget
