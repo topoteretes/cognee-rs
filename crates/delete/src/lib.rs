@@ -22,10 +22,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use cognee_core::dataset_locks::DatasetLocks;
-use cognee_core::pipeline_run_registry::{
-    ids::{pipeline_id, pipeline_run_id},
-    run_info_for_initiated,
-};
 use cognee_database::{
     DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
     PipelineRunStatus,
@@ -419,19 +415,8 @@ impl DeleteService {
         self
     }
 
-    /// Wire a [`PipelineRunRepository`] so the dataset-scoped delete path
-    /// writes a fresh `INITIATED` row for every `(dataset_id, pipeline_name)`
-    /// pair before tearing the dataset down. This matches Python's prune
-    /// chain, which fires `reset_dataset_pipeline_run_status` so a future
-    /// re-cognify is not short-circuited by
-    /// `check_pipeline_run_qualification` (task 08-08).
-    ///
-    /// Since the pipeline cache became opt-in, that short-circuit only applies
-    /// to callers that set `CognifyConfig::use_pipeline_cache`; the fresh row
-    /// is still written for parity and for those callers.
-    ///
-    /// When unset (default for back-compat / mock paths) the reset is a
-    /// no-op.
+    /// Wire a [`PipelineRunRepository`] so a delete records its `forget`
+    /// change row (see `record_forget`). Unset, no row is written.
     pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
         self.pipeline_run_repo = Some(repo);
         self
@@ -793,19 +778,9 @@ impl DeleteService {
                 })?;
             cleared_pipeline_statuses += count;
 
-            // Python parity: writing a fresh `INITIATED` row for every
-            // pipeline registered against this dataset invalidates any prior
-            // `COMPLETED` row so a future re-cognify is not short-circuited
-            // by `check_pipeline_run_qualification` (task 08-08) — which since
-            // the cache became opt-in only affects callers that set
-            // `CognifyConfig::use_pipeline_cache`. The rows
-            // outlive the dataset itself — once the FK is dropped (gap 08-01)
-            // the orphans are harmless and surface in
-            // `list_recent_with_attribution` with `dataset_name = None`.
-            // See [docs/telemetry/08/05-reset-helpers.md §4.3] for the
-            // orphan-row decision.
-            self.reset_dataset_pipeline_run_status(dataset.owner_id, dataset.id)
-                .await?;
+            // No `INITIATED` reset row: Python's forget stopped writing one in
+            // `dc0b4ad6a`. Per-item completion markers, cleared above, are
+            // what lets a re-add be cognified again.
         }
 
         // For data-scoped deletion, clear pipeline_status for each affected
@@ -1234,7 +1209,7 @@ impl DeleteService {
             }
         } else {
             // Dataset (and All): mirror Python's per-record all-pipeline key
-            // removal, then reset cognify run status at the dataset level.
+            // removal. No `INITIATED` reset row (Python `dc0b4ad6a`).
             for dataset in &targets.datasets_to_delete {
                 self.database
                     .clear_pipeline_status_for_dataset(dataset.id)
@@ -1245,9 +1220,6 @@ impl DeleteService {
                             dataset.name
                         ))
                     })?;
-
-                self.reset_cognify_pipeline_run_status(dataset.owner_id, dataset.id)
-                    .await?;
             }
         }
 
@@ -1337,114 +1309,6 @@ impl DeleteService {
             )
             .collect()
     }
-
-    /// Internal Python-parity helper invoked from the dataset-deletion
-    /// path. Walks every distinct `pipeline_name` registered against
-    /// `dataset_id` and writes a fresh `INITIATED` row for each (skipping
-    /// pipelines already at `INITIATED`).
-    ///
-    /// No-op when no [`PipelineRunRepository`] was supplied via
-    /// [`Self::with_pipeline_run_repo`]; this keeps mock-only test paths
-    /// working without forcing them to wire a repo.
-    async fn reset_dataset_pipeline_run_status(
-        &self,
-        owner_id: Uuid,
-        dataset_id: Uuid,
-    ) -> Result<(), DeleteError> {
-        let Some(repo) = self.pipeline_run_repo.as_ref() else {
-            return Ok(());
-        };
-
-        let runs = repo
-            .get_pipeline_runs_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
-        for run in runs {
-            if matches!(run.status, PipelineRunStatus::Initiated) {
-                // Python skips runs already pending to avoid duplicate rows.
-                continue;
-            }
-            // Change records, not pipelines a re-run could be short-circuited
-            // by: nothing to reset.
-            if CHANGE_RECORD_PIPELINE_NAMES.contains(&run.pipeline_name.as_str()) {
-                continue;
-            }
-            let name = run.pipeline_name;
-            let pid = pipeline_id(owner_id, dataset_id, &name);
-            let prid = pipeline_run_id(pid, dataset_id);
-            repo.log_pipeline_run(
-                prid,
-                pid,
-                &name,
-                Some(dataset_id),
-                PipelineRunStatus::Initiated,
-                Some(run_info_for_initiated()),
-            )
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to reset pipeline '{name}' for dataset {dataset_id}: {e}"
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Like [`reset_dataset_pipeline_run_status`] but only resets the specified
-    /// pipeline by name. Used by memory-only forget to reset `cognify_pipeline`
-    /// without touching `add_pipeline` — matching Python's
-    /// `reset_dataset_pipeline_run_status(pipeline_names=["cognify_pipeline"])`.
-    async fn reset_cognify_pipeline_run_status(
-        &self,
-        owner_id: Uuid,
-        dataset_id: Uuid,
-    ) -> Result<(), DeleteError> {
-        let Some(repo) = self.pipeline_run_repo.as_ref() else {
-            return Ok(());
-        };
-
-        let runs = repo
-            .get_pipeline_runs_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
-        for run in runs {
-            if run.pipeline_name != "cognify_pipeline" {
-                continue;
-            }
-            if matches!(run.status, PipelineRunStatus::Initiated) {
-                continue;
-            }
-            let name = run.pipeline_name;
-            let pid = pipeline_id(owner_id, dataset_id, &name);
-            let prid = pipeline_run_id(pid, dataset_id);
-            repo.log_pipeline_run(
-                prid,
-                pid,
-                &name,
-                Some(dataset_id),
-                PipelineRunStatus::Initiated,
-                Some(run_info_for_initiated()),
-            )
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to reset cognify pipeline for dataset {dataset_id}: {e}"
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
     // ==================================================================
     // Graph/vector cleanup helpers
     // ==================================================================

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cognee_core::pipeline::{PipelineRunInfo, PipelineStatus, PipelineWatcher, TaskStatus};
-use cognee_core::pipeline_run_registry::{DbPipelineWatcher, data_info, run_info_for_errored};
+use cognee_core::pipeline_run_registry::{DbPipelineWatcher, run_info_for_errored};
 use cognee_database::{PipelineRunRepository, PipelineRunStatus, RelationalDb};
 use cognee_delete::{RunSweeper, SweepScope};
 use cognee_graph::GraphDBTrait;
@@ -33,9 +33,8 @@ use crate::failure::{FailureReport, RollbackScope};
 /// The `run_info` key a tolerantly-completed run's failure summary rides
 /// under.
 ///
-/// Additive: the `data` key Python's shape requires is still written first, so
-/// the cross-SDK `pipeline_runs` shape assertions keep passing and a reader
-/// that only knows Python's shape sees exactly what it expects.
+/// A Rust-only, additive key: Python's `COMPLETED` row is `{}` (no `data`
+/// since COG-6089), so a reader that only knows Python's shape ignores it.
 pub const RUN_INFO_FAILURES_KEY: &str = "cognify_failures";
 
 // ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ pub const RUN_INFO_FAILURES_KEY: &str = "cognify_failures";
 /// from. Without this, a failed run could not be swept: the sweep would have
 /// no run to select on, and a sweep that selects nothing is the silent no-op
 /// the plan calls worse than an honest refusal. Observing
-/// `on_pipeline_run_initiated`, the first event the executor emits, gets the
+/// `on_pipeline_run_started`, the first event the executor emits, gets the
 /// id on every exit path — collected failure, persistence error, cancellation
 /// alike.
 pub(crate) struct RunIdCapturingWatcher {
@@ -111,12 +110,8 @@ impl PipelineWatcher for RunIdCapturingWatcher {
             .await;
     }
 
-    async fn on_pipeline_run_initiated(&self, run: &PipelineRunInfo) {
-        *self.ids() = Some((run.run_id, run.pipeline_id));
-        self.inner.on_pipeline_run_initiated(run).await;
-    }
-
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
+        *self.ids() = Some((run.run_id, run.pipeline_id));
         self.inner.on_pipeline_run_started(run).await;
     }
 
@@ -241,12 +236,13 @@ fn outstanding_items(report: &FailureReport) -> Vec<Uuid> {
 // The run record
 // ---------------------------------------------------------------------------
 
-/// `{"data": [...], "cognify_failures": {…}}` for a run that completed with
-/// files still outstanding.
+/// `{"cognify_failures": {…}}` for a run that completed with files still
+/// outstanding.
 ///
-/// `data` is built with [`data_info`] so the shape cannot drift from the one
-/// the watcher writes, and is inserted first so it stays first on the wire.
-pub(crate) fn run_info_with_failures(data_ids: &[Uuid], report: &FailureReport) -> Value {
+/// No `data` key: Python stopped storing the run's data items in `run_info`
+/// (`a88402500`, COG-6089), and the failure lists below already name every
+/// item that matters to the next run.
+pub(crate) fn run_info_with_failures(report: &FailureReport) -> Value {
     let mut failures = Map::with_capacity(4);
     failures.insert(
         "failed_data_ids".into(),
@@ -274,8 +270,7 @@ pub(crate) fn run_info_with_failures(data_ids: &[Uuid], report: &FailureReport) 
         Value::from(report.chunk_failure_ratio()),
     );
 
-    let mut info = Map::with_capacity(2);
-    info.insert("data".into(), data_info(data_ids));
+    let mut info = Map::with_capacity(1);
     info.insert(RUN_INFO_FAILURES_KEY.into(), Value::Object(failures));
     Value::Object(info)
 }
@@ -462,7 +457,7 @@ pub(crate) async fn on_run_failed(
     if !executor_recorded_the_error {
         ctx.append_run_row(
             PipelineRunStatus::Errored,
-            run_info_for_errored(&ctx.processed, &error.to_string()),
+            run_info_for_errored(&error.to_string()),
         )
         .await;
     }
@@ -506,11 +501,8 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
     // what keeps the cross-SDK shape parity suite honest rather than merely
     // passing.
     if !outstanding.is_empty() {
-        ctx.append_run_row(
-            PipelineRunStatus::Completed,
-            run_info_with_failures(&ctx.processed, report),
-        )
-        .await;
+        ctx.append_run_row(PipelineRunStatus::Completed, run_info_with_failures(report))
+            .await;
     }
 }
 
@@ -682,16 +674,11 @@ mod tests {
         let failed = Uuid::new_v4();
         let unreached = Uuid::new_v4();
         let report = report_with(&[failed], &[unreached]);
-        let processed = vec![failed, unreached, Uuid::new_v4()];
-
-        let info = run_info_with_failures(&processed, &report);
-        assert!(
-            info.get("data").is_some(),
-            "Python's shape requires `data`, and it must stay first"
-        );
+        let info = run_info_with_failures(&report);
         assert_eq!(
-            info.as_object().unwrap().keys().next().map(String::as_str),
-            Some("data")
+            info.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec![RUN_INFO_FAILURES_KEY],
+            "no `data` key since COG-6089; the failure summary is the only key"
         );
         assert!(run_info_has_outstanding_failures(Some(&info)));
 
@@ -713,7 +700,6 @@ mod tests {
         )));
         assert!(
             !run_info_has_outstanding_failures(Some(&run_info_with_failures(
-                &[Uuid::new_v4()],
                 &FailureReport::default()
             ))),
             "an empty report leaves both id lists empty, so nothing is outstanding"
@@ -781,9 +767,7 @@ mod tests {
                 "cognify_pipeline",
                 Some(dataset_id),
                 PipelineRunStatus::Completed,
-                Some(cognee_core::pipeline_run_registry::run_info_for_running(
-                    &processed,
-                )),
+                Some(cognee_core::pipeline_run_registry::run_info_for_completed()),
             )
             .await
             .expect("seed the COMPLETED row");
@@ -803,8 +787,8 @@ mod tests {
             .expect("the ERRORED row carries run_info");
         assert_eq!(
             info.as_object().unwrap().keys().collect::<Vec<_>>(),
-            vec!["data", "error"],
-            "Python's shape: `data` before `error`"
+            vec!["error"],
+            "Python's ERRORED shape is the error alone (COG-6089)"
         );
         assert!(
             info["error"].as_str().unwrap().contains("teardown blew up"),
