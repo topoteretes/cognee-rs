@@ -581,7 +581,7 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *
  *   CogneeDataInput — same discriminated union as cg_sdk_add (see above).
  *
- *   RememberResult — JSON object (fields vary; cognify_result/memify_result
+ *   RememberResult — JSON object (fields vary; cognify_result/improve_result
  *     are skipped in serialisation via #[serde(skip)]).
  *
  *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,

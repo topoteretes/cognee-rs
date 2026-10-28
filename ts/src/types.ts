@@ -439,7 +439,7 @@ export interface CogneeRecallResult {
 export interface CogneeRememberOptions {
   /** Session ID — switches to session-memory mode (no graph writes). */
   sessionId?: string;
-  /** Run a memify pass after cognify (default false). */
+  /** Run `improve()` after cognify, or on the session in session mode (default false). */
   selfImprovement?: boolean;
   /** Tenant UUID string (multi-tenant scoping). */
   tenant?: string;
