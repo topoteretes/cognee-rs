@@ -2,7 +2,7 @@
 
 What cognee-rust *does*. The primary surface is the **memory API** —
 **`remember`**, **`recall`**, **`improve`**, **`forget`** — four high-level
-operations that compose the lower-level pipeline (`add → cognify → memify →
+operations that compose the lower-level pipeline (`add → cognify →
 search`). Every operation is reachable from each interface (CLI, language
 bindings, HTTP server) — see [tools/](tools/README.md). API/type detail lives in
 rustdoc (`cargo doc --no-deps --open`); this page is the conceptual map.
@@ -44,12 +44,15 @@ returned to the caller (printed to stdout by the CLI).
 
 ### improve
 
-Enriches memory and bridges sessions: runs the feedback/enrichment improvement
-stages over the graph (memify-style triplet enrichment plus feedback weighting).
-When session IDs are supplied it also distills each session's Q&A into curated,
+Enriches memory and bridges sessions: runs the session-driven improvement
+stages over the graph (feedback weighting, session persistence). Triplet
+enrichment is gone, as in Python (SDK-1115). When session IDs are supplied it also distills each session's Q&A into curated,
 entity-anchored "session-learnings" lesson documents (tagged with the
 `session_learnings` node-set) and cognifies them into the permanent graph.
-Can target specific sessions or graph nodes and tune the feedback weight.
+Can target specific sessions and tune the feedback weight. The deprecated
+custom-task and scoping options (`extraction_tasks`, `enrichment_tasks`,
+`data`, `node_name`, `node_type`, `vector_db_config`, `graph_db_config`) do not
+exist; over REST they are ignored.
 rustdoc: `api::improve`.
 
 ### forget
@@ -193,14 +196,6 @@ Both branches share one marker key, matching Python, so **a `cognify()` and a
 temporal `cognify()` over the same dataset are no-ops for each other**. Turn
 incremental loading off to build both graphs over one dataset.
 
-### memify (graph enrichment)
-
-Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`
-objects from every edge (`"source → relationship → target"`), embeds them, and
-indexes them into the `Triplet`/`text` vector collection. The
-`TripletCompletion` search type was removed, as in Python (SDK-1039). Pipeline:
-[`cognee-cognify`](../crates/cognify/) (`memify()`).
-
 ### search (retrieval)
 
 Unified orchestration across 17 retrieval strategies selected by `SearchType`
@@ -312,7 +307,6 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | add | `cognee-cli add` | `POST /api/v1/add` | `add()` |
 | cognify | `cognee-cli cognify` | `POST /api/v1/cognify` | `cognify()` |
 | add + cognify | `cognee-cli add-and-cognify` | _(two calls)_ | — |
-| memify | `cognee-cli memify` | `POST /api/v1/memify` | `memify()` |
 | search | `cognee-cli search` | `POST /api/v1/search` | `search()` |
 | delete | `cognee-cli delete` | `POST /api/v1/delete` | `delete*()` |
 | update | _(via run-sequence)_ | `POST /api/v1/update` | `update()` |

@@ -246,7 +246,7 @@ impl DataPoint {
     /// `skip_serializing_if = "Option::is_none"` annotations on the
     /// struct).
     ///
-    /// Used by the cognify and memify pipelines when constructing
+    /// Used by the cognify pipeline when constructing
     /// `VectorPoint` payloads to keep the Rust shape byte-comparable to
     /// Python's for the cross-SDK parity tests. Note: the `data_type`
     /// field carries `#[serde(rename = "type")]`, so the resulting map

@@ -1,4 +1,4 @@
-//! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index) and the memify enrichment pipeline.
+//! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
 /// Configuration module for the cognify pipeline.
 pub mod config;
@@ -74,12 +74,11 @@ pub use graph_spec::{
 };
 pub use memify::{
     CuratorBatchOutput, DistillError, DistillSessionsResult, DistillationResult,
-    DistillationStatus, FeedbackApplyResult, FeedbackError, MemifyConfig, MemifyError,
-    MemifyResult, MemifyTask, NODE_EMBED_BATCH_SIZE, PersistSessionsError, PersistSessionsResult,
-    ProposedLesson, REASON_BACKEND_UNSUPPORTED, RejectionReason, SyncError, SyncResult,
-    TruthBuildStatus, TruthSubspaceResult, WrittenLesson, apply_feedback_weights_pipeline,
-    build_memify_index_only_pipeline, build_truth_subspace, distill_session,
-    distill_sessions_in_knowledge_graph, memify as run_memify, persist_sessions_in_knowledge_graph,
+    DistillationStatus, FeedbackApplyResult, FeedbackError, NODE_EMBED_BATCH_SIZE,
+    PersistSessionsError, PersistSessionsResult, ProposedLesson, REASON_BACKEND_UNSUPPORTED,
+    RejectionReason, SyncError, SyncResult, TruthBuildStatus, TruthSubspaceResult, WrittenLesson,
+    apply_feedback_weights_pipeline, build_truth_subspace, distill_session,
+    distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph,
     render_lesson_document, sync_graph_to_session,
 };
 

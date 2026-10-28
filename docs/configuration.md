@@ -924,7 +924,7 @@ this setting. Assert it the way your deployment is actually started:
 |---|---|---|
 | a binding — Python, JS, C API, Java/Android | `set_config("single_process", true)`, `ConfigManager::set_single_process(true)`, or `COGNEE_SINGLE_PROCESS=1` | recovery runs on the first operation |
 | `cognee-http-server` | `COGNEE_SINGLE_PROCESS=1` **only** | recovery runs at server startup |
-| `cognee-cli cognify` / `memify` | — | **no startup recovery at all**; use `cognee-cli pipeline-unblock --clear` |
+| `cognee-cli cognify` | — | **no startup recovery at all**; use `cognee-cli pipeline-unblock --clear` |
 
 The two gaps are deliberate, not oversights:
 

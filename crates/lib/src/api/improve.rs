@@ -6,8 +6,9 @@
 //!    then persist agent trace steps (Stage 2b), then distill each session's
 //!    Q&A into curated, entity-anchored lesson documents tagged with the
 //!    `session_learnings` node-set (Stage 2c).
-//! 3. Default enrichment: reuse `memify()` for triplet embeddings.
-//! 4. Sync recent graph edges into the session's `graph_context`.
+//! 3. Sync recent graph edges into the session's `graph_context`.
+//!
+//! Python's triplet-enrichment stage is gone (SDK-1115), and so is Rust's.
 //!
 //! Each stage is wrapped in a warning-only handler so that a failure in one
 //! stage does not abort subsequent stages (matches Python semantics).
@@ -18,9 +19,8 @@ use std::time::Instant;
 
 use cognee_cognify::memify::sync_graph_session::DEFAULT_MAX_LINES;
 use cognee_cognify::{
-    CognifyConfig, MemifyConfig, MemifyResult, apply_feedback_weights_pipeline,
-    distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph, run_memify,
-    sync_graph_to_session,
+    CognifyConfig, apply_feedback_weights_pipeline, distill_sessions_in_knowledge_graph,
+    persist_sessions_in_knowledge_graph, sync_graph_to_session,
 };
 use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
@@ -169,8 +169,6 @@ pub struct ImproveResult {
     /// Per-stage results, Python's `ImproveResult.stages`. Only the
     /// `build_truth_subspace` stage reports here so far (see [`StageResult`]).
     pub stages: Vec<StageResult>,
-    /// Result of the memify (triplet embedding) stage, if it ran.
-    pub memify_result: Option<MemifyResult>,
     /// Number of feedback QA entries that were processed (Stage 1).
     pub feedback_entries_processed: usize,
     /// Number of feedback QA entries whose graph updates all applied cleanly.
@@ -194,19 +192,15 @@ pub struct ImproveResult {
 /// pass `None` explicitly for the `Option<...>` fields.
 ///
 /// LIB-04 (Decision 8) introduced this struct to replace the previous 18
-/// positional parameters. E-05 (this commit) extended it with three v2
-/// power-user fields — `extraction_tasks`, `enrichment_tasks`, `data` —
-/// matching Python's `ImprovePayloadDTO` field-for-field. They are pure-data
-/// fields and currently informational: the orchestrator does not yet branch
-/// on them, but they are accepted by the constructor so callers (especially
-/// the HTTP layer) can plumb the raw payload through without dropping fields.
+/// positional parameters. Python's deprecated custom-task and scoping options
+/// (`extraction_tasks`, `enrichment_tasks`, `data`, `node_name`, `node_type`,
+/// `vector_db_config`, `graph_db_config`) are not carried (SDK-1115): a REST
+/// client that still sends them has them ignored by the HTTP layer.
 pub struct ImproveParams<'a> {
     /// Dataset name to operate on (Stage 2 persistence + Stage 4 lookup).
     pub dataset_name: String,
     /// Session ids that drive Stages 1, 2, and 4. `None` or empty skips them.
     pub session_ids: Option<Vec<String>>,
-    /// Optional graph node-name filter applied to the memify (Stage 3) pass.
-    pub node_name: Option<Vec<String>>,
     /// Owner UUID under which graph/session reads and writes are scoped.
     pub owner_id: Uuid,
     /// Optional tenant UUID for multi-tenant deployments.
@@ -214,20 +208,8 @@ pub struct ImproveParams<'a> {
     /// Mixing factor for feedback weight propagation (Stage 1).
     pub feedback_alpha: f64,
 
-    /// Optional list of extraction-task identifiers (Python parity:
-    /// `extraction_tasks: Optional[List[str]]`). Currently informational —
-    /// reserved for future power-user overrides matching Python's
-    /// `ImproveKwargs.extraction_tasks`.
-    pub extraction_tasks: Option<Vec<String>>,
-    /// Optional list of enrichment-task identifiers (Python parity:
-    /// `enrichment_tasks: Optional[List[str]]`). Currently informational.
-    pub enrichment_tasks: Option<Vec<String>>,
-    /// Optional inline text payload (Python parity: `data: Optional[str]`).
-    /// Currently informational; reserved for future power-user overrides.
-    pub data: Option<String>,
-
     /// When `true` and not running in background, build the global context
-    /// index (graph summary) after Stage 3.
+    /// index (graph summary) after the session stages.
     ///
     /// Mirrors Python's `build_global_context_index` parameter.
     /// Default `false` (opt-in) — matches Python parity.
@@ -306,7 +288,6 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     let ImproveParams {
         dataset_name,
         session_ids,
-        node_name,
         owner_id,
         tenant_id,
         feedback_alpha,
@@ -325,12 +306,6 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         build_global_context_index,
         build_truth_subspace,
         run_in_background,
-        // E-05 v2 power-user fields — currently informational; the orchestrator
-        // does not yet branch on them. Accepting them here keeps the struct
-        // shape Python-parity-aligned for HTTP plumbing.
-        extraction_tasks: _extraction_tasks,
-        enrichment_tasks: _enrichment_tasks,
-        data: _data,
     } = params;
 
     // ---- Improve lock (parity with Python session_lock.py:136-150) ----
@@ -396,9 +371,9 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         );
     }
 
-    // The dataset the graph-reading stages (1, 3, 3b) run in. Under per-dataset
+    // The dataset the graph-reading stages (1, 3) run in. Under per-dataset
     // storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the graph they read and write
-    // is that dataset's own, as Python's memify runs in the dataset's database
+    // is that dataset's own, as Python's improve stages run in the dataset's database
     // context. Stages 2–2d scope themselves (add, cognify, truth subspace). A
     // dataset that does not exist yet has no graph to weight; stage 2 may
     // create it, so the later stages look it up again.
@@ -850,62 +825,9 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     };
     result.stages.push(truth_stage);
 
-    // ---- Stage 3: Default Enrichment (always) ----
     let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
-    let memify_config = if let Some(names) = node_name {
-        MemifyConfig::default().with_node_name_filter(names)
-    } else {
-        MemifyConfig::default()
-    };
-    match db.as_ref() {
-        Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
-            Ok(pool) => {
-                let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                    Arc::clone(database).pipeline_runs();
-                match maybe_with_dataset(
-                    later_dataset,
-                    run_memify(
-                        Arc::clone(&graph_db),
-                        Arc::clone(&vector_db),
-                        Arc::clone(&embedding_engine),
-                        thread_pool,
-                        Arc::clone(database),
-                        pipeline_run_repo,
-                        None,
-                        Some(owner_id),
-                        tenant_id,
-                        &memify_config,
-                    ),
-                )
-                .await
-                {
-                    Ok(mr) => {
-                        info!(
-                            triplets = mr.triplet_count,
-                            "improve stage 3 (memify) complete"
-                        );
-                        result.memify_result = Some(mr);
-                        result.stages_run.push("memify".to_string());
-                    }
-                    Err(e) => {
-                        warn!("improve stage 3 (memify) failed (non-fatal): {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("improve stage 3 (memify) failed (non-fatal): rayon pool init: {e}");
-            }
-        },
-        None => {
-            warn!(
-                "improve stage 3: a relational database connection is required by the LIB-06 \
-                 executor-routed memify; skipping memify"
-            );
-        }
-    }
 
-    // ---- Stage 3b: Global Context Index (opt-in) ----
+    // ---- Stage 3: Global Context Index (opt-in) ----
     //
     // Mirrors Python's `_build_global_context_index` (improve.py:201-213).
     // When `build_global_context_index` is `true` and not running in background:
@@ -922,7 +844,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     if build_global_context_index {
         if run_in_background {
             warn!(
-                "improve stage 3b: global context index skipped in background mode \
+                "improve stage 3: global context index skipped in background mode \
                  because ordered background pipeline chaining is not supported"
             );
         } else if let Some(sm) = session_manager.as_ref() {
@@ -953,26 +875,26 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                         Ok(()) => {
                             info!(
                                 edges = edges.len(),
-                                "improve stage 3b (global_context_index) complete"
+                                "improve stage 3 (global_context_index) complete"
                             );
                             result.stages_run.push("global_context_index".to_string());
                         }
                         Err(e) => {
                             warn!(
-                                "improve stage 3b: failed to store global context (non-fatal): {e}"
+                                "improve stage 3: failed to store global context (non-fatal): {e}"
                             );
                         }
                     }
                 }
                 Ok(_) => {
-                    info!("improve stage 3b: graph has no edges; skipping global_context_index");
+                    info!("improve stage 3: graph has no edges; skipping global_context_index");
                 }
                 Err(e) => {
-                    warn!("improve stage 3b: failed to load graph data (non-fatal): {e}");
+                    warn!("improve stage 3: failed to load graph data (non-fatal): {e}");
                 }
             }
         } else {
-            warn!("improve stage 3b: session_manager is required; skipping global_context_index");
+            warn!("improve stage 3: session_manager is required; skipping global_context_index");
         }
     }
 
@@ -1066,7 +988,6 @@ mod tests {
     fn improve_result_default_fields() {
         let result = ImproveResult::default();
         assert!(result.stages_run.is_empty());
-        assert!(result.memify_result.is_none());
         assert_eq!(result.feedback_entries_processed, 0);
         assert_eq!(result.feedback_entries_applied, 0);
         assert_eq!(result.sessions_persisted, 0);

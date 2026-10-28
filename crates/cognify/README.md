@@ -1,6 +1,6 @@
 # cognee-cognify
 
-Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index) and the memify enrichment pipeline.
+Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
 ## Pluggable graph extraction
 

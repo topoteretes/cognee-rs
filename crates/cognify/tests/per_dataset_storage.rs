@@ -3,7 +3,7 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Cognify, memify, rollback and delete under per-dataset storage
+//! Cognify, rollback and delete under per-dataset storage
 //! (`ENABLE_BACKEND_ACCESS_CONTROL`, `docs/design/per-dataset-storage.md`).
 //!
 //! The graph and vector engines are the routing ones over one mock store per
@@ -17,7 +17,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use cognee_cognify::memify::{MemifyConfig, memify};
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::ops::data::create_data;
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
@@ -284,39 +283,6 @@ async fn delete_all_drops_every_store() {
         .await
         .expect("delete all");
     assert!(fx.stores.graph_datasets().is_empty());
-}
-
-/// Memify reads and indexes the dataset's own graph.
-#[tokio::test]
-async fn memify_runs_in_its_dataset() {
-    let fx = Fixture::new().await;
-    let (a, b) = (fx.dataset("a").await, fx.dataset("b").await);
-    let file = fx.add_file(a, "Alice works at Acme.").await;
-    fx.cognify(a, vec![file], graph_response("Alice", "Acme"))
-        .await;
-
-    let config = MemifyConfig::default();
-    let run = |dataset_id: Uuid| {
-        memify(
-            fx.stores.graph_db(),
-            fx.stores.vector_db(),
-            Arc::new(MockEmbeddingEngine::new(8)),
-            Arc::new(cognee_core::RayonThreadPool::with_default_threads().unwrap()),
-            fx.db.clone(),
-            Arc::clone(&fx.repo),
-            Some(dataset_id),
-            Some(fx.owner_id),
-            None,
-            &config,
-        )
-    };
-    let in_a = run(a).await.expect("memify a");
-    assert!(in_a.triplet_count > 0, "a's graph has a triplet to index");
-    let in_b = run(b).await.expect("memify b");
-    assert_eq!(
-        in_b.triplet_count, 0,
-        "b's graph is empty: it never saw a's"
-    );
 }
 
 /// Without a dataset, the routing engines refuse instead of reaching a store.

@@ -101,7 +101,7 @@ Every async op returns a `CompletableFuture<T>`. The generated
 | Lifecycle | `warm()`, `ownerId()`, `close()` |
 | Ingest / extract | `add(...)`, `cognify(...)`, `addAndCognify(...)` |
 | Retrieval | `search(query[, SearchOptions])`, `recall(query[, RecallOptions])` |
-| Memory | `remember(...)`, `rememberEntry(...)`, `memify([MemifyOptions])`, `improve(ImproveOptions)` |
+| Memory | `remember(...)`, `rememberEntry(...)`, `improve(ImproveOptions)` |
 | Data lifecycle | `forget(ForgetTarget[, tenant])`, `update(...)`, `pruneData()`, `pruneSystem([PruneSystemOptions])` |
 | Visualization | `visualize([VisualizeOptions])`, `visualizeToFile(VisualizeOptions)` |
 | Sub-surfaces | `datasets()`, `sessions()`, `users()`, `notebooks()`, `config()` |

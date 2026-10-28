@@ -1,11 +1,11 @@
-//! Phase 5 — memory ops: remember / remember_entry / memify / improve.
+//! Phase 5 — memory ops: remember / remember_entry / improve.
 //!
 //! Each export follows the canonical pattern:
 //!   `Arc::clone(&handle.state)` → `runtime().spawn` → delegate to
 //!   `cognee_bindings_common::ops::memory` shared async bodies
 //!   → `settle_with`.
 //!
-//! The shared async bodies (run_remember / run_remember_entry / run_memify_op /
+//! The shared async bodies (run_remember / run_remember_entry /
 //! run_improve) now live in `cognee-bindings-common` so they can be reused by
 //! the Python and C API bindings without duplication.
 
@@ -89,43 +89,6 @@ pub fn cognee_remember_entry(mut cx: FunctionContext) -> JsResult<JsPromise> {
     runtime().spawn(async move {
         let result =
             memory::run_remember_entry(&state, entry_json, &dataset_name, &session_id, &opts).await;
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(val) => {
-                let json_str = match serde_json::to_string(&val) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        return cx.throw_error(format!("serialization error: {e}"));
-                    }
-                };
-                parse_js(&mut cx, &json_str)
-            }
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-// ---------------------------------------------------------------------------
-// cogneeMemify
-// ---------------------------------------------------------------------------
-
-/// `cogneeMemify(handle, opts?) -> Promise<MemifyResult>`
-///
-/// opts: `{ tripletBatchSize?, nodeTypeFilter?, nodeNameFilter?, nodeNameFilterOperator? }`
-///
-/// NOTE: `extraction_tasks`, `enrichment_tasks`, `custom_data` fields in
-/// `MemifyConfig` are `#[serde(skip)]` closures and cannot be passed from JS.
-pub fn cognee_memify(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let opts = read_opts(&mut cx, 1)?;
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = memory::run_memify_op(&state, &opts).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
                 let json_str = match serde_json::to_string(&val) {

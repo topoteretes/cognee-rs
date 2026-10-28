@@ -186,7 +186,7 @@ impl fmt::Display for RememberResult {
 /// 1. `add()` to ingest data.
 /// 2. `cognify()` to extract knowledge graph.
 /// 3. If `self_improvement=true`, `improve()` on the dataset (as Python's
-///    `remember(self_improvement=True)` does; memify is not involved).
+///    `remember(self_improvement=True)` does).
 ///
 /// **Session Memory Mode** (with `session_id`):
 /// 1. Convert data inputs to text.
@@ -411,7 +411,6 @@ async fn run_permanent_inner(
         match improve(crate::api::improve::ImproveParams {
             dataset_name: dataset_name.to_string(),
             session_ids: None,
-            node_name: None,
             owner_id,
             tenant_id,
             feedback_alpha: 0.1,
@@ -427,9 +426,6 @@ async fn run_permanent_inner(
             add_pipeline: Some(add_pipeline),
             checkpoint_store,
             cognify_config,
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: None,
             build_global_context_index: false,
             build_truth_subspace: false,
             run_in_background: false,
@@ -594,7 +590,6 @@ async fn remember_session(
         let improve_result = improve(crate::api::improve::ImproveParams {
             dataset_name: dataset_name.to_string(),
             session_ids: Some(vec![session_id.to_string()]),
-            node_name: None,
             owner_id,
             tenant_id,
             feedback_alpha: 0.1, // default feedback_alpha
@@ -610,11 +605,6 @@ async fn remember_session(
             add_pipeline: Some(add_pipeline.as_ref()),
             checkpoint_store,
             cognify_config: &cognify_config,
-            // E-05: v2 power-user fields not exercised by remember()'s
-            // internal session-improve path.
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: None,
             // Global context index and background mode are not used by the
             // inline remember() improve path.
             build_global_context_index: false,

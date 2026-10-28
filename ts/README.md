@@ -75,7 +75,6 @@ Fully-annotated runnable examples are available in the [`examples/`](examples/) 
 |---|---|---|
 | [`remember-recall.ts`](examples/remember-recall.ts) | `npm run example` | High-level remember → recall pipeline |
 | [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example:add-cognify-search` | Lower-level add → cognify → search pipeline |
-| [`memify-recall.ts`](examples/memify-recall.ts) | `npm run example:memify` | Triplet embeddings (memify) + session recall |
 | [`datasets.ts`](examples/datasets.ts) | `npm run example:datasets` | Dataset listing, status, deletion |
 | [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history, feedback, graph-context snapshots |
 | [`config.ts`](examples/config.ts) | `npm run example:config` | Programmatic config (LLM / embedding / DBs) |
@@ -241,15 +240,6 @@ await c.remember({ type: "text", text: "…" }, "my-dataset", {
   selfImprovement: true,   // run improve() after cognify
   sessionId: "session-id", // session-only mode (no graph writes)
 });
-```
-
-### memify
-
-Index triplet embeddings from the existing knowledge graph.
-Idempotent. Triplet search (`TRIPLET_COMPLETION`) was removed, as in Python.
-
-```ts
-await c.memify();
 ```
 
 ### improve

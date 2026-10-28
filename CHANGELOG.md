@@ -27,8 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_triplets_from_graph_with_timestamps`) are removed. `cognee_models::Triplet`
   stays, and so does the delete-side cleanup: deleting data still removes the
   legacy `Triplet_text` rows an earlier version wrote, and search on a database
-  that holds one keeps working. `memify` still writes triplets until its own
-  removal lands.
+  that holds one keeps working.
 
 - **`remember(self_improvement=true)` runs `improve()`, not memify (SDK-1039).**
   In permanent mode the self-improvement step now calls `improve()` on the
@@ -36,6 +35,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RememberResult::memify_result` is replaced by `RememberResult::improve_result`
   (`Option<ImproveResult>`, not serialised), and an `improve()` failure is
   reported in `RememberResult::error` instead of being logged and dropped.
+
+- **Public memify and improve stage 3 are removed (SDK-1039).** Python deprecated
+  `cognee.memify`, `POST /api/v1/memify` and the memify CLI in SDK-1115 and
+  removes them in the next release; Rust goes straight to the removed state,
+  with no shim. Gone: the `cognee-cli memify` command, `cognee::run_memify`,
+  `MemifyConfig`, `MemifyTask`, `MemifyResult`, `MemifyError`,
+  `build_memify_index_only_pipeline` and the triplet extract/index tasks, the
+  memify binding ops (`memify` in Python, TS, Java, `cg_sdk_memify` in C and
+  their option/result types), `ApiError::Memify`, the improve "memify" stage
+  (stage 3; the global-context-index stage is now stage 3 and sync stays stage
+  4), `ImproveResult::memify_result` (and `memifyResult` on the binding wire
+  shape), the `memify` entry of the schema view's operation catalog, and the
+  `memify_pipeline` name from `cognee-cli pipeline-unblock` (it now knows
+  `cognify_pipeline` and `temporal-cognify`).
+
+  `improve()` also drops the options that only scoped or fed memify:
+  `ImproveParams::{node_name, extraction_tasks, enrichment_tasks, data}`, the CLI
+  `improve --node-name` flag, and the `nodeName` option of every binding. Over
+  REST, a client that still sends them is ignored, as in Python (pydantic
+  `extra="ignore"`). The `cognee_cognify::memify` module keeps its name but only
+  holds the improve stages (feedback weights, session persist, distill,
+  truth subspace, session sync). `cognee_models::Triplet` and the delete-side
+  cleanup of legacy `Triplet_text` rows stay.
+
+  **Migration.** Remove `memify` calls; cognify and `improve()` cover what they
+  did for search (triplet search itself was removed with `TRIPLET_COMPLETION`).
 
 - **`TRIPLET_COMPLETION` and `TripletRetriever` are removed (SDK-1039).**
   Python deprecated triplet search in SDK-1115 and removes it in the next

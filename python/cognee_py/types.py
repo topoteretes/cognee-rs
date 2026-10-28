@@ -146,16 +146,6 @@ class RememberOpts(TypedDict, total=False):
     tenant: str
 
 
-class MemifyOpts(TypedDict, total=False):
-    """Options accepted by :meth:`Cognee.memify`."""
-
-    triplet_batch_size: int
-    node_type_filter: str
-    node_name_filter: list[str]
-    #: ``"AND"`` or ``"OR"``
-    node_name_filter_operator: str
-
-
 class ImproveOpts(TypedDict, total=False):
     """Options accepted by :meth:`Cognee.improve`.
 
@@ -164,7 +154,6 @@ class ImproveOpts(TypedDict, total=False):
 
     dataset_name: str  # required — missing raises CogneeValidationError at runtime
     session_ids: list[str]
-    node_name: list[str]
     feedback_alpha: float
     tenant: str
 
@@ -309,21 +298,6 @@ class PruneResult(TypedDict):
     cache_pruned: bool
 
 
-class MemifyResult(TypedDict):
-    """Result of :meth:`Cognee.memify` (snake_case view).
-
-    The native method returns the same data with camelCase keys
-    (``tripletCount``, ``indexedCount``, ``batchCount``,
-    ``alreadyCompleted``, ``priorPipelineRunId``).
-    """
-
-    triplet_count: int
-    indexed_count: int
-    batch_count: int
-    already_completed: bool
-    prior_pipeline_run_id: str | None
-
-
 class ImproveStageResult(TypedDict):
     """What one improve stage did (Python core's ``StageResult``).
 
@@ -348,7 +322,6 @@ class ImproveResult(TypedDict):
     stages_run: list[str]
     # Per-stage records; only ``build_truth_subspace`` reports one so far.
     stages: list[ImproveStageResult]
-    memify_result: MemifyResult | None
     feedback_entries_processed: int
     feedback_entries_applied: int
     sessions_persisted: int
@@ -368,7 +341,6 @@ __all__ = [
     "SearchOpts",
     "RecallOpts",
     "RememberOpts",
-    "MemifyOpts",
     "ImproveOpts",
     "ForgetTarget",
     "UpdateOpts",
@@ -383,7 +355,6 @@ __all__ = [
     "ForgetResult",
     "UpdateResult",
     "PruneResult",
-    "MemifyResult",
     "ImproveResult",
     "ImproveStageResult",
 ]

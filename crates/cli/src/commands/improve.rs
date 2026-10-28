@@ -36,12 +36,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     } else {
         Some(args.session_id.clone())
     };
-    let node_name = if args.node_name.is_empty() {
-        None
-    } else {
-        Some(args.node_name.clone())
-    };
-
     crate::teardown::run_command(Arc::clone(&cm), async {
         // `graph_extraction.backend`, resolved before any side effect: an
         // unregistered kind is an error, never a silent LLM-extractor run.
@@ -107,13 +101,9 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         let result = improve(ImproveParams {
             dataset_name: dataset_name.clone(),
             session_ids,
-            node_name,
             owner_id,
             tenant_id,
             feedback_alpha: args.feedback_alpha,
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: None,
             build_global_context_index: false,
             build_truth_subspace: false,
             run_in_background: false,
@@ -139,7 +129,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             feedback_applied = result.feedback_entries_applied,
             sessions_persisted = result.sessions_persisted,
             edges_synced = result.edges_synced,
-            triplets = result.memify_result.as_ref().map(|m| m.triplet_count).unwrap_or(0),
             "improve completed"
         );
 

@@ -569,7 +569,7 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
 });
 
 // ---------------------------------------------------------------------------
-// Tier-B: remember / memify / improve (skip cleanly without creds)
+// Tier-B: remember / improve (skip cleanly without creds)
 // ---------------------------------------------------------------------------
 
 describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
@@ -625,13 +625,6 @@ describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
     expect(result.status).toBe("PipelineRunCompleted");
     // `remember` results are snake_case (Python-parity wire shape); see #46.
     expect(result.dataset_name).toBe("tier_b_remember");
-  });
-
-  it("cogneeMemify runs without error and returns MemifyResult", async () => {
-    const result = await native.cogneeMemify(handle);
-    expect(typeof result.tripletCount).toBe("number");
-    expect(typeof result.indexedCount).toBe("number");
-    expect(typeof result.alreadyCompleted).toBe("boolean");
   });
 
   it("cogneeImprove returns ImproveResult with stagesRun array", async () => {

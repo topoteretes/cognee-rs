@@ -1,11 +1,11 @@
 //! Phase 6 — memory ops: `cg_sdk_remember`, `cg_sdk_remember_entry`,
-//! `cg_sdk_memify`, `cg_sdk_improve`.
+//! `cg_sdk_improve`.
 //!
-//! All four follow the Phase-4 canonical pattern:
+//! All three follow the Phase-4 canonical pattern:
 //!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → delegate to
 //!   `cognee_bindings_common::ops::memory` shared async bodies.
 //!
-//! The shared async bodies (run_remember / run_remember_entry / run_memify_op /
+//! The shared async bodies (run_remember / run_remember_entry /
 //! run_improve) now live in `cognee-bindings-common` so they can be reused by
 //! the Python and JS bindings without duplication.
 
@@ -150,63 +150,14 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
     });
 }
 
-/// Run the memify pipeline: create triplet embeddings for all graph edges and
-/// index them in the vector DB.  Idempotent (safe to re-run).
-///
-/// `opts_json` may be `NULL` or a JSON object with optional fields:
-///   `"tripletBatchSize"` (integer), `"nodeTypeFilter"` (string),
-///   `"nodeNameFilter"` (string array), `"nodeNameFilterOperator"` (string).
-///
-/// On success `result_json` is a JSON object:
-///   `{"tripletCount":N,"indexedCount":N,"batchCount":N,"alreadyCompleted":bool,
-///     "priorPipelineRunId":null|"<uuid>"}`
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` must be a valid `CgSdk*` or NULL.  `opts_json` may be NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_memify(
-    sdk: *const CgSdk,
-    opts_json: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let opts_str: Option<String> = if opts_json.is_null() {
-        None
-    } else {
-        match parse_c_str_or_fire(opts_json, "opts_json", callback, ud_raw) {
-            Some(s) => Some(s),
-            None => return,
-        }
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        let opts_val: serde_json::Value = match opts_str {
-            Some(ref s) => serde_json::from_str(s)
-                .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
-            None => serde_json::Value::Null,
-        };
-        memory::run_memify_op(&state, &opts_val).await
-    });
-}
-
 /// Apply graph improvement based on session feedback.
 ///
 /// `opts_json` is a JSON object with required field `"datasetName"` and optional:
-///   `"sessionIds"` (string array), `"nodeName"` (string array),
+///   `"sessionIds"` (string array),
 ///   `"feedbackAlpha"` (float, default 0.1), `"tenant"` (UUID string).
 ///
 /// On success `result_json` is a JSON object:
-///   `{"stagesRun":[…],"stages":[…],"memifyResult":…,"feedbackEntriesProcessed":N,
+///   `{"stagesRun":[…],"stages":[…],"feedbackEntriesProcessed":N,
 ///     "feedbackEntriesApplied":N,"sessionsPersisted":N,"edgesSynced":N}`
 ///   where each `stages` entry is `{"stage":"…","status":"…","reason":…,
 ///   "error":…,"counts":{…},"durationMs":N}`.

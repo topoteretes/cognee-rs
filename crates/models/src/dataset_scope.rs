@@ -55,7 +55,7 @@ pub fn current_dataset() -> Option<Uuid> {
 }
 
 /// `future` in `dataset_id`'s scope when there is one, unscoped otherwise —
-/// for an operation whose dataset is optional (an ad-hoc memify, an improve
+/// for an operation whose dataset is optional (an improve
 /// whose dataset does not exist yet).
 pub async fn maybe_with_dataset<F: Future>(dataset_id: Option<Uuid>, future: F) -> F::Output {
     match dataset_id {

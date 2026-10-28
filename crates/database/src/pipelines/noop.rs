@@ -1,6 +1,6 @@
 //! In-memory no-op [`PipelineRunRepository`] for embedded uses without a DB.
 //!
-//! Library convenience functions (`cognify`, `memify`, `AddPipeline::add`)
+//! Library convenience functions (`cognify`, `AddPipeline::add`)
 //! now take an `Arc<dyn PipelineRunRepository>` (gap 08-07). Embedded users
 //! (no SQL database wired) construct `Arc::new(NoopPipelineRunRepository::new())`
 //! to satisfy the parameter without paying for any writes.

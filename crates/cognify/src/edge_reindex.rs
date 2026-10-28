@@ -247,8 +247,7 @@ pub async fn reindex_edge_types(
     };
 
     // The whole-graph read, exactly as Python's repair does it
-    // (`index_graph_edges.py:79-80`) and as memify's `extract_triplets`
-    // already does in this crate. `GraphDBTrait` exposes no paginated or
+    // (`index_graph_edges.py:79-80`). `GraphDBTrait` exposes no paginated or
     // streaming edge accessor, so this materialises every edge; the resume
     // cursor below bounds the *embedding* work, which is the part that costs
     // money, but not this read. Streaming it needs a new trait method on all

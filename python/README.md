@@ -107,7 +107,6 @@ credentials.
 | Script | Run command | What it covers |
 |---|---|---|
 | [`add_cognify_search.py`](examples/add_cognify_search.py) | `python examples/add_cognify_search.py` | Core add → cognify → search pipeline |
-| [`memify_recall.py`](examples/memify_recall.py) | `python examples/memify_recall.py` | Triplet embeddings (memify) + session recall |
 | [`datasets.py`](examples/datasets.py) | `python examples/datasets.py` | Dataset listing, status, deletion |
 | [`sessions.py`](examples/sessions.py) | `python examples/sessions.py` | QA history, feedback, graph-context snapshots |
 | [`config.py`](examples/config.py) | `python examples/config.py` | Programmatic config (LLM / embedding / DBs) |
@@ -282,15 +281,6 @@ await cognee.remember(
     "my-dataset",
     {"self_improvement": True},
 )
-```
-
-#### memify
-
-Index triplet embeddings from the existing knowledge graph.
-Idempotent. Triplet search (`TRIPLET_COMPLETION`) was removed, as in Python.
-
-```python
-await cognee.memify()
 ```
 
 #### remember_entry

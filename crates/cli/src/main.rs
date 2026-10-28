@@ -12,7 +12,7 @@ use commands::bench;
 #[cfg(feature = "visualization")]
 use commands::visualize;
 use commands::{
-    add, add_and_cognify, cognify, config, delete, edge_reindex, export, forget, improve, memify,
+    add, add_and_cognify, cognify, config, delete, edge_reindex, export, forget, improve,
     pipeline_unblock, recall, remember, run_sequence, search, vector_reindex,
 };
 use tracing::error;
@@ -68,7 +68,6 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Add(args) => add::run(args, Arc::clone(cm)),
         Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
         Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
-        Commands::Memify(args) => memify::run(args, Arc::clone(cm)),
         Commands::Search(args) => search::run(args, Arc::clone(cm)),
         Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
         Commands::Recall(args) => recall::run(args, Arc::clone(cm)),

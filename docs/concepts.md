@@ -62,7 +62,6 @@ events. The concrete pipelines are:
 |---|---|---|
 | **add** | ingest → hash → dedup → persist | [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`) |
 | **cognify** | classify → chunk → extract → summarize → index → FK edges | [`cognee-cognify`](../crates/cognify/) (`cognify()`) |
-| **memify** | read graph → build triplets → embed → index | [`cognee-cognify`](../crates/cognify/) (`memify()`) |
 | **search** | route query → retrieve → (optionally) complete | [`cognee-search`](../crates/search/) (`SearchOrchestrator`) |
 
 Pipeline orchestration primitives (`PipelineWatcher`, `ExecStatusManager`,
@@ -108,11 +107,10 @@ realized** in Rust today:
   and propagated to derived DataPoints as `source_node_set`); the pipeline
   executor can attach `node_set` provenance to task outputs (`Tagged` /
   `TaggedMeta` in [`cognee-core`](../crates/core/)).
-- **Scoping memify** — memify enrichment can be restricted to a subset of the
-  graph by node *type* and node *name* via `--node-type` / `--node-name`
-  (`MemifyConfig::with_node_type_filter` / `with_node_name_filter`, backed by the
-  graph trait's `get_nodeset_subgraph`). The internal `persist_sessions` step
-  tags cached session data with a fixed node set.
+- **Scoping** — a graph subset can be selected by node *type* and node *name*
+  (the graph trait's `get_nodeset_subgraph`, used by search's node-name filter).
+  The internal `persist_sessions` step tags cached session data with a fixed
+  node set.
 
 Note: this is type/name-based subgraph filtering rather than a fully general
 named-node-set query surface; treat node sets as a tagging-and-scoping primitive,

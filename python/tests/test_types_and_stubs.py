@@ -33,7 +33,7 @@ def test_all_opts_typeddicts_present():
     from cognee_py import types as t
     expected = [
         "AddOpts", "CognifyOpts", "SearchOpts", "RecallOpts", "RememberOpts",
-        "MemifyOpts", "ImproveOpts", "ForgetTarget", "UpdateOpts",
+        "ImproveOpts", "ForgetTarget", "UpdateOpts",
         "PruneSystemOpts", "DeleteDataOpts", "VisualizeOpts",
     ]
     for name in expected:
@@ -45,7 +45,7 @@ def test_all_result_typeddicts_present():
     from cognee_py import types as t
     expected = [
         "AddResult", "CognifyResult", "SearchResult", "RecallResult",
-        "ForgetResult", "UpdateResult", "PruneResult", "MemifyResult",
+        "ForgetResult", "UpdateResult", "PruneResult",
         "ImproveResult",
     ]
     for name in expected:

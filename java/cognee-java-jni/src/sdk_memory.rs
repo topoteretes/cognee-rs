@@ -1,4 +1,4 @@
-//! Memory ops: remember, remember_entry, memify, improve.
+//! Memory ops: remember, remember_entry, improve.
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
@@ -79,29 +79,6 @@ pub extern "system" fn Java_ai_cognee_internal_Native_rememberEntry<'l>(
         };
         spawn_future(env, &future, async move {
             memory::run_remember_entry(&state, entry, &dataset, &session, &opts).await
-        });
-    })
-}
-
-/// `memify(handle, optsJson, future)`
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_ai_cognee_internal_Native_memify<'l>(
-    mut env: JNIEnv<'l>,
-    _class: JClass<'l>,
-    handle: jlong,
-    opts_json: JString<'l>,
-    future: JObject<'l>,
-) {
-    guard_void(&mut env, |env| {
-        let Some(state) = checked_handle(env, handle, &future) else {
-            return;
-        };
-        let opts = match arg_json(env, &opts_json) {
-            Ok(v) => v,
-            Err(e) => return throw_sdk_error(env, e),
-        };
-        spawn_future(env, &future, async move {
-            memory::run_memify_op(&state, &opts).await
         });
     })
 }

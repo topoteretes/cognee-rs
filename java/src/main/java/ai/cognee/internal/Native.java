@@ -74,8 +74,6 @@ public final class Native {
     public static native void rememberEntry(long handle, String entryJson, String datasetName,
             String sessionId, String optsJson, CompletableFuture<String> future);
 
-    public static native void memify(long handle, String optsJson, CompletableFuture<String> future);
-
     public static native void improve(long handle, String optsJson, CompletableFuture<String> future);
 
     // data ops

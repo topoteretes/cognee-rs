@@ -5,7 +5,7 @@
 )]
 //! E2E test: delete preview counts must match actual execution counts.
 //!
-//! Runs the full pipeline (add -> cognify -> memify -> delete) using real
+//! Runs the full pipeline (add -> cognify -> seed legacy triplets -> delete) using real
 //! backends (SQLite, Ladybug, Qdrant, ONNX embeddings, OpenAI-compatible LLM),
 //! then verifies that `DeleteService::preview()` returns the same counts as
 //! `DeleteService::execute()` for `DeleteScope::Dataset` with `DeleteMode::Soft`.
@@ -16,7 +16,6 @@
 
 use std::sync::Arc;
 
-use cognee_cognify::memify::{MemifyConfig, memify};
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, DeleteDb, IngestDb, connect, initialize, ops};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
@@ -24,11 +23,11 @@ use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{GraphDBTrait, LadybugAdapter};
 use cognee_ingestion::AddPipeline;
 use cognee_llm::Llm;
-use cognee_models::DataInput;
+use cognee_models::{DataInput, Triplet};
 use cognee_ontology::NoOpOntologyResolver;
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockVectorDB;
-use cognee_vector::VectorDB;
+use cognee_vector::{VectorDB, VectorPoint};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -156,32 +155,49 @@ async fn test_delete_preview_counts_match_execution() {
         cognify_result.edges.len(),
     );
 
-    // ── Step 3: Memify to add Triplet vector points ─────────────────────────
-    let memify_config = MemifyConfig::default();
-    let memify_pool: Arc<dyn cognee_core::CpuPool> =
-        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("rayon pool"));
-    let memify_result = memify(
-        Arc::clone(&graph_db),
-        Arc::clone(&vector_db),
-        Arc::clone(&embedding_engine),
-        memify_pool,
-        database.clone(),
-        Arc::new(cognee_database::NoopPipelineRunRepository::new())
-            as Arc<dyn cognee_database::PipelineRunRepository>,
-        Some(dataset.id),
-        None,
-        None,
-        &memify_config,
-    )
-    .await
-    .expect("memify should succeed");
+    // ── Step 3: Seed legacy `Triplet_text` points ───────────────────────────
+    // Cognify no longer embeds triplets (SDK-1115), but databases written by
+    // earlier versions still hold them. Seed one point per ledger edge under
+    // the id those versions wrote, so the preview and the execution are
+    // compared over a store that has them.
+    vector_db
+        .create_collection("Triplet", "text", embedding_engine.dimension())
+        .await
+        .expect("create the legacy Triplet collection");
+    let edge_rows = ops::graph_storage::get_edges_by_dataset(&database, dataset.id)
+        .await
+        .expect("ledger edges of the dataset");
+    let ids: std::collections::BTreeSet<Uuid> = edge_rows
+        .iter()
+        .map(|row| {
+            Triplet::new(
+                row.source_node_id,
+                row.destination_node_id,
+                row.relationship_name.clone(),
+                String::new(),
+            )
+            .id
+        })
+        .collect();
+    let texts: Vec<String> = ids
+        .iter()
+        .map(|id| format!("legacy triplet {id}"))
+        .collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let vectors = embedding_engine.embed(&refs).await.expect("embed");
+    let points: Vec<VectorPoint> = ids
+        .iter()
+        .zip(vectors)
+        .map(|(id, vector)| {
+            VectorPoint::new(*id, vector).with_metadata("type", serde_json::json!("Triplet"))
+        })
+        .collect();
+    vector_db
+        .index_points("Triplet", "text", &points)
+        .await
+        .expect("seed legacy triplets");
 
-    println!(
-        "Memify produced {} triplets, indexed {}",
-        memify_result.triplet_count, memify_result.index_result.indexed_count,
-    );
-
-    // ── Step 4: Build DeleteService with graph+vector ───────────────────────
+    // ── Step 3b: Build DeleteService with graph+vector ───────────────────────
     let delete_service = DeleteService::new(
         storage.clone() as Arc<dyn StorageTrait>,
         database.clone() as Arc<dyn DeleteDb>,
@@ -199,7 +215,7 @@ async fn test_delete_preview_counts_match_execution() {
         memory_only: false,
     };
 
-    // ── Step 5: Preview ─────────────────────────────────────────────────────
+    // ── Step 4: Preview ─────────────────────────────────────────────────────
     let preview = delete_service
         .preview(&delete_request)
         .await
@@ -229,7 +245,7 @@ async fn test_delete_preview_counts_match_execution() {
         preview.vector_points_to_delete,
     );
 
-    // ── Step 6: Execute with the SAME request ───────────────────────────────
+    // ── Step 5: Execute with the SAME request ───────────────────────────────
     let result = delete_service
         .execute(&delete_request)
         .await
@@ -237,7 +253,7 @@ async fn test_delete_preview_counts_match_execution() {
 
     println!("Delete result: {result:?}");
 
-    // ── Step 7: Compare preview vs execution counts field by field ───────────
+    // ── Step 6: Compare preview vs execution counts field by field ───────────
     assert_eq!(
         preview.datasets_to_delete, result.deleted_datasets,
         "datasets_to_delete ({}) != deleted_datasets ({})",
@@ -284,7 +300,7 @@ async fn test_delete_preview_counts_match_execution() {
         preview.search_queries_to_delete, result.deleted_search_queries,
     );
 
-    // ── Step 8: In Soft mode, orphan counts should be 0 ────────────────────
+    // ── Step 7: In Soft mode, orphan counts should be 0 ────────────────────
     assert_eq!(
         preview.orphaned_edge_types_to_delete, 0,
         "preview orphaned_edge_types_to_delete should be 0 in Soft mode",

@@ -84,7 +84,8 @@ describe("Cognee class API shape", () => {
     expect(Cognee.prototype.recall).toBeDefined();
     expect(Cognee.prototype.remember).toBeDefined();
     expect(Cognee.prototype.rememberEntry).toBeDefined();
-    expect(Cognee.prototype.memify).toBeDefined();
+    // memify was removed, as in Python (SDK-1115).
+    expect((Cognee.prototype as unknown as Record<string, unknown>).memify).toBeUndefined();
     expect(Cognee.prototype.improve).toBeDefined();
   });
 
