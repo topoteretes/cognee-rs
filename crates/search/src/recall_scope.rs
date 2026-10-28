@@ -20,8 +20,8 @@ use uuid::Uuid;
 use crate::observability::{COGNEE_RECALL_ROUTE_RULE, COGNEE_SEARCH_TYPE};
 use crate::types::SearchError;
 use crate::{
-    ROUTER_FALLBACK_TYPE, RoutingConstraints, SearchOrchestrator, SearchRequest, SearchResponse,
-    SearchType, route_query,
+    ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, SearchOrchestrator, SearchRequest,
+    SearchResponse, SearchType, default_route, pinned_route, route_query,
 };
 
 /// Advanced tuning options forwarded from `cognee::api::recall::RecallOptions`.
@@ -48,6 +48,9 @@ pub struct RecallOptions {
     /// `None` means a tenant-less caller: it reaches only datasets that have
     /// no tenant.
     pub tenant_id: Option<Uuid>,
+    /// What the deployment can run: routing resolves the search type against
+    /// it. The default allows everything.
+    pub routing_constraints: RoutingConstraints,
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
@@ -481,16 +484,19 @@ pub async fn run_graph(
         },
     };
 
+    let constraints = options.map(|o| o.routing_constraints).unwrap_or_default();
+    let fallback = default_route(&constraints);
     // `routed_rule` is set only when the router chose the type, so the retry
     // below never second-guesses an explicit type.
-    let (mut search_type, routed_rule) = match (query_type, auto_route) {
-        (Some(qt), _) => (qt, None),
+    let (decision, routed_rule) = match (query_type, auto_route) {
+        (Some(qt), _) => (pinned_route(qt, &constraints), None),
         (None, true) => {
-            let decision = route_query(query_text, &RoutingConstraints::default());
-            (decision.search_type, Some(decision.rule))
+            let decision = route_query(query_text, &constraints);
+            (decision, Some(decision.rule))
         }
-        (None, false) => (ROUTER_FALLBACK_TYPE, None),
+        (None, false) => (fallback, None),
     };
+    let mut search_type = decision.search_type;
     let auto_routed = routed_rule.is_some();
 
     span.record(COGNEE_SEARCH_TYPE, format!("{search_type:?}").as_str());
@@ -520,6 +526,7 @@ pub async fn run_graph(
         return Ok((Vec::new(), search_type, auto_routed, response));
     }
 
+    let caller_only_context = options.and_then(|o| o.only_context);
     let mut request = SearchRequest {
         query_text: query_text.to_string(),
         search_type,
@@ -528,7 +535,7 @@ pub async fn run_graph(
         dataset_ids,
         system_prompt: options.and_then(|o| o.system_prompt.clone()),
         system_prompt_path: options.and_then(|o| o.system_prompt_path.clone()),
-        only_context: options.and_then(|o| o.only_context),
+        only_context: search_only_context(caller_only_context, decision),
         use_combined_context: None,
         session_id: session_id.map(|s| s.to_string()),
         node_type: None,
@@ -558,14 +565,14 @@ pub async fn run_graph(
                 ?rejected,
                 "recall: routed search type is not supported; retrying as the fallback"
             );
-            request.search_type = ROUTER_FALLBACK_TYPE;
+            switch_to(&mut request, fallback, caller_only_context);
             search_orchestrator.search(&request).await?
         }
         result => result?,
     };
     if routed_guess && RETRY_ON_EMPTY.contains(&request.search_type) && is_empty(&response.result) {
         info!(search_type = ?request.search_type, "recall: routed search found nothing; retrying as the fallback");
-        request.search_type = ROUTER_FALLBACK_TYPE;
+        switch_to(&mut request, fallback, caller_only_context);
         response = search_orchestrator.search(&request).await?;
     }
     search_type = request.search_type;
@@ -617,6 +624,24 @@ fn is_empty(output: &crate::SearchOutput) -> bool {
         crate::SearchOutput::Rules(rules) => rules.is_empty(),
         _ => false,
     }
+}
+
+/// The caller's `only_context`, forced on when no LLM can write the answer.
+fn search_only_context(caller: Option<bool>, decision: RouteDecision) -> Option<bool> {
+    if decision.only_context {
+        Some(true)
+    } else {
+        caller
+    }
+}
+
+fn switch_to(
+    request: &mut SearchRequest,
+    decision: RouteDecision,
+    caller_only_context: Option<bool>,
+) {
+    request.search_type = decision.search_type;
+    request.only_context = search_only_context(caller_only_context, decision);
 }
 
 /// Tokenize text into lowercase words of length >= 2.
