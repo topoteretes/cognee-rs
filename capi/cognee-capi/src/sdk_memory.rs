@@ -203,7 +203,7 @@ pub unsafe extern "C" fn cg_sdk_memify(
 ///
 /// `opts_json` is a JSON object with required field `"datasetName"` and optional:
 ///   `"sessionIds"` (string array), `"nodeName"` (string array),
-///   `"feedbackAlpha"` (float, default 0.1), `"tenant"` (UUID string).
+///   `"feedbackAlpha"` (float in (0, 1], default the `improve.feedback_alpha` setting, 0.1), `"tenant"` (UUID string).
 ///
 /// On success `result_json` is a JSON object:
 ///   `{"datasetId":…,"datasetName":"…","sessionIds":[…],"stages":[…],

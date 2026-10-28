@@ -1461,6 +1461,47 @@ which are not part of this repository.
 When on, each search records one query row and one result row. They carry the
 searched dataset's `dataset_id` when exactly one dataset was searched.
 
+## Improve (self-improvement loop)
+
+The `improve` engine section is Python's `ImproveConfig` (`IMPROVE_*`).
+`Settings::improve_config` resolves and checks it: a negative count, a
+`feedback_alpha` outside (0, 1], an unknown stage name or the fatal
+`persist_session_qa` in `stages_disabled` is an error. An explicit `improve()`
+(the CLI verb, the bindings, `POST /api/v1/improve`) fails on it; the automatic
+improve after a session `remember()` is skipped with a warning instead, so the
+entry is still stored. A removed stage name (`triplet_enrichment`) is ignored
+with a warning.
+
+| Env var | Key | Default | Effect |
+|---|---|---|---|
+| `IMPROVE_AUTO_ENABLED` | `improve.auto_enabled` | `true` | Run `improve()` after a session `remember()` (detached). `false` is the kill switch; an explicit `self_improvement` does not override it. |
+| `IMPROVE_DEBOUNCE_ENTRIES` | `improve.debounce_entries` | `1` | Auto-improve fires only once this many new session entries accumulated since the last one; `0` turns the entry trigger off. With `debounce_seconds` set, the default `1` steps aside (set `>= 2` to combine both). |
+| `IMPROVE_DEBOUNCE_SECONDS` | `improve.debounce_seconds` | `0` | ... or once this many seconds passed; `0` turns the time trigger off. Checked only on the next `remember()`: there is no timer. |
+| `IMPROVE_STAGES_DISABLED` | `improve.stages_disabled` | _(empty)_ | Comma-separated stage names skipped with `disabled_by_config`. |
+| `IMPROVE_FEEDBACK_ALPHA` | `improve.feedback_alpha` | `0.1` | `feedback_weights` learning rate, in (0, 1], when a run passes none. |
+| `IMPROVE_REVIEW_CONFLICTS` | `improve.review_conflicts` | `false` | Opt every run into `review_conflicts` (not ported yet: SDK-1038). |
+| `IMPROVE_EFFECTIVE_DATE_KEY` | `improve.effective_date_key` | `effective_date` | Document metadata key of a source's date (read by `review_conflicts`; not ported yet). |
+| `IMPROVE_TRACE_WINDOW_STEPS` | `improve.trace_window_steps` | `0` | Agent trace steps per persisted document; `0` = all pending. Not read yet (SDK-1047). |
+| `IMPROVE_TRACE_WINDOWS_PER_RUN` | `improve.trace_windows_per_run` | `0` | Trace documents one run may cognify; `0` = drain. Not read yet (SDK-1047). |
+| `IMPROVE_DISTILL_MAX_BATCHES_PER_RUN` | `improve.distill_max_batches_per_run` | `0` | Curator batches per distillation run; `0` = uncapped. Not read yet (SDK-1049). |
+
+`IMPROVE_AUTO_ENABLED` and `IMPROVE_REVIEW_CONFLICTS` accept `true|1|yes|on`
+and `false|0|no|off`; any other value is ignored with a warning.
+
+### Feedback & personalization
+
+Python's `BaseConfig` knobs, cognee-wide `Settings` fields. Each is
+range-checked: out of range is an error from `ConfigManager::set` (and every
+binding / `cognee-cli config set`), and is ignored with a warning from env.
+
+| Env var | `Settings` field | Default | Effect |
+|---|---|---|---|
+| `DEFAULT_FEEDBACK_INFLUENCE` | `default_feedback_influence` | `0.0` | Blend weight of the learned feedback signal in graph search, in [0, 1]. Not yet the retrievers' default: a search passes its own `feedback_influence`. |
+| `PREFERENCE_ALPHA` | `preference_alpha` | `0.3` | How far one rating pulls a personal `prefers` weight, in (0, 1]. Read by `update_user_preferences` (not ported yet). |
+| `PREFERENCE_BETA` | `preference_beta` | `0.02` | Per-turn decay of an untouched `prefers` weight, in [0, 1). Not read yet. |
+| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization; gates improve's `update_user_preferences` stage. |
+| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most personalization may move a ranking score, in [0, 1]. Not read yet. |
+
 ## Ontology
 
 The `ontology` section is registered by the ontology-resolver kind. Resolvers are

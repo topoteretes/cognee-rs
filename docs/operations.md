@@ -27,7 +27,14 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
 **improve** enrichment pass. Accepts inline text and/or file paths.
 
 - **Session memory** — pass a `--session-id` to scope the turn to a session
-  (session-backed QA history).
+  (session-backed QA history). The improve that bridges the session into the
+  graph runs as a detached background task, as in Python: `remember` returns
+  once the entry is stored. It is skipped when `improve.auto_enabled` is off
+  (`IMPROVE_AUTO_ENABLED=false`) or an `improve.*` setting is invalid, and
+  debounced by `improve.debounce_entries` / `improve.debounce_seconds` (state
+  kept in the session as an internal `auto_improve_debounce` row). The CLI
+  waits for it before exiting and a binding's `close()` before closing the
+  handle (`cognee::wait_for_background_tasks`).
 - **Permanent graph memory** — omit `--session-id` and the input is persisted as
   permanent, graph-backed memory.
 
@@ -57,6 +64,11 @@ skipped with `no_session_ids` without them; the last two work on the graph
 alone and are opt-in. Each stage reports a `StageResult` (`status`, `reason`,
 `error`, `counts`, `duration_ms`) on the returned `ImproveResult`, whose
 `status` summarises them (`completed`, `errored`, `skipped`, `running`).
+Stages named in `improve.stages_disabled` (`IMPROVE_STAGES_DISABLED`, a
+comma-separated list) are skipped first, with `disabled_by_config`; an unknown
+name, or the fatal `persist_session_qa`, makes the configuration invalid and
+the run fails before any stage. `feedback_alpha` defaults to
+`improve.feedback_alpha` (0.1).
 
 The run fails open — a failed stage is recorded and the next one runs —
 except that a failure in `persist_session_qa` (losing session Q&A would be data
@@ -64,8 +76,9 @@ loss) stops the run with `ApiError::ImproveAborted` carrying the partial
 result, and an exhausted LLM budget skips every later stage with
 `budget_exhausted`. The stages that draft text with an LLM are skipped with
 `no_llm_configured` when none is configured. `extract_agent_context`,
-`update_user_preferences` and `review_conflicts` are not ported yet and always
-report a skip reason. rustdoc: `api::improve`.
+`update_user_preferences` (gated by `personalization_enabled`) and
+`review_conflicts` (opt-in, also via `improve.review_conflicts`) are not
+ported yet and always report a skip reason. rustdoc: `api::improve`.
 
 ### forget
 

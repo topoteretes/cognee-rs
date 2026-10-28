@@ -212,7 +212,7 @@ impl PyCognee {
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
-    /// ``nodeName`` (list of str), ``feedbackAlpha`` (float, default 0.1),
+    /// ``nodeName`` (list of str), ``feedbackAlpha`` (float in (0, 1], default the ``improve.feedback_alpha`` setting, 0.1),
     /// ``tenant`` (UUID str).
     ///
     /// Returns a dict with camelCase keys:

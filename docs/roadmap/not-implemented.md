@@ -74,11 +74,19 @@ each. Not yet ported — they report a skip reason instead of running:
 
 - **`extract_agent_context`** — skipped `not_ported` (or `session_manager_unavailable` /
   `no_llm_configured` by its gates). Ported in SDK-1044 step 6.
-- **`update_user_preferences`** — skipped `personalization_disabled`; there is no personalization
-  setting yet. Ported in SDK-1044 steps 3 and 6.
-- **`review_conflicts`** — skipped `opt_in_disabled` (SDK-1038).
-- **`disabled_by_config`** — the orchestrator gate exists, but there is no improve settings section
-  to disable a stage with yet (SDK-1044 step 3).
+- **`update_user_preferences`** — skipped `personalization_disabled`, or `not_ported` once
+  `personalization_enabled` is on. Ported in SDK-1044 step 6.
+- **`review_conflicts`** — skipped `opt_in_disabled` unless opted in (argument or
+  `improve.review_conflicts`), then `no_llm_configured` or `not_ported` (SDK-1038).
+
+Improve settings that exist but are not read by any stage yet: `improve.trace_window_steps`,
+`improve.trace_windows_per_run` (SDK-1047), `improve.distill_max_batches_per_run` (SDK-1049) and
+`improve.effective_date_key` (SDK-1038). Of the personalization knobs only `personalization_enabled`
+is read (the `update_user_preferences` gate); `preference_alpha`, `preference_beta` and
+`personalization_influence` wait for the stage and the retrieval side (SDK-1044 step 6), and
+`default_feedback_influence` is not yet the retrievers' default (a search passes its own
+`feedback_influence`). Python's host admission check for the automatic improve
+(`register_auto_improve_admission`) is not ported.
 
 Partial stages:
 

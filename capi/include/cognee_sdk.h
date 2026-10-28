@@ -687,7 +687,7 @@ void cg_sdk_memify(const CgSdk*        sdk,
  *   "datasetName" (string, required),
  *   "sessionIds"  (string array, optional),
  *   "nodeName"    (string array, optional),
- *   "feedbackAlpha" (float, default 0.1),
+ *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
  *   "tenant"      (UUID string, optional).
  *
  * result_json on success: ImproveResult JSON object (see wire shape above).
