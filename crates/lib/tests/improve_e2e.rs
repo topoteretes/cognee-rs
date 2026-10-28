@@ -544,32 +544,86 @@ async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
     assert_eq!(stage.duration_ms, 0, "a gated stage never ran");
 }
 
-/// Stage 9 (`global_context_index`) is opt-in and needs no sessions. With
-/// >= 1 graph edge, the stage formats the edges into the global session
-/// graph-context.
-#[tokio::test]
-async fn improve_records_global_context_index_when_opted_in() {
-    let h = make_harness().await;
-    let config = CognifyConfig::default();
-    h.graph_db
-        .add_edge("node_a", "node_b", "related_to", None)
+/// One document of `dataset_id` with one chunk naming `entity`, so the
+/// global context index has a bucket and a root to write.
+async fn seed_document(h: &Harness, dataset_id: Uuid, owner: Uuid, entity: &str) -> Uuid {
+    use cognee_database::ops::{data as data_ops, datasets as ds_ops};
+    use cognee_graph::GraphDBTraitExt;
+    let data_id = Uuid::new_v4();
+    let data = cognee::models::Data::builder(
+        data_id,
+        "notes.md",
+        "file:///tmp/notes.md",
+        "notes.md",
+        "md",
+        "text/markdown",
+        data_id.simple().to_string(),
+        owner,
+    )
+    .build();
+    data_ops::create_data(&h.db, data).await.unwrap();
+    ds_ops::attach_data_to_dataset(&h.db, dataset_id, data_id)
         .await
         .unwrap();
+    let chunk = format!("chunk-{entity}");
+    h.graph_db
+        .add_node(&serde_json::json!({"id": chunk, "type": "DocumentChunk", "document_id": data_id.to_string()}))
+        .await
+        .unwrap();
+    h.graph_db
+        .add_node(&serde_json::json!({"id": entity, "type": "Entity", "name": entity}))
+        .await
+        .unwrap();
+    h.graph_db
+        .add_edge(&chunk, entity, "contains", None)
+        .await
+        .unwrap();
+    data_id
+}
+
+async fn index_node_texts(h: &Harness) -> Vec<String> {
+    let (nodes, _) = h.graph_db.get_graph_data().await.unwrap();
+    let mut texts: Vec<String> = nodes
+        .into_iter()
+        .filter(|(_, p)| p.get("type") == Some(&serde_json::json!("GlobalContextSummary")))
+        .filter_map(|(_, p)| p.get("text").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    texts.sort();
+    texts
+}
+
+/// Stage 9 (`global_context_index`) is opt-in and needs no sessions. It
+/// builds Python's default `from_entities` index: one bucket per document
+/// and a root, with no LLM call (Python `test_improve_global_context_index`).
+#[tokio::test]
+async fn improve_builds_the_global_context_index_when_opted_in() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
     let mut p = params(&h, &config, "ds_gcidx", None, mock_llm());
     let owner = p.owner_id;
+    let dataset_id = create_dataset(&h, "ds_gcidx", owner).await;
+    seed_document(&h, dataset_id, owner, "Alice").await;
     p.build_global_context_index = true;
     let r = improve(p).await.unwrap();
 
     let gci = stage(&r, "global_context_index");
     assert_eq!(gci.status, StageStatus::Completed);
+    assert_eq!(gci.counts.get("nodes_written"), Some(&2));
     assert_eq!(r.status(), ImproveStatus::Completed);
-
+    assert_eq!(
+        index_node_texts(&h).await,
+        [
+            "Topics: Entity (1)\nEntities: Alice\nDocuments: notes.md",
+            "notes.md\nEntity: Alice",
+        ]
+    );
+    // The edge-line session stub is gone.
     let stored = h
         .session_manager
         .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
         .await
         .unwrap();
-    assert_eq!(stored, Some("node_a → related_to → node_b".to_string()));
+    assert_eq!(stored, None);
 }
 
 /// A background run (dispatched by its host) runs the same stages, the
@@ -1015,11 +1069,12 @@ async fn an_errored_run_does_not_stamp_the_stage() {
     let owner = Uuid::new_v4();
     let dataset_id = create_dataset(&h, "ds_watermark_err", owner).await;
 
-    // The stage needs the session manager: without one it errors.
+    // A failed vector write fails the build.
+    seed_document(&h, dataset_id, owner, "Alice").await;
+    h.vector_db.set_index_error("boom");
     let mut p = params(&h, &config, "ds_watermark_err", None, mock_llm());
     p.owner_id = owner;
     p.build_global_context_index = true;
-    p.session_manager = None;
     let r = improve(p).await.unwrap();
     assert_eq!(
         stage(&r, "global_context_index").status,

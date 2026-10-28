@@ -719,7 +719,7 @@ impl ImproveStages<'_> {
         let result = if unchanged {
             StageResult::already_completed(KIND.name(), REASON_NO_WRITES_SINCE_LAST_IMPROVE)
         } else {
-            self.build_global_context_index().await
+            self.build_global_context_index(dataset_id).await
         };
         let stamp = match (dataset_id, result.status) {
             (Some(id), StageStatus::Completed | StageStatus::AlreadyCompleted) => {
@@ -734,46 +734,40 @@ impl ImproveStages<'_> {
         }
     }
 
-    /// The global context index build.
+    /// The global context index build: Python's default method,
+    /// `from_entities` (no LLM), in the dataset's storage scope.
     ///
-    /// Partial port: stores the graph's `source → relationship → target`
-    /// lines as a global session graph-context. Python's pipeline (bucket and
-    /// root summaries) lands in SDK-1044 step 5.
-    async fn build_global_context_index(&mut self) -> StageResult {
+    /// Counts `nodes_written`, the index nodes whose text changed (Rust
+    /// extra). A dataset that does not exist yet has nothing to index.
+    async fn build_global_context_index(&mut self, dataset_id: Option<Uuid>) -> StageResult {
         const STAGE: &str = StageKind::GlobalContextIndex.name();
-        let Some(manager) = self.session_manager.as_ref() else {
-            return StageResult::errored(STAGE, "session manager is required");
-        };
-        let edges = match maybe_with_dataset(self.dataset_id, self.graph_db.get_graph_data()).await
-        {
-            Ok((_nodes, edges)) => edges,
-            Err(e) => {
-                return StageResult::errored(STAGE, format!("failed to load graph data: {e}"));
-            }
-        };
-        if edges.is_empty() {
-            info!("improve: graph has no edges; nothing to index");
+        let Some(dataset_id) = dataset_id else {
+            info!("improve: dataset not found; no global context index to build");
             return StageResult::completed(STAGE);
-        }
-        let global_context = edges
-            .iter()
-            .map(|(src, tgt, rel, _props)| format!("{src} → {rel} → {tgt}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let user_id = self.owner_id.to_string();
-        match manager
-            .set_graph_context(
-                Some("_global_context_index"),
-                Some(&user_id),
-                &global_context,
-            )
-            .await
-        {
-            Ok(()) => {
-                info!(edges = edges.len(), "improve: global context index stored");
-                StageResult::completed(STAGE)
+        };
+        let Some(db) = self.db.as_ref() else {
+            return StageResult::errored(STAGE, "relational database is required");
+        };
+        let store = cognee_cognify::IndexStore {
+            graph_db: self.graph_db.as_ref(),
+            vector_db: self.vector_db.as_ref(),
+            embedding_engine: self.embedding_engine.as_ref(),
+            db: db.as_ref(),
+            dataset_id,
+            owner_id: self.owner_id,
+            tenant_id: self.tenant_id,
+        };
+        let method = cognee_cognify::GlobalContextIndexMethod::default();
+        let build = cognee_cognify::build_global_context_index(&store, &self.llm, &method);
+        match maybe_with_dataset(Some(dataset_id), build).await {
+            Ok(written) => {
+                info!(
+                    nodes = written.len(),
+                    "improve: global context index updated"
+                );
+                StageResult::completed(STAGE).with_counts([("nodes_written", count(written.len()))])
             }
-            Err(e) => StageResult::errored(STAGE, format!("failed to store global context: {e}")),
+            Err(e) => StageResult::errored(STAGE, format!("global context index failed: {e}")),
         }
     }
 }
