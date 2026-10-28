@@ -636,7 +636,7 @@ pub async fn persist_data_with_acl_and_locks(
         // `update()` is the way to re-tag cognified content: it removes the
         // item's memory and re-cognifies it (Python resets the marker on the
         // pinned row; Rust adds the replacement first, then deletes the old
-        // item — or, when the replacement is this same content-addressed row,
+        // item — or, when the replacement dedups onto this same row,
         // drops only its memory and completion marker).
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
