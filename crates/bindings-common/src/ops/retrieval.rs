@@ -506,6 +506,7 @@ pub async fn recall(
             tenant_id,
             neighborhood_depth,
             neighborhood_seed_top_k,
+            routing_constraints: svc.component_manager.routing_constraints().await?,
             ..Default::default()
         }),
     )

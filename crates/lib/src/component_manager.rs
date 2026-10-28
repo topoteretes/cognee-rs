@@ -17,6 +17,7 @@ use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::{Llm, Transcriber};
+use cognee_search::RoutingConstraints;
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 
@@ -333,6 +334,16 @@ impl ComponentManager {
     pub async fn llm_available(&self) -> Result<bool, ComponentError> {
         let ctx = self.build_context().await?;
         self.registry.llm_available(&ctx)
+    }
+
+    /// What this configuration can run, for recall's routing: whether the LLM
+    /// is [available](Self::llm_available) and whether Cypher queries are
+    /// allowed (`search.allow_cypher_query`).
+    pub async fn routing_constraints(&self) -> Result<RoutingConstraints, ComponentError> {
+        Ok(RoutingConstraints {
+            llm_available: self.llm_available().await?,
+            cypher_allowed: self.settings().search_tuning().allow_cypher_query,
+        })
     }
 
     /// Build the session store selected by `session.store` (default
@@ -1610,6 +1621,34 @@ mod tests {
         cm.llm()
             .await
             .expect("a missing key should not fail the build");
+    }
+
+    #[tokio::test]
+    async fn routing_constraints_come_from_the_llm_and_the_cypher_setting() {
+        let settings = Settings {
+            sections: [
+                ("llm.provider".to_string(), serde_json::json!("openai")),
+                ("llm.api_key".to_string(), serde_json::json!("")),
+                (
+                    "search.allow_cypher_query".to_string(),
+                    serde_json::json!(false),
+                ),
+            ]
+            .into(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let constraints = cm
+            .routing_constraints()
+            .await
+            .expect("openai is a built-in provider");
+        assert_eq!(
+            constraints,
+            RoutingConstraints {
+                llm_available: false,
+                cypher_allowed: false,
+            }
+        );
     }
 
     #[cfg(feature = "mock-llm")]
