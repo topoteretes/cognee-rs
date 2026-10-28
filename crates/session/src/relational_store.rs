@@ -5,12 +5,14 @@ use async_trait::async_trait;
 use cognee_database::{DatabaseError, SessionQaDb, SessionQaPatch, SessionQaRow, SessionTraceRow};
 use uuid::Uuid;
 
+use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// Session store on the relational database (`session_qa_entries`,
-/// `session_graph_context`, `session_trace_steps`), through any
+/// `session_graph_context`, `session_trace_steps`, `session_context_entries`),
+/// through any
 /// [`SessionQaDb`] — the built-in SeaORM connection (SQLite, Postgres) or
 /// another relational backend.
 ///
@@ -250,5 +252,56 @@ impl SessionStore for RelationalSessionStore {
             .await
             .map_err(store_err)?;
         rows.into_iter().map(row_to_step).collect()
+    }
+
+    async fn create_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry: SessionContextRow,
+    ) -> Result<(), SessionError> {
+        // The row's "id" is promoted to the key column; an id-less row gets a
+        // synthetic key (never targetable by an update), as in Python.
+        let entry_id = match entry.get("id") {
+            Some(serde_json::Value::String(id)) if !id.is_empty() => id.clone(),
+            _ => Uuid::new_v4().to_string(),
+        };
+        let payload = to_json(&entry)?;
+        self.db
+            .create_session_context_entry(session_id, user_id, &entry_id, payload)
+            .await
+            .map_err(store_err)
+    }
+
+    async fn get_session_context_entries(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Vec<SessionContextRow>, SessionError> {
+        let payloads = self
+            .db
+            .session_context_entries(session_id, user_id)
+            .await
+            .map_err(store_err)?;
+        payloads
+            .iter()
+            .map(|p| {
+                serde_json::from_str::<SessionContextRow>(p)
+                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))
+            })
+            .collect()
+    }
+
+    async fn update_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry_id: &str,
+        merge: SessionContextRow,
+    ) -> Result<bool, SessionError> {
+        self.db
+            .update_session_context_entry(session_id, user_id, entry_id, &merge)
+            .await
+            .map_err(store_err)
     }
 }

@@ -332,3 +332,207 @@ async fn test_fs_trace_step_isolation() {
     assert_eq!(a2.len(), 1);
     assert_eq!(a2[0].trace_id, "a-2");
 }
+
+// ── session-context rows ────────────────────────────────────────────────────
+
+fn ctx_row(value: serde_json::Value) -> cognee_session::SessionContextRow {
+    match value {
+        serde_json::Value::Object(map) => map,
+        other => panic!("not an object: {other}"),
+    }
+}
+
+fn guidance(id: &str, content: &str) -> cognee_session::SessionContextRow {
+    ctx_row(serde_json::json!({
+        "id": id,
+        "kind": "context",
+        "section": "rules",
+        "content": content,
+        "created_at": "2026-10-28T00:00:00+00:00",
+    }))
+}
+
+#[tokio::test]
+async fn context_rows_round_trip_in_insertion_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "first"))
+        .await
+        .unwrap();
+    store
+        .create_session_context_entry(
+            "s1",
+            Some("u"),
+            ctx_row(serde_json::json!({"id": "wm", "kind": "wm_state", "done_count": 2})),
+        )
+        .await
+        .unwrap();
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e2", "second"))
+        .await
+        .unwrap();
+
+    let rows = store
+        .get_session_context_entries("s1", Some("u"))
+        .await
+        .unwrap();
+    let ids: Vec<_> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["e1", "wm", "e2"]);
+    assert_eq!(rows[1]["done_count"], serde_json::json!(2));
+
+    // State rows stay out of the rendered context and out of the Q&A history.
+    let active = cognee_session::coerce_active_context_entries(&rows).unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(
+        store
+            .get_all_qa_entries("s1", Some("u"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Other users and sessions see nothing.
+    assert!(
+        store
+            .get_session_context_entries("s1", Some("other"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .get_session_context_entries("s2", Some("u"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn update_context_row_merges_shallowly() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "first"))
+        .await
+        .unwrap();
+
+    let merged = store
+        .update_session_context_entry(
+            "s1",
+            Some("u"),
+            "e1",
+            ctx_row(serde_json::json!({"helpful_count": 3, "content": "updated"})),
+        )
+        .await
+        .unwrap();
+    assert!(merged);
+    let rows = store
+        .get_session_context_entries("s1", Some("u"))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["content"], serde_json::json!("updated"));
+    assert_eq!(rows[0]["helpful_count"], serde_json::json!(3));
+    assert_eq!(rows[0]["section"], serde_json::json!("rules"));
+
+    let missing = store
+        .update_session_context_entry("s1", Some("u"), "nope", guidance("nope", "x"))
+        .await
+        .unwrap();
+    assert!(!missing);
+}
+
+#[tokio::test]
+async fn watermark_writes_keep_one_row_on_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    let manager = SessionManager::new(store.clone());
+    let wm = cognee_session::SESSION_PERSIST_WATERMARK;
+    wm.write_count(&manager, Some("s1"), Some("u"), 4)
+        .await
+        .unwrap();
+    wm.write_count(&manager, Some("s1"), Some("u"), 7)
+        .await
+        .unwrap();
+    assert_eq!(
+        wm.read_count(&manager, Some("s1"), Some("u"))
+            .await
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        manager
+            .get_session_context_entries(Some("s1"), Some("u"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn delete_session_removes_context_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "first"))
+        .await
+        .unwrap();
+    store
+        .create_session_context_entry("s2", Some("u"), guidance("e1", "other"))
+        .await
+        .unwrap();
+
+    // A session holding only context rows still existed.
+    assert!(store.delete_session("s1", Some("u")).await.unwrap());
+    assert!(
+        store
+            .get_session_context_entries("s1", Some("u"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .get_session_context_entries("s2", Some("u"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!store.delete_session("s1", Some("u")).await.unwrap());
+
+    store.prune().await.unwrap();
+    assert!(
+        store
+            .get_session_context_entries("s2", Some("u"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// The fs store appends like Python's `FsCacheAdapter`; an update targets the
+/// first row holding the id.
+#[tokio::test]
+async fn create_context_row_appends() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = setup_store(dir.path());
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "first"))
+        .await
+        .unwrap();
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "again"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_session_context_entries("s1", Some("u"))
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}

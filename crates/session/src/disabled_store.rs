@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::{SessionQAEntry, SessionTraceStep};
@@ -11,8 +12,8 @@ use crate::types::{SessionQAEntry, SessionTraceStep};
 ///
 /// It mirrors Python's session manager without a cache engine
 /// (`SessionManager.is_available == False`): every read finds an empty
-/// session, updates and deletes find nothing, and the graph-context snapshot
-/// is dropped, and [`SessionStore::is_available`] is `false`. The two writes
+/// session, updates and deletes find nothing, the graph-context snapshot and
+/// session-context rows are dropped, and [`SessionStore::is_available`] is `false`. The two writes
 /// that must hand back an id, a Q&A entry and a trace step, fail with
 /// [`SessionError::Disabled`]. Callers handle that as Python does:
 ///
@@ -125,6 +126,33 @@ impl SessionStore for DisabledSessionStore {
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         Ok(Vec::new())
     }
+
+    async fn create_session_context_entry(
+        &self,
+        _session_id: &str,
+        _user_id: Option<&str>,
+        _entry: SessionContextRow,
+    ) -> Result<(), SessionError> {
+        Ok(())
+    }
+
+    async fn get_session_context_entries(
+        &self,
+        _session_id: &str,
+        _user_id: Option<&str>,
+    ) -> Result<Vec<SessionContextRow>, SessionError> {
+        Ok(Vec::new())
+    }
+
+    async fn update_session_context_entry(
+        &self,
+        _session_id: &str,
+        _user_id: Option<&str>,
+        _entry_id: &str,
+        _merge: SessionContextRow,
+    ) -> Result<bool, SessionError> {
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
@@ -163,5 +191,24 @@ mod tests {
         assert_eq!(store.get_graph_context("s", None).await.unwrap(), None);
         assert!(!store.delete_session("s", None).await.unwrap());
         assert!(store.read_trace_steps("u", "s").await.unwrap().is_empty());
+        let mut row = SessionContextRow::new();
+        row.insert("id".into(), "e1".into());
+        store
+            .create_session_context_entry("s", None, row.clone())
+            .await
+            .unwrap();
+        assert!(
+            store
+                .get_session_context_entries("s", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store
+                .update_session_context_entry("s", None, "e1", row)
+                .await
+                .unwrap()
+        );
     }
 }

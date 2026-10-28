@@ -5,6 +5,7 @@ use cognee_llm::Llm;
 use cognee_llm::Message;
 use tracing::debug;
 
+use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::feedback;
 use crate::session_store::{SessionQAUpdate, SessionStore};
@@ -182,7 +183,57 @@ impl SessionManager {
         Ok(qa_id)
     }
 
-    /// Delete all Q&A entries for a session.
+    /// Every stored session-context row of the session (guidance entries,
+    /// feedback records and internal state rows), oldest first. Use
+    /// [`crate::coerce_active_context_entries`] to keep only the rows that
+    /// may be rendered.
+    ///
+    /// Python's `SessionManager.get_session_context_entries`. Unlike Python
+    /// (fail-open unless `raise_on_error`) a failed read is returned as an
+    /// error, so a caller never mistakes an unreadable session for an empty
+    /// one; an unavailable store reads as empty.
+    pub async fn get_session_context_entries(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<Vec<SessionContextRow>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .get_session_context_entries(resolved_id, user_id)
+            .await
+    }
+
+    /// Append one session-context row (a JSON object carrying a `"kind"`
+    /// field). Python's `SessionManager.create_session_context_entry`.
+    pub async fn create_session_context_entry(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        entry: SessionContextRow,
+    ) -> Result<(), SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .create_session_context_entry(resolved_id, user_id, entry)
+            .await
+    }
+
+    /// Shallow-merge `merge` into the session-context row whose `"id"` is
+    /// `entry_id`; `false` when there is none. Python's
+    /// `SessionManager.update_session_context_entry`.
+    pub async fn update_session_context_entry(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        entry_id: &str,
+        merge: SessionContextRow,
+    ) -> Result<bool, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .update_session_context_entry(resolved_id, user_id, entry_id, merge)
+            .await
+    }
+
+    /// Delete all entries for a session, its session-context rows included.
     pub async fn delete_session(
         &self,
         session_id: Option<&str>,

@@ -18,6 +18,7 @@ use chrono::Utc;
 use tokio::fs;
 use uuid::Uuid;
 
+use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
@@ -60,7 +61,8 @@ impl FsSessionStore {
         }
     }
 
-    /// Expire a session's files (Q&A entries, trace steps, graph context)
+    /// Expire a session's files (Q&A entries, trace steps, graph context,
+    /// session-context rows)
     /// this many seconds after their last write, as Python's `FSCacheAdapter`
     /// does with `session_ttl_seconds` (its `diskcache` expiry, refreshed on
     /// every write). An expired file is deleted when it is next read. `0`
@@ -183,7 +185,16 @@ fn trace_session_file(base: &Path, user_id: &str, session_id: &str) -> PathBuf {
     base.join(user_id).join(format!("{session_id}.traces.json"))
 }
 
-async fn load_trace_steps(path: &Path) -> Result<Vec<SessionTraceStep>, SessionError> {
+fn context_session_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf {
+    let uid = user_id.unwrap_or("default");
+    base.join(uid).join(format!("{session_id}.context.json"))
+}
+
+/// Load a JSON array file (trace steps, session-context rows); a missing or
+/// empty file is an empty list.
+async fn load_json_list<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Result<Vec<T>, SessionError> {
     match fs::read_to_string(path).await {
         Ok(contents) if !contents.is_empty() => serde_json::from_str(&contents)
             .map_err(|e| SessionError::StoreError(format!("json parse error: {e}"))),
@@ -193,18 +204,27 @@ async fn load_trace_steps(path: &Path) -> Result<Vec<SessionTraceStep>, SessionE
     }
 }
 
-async fn save_trace_steps(path: &Path, steps: &[SessionTraceStep]) -> Result<(), SessionError> {
+async fn save_json_list<T: serde::Serialize>(path: &Path, items: &[T]) -> Result<(), SessionError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .await
             .map_err(|e| SessionError::StoreError(format!("fs mkdir error: {e}")))?;
     }
-    let json = serde_json::to_string_pretty(steps)
+    let json = serde_json::to_string_pretty(items)
         .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
     fs::write(path, json)
         .await
         .map_err(|e| SessionError::StoreError(format!("fs write error: {e}")))?;
     Ok(())
+}
+
+/// Remove `path`; whether it existed.
+async fn remove_if_exists(path: &Path) -> Result<bool, SessionError> {
+    match fs::remove_file(path).await {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(SessionError::StoreError(format!("fs delete error: {e}"))),
+    }
 }
 
 /// Apply a `SessionQAUpdate` to an `FsQAEntry` in place.
@@ -299,17 +319,18 @@ impl SessionStore for FsSessionStore {
         user_id: Option<&str>,
     ) -> Result<bool, SessionError> {
         let path = session_file(&self.base_dir, user_id, session_id);
-        let existed = match fs::remove_file(&path).await {
-            Ok(()) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(SessionError::StoreError(format!("fs delete error: {e}"))),
-        };
+        let existed = remove_if_exists(&path).await?;
 
         // Also remove the graph context file for this session (best-effort).
         let gc_path = graph_context_file(&self.base_dir, user_id, session_id);
         let _ = fs::remove_file(&gc_path).await; // ignore NotFound
 
-        Ok(existed)
+        // And its session-context rows, which count toward "existed" as in
+        // Python's `delete_session`.
+        let ctx_path = context_session_file(&self.base_dir, user_id, session_id);
+        let context_existed = remove_if_exists(&ctx_path).await?;
+
+        Ok(existed || context_existed)
     }
 
     async fn delete_qa_entry(
@@ -424,10 +445,10 @@ impl SessionStore for FsSessionStore {
     ) -> Result<String, SessionError> {
         let path = trace_session_file(&self.base_dir, user_id, session_id);
         self.expire(&path).await?;
-        let mut steps = load_trace_steps(&path).await?;
+        let mut steps = load_json_list(&path).await?;
         let trace_id = step.trace_id.clone();
         steps.push(step);
-        save_trace_steps(&path, &steps).await?;
+        save_json_list(&path, &steps).await?;
         Ok(trace_id)
     }
 
@@ -438,7 +459,51 @@ impl SessionStore for FsSessionStore {
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         let path = trace_session_file(&self.base_dir, user_id, session_id);
         self.expire(&path).await?;
-        load_trace_steps(&path).await
+        load_json_list(&path).await
+    }
+
+    async fn create_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry: SessionContextRow,
+    ) -> Result<(), SessionError> {
+        let path = context_session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
+        let mut rows: Vec<SessionContextRow> = load_json_list(&path).await?;
+        rows.push(entry);
+        save_json_list(&path, &rows).await
+    }
+
+    async fn get_session_context_entries(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Vec<SessionContextRow>, SessionError> {
+        let path = context_session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
+        load_json_list(&path).await
+    }
+
+    async fn update_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry_id: &str,
+        merge: SessionContextRow,
+    ) -> Result<bool, SessionError> {
+        let path = context_session_file(&self.base_dir, user_id, session_id);
+        self.expire(&path).await?;
+        let mut rows: Vec<SessionContextRow> = load_json_list(&path).await?;
+        let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.get("id").and_then(serde_json::Value::as_str) == Some(entry_id))
+        else {
+            return Ok(false);
+        };
+        row.extend(merge);
+        save_json_list(&path, &rows).await?;
+        Ok(true)
     }
 }
 

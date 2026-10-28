@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
+use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
@@ -63,7 +64,8 @@ pub trait SessionStore: Send + Sync {
         user_id: Option<&str>,
     ) -> Result<Vec<SessionQAEntry>, SessionError>;
 
-    /// Delete all entries for a session. Returns `true` if the session existed.
+    /// Delete all entries for a session, its session-context rows included.
+    /// Returns `true` if the session existed.
     async fn delete_session(
         &self,
         session_id: &str,
@@ -156,6 +158,54 @@ pub trait SessionStore: Send + Sync {
         let _ = (user_id, session_id);
         Err(SessionError::StoreError(
             "read_trace_steps not implemented for this backend".into(),
+        ))
+    }
+
+    /// Append one session-context row (a JSON object carrying a `"kind"`
+    /// field) to the session's context list. Python's
+    /// `create_session_context_entry`: the relational store upserts on the
+    /// row's `"id"` (last writer wins), the fs and Redis stores append.
+    ///
+    /// The caller validates the row; the store keeps it as-is. Default impl
+    /// returns `SessionError::StoreError`, like the trace-step methods.
+    async fn create_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry: SessionContextRow,
+    ) -> Result<(), SessionError> {
+        let _ = (session_id, user_id, entry);
+        Err(SessionError::StoreError(
+            "create_session_context_entry not implemented for this backend".into(),
+        ))
+    }
+
+    /// Every stored session-context row of the session (all kinds), oldest
+    /// first. Default impl returns `SessionError::StoreError`.
+    async fn get_session_context_entries(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> Result<Vec<SessionContextRow>, SessionError> {
+        let _ = (session_id, user_id);
+        Err(SessionError::StoreError(
+            "get_session_context_entries not implemented for this backend".into(),
+        ))
+    }
+
+    /// Shallow-merge `merge` into the session-context row whose `"id"` is
+    /// `entry_id`. Returns `false` when no such row exists. Default impl
+    /// returns `SessionError::StoreError`.
+    async fn update_session_context_entry(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        entry_id: &str,
+        merge: SessionContextRow,
+    ) -> Result<bool, SessionError> {
+        let _ = (session_id, user_id, entry_id, merge);
+        Err(SessionError::StoreError(
+            "update_session_context_entry not implemented for this backend".into(),
         ))
     }
 }
