@@ -69,30 +69,41 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 
 ## improve() — deferred stages (partial implementations)
 
-Shipped in task 20 as sanctioned partials for 0.1.0:
+`improve()` runs Python's nine stages in order and reports one `StageResult`
+each. Not yet ported — they report a skip reason instead of running:
 
-- **`build_global_context_index` stage (Stage 3b)** — the `build_global_context_index: bool` flag
-  and the `"global_context_index"` entry in `stages_run` are wired. The current implementation
+- **`extract_agent_context`** — skipped `not_ported` (or `session_manager_unavailable` /
+  `no_llm_configured` by its gates). Ported in SDK-1044 step 6.
+- **`update_user_preferences`** — skipped `personalization_disabled`; there is no personalization
+  setting yet. Ported in SDK-1044 steps 3 and 6.
+- **`review_conflicts`** — skipped `opt_in_disabled` (SDK-1038).
+- **`disabled_by_config`** — the orchestrator gate exists, but there is no improve settings section
+  to disable a stage with yet (SDK-1044 step 3).
+
+Partial stages:
+
+- **`global_context_index`** — opt-in via `build_global_context_index`. The current implementation
   reads all graph edges via `get_graph_data()`, formats them as `"source → relationship → target"`
   lines, and stores the result in the session's graph-context slot (keyed
-  `"_global_context_index"`). What is **not** yet implemented:
-  - Bucket/root summarization: Python's reference implementation chunks the edge list into buckets
-    and runs an LLM summarization pass to produce a condensed global context rather than a raw edge
-    dump. The Rust version stores the raw edge list, which is token-inefficient for large graphs.
-  - TODO: add `global_context_index_pipeline()` in `cognee-cognify` (mirrors Python
-    `session_manager.py: build_global_context_index`) that does bucket summarization with the LLM
-    before writing to the session store.
+  `"_global_context_index"`). Python's `from_entities` bucket/root summaries and its
+  `already_completed` watermark are not implemented yet (SDK-1044 step 5).
 
-- **`persist_trace_steps` stage (Stage 2b)** — trace steps whose `session_feedback` field is
-  non-empty are collected and run through the standard `add → cognify` path (tagged to the
-  `"agent_trace_feedbacks"` node set). This **matches the current Python reference**, not a
-  scoped-down version of it: Python's `persist_agent_trace_feedbacks_in_knowledge_graph` pipeline
-  also cognifies only the feedback text, so the per-step provenance metadata (origin function,
-  status, parameters, return values) is stored as separate graph nodes in *neither* SDK. This entry
-  is therefore a shared future enhancement rather than a Rust↔Python parity gap.
-  - Future enhancement (both SDKs): persist a per-step graph entity preserving the full
-    `SessionTraceStep` fields for audit/replay. In Rust this would be a dedicated
-    `persist_trace_step_metadata()` in `cognee-cognify`.
+- **`persist_agent_traces`** — trace steps whose `session_feedback` field is non-empty are
+  collected and run through the standard `add → cognify` path (tagged to the
+  `"agent_trace_feedbacks"` node set), all sessions as one document. There is no per-session
+  trace watermark (`windows`, `sessions_stuck`) yet (SDK-1047); a run with no trace feedback reports
+  `already_completed: no_new_trace_steps`. Per-step provenance metadata is stored as graph nodes in
+  *neither* SDK — a shared future enhancement rather than a parity gap.
+
+- **`persist_session_qa` / `distill_sessions`** — no Q&A or distillation watermark yet
+  (SDK-1047 / SDK-1049): every run persists and distills the sessions' full Q&A, and
+  `distill_sessions` reports no `entries_uncurated` count.
+
+- **Budget exhaustion inside cognify** — an exhausted LLM budget is recognised from the typed
+  `LlmError::PaymentRequired` (carried as `CognifyError::PaymentRequired`): the distillation
+  curator/writer calls and any cognify step that returns the LLM error directly. A budget failure
+  that cognify's per-chunk failure report records only as text is not recognised, so that stage
+  errors (aborting the run for `persist_session_qa`) without the `budget_exhausted` reason.
 
 ## HTTP server
 

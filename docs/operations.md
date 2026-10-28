@@ -48,13 +48,24 @@ returned to the caller (printed to stdout by the CLI).
 
 ### improve
 
-Enriches memory and bridges sessions: runs the feedback/enrichment improvement
-stages over the graph (memify-style triplet enrichment plus feedback weighting).
-When session IDs are supplied it also distills each session's Q&A into curated,
-entity-anchored "session-learnings" lesson documents (tagged with the
-`session_learnings` node-set) and cognifies them into the permanent graph.
-Can target specific sessions or graph nodes and tune the feedback weight.
-rustdoc: `api::improve`.
+Runs the self-improvement loop over a dataset as nine gated stages, in
+Python's registry order: `feedback_weights`, `persist_session_qa`,
+`persist_agent_traces`, `extract_agent_context`, `distill_sessions`,
+`update_user_preferences`, `build_truth_subspace`, `review_conflicts`,
+`global_context_index`. The first seven read the given sessions and are
+skipped with `no_session_ids` without them; the last two work on the graph
+alone and are opt-in. Each stage reports a `StageResult` (`status`, `reason`,
+`error`, `counts`, `duration_ms`) on the returned `ImproveResult`, whose
+`status` summarises them (`completed`, `errored`, `skipped`, `running`).
+
+The run fails open — a failed stage is recorded and the next one runs —
+except that a failure in `persist_session_qa` (losing session Q&A would be data
+loss) stops the run with `ApiError::ImproveAborted` carrying the partial
+result, and an exhausted LLM budget skips every later stage with
+`budget_exhausted`. The stages that draft text with an LLM are skipped with
+`no_llm_configured` when none is configured. `extract_agent_context`,
+`update_user_preferences` and `review_conflicts` are not ported yet and always
+report a skip reason. rustdoc: `api::improve`.
 
 ### forget
 
