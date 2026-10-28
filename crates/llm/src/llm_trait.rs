@@ -102,6 +102,15 @@ pub trait Llm: Send + Sync {
     /// Get the model identifier.
     fn model(&self) -> &str;
 
+    /// Whether this LLM can make calls at all — `false` only for the
+    /// [`UnconfiguredLlm`](crate::UnconfiguredLlm) stand-in built when the
+    /// provider needs an API key that is not set. The stages of `improve()`
+    /// that draft text with an LLM gate on it (Python's `llm_available()`,
+    /// reason `no_llm_configured`). A wrapper must forward it.
+    fn is_configured(&self) -> bool {
+        true
+    }
+
     /// Check if the LLM supports streaming.
     fn supports_streaming(&self) -> bool {
         false

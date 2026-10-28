@@ -204,6 +204,10 @@ impl Llm for ThrottleLlm {
         self.inner.model()
     }
 
+    fn is_configured(&self) -> bool {
+        self.inner.is_configured()
+    }
+
     fn supports_streaming(&self) -> bool {
         self.inner.supports_streaming()
     }

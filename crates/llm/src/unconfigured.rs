@@ -51,6 +51,10 @@ impl Llm for UnconfiguredLlm {
         ""
     }
 
+    fn is_configured(&self) -> bool {
+        false
+    }
+
     async fn transcribe_image(
         &self,
         _image_bytes: &[u8],
@@ -58,5 +62,15 @@ impl Llm for UnconfiguredLlm {
         _options: Option<GenerationOptions>,
     ) -> LlmResult<String> {
         Err(self.key_not_set())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unconfigured_llm_reports_it() {
+        assert!(!UnconfiguredLlm::new("openai").is_configured());
     }
 }
