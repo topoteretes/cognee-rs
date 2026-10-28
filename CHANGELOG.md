@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`data` rows are dataset-scoped, with `uuid4` ids, as in Python (SDK-1039).**
+  A new `data` row gets a random `uuid4` id (it was
+  `uuid5(content_hash, owner, tenant)`), and its dataset is the new
+  `data.dataset_id` column. Re-adding content reuses the row that holds the same
+  `content_hash` in the same dataset for the same owner and tenant (Python's
+  `identify_many`); the same content in another dataset is another row, and a
+  re-add after delete gets a new id. The `dataset_data` membership table is
+  retired: migration `m20261028_000001_dataset_scoped_data` adds
+  `data.dataset_id` and `data.legacy_id`, stamps every row from its memberships
+  and drops the table, as Python's alembic `d6e8f0a2b4c6` does. A row shared by
+  several datasets is split: the oldest membership keeps the id; every other
+  dataset gets a uuid4 copy with `legacy_id` = the original id, and its `nodes`
+  and `edges` ledger rows are repointed to the copy. Stop every writer before
+  upgrading (not an online migration). Rust now reads a Python-written database's
+  membership. `cognee_ingestion::generate_data_id` is removed; `Data` gains
+  `dataset_id` and `legacy_id`; `IngestDb` gains `find_data_in_dataset` and
+  `DeleteDb` gains `count_data_location_references` (a stored file shared by
+  several rows is deleted with its last row); `attach_data_to_dataset` now
+  stamps `data.dataset_id` and refuses a row of another dataset.
+
 - **Embedding batch size defaults to 32 and drives batching (SDK-1039).**
   `embedding.batch_size` (`EMBEDDING_BATCH_SIZE`) drops from 36 to 32, Python's
   `embedding_batch_size`, because Text Embeddings Inference rejects more than 32

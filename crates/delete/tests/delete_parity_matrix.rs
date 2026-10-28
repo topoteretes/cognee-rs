@@ -609,13 +609,21 @@ async fn dataset_less_item_refused_under_acl() {
     f.assert_untouched("dataset-less item").await;
 }
 
+/// Rows are dataset-scoped, so a dataset-less item delete finds the one
+/// dataset that holds the item, and only when that dataset is the owner's in
+/// the scope tenant: another tenant finds no link and is refused.
 #[tokio::test]
 async fn plain_dataset_less_item_detaches_only_owner_links_in_tenant() {
     let f = fixture().await;
-    // o_t1's item is also linked to o_t2.
-    database::ops::datasets::attach_data_to_dataset(&f.db, f.o_t2.0, f.o_t1.1)
-        .await
-        .unwrap();
+    assert_validation(
+        f.plain()
+            .execute(&req(data_without_dataset(f.owner, f.o_t1.1, Some(f.t2))))
+            .await,
+        "o_t1's item is not in a T2 dataset",
+    );
+    f.assert_untouched("dataset-less item in the wrong tenant")
+        .await;
+
     f.plain()
         .execute(&req(data_without_dataset(f.owner, f.o_t1.1, Some(f.t1))))
         .await
@@ -624,11 +632,12 @@ async fn plain_dataset_less_item_detaches_only_owner_links_in_tenant() {
         !f.linked(f.o_t1.0, f.o_t1.1).await,
         "the T1 link is detached"
     );
-    assert!(f.linked(f.o_t2.0, f.o_t1.1).await, "the T2 link is kept");
     assert!(
-        f.data_exists(f.o_t1.1).await,
-        "the data row stays while another link holds it"
+        !f.data_exists(f.o_t1.1).await,
+        "with its only dataset gone, the row is deleted"
     );
+    assert!(f.data_exists(f.o_t2.1).await, "o_t2's item is kept");
+    assert!(f.data_exists(f.o_none.1).await, "o_none's item is kept");
 }
 
 // ---------------------------------------------------------------------------

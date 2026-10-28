@@ -1,11 +1,18 @@
 """Tests that the ``add`` operation produces identical output in both SDKs.
 
 All tests in this file are **deterministic** — they compare MD5 hashes,
-UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
+dataset UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
 or API key is required.
+
+Data ids are NOT compared across SDKs: both mint a random ``uuid4`` for a new
+``data`` row and dedup by ``(content_hash, dataset_id, owner_id, tenant_id)``
+(Python ``cognee/tasks/ingestion/ingest_data.py:364-389`` with
+``identify_many``; ``get_unique_data_id``'s uuid5 is used only by dlt sources
+and code_repo). The tests check that shape instead (SDK-1039 D7).
 """
 
 import json
+import uuid
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -105,18 +112,33 @@ def test_add_text_content_hash_matches(both_added):
 # ── Data ID ──────────────────────────────────────────────────────────────────
 
 
-def test_add_text_data_id_matches(both_added):
-    """With synced user_id + tenant_id, data.id must be identical (UUID5)."""
+def _uuid_version(value) -> int:
+    return uuid.UUID(str(value)).version
+
+
+def test_add_text_data_id_is_dataset_scoped_uuid4(both_added):
+    """Both SDKs give a new data row a random uuid4 owned by its dataset.
+
+    Replaces the old cross-SDK ``data.id`` equality check, whose premise (a
+    uuid5 of content + owner + tenant) Python no longer has: ``ingest_data``
+    mints ``uuid4()`` for a new row and stores its dataset in
+    ``data.dataset_id`` (SDK-1039 D7).
+    """
     py_ws, rust_ws, *_ = both_added
 
-    py_data = query_data(open_db(python_db_path(py_ws)))
-    rust_data = query_data(open_db(rust_db_path(rust_ws)))
-
-    assert py_data[0]["id"] == rust_data[0]["id"], (
-        f"data.id mismatch:\n"
-        f"  Python: {py_data[0]['id']}\n"
-        f"  Rust:   {rust_data[0]['id']}"
-    )
+    for sdk, db in (("Python", python_db_path(py_ws)), ("Rust", rust_db_path(rust_ws))):
+        conn = open_db(db)
+        data = query_data(conn)
+        datasets = {d["name"]: d["id"] for d in query_datasets(conn)}
+        conn.close()
+        assert len(data) == 1, f"{sdk}: expected 1 data row, got {len(data)}"
+        assert _uuid_version(data[0]["id"]) == 4, (
+            f"{sdk}: data.id {data[0]['id']} is not a uuid4"
+        )
+        assert data[0].get("dataset_id") == datasets[DATASET_NAME], (
+            f"{sdk}: data.dataset_id {data[0].get('dataset_id')!r} is not the id of "
+            f"'{DATASET_NAME}' ({datasets[DATASET_NAME]!r})"
+        )
 
 
 # ── Name ─────────────────────────────────────────────────────────────────────
@@ -187,14 +209,14 @@ def test_add_dataset_id_matches(both_added):
 
 
 def test_add_junction_row_count(both_added):
-    """dataset_data junction table must have the same number of rows."""
+    """Both SDKs must record the same number of dataset memberships."""
     py_ws, rust_ws, *_ = both_added
 
     py_junctions = query_dataset_data(open_db(python_db_path(py_ws)))
     rust_junctions = query_dataset_data(open_db(rust_db_path(rust_ws)))
 
     assert len(py_junctions) == len(rust_junctions), (
-        f"dataset_data row count mismatch:\n"
+        f"dataset membership count mismatch:\n"
         f"  Python: {len(py_junctions)}\n"
         f"  Rust:   {len(rust_junctions)}"
     )
@@ -335,7 +357,11 @@ def test_add_deduplication(python_add_result, synced_rust_workspace):
 
 
 def test_add_multiple_items(python_add_result, synced_rust_workspace):
-    """Adding 2 different texts must produce 2 data rows with matching IDs."""
+    """Adding 2 different texts produces 2 dataset-scoped rows in both SDKs.
+
+    The rows hold the same contents (content hashes) in both SDKs; their ids
+    are each SDK's own uuid4 and are not compared (SDK-1039 D7).
+    """
     py_ws, owner_id, tenant_id = python_add_result
     rust_ws, _, _ = synced_rust_workspace
 
@@ -361,37 +387,33 @@ def test_add_multiple_items(python_add_result, synced_rust_workspace):
         rust_args.extend(["--tenant-id", tenant_id])
     run_rust_cli(rust_ws, rust_args)
 
-    # Query only the multi_test dataset's data. Membership is modelled
-    # differently (see helpers.query_dataset_membership): Python dropped the
-    # dataset_data junction table for a data.dataset_id column, Rust keeps the
-    # junction table.
-    py_conn = open_db(python_db_path(py_ws))
-    rust_conn = open_db(rust_db_path(rust_ws))
-
-    py_data = query_rows(
-        py_conn,
+    # Query only the multi_test dataset's data. Both SDKs keep membership in
+    # data.dataset_id (Python alembic d6e8f0a2b4c6; Rust
+    # m20261028_000001_dataset_scoped_data).
+    query = (
         f"SELECT d.* FROM data d "
         f"JOIN datasets ds ON d.dataset_id = ds.id "
-        f"WHERE ds.name = '{ds}' ORDER BY d.name",
+        f"WHERE ds.name = '{ds}' ORDER BY d.name"
     )
-    rust_data = query_rows(
-        rust_conn,
-        f"SELECT d.* FROM data d "
-        f"JOIN dataset_data dd ON d.id = dd.data_id "
-        f"JOIN datasets ds ON dd.dataset_id = ds.id "
-        f"WHERE ds.name = '{ds}' ORDER BY d.name",
-    )
+    py_conn = open_db(python_db_path(py_ws))
+    rust_conn = open_db(rust_db_path(rust_ws))
+    py_data = query_rows(py_conn, query)
+    rust_data = query_rows(rust_conn, query)
     py_conn.close()
     rust_conn.close()
 
     assert len(py_data) == 2, f"Python: expected 2 data rows, got {len(py_data)}"
     assert len(rust_data) == 2, f"Rust: expected 2 data rows, got {len(rust_data)}"
 
-    # IDs should match (same content, same user, same tenant)
-    py_ids = sorted(d["id"] for d in py_data)
-    rust_ids = sorted(d["id"] for d in rust_data)
-    assert py_ids == rust_ids, (
-        f"data IDs mismatch for multi-item add:\n"
-        f"  Python: {py_ids}\n"
-        f"  Rust:   {rust_ids}"
+    py_hashes = sorted(d["content_hash"] for d in py_data)
+    rust_hashes = sorted(d["content_hash"] for d in rust_data)
+    assert py_hashes == rust_hashes, (
+        f"content hashes mismatch for multi-item add:\n"
+        f"  Python: {py_hashes}\n"
+        f"  Rust:   {rust_hashes}"
     )
+    for sdk, rows in (("Python", py_data), ("Rust", rust_data)):
+        assert len({d["id"] for d in rows}) == 2, f"{sdk}: the two rows share an id"
+        assert all(_uuid_version(d["id"]) == 4 for d in rows), (
+            f"{sdk}: data ids are not uuid4: {[d['id'] for d in rows]}"
+        )

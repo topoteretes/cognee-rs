@@ -159,6 +159,10 @@ export interface CogneeDataRecord {
   data_size: number;
   last_accessed: string | null;
   importance_weight: number | null;
+  /** Owning dataset: rows are dataset-scoped, as in Python. */
+  dataset_id: string | null;
+  /** Pre-scoping id of a row split off a shared legacy row by migration. */
+  legacy_id: string | null;
 }
 
 /**

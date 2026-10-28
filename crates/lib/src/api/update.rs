@@ -28,8 +28,9 @@ use super::error::ApiError;
 #[derive(Debug)]
 pub struct UpdateResult {
     /// ID of the data item that was replaced. When the new data has the same
-    /// content (and so the same content-addressed id) the row is kept and
-    /// only its graph and vector memory is dropped and rebuilt.
+    /// content, the add dedups onto the same row (dataset-scoped dedup by
+    /// content hash, owner and tenant), so the row is kept and only its graph
+    /// and vector memory is dropped and rebuilt.
     pub deleted_data_id: Uuid,
     /// Remove phase summary: a soft delete of the old item from the dataset,
     /// or — when the new data re-added the same item — a memory-only delete.
@@ -61,9 +62,10 @@ pub struct UpdateResult {
 /// This follows Python's ordering principle — the v1.6.4 `update()` never
 /// deletes the document row; it drops the document's memory, re-adds pinned
 /// to the same id, and re-cognifies, so "a re-add that fails leaves a document
-/// to re-cognify rather than a document that is gone". Rust's ids are
-/// content-addressed rather than pinned, so new content is a new row and the
-/// old row has to go; doing that after the add keeps the same guarantee.
+/// to re-cognify rather than a document that is gone". Rust does not pin the
+/// replacement to the old id: new content is a new row with a fresh `uuid4`
+/// and the old row has to go; doing that after the add keeps the same
+/// guarantee.
 ///
 /// Remaining windows: if step 2 fails, both the new and the old item are in
 /// the dataset (nothing is lost; the call errors and can be retried, or the
@@ -176,8 +178,8 @@ pub async fn update(
         .map_err(|e| ApiError::Ingestion(e.to_string()))?;
 
     // ── Step 2: Remove the old data ──────────────────────────────────────────
-    // When the replacement has the old content, the add re-attached the same
-    // content-addressed row (refreshing its node set): keep it, and drop only
+    // When the replacement has the old content, the add deduped onto the same
+    // dataset-scoped row (refreshing its node set): keep it, and drop only
     // its memory — which also clears its cognify completion marker, so step 3
     // rebuilds it under the new node set rather than skipping it.
     let same_item = data_items.iter().any(|item| item.id == data_id);
@@ -441,9 +443,21 @@ mod tests {
         )
         .build();
         ingest.create_data(data.clone()).await.unwrap();
-        for ds in [tenanted.id, untenanted.id] {
-            ingest.attach_data_to_dataset(ds, data.id).await.unwrap();
-        }
+        ingest
+            .attach_data_to_dataset(untenanted.id, data.id)
+            .await
+            .unwrap();
+        // Rows are dataset-scoped: the same content in the same-named T1
+        // dataset is a row of its own.
+        let t1_data = Data {
+            id: Uuid::new_v4(),
+            ..data.clone()
+        };
+        ingest.create_data(t1_data.clone()).await.unwrap();
+        ingest
+            .attach_data_to_dataset(tenanted.id, t1_data.id)
+            .await
+            .unwrap();
         let delete_service = DeleteService::new(
             Arc::new(cognee_storage::MockStorage::new()) as Arc<dyn StorageTrait>,
             db.clone() as Arc<dyn DeleteDb>,
@@ -465,8 +479,8 @@ mod tests {
             ids(DeleteDb::get_dataset_data(db.as_ref(), tenanted.id)
                 .await
                 .unwrap()),
-            vec![data.id],
-            "the same-named T1 dataset keeps its link"
+            vec![t1_data.id],
+            "the same-named T1 dataset keeps its row"
         );
     }
 
@@ -850,7 +864,8 @@ mod tests {
         assert!(fx.row(new_id).await.is_some());
     }
 
-    /// A replacement with the old content has the old content-addressed id.
+    /// A replacement with the old content dedups onto the old row (same
+    /// dataset, content hash, owner and tenant), so it has the old id.
     /// The cleanup must not delete the row the add just re-attached: it is
     /// kept, re-tagged with the new node set, and its memory is rebuilt.
     #[tokio::test]

@@ -35,7 +35,7 @@ from conftest import requires_openai
 def _assert_db_empty(db_path, sdk_name):
     """Assert that the core relational tables are empty after delete.
 
-    Checks: data, datasets, dataset_data.  Nodes and edges may or may not
+    Checks: data, datasets, dataset memberships (``data.dataset_id``).  Nodes and edges may or may not
     be cleaned depending on the SDK's cascade behavior, so we only warn
     about those.
     """
@@ -52,7 +52,7 @@ def _assert_db_empty(db_path, sdk_name):
         f"{sdk_name} still has {len(dataset_rows)} dataset row(s) after delete --all"
     )
     assert len(junction_rows) == 0, (
-        f"{sdk_name} still has {len(junction_rows)} dataset_data row(s) after delete --all"
+        f"{sdk_name} still has {len(junction_rows)} dataset membership(s) after delete --all"
     )
 
 

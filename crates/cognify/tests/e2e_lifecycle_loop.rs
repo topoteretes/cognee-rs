@@ -6,8 +6,9 @@
 //! E2E lifecycle loop test: add → cognify → delete → re-add → re-cognify → search.
 //!
 //! Verifies that after a hard delete of a dataset, the same content can be
-//! re-ingested and re-cognified with identical deterministic IDs (UUID5),
-//! and that search works on the re-created data.
+//! re-ingested and re-cognified (a fresh uuid4 data id, as in Python; the
+//! dataset id stays the deterministic UUID5), and that search works on the
+//! re-created data.
 //!
 //! Required environment variables:
 //!   OPENAI_URL, OPENAI_TOKEN, OPENAI_MODEL,
@@ -316,12 +317,13 @@ async fn test_readd_and_recognify_after_delete() {
     );
     let readded_data_id = data_items_2[0].id;
 
-    // CRITICAL: UUID5 determinism — same content + same owner = same ID
-    assert_eq!(
+    // Data ids are a random uuid4, as in Python's `add` (D7 of SDK-1039):
+    // once the row is deleted, re-adding the content creates a new row.
+    assert_ne!(
         original_data_id, readded_data_id,
-        "Re-added data should have the same deterministic UUID5 ID: \
-         original={original_data_id}, readded={readded_data_id}"
+        "a re-add after delete creates a new row with a fresh uuid4 id"
     );
+    assert_eq!(readded_data_id.get_version_num(), 4);
 
     let dataset_2 =
         ops::datasets::get_dataset_by_name_in_tenant(&database, "lifecycle_test", owner_id, None)

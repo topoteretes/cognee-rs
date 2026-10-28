@@ -17,13 +17,4 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 
-impl Related<super::data::Entity> for Entity {
-    fn to() -> RelationDef {
-        super::dataset_data::Relation::Data.def()
-    }
-    fn via() -> Option<RelationDef> {
-        Some(super::dataset_data::Relation::Dataset.def().rev())
-    }
-}
-
 impl ActiveModelBehavior for ActiveModel {}

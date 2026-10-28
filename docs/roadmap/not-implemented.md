@@ -135,7 +135,7 @@ discriminated-union `dataInput` (`{ type, … }`). The supported variants track 
 
 `cogneeAdd` returns one record per input including duplicates (the pipeline's duplicate branch
 returns the pre-existing row), so the binding partitions the result into `added` (newly created) vs
-`deduplicated` (already existed) by content-addressed id; there is no in-pipeline "drop duplicates
+`deduplicated` (already existed) by data id (dedup reuses the dataset's existing row); there is no in-pipeline "drop duplicates
 from the result" behavior to rely on.
 
 ## Cloud sync

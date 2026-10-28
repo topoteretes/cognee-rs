@@ -6,8 +6,7 @@
 )]
 
 use crate::entities::{
-    data, dataset, dataset_data, edge, graph_metrics, node, pipeline_run, query, result_log,
-    task_run,
+    data, dataset, edge, graph_metrics, node, pipeline_run, query, result_log, task_run,
 };
 use crate::types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,
@@ -15,7 +14,6 @@ use crate::types::{
 };
 use crate::uuid_hex;
 /// Shared SeaORM ↔ domain-type conversions and error helpers used across ops modules.
-use chrono::Utc;
 use cognee_models::{Data, Dataset};
 use cognee_utils::sanitize::{sanitize_json, sanitize_str, sanitize_string};
 use sea_orm::ActiveValue::Set;
@@ -37,19 +35,6 @@ pub(crate) fn map_sea_err(e: sea_orm::DbErr) -> DatabaseError {
             }
         }
         _ => DatabaseError::QueryError(e.to_string()),
-    }
-}
-
-/// SeaORM raises an error when on_conflict do_nothing finds a duplicate.
-/// This helper treats that as a no-op success.
-pub(crate) fn ignore_do_nothing(result: Result<(), DatabaseError>) -> Result<(), DatabaseError> {
-    match result {
-        Err(DatabaseError::QueryError(ref msg))
-            if msg.contains("None of the records are inserted") =>
-        {
-            Ok(())
-        }
-        other => other,
     }
 }
 
@@ -113,6 +98,8 @@ impl From<data::Model> for Data {
             data_size: m.data_size,
             last_accessed: m.last_accessed,
             importance_weight: m.importance_weight,
+            dataset_id: uuid_hex::from_hex_opt(m.dataset_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
+            legacy_id: uuid_hex::from_hex_opt(m.legacy_id.as_deref()).expect("DB stores only valid UUID hex strings; corruption indicates data integrity failure"),
         }
     }
 }
@@ -143,22 +130,9 @@ impl From<&Data> for data::ActiveModel {
             data_size: Set(d.data_size),
             last_accessed: Set(d.last_accessed),
             importance_weight: Set(d.importance_weight),
+            dataset_id: Set(uuid_hex::to_hex_opt(d.dataset_id)),
+            legacy_id: Set(uuid_hex::to_hex_opt(d.legacy_id)),
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// DatasetData conversions
-// ---------------------------------------------------------------------------
-
-pub(crate) fn make_dataset_data_active(
-    dataset_id: uuid::Uuid,
-    data_id: uuid::Uuid,
-) -> dataset_data::ActiveModel {
-    dataset_data::ActiveModel {
-        dataset_id: Set(uuid_hex::to_hex(dataset_id)),
-        data_id: Set(uuid_hex::to_hex(data_id)),
-        created_at: Set(Utc::now()),
     }
 }
 
