@@ -48,7 +48,7 @@ EXPECTED_TASKS = {
     "classify_documents",
     "extract_chunks_from_documents",
     "extract_graph_from_data",
-    "summarize_text",
+    "extract_graph_and_summarize",
 }
 
 

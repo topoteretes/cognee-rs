@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use cognee_cognify::tasks::{
     ADD_DATA_POINTS_TASK_NAME, CLASSIFY_DOCUMENTS_TASK_NAME, EXTRACT_CHUNKS_TASK_NAME,
-    EXTRACT_GRAPH_TASK_NAME, SUMMARIZE_TEXT_TASK_NAME,
+    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME, EXTRACT_GRAPH_TASK_NAME,
 };
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::{DatabaseConnection, IngestDb, connect, initialize, ops};
@@ -220,7 +220,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
                     CLASSIFY_DOCUMENTS_TASK_NAME
                         | EXTRACT_CHUNKS_TASK_NAME
                         | EXTRACT_GRAPH_TASK_NAME
-                        | SUMMARIZE_TEXT_TASK_NAME
+                        | EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME
                         | ADD_DATA_POINTS_TASK_NAME
                 ),
                 "unexpected source_task {t}"
@@ -250,7 +250,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
     let expected_visible = [
         "extract_chunks_from_documents",
         "extract_graph_from_data",
-        "summarize_text",
+        "extract_graph_and_summarize",
     ];
     for t in expected_visible {
         assert!(
