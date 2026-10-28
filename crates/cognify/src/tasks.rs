@@ -4770,7 +4770,7 @@ async fn cognify_in_scope(
         };
         let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
 
-        // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the four-state
+        // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the
         // `pipeline_runs` trail through the caller-supplied repository.
         // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
         // pass a `SeaOrmPipelineRunRepository` to surface rows in the

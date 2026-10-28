@@ -27,7 +27,7 @@ pub mod visualize;
 
 use std::sync::Arc;
 
-use cognee::database::{DeleteDb, PipelineRunRepository};
+use cognee::database::DeleteDb;
 use cognee::delete::DeleteService;
 use cognee::{ComponentManager, PipelineContext};
 
@@ -117,11 +117,11 @@ pub(crate) fn validate_cognify_config(
 ///
 /// - the graph and vector backends — without them a deletion drops relational
 ///   rows only, which for the benchmark would turn a populated-dataset delete
-///   into a metadata-row delete;
-/// - the pipeline-runs repository — without it a deletion writes no fresh
-///   `INITIATED` row. That only changes behaviour for a caller that enabled
-///   `CognifyConfig::use_pipeline_cache`: since the cache became opt-in, a
-///   `COMPLETED` row no longer short-circuits the default re-cognify path.
+///   into a metadata-row delete.
+///
+/// A deletion writes no `pipeline_runs` row (Python stopped writing the
+/// `INITIATED` reset row in `dc0b4ad6a`), so no pipeline-runs repository is
+/// wired.
 pub(crate) async fn build_delete_service(
     cm: &Arc<ComponentManager>,
 ) -> Result<DeleteService, CliError> {
@@ -142,12 +142,9 @@ pub(crate) async fn build_delete_service(
         .await
         .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-    let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
-
     let service = DeleteService::new(storage, database as Arc<dyn DeleteDb>)
         .with_graph_db(graph_db)
-        .with_vector_db(vector_db)
-        .with_pipeline_run_repo(pipeline_run_repo);
+        .with_vector_db(vector_db);
     // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
     // dataset drops its own databases.
     Ok(

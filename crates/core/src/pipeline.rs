@@ -530,13 +530,9 @@ pub struct PipelineRunInfo {
     pub tenant_id: Option<Uuid>,
     /// Dataset being processed.
     pub dataset_id: Option<Uuid>,
-    /// `Data.id`s for the inputs of the run. Surfaced into
-    /// `run_info["data"]` by the watcher. Empty when the run has no
-    /// `Data` input.
-    pub data_ids: Vec<Uuid>,
     /// Current run status.
     pub status: PipelineRunStatus,
-    /// When the run was initiated.
+    /// When the run started.
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// When the run reached a terminal state (`Completed` or `Errored`).
     /// `None` while the run is still in flight.
@@ -555,9 +551,14 @@ impl PipelineRunInfo {
 }
 
 /// High-level status of a pipeline run.
+///
+/// A run is `Started`, then `Completed` or `Errored`, as in Python's
+/// `run_tasks`. There is no `Initiated` state: Python stopped writing
+/// `DATASET_PROCESSING_INITIATED` in `dc0b4ad6a`, and the stored-row enum
+/// ([`cognee_database::PipelineRunStatus`]) keeps that value only to read
+/// rows that already carry it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineRunStatus {
-    Initiated,
     Started,
     Completed,
     Errored,
@@ -566,7 +567,6 @@ pub enum PipelineRunStatus {
 impl std::fmt::Display for PipelineRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Initiated => write!(f, "INITIATED"),
             Self::Started => write!(f, "STARTED"),
             Self::Completed => write!(f, "COMPLETED"),
             Self::Errored => write!(f, "ERRORED"),
@@ -651,17 +651,9 @@ pub trait PipelineWatcher: Send + Sync {
 
     // ── Rich lifecycle events (default no-ops) ──────────────────────────
 
-    /// Called before any task runs. Persists the initial `INITIATED` row in
-    /// the Python lifecycle. Default no-op — watchers that don't persist
-    /// runs can ignore this.
-    ///
-    /// Does NOT broadcast a `RunEvent` — the in-memory event stream remains
-    /// four-kinded (`Started`/`Yield`/`Completed`/`Errored`/`AlreadyCompleted`).
-    /// Subscribers only see the run "exists" once `Started` fires
-    /// (locked decision 13).
-    async fn on_pipeline_run_initiated(&self, _run: &PipelineRunInfo) {}
-
     /// Called when the pipeline run is first created (before any tasks).
+    /// This is the run's first lifecycle event; persisting watchers write
+    /// the `STARTED` row here.
     async fn on_pipeline_run_started(&self, _run: &PipelineRunInfo) {}
 
     /// Called after all tasks complete successfully.
@@ -887,25 +879,6 @@ async fn execute_unscoped(
     let pipeline_id = deterministic_pipeline_id(pipeline.name.as_deref(), user_id, dataset_id)
         .unwrap_or(pipeline.id);
 
-    // Collect `Data.id`s from the inputs for the watcher's `run_info["data"]`
-    // payload. Uses the pipeline's `data_id_fn` extractor when present; falls
-    // back to an empty vec, which the watcher maps to Python's `"None"`.
-    //
-    // `DataIdFn` returns `Option<String>` (the extractor stringifies whatever
-    // identity its inputs carry). For `run_info["data"]` we only surface the
-    // ones that parse as canonical UUIDs — anything else is silently
-    // dropped, mirroring Python's `list[Data]` branch which only emits
-    // `str(item.id)` for genuine `Data` instances.
-    let data_ids: Vec<Uuid> = if let Some(id_fn) = pipeline.data_id_fn.as_ref() {
-        inputs
-            .iter()
-            .filter_map(|x| id_fn(Arc::clone(x)))
-            .filter_map(|s| Uuid::parse_str(&s).ok())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
     let mut run_info = PipelineRunInfo {
         run_id,
         pipeline_id,
@@ -913,8 +886,7 @@ async fn execute_unscoped(
         user_id,
         tenant_id,
         dataset_id,
-        data_ids,
-        status: PipelineRunStatus::Initiated,
+        status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
         completed_at: None,
     };
@@ -932,16 +904,10 @@ async fn execute_unscoped(
         pctx.provenance_visited.lock().unwrap().clear();
     }
 
-    // ── INITIATED ──────────────────────────────────────────────────────────
-    // Write the audit row BEFORE transitioning to STARTED. The `NoTasks` /
-    // `InvalidConfig` guards above ensure malformed pipelines produce zero
-    // rows (matching Python: `run_tasks` is only called once tasks are
-    // validated upstream). Locked decisions 1 + 13: emit INITIATED at the
-    // executor level; no `RunEvent` broadcast.
-    watcher.on_pipeline_run_initiated(&run_info).await;
-
     // ── STARTED ────────────────────────────────────────────────────────────
-    run_info.status = PipelineRunStatus::Started;
+    // Python's `run_tasks` writes no row before this one (no `INITIATED`
+    // since `dc0b4ad6a`); the `NoTasks` / `InvalidConfig` guards above mean a
+    // malformed pipeline writes no row at all.
     watcher
         .on_pipeline(pipeline_id, PipelineStatus::Started { task_count })
         .await;
@@ -2115,7 +2081,6 @@ mod tests {
             user_id: None,
             tenant_id: None,
             dataset_id: None,
-            data_ids: Vec::new(),
             status: PipelineRunStatus::Started,
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -2134,7 +2099,6 @@ mod tests {
             user_id: None,
             tenant_id: None,
             dataset_id: None,
-            data_ids: Vec::new(),
             status: PipelineRunStatus::Completed,
             started_at,
             completed_at: Some(now),

@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Pipeline runs write Python's lifecycle and `run_info` (SDK-1039).** A run
+  writes `DATASET_PROCESSING_STARTED`, then `…_COMPLETED` or `…_ERRORED`; the
+  `DATASET_PROCESSING_INITIATED` row is gone, as in Python `dc0b4ad6a`. `run_info`
+  no longer carries the run's data items (Python `a88402500`, COG-6089):
+  STARTED and COMPLETED are `{}`, ERRORED is `{"error": …}` (cognify's
+  tolerantly completed runs still add the Rust-only `cognify_failures` key). The
+  orphan sweep's ERRORED row is `{"error": <reason>}` instead of
+  `{"reason": …}`. Migration `m20261029_000001_drop_run_info_data` strips the
+  `data` key from stored rows, as Python's alembic `b7e4c2a9d6f1` does. Deleting
+  a dataset or forgetting its memory no longer appends `INITIATED` reset rows.
+  API: `cognee_core::PipelineRunStatus::Initiated`,
+  `PipelineWatcher::on_pipeline_run_initiated`, `PipelineRunInfo::data_ids`,
+  `RunSpec::data_ids`, `pipeline_run_registry::{data_info, run_info_for_running}`
+  and `DeleteService::with_pipeline_run_repo` are removed;
+  `run_info_for_errored` takes only the error, and `run_info_for_started` /
+  `run_info_for_completed` are new. The stored-row enum keeps `Initiated` to
+  read old rows, and the explicit `reset_pipeline_run_status` re-arm API (for
+  the opt-in pipeline cache) still writes it.
+
 - **`data` rows are dataset-scoped, with `uuid4` ids, as in Python (SDK-1039).**
   A new `data` row gets a random `uuid4` id (it was
   `uuid5(content_hash, owner, tenant)`), and its dataset is the new

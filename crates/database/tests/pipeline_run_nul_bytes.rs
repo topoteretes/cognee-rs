@@ -287,7 +287,7 @@ async fn reset_orphans_strips_nul_from_reason() {
         .as_ref()
         .expect("reset_orphans always writes a reason");
     assert_no_nul(run_info, "stored reset_orphans reason");
-    assert_eq!(run_info, &json!({"reason": "server_restartorphan"}));
+    assert_eq!(run_info, &json!({"error": "server_restartorphan"}));
 }
 
 // ---------------------------------------------------------------------------

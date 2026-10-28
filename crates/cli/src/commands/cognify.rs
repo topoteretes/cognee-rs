@@ -290,7 +290,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 })?,
             );
 
-            // Gap 08-07: persist the four-state `pipeline_runs` trail so
+            // Gap 08-07: persist the `pipeline_runs` trail so
             // CLI cognify shows up in `/api/v1/activity/pipeline-runs`.
             let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
                 Arc::clone(&database).pipeline_runs();

@@ -489,10 +489,13 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         }
 
         // Write new ERRORED rows for each orphan (new-row-per-transition pattern).
+        // The row carries Python's ERRORED shape, `{"error": …}` (its startup
+        // recovery closes an abandoned run through `log_pipeline_run_error`),
+        // with `reason` as the message.
         // `reason` is caller-supplied and lands in the `run_info` json column,
         // which Postgres rejects on an embedded NUL. Today's only production
         // caller passes a literal, but the trait takes `&str` from anyone.
-        let reason_info = sanitize_json(json!({"reason": reason}));
+        let reason_info = sanitize_json(json!({"error": reason}));
         let mut count = 0u64;
         for orphan_id in &orphan_ids {
             // Fetch the orphan row to get all its fields.
@@ -898,7 +901,8 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             // Operator-supplied, and `run_info` is a json column whose Postgres
             // parser rejects the `\u0000` escape — the same reason
             // `reset_orphans` sanitizes its own literal reason.
-            run_info: sea_orm::ActiveValue::Set(Some(sanitize_json(json!({"reason": reason})))),
+            // Python's ERRORED shape, `{"error": …}`, as `reset_orphans` writes.
+            run_info: sea_orm::ActiveValue::Set(Some(sanitize_json(json!({"error": reason})))),
             user_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(latest.user_id)),
         };
         active.insert(self.db.as_ref()).await.map_err(|e| {

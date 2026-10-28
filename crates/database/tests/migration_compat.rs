@@ -301,6 +301,9 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 11 for `m20261028_000001_dataset_scoped_data`: `data` rows become
 /// dataset-scoped (`data.dataset_id`, `data.legacy_id`) and `dataset_data` is
 /// backfilled into them and dropped (Python alembic `d6e8f0a2b4c6`).
+/// Bumped to 12 for `m20261029_000001_drop_run_info_data`: the `data` key is
+/// stripped from stored `pipeline_runs.run_info` (Python alembic
+/// `b7e4c2a9d6f1`, COG-6089).
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -310,7 +313,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        11,
+        12,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
