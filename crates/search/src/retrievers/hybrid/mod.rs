@@ -189,7 +189,9 @@ impl Default for HybridBudget {
 /// truth-subspace alignment; it fails open to baseline ranking on any error and
 /// stays default-off. **Global-context (`include_global_context_index` /
 /// `global_context_index_top_k`):** still accepted on the wire but inert — no
-/// global-context section is produced (locked deferral).
+/// global-context section is produced yet. The index and its shared loader
+/// ([`crate::utils::build_global_context_prelude`]) exist; wiring this
+/// channel is SDK-1045.
 pub struct HybridRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -301,8 +303,8 @@ impl HybridRetriever {
             .unwrap_or(self.include_global_context_index)
         {
             debug!(
-                "HYBRID_COMPLETION: include_global_context_index is set but unsupported in \
-                 Phase 1; no global-context section will be produced"
+                "HYBRID_COMPLETION: include_global_context_index is set but not wired yet \
+                 (SDK-1045); no global-context section will be produced"
             );
         }
         HybridLanes {

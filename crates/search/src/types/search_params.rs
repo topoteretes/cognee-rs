@@ -110,12 +110,14 @@ pub struct SearchParams {
     /// Target default when `None`: `false`.
     pub use_truth_weight: Option<bool>,
 
-    /// (HybridCompletion, reserved/inert — Phase 2) Whether to include the global context index.
-    /// Target default when `None`: `false`.
+    /// (GraphCompletion) Whether to prepend the global context index (the
+    /// root and the nearest bucket summaries `improve()` built) to the graph
+    /// context. Accepted but inert for HybridCompletion until SDK-1045.
+    /// Default when `None`: `false`.
     pub include_global_context_index: Option<bool>,
 
-    /// (HybridCompletion, reserved/inert — Phase 2) Max entries from the global context index.
-    /// Target default when `None`: `3`.
+    /// (GraphCompletion) How many bucket summaries the global context
+    /// prelude names. Default when `None`: `3`.
     pub global_context_index_top_k: Option<usize>,
 
     /// (Temporal) How many chunks and entities the hybrid fetch behind a
