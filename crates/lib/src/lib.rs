@@ -151,6 +151,8 @@ pub mod session;
 
 /// Top-level API functions mirroring the Python SDK.
 pub mod api;
+/// Detached tasks (the automatic improve) and the drain that awaits them.
+pub mod background_tasks;
 /// Component lifecycle management.
 pub mod component_manager;
 /// Runtime configuration management.
@@ -167,6 +169,9 @@ pub use api::notebooks::{
     NotebookError, create_notebook, delete_notebook, list_notebooks, update_notebook,
 };
 pub use api::{DatasetDb, DatasetError, DatasetManager};
+pub use background_tasks::{
+    BackgroundTasks, pending_background_tasks, spawn_background_task, wait_for_background_tasks,
+};
 pub use component_manager::{ComponentManager, GraphExtractorChoice};
 pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
