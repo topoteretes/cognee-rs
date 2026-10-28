@@ -644,6 +644,30 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         Ok(out)
     }
 
+    async fn count_runs_created_after(
+        &self,
+        since: chrono::DateTime<Utc>,
+        dataset_id: Option<Uuid>,
+        exclude_pipeline_names: &[&str],
+    ) -> Result<u64, DatabaseError> {
+        use sea_orm::PaginatorTrait;
+
+        let mut query =
+            pipeline_run::Entity::find().filter(pipeline_run::Column::CreatedAt.gt(since));
+        if let Some(dataset_id) = dataset_id {
+            query = query.filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)));
+        }
+        if !exclude_pipeline_names.is_empty() {
+            query = query.filter(
+                pipeline_run::Column::PipelineName
+                    .is_not_in(exclude_pipeline_names.iter().copied()),
+            );
+        }
+        query.count(self.db.as_ref()).await.map_err(|e| {
+            DatabaseError::QueryError(format!("count_runs_created_after query failed: {e}"))
+        })
+    }
+
     /// Take the claim by inserting the `(dataset_id, pipeline_name)` row. The
     /// composite primary key is the mutual exclusion: concurrent inserts race
     /// in the database and exactly one commits, so `ON CONFLICT DO NOTHING`

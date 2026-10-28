@@ -1535,6 +1535,13 @@ impl AddPipeline {
         self
     }
 
+    /// The dataset lock registry wired with [`Self::with_dataset_locks`], if
+    /// any. An operation that holds a dataset across `add` calls (`improve`)
+    /// must hold it in this registry, so the `add` rides on its hold.
+    pub fn dataset_locks(&self) -> Option<&Arc<DatasetLocks>> {
+        self.dataset_locks.as_ref()
+    }
+
     /// Attach the CPU pool used by [`cognee_core::TaskContext`].
     pub fn with_thread_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
         self.thread_pool = Some(pool);

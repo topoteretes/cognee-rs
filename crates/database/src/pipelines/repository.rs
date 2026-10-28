@@ -324,6 +324,29 @@ pub trait PipelineRunRepository: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<Vec<PipelineRun>, DbError>;
 
+    /// How many rows were written strictly after `since`, on `dataset_id`
+    /// (`None`: on any dataset, or none), whose `pipeline_name` is not one of
+    /// `exclude_pipeline_names`. Every status row counts, whatever its status:
+    /// a started or errored run may already have written data.
+    ///
+    /// Backs the improve stage watermarks (Python
+    /// `has_dataset_changed_since_last_improve`,
+    /// `cognee/modules/improve/graph_changes.py`).
+    ///
+    /// The default implementation fails: a repository that cannot answer must
+    /// not be read as "nothing changed".
+    async fn count_runs_created_after(
+        &self,
+        since: DateTime<Utc>,
+        dataset_id: Option<Uuid>,
+        exclude_pipeline_names: &[&str],
+    ) -> Result<u64, DbError> {
+        let _ = (since, dataset_id, exclude_pipeline_names);
+        Err(DatabaseError::QueryError(
+            "count_runs_created_after is not supported by this repository".to_string(),
+        ))
+    }
+
     /// Atomically claim exclusive-run rights for `(dataset_id,
     /// pipeline_name)`, returning `true` iff the claim was taken.
     ///
