@@ -23,7 +23,7 @@ from helpers import (
     open_db,
     query_nodes_by_type,
     _normalize_uuid,
-    python_db_path,
+    python_graph,
     rust_db_path,
 )
 from conftest import requires_openai
@@ -42,7 +42,11 @@ def _entity_ids(conn) -> set[str]:
 def test_entity_node_ids_match_across_sdks(both_cognified):
     py_ws, rust_ws = both_cognified
 
-    py_ids = _entity_ids(open_db(python_db_path(py_ws)))
+    # Python on Ladybug keeps its nodes in the graph only (see
+    # helpers.python_graph), so they are read from there.
+    py_ids = {
+        n["id"] for n in python_graph(py_ws)[0] if n.get("type") == "Entity" and n.get("id")
+    }
     rust_ids = _entity_ids(open_db(rust_db_path(rust_ws)))
 
     if not py_ids or not rust_ids:
