@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`TextSummary.source_task` is `extract_graph_and_summarize` (SDK-1039).**
+  Summaries were stamped `summarize_text`; Python stamps them with the merged
+  task's name (`run_tasks_base._stamp_provenance`, `cognify.py:643-653`).
+  Entity and EntityType keep `extract_graph_from_data`. The
+  `SUMMARIZE_TEXT_TASK_NAME` constant is removed; use
+  `EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME`. Already-stored nodes keep their old
+  stamp.
 - **Pipeline runs write Python's lifecycle and `run_info` (SDK-1039).** A run
   writes `DATASET_PROCESSING_STARTED`, then `…_COMPLETED` or `…_ERRORED`; the
   `DATASET_PROCESSING_INITIATED` row is gone, as in Python `dc0b4ad6a`. `run_info`
@@ -375,7 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   halves remain separately available for a caller who wants to fuse one of them
   against a different sibling, via the new `TypedTask::try_parallel` in
   `cognee-core`. Provenance is unaffected: entities still stamp
-  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"`,
+  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"` (changed to `"extract_graph_and_summarize"` in SDK-1039),
   both at `topological_rank` 3.
 
   Three behavioural consequences, all three shared with Python: the stage's

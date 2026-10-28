@@ -6451,14 +6451,15 @@ async fn index_data_points_windowed(
 pub const CLASSIFY_DOCUMENTS_TASK_NAME: &str = "classify_documents";
 pub const EXTRACT_CHUNKS_TASK_NAME: &str = "extract_chunks_from_documents";
 pub const EXTRACT_GRAPH_TASK_NAME: &str = "extract_graph_from_data";
-pub const SUMMARIZE_TEXT_TASK_NAME: &str = "summarize_text";
-/// Name of the fused **pipeline stage** that runs both of the two above,
-/// concurrently — [`make_extract_graph_and_summarize_task`].
+/// Name of the fused **pipeline stage** that runs graph extraction and
+/// summarization concurrently — [`make_extract_graph_and_summarize_task`].
 ///
 /// Matches the name of the single Python task it ports
 /// (`cognify.py:350-375`), which is also why both halves' `*_TASK_RANK`
-/// constants are 3. It names the *stage*; the two constants above still name
-/// what each half writes to `DataPoint.source_task`, and those are unchanged.
+/// constants are 3. It is also what `DataPoint.source_task` carries on every
+/// `TextSummary`: Python's `run_tasks_base._stamp_provenance` stamps the
+/// yielded summaries with the merged task's name, while Entity and EntityType
+/// keep [`EXTRACT_GRAPH_TASK_NAME`] (stamped inside `extract_graph_from_data`).
 pub const EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME: &str = "extract_graph_and_summarize";
 pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
 
@@ -6836,17 +6837,17 @@ pub fn make_extract_graph_task_with_rank(
             }
             // Backend-produced summaries never pass through
             // `make_summarize_text_task_with_rank`, so their stamp has to
-            // happen here. `source_task` is deliberately the *summarization*
-            // task name, not this one: the cross-SDK provenance parity harness
-            // keys `TextSummary` off `"summarize_text"`, and both halves of the
-            // fused stage share one rank (see
+            // happen here. `source_task` is the fused stage's name, as in
+            // Python (`run_tasks_base._stamp_provenance` stamps the yielded
+            // summaries with `extract_graph_and_summarize`), and both halves
+            // of the fused stage share one rank (see
             // `make_extract_graph_and_summarize_task_with_rank`), so the `rank`
             // this factory already has is the right one.
             for summary in &mut graph_data.backend_summaries {
                 stamp_provenance(
                     &mut summary.base,
                     COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
+                    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
                     user_label.as_deref(),
                     rank,
                 );
@@ -6893,7 +6894,7 @@ pub fn make_extract_graph_task_with_rank(
 /// leave `graph_backend` unset on the config this task is built from.
 ///
 /// In-body provenance stamping: stamps every emitted `TextSummary`
-/// with `source_task = "summarize_text"`. Nothing else is stamped here: the
+/// with `source_task = "extract_graph_and_summarize"`, as Python does. Nothing else is stamped here: the
 /// carried-forward chunks, documents and entities this used to walk all belong
 /// to the sibling branch now, and every one of those stamps was already an
 /// idempotent no-op — upstream stages had filled the same fields in, under the
@@ -6922,7 +6923,7 @@ pub fn make_summarize_text_task_with_rank(
                 stamp_provenance(
                     &mut summary.base,
                     COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
+                    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
                     user_label.as_deref(),
                     rank,
                 );
@@ -7017,9 +7018,9 @@ fn merge_graph_and_summaries(
 /// It is also what the `topological_rank` constants have always claimed: both
 /// halves are rank **3** precisely because Python has one stage here, and
 /// [`CLASSIFY_DOCUMENTS_TASK_RANK`] documents why. The stamps stay split —
-/// entities keep `source_task = "extract_graph_from_data"` and summaries keep
-/// `"summarize_text"`, which is what the cross-SDK provenance parity harness
-/// asserts.
+/// entities keep `source_task = "extract_graph_from_data"` and summaries are
+/// stamped `"extract_graph_and_summarize"` (the stage's name), which is what
+/// the cross-SDK provenance parity harness asserts.
 ///
 /// # Concurrency cost
 ///
@@ -11227,7 +11228,7 @@ mod tests {
         );
         assert_eq!(
             out.summaries[0].base.source_task.as_deref(),
-            Some(SUMMARIZE_TEXT_TASK_NAME)
+            Some(EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME)
         );
         assert_eq!(
             out.entities[0].entity.base.topological_rank,
