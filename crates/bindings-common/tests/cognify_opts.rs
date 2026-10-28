@@ -144,7 +144,6 @@ fn invalid_values_are_validation_errors() {
         (json!({ "chunkOverlap": 1.5 }), "`chunkOverlap` must be"),
         (json!({ "summarization": "yes" }), "`summarization` must be"),
         (json!({ "temporalCognify": 1 }), "`temporalCognify` must be"),
-        (json!({ "triplet": "true" }), "`triplet` must be"),
         (json!([1]), "must be an object"),
     ];
     for (opts, expected) in cases {
@@ -218,7 +217,6 @@ fn unknown_keys_are_reported_and_known_ones_are_not() {
         "chunkOverlap": 1,
         "summarization": true,
         "temporalCognify": false,
-        "triplet": false,
         "graphBackend": null,
         "graphSchema": null,
         "graphModel": null,
@@ -226,10 +224,16 @@ fn unknown_keys_are_reported_and_known_ones_are_not() {
         "chunkAttachment": null,
         "chunkAtachment": "all",
         "runInBackground": true,
+        // Removed with triplet embedding (SDK-1039): warned about, not honoured.
+        "triplet": true,
     });
     assert_eq!(
         unknown_cognify_opts(&opts),
-        vec!["chunkAtachment".to_string(), "runInBackground".to_string()]
+        vec![
+            "chunkAtachment".to_string(),
+            "runInBackground".to_string(),
+            "triplet".to_string()
+        ]
     );
     // Reported, not fatal: Python forwards unknown kwargs instead of raising.
     let cfg = apply(opts).expect("unknown keys warn, they do not fail");

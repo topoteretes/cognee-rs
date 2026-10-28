@@ -169,10 +169,8 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
     .expect("get_dataset_by_name_in_tenant")
     .expect("dataset should exist after ingest");
 
-    // ── Step 2: Cognify (triplet_embeddings=false so memify creates them) ────
-    let config = CognifyConfig::default()
-        .with_summarization(true)
-        .with_triplet_embeddings(false);
+    // ── Step 2: Cognify (writes no triplets; memify creates them) ────
+    let config = CognifyConfig::default().with_summarization(true);
 
     let cognify_result = match cognify(
         data_items,
@@ -222,14 +220,14 @@ async fn test_full_pipeline_add_cognify_memify_search_delete() {
         cognify_result.edges.len()
     );
 
-    // Triplet collection should NOT exist yet (triplet_embeddings was false)
+    // Triplet collection should NOT exist yet (cognify writes none)
     let has_triplets_before = vector_db
         .has_collection("Triplet", "text")
         .await
         .expect("has_collection Triplet before memify");
     assert!(
         !has_triplets_before,
-        "Triplet collection should not exist before memify (triplet_embeddings=false)"
+        "Triplet collection should not exist before memify"
     );
 
     // ── Step 3: Memify ───────────────────────────────────────────────────────

@@ -10,7 +10,6 @@ public final class CognifyOptions extends Options {
     public CognifyOptions chunkOverlap(int n) { put("chunkOverlap", n); return this; }
     public CognifyOptions summarization(boolean b) { put("summarization", b); return this; }
     public CognifyOptions temporalCognify(boolean b) { put("temporalCognify", b); return this; }
-    public CognifyOptions triplet(boolean b) { put("triplet", b); return this; }
 
     /**
      * Graph extractor for this run (Python's {@code extractor}): {@code "auto"} (the LLM when one

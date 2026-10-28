@@ -89,10 +89,43 @@ pub async fn extract_triplets_from_graph_db(
         warn!(skipped, "Skipped edges (missing nodes or empty text)");
     }
 
-    // memify writes into the same `Triplet`/`text` collection as cognify, so it
-    // needs the same producer-side fold — see
-    // [`crate::triplet_creation::fold_triplets_by_id`].
-    Ok(crate::triplet_creation::fold_triplets_by_id(triplets))
+    Ok(fold_triplets_by_id(triplets))
+}
+
+/// Fold a list of built triplets down to one per **point id**, picking
+/// the survivor deterministically (SDK-778, the `Triplet_text` half).
+///
+/// `Triplet::new` hashes `source_id + relationship_name + target_id` through
+/// the same lower-case / spaces→underscores / strip-apostrophes normalization
+/// the other content-addressed ids use, but the embedded `text` keeps the
+/// relation's **raw** spelling. Nothing upstream normalizes it either: the edge
+/// dedup key (`GraphEdgePair::dedup_key`) is the raw triple, so
+/// `(A, B, "works at")` and `(A, B, "Works At")` both survive as edges and yield
+/// two triplets carrying one identical id — with *different* embedding vectors,
+/// `text` and `relationship` metadata.
+///
+/// Emitting both into one `index_points` batch is the id-collision hazard:
+/// pgvector rejects a multi-row `INSERT … ON CONFLICT (id) DO UPDATE` that
+/// touches a row twice, and since the adapter-side fold landed (#256) one of the
+/// two is instead dropped silently, with batch order deciding which. Folding
+/// here makes the choice the producer's, and makes it reproducible.
+///
+/// Survivor rule: lexicographically smallest `text`, tie-broken on
+/// `relationship_name` — the same "smallest spelling wins" rule
+/// `build_edge_types` applies to `EdgeType`, so the two collections agree about
+/// which spelling of a relation is canonical. The sort also removes the
+/// non-determinism inherited from the input order, which reaches here from a
+/// `HashMap::into_values()` upstream.
+pub(crate) fn fold_triplets_by_id(mut triplets: Vec<Triplet>) -> Vec<Triplet> {
+    triplets.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.text.cmp(&b.text))
+            .then_with(|| a.relationship_name.cmp(&b.relationship_name))
+    });
+    // Equal ids are now adjacent; `dedup_by` keeps the first of each run, which
+    // the sort above made the smallest `(text, relationship_name)`.
+    triplets.dedup_by(|a, b| a.id == b.id);
+    triplets
 }
 
 /// Read graph data, applying filters from config if present.

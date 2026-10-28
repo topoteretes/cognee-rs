@@ -137,7 +137,7 @@ on. `id`, `created_at`, `updated_at` and any name that is neither a field nor a
 base field make every node fall back to a random UUID, as in Python (a warning
 is logged).
 
-Edge sentences (`"{source} {field} {target}."`) and triplet text label a custom
+Edge sentences (`"{source} {field} {target}."`) label a custom
 node with the same Python `str()` of its first non-blank index field, trimmed to
 80 characters with whitespace collapsed (`Role.lead_dev`, `True`,
 `['x', 'y']`), else its `name` stripped but otherwise untouched, else the model

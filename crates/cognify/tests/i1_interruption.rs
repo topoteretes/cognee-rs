@@ -751,14 +751,12 @@ impl Fixture {
 }
 
 /// The config the sweep runs under. Summarization on, so the `TextSummary`
-/// node and `TextSummary_text` collection are exercised too; triplet indexing
-/// on, so `Triplet_text` is.
+/// node and `TextSummary_text` collection are exercised too.
 fn full_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)
         .with_chunks_per_batch(1)
         .with_summarization(true)
-        .with_triplet_embeddings(true)
 }
 
 const FIXTURE_TEXT: &str = "Alice works at Acme. Acme builds tools.";
@@ -814,7 +812,7 @@ async fn census_of_the_writes_one_run_performs() {
 /// is what tells the reader they did.
 const NODE_WRITES: usize = 5;
 const EDGE_WRITES: usize = 2;
-const INDEX_WRITES: usize = 7;
+const INDEX_WRITES: usize = 6;
 
 /// `RollbackScope::Nothing` — the sweep is disabled, so I1 can only be
 /// upheld by the order the stages write in.
