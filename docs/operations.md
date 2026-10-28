@@ -95,8 +95,8 @@ own adds re-enter it. A dataset that does not exist yet is held by the id an
 `add` of it would create.
 
 `global_context_index` reports `already_completed` (`no_writes_since_last_improve`)
-when no `pipeline_runs` row other than a `search` / `recall` was written since
-it last ran. A run that did not end `errored` stamps the stage's start in the
+when no `pipeline_runs` row other than a `search`, a `recall` or a host's
+`improve_pipeline` record was written since it last ran. A run that did not end `errored` stamps the stage's start in the
 checkpoint store (`improve_stage:{stage}:{dataset_id}`); without a checkpoint
 store or a relational database, or on any error reading them, the stage runs.
 rustdoc: `api::improve`.

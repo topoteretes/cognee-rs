@@ -11,10 +11,13 @@
 //! operation row `failed`, which invalidates its stamps).
 //!
 //! The dataset has changed since the stamp when any `pipeline_runs` row was
-//! written after it, except for reads (`search`, `recall`). Python also
-//! excludes the stamping improve's own operation row and the runs it started;
-//! Rust's `improve()` writes no operation row, and a stage's stamp is taken
-//! after the earlier stages' runs, so there is nothing of its own to exclude.
+//! written after it, except for reads (`search`, `recall`) and the rows a host
+//! records an improve run under ([`IMPROVE_PIPELINE_NAME`]). Python excludes
+//! only the stamping run's own row (and the runs it started), counting another
+//! improve as a change. Rust's `improve()` writes no row of its own, and a host
+//! that records one (the HTTP server) closes it after the stamp, so improve
+//! rows are not counted at all: the writes an improve makes are counted through
+//! the add and cognify runs it logs.
 //! Missing or unreadable state means "changed": being conservative costs extra
 //! work, never lost work.
 
@@ -29,8 +32,12 @@ use super::stages::StageKind;
 /// the stage last ran (Python `REASON_NO_WRITES_SINCE_LAST_IMPROVE`).
 pub const REASON_NO_WRITES_SINCE_LAST_IMPROVE: &str = "no_writes_since_last_improve";
 
-/// Operations that only read a dataset (Python `READ_OPERATION_NAMES`).
-pub(crate) const READ_PIPELINE_NAMES: [&str; 2] = ["search", "recall"];
+/// The `pipeline_runs` name a host records an `improve()` run under.
+pub const IMPROVE_PIPELINE_NAME: &str = "improve_pipeline";
+
+/// Runs that are not writes to the dataset: reads (Python
+/// `READ_OPERATION_NAMES`) and improve runs themselves.
+pub(crate) const UNCOUNTED_PIPELINE_NAMES: [&str; 3] = ["search", "recall", IMPROVE_PIPELINE_NAME];
 
 /// The checkpoint key of `stage`'s watermark on `dataset_id`.
 pub fn stage_watermark_key(stage: StageKind, dataset_id: Uuid) -> String {
@@ -80,7 +87,7 @@ pub(crate) async fn has_dataset_changed_since_last_improve(
     };
     let scope = (!any_dataset).then_some(dataset_id);
     match runs
-        .count_runs_created_after(stamp, scope, &READ_PIPELINE_NAMES)
+        .count_runs_created_after(stamp, scope, &UNCOUNTED_PIPELINE_NAMES)
         .await
     {
         Ok(changes) => changes > 0,
@@ -225,6 +232,8 @@ mod tests {
         let cases = [
             ("search", PipelineRunStatus::Completed, false),
             ("recall", PipelineRunStatus::Completed, false),
+            // The host's record of an improve run, this one's included.
+            (IMPROVE_PIPELINE_NAME, PipelineRunStatus::Completed, false),
             ("cognify_pipeline", PipelineRunStatus::Started, true),
             ("cognify_pipeline", PipelineRunStatus::Errored, true),
             ("add_pipeline", PipelineRunStatus::Completed, true),

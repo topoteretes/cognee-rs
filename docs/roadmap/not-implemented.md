@@ -96,8 +96,9 @@ Partial stages:
   lines, and stores the result in the session's graph-context slot (keyed
   `"_global_context_index"`). Python's `from_entities` bucket/root summaries are not implemented
   yet (SDK-1044 step 5). Its `already_completed` watermark is: unlike Python, which narrows the
-  change check to the dataset under backend access control, every dataset's pipeline runs count,
-  and Rust's `improve()` writes no operation row of its own.
+  change check to the dataset under backend access control, every dataset's pipeline runs count;
+  and a host's `improve_pipeline` rows never count (Python counts another succeeded improve),
+  since Rust's `improve()` writes no operation row of its own to tell apart.
 
 - **`persist_agent_traces`** — trace steps whose `session_feedback` field is non-empty are
   collected and run through the standard `add → cognify` path (tagged to the

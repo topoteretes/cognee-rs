@@ -67,7 +67,9 @@ pub use stages::{
     REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
     REMOVED_STAGE_NAMES, StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
 };
-pub use watermark::{REASON_NO_WRITES_SINCE_LAST_IMPROVE, stage_watermark_key};
+pub use watermark::{
+    IMPROVE_PIPELINE_NAME, REASON_NO_WRITES_SINCE_LAST_IMPROVE, stage_watermark_key,
+};
 
 /// The dataset lock registry of a run whose caller wired none, neither on
 /// [`ImproveParams::dataset_locks`] nor on its add pipeline: improves in this
