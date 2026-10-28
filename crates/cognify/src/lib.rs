@@ -22,7 +22,7 @@ pub mod graph_extraction;
 pub mod graph_integration;
 /// The JSON graph-model spec DSL, compiled into a graph schema.
 pub mod graph_spec;
-/// Memify pipeline module.
+/// Improve-stage building blocks (the name is historical, SDK-1039 D3).
 pub mod memify;
 /// Pipeline orchestration module.
 pub mod pipeline;
