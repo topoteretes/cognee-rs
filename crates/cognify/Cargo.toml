@@ -77,6 +77,11 @@ path = "tests/e2e_memify.rs"
 required-features = ["testing"]
 
 [[test]]
+name = "global_context_index"
+path = "tests/global_context_index.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "integration_memify"
 path = "tests/integration_memify.rs"
 required-features = ["testing"]

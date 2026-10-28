@@ -14,6 +14,8 @@ pub mod error;
 pub mod fact_extraction;
 /// Failure-handling vocabulary (the two axes, the failure report).
 pub mod failure;
+/// The global context index (bucket and root summaries above a dataset).
+pub mod global_context_index;
 /// LLM-free graph extraction backends.
 pub mod graph_backend;
 /// Graph extraction module.
@@ -57,6 +59,9 @@ pub use error::CognifyError;
 pub use fact_extraction::{Edge, FactExtractor, GraphModel, KnowledgeGraph, Node};
 pub use failure::{
     FailurePolicy, FailureReport, FailureStage, FailureStop, RollbackScope, StageFailure,
+};
+pub use global_context_index::{
+    GlobalContextIndexMethod, IndexStore, LlmIndexOptions, build_global_context_index,
 };
 pub use graph_backend::{
     ChunkExtractionError, ChunkGraphExtractor, ChunkGraphResult, ChunkRef, ExtractionContext,

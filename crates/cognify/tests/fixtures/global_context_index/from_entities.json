@@ -1,0 +1,1154 @@
+{
+ "dataset_id": "6f1c1a40-0000-5000-8000-000000000044",
+ "documents": {
+  "73703072-fb58-5270-8034-ab62a49b7126": "alpha.md",
+  "cbca1785-765f-58e2-88eb-d1725e16827a": "beta notes.txt",
+  "d2749593-2b82-5f21-afc2-deb7292b8c10": "gamma.pdf",
+  "348b88fa-fec6-524c-8c9f-427fbd3c692b": "alpha.md",
+  "7cd4d05f-1d1e-5fb3-850e-54e9e0a6fda6": "  "
+ },
+ "nodes": [
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   {
+    "type": "DocumentChunk",
+    "document_id": "73703072-fb58-5270-8034-ab62a49b7126",
+    "text": "..."
+   }
+  ],
+  [
+   "6cfb56c3-b43b-5a77-8911-3436089fc2b2",
+   {
+    "type": "DocumentChunk",
+    "document_id": "73703072-fb58-5270-8034-ab62a49b7126",
+    "text": "..."
+   }
+  ],
+  [
+   "f2703139-4f7e-563f-8636-c0d450d0199b",
+   {
+    "type": "DocumentChunk",
+    "document_id": "cbca1785-765f-58e2-88eb-d1725e16827a",
+    "text": "..."
+   }
+  ],
+  [
+   "4c473f9b-a97a-51ec-96fb-4072cd94ab7a",
+   {
+    "type": "DocumentChunk",
+    "document_id": "cbca1785-765f-58e2-88eb-d1725e16827a",
+    "text": "..."
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   {
+    "type": "DocumentChunk",
+    "document_id": "cbca1785-765f-58e2-88eb-d1725e16827a",
+    "text": "..."
+   }
+  ],
+  [
+   "5ef2ea3c-9c00-5e62-a1ad-894d1c81e908",
+   {
+    "type": "DocumentChunk",
+    "document_id": "d2749593-2b82-5f21-afc2-deb7292b8c10",
+    "text": "..."
+   }
+  ],
+  [
+   "4cc7c396-21a7-5b50-a150-532c99237030",
+   {
+    "type": "DocumentChunk",
+    "document_id": "d2749593-2b82-5f21-afc2-deb7292b8c10",
+    "text": "..."
+   }
+  ],
+  [
+   "d73f01a4-6541-5096-9269-4dc8f81ca18d",
+   {
+    "type": "DocumentChunk",
+    "document_id": "d2749593-2b82-5f21-afc2-deb7292b8c10",
+    "text": "..."
+   }
+  ],
+  [
+   "39ca9a1d-e2c3-5eb6-85fc-3a4f90928630",
+   {
+    "type": "DocumentChunk",
+    "document_id": "d2749593-2b82-5f21-afc2-deb7292b8c10",
+    "text": "..."
+   }
+  ],
+  [
+   "e15a262a-55e7-57a5-aaea-67383aed2f30",
+   {
+    "type": "DocumentChunk",
+    "document_id": "348b88fa-fec6-524c-8c9f-427fbd3c692b",
+    "text": "..."
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   {
+    "type": "DocumentChunk",
+    "document_id": "348b88fa-fec6-524c-8c9f-427fbd3c692b",
+    "text": "..."
+   }
+  ],
+  [
+   "22cd1995-0a82-5b91-b774-1bb49e12e5a3",
+   {
+    "type": "DocumentChunk",
+    "document_id": "348b88fa-fec6-524c-8c9f-427fbd3c692b",
+    "text": "..."
+   }
+  ],
+  [
+   "8dc3d96a-193a-5a64-9ff7-b3f959402e35",
+   {
+    "type": "DocumentChunk",
+    "document_id": "348b88fa-fec6-524c-8c9f-427fbd3c692b",
+    "text": "..."
+   }
+  ],
+  [
+   "01eca8e0-5439-5a0c-8ed1-4c6a7ca445b6",
+   {
+    "type": "DocumentChunk",
+    "document_id": "7cd4d05f-1d1e-5fb3-850e-54e9e0a6fda6",
+    "text": "..."
+   }
+  ],
+  [
+   "c-foreign",
+   {
+    "type": "DocumentChunk",
+    "document_id": "not-in-dataset"
+   }
+  ],
+  [
+   "c-internal",
+   {
+    "type": "DocumentChunk",
+    "document_id": "73703072-fb58-5270-8034-ab62a49b7126",
+    "is_internal": true
+   }
+  ],
+  [
+   "65cc97af-2ce9-51d3-b68e-9488d8ed321f",
+   {
+    "type": "EntityType",
+    "name": "Person"
+   }
+  ],
+  [
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   {
+    "type": "EntityType",
+    "name": "Organization"
+   }
+  ],
+  [
+   "83037ee8-6033-56bf-a04b-9c3a62e6ad20",
+   {
+    "type": "EntityType",
+    "name": "Place"
+   }
+  ],
+  [
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   {
+    "type": "EntityType",
+    "name": "Project"
+   }
+  ],
+  [
+   "3fd774d2-29fd-5719-9f51-20b920be59e9",
+   {
+    "type": "EntityType",
+    "name": "Concept"
+   }
+  ],
+  [
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   {
+    "type": "Entity",
+    "name": "Alice"
+   }
+  ],
+  [
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   {
+    "type": "Entity",
+    "name": "Bob"
+   }
+  ],
+  [
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   {
+    "type": "Entity",
+    "name": "Cara"
+   }
+  ],
+  [
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   {
+    "type": "Entity",
+    "name": "Dan"
+   }
+  ],
+  [
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   {
+    "type": "Entity",
+    "name": "Eve"
+   }
+  ],
+  [
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   {
+    "type": "Entity",
+    "name": "Acme Corp"
+   }
+  ],
+  [
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   {
+    "type": "Entity",
+    "name": "Globex"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   {
+    "type": "Entity",
+    "name": "Paris"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   {
+    "type": "Entity",
+    "name": "Berlin"
+   }
+  ],
+  [
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   {
+    "type": "Entity",
+    "name": "Project  Apollo"
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   {
+    "type": "Entity",
+    "name": "Quantum\tSystems"
+   }
+  ],
+  [
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   {
+    "type": "Entity",
+    "name": "Zed"
+   }
+  ],
+  [
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   {
+    "type": "Entity",
+    "name": "Ünïcode Name"
+   }
+  ],
+  [
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   {
+    "type": "Entity",
+    "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   }
+  ],
+  [
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   {
+    "type": "Entity",
+    "name": "Mallory"
+   }
+  ],
+  [
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   {
+    "type": "Entity",
+    "name": "Trent"
+   }
+  ],
+  [
+   "9e5b970d-fb7f-5280-bbdf-3f12ed0869ee",
+   {
+    "type": "GlobalContextSummary",
+    "dataset_id": "6f1c1a40-0000-5000-8000-000000000044",
+    "text": "stale"
+   }
+  ],
+  [
+   "other-ds-node",
+   {
+    "type": "GlobalContextSummary",
+    "dataset_id": "other",
+    "text": "x"
+   }
+  ]
+ ],
+ "edges": [
+  [
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "39ca9a1d-e2c3-5eb6-85fc-3a4f90928630",
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "c-foreign",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "5ef2ea3c-9c00-5e62-a1ad-894d1c81e908",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "01eca8e0-5439-5a0c-8ed1-4c6a7ca445b6",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "83037ee8-6033-56bf-a04b-9c3a62e6ad20",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "f2703139-4f7e-563f-8636-c0d450d0199b",
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "f2703139-4f7e-563f-8636-c0d450d0199b",
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "4c473f9b-a97a-51ec-96fb-4072cd94ab7a",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "39ca9a1d-e2c3-5eb6-85fc-3a4f90928630",
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "3fd774d2-29fd-5719-9f51-20b920be59e9",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "aa70b9a4-db52-5d58-bbf1-bb0abafa056f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "22cd1995-0a82-5b91-b774-1bb49e12e5a3",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "4c473f9b-a97a-51ec-96fb-4072cd94ab7a",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   "83037ee8-6033-56bf-a04b-9c3a62e6ad20",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "4c473f9b-a97a-51ec-96fb-4072cd94ab7a",
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "8dc3d96a-193a-5a64-9ff7-b3f959402e35",
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "c-foreign",
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "4c473f9b-a97a-51ec-96fb-4072cd94ab7a",
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "83037ee8-6033-56bf-a04b-9c3a62e6ad20",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "d73f01a4-6541-5096-9269-4dc8f81ca18d",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "5ef2ea3c-9c00-5e62-a1ad-894d1c81e908",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "39ca9a1d-e2c3-5eb6-85fc-3a4f90928630",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "22273aa3-48e1-5424-a7d9-e7b75a22f562",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "8dc3d96a-193a-5a64-9ff7-b3f959402e35",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "65cc97af-2ce9-51d3-b68e-9488d8ed321f",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "c-foreign",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "d73f01a4-6541-5096-9269-4dc8f81ca18d",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "8dc3d96a-193a-5a64-9ff7-b3f959402e35",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "8dc3d96a-193a-5a64-9ff7-b3f959402e35",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "f2703139-4f7e-563f-8636-c0d450d0199b",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "eefeca61-5d21-52d3-95ba-32ca7556ad40",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "9a887c32-df52-5603-a434-7b67bb67b20b",
+   "is_a",
+   {
+    "relationship_name": "is_a"
+   }
+  ],
+  [
+   "6cfb56c3-b43b-5a77-8911-3436089fc2b2",
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "e332e182-6fb9-5f1d-a891-4233392ee199",
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "contains",
+   {
+    "relationship_name": "contains"
+   }
+  ],
+  [
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "located_in",
+   {
+    "relationship_name": "located_in"
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 5"
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "works_at relation"
+   }
+  ],
+  [
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "knows relation"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "rel 0"
+   }
+  ],
+  [
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "located_in",
+   {
+    "relationship_name": "located_in"
+   }
+  ],
+  [
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   "knows",
+   {
+    "relationship_name": "knows"
+   }
+  ],
+  [
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 5"
+   }
+  ],
+  [
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "works_at",
+   {
+    "relationship_name": "works_at"
+   }
+  ],
+  [
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "works_at",
+   {
+    "relationship_name": "works_at"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "located_in",
+   {
+    "relationship_name": "located_in"
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "rel 3"
+   }
+  ],
+  [
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 2"
+   }
+  ],
+  [
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "knows",
+   {
+    "relationship_name": "knows"
+   }
+  ],
+  [
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "located_in",
+   {
+    "relationship_name": "located_in"
+   }
+  ],
+  [
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 8"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "knows relation"
+   }
+  ],
+  [
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "works_at relation"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "knows relation"
+   }
+  ],
+  [
+   "2ae16a18-0f8a-5b92-a160-26cdeafba794",
+   "dc3f5a07-7abe-57c4-a589-3be7f1f9e68c",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 4"
+   }
+  ],
+  [
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "located_in relation"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "located_in relation"
+   }
+  ],
+  [
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "located_in relation"
+   }
+  ],
+  [
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "knows",
+   {
+    "relationship_name": "knows"
+   }
+  ],
+  [
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "works_at relation"
+   }
+  ],
+  [
+   "4a6faa33-5411-5e03-a89e-3d63d4f7a5cf",
+   "92198410-e2c9-5baa-8708-d1c0b0d07df7",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "fc37f1d0-0e92-5cd3-9192-26cb81ab7190",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 3"
+   }
+  ],
+  [
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "c27eac72-2b4b-55a6-9dc6-8202181b1f8c",
+   "knows",
+   {
+    "relationship_name": "knows",
+    "edge_text": "rel 9"
+   }
+  ],
+  [
+   "33ecbece-f05f-5ff8-a102-9d58e33c505d",
+   "b9ba62a9-ff24-5863-9ecf-2cc57b10787c",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "rel 1"
+   }
+  ],
+  [
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "83256f72-84ea-5cb0-b3ff-c8acac7b2528",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "c1628144-a2be-5060-bc62-313db3cd387a",
+   "0442e1b0-27bb-519f-a433-eb6d066e4ddb",
+   "works_at",
+   {
+    "relationship_name": "works_at"
+   }
+  ],
+  [
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "2a220c22-6e79-584a-a04e-e6138197fa65",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "  spaced   text  "
+   }
+  ],
+  [
+   "d82ce80d-e33f-5857-926c-308d467d88d9",
+   "65e3bf95-d1a5-56f4-be81-e26122cc231b",
+   "located_in",
+   {
+    "relationship_name": "located_in",
+    "edge_text": "located_in relation"
+   }
+  ],
+  [
+   "361ccda7-1721-51be-8a2a-10819a04679e",
+   "c8fd4e2e-7450-5b59-b400-75cd0d81205a",
+   "works_at",
+   {
+    "relationship_name": "works_at",
+    "edge_text": "works_at relation"
+   }
+  ]
+ ],
+ "expected": [
+  {
+   "id": "4022fafe-6f68-546c-9e62-38384d8d8a0d",
+   "text": "7cd4d05f-1d1e-5fb3-850e-54e9e0a6fda6\nProject: Bob",
+   "level": 0,
+   "is_root": false,
+   "document_id": "7cd4d05f-1d1e-5fb3-850e-54e9e0a6fda6"
+  },
+  {
+   "id": "122a6325-08e4-5d48-b8c9-f612fcad8881",
+   "text": "alpha.md\nEntity: Ünïcode Name, Quantum Systems, Mallory\nOrganization: Acme Corp, Berlin, Globex, Eve\nPlace: Cara, Zed\nPerson: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nknows relation\nlocated_in relation\nrel 0\nworks_at relation\nrel 1\nrel 3\nrel 5\nrel 8\nrel 9\nspaced text",
+   "level": 0,
+   "is_root": false,
+   "document_id": "348b88fa-fec6-524c-8c9f-427fbd3c692b"
+  },
+  {
+   "id": "c7bd3f16-ddea-599f-86e8-b80e86675ec1",
+   "text": "alpha.md\nProject: Trent, Bob\nEntity: Quantum Systems, Ünïcode Name, Mallory\nOrganization: Eve\nrel 0\nworks_at relation\nrel 5",
+   "level": 0,
+   "is_root": false,
+   "document_id": "73703072-fb58-5270-8034-ab62a49b7126"
+  },
+  {
+   "id": "c362ec73-a39d-5565-887b-4832261d435e",
+   "text": "beta notes.txt\nPlace: Cara, Project Apollo\nProject: Dan\nOrganization: Berlin, Eve\nEntity: Mallory, Quantum Systems\nPerson: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nrel 4\nrel 8\nrel 9\nlocated_in relation\nrel 5\nspaced text\nworks_at relation",
+   "level": 0,
+   "is_root": false,
+   "document_id": "cbca1785-765f-58e2-88eb-d1725e16827a"
+  },
+  {
+   "id": "a19fc75d-3f5b-545a-beb1-03ad3e97c475",
+   "text": "gamma.pdf\nPlace: Zed\nOrganization: Alice, Globex\nProject: Bob\nPerson: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "level": 0,
+   "is_root": false,
+   "document_id": "d2749593-2b82-5f21-afc2-deb7292b8c10"
+  },
+  {
+   "id": "2775e286-101f-5865-abbf-57dbb6eade64",
+   "text": "Topics: Organization (5), Entity (3), Place (3), Project (3), Person (1)\nEntities: Bob, Eve, Mallory, Quantum Systems, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, Berlin, Cara, Globex, Zed, Ünïcode Name, Acme Corp, Alice, Dan, Project Apollo, Trent\nDocuments: alpha.md, gamma.pdf, beta notes.txt, alpha.md, 7cd4d05f-1d1e-5fb3-850e-54e9e0a6fda6",
+   "level": 1,
+   "is_root": true,
+   "document_id": null
+  }
+ ]
+}

@@ -5069,7 +5069,7 @@ fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult
 /// `uuid5(NAMESPACE_OID, str(tenant_id) + str(user_id) + str(dataset_id) + str(data_id) + str(node_id))`
 ///
 /// When `tenant_id` is `None`, Python's `str(None)` produces `"None"`.
-fn provenance_node_id(
+pub(crate) fn provenance_node_id(
     tenant_id: Option<Uuid>,
     user_id: Uuid,
     dataset_id: Uuid,
