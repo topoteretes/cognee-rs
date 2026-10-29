@@ -126,6 +126,16 @@ pub struct ProcessedInput {
     /// refreshes (or creates under that id) the pinned row instead of
     /// deduplicating by content hash.
     pub pinned_id: Option<Uuid>,
+    /// The item's own `external_metadata` as the caller gave it (a
+    /// `DataInput::DataItem`'s), before `_cognee.source_uri` is merged in;
+    /// `None` when the input carries none. A pinned refresh needs it apart
+    /// from [`Self::external_metadata`]: Python's `merge_existing_row_metadata`
+    /// keeps the stored metadata when the item carries none, clears it for an
+    /// explicit `{}`, and replaces it otherwise.
+    pub item_metadata: Option<String>,
+    /// Where the content came from (Python's `_source_uri_from_input`): the
+    /// `_cognee.source_uri` a pinned refresh writes over the stored one.
+    pub source_uri: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +401,7 @@ pub async fn process_input_with_loaders(
         }
     };
     let source_uri = source_uri_from_input(input);
+    let item_metadata = data_item_metadata.clone();
     let external_metadata = merge_external_metadata(data_item_metadata, source_uri.as_deref())?;
 
     Ok(ProcessedInput {
@@ -415,6 +426,8 @@ pub async fn process_input_with_loaders(
         node_set: None,
         importance_weight: None,
         pinned_id: None,
+        item_metadata,
+        source_uri,
     })
 }
 
@@ -734,11 +747,9 @@ pub async fn persist_data_with_acl_and_locks(
         // item on top of its existing memory, and whatever the old extraction
         // produced that the new one does not reproduce (entities, edges,
         // summaries) would stay in the graph and vector stores. In both SDKs
-        // `update()` is the way to re-tag cognified content: it removes the
-        // item's memory and re-cognifies it (Python resets the marker on the
-        // pinned row; Rust adds the replacement first, then deletes the old
-        // item — or, when the replacement dedups onto this same row,
-        // drops only its memory and completion marker).
+        // `update()` is the way to re-tag cognified content: it drops the
+        // item's memory and completion marker, re-adds it pinned to the same
+        // id and re-cognifies it.
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
                 existing_data.external_metadata.as_deref(),
@@ -862,7 +873,8 @@ async fn persist_pinned_row(
     let (external_metadata, row_node_set) = merge_pinned_row_metadata(
         row.external_metadata.as_deref(),
         row.node_set.as_deref(),
-        processed.external_metadata.as_deref(),
+        processed.item_metadata.as_deref(),
+        processed.source_uri.as_deref(),
         requested_node_set,
         content_changed,
     )?;
@@ -899,14 +911,16 @@ async fn persist_pinned_row(
 
 /// The `external_metadata` and `node_set` column a re-ingested (pinned) row
 /// ends up with: Python's `merge_existing_row_metadata`
-/// (`ingest_data.py:61-113`), a PATCH.
+/// (`ingest_data.py:60-113`), a PATCH.
 ///
-/// * `item_metadata` is what the item carries, already holding its
-///   `_cognee.source_uri` ([`merge_external_metadata`]). An empty object means
-///   the item brought none, so the stored metadata is kept; anything else
-///   replaces it.
-/// * When the content changed, a stored `_cognee.source_uri` described the
-///   old content, so it is dropped unless the item carries a new one.
+/// * `item_metadata` is the item's own metadata, as the caller gave it:
+///   absent (`None`, blank or `null`) keeps the stored metadata, an explicit
+///   `{}` clears it, an object replaces it (other JSON is kept under
+///   `data_item_external_metadata_raw`, as for a new row).
+/// * `source_uri` (where the new content came from) is written to
+///   `_cognee.source_uri` on top. When the content changed and there is no
+///   new source (raw text, an upload), the stored one described the old
+///   content and is dropped; unchanged content keeps it.
 /// * `node_set`: `None` keeps the stored one, a list replaces it (the union of
 ///   the call's and the item's own), an empty one clears it. It is mirrored
 ///   under `external_metadata["node_set"]`.
@@ -914,46 +928,57 @@ fn merge_pinned_row_metadata(
     stored_metadata: Option<&str>,
     stored_node_set: Option<&str>,
     item_metadata: Option<&str>,
+    source_uri: Option<&str>,
     node_set: Option<&[String]>,
     content_changed: bool,
 ) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
-    let as_object = |text: Option<&str>| match text.map(serde_json::from_str::<serde_json::Value>) {
+    // Stored metadata that is not an object (older versions could write it)
+    // counts as empty, as in Python.
+    let stored = match stored_metadata.map(serde_json::from_str::<serde_json::Value>) {
         Some(Ok(serde_json::Value::Object(map))) => map,
         _ => serde_json::Map::new(),
     };
-    let item = as_object(item_metadata);
-    let mut metadata = if item.is_empty() {
-        as_object(stored_metadata)
-    } else {
-        item.clone()
+    let item = match classify_item_metadata(item_metadata) {
+        ItemMetadata::Absent => None,
+        other => Some(item_metadata_map(other)),
+    };
+    let mut metadata = match &item {
+        None => stored,
+        Some(item) => item.clone(),
     };
 
-    let carries_source_uri = item
-        .get("_cognee")
-        .and_then(|c| c.get("source_uri"))
-        .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()));
-    if content_changed && !carries_source_uri {
-        let emptied = match metadata.get_mut("_cognee") {
-            Some(serde_json::Value::Object(cognee)) => {
-                cognee.remove("source_uri");
-                cognee.is_empty()
-            }
-            _ => false,
+    if source_uri.is_some() || content_changed {
+        let mut cognee = match metadata.get("_cognee") {
+            Some(serde_json::Value::Object(map)) => map.clone(),
+            _ => serde_json::Map::new(),
         };
-        if emptied {
+        match source_uri {
+            Some(uri) => {
+                cognee.insert("source_uri".to_string(), serde_json::json!(uri));
+            }
+            None => {
+                cognee.remove("source_uri");
+            }
+        }
+        if cognee.is_empty() {
             metadata.remove("_cognee");
+        } else {
+            metadata.insert("_cognee".to_string(), serde_json::Value::Object(cognee));
         }
     }
 
     // The item's own node set (a list in its metadata) counts as passed.
-    let item_node_set: Option<Vec<String>> = item.get("node_set").and_then(|v| {
-        v.as_array().map(|names| {
-            names
-                .iter()
-                .filter_map(|n| n.as_str().map(str::to_string))
-                .collect()
-        })
-    });
+    let item_node_set: Option<Vec<String>> = item
+        .as_ref()
+        .and_then(|item| item.get("node_set"))
+        .and_then(|v| {
+            v.as_array().map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect()
+            })
+        });
     let requested: Option<Vec<String>> = match (node_set, item_node_set) {
         (None, None) => None,
         (call, item) => {
@@ -4056,57 +4081,179 @@ mod tests {
         assert_eq!(stored.content_hash, theirs.content_hash, "row untouched");
     }
 
-    /// The metadata of a pinned refresh is a PATCH: an item without metadata
-    /// keeps the stored one, an item with metadata replaces it; node set
-    /// likewise (`None` keeps, a list replaces, an empty list clears); a
-    /// content change drops the stored `_cognee.source_uri`.
+    /// The metadata of a pinned refresh is a PATCH, as Python's
+    /// `merge_existing_row_metadata` (`ingest_data.py:60-113`): an item with no
+    /// metadata keeps the stored one, an explicit `{}` clears it, an object
+    /// replaces it; the new `source_uri` always lands in `_cognee.source_uri`,
+    /// and a content change without one drops the stored one; node set:
+    /// `None` keeps, a list replaces, an empty list clears.
     #[test]
     fn pinned_metadata_is_a_patch() {
-        let stored = r#"{"k":"v","node_set":["a"],"_cognee":{"source_uri":"file:///old"}}"#;
+        let stored = r#"{"k":"v","node_set":["a"],"_cognee":{"source_uri":"file:///old","x":1}}"#;
         let stored_ns = Some(r#"["a"]"#);
+        let json = |meta: Option<String>| -> serde_json::Value {
+            serde_json::from_str(&meta.expect("metadata is always written")).unwrap()
+        };
 
-        // Nothing carried: stored kept (source uri too, content unchanged).
+        // Nothing carried, content unchanged: everything stored is kept.
         let (meta, ns) =
-            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, false).unwrap();
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, None, false).unwrap();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
+            json(meta),
             serde_json::from_str::<serde_json::Value>(stored).unwrap()
         );
         assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
 
-        // Content changed without a new source: the stale source uri goes.
+        // `null` and a blank string are "nothing carried" too.
+        for absent in ["null", " "] {
+            let (meta, _) =
+                merge_pinned_row_metadata(Some(stored), stored_ns, Some(absent), None, None, false)
+                    .unwrap();
+            assert_eq!(json(meta)["k"], "v", "{absent:?} keeps the stored metadata");
+        }
+
+        // Raw text replaced, no source: the stale source uri goes, the rest of
+        // `_cognee` stays.
         let (meta, _) =
-            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, true).unwrap();
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, None, true).unwrap();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
-            serde_json::json!({"k": "v", "node_set": ["a"]})
+            json(meta),
+            serde_json::json!({"k": "v", "node_set": ["a"], "_cognee": {"x": 1}})
         );
 
-        // The item brings metadata: it replaces the stored one.
-        let (meta, ns) = merge_pinned_row_metadata(
+        // A plain file replaces the content: the stored keys are KEPT and the
+        // source uri is the new file's.
+        let (meta, _) = merge_pinned_row_metadata(
             Some(stored),
             stored_ns,
-            Some(r#"{"x":1,"_cognee":{"source_uri":"https://new"}}"#),
+            None,
+            Some("file:///new.txt"),
             None,
             true,
         )
         .unwrap();
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
+            json(meta),
+            serde_json::json!({
+                "k": "v",
+                "node_set": ["a"],
+                "_cognee": {"source_uri": "file:///new.txt", "x": 1}
+            })
+        );
+
+        // An explicit `{}` clears the stored metadata (the node set column
+        // still mirrors in).
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, None, true)
+                .unwrap();
+        assert_eq!(json(meta), serde_json::json!({"node_set": ["a"]}));
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // The item brings metadata: it replaces the stored one; the source
+        // lands on top.
+        let (meta, ns) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            Some(r#"{"x":1}"#),
+            Some("https://new"),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            json(meta),
             serde_json::json!({"x": 1, "_cognee": {"source_uri": "https://new"}, "node_set": ["a"]})
         );
         assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
 
-        // A node set replaces; an empty one clears.
+        // Stored metadata that is not an object counts as empty.
+        let (meta, _) =
+            merge_pinned_row_metadata(Some("[1,2]"), None, None, Some("s3://b/k"), None, true)
+                .unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::json!({"_cognee": {"source_uri": "s3://b/k"}})
+        );
+
+        // A node set replaces; an empty one clears; the item's own node set
+        // counts as passed and is unioned with the call's.
         let names = vec!["b".to_string()];
         let (meta, ns) =
-            merge_pinned_row_metadata(Some(stored), stored_ns, None, Some(&names), false).unwrap();
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, Some(&names), false)
+                .unwrap();
         assert_eq!(ns.as_deref(), Some(r#"["b"]"#));
-        assert!(meta.unwrap().contains(r#""node_set":["b"]"#));
+        assert_eq!(json(meta)["node_set"], serde_json::json!(["b"]));
         let (meta, ns) =
-            merge_pinned_row_metadata(Some(stored), stored_ns, None, Some(&[]), false).unwrap();
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, Some(&[]), false)
+                .unwrap();
         assert_eq!(ns, None);
-        assert!(!meta.unwrap().contains("node_set"));
+        assert!(json(meta).get("node_set").is_none());
+        let (_, ns) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            Some(r#"{"node_set":["c","b"]}"#),
+            None,
+            Some(&names),
+            false,
+        )
+        .unwrap();
+        assert_eq!(ns.as_deref(), Some(r#"["b","c"]"#));
+    }
+
+    /// End to end through `process_input` + `persist_data`: a pinned refresh
+    /// with a plain file keeps the user's stored metadata keys and records the
+    /// new file as `_cognee.source_uri` (Python keeps stored metadata when the
+    /// item carries none, `ingest_data.py:85-87`).
+    #[tokio::test]
+    async fn a_pinned_file_refresh_keeps_the_stored_metadata() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let first = process_input(
+            &DataInput::DataItem {
+                data: Box::new(DataInput::Text("old content".into())),
+                label: "item".into(),
+                external_metadata: Some(r#"{"source":"crm"}"#.into()),
+            },
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let old = persist_data(&first, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.txt");
+        std::fs::write(&path, "new content").unwrap();
+        let mut processed = process_input(
+            &DataInput::FilePath(path.to_string_lossy().into_owned()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.pinned_id = Some(old.id);
+        let refreshed = persist_data(&processed, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.id, old.id);
+        let meta: serde_json::Value =
+            serde_json::from_str(refreshed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["source"], "crm", "the stored key survives: {meta}");
+        let uri = meta["_cognee"]["source_uri"].as_str().unwrap();
+        assert!(
+            uri.starts_with("file://") && uri.ends_with("/new.txt"),
+            "{uri}"
+        );
     }
 
     /// A pinned add takes exactly one item.
