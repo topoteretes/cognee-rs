@@ -1,19 +1,18 @@
-//! Graph sync checkpoint entity for Stage 4 of `improve()`.
+//! Checkpoint entity behind [`CheckpointStore`](crate::CheckpointStore): one
+//! timestamp per string key.
 //!
-//! Stores high-water mark timestamps per `(user_id, dataset_id, session_id)`
-//! triple so that `sync_graph_to_session()` can process only new edges
-//! on re-runs.
+//! The table name is historical: it was added for the removed
+//! graph-to-session sync. `improve()` now keeps its stage watermarks here.
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "graph_sync_checkpoints")]
 pub struct Model {
-    /// Checkpoint key of the form
-    /// `graph_sync_checkpoint:{user_id}:{dataset_id}:{session_id}`.
+    /// Checkpoint key, e.g. `improve_stage:{stage}:{dataset_id}`.
     #[sea_orm(primary_key, auto_increment = false)]
     pub key: String,
-    /// Last-synced edge `created_at` timestamp.
+    /// Stored timestamp.
     pub ts: DateTimeUtc,
 }
 

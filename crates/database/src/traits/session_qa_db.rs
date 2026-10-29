@@ -7,8 +7,8 @@ use crate::session_qa::migrator::SessionMigrator;
 use crate::session_qa::{SessionQaPatch, SessionQaRow, SessionTraceRow, ops};
 use crate::types::DatabaseError;
 
-/// Session Q&A entries, per-session graph context, agent trace steps and
-/// session-context rows kept in the relational database (the `relational` session store).
+/// Session Q&A entries, agent trace steps and session-context rows kept in
+/// the relational database (the `relational` session store).
 ///
 /// `user_id: None` selects rows without a user filter on reads and deletes.
 #[async_trait]
@@ -43,7 +43,7 @@ pub trait SessionQaDb: Send + Sync {
         user_id: Option<&str>,
     ) -> Result<Vec<SessionQaRow>, DatabaseError>;
 
-    /// Delete the session's entries, graph context and context rows; returns
+    /// Delete the session's entries and context rows; returns
     /// the number of Q&A entries and context rows removed.
     async fn delete_session_qa(
         &self,
@@ -59,7 +59,7 @@ pub trait SessionQaDb: Send + Sync {
         qa_id: &str,
     ) -> Result<bool, DatabaseError>;
 
-    /// Delete every entry, graph context and context row of every session.
+    /// Delete every entry and context row of every session.
     async fn delete_all_session_qa(&self) -> Result<(), DatabaseError>;
 
     /// Apply `patch` to one entry; whether it existed.
@@ -70,21 +70,6 @@ pub trait SessionQaDb: Send + Sync {
         qa_id: &str,
         patch: SessionQaPatch,
     ) -> Result<bool, DatabaseError>;
-
-    /// The session's stored graph context.
-    async fn get_session_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, DatabaseError>;
-
-    /// Store (or overwrite) the session's graph context.
-    async fn set_session_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), DatabaseError>;
 
     /// Append one agent trace step; returns its `trace_id`.
     async fn save_session_trace_step(
@@ -195,23 +180,6 @@ impl SessionQaDb for DatabaseConnection {
         patch: SessionQaPatch,
     ) -> Result<bool, DatabaseError> {
         ops::update_qa_entry(self, session_id, user_id, qa_id, patch).await
-    }
-
-    async fn get_session_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, DatabaseError> {
-        ops::get_graph_context(self, session_id, user_id).await
-    }
-
-    async fn set_session_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), DatabaseError> {
-        ops::set_graph_context(self, session_id, user_id, context).await
     }
 
     async fn save_session_trace_step(

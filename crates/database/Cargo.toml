@@ -107,6 +107,11 @@ name = "relational_ops_span_instrumentation"
 path = "tests/relational_ops_span_instrumentation.rs"
 required-features = ["sqlite"]
 
+[[test]]
+name = "session_schema"
+path = "tests/session_schema.rs"
+required-features = ["sqlite"]
+
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 serial_test.workspace = true

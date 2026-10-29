@@ -1,8 +1,8 @@
-//! Checkpoint store abstraction for Stage 4 of `improve()`.
+//! Generic key/timestamp checkpoint store.
 //!
-//! Provides a generic key/timestamp storage interface used by
-//! `sync_graph_to_session` to track the high-water mark of edges that have
-//! already been merged into a session's graph context.
+//! `improve()` keeps its stage watermarks here (`improve_stage:{stage}:{dataset_id}`
+//! keys, see `cognee::api::improve::watermark`). The table keeps its historical
+//! name, `graph_sync_checkpoints`, from the removed graph-to-session sync.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -17,9 +17,6 @@ use crate::entities::graph_sync_checkpoint;
 use crate::types::DatabaseError;
 
 /// Abstraction over persistent timestamp checkpoints keyed by string.
-///
-/// Analogous to Python's cache-engine interface used for
-/// `graph_sync_checkpoint:{user_id}:{dataset_id}:{session_id}` keys.
 #[async_trait]
 pub trait CheckpointStore: Send + Sync {
     /// Read the timestamp stored under `key`, or `None` if missing.

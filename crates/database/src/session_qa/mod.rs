@@ -1,6 +1,5 @@
 //! Session Q&A storage on the relational database: the `session_qa_entries`,
-//! `session_graph_context`, `session_trace_steps` and `session_context_entries`
-//! tables, behind
+//! `session_trace_steps` and `session_context_entries` tables, behind
 //! [`SessionQaDb`](crate::SessionQaDb).
 //!
 //! The tables have their own migration chain (`seaql_session_migrations`), run

@@ -74,29 +74,6 @@ pub mod trace_step {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// Entity for the `session_graph_context` table.
-pub mod graph_context {
-    use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-    #[sea_orm(table_name = "session_graph_context")]
-    pub struct Model {
-        #[sea_orm(primary_key, auto_increment = false)]
-        pub id: String,
-        pub session_id: String,
-        pub user_id: Option<String>,
-        #[sea_orm(column_type = "Text")]
-        pub context: String,
-        pub updated_at: DateTimeUtc,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
-
 /// Entity for the `session_context_entries` table — session-scoped context
 /// rows (guidance entries and internal state rows); mirrors Python's
 /// `cache_session_context`.
