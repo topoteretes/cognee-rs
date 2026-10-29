@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`improve()` is Python's staged orchestrator and returns its
+  `ImproveResult` (SDK-1044).** `cognee::api::improve` runs Python's nine
+  stages in registry order and reports one `StageResult` per stage.
+
+  | Item | Before | After |
+  |---|---|---|
+  | `ImproveResult` | `stages_run`, `memify_result`, `feedback_entries_processed`, `feedback_entries_applied`, `sessions_persisted`, `edges_synced` | Python's shape: `dataset_id`, `dataset_name`, `session_ids`, `stages: Vec<StageResult>`, `background`, `finished`, `error`, `memify_run`, computed `status()`; the old counters are stage `counts` |
+  | `ImproveParams` | — | `+ dataset_id` (struct literals must set it); `node_name` and the custom-task fields are deprecated and ignored |
+  | `ApiError::ImproveAborted { result, budget_exhausted }` | — | new: the fatal `persist_session_qa` stage errored; carries the partial result |
+  | Stages `memify` / `sync_graph_to_session` | ran | removed; `global_context_index` runs last |
+  | Binding / C API improve JSON | `{stagesRun, stages, memifyResult, feedbackEntriesProcessed, …}` | `{datasetId, datasetName, sessionIds, stages, background, finished, error, status}` |
+  | Binding improve errors | a fatal-stage abort was a plain runtime error | `SdkError::ImproveAborted { message, improve_result }` (code `IMPROVE_ABORTED`): Python `CogneeImproveAbortedError.improve_result`, JS `ImproveAbortedError.improveResult`; C (`CG_ERR_RUNTIME`) and Java append `improve_result: <json>` to the message |
+  | CLI `improve --node-name` | scoped the run | deprecated, ignored |
+
+  An exhausted LLM budget is recognised from the typed
+  `LlmError::PaymentRequired` / `CognifyError::PaymentRequired` — including a
+  budget failure inside cognify, now carried by `FailureReport::budget_exhausted`
+  (`record_error`) — and from a stage's rendered error
+  (`cognee_llm::is_budget_exhausted_message`, Python's
+  `is_budget_exhausted_record`). The temporal extractors keep a 402 typed
+  (`CognifyError::PaymentRequired` instead of `FactExtractionError`).
+
 - **`cognee-search`: recall routes with Python's ordered rule router, and an
   unmatched query runs `HYBRID_COMPLETION`.** `route_query` checks three rules
   in order — a quoted phrase → `CHUNKS_LEXICAL`, coding-rules wording →
