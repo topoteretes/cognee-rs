@@ -87,7 +87,6 @@ pub const COGNIFY_OPT_KEYS: &[&str] = &[
     "chunkSize",
     "chunkOverlap",
     "summarization",
-    "temporalCognify",
     "graphBackend",
     "extractor",
     "graphSchema",
@@ -186,9 +185,6 @@ pub fn apply_cognify_opts(
     }
     if let Some(b) = opt_bool(opts, "summarization")? {
         cfg = cfg.with_summarization(b);
-    }
-    if let Some(b) = opt_bool(opts, "temporalCognify")? {
-        cfg = cfg.with_temporal_cognify(b);
     }
     let schema = match (
         opt_value(opts, "graphSchema"),

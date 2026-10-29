@@ -814,8 +814,9 @@ config_section! {
         pub chunks_per_batch: u32 = 2000 => {
             env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
         },
-        /// Data items per batch in temporal cognify (Python's `data_per_batch`
-        /// parameter); 0 uses the default, 20.
+        /// Python's `data_per_batch` cognify parameter; 0 uses the default, 20.
+        /// Accepted for parity; no Rust stage reads it since the temporal
+        /// cognify pipeline was removed (SDK-1039).
         pub data_per_batch: u32 = 20 => {
             env: ["COGNEE_DATA_PER_BATCH"], alias: ["data_per_batch"], secret: false,
         },

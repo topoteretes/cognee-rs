@@ -56,8 +56,7 @@ pub fn parse_tenant_id(raw: Option<&str>) -> Result<Option<uuid::Uuid>, CliError
 /// is the default model); a spec file is compiled into a schema by
 /// [`cognee::cognify::graph_schema_from_spec_value`] (clap rejects both flags
 /// together). The schema is compiled by `CognifyConfig::validate`, which also
-/// rejects `--chunk-attachment` without `--graph-schema` and either with
-/// `--temporal-cognify`.
+/// rejects `--chunk-attachment` without `--graph-schema`.
 pub(crate) fn apply_graph_schema_args(
     mut cfg: cognee::cognify::CognifyConfig,
     args: &crate::cli::GraphSchemaArgs,

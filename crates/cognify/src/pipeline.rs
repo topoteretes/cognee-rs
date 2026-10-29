@@ -46,8 +46,7 @@ pub struct CognifyResult {
 
     /// Documents needed by the post-pipeline
     /// [`crate::tasks::extract_dlt_fk_edges`] teardown step. Populated by the
-    /// final task in [`crate::tasks::build_cognify_pipeline`]; empty in the
-    /// temporal branch (which does not run DLT FK extraction). The matching
+    /// final task in [`crate::tasks::build_cognify_pipeline`]. The matching
     /// chunk list reuses the existing [`Self::chunks`] field.
     ///
     /// Not serialised — internal teardown carrier, not part of the public

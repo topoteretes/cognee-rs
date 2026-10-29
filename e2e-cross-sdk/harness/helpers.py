@@ -213,28 +213,24 @@ def run_python_cli(
             f"asyncio.run(main())\n"
         )
     elif command == "cognify":
-        # Parse: cognify -d <dataset_name> [--temporal-cognify]
+        # Parse: cognify -d <dataset_name>. There is no temporal flag: Python
+        # deprecated and ignores `temporal_cognify`, Rust removed it (SDK-1039).
         dataset_name = None
-        temporal_cognify = False
         i = 1
         while i < len(args):
             if args[i] in ("-d", "--datasets") and i + 1 < len(args):
                 dataset_name = args[i + 1]
                 i += 2
-            elif args[i] == "--temporal-cognify":
-                temporal_cognify = True
-                i += 1
             else:
                 i += 1
 
         ds_arg = f"[{dataset_name!r}]" if dataset_name else "None"
-        temporal_arg = "True" if temporal_cognify else "False"
         script = (
             f"import asyncio, cognee\n"
             f"cognee.config.data_root_directory({str(py_storage)!r})\n"
             f"cognee.config.system_root_directory({str(py_system)!r})\n"
             f"async def main():\n"
-            f"    await cognee.cognify(datasets={ds_arg}, temporal_cognify={temporal_arg})\n"
+            f"    await cognee.cognify(datasets={ds_arg})\n"
             f"    print('OK')\n"
             f"asyncio.run(main())\n"
         )
