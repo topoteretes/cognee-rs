@@ -1031,3 +1031,50 @@ async fn add_runs_carry_a_recovery_lock_and_an_abandoned_one_is_closed() {
         Some(cognee_delete::ABANDONED_RUN_ERROR)
     );
 }
+
+/// A rollback that fails leaves the run `STARTED` with its marker in place,
+/// so a later recovery retries it (Python lets the handler's exception abort
+/// that run's recovery, `recovery.py:112-125`, and `ownership.closed` stays
+/// unset).
+#[tokio::test]
+async fn a_failed_rollback_leaves_the_run_started_for_a_later_retry() {
+    use sea_orm::ConnectionTrait;
+
+    let h = Harness::new().await;
+    let items = h.add("repeat_cognify_failed_rollback", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_failed_rollback").await;
+
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    let token = marker.token().expect("marker created");
+    drop(marker);
+    let dead_run = h.seed_started_row(dataset_id, Some(token)).await;
+    let slug = h.seed_run_artifact(dataset_id, items[0].id, dead_run).await;
+
+    // Break the ownership ledger the rollback selects on.
+    h.database
+        .execute_unprepared("ALTER TABLE nodes RENAME TO nodes_broken")
+        .await
+        .expect("rename");
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.failed, 1, "{report:?}");
+    assert_eq!(report.recovered, 0, "{report:?}");
+    let latest = h
+        .pipeline_run_repo
+        .get_pipeline_run(dead_run)
+        .await
+        .expect("get_pipeline_run")
+        .expect("rows exist");
+    assert_eq!(latest.status, PipelineRunStatus::Started, "not closed");
+    assert!(
+        h.ownership_dir.join(token.to_string()).exists(),
+        "the marker stays for the retry"
+    );
+
+    h.database
+        .execute_unprepared("ALTER TABLE nodes_broken RENAME TO nodes")
+        .await
+        .expect("rename back");
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 1, "the retry succeeds: {report:?}");
+    assert!(!h.graph_has(slug).await);
+}
