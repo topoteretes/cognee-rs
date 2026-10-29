@@ -159,7 +159,7 @@ def _run_both_sdks(tmp_path, filename: str, file_bytes: bytes, dataset: str):
     return py_ws, rust_ws, py_rows[0], rust_rows[0]
 
 
-def _assert_dataset_scoped_uuid4(ws: Path, db_path, sdk: str) -> None:
+def _assert_dataset_scoped_uuid4(db_path, sdk: str) -> None:
     """The one data row is a random uuid4 owned by its dataset (SDK-1039 D7).
 
     Python's ``add`` mints ``uuid4()`` for a new ``data`` row and dedups by
@@ -245,8 +245,8 @@ def test_add_image_data_id_is_dataset_scoped_uuid4(tmp_path):
     py_ws, rust_ws, _, _ = _run_both_sdks(
         tmp_path, "photo.png", _PNG_BYTES, "image_parity"
     )
-    _assert_dataset_scoped_uuid4(py_ws, python_db_path(py_ws), "Python")
-    _assert_dataset_scoped_uuid4(rust_ws, rust_db_path(rust_ws), "Rust")
+    _assert_dataset_scoped_uuid4(python_db_path(py_ws), "Python")
+    _assert_dataset_scoped_uuid4(rust_db_path(rust_ws), "Rust")
 
 
 def test_add_image_metadata_matches(tmp_path):
@@ -302,8 +302,8 @@ def test_add_audio_data_id_is_dataset_scoped_uuid4(tmp_path):
     py_ws, rust_ws, _, _ = _run_both_sdks(
         tmp_path, "speech.wav", _WAV_BYTES, "audio_parity"
     )
-    _assert_dataset_scoped_uuid4(py_ws, python_db_path(py_ws), "Python")
-    _assert_dataset_scoped_uuid4(rust_ws, rust_db_path(rust_ws), "Rust")
+    _assert_dataset_scoped_uuid4(python_db_path(py_ws), "Python")
+    _assert_dataset_scoped_uuid4(rust_db_path(rust_ws), "Rust")
 
 
 def test_add_audio_metadata_matches(tmp_path):
