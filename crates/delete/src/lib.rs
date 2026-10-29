@@ -63,6 +63,11 @@ fn mode_label(mode: &DeleteMode) -> &'static str {
     }
 }
 
+/// The legacy `Triplet_text` collection, as `(data_type, field_name)`.
+/// Cognify no longer writes it (SDK-1115); delete still clears it.
+const TRIPLET_DATA_TYPE: &str = "Triplet";
+const TRIPLET_FIELD: &str = "text";
+
 /// Fallback vector collections used when `list_collections()` returns an empty
 /// list (e.g. backends that do not implement dynamic discovery). The store-wide
 /// wipe adds every collection the ownership ledger names to these, which is
@@ -73,7 +78,7 @@ const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("EntityType", "name"),
     ("TextSummary", "text"),
     ("EdgeType", "relationship_name"),
-    ("Triplet", "text"),
+    (TRIPLET_DATA_TYPE, TRIPLET_FIELD),
     // Legacy: written only by the removed `temporal_cognify` event pipeline
     // (SDK-1039). Kept so a wipe still clears what older builds wrote, as
     // `Triplet_text` is.
@@ -1390,7 +1395,10 @@ impl DeleteService {
                         "Failed to drop the storage of dataset {dataset_id}: {e}"
                     ))
                 })?;
-            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+            // The dataset's own vector store is gone and was never reachable
+            // from here, so no legacy `Triplet_text` point is counted; the
+            // preview counts the same way.
+            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await?;
             graph_node_count += gn;
             vector_point_count += vp;
         } else {
@@ -1853,7 +1861,15 @@ impl DeleteService {
 
             prov_nodes += nodes.len();
             prov_edges += edges.len();
-            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+            // With per-dataset storage the dataset's points live in its own
+            // store, which execution drops whole without counting legacy
+            // `Triplet_text` points (see `cleanup_dataset`).
+            let triplet_store = if self.dataset_storage.is_some() {
+                None
+            } else {
+                self.vector_db.as_ref()
+            };
+            let (gn, vp) = ledger_artifact_counts(triplet_store, &nodes, &edges).await?;
             graph_nodes += gn;
             vector_points += vp;
         }
@@ -2347,17 +2363,18 @@ pub(crate) async fn delete_graph_artifacts(
     }
 }
 
-/// Delete vector points based on provenance nodes and edges.
-/// Returns `(count, warnings)`.
-///
-/// `edges` drives the `Triplet_text` points, whose id is one-to-one with the
-/// edge (source, text, target). The `EdgeType_relationship_name` points are
-/// passed in separately as `edge_type_ids`, because their id is *many*-to-one
-/// over edges: deciding which of them a caller may delete needs an exclusivity
-/// check over the retrieval text, which is the caller's to make.
 /// The graph nodes and vector points a dataset's ledger rows account for:
 /// what a dataset delete reports, previewed or executed.
-fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, usize) {
+///
+/// `triplet_store` is the vector store probed for legacy `Triplet_text`
+/// points (see [`existing_triplet_vector_ids`]); `None` counts none, for a
+/// dataset whose own databases are dropped whole and cannot be probed from
+/// here.
+async fn ledger_artifact_counts(
+    triplet_store: Option<&Arc<dyn VectorDB>>,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+) -> Result<(usize, usize), DeleteError> {
     // Unique node slugs = graph nodes to delete
     let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
     // Count vector points from indexed_fields
@@ -2365,18 +2382,77 @@ fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, u
         .iter()
         .map(|node| parse_indexed_fields(&node.indexed_fields).len())
         .sum();
-    // Each edge contributes a Triplet point, plus an EdgeType point only when
-    // it has a retrieval text — the same predicate `delete_vector_artifacts`
-    // uses, so the preview cannot promise a point the execution will not
-    // delete.
-    let edge_points = edges.len()
-        + edges
-            .iter()
-            .filter(|edge| edge_type_vector_id(edge).is_some())
-            .count();
-    (unique_slugs.len(), node_points + edge_points)
+    // An edge contributes an EdgeType point only when it has a retrieval
+    // text — the same predicate `delete_vector_artifacts` uses, so the preview
+    // cannot promise a point the execution will not delete.
+    let edge_type_points = edges
+        .iter()
+        .filter(|edge| edge_type_vector_id(edge).is_some())
+        .count();
+    // A `Triplet_text` point counts only when it exists: cognify no longer
+    // writes them (SDK-1115), so most edges have none. Execution counts the
+    // same way.
+    let triplet_points = match triplet_store {
+        Some(vector_db) => existing_triplet_vector_ids(vector_db, edges).await?.len(),
+        None => 0,
+    };
+    Ok((
+        unique_slugs.len(),
+        node_points + edge_type_points + triplet_points,
+    ))
 }
 
+/// The legacy `Triplet_text` point ids of `edges` that exist in `vector_db`,
+/// without duplicates.
+///
+/// Cognify stopped writing `Triplet_text` (SDK-1115), as Python did, but a
+/// store built before then may still hold it, so deleting an edge still drops
+/// its point (Python `delete_from_graph_and_vector.py:99-113`,
+/// `provenance_delete_planner.py:113-122`). Only the points found here are
+/// deleted and counted, so neither the preview nor the run reports a point
+/// that was never written. A missing collection has none.
+async fn existing_triplet_vector_ids(
+    vector_db: &Arc<dyn VectorDB>,
+    edges: &[GraphEdge],
+) -> Result<Vec<Uuid>, DeleteError> {
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+    let exists = vector_db
+        .has_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
+        .await
+        .map_err(|e| {
+            DeleteError::VectorCleanup(format!(
+                "Failed to check vector collection {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}"
+            ))
+        })?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let candidates: BTreeSet<Uuid> = edges.iter().map(triplet_vector_id).collect();
+    let candidates: Vec<Uuid> = candidates.into_iter().collect();
+    let found = vector_db
+        .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &candidates)
+        .await
+        .map_err(|e| {
+            DeleteError::VectorCleanup(format!(
+                "Failed to look up vector points in {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}"
+            ))
+        })?;
+    let found: BTreeSet<Uuid> = found.into_iter().map(|result| result.id).collect();
+    Ok(found.into_iter().collect())
+}
+
+/// Delete vector points based on provenance nodes and edges.
+/// Returns `(count, warnings)`.
+///
+/// `edges` drives the legacy `Triplet_text` points, whose id is one-to-one
+/// with the edge (source, text, target); only the points that exist are
+/// deleted and counted ([`existing_triplet_vector_ids`]). The
+/// `EdgeType_relationship_name` points are passed in separately as
+/// `edge_type_ids`, because their id is *many*-to-one over edges: deciding
+/// which of them a caller may delete needs an exclusivity check over the
+/// retrieval text, which is the caller's to make.
 pub(crate) async fn delete_vector_artifacts(
     vector_db: Option<&Arc<dyn VectorDB>>,
     nodes: &[GraphNode],
@@ -2400,7 +2476,8 @@ pub(crate) async fn delete_vector_artifacts(
             }
         }
 
-        // Edges contribute to EdgeType_relationship_name and Triplet_text.
+        // Edges contribute to EdgeType_relationship_name and, for legacy
+        // stores, Triplet_text.
         for edge_type_id in edge_type_ids {
             by_collection
                 .entry(("EdgeType".to_string(), "relationship_name".to_string()))
@@ -2408,11 +2485,12 @@ pub(crate) async fn delete_vector_artifacts(
                 .push(*edge_type_id);
         }
 
-        for edge in edges {
+        let triplet_ids = existing_triplet_vector_ids(vector_db, edges).await?;
+        if !triplet_ids.is_empty() {
             by_collection
-                .entry(("Triplet".to_string(), "text".to_string()))
+                .entry((TRIPLET_DATA_TYPE.to_string(), TRIPLET_FIELD.to_string()))
                 .or_default()
-                .push(triplet_vector_id(edge));
+                .extend(triplet_ids);
         }
 
         for ((data_type, field_name), ids) in &by_collection {
@@ -3231,7 +3309,10 @@ mod tests {
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
         assert_eq!(preview.graph_nodes_to_delete, 2);
-        assert_eq!(preview.vector_points_to_delete, 6);
+        // 2 nodes x 2 indexed fields + 1 EdgeType point. The edge has no
+        // `Triplet_text` point (cognify no longer writes them), so none is
+        // counted.
+        assert_eq!(preview.vector_points_to_delete, 5);
         assert_eq!(preview.provenance_nodes_to_delete, 2);
         assert_eq!(preview.provenance_edges_to_delete, 1);
 
@@ -3382,7 +3463,7 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        // Each edge contributes 1 point to EdgeType and 1 to Triplet = 2
+        // The edge's EdgeType point plus its seeded legacy Triplet point = 2
         assert_eq!(result.deleted_vector_points, 2);
         assert_eq!(
             vector_db
@@ -3404,8 +3485,10 @@ mod tests {
     ///
     /// A malformed extraction can yield an edge with a blank relationship name
     /// and no `edge_text`; cognify writes no `EdgeType` DataPoint for it, so
-    /// neither side may claim one. The counters are asserted equal *and*
-    /// pinned to 1 — equality alone would also hold if both sides counted 2.
+    /// neither side may claim one. Nor does it have a `Triplet_text` point:
+    /// cognify no longer writes them (SDK-1115), and none was seeded. The
+    /// counters are asserted equal *and* pinned to 0 — equality alone would
+    /// also hold if both sides counted a point that does not exist.
     #[tokio::test]
     async fn preview_and_execution_agree_on_an_edge_with_no_retrieval_text() {
         let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
@@ -3423,8 +3506,8 @@ mod tests {
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
         assert_eq!(
-            preview.vector_points_to_delete, 1,
-            "only the Triplet point exists for a textless edge"
+            preview.vector_points_to_delete, 0,
+            "a textless edge with no legacy Triplet point has no vector point"
         );
 
         let result = svc.execute(&request).await.expect("execute should succeed");
@@ -3432,6 +3515,158 @@ mod tests {
             result.deleted_vector_points, preview.vector_points_to_delete,
             "the preview must not promise an EdgeType point the sweep never issues"
         );
+    }
+
+    /// Seed `count` provenance edges named `relationship_name` and return them,
+    /// so a test can derive each edge's legacy `Triplet_text` point id.
+    async fn seed_edges_returning(
+        db: &cognee_database::DatabaseConnection,
+        dataset_id: Uuid,
+        data_id: Uuid,
+        owner_id: Uuid,
+        count: usize,
+        relationship_name: &str,
+    ) -> Vec<GraphEdge> {
+        let edges: Vec<GraphEdge> = (0..count)
+            .map(|_| GraphEdge {
+                id: Uuid::new_v4(),
+                slug: Uuid::new_v4(),
+                user_id: owner_id,
+                data_id,
+                dataset_id,
+                pipeline_run_id: None,
+                source_node_id: Uuid::new_v4(),
+                destination_node_id: Uuid::new_v4(),
+                relationship_name: relationship_name.to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            })
+            .collect();
+        ops::graph_storage::upsert_edges(db, &edges).await.unwrap();
+        edges
+    }
+
+    /// Index a legacy `Triplet_text` point for each of `edges`.
+    async fn seed_legacy_triplet_points(vector_db: &MockVectorDB, edges: &[GraphEdge]) {
+        vector_db
+            .create_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD, 3)
+            .await
+            .unwrap();
+        let points: Vec<cognee_vector::VectorPoint> = edges
+            .iter()
+            .map(|edge| {
+                cognee_vector::VectorPoint::new(triplet_vector_id(edge), vec![0.0, 1.0, 0.0])
+            })
+            .collect();
+        vector_db
+            .index_points(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &points)
+            .await
+            .unwrap();
+    }
+
+    /// A dataset delete counts a legacy `Triplet_text` point only when it
+    /// exists — in the preview and in the run (SDK-1039 part E).
+    ///
+    /// Three edges, of which only one still has a `Triplet_text` point: the
+    /// old code counted one point per edge in both places. The edges have no
+    /// retrieval text, so no `EdgeType` point muddies the count.
+    #[tokio::test]
+    async fn dataset_delete_counts_only_existing_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "legacy_triplet_ds").await;
+        let edges = seed_edges_returning(&db, dataset_id, data_id, owner, 3, "").await;
+        seed_legacy_triplet_points(&vector_db, &edges[..1]).await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "legacy_triplet_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(
+            preview.vector_points_to_delete, 1,
+            "only the one existing Triplet point counts"
+        );
+
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(
+            result.deleted_vector_points, preview.vector_points_to_delete,
+            "preview and run must count the same Triplet points"
+        );
+        assert_eq!(
+            vector_db
+                .collection_size(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
+                .await
+                .unwrap(),
+            0,
+            "the existing legacy Triplet point must still be deleted"
+        );
+    }
+
+    /// With no `Triplet_text` collection at all — every store cognify writes
+    /// now — a dataset delete counts no Triplet point, previewed or run.
+    #[tokio::test]
+    async fn dataset_delete_without_triplet_collection_counts_no_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "no_triplet_ds").await;
+        seed_edges_returning(&db, dataset_id, data_id, owner, 2, "").await;
+        assert!(
+            !vector_db
+                .has_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
+                .await
+                .unwrap()
+        );
+
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "no_triplet_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(
+            preview.vector_points_to_delete, 0,
+            "textless edges with no Triplet collection have no vector point"
+        );
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_vector_points, 0);
+    }
+
+    /// The store-wide delete counts through the same ledger helper, so an
+    /// existing legacy `Triplet_text` point is counted once, and a missing one
+    /// not at all, in both the preview and the run.
+    #[tokio::test]
+    async fn delete_all_counts_only_existing_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "all_legacy_triplet_ds").await;
+        let edges = seed_edges_returning(&db, dataset_id, data_id, owner, 2, "").await;
+        seed_legacy_triplet_points(&vector_db, &edges[1..]).await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(preview.vector_points_to_delete, 1);
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_vector_points, 1);
     }
 
     /// An edge carrying a description must have its `EdgeType` vector removed.
