@@ -33,6 +33,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 const PNG_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nfake-png-payload";
+const JPEG_BYTES: &[u8] = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00fake-jpeg-payload";
+const TIFF_BYTES: &[u8] = b"II*\x00\x08\x00\x00\x00fake-tiff-payload";
 const WAV_BYTES: &[u8] = b"RIFF\x24\x00\x00\x00WAVEfmt fake-wav-payload";
 const DESCRIPTION: &str = "The image is a solid red square.";
 const TRANSCRIPT: &str = "Hello from the recording.";
@@ -203,14 +205,45 @@ async fn add_audio_stores_transcript_as_python_does() {
 }
 
 /// Python's image loader also claims `jpeg`, `jpe` and `tiff`, so those are
-/// described too rather than stored as a raw blob.
+/// described too rather than stored as a raw blob. The row records what the
+/// bytes are (`filetype` extension and MIME type), not the file name's.
 #[tokio::test]
 async fn add_jpeg_and_tiff_use_the_image_loader() {
-    for (name, mime) in [
-        ("photo.jpeg", "image/jpeg"),
-        ("photo.jpe", "image/jpeg"),
-        ("scan.tiff", "image/tiff"),
+    for (name, bytes, ext, mime) in [
+        ("photo.jpeg", JPEG_BYTES, "jpg", "image/jpeg"),
+        ("photo.jpe", JPEG_BYTES, "jpg", "image/jpeg"),
+        ("scan.tiff", TIFF_BYTES, "tif", "image/tiff"),
     ] {
+        let dir = TempDir::new().expect("tempdir");
+        let (pipeline, storage) = make_pipeline(&dir, 1).await;
+        let rows = pipeline
+            .add(
+                vec![file_input(&dir, name, bytes)],
+                "images",
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name}: add failed: {e}"));
+        assert_eq!(rows.len(), 1);
+        assert_python_media_row(
+            &storage,
+            &rows[0],
+            bytes,
+            DESCRIPTION,
+            ext,
+            mime,
+            "image_loader",
+        )
+        .await;
+    }
+}
+
+/// SDK-1039 P20: Python routes by the sniffed type, so a PNG named `.jpg`
+/// goes to the image loader and the row says `png` / `image/png`.
+#[tokio::test]
+async fn add_routes_images_by_content_not_by_name() {
+    for name in ["image.jpg", "image.PNG"] {
         let dir = TempDir::new().expect("tempdir");
         let (pipeline, storage) = make_pipeline(&dir, 1).await;
         let rows = pipeline
@@ -222,19 +255,58 @@ async fn add_jpeg_and_tiff_use_the_image_loader() {
             )
             .await
             .unwrap_or_else(|e| panic!("{name}: add failed: {e}"));
-        assert_eq!(rows.len(), 1);
-        let ext = name.rsplit('.').next().expect("extension");
         assert_python_media_row(
             &storage,
             &rows[0],
             PNG_BYTES,
             DESCRIPTION,
-            ext,
-            mime,
+            "png",
+            "image/png",
             "image_loader",
         )
         .await;
     }
+}
+
+/// An image whose name has no image extension is routed to the image loader
+/// and then fails, as in Python, whose vision call takes the MIME type from
+/// the name (`native_adapter.py:633-638`).
+#[tokio::test]
+async fn add_image_without_an_image_extension_fails_in_the_image_loader() {
+    for name in ["image", "image.bin"] {
+        let dir = TempDir::new().expect("tempdir");
+        let (pipeline, _storage) = make_pipeline(&dir, 1).await;
+        let err = pipeline
+            .add(
+                vec![file_input(&dir, name, PNG_BYTES)],
+                "images",
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .expect_err("no image extension must fail");
+        assert!(
+            err.to_string().contains("Could not determine MIME type"),
+            "{name}: unexpected error: {err}"
+        );
+    }
+}
+
+/// A PNG named `.txt` is read as text, which fails (Python:
+/// `UnreadableFileContentError`).
+#[tokio::test]
+async fn add_png_named_txt_fails() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _storage) = make_pipeline(&dir, 1).await;
+    let result = pipeline
+        .add(
+            vec![file_input(&dir, "image.txt", PNG_BYTES)],
+            "images",
+            Uuid::new_v4(),
+            None,
+        )
+        .await;
+    assert!(result.is_err(), "a PNG named .txt must fail the add");
 }
 
 /// The same image under two names is one `data` row, as the lane's

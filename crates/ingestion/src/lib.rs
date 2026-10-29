@@ -11,6 +11,7 @@
 
 mod content_hasher;
 pub mod dataset_locks;
+mod file_type;
 mod id_generation;
 mod loader_registry;
 pub mod loaders;

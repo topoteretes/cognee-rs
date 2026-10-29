@@ -324,6 +324,97 @@ def test_add_loopback_url_rejected_by_both(tmp_path):
     assert _data_rows(rust_ws, rust_db_path) == []
 
 
+def _file_add_both(tmp_path, filename, file_bytes, dataset):
+    """Run ``add <file>`` named ``filename`` in both SDKs, without asserting success.
+
+    Returns ``(py_ws, rust_ws, py_result, rust_result)``.
+    """
+    py_ws = tmp_path / "python_file"
+    rust_ws = tmp_path / "rust_file"
+    py_ws.mkdir()
+    rust_ws.mkdir()
+    py_file = py_ws / filename
+    rust_file = rust_ws / filename
+    py_file.write_bytes(file_bytes)
+    rust_file.write_bytes(file_bytes)
+
+    py_result = run_python_cli(py_ws, ["add", str(py_file), "-d", dataset], check=False)
+    py_owner = py_tenant = None
+    if py_result.returncode == 0:
+        py_conn = open_db(python_db_path(py_ws))
+        py_owner = query_datasets(py_conn)[0]["owner_id"]
+        py_tenant = query_datasets(py_conn)[0].get("tenant_id")
+        py_conn.close()
+
+    write_rust_config(rust_ws, **({"user_id": str(py_owner)} if py_owner else {}))
+    rust_args = ["add", str(rust_file), "-d", dataset]
+    if py_tenant:
+        rust_args.extend(["--tenant-id", str(py_tenant)])
+    rust_result = run_rust_cli(rust_ws, rust_args, check=False)
+    return py_ws, rust_ws, py_result, rust_result
+
+
+_LOADER_ROUTING_FIELDS = (
+    "loader_engine",
+    "original_extension",
+    "original_mime_type",
+    "extension",
+    "mime_type",
+)
+
+
+def test_add_text_with_unknown_extension_routes_by_content(tmp_path):
+    """UTF-8 text named ``notes.conf`` is plain text in both SDKs (SDK-1039 P20).
+
+    Python ``guess_file_type`` sniffs the bytes (``.conf`` is not in the
+    short-circuit list), finds no magic number and reports ``text/plain`` /
+    ``txt``; ``LoaderEngine.get_loader`` then lets ``text_loader`` claim it
+    through the sniffed extension, and the row stores the sniffed
+    ``original_extension`` / ``original_mime_type``.
+    """
+    py_ws, rust_ws, py_result, rust_result = _file_add_both(
+        tmp_path, "notes.conf", b"key = value\nother = thing\n", "routing_conf"
+    )
+    assert py_result.returncode == 0, f"Python add failed:\n{py_result.stderr}"
+    assert rust_result.returncode == 0, f"Rust add failed:\n{rust_result.stderr}"
+    py_row = _data_rows(py_ws, python_db_path)[0]
+    rust_row = _data_rows(rust_ws, rust_db_path)[0]
+    for field in _LOADER_ROUTING_FIELDS:
+        assert py_row.get(field) == rust_row.get(field), (
+            f"{field} mismatch:\n  Python: {py_row.get(field)!r}\n  Rust:   {rust_row.get(field)!r}"
+        )
+    assert rust_row["loader_engine"] == "text_loader"
+    assert rust_row["original_extension"] == "txt"
+    assert rust_row["original_mime_type"] == "text/plain"
+
+
+# A real (valid) PNG: the sniffer must recognise it.
+_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
+    b"\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def test_add_png_named_txt_fails_in_both(tmp_path):
+    """PNG bytes named ``.txt`` fail the add in both SDKs (SDK-1039 P20, D15).
+
+    ``.txt`` short-circuits the sniffer (``guess_file_type.py:63-66``), so
+    ``text_loader`` gets the bytes and raises ``UnreadableFileContentError``
+    (``text_loader.py:81-95``). Rust's text loader rejects non-UTF-8 the same
+    way, and no blob is stored.
+    """
+    py_ws, rust_ws, py_result, rust_result = _file_add_both(
+        tmp_path, "image.txt", _PNG_BYTES, "routing_png_txt"
+    )
+    assert py_result.returncode != 0, "Python accepted PNG bytes named .txt"
+    assert rust_result.returncode != 0, (
+        f"Rust accepted PNG bytes named .txt:\n{rust_result.stdout}"
+    )
+    assert _data_rows(py_ws, python_db_path) == []
+    assert _data_rows(rust_ws, rust_db_path) == []
+
+
 _PUBLIC_URL = "https://example.com/"
 
 
