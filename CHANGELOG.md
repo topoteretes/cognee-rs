@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cypher_allowed }` is applied after the rules. With Cypher disabled, a routed
   Cypher type would become the fallback, but no rule routes to one; an explicit
   one is refused by its retriever. With no LLM, `CHUNKS_LEXICAL` and `CODING_RULES` run as they are,
-  `HYBRID_COMPLETION`, `GRAPH_COMPLETION` and `RAG_COMPLETION` — routed or
+  `HYBRID_COMPLETION`, `GRAPH_COMPLETION`, `RAG_COMPLETION` and
+  `TRIPLET_COMPLETION` (in Python a deprecated alias of `GRAPH_COMPLETION`) — routed or
   explicit — run with `only_context`, and any other routed type becomes the
   fallback with `only_context`. Recall reads the constraints from the search
   orchestrator, which `SearchBuilder` sets from its LLM (`Llm::is_configured`)

@@ -52,10 +52,15 @@ pub const LLM_FREE_TYPES: [SearchType; 2] = [SearchType::ChunksLexical, SearchTy
 
 /// Types whose only LLM call writes the final answer: with no LLM they run
 /// with `only_context` and return the context instead.
-pub const COMPLETION_ONLY_TYPES: [SearchType; 3] = [
+///
+/// Python's set has no `TripletCompletion`: there it is a deprecated alias of
+/// `GraphCompletion`. Rust still has the triplet retriever, whose context
+/// needs no LLM either.
+pub const COMPLETION_ONLY_TYPES: [SearchType; 4] = [
     SearchType::HybridCompletion,
     SearchType::GraphCompletion,
     SearchType::RagCompletion,
+    SearchType::TripletCompletion,
 ];
 
 /// Types that run the query as Cypher, directly or after an LLM writes it.

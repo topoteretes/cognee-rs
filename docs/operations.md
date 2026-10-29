@@ -54,7 +54,8 @@ preposition before an absolute date → `TEMPORAL`, anything else →
 rules search that finds nothing, is retried as `HYBRID_COMPLETION`. With no
 LLM API key, recall still routes: `CHUNKS_LEXICAL` and `CODING_RULES` run as
 they are, and any other routed type falls back to `HYBRID_COMPLETION`; it and an
-explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION` or `RAG_COMPLETION` return
+explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION`, `RAG_COMPLETION` or
+`TRIPLET_COMPLETION` return
 their context instead of an answer (`only_context`). No rule routes to
 `CYPHER` or `NATURAL_LANGUAGE`; requested explicitly with
 `ALLOW_CYPHER_QUERY=false`, they are refused. It is session-aware (reads

@@ -139,6 +139,16 @@ async fn with_no_llm_a_pinned_completion_type_runs_as_only_context() {
 }
 
 #[tokio::test]
+async fn with_no_llm_a_pinned_triplet_completion_runs_as_only_context() {
+    let stub = (SearchType::TripletCompletion, answer());
+    let orchestrator = without_an_llm(orchestrator(vec![stub]));
+    let pinned = Some(SearchType::TripletCompletion);
+    let result = recall_graph(&orchestrator, "Who won?", pinned, true).await;
+    assert_eq!(result.search_type_used, Some(SearchType::TripletCompletion));
+    assert!(ran_as_only_context(&result));
+}
+
+#[tokio::test]
 async fn with_no_llm_a_retry_runs_the_fallback_as_only_context() {
     let orchestrator = without_an_llm(orchestrator(vec![
         (SearchType::CodingRules, SearchOutput::Rules(Vec::new())),
