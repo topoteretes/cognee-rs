@@ -1016,8 +1016,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overcounted (edges sharing a retrieval text are one point; the point may be
   absent) and disagreed when the collection was missing (preview N, run 0).
   Both now look the distinct point ids up (`VectorDB::retrieve`) and count, and
-  delete, only those found. With per-dataset storage the dataset's store is
-  dropped whole and cannot be probed, so the preview counts the distinct ids.
+  delete, only those found. A point several deleted datasets share (a `User`
+  or `All` delete) counts once in the preview, as the run deletes it once. A
+  failed probe fails the run and counts 0 in the preview. With per-dataset
+  storage each dataset's store is dropped whole and cannot be probed, so both
+  count each dataset's distinct ids.
 
 - **`cognee-cognify`: the graph-extraction request is Python's (SDK-1039).**
   Default cognify sent a different request from Python's, and Rust wrote
