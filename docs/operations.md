@@ -91,17 +91,17 @@ points** (six vector collections + provenance to the relational DB) →
 (chunk strategy, custom prompts/schemas). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
-Dates come out of the default extraction, with no separate temporal
-pipeline (Rust's event-graph `temporal_cognify` was removed in SDK-1039;
-Python ignores the flag since 1.6.3): a node the LLM types `Timestamp` whose name is an absolute time
-(`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes a shared
-`Timestamp` graph node — one per normalized time string, carrying
-`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its
-`precision` — that `*_at` edges point at and every chunk naming it `contains`.
-Timestamps are not embedded. A name that does not parse stays an ordinary
-entity. Year-less dates in the text ("27 April", "four weeks later") are
-resolved against the last stated year earlier in the document and handed to the
-default prompt as normalization hints; a custom prompt receives none.
+Dates come out of the default extraction, with no separate temporal pipeline
+(Rust's event-graph `temporal_cognify` was removed in SDK-1039; Python ignores
+the flag since 1.6.3): a node the LLM types `Timestamp` whose name is an
+absolute time (`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes
+a shared `Timestamp` graph node — one per normalized time string, carrying
+`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its `precision`
+— that `*_at` edges point at and every chunk naming it `contains`. Timestamps
+are not embedded. A name that does not parse stays an ordinary entity. Year-less
+dates in the text ("27 April", "four weeks later") are resolved against the last
+stated year earlier in the document and handed to the default prompt as
+normalization hints; a custom prompt receives none.
 
 An extracted entity's id derives from its **name** (`Entity.id_for(name)`), as in
 Python, so the same name from two chunks or documents is one node; several nodes

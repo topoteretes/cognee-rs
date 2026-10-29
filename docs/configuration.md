@@ -1577,9 +1577,10 @@ Pass the schema per call instead, as below.
 treats an omitted or empty `graph_model`. Every entry point runs
 `CognifyConfig::validate` before any side effect, so an invalid value (an
 unknown attachment, an attachment without a schema, a schema that does not
-compile, a schema with a `graph_backend` or the `cascade` strategy) fails with a validation error. The binding opts are type-checked as
-a whole: a wrongly-typed value for any known cognify option is an error, and an
-unknown key is logged as a warning — Python forwards unknown `cognify()`
+compile, a schema with a `graph_backend` or the `cascade` strategy) fails
+with a validation error. The binding opts are type-checked as a whole: a
+wrongly-typed value for any known cognify option is an error, and an unknown
+key is logged as a warning — Python forwards unknown `cognify()`
 keywords into the LLM call instead of raising. See
 [the custom graph schema guide](guides/custom-graph-schema.md).
 
