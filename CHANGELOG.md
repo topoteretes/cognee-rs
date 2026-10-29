@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **URL add stores the raw page and `external_metadata` is Python's (SDK-1039).**
+  `add` of an `http(s)` URL that returns HTML now stores the page as Python's
+  `text_loader` does: the fetched HTML is kept whole (`original_data_location`
+  `text_<md5(html)>.html`), `raw_data_location` is `text_<md5(html)>.txt` with
+  the same HTML, `content_hash` is the MD5 of the page, `loader_engine` is
+  `text_loader`, and `extension` / `original_extension` are `txt`
+  (`text/plain`). The text is no longer extracted at add time, and the
+  `source` / `url` / `final_url` / `content_type` / `title` metadata keys are
+  gone: every file or URL add writes `external_metadata`
+  `{"_cognee": {"source_uri": <url or absolute file:// URI>}}` merged over the
+  item's own metadata (an explicit `source_uri` in the item wins), and a text
+  add writes `{}` instead of NULL. `Document.external_metadata` is formatted
+  like Python's `json.dumps(..., indent=4)` (four spaces, non-ASCII escaped)
+  and is `{}` for a row without metadata. `UrlMetadata` loses `title` and
+  `raw_bytes`. WebPage/WebSite provenance nodes are now derived from an
+  `http(s)` `_cognee.source_uri` and no longer carry a `title`. **Documented
+  difference:** a local `.html` file keeps Rust's text extraction
+  (`beautiful_soup_loader`); Python chunks the raw HTML for it. A fetched
+  page is decoded like httpx's `Response.text`: with the Content-Type
+  `charset` (UTF-8 otherwise), undecodable bytes replaced instead of failing
+  the add.
+
 - **The notebooks feature is removed (SDK-1039).** Python removed
   `cognee/modules/notebooks` and both bundled tutorials in `52bcc7494`. Rust
   follows: gone are the `cognee::api::notebooks` module and its

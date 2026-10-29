@@ -3,7 +3,7 @@ use cognee_models::DataInput;
 #[cfg(feature = "html-loader")]
 use crate::loader_registry::get_loader_name;
 #[cfg(feature = "html-loader")]
-use crate::url_crawler::{HtmlParser, UrlFetcher, UrlFetcherError};
+use crate::url_crawler::{UrlFetcher, UrlFetcherError};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedUrlInput {
@@ -22,8 +22,6 @@ pub struct UrlMetadata {
     pub source_extension: String,
     pub source_mime_type: String,
     pub loader_engine: String,
-    pub raw_bytes: Vec<u8>,
-    pub title: Option<String>,
 }
 
 /// Resolve a URL into a streamable [`DataInput`] and canonical URL metadata.
@@ -43,29 +41,25 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
     let (source_extension, source_mime_type, loader_engine) = metadata_from_mime(&essence);
     let raw_bytes = fetch_result.bytes;
 
-    let (input, stored_extension, stored_mime_type, title) = if essence == "text/html"
+    let (input, stored_extension, stored_mime_type) = if essence == "text/html"
         || essence == "application/xhtml+xml"
     {
-        let html = String::from_utf8(raw_bytes.clone()).map_err(|e| {
-            UrlFetcherError::ParseError(format!("Invalid UTF-8 in HTML response from {url}: {e}"))
-        })?;
-        let title = HtmlParser::extract_title(&html);
-        let text = HtmlParser::extract_text(&html);
+        let html = decode_page(&raw_bytes, &fetch_result.content_type);
+        // Python stores the fetched page as is and lets `text_loader` read
+        // it (`save_data_item_to_storage.py:82-89`): no title, no extraction.
         (
-            DataInput::Text(text),
+            DataInput::Text(html),
             "txt".to_string(),
             "text/plain".to_string(),
-            title,
         )
     } else if essence == "text/plain" || essence == "application/json" || essence == "text/csv" {
-        let text = String::from_utf8(raw_bytes.clone()).map_err(|e| {
+        let text = String::from_utf8(raw_bytes).map_err(|e| {
             UrlFetcherError::ParseError(format!("Invalid UTF-8 in text response from {url}: {e}"))
         })?;
         (
             DataInput::Text(text),
             source_extension.clone(),
             source_mime_type.clone(),
-            None,
         )
     } else if essence.starts_with("image/")
         || essence.starts_with("audio/")
@@ -74,15 +68,14 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
         let file_name = format!("url_fetched.{source_extension}");
         (
             DataInput::Binary {
-                data: raw_bytes.clone(),
+                data: raw_bytes,
                 name: file_name,
             },
             source_extension.clone(),
             source_mime_type.clone(),
-            None,
         )
     } else {
-        let text = String::from_utf8(raw_bytes.clone()).unwrap_or_else(|e| {
+        let text = String::from_utf8(raw_bytes).unwrap_or_else(|e| {
             tracing::warn!(
                 "Non-UTF-8 response from {url} with Content-Type {essence}, \
                      storing lossy conversion: {e}"
@@ -93,7 +86,6 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
             DataInput::Text(text),
             "txt".to_string(),
             "text/plain".to_string(),
-            None,
         )
     };
 
@@ -109,8 +101,6 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
             source_extension,
             source_mime_type,
             loader_engine,
-            raw_bytes,
-            title,
         },
     })
 }
@@ -130,6 +120,24 @@ fn resolve_url_fetcher() -> Result<UrlFetcher, UrlFetcherError> {
     {
         UrlFetcher::new()
     }
+}
+
+/// The page as text, the way Python's crawler reads it: httpx's
+/// `Response.text` (`default_url_crawler.py` `_fetch_httpx`) decodes with the
+/// Content-Type `charset`, falling back to UTF-8, and replaces bytes it
+/// cannot decode instead of failing. A BOM is kept, as Python's codecs keep it.
+#[cfg(feature = "html-loader")]
+fn decode_page(bytes: &[u8], content_type: &str) -> String {
+    let encoding = content_type
+        .split(';')
+        .skip(1)
+        .filter_map(|param| param.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .and_then(|(_, label)| {
+            encoding_rs::Encoding::for_label(label.trim().trim_matches('"').as_bytes())
+        })
+        .unwrap_or(encoding_rs::UTF_8);
+    encoding.decode_without_bom_handling(bytes).0.into_owned()
 }
 
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
@@ -166,8 +174,9 @@ fn mime_from_url_path(url: &str) -> Option<String> {
 #[cfg(feature = "html-loader")]
 fn metadata_from_mime(essence: &str) -> (String, String, String) {
     let ext = match essence {
-        "text/html" | "application/xhtml+xml" => "html",
-        "text/plain" => "txt",
+        // A fetched page is plain text to Python's loader table: `.html` only
+        // renames the stored original, and `text_loader` reads it.
+        "text/html" | "application/xhtml+xml" | "text/plain" => "txt",
         "application/json" => "json",
         "text/csv" => "csv",
         "application/pdf" => "pdf",
@@ -190,7 +199,11 @@ fn metadata_from_mime(essence: &str) -> (String, String, String) {
         },
         _ => "bin",
     };
-    let mime = essence.to_string();
+    let mime = if matches!(essence, "text/html" | "application/xhtml+xml") {
+        "text/plain".to_string()
+    } else {
+        essence.to_string()
+    };
     let loader = get_loader_name(ext).to_string();
     (ext.to_string(), mime, loader)
 }
@@ -216,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_html_and_title() {
+    async fn resolves_html_as_the_raw_page() {
         let mut server = server_with_robots().await;
         let html =
             "<html><head><title>Example Title</title></head><body><p>Hello HTML</p></body></html>";
@@ -231,20 +244,42 @@ mod tests {
 
         let resolved = resolve_url_input(&url).await.unwrap();
 
-        assert!(matches!(resolved.input, DataInput::Text(_)));
-        if let DataInput::Text(text) = resolved.input {
-            assert!(text.contains("Hello HTML"));
-        }
+        // The page is kept whole, as Python's `text_loader` reads it.
+        assert!(matches!(resolved.input, DataInput::Text(ref text) if text == html));
         assert_eq!(resolved.metadata.requested_url, url);
         assert_eq!(resolved.metadata.content_type, "text/html; charset=utf-8");
         assert_eq!(resolved.metadata.essence, "text/html");
-        assert_eq!(resolved.metadata.source_extension, "html");
-        assert_eq!(resolved.metadata.source_mime_type, "text/html");
+        assert_eq!(resolved.metadata.source_extension, "txt");
+        assert_eq!(resolved.metadata.source_mime_type, "text/plain");
         assert_eq!(resolved.metadata.stored_extension, "txt");
         assert_eq!(resolved.metadata.stored_mime_type, "text/plain");
-        assert_eq!(resolved.metadata.loader_engine, "beautiful_soup_loader");
-        assert_eq!(resolved.metadata.title, Some("Example Title".to_string()));
-        assert_eq!(resolved.metadata.raw_bytes, html.as_bytes());
+        assert_eq!(resolved.metadata.loader_engine, "text_loader");
+    }
+
+    /// httpx's `Response.text`: the `charset` decodes the page, and bytes
+    /// that are not valid in it are replaced rather than failing the add.
+    #[tokio::test]
+    async fn html_is_decoded_like_httpx() {
+        let mut server = server_with_robots().await;
+        let latin1 = format!("{}/latin1", server.url());
+        let _latin1 = server
+            .mock("GET", "/latin1")
+            .with_header("content-type", "text/html; charset=\"ISO-8859-2\"")
+            .with_body(b"<p>\xb1</p>".as_slice())
+            .create_async()
+            .await;
+        let bad = format!("{}/bad", server.url());
+        let _bad = server
+            .mock("GET", "/bad")
+            .with_header("content-type", "text/html")
+            .with_body(b"<p>\xff</p>".as_slice())
+            .create_async()
+            .await;
+
+        let resolved = resolve_url_input(&latin1).await.unwrap();
+        assert!(matches!(resolved.input, DataInput::Text(ref t) if t == "<p>\u{105}</p>"));
+        let resolved = resolve_url_input(&bad).await.unwrap();
+        assert!(matches!(resolved.input, DataInput::Text(ref t) if t == "<p>\u{fffd}</p>"));
     }
 
     #[tokio::test]

@@ -104,6 +104,8 @@ fn metadata_value_is_dlt_sourced(value: &serde_json::Value) -> bool {
         .and_then(|source| source.as_str())
         .map(|source| source == "dlt")
         .unwrap_or(false)
+        // Rows written before SDK-1039 P19 nested an item's metadata here when
+        // it clashed with the Rust-only URL keys; nothing writes it any more.
         || value
             .get("data_item_external_metadata")
             .map(metadata_value_is_dlt_sourced)
@@ -136,11 +138,15 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
             base.importance_weight = Some(data.importance_weight.unwrap_or(0.5));
             base.set_metadata("index_fields", json!(["name"]));
 
-            // Format external_metadata as indented JSON (Python does json.dumps(..., indent=4))
-            let formatted_metadata = data.external_metadata.as_ref().and_then(|m| {
-                let v: serde_json::Value = serde_json::from_str(m).ok()?;
-                serde_json::to_string_pretty(&v).ok()
-            });
+            // Python: `json.dumps(data_item.external_metadata, indent=4)`
+            // (`classify_documents.py:171`). A row without metadata reads as
+            // `{}`; text that is not JSON is passed through.
+            let formatted_metadata = match data.external_metadata.as_deref() {
+                None => Some(python_json_dumps_indent4(&json!({}))),
+                Some(text) => serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .map(|v| python_json_dumps_indent4(&v)),
+            };
 
             let mut doc = Document {
                 base,
@@ -150,7 +156,7 @@ pub fn classify_documents(data_items: &[Data]) -> Vec<Document> {
                 mime_type: data.mime_type.clone(),
                 extension: data.extension.clone(),
                 data_id: data.id,
-                external_metadata: formatted_metadata.or(data.external_metadata.clone()),
+                external_metadata: formatted_metadata.or_else(|| data.external_metadata.clone()),
             };
 
             // update_node_set: parse external_metadata for node_set array
@@ -235,6 +241,90 @@ impl HasDataPoint for Document {
     }
     // for_each_child_mut: default no-op — Document has no nested
     // DataPoint-bearing fields (links to its source `Data` by `data_id: Uuid`).
+}
+
+/// `json.dumps(value, indent=4)` as Python writes it: four-space indent,
+/// `", "`-free item separators, `": "` key separators, non-ASCII escaped as
+/// `\uXXXX` (`ensure_ascii=True`), key order as inserted.
+fn python_json_dumps_indent4(value: &serde_json::Value) -> String {
+    use serde::Serialize;
+    use serde_json::ser::{Formatter, PrettyFormatter};
+
+    struct AsciiPretty(PrettyFormatter<'static>);
+
+    impl Formatter for AsciiPretty {
+        fn begin_array<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+            self.0.begin_array(w)
+        }
+        fn end_array<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+            self.0.end_array(w)
+        }
+        fn begin_array_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            self.0.begin_array_value(w, first)
+        }
+        fn end_array_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
+            self.0.end_array_value(w)
+        }
+        fn begin_object<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+            self.0.begin_object(w)
+        }
+        fn end_object<W: ?Sized + std::io::Write>(&mut self, w: &mut W) -> std::io::Result<()> {
+            self.0.end_object(w)
+        }
+        fn begin_object_key<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            self.0.begin_object_key(w, first)
+        }
+        fn begin_object_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
+            self.0.begin_object_value(w)
+        }
+        fn end_object_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
+            self.0.end_object_value(w)
+        }
+        fn write_string_fragment<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            fragment: &str,
+        ) -> std::io::Result<()> {
+            let mut buf = [0u16; 2];
+            for ch in fragment.chars() {
+                if ch.is_ascii() {
+                    w.write_all(&[ch as u8])?;
+                } else {
+                    for unit in ch.encode_utf16(&mut buf) {
+                        write!(w, "\\u{unit:04x}")?;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut serializer = serde_json::Serializer::with_formatter(
+        &mut out,
+        AsciiPretty(PrettyFormatter::with_indent(b"    ")),
+    );
+    if value.serialize(&mut serializer).is_err() {
+        return value.to_string();
+    }
+    String::from_utf8(out).unwrap_or_else(|_| value.to_string())
 }
 
 #[cfg(test)]
@@ -332,24 +422,22 @@ mod tests {
     }
 
     #[test]
-    fn classifies_extracted_html_url_text_as_text_document() {
+    fn classifies_fetched_url_page_as_text_document() {
         let data = vec![
             Data::builder(
                 Uuid::new_v4(),
                 "text_hash",
                 "file:///storage/text_hash.txt",
-                "file:///storage/source.html",
+                "file:///storage/text_hash.html",
                 "txt",
                 "text/plain",
                 "hash123",
                 Uuid::new_v4(),
             )
-            .original_extension("html")
-            .original_mime_type("text/html")
-            .loader_engine("beautiful_soup_loader")
-            .external_metadata(
-                r#"{"source":"url","url":"https://example.test","content_type":"text/html"}"#,
-            )
+            .original_extension("txt")
+            .original_mime_type("text/plain")
+            .loader_engine("text_loader")
+            .external_metadata(r#"{"_cognee":{"source_uri":"https://example.test"}}"#)
             .build(),
         ];
 
@@ -547,18 +635,37 @@ mod tests {
     // ----- External metadata formatting -----
 
     #[test]
-    fn formats_external_metadata_as_pretty_json() {
+    fn formats_external_metadata_as_python_indent_4() {
         let data = vec![make_data_with_metadata(
             "text/plain",
             "txt",
-            r#"{"key":"value","nested":{"a":1}}"#,
+            r#"{"_cognee":{"source_uri":"file:///tmp/a.txt"},"tags":["x","é","😀"],"empty":{}}"#,
         )];
         let docs = classify_documents(&data);
         assert_eq!(docs.len(), 1);
-        let meta = docs[0].external_metadata.as_ref().unwrap();
-        // Pretty-printed JSON should contain newlines and indentation
-        assert!(meta.contains('\n'));
-        assert!(meta.contains("  "));
+        // `json.dumps(..., indent=4)`: four spaces, `": "`, insertion order,
+        // `ensure_ascii`.
+        assert_eq!(
+            docs[0].external_metadata.as_deref(),
+            Some(
+                "{\n    \"_cognee\": {\n        \"source_uri\": \"file:///tmp/a.txt\"\n    },\n    \"tags\": [\n        \"x\",\n        \"\\u00e9\",\n        \"\\ud83d\\ude00\"\n    ],\n    \"empty\": {}\n}"
+            )
+        );
+    }
+
+    #[test]
+    fn row_without_external_metadata_classifies_to_empty_object() {
+        let mut data = make_data_with_metadata("text/plain", "txt", "{}");
+        data.external_metadata = None;
+        let docs = classify_documents(&[data]);
+        assert_eq!(docs[0].external_metadata.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn empty_object_metadata_stays_empty_object() {
+        let data = vec![make_data_with_metadata("text/plain", "txt", "{}")];
+        let docs = classify_documents(&data);
+        assert_eq!(docs[0].external_metadata.as_deref(), Some("{}"));
     }
 
     #[test]

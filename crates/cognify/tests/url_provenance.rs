@@ -46,11 +46,7 @@ async fn url_provenance_creates_page_site_and_chunk_edges_offline() {
     let documents = vec![document(
         doc_id,
         json!({
-            "source": "url",
-            "url": "https://example.test/start",
-            "final_url": final_url,
-            "content_type": "text/html",
-            "title": "Offline fixture",
+            "_cognee": {"source_uri": final_url},
         }),
     )];
     let chunks = vec![DocumentChunk::new(

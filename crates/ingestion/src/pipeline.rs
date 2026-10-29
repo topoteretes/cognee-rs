@@ -200,16 +200,6 @@ pub async fn process_input_with_loaders(
         return Err(Box::new(IngestionError::S3IngestionUnavailable));
     }
 
-    let raw_source_uri = if let Some(metadata) = resolved_url_metadata.as_ref()
-        && is_html_url_metadata(metadata)
-    {
-        let raw_file_name = format!("source_placeholder.{}", metadata.source_extension);
-        let raw_location = storage.store(&metadata.raw_bytes, &raw_file_name).await?;
-        Some(storage_location_to_uri(storage.base_path(), &raw_location))
-    } else {
-        None
-    };
-
     // Rebindable stored-file metadata. For non-URL inputs the loader runs at
     // ADD time (Python parity, ingest_data.py:103) and the stored artifact
     // becomes extracted text, so these are overridden to txt/text/plain below.
@@ -218,8 +208,9 @@ pub async fn process_input_with_loaders(
     let mut loader_engine = loader_engine;
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
-    // the already-extracted text; for everything else it is the raw original
-    // bytes, which we hash (UNCHANGED — sacred) and then feed to the loader.
+    // the fetched content (a page as its raw HTML text); for everything else
+    // it is the raw original bytes, which we hash (UNCHANGED — sacred) and
+    // then feed to the loader.
     let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
     let raw_bytes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -258,12 +249,25 @@ pub async fn process_input_with_loaders(
 
     // Store the artifact + compute `raw_content_hash` (MD5 of the stored
     // extracted-text file — Python parity, ingest_data.py:195).
-    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() {
-        // URL path: the loader already ran at fetch time, so `collected` IS the
-        // extracted text. Store it verbatim under the metadata-derived name and
-        // extension (preserving the existing URL behaviour, incl. non-HTML
-        // URLs that keep their source extension). `raw_content_hash` is the MD5
-        // of that stored file, which equals `content_hash` here.
+    //
+    // A fetched HTML page is the exception that follows Python: the page is
+    // kept as `text_<content_hash>.html` and goes through the regular text
+    // branch below, so `text_loader` stores it as `text_<content_hash>.txt`
+    // (`save_data_item_to_storage.py:82-89`, `ingest_data.py:315-331`).
+    let is_html_url = resolved_url_metadata
+        .as_ref()
+        .is_some_and(is_html_url_metadata);
+    let raw_source_uri = if is_html_url {
+        let raw_file_name = format!("text_{content_hash}.html");
+        let raw_location = storage.store(&collected, &raw_file_name).await?;
+        Some(storage_location_to_uri(storage.base_path(), &raw_location))
+    } else {
+        None
+    };
+    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() && !is_html_url {
+        // Other URL types: the content is stored verbatim under the
+        // metadata-derived name and extension, as before. `raw_content_hash`
+        // is the MD5 of that stored file, which equals `content_hash` here.
         let location = storage.store(&collected, &file_name).await?;
         (location, content_hash.clone())
     } else {
@@ -345,8 +349,8 @@ pub async fn process_input_with_loaders(
             _ => extract_original_location(input),
         }
     };
-    let external_metadata =
-        merge_external_metadata(data_item_metadata, resolved_url_metadata.as_ref())?;
+    let source_uri = source_uri_from_input(input);
+    let external_metadata = merge_external_metadata(data_item_metadata, source_uri.as_deref())?;
 
     Ok(ProcessedInput {
         content_hash,
@@ -1180,52 +1184,92 @@ fn with_node_set_in_external_metadata(
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
 }
 
+/// Where an add's content came from, as Python's `_source_uri_from_input`
+/// reports it (`ingest_data.py:140-181`): an explicit `source_uri` string in
+/// the item's own metadata wins; otherwise a URL or `s3://` path is its own
+/// locator and a local file is its absolute `file://` URI. Raw text, binary uploads and
+/// anything else have none.
+fn source_uri_from_input(input: &DataInput) -> Option<String> {
+    if let DataInput::DataItem {
+        external_metadata, ..
+    } = input
+        && let ItemMetadata::Object(object) = classify_item_metadata(external_metadata.as_deref())
+        && let Some(explicit) = object.get("source_uri").and_then(|v| v.as_str())
+        && !explicit.trim().is_empty()
+    {
+        return Some(explicit.trim().to_string());
+    }
+    match unwrap_data_item(input) {
+        // Python returns an `http`, `https`, `s3` or `file` locator as given.
+        DataInput::Url(url) | DataInput::S3Path(url) => Some(url.clone()),
+        DataInput::FilePath(path) => Some(file_uri(path)),
+        _ => None,
+    }
+}
+
+/// The `file://` URI of a local path, as Python's `Path(p).resolve().as_uri()`
+/// builds it. A path that already is a `file://` URI is kept as given, which is
+/// what Python does for any `file`, `http`, `https` or `s3` string.
+fn file_uri(path: &str) -> String {
+    if path.starts_with("file://") {
+        path.to_string()
+    } else {
+        path_to_file_uri(path)
+    }
+}
+
+fn path_to_file_uri(path: &str) -> String {
+    let path = Path::new(path);
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        }
+    });
+    let mut uri = String::from("file://");
+    for byte in absolute.to_string_lossy().as_bytes() {
+        // `urllib.parse.quote(path)`: letters, digits, `_.-~` and `/` stay.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/') {
+            uri.push(char::from(*byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
+/// The `external_metadata` a new `data` row gets, built as Python's
+/// `merge_existing_row_metadata` builds a new row's (`ingest_data.py:60-109`):
+/// the item's own object, with `_cognee.source_uri` set when the content has
+/// a source. Plain text has no source and no item metadata, and stores `{}`.
+///
+/// Metadata that is not a JSON object is kept under
+/// `data_item_external_metadata_raw` when a source URI has to be merged into
+/// it, and verbatim otherwise.
 fn merge_external_metadata(
     data_item_metadata: Option<String>,
-    url_metadata: Option<&UrlMetadata>,
+    source_uri: Option<&str>,
 ) -> Result<Option<String>, serde_json::Error> {
-    let Some(metadata) = url_metadata else {
-        // Nothing to merge with: the item's text is stored verbatim, unless
-        // it spells "no metadata".
-        return Ok(data_item_metadata.filter(|item_metadata| {
-            !matches!(
-                classify_item_metadata(Some(item_metadata)),
-                ItemMetadata::Absent
-            )
+    let Some(source_uri) = source_uri else {
+        // Nothing to merge: the item's text is stored verbatim, unless it
+        // spells "no metadata", which Python stores as `{}`.
+        return Ok(Some(match data_item_metadata {
+            Some(text) if !matches!(classify_item_metadata(Some(&text)), ItemMetadata::Absent) => {
+                text
+            }
+            _ => "{}".to_string(),
         }));
     };
 
-    let data_item_metadata = classify_item_metadata(data_item_metadata.as_deref());
-    let user_metadata_object = match &data_item_metadata {
-        ItemMetadata::Object(object) => Some(serde_json::Value::Object(object.clone())),
-        _ => None,
-    };
-    let mut merged = item_metadata_map(data_item_metadata);
-    let mut has_conflict = false;
-
-    let url_fields = [
-        ("source", serde_json::json!("url")),
-        ("url", serde_json::json!(metadata.requested_url.clone())),
-        ("final_url", serde_json::json!(metadata.final_url.clone())),
-        (
-            "content_type",
-            serde_json::json!(metadata.content_type.clone()),
-        ),
-    ];
-    for (key, value) in url_fields {
-        if merged.contains_key(key) {
-            has_conflict = true;
-        }
-        merged.insert(key.to_string(), value);
-    }
-    if let Some(title) = &metadata.title {
-        if merged.contains_key("title") {
-            has_conflict = true;
-        }
-        merged.insert("title".to_string(), serde_json::json!(title));
-    }
-    if has_conflict && let Some(user_metadata) = user_metadata_object {
-        merged.insert("data_item_external_metadata".to_string(), user_metadata);
+    let mut merged = item_metadata_map(classify_item_metadata(data_item_metadata.as_deref()));
+    if let Some(serde_json::Value::Object(cognee)) = merged.get_mut("_cognee") {
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+    } else {
+        merged.insert(
+            "_cognee".to_string(),
+            serde_json::json!({ "source_uri": source_uri }),
+        );
     }
 
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
@@ -1973,7 +2017,7 @@ mod tests {
 
     #[cfg(feature = "html-loader")]
     #[tokio::test]
-    async fn test_process_input_url_html_stores_text_with_source_metadata() {
+    async fn test_process_input_url_html_stores_the_raw_page_as_text() {
         let mut server = server_with_robots().await;
         let html = "<html><head><title>Example</title><style>.x{display:none}</style></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
         let url = format!("{}/page.html", server.url());
@@ -1996,33 +2040,43 @@ mod tests {
         .await
         .unwrap();
 
-        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
-        let raw_html = storage.retrieve(raw_source_uri).await.unwrap();
-        assert_eq!(raw_html, html.as_bytes());
-        assert!(raw_source_uri.ends_with(".html"));
-        assert!(processed.raw_data_uri.ends_with(".txt"));
-        assert_ne!(processed.raw_data_uri, *raw_source_uri);
+        // Python stores the page whole: the hash, the size and both stored
+        // files describe the raw HTML (`ingest_data.py:315-331`).
+        let hash =
+            crate::content_hasher::ContentHasher::hash_content(html.as_bytes(), HashAlgorithm::Md5);
+        assert_eq!(processed.content_hash, hash);
+        assert_eq!(processed.raw_content_hash, hash);
+        assert_eq!(processed.data_size, html.len() as i64);
+        assert_eq!(processed.name, format!("text_{hash}"));
 
-        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
-        let stored_text = String::from_utf8(stored).unwrap();
-        assert!(stored_text.contains("Visible text"));
-        assert!(!stored_text.contains("<html>"));
-        assert!(!stored_text.contains("hidden()"));
-        assert!(!stored_text.contains("display:none"));
+        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
+        assert!(raw_source_uri.ends_with(&format!("text_{hash}.html")));
+        assert_eq!(
+            storage.retrieve(raw_source_uri).await.unwrap(),
+            html.as_bytes()
+        );
+        assert!(
+            processed
+                .raw_data_uri
+                .ends_with(&format!("text_{hash}.txt"))
+        );
+        assert_eq!(
+            storage.retrieve(&processed.raw_data_uri).await.unwrap(),
+            html.as_bytes()
+        );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
-        assert_eq!(processed.original_extension, "html");
-        assert_eq!(processed.original_mime_type, "text/html");
-        assert_eq!(processed.loader_engine, "beautiful_soup_loader");
+        assert_eq!(processed.original_extension, "txt");
+        assert_eq!(processed.original_mime_type, "text/plain");
+        assert_eq!(processed.loader_engine, "text_loader");
         assert_eq!(processed.original_location, *raw_source_uri);
 
         let metadata: serde_json::Value =
             serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html; charset=utf-8");
-        assert_eq!(metadata["title"], "Example");
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": url}})
+        );
     }
 
     #[cfg(feature = "html-loader")]
@@ -2068,12 +2122,9 @@ mod tests {
                 .unwrap(),
             html.as_bytes()
         );
-        assert_eq!(data.original_extension.as_deref(), Some("html"));
-        assert_eq!(
-            data.original_mime_type.as_deref(),
-            Some("application/xhtml+xml")
-        );
-        assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
+        assert_eq!(data.original_extension.as_deref(), Some("txt"));
+        assert_eq!(data.original_mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(data.loader_engine.as_deref(), Some("text_loader"));
     }
 
     #[cfg(feature = "html-loader")]
@@ -2116,11 +2167,8 @@ mod tests {
             serde_json::from_str(data.external_metadata.as_ref().unwrap()).unwrap();
         assert_eq!(metadata["custom"], "keep");
         assert_eq!(metadata["rank"], 7);
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html");
-        assert_eq!(metadata["title"], "Wrapped");
+        assert_eq!(metadata["_cognee"]["source_uri"], url);
+        assert!(metadata.get("source").is_none() && metadata.get("title").is_none());
     }
 
     #[cfg(feature = "html-loader")]
@@ -2161,8 +2209,7 @@ mod tests {
             let metadata: serde_json::Value =
                 serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
             assert_eq!(metadata["data_item_external_metadata_raw"], user_metadata);
-            assert_eq!(metadata["source"], "url");
-            assert_eq!(metadata["url"], url);
+            assert_eq!(metadata["_cognee"]["source_uri"], url);
         }
     }
 
@@ -2211,6 +2258,14 @@ mod tests {
 
             assert_eq!(processed.raw_source_uri, None);
             assert_eq!(processed.original_location, url);
+            // Every URL add records where it came from (`ingest_data.py:157-164`).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    processed.external_metadata.as_deref().unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({"_cognee": {"source_uri": url}})
+            );
             assert_eq!(processed.stored_extension, expected_ext);
             assert_eq!(processed.stored_mime_type, expected_mime);
             assert_eq!(
@@ -3057,8 +3112,9 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            result[0].external_metadata, None,
-            "DataItem with no external_metadata should produce None on Data"
+            result[0].external_metadata.as_deref(),
+            Some("{}"),
+            "a Python add stores `{{}}` for content with no metadata and no source"
         );
     }
 
@@ -3178,7 +3234,7 @@ mod tests {
             .await
             .expect("first add");
         assert_eq!(first[0].node_set, None);
-        assert_eq!(first[0].external_metadata, None);
+        assert_eq!(first[0].external_metadata.as_deref(), Some("{}"));
 
         // A re-add that supplies a node set tags the existing row.
         let second = pipeline
@@ -3378,11 +3434,15 @@ mod tests {
         assert!(validate_node_set_names(&["a".into(), String::new()]).is_err());
     }
 
-    /// JSON `null` and a blank string are "no metadata", for both merges.
+    /// JSON `null` and a blank string are "no metadata", for both merges, and
+    /// no metadata is stored as `{}`, as Python does.
     #[test]
     fn json_null_item_metadata_is_no_metadata() {
         for absent in [None, Some("null".to_string()), Some(String::new())] {
-            assert_eq!(merge_external_metadata(absent, None).unwrap(), None);
+            assert_eq!(
+                merge_external_metadata(absent, None).unwrap(),
+                Some("{}".to_string())
+            );
         }
         assert_eq!(
             merge_external_metadata(Some(r#"{"a":1}"#.into()), None).unwrap(),
@@ -3398,6 +3458,113 @@ mod tests {
             classify_item_metadata(Some("[1]")),
             ItemMetadata::Raw(raw) if raw == "[1]"
         ));
+    }
+
+    /// Python writes `_cognee.source_uri` for a file add too
+    /// (`ingest_data.py:157-164`): the file's absolute `file://` URI. Raw text
+    /// has no source and stores `{}`.
+    #[tokio::test]
+    async fn file_add_writes_source_uri_and_text_add_writes_empty_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "from a file").unwrap();
+        let storage = MockStorage::new();
+
+        let processed = process_input(
+            &DataInput::FilePath(file.to_string_lossy().into_owned()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(processed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": format!("file://{}", canonical.display())}})
+        );
+
+        let text = process_input(
+            &DataInput::Text("plain".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(text.external_metadata.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn source_uri_follows_python() {
+        let item = |meta: &str, data: DataInput| DataInput::DataItem {
+            data: Box::new(data),
+            label: "l".into(),
+            external_metadata: Some(meta.to_string()),
+        };
+        assert_eq!(
+            source_uri_from_input(&DataInput::Url("https://example.com/a".into())),
+            Some("https://example.com/a".to_string())
+        );
+        assert_eq!(
+            source_uri_from_input(&DataInput::FilePath("file:///tmp/a.txt".into())),
+            Some("file:///tmp/a.txt".to_string())
+        );
+        assert_eq!(source_uri_from_input(&DataInput::Text("x".into())), None);
+        // An explicit `source_uri` in the item's metadata wins.
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": " s3://b/k "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("s3://b/k".to_string())
+        );
+        assert_eq!(path_to_file_uri("/tmp/a b.txt"), "file:///tmp/a%20b.txt");
+        // `urllib.parse.quote` percent-encodes the UTF-8 bytes, upper-case hex.
+        assert_eq!(
+            path_to_file_uri("/tmp/caf\u{e9}/x+y.txt"),
+            "file:///tmp/caf%C3%A9/x%2By.txt"
+        );
+        // `Path.resolve()`: a relative path is made absolute.
+        let relative = path_to_file_uri("Cargo.toml");
+        let absolute = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert_eq!(relative, format!("file://{}", absolute.display()));
+        // `s3://` is kept as given, as Python keeps an `s3` locator.
+        assert_eq!(
+            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into())),
+            Some("s3://bucket/key.txt".to_string())
+        );
+        // A blank explicit `source_uri` does not win (`explicit.strip()`).
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": "   "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("https://example.com/a".to_string())
+        );
+        // Neither does one that is not a string.
+        assert_eq!(
+            source_uri_from_input(&item(r#"{"source_uri": 7}"#, DataInput::Text("x".into()))),
+            None
+        );
+    }
+
+    #[test]
+    fn merge_external_metadata_nests_source_uri_under_cognee() {
+        let merged = merge_external_metadata(
+            Some(r#"{"k":1,"_cognee":{"x":2}}"#.into()),
+            Some("https://example.com"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&merged).unwrap(),
+            serde_json::json!({"k": 1, "_cognee": {"x": 2, "source_uri": "https://example.com"}})
+        );
     }
 
     /// A caller of the public `persist_data` with `ProcessedInput::node_set`
