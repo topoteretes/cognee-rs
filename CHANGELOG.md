@@ -1010,6 +1010,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Delete counts an `EdgeType` point only when it exists, once (SDK-1039).**
+  The delete preview counted one `EdgeType_relationship_name` point per
+  text-bearing edge and the dataset run counted the requested ids, so both
+  overcounted (edges sharing a retrieval text are one point; the point may be
+  absent) and disagreed when the collection was missing (preview N, run 0).
+  Both now look the distinct point ids up (`VectorDB::retrieve`) and count, and
+  delete, only those found. With per-dataset storage the dataset's store is
+  dropped whole and cannot be probed, so the preview counts the distinct ids.
+
 - **`cognee-cognify`: the graph-extraction request is Python's (SDK-1039).**
   Default cognify sent a different request from Python's, and Rust wrote
   Timestamp nodes irregularly (0 in four of five captured runs, where the
