@@ -2,7 +2,9 @@
 
 All tests in this file are **deterministic** — they compare MD5 hashes,
 dataset UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
-or API key is required.
+or API key is required. The one exception is
+``test_add_public_url_ingests_same_page_in_both``, which needs outbound
+network access to a public page and skips when there is none (SDK-1039 D9).
 
 Data ids are NOT compared across SDKs: both mint a random ``uuid4`` for a new
 ``data`` row and dedup by ``(content_hash, dataset_id, owner_id, tenant_id)``
