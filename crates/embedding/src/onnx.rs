@@ -524,6 +524,35 @@ mod tests {
         }
     }
 
+    /// SDK-1039 P23: the engine reports `embedding.batch_size` as its batch and
+    /// honours `max_concurrent_data_points` (Python's
+    /// `max(1, embedding_max_concurrent_data_points // batch_size)`,
+    /// `index_data_points.py:58-59`) instead of the trait's default 150. Skips
+    /// when the model artifacts have not been downloaded.
+    #[tokio::test]
+    async fn engine_batches_by_the_embedding_batch_settings() {
+        let model = "../../target/models/BGE-Small-v1.5-model_quantized.onnx";
+        let tok = "../../target/models/bge-small-tokenizer.json";
+        if !std::path::Path::new(model).exists() || !std::path::Path::new(tok).exists() {
+            return; // model not available in this environment — skip
+        }
+        let embedding = crate::config::EmbeddingConfig {
+            provider: crate::EmbeddingProvider::Onnx,
+            batch_size: 8,
+            max_concurrent_data_points: 40,
+            onnx: OnnxEmbeddingConfig {
+                model_path: model.into(),
+                tokenizer_path: tok.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let engine =
+            OnnxEmbeddingEngine::new(embedding.onnx_engine_config()).expect("engine creation");
+        assert_eq!(engine.batch_size(), 8);
+        assert_eq!(engine.max_concurrent_batches(), 5);
+    }
+
     /// Regression test for the unbounded-batch OOM: `embed` must split inputs
     /// larger than `config.batch_size` into sub-batches (so ONNX never sees a
     /// giant `[N, seq_len]` tensor), while returning one embedding per input
