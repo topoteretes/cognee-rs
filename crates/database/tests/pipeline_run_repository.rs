@@ -960,6 +960,87 @@ async fn reset_orphan_run_leaves_a_completed_run_alone() {
     assert_eq!(latest.status, PipelineRunStatus::Completed);
 }
 
+/// Keyed by the run, not by the `(dataset, pipeline)` pair: a run abandoned
+/// before a newer run of the same pipeline on the same dataset completed is
+/// still closed (Python `get_unterminated_pipeline_runs` partitions by
+/// `pipeline_run_id`, and `recovery.py:102` re-reads the run's own latest row).
+#[tokio::test]
+async fn reset_orphan_run_closes_an_abandoned_run_a_newer_run_has_overtaken() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let abandoned_run = Uuid::new_v4();
+    let abandoned_row = log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        abandoned_run,
+        PipelineRunStatus::Started,
+    )
+    .await;
+    let newer_run = Uuid::new_v4();
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        newer_run,
+        PipelineRunStatus::Started,
+    )
+    .await;
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        newer_run,
+        PipelineRunStatus::Completed,
+    )
+    .await;
+
+    assert!(
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", abandoned_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
+        "the abandoned run is closed although a newer run completed since"
+    );
+    let abandoned = repo
+        .get_pipeline_run(abandoned_run)
+        .await
+        .expect("get run")
+        .expect("rows exist");
+    assert_eq!(abandoned.status, PipelineRunStatus::Errored);
+    let newer = repo
+        .get_pipeline_run(newer_run)
+        .await
+        .expect("get run")
+        .expect("rows exist");
+    assert_eq!(
+        newer.status,
+        PipelineRunStatus::Completed,
+        "the newer run is untouched"
+    );
+
+    // The observed row must belong to the named pair.
+    let other_dataset = Uuid::new_v4();
+    create_dataset(&db, other_dataset).await;
+    let other_row = log_status(
+        &repo,
+        other_dataset,
+        "cognify_pipeline",
+        Uuid::new_v4(),
+        PipelineRunStatus::Started,
+    )
+    .await;
+    assert!(
+        !repo
+            .reset_orphan_run(dataset_id, "cognify_pipeline", other_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
+        "a row of another dataset is not closed under this dataset's name"
+    );
+}
+
 #[tokio::test]
 async fn reset_orphan_run_reports_false_when_the_pair_has_no_runs() {
     let db = make_db().await;
@@ -1065,14 +1146,13 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     assert_eq!(survivor.status, PipelineRunStatus::Started);
 }
 
-/// The TOCTOU the run-id scoping exists for.
+/// Closing an abandoned run never touches another run of the same pair.
 ///
-/// The command reports first and clears second, so a real run can start between
-/// the two invocations. Retiring by `(dataset, pipeline)` alone would write an
-/// `Errored` successor over that healthy in-flight run — marking it failed and
-/// re-opening the gate it had legitimately closed.
+/// A fresh run may start on the dataset after the abandoned one was listed
+/// (no gate refuses it any more). The close appends an `Errored` row to the
+/// *abandoned* run only; the newcomer's own latest row stays `Started`.
 #[tokio::test]
-async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
+async fn reset_orphan_run_leaves_a_run_started_since_the_read_running() {
     let db = make_db().await;
     let repo = make_repo(Arc::clone(&db));
     let dataset_id = Uuid::new_v4();
@@ -1088,7 +1168,6 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     )
     .await;
 
-    // The wedged run is cleaned up some other way, and a fresh one starts.
     let newcomer = Uuid::new_v4();
     log_status(
         &repo,
@@ -1100,31 +1179,36 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     .await;
 
     assert!(
-        !repo
-            .reset_orphan_run(
-                dataset_id,
-                "cognify_pipeline",
-                observed_row,
-                "operator_unblock"
-            )
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", observed_row, "abandoned")
             .await
             .expect("reset_orphan_run"),
-        "retiring a run that is no longer the latest must do nothing"
+        "the observed run is still unterminated, so it is closed"
     );
 
-    let latest = repo
-        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
+    let newcomer_latest = repo
+        .get_pipeline_run(newcomer)
         .await
-        .expect("get latest")
+        .expect("get run")
         .expect("a row exists");
     assert_eq!(
-        latest.pipeline_run_id, newcomer,
-        "the live run must still be the latest"
-    );
-    assert_eq!(
-        latest.status,
+        newcomer_latest.status,
         PipelineRunStatus::Started,
-        "and must not have been marked failed"
+        "the live run must not have been marked failed"
+    );
+    let observed_latest = repo
+        .get_pipeline_run(observed)
+        .await
+        .expect("get run")
+        .expect("a row exists");
+    assert_eq!(observed_latest.status, PipelineRunStatus::Errored);
+
+    // Once closed, the observed row is no longer its run's latest: a second
+    // close does nothing.
+    assert!(
+        !repo
+            .reset_orphan_run(dataset_id, "cognify_pipeline", observed_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
     );
 }
 
