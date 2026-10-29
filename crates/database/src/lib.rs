@@ -7,17 +7,12 @@ pub mod migrator;
 pub mod ops;
 pub mod pipelines;
 pub mod session_qa;
-pub mod single_process;
 pub mod sync;
 mod traits;
 mod types;
 pub mod uuid_hex;
 
 pub use connection::{close, connect, initialize, sqlite_url_is_in_memory};
-pub use single_process::{
-    SINGLE_PROCESS_ENV, parse_single_process_override, resolve_single_process,
-    single_process_default, single_process_from_env, single_process_override_from_env,
-};
 
 /// Generic backend-label helper shared by the concrete public fn below and the
 /// transaction-scoped internals in `ops::graph_storage` (a `DatabaseTransaction`
@@ -51,8 +46,8 @@ pub use pipelines::sea_orm_impl::{
     LIST_RUNS_CHUNKED_WINDOW, LIST_RUNS_MAX_BINDS, SeaOrmPipelineRunRepository,
 };
 pub use pipelines::{
-    NoopPipelineRunRepository, PipelineRunClaim, PipelineRunEntry, PipelineRunListQuery,
-    PipelineRunRepository, PipelineRunVisibility, PipelineRunWithAttributionRow,
+    NoopPipelineRunRepository, PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository,
+    PipelineRunVisibility, PipelineRunWithAttributionRow,
 };
 pub use sea_orm::DatabaseConnection;
 pub use session_qa::{SessionQaPatch, SessionQaRow, SessionTraceRow};

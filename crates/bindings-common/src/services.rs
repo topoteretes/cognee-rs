@@ -16,7 +16,7 @@ use cognee::PipelineContext;
 use cognee::add::AddPipeline;
 use cognee::api::get_or_create_default_user;
 use cognee::cognify::CognifyConfig;
-use cognee::core::{CpuPool, RayonThreadPool};
+use cognee::core::{CpuPool, DatasetLocks, RayonThreadPool};
 use cognee::database::{
     CheckpointStore, DeleteDb, IngestDb, PipelineRunRepository, RelationalDb, SearchHistoryDb,
 };
@@ -76,13 +76,10 @@ pub struct CogneeServices {
 /// services against more than one relational URL (a test harness, an embedder
 /// switching tenants), and a bare flag would recover the first and silently
 /// skip every other. Per *process* and not per handle or per config version,
-/// because `CogneeServices::build` runs again on every config-version change,
-/// and by then a cognify started through an earlier handle may hold a claim
-/// that is very much alive. Sweeping then would drop it, admit a second run
-/// into the same dataset, and — now that recovery also rolls artifacts back —
-/// delete that live run's nodes out from under it. The only moment at which
-/// every leftover in a database is provably dead is the first time this
-/// process touches it.
+/// because `CogneeServices::build` runs again on every config-version change
+/// and recovering once is enough: a run is only ever recovered when its
+/// ownership marker can be claimed (see `cognee_delete::recover_stale_pipeline_runs`),
+/// which a live run of this process never allows.
 ///
 /// Hashed rather than stored verbatim because a Postgres URL carries its
 /// password, and this map lives for the whole process. Nothing ever reads a
@@ -117,9 +114,7 @@ fn recovery_gate(relational_db_url: &str) -> Arc<tokio::sync::OnceCell<bool>> {
 
     // A process-local dedup key, not a security boundary and not persisted, so
     // `DefaultHasher` is enough. A collision between two URLs in one process
-    // would skip a recovery rather than perform an extra one — the
-    // conservative direction, and the same outcome as not asserting
-    // single-process.
+    // would skip a recovery rather than perform an extra one.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     relational_db_url.hash(&mut hasher);
     let key = hasher.finish();
@@ -139,151 +134,72 @@ fn recovery_gate(relational_db_url: &str) -> Arc<tokio::sync::OnceCell<bool>> {
     Arc::clone(gates.entry(key).or_default())
 }
 
-/// Clear what a killed run left behind on this database — once per database
-/// per process, and only where the deployment asserts one process per
-/// relational database.
+/// Recover the pipeline runs a killed process left in flight on this database
+/// — once per database per process, as Python does at API startup
+/// (`recover_stale_pipeline_runs_on_startup`).
 ///
-/// A run killed mid-flight (SIGKILL, OOM, an Android process kill) leaves
-/// **three** things behind. Two of them wedge the dataset, and clearing one of
-/// those alone is worth nothing:
+/// A run killed mid-flight (SIGKILL, OOM, an Android process kill) leaves its
+/// `STARTED` row and whatever it had already written into the graph and vector
+/// stores, recorded in the ownership ledger against its `pipeline_run_id`.
+/// Recovery rolls those back and closes the run with an `ERRORED` row — but
+/// only for a run whose ownership marker it can claim, which proves the writer
+/// gone (see `cognee_delete::recover_stale_pipeline_runs` for the conditions).
+/// It is therefore safe with any number of processes on the database, file-backed
+/// SQLite and shared Postgres included: a live peer holds its marker's OS lock.
 ///
-/// 1. Whatever the run had already written into the graph and vector stores,
-///    recorded in the ownership ledger against its `pipeline_run_id`. A run
-///    that fails while its process is alive rolls this back through
-///    `cognify::rollback::on_run_failed`; a killed one never reaches that
-///    code, so the artifacts survive attributed to a run that will never
-///    finish, and no later sweep will ever select them again.
-/// 2. The `pipeline_runs` row left at `Initiated`/`Started`.
-///    `check_pipeline_run_qualification` reads it *first*, before any claim is
-///    consulted, and returns `AlreadyRunning`. It never expires. Until this
-///    landed, the only sweep that retired it ran at HTTP-server startup, so an
-///    embedded consumer never reached it at all.
-/// 3. The exclusive-run claim. Released only by its holder
-///    (`release_pipeline_run_claim` filters on the `claim_id` that died with
-///    it), so liveness is inferred from age against a day-long window.
+/// Nothing is gated on the outcome. A dataset is never refused because a row
+/// says `STARTED`, so a run that cannot be recovered costs a stale status, not
+/// a wedged dataset.
 ///
-/// The order is the point: roll back first, retire second, unclaim last. Step
-/// 2 is what makes the dataset runnable again, so doing it before step 1 opens
-/// a window in which a new run starts while the rollback is still deleting the
-/// dead run's nodes. Python orders it the same way — `cognify_rollback_handler`
-/// runs before the status reset in `modules/cognify/recovery.py`.
-///
-/// `cognee-cli pipeline-unblock` clears gates 2 and 3 for the same reason, and
-/// says so in its own module docs. An embedded consumer has neither that CLI
-/// nor an HTTP server.
-///
-/// Safety: the two clears are unscoped and the rollback deletes graph data, so
-/// all three are sound **only** where no peer process can hold what they drop.
-/// With one process per database, every leftover present the first time this
-/// process touches it was written by a dead incarnation of this same process.
-/// Anything else — a shared Postgres, or the *file-backed* SQLite that is the
-/// shipped default — derives `false` and is left entirely alone.
-/// `COGNEE_SINGLE_PROCESS` is how a deployment that does own its file (one
-/// process per device, say) opts in; the SDK cannot infer that from the URL.
-///
-/// The steps are attempted independently: a transient failure on one must not
-/// suppress the others, since the dataset stays wedged unless both gates go.
-/// All are best-effort — a failure is logged and ignored, because refusing to
-/// build the SDK over a recovery convenience would turn a recoverable wedge
-/// into a hard startup failure.
-async fn sweep_killed_run_leftovers(
+/// Best-effort: every failure is logged and ignored, because refusing to build
+/// the SDK over a recovery convenience would be worse than the stale row.
+async fn recover_abandoned_runs(
     cm: &ComponentManager,
     pipeline_run_repo: &Arc<dyn PipelineRunRepository>,
     database: &Arc<dyn RelationalDb>,
     graph_db: &Arc<dyn GraphDBTrait>,
     vector_db: &Arc<dyn VectorDB>,
 ) {
-    // Snapshot under the read guard and drop it before the `.await`:
-    // `RwLockReadGuard` is `!Send`, and this future is awaited from PyO3
-    // bindings that require `Send`.
-    let (relational_db_url, single_process) = {
+    let (relational_db_url, ownership_dir) = {
+        // Snapshot under the read guard and drop it before the `.await`:
+        // `RwLockReadGuard` is `!Send`, and this future is awaited from PyO3
+        // bindings that require `Send`.
         let settings = cm.settings();
         (
             settings.resolved_relational_db_url(),
-            settings.resolved_single_process(),
+            settings.cognify_config().run_ownership_dir,
         )
     };
+    let Some(ownership_dir) = ownership_dir else {
+        return;
+    };
 
-    // Every builder awaits this, not just the first — see `recovery_gate` for
-    // the race that returning early used to open. The assertion is consulted
-    // *inside* the gate so a database is marked considered either way:
-    // resolving it outside would let a first build that answered `false` leave
-    // the gate open for a later build to sweep with this process's own runs
-    // already in flight.
+    // Every builder awaits this gate, not just the first, so a second builder
+    // never hands its caller a working SDK while the first is still recovering.
     let gate = recovery_gate(&relational_db_url);
-    let recovered = *gate
-        .get_or_init(|| async {
-            if !single_process {
-                return false;
-            }
-
-            let rollback = cognee::delete::sweep_orphaned_run_artifacts(
-                pipeline_run_repo.as_ref(),
-                Arc::clone(database),
-                Arc::clone(graph_db),
-                Arc::clone(vector_db),
-            )
-            .await;
-            if rollback.runs_found > 0 {
-                tracing::warn!(
-                    runs_found = rollback.runs_found,
-                    runs_swept = rollback.runs_swept,
-                    runs_failed = rollback.runs_failed,
-                    graph_nodes_deleted = rollback.graph_nodes_deleted,
-                    vector_points_deleted = rollback.vector_points_deleted,
-                    "rolled back the artifacts of pipeline runs a previous process left in \
-                     flight"
-                );
-            }
-
-            match pipeline_run_repo
-                .reset_orphans("sdk_startup_orphan_single_process")
-                .await
-            {
-                Ok(0) => {}
-                Ok(reset) => tracing::warn!(
-                    reset,
-                    "retired pipeline-run rows left in flight by a previous process; the \
-                     datasets they blocked are runnable again"
-                ),
-                Err(e) => tracing::warn!(
-                    "startup reset of orphaned pipeline runs failed (non-fatal); a dataset \
-                     wedged by a killed run stays wedged, and this gate never expires: {e}"
-                ),
-            }
-
-            match pipeline_run_repo
-                .release_all_pipeline_run_claims("sdk_startup_sweep_single_process")
-                .await
-            {
-                Ok(0) => {}
-                Ok(released) => tracing::warn!(
-                    released,
-                    "released pipeline-run claims left behind by a previous process"
-                ),
-                Err(e) => tracing::warn!(
-                    "startup sweep of pipeline-run claims failed (non-fatal); a dataset wedged \
-                     by a killed run stays wedged until its claim ages out: {e}"
-                ),
-            }
-
-            true
-        })
+    gate.get_or_init(|| async {
+        let report = cognee::delete::recover_stale_pipeline_runs(
+            pipeline_run_repo.as_ref(),
+            Arc::clone(database),
+            Arc::clone(graph_db),
+            Arc::clone(vector_db),
+            &DatasetLocks::global(),
+            &ownership_dir,
+            cognee::delete::DEFAULT_STALE_RUN_MIN_AGE,
+        )
         .await;
-
-    // The setting is read once per database, on the first build that reaches
-    // it — and `CogneeServices::build` is lazy, so "the first build" is the
-    // first *operation*, not construction of the handle. Turning the assertion
-    // on afterwards therefore does nothing for the rest of the process, and
-    // silence about that reads as a recovery that ran and found nothing.
-    if single_process && !recovered {
-        tracing::warn!(
-            "single_process is asserted, but this process had already opened its relational \
-             database without it, so startup recovery was skipped and will not run again for \
-             the lifetime of this process. Set single_process (or COGNEE_SINGLE_PROCESS) \
-             before the first operation; restart to recover a dataset wedged by a killed run."
-        );
-    }
+        if report.recovered > 0 || report.failed > 0 {
+            tracing::warn!(
+                recovered = report.recovered,
+                failed = report.failed,
+                graph_nodes_deleted = report.graph_nodes_deleted,
+                vector_points_deleted = report.vector_points_deleted,
+                "recovered pipeline runs a previous process left in flight"
+            );
+        }
+        true
+    })
+    .await;
 }
 
 impl CogneeServices {
@@ -332,7 +248,7 @@ impl CogneeServices {
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
 
-        sweep_killed_run_leftovers(cm, &pipeline_run_repo, &database, &graph_db, &vector_db).await;
+        recover_abandoned_runs(cm, &pipeline_run_repo, &database, &graph_db, &vector_db).await;
 
         let add_pipeline = Arc::new(
             AddPipeline::new(
@@ -344,6 +260,9 @@ impl CogneeServices {
             .with_vector_db(Arc::clone(&vector_db))
             .with_database(Arc::clone(&database))
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            // One lock registry for pipeline runs, `add` and `delete`, as in
+            // Python (`infrastructure/locks/dataset_lock.py`).
+            .with_dataset_locks(DatasetLocks::global())
             // Python runs its image and audio loaders at `add`.
             .with_loader_registry(cm.add_loader_registry().await),
         );
@@ -355,7 +274,8 @@ impl CogneeServices {
             Arc::clone(&database) as Arc<dyn DeleteDb>,
         )
         .with_graph_db(Arc::clone(&graph_db))
-        .with_vector_db(Arc::clone(&vector_db));
+        .with_vector_db(Arc::clone(&vector_db))
+        .with_dataset_locks(DatasetLocks::global());
         // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
         // dataset drops its own databases.
         if let Some(dataset_storage) = cm
@@ -485,8 +405,8 @@ mod tests {
             tokio::spawn(async move {
                 gate.get_or_init(|| async move {
                     entered_tx.send(()).expect("nobody drops the receiver");
-                    // Stands in for the rollback + reset + unclaim sequence,
-                    // which is many round-trips to the database.
+                    // Stands in for the rollback + close sequence, which is
+                    // many round-trips to the database.
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                     recovery_finished.store(true, Ordering::SeqCst);
                     true
@@ -513,7 +433,7 @@ mod tests {
         assert!(
             recovery_finished.load(Ordering::SeqCst),
             "the late builder returned while the first caller's recovery was still running — \
-             its caller could now start a run that the recovery would retire"
+             its caller could now start a run while the recovery was still running"
         );
         assert!(
             recovered,

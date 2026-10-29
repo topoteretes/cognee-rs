@@ -154,6 +154,31 @@ impl DatasetLocks {
         }
     }
 
+    /// Take the lock for `dataset_id` only if nobody holds it, without waiting.
+    ///
+    /// `None` means another task holds it. Inside a [`Self::hold`] scope that
+    /// already holds `dataset_id` the answer is a re-entrant guard, as for
+    /// [`Self::lock`]. Startup recovery uses this to leave a dataset with a
+    /// live run alone (Python's `lock.locked()` check in `recovery.py`).
+    pub fn try_lock(&self, dataset_id: Uuid) -> Option<DatasetLockGuard> {
+        if self.is_held(dataset_id) {
+            return Some(DatasetLockGuard { _guard: None });
+        }
+        let lock = self.lock_arc(dataset_id);
+        lock.try_lock_owned().ok().map(|guard| DatasetLockGuard {
+            _guard: Some(guard),
+        })
+    }
+
+    /// The process-wide registry. Pipeline runs (`cognify`), `add`, `delete`
+    /// and startup recovery of the bindings all take their locks here, so they
+    /// exclude each other as Python's single `get_dataset_lock` registry does.
+    pub fn global() -> Arc<DatasetLocks> {
+        static GLOBAL: std::sync::LazyLock<Arc<DatasetLocks>> =
+            std::sync::LazyLock::new(|| Arc::new(DatasetLocks::new()));
+        Arc::clone(&GLOBAL)
+    }
+
     /// Run `fut` holding the locks of every id in `dataset_ids`.
     ///
     /// Ids the current task already holds (an enclosing `hold`) are not
@@ -297,6 +322,38 @@ mod tests {
         let locks = DatasetLocks::new();
         let _a = locks.lock(Uuid::new_v4()).await;
         let _b = locks.lock(Uuid::new_v4()).await;
+    }
+
+    /// Scenario: `try_lock` on a held key and on a free key.
+    /// Expected: `None` while held (without waiting), a guard once released,
+    /// and re-entrant success inside a `hold` of the same key.
+    #[tokio::test]
+    async fn try_lock_reports_a_held_dataset_without_waiting() {
+        let locks = DatasetLocks::new();
+        let id = Uuid::new_v4();
+
+        let held = locks.lock(id).await;
+        assert!(locks.try_lock(id).is_none(), "held: must not wait or grant");
+        assert!(
+            locks.try_lock(Uuid::new_v4()).is_some(),
+            "another key is free"
+        );
+        drop(held);
+
+        assert!(locks.try_lock(id).is_some(), "free again once released");
+
+        let inside = locks
+            .hold([id], async { locks.try_lock(id).map(|g| g.is_reentrant()) })
+            .await;
+        assert_eq!(inside, Some(true), "re-entrant inside its own hold");
+    }
+
+    /// Scenario: the process-wide registry is one registry.
+    #[tokio::test]
+    async fn the_global_registry_is_shared() {
+        let id = Uuid::new_v4();
+        let _held = DatasetLocks::global().lock(id).await;
+        assert!(DatasetLocks::global().try_lock(id).is_none());
     }
 
     /// Scenario: a lock is taken and released, then taken again for the same

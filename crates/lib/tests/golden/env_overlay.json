@@ -2569,68 +2569,6 @@
   "COGNEE_SESSION_STORE=\"{\\\"ssl\\\":true}\"": {
     "session.store": "{\"ssl\":true}"
   },
-  "COGNEE_SINGLE_PROCESS=\"  \"": {},
-  "COGNEE_SINGLE_PROCESS=\"\"": {},
-  "COGNEE_SINGLE_PROCESS=\"-1\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"0\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"1\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"1.5\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"42\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"5000000000\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"70000\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"TRUE\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"[1]\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"abc\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"false\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"no\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"on\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"require\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"true\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"v\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"yes\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"a\\\":1}\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"ssl\\\":true}\"": {
-    "single_process": false
-  },
   "COGNEE_SKIP_CONNECTION_TEST=\"  \"": {},
   "COGNEE_SKIP_CONNECTION_TEST=\"\"": {},
   "COGNEE_SKIP_CONNECTION_TEST=\"-1\"": {},

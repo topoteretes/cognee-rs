@@ -32,8 +32,6 @@ pub enum Commands {
     Improve(ImproveArgs),
     Delete(DeleteArgs),
     Export(ExportArgs),
-    #[command(name = "pipeline-unblock")]
-    PipelineUnblock(PipelineUnblockArgs),
     #[command(name = "vector-reindex")]
     VectorReindex(VectorReindexArgs),
     #[command(name = "edge-reindex")]
@@ -218,50 +216,6 @@ pub struct VisualizeArgs {
     pub tenant_id: Option<String>,
 }
 
-/// Report, and optionally clear, what a killed run left behind on a dataset.
-///
-/// A run is refused as "already running" by two independent gates, and a killed
-/// process leaves both set: the latest `pipeline_runs` row stuck at `Started`,
-/// which is checked first and **never expires** outside an HTTP-server restart;
-/// and the exclusive-run claim, which expires after a day. Clearing only the
-/// claim leaves the run still refused, so this handles both.
-///
-/// Reporting is the default. Clearing is opt-in because nothing here can tell a
-/// dead holder from a live run, and clearing a live one re-admits the
-/// concurrent run the claim exists to prevent.
-#[derive(Debug, Args)]
-pub struct PipelineUnblockArgs {
-    /// Dataset to inspect, by name.
-    #[arg(long = "dataset", short = 'd')]
-    pub dataset: String,
-
-    /// Pipeline to inspect: `cognify_pipeline` (the only pipeline that claims a
-    /// dataset today). Each claiming pipeline claims under its own name, so
-    /// pipelines never exclude each other.
-    ///
-    /// Omit to check every known pipeline. Defaulting to one would answer "nothing is
-    /// blocking" for a dataset wedged on another, and the failing run's error
-    /// does not tell an operator which name to pass.
-    ///
-    /// Required with `--clear`: clearing both would retire a run on
-    /// another pipeline that is alive and mid-flight.
-    #[arg(long = "pipeline")]
-    pub pipeline: Option<String>,
-
-    /// Actually clear what is reported. Requires `--pipeline`.
-    ///
-    /// Only do this when the process that started the run is known to be gone.
-    #[arg(long = "clear", default_value_t = false)]
-    pub clear: bool,
-
-    /// Tenant the dataset belongs to (the one the blocked run used). Datasets are
-    /// matched by strict tenant equality: a dataset added with `--tenant-id T` is
-    /// found only with `--tenant-id T`; without the flag only tenant-less datasets
-    /// are reachable.
-    #[arg(long = "tenant-id")]
-    pub tenant_id: Option<String>,
-}
-
 /// Build the ANN index on every vector collection that is missing one.
 ///
 /// pgvector only: the index is created alongside the collection, so a
@@ -271,8 +225,8 @@ pub struct PipelineUnblockArgs {
 /// is logged and then continues, so the collection is usable and silently slow.
 /// Every other backend has no such index and this is a no-op there.
 ///
-/// Takes no flags on purpose. Unlike `pipeline-unblock` there is nothing here
-/// only the operator can decide: the build is online (`CREATE INDEX
+/// Takes no flags on purpose: there is nothing here only the operator can
+/// decide. The build is online (`CREATE INDEX
 /// CONCURRENTLY`), idempotent, and touches nothing that already has a usable
 /// index — so a report-first mode would ask for a second invocation to reach
 /// the same end state. Choosing *when* to pay for it is the whole reason this
@@ -1042,7 +996,7 @@ mod tests {
     }
 
     /// `--tenant-id` reaches every dataset command — `search`, `recall`,
-    /// `cognify`, `add-and-cognify`, `pipeline-unblock`, `delete` —
+    /// `cognify`, `add-and-cognify`, `delete` —
     /// (symmetric with `add` / `remember` / `improve`), so CLI-written tenanted
     /// data stays reachable under strict tenant matching.
     #[test]
@@ -1067,19 +1021,6 @@ mod tests {
         match parse(&["cognee-cli", "add-and-cognify", "x", "--tenant-id", t]).command {
             Commands::AddAndCognify(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),
             other => panic!("expected add-and-cognify, got {other:?}"),
-        }
-        match parse(&[
-            "cognee-cli",
-            "pipeline-unblock",
-            "-d",
-            "ds",
-            "--tenant-id",
-            t,
-        ])
-        .command
-        {
-            Commands::PipelineUnblock(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),
-            other => panic!("expected pipeline-unblock, got {other:?}"),
         }
         match parse(&["cognee-cli", "delete", "--all", "--tenant-id", t]).command {
             Commands::Delete(args) => assert_eq!(args.tenant_id.as_deref(), Some(t)),

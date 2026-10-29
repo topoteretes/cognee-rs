@@ -255,34 +255,6 @@ pub struct Settings {
     // -- Feature flags -----------------------------------------------------------
     pub enable_last_accessed: bool,
 
-    /// Does exactly one process use the relational database?
-    ///
-    /// `None` (the default) means "derive it from the relational DB URL", and
-    /// only an *in-memory* SQLite database derives `true` — see
-    /// [`cognee_database::single_process_default`]. File-backed SQLite derives
-    /// `false`, the shipped `sqlite:./cognee.db?mode=rwc` included: it is a
-    /// file every cognee process in that directory opens, not a private
-    /// handle. Set this explicitly — here or via `COGNEE_SINGLE_PROCESS` — to
-    /// override in either direction; [`Settings::resolved_single_process`] is
-    /// what reads it.
-    ///
-    /// Asserting it enables startup recovery that is only sound when no peer
-    /// process exists: clearing the orphaned `pipeline_runs` row *and* the
-    /// exclusive-run claim that a run killed mid-flight (SIGKILL, OOM, an
-    /// Android process kill) leaves behind. Both refuse every later run on
-    /// that dataset — the claim for a day, the row forever — and neither can
-    /// be cleared by its dead holder. With one process per database every such
-    /// leftover belongs to a dead predecessor; with more than one it may
-    /// belong to a live peer and must not be touched.
-    ///
-    /// In practice this is an **opt-in**: the only URL that derives `true` is
-    /// an in-memory database, which dies with its process and so can never
-    /// hold a leftover to clear. Every real deployment that wants the recovery
-    /// sets this — `cognee config set single_process true`, a binding's
-    /// `set_config`, [`ConfigManager::set_single_process`], or
-    /// `COGNEE_SINGLE_PROCESS=1`.
-    pub single_process: Option<bool>,
-
     /// Make an unknown config key an error instead of a warning
     /// (`COGNEE_STRICT_CONFIG`). Off by default: a key can be unknown because
     /// it is misspelled, or because the component that owns it is not
@@ -466,6 +438,11 @@ impl Settings {
         if cognify.data_per_batch > 0 {
             cfg = cfg.with_data_per_batch(cognify.data_per_batch as usize);
         }
+        // Run-ownership markers live under the system root, as Python's
+        // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
+        cfg = cfg.with_run_ownership_dir(
+            std::path::PathBuf::from(&self.system_root_directory).join("pipeline_run_locks"),
+        );
         if let Some(schema) = &self.summarization_schema {
             // Validated when it was set; checked again because a bulk-loaded
             // config could still carry one that fails.
@@ -602,25 +579,6 @@ impl Settings {
     /// timeouts and the other settings every LLM adapter shares.
     pub fn llm(&self) -> cognee_components::LlmConfig {
         self.section()
-    }
-
-    /// Whether exactly one process uses the relational database.
-    ///
-    /// The explicit [`Settings::single_process`] answer when the operator gave
-    /// one, otherwise derived from [`Settings::resolved_relational_db_url`]:
-    /// only an *in-memory* SQLite database, which no other process can open,
-    /// derives `true`. File-backed SQLite — including the shipped default
-    /// `sqlite:./cognee.db?mode=rwc` — is shared by every process started
-    /// against it, so it must be asserted explicitly.
-    ///
-    /// Callers use this to gate recovery that is only sound with no peer
-    /// process — see
-    /// [`cognee_database::PipelineRunRepository::release_all_pipeline_run_claims`].
-    pub fn resolved_single_process(&self) -> bool {
-        cognee_database::resolve_single_process(
-            &self.resolved_relational_db_url(),
-            self.single_process,
-        )
     }
 
     /// Returns the effective relational DB connection URL.
@@ -1094,7 +1052,6 @@ impl Default for Settings {
 
             // Feature flags
             enable_last_accessed: false,
-            single_process: None,
             strict_config: false,
             skip_preflight: false,
             skip_connection_test: false,
@@ -1690,28 +1647,6 @@ impl ConfigManager {
         self.bump_version();
     }
 
-    /// Assert (or deny) that exactly one process uses the relational database.
-    ///
-    /// The programmatic form of `COGNEE_SINGLE_PROCESS`, and the one an
-    /// embedded consumer needs: the Python, C, TS and Java bindings configure
-    /// through `set_config`, and an app that owns its SQLite file has no other
-    /// way to say so. See [`Settings::single_process`] for what it enables.
-    pub fn set_single_process(&self, single_process: bool) {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.single_process = Some(single_process);
-        drop(s);
-        self.bump_version();
-    }
-
-    /// Restore the derived answer (`single_process = None`), the counterpart of
-    /// [`Self::set_single_process`].
-    pub fn clear_single_process(&self) {
-        let mut s = self.inner.write().expect("lock poison is unrecoverable"); // lock poison is unrecoverable
-        s.single_process = None;
-        drop(s);
-        self.bump_version();
-    }
-
     /// Set all relational DB connection fields at once.
     // Many optional fields are needed here to match Python's bulk-setter API.
     #[allow(clippy::too_many_arguments)]
@@ -2301,13 +2236,6 @@ impl ConfigManager {
         m.insert(
             "db_password".into(),
             Value::String(mask(&s.relational().password)),
-        );
-        m.insert(
-            "single_process".into(),
-            // `null` = derived from the relational URL, not "false". The
-            // difference is load-bearing: `false` is an operator refusing the
-            // startup sweep, `null` is nobody having said anything.
-            s.single_process.map_or(Value::Null, Value::Bool),
         );
 
         // Paths
@@ -2926,128 +2854,6 @@ mod tests {
         assert_eq!(cm.read().llm().network_retries, 7);
     }
 
-    /// The same class of gap as the test above, for `single_process`.
-    ///
-    /// It shipped in review as env-var-only: the docs told embedders to set
-    /// `Settings::single_process`, and the generic dispatcher every binding
-    /// goes through answered `UnknownKey`. Since the whole point of the
-    /// setting is to let an embedded consumer — Python, C, TS, Java — opt into
-    /// startup recovery, env-only made it unreachable for its own audience.
-    #[test]
-    fn single_process_is_reachable_from_every_config_entry_point() {
-        let cm = ConfigManager::new(Settings::default());
-        assert_eq!(cm.read().single_process, None, "unset by default");
-
-        cm.set("single_process", serde_json::json!(true))
-            .expect("the generic dispatcher must accept a bool");
-        assert_eq!(cm.read().single_process, Some(true));
-
-        cm.set("single_process", serde_json::json!(false))
-            .expect("and the other way");
-        assert_eq!(cm.read().single_process, Some(false));
-
-        // `null` restores the derivation, like `chunk_size` / `llm_temperature`.
-        cm.set("single_process", serde_json::Value::Null)
-            .expect("null must clear it, not fail");
-        assert_eq!(cm.read().single_process, None);
-
-        cm.set_single_process(true);
-        assert_eq!(cm.read().single_process, Some(true));
-        cm.clear_single_process();
-        assert_eq!(cm.read().single_process, None);
-    }
-
-    /// A string value must mean exactly what the same text means in
-    /// `COGNEE_SINGLE_PROCESS`, including the blank case — the two parsers
-    /// disagreeing on whitespace is the bug this shares a parser to prevent.
-    #[test]
-    fn single_process_strings_parse_as_the_env_var_does() {
-        let cm = ConfigManager::new(Settings::default());
-
-        for truthy in ["1", "true", " yes ", "ON"] {
-            cm.set("single_process", serde_json::json!(truthy))
-                .expect("truthy string");
-            assert_eq!(
-                cm.read().single_process,
-                Some(true),
-                "{truthy:?} must read as true"
-            );
-        }
-        for falsy in ["0", "no", "off", "maybe"] {
-            cm.set("single_process", serde_json::json!(falsy))
-                .expect("falsy string");
-            assert_eq!(
-                cm.read().single_process,
-                Some(false),
-                "{falsy:?} must read as an explicit false"
-            );
-        }
-        // Blank is "no answer given", not a silent `false` — the same
-        // whitespace case both env paths now agree on.
-        cm.set_single_process(true);
-        cm.set("single_process", serde_json::json!("   "))
-            .expect("blank string");
-        assert_eq!(cm.read().single_process, None, "blank means derive");
-    }
-
-    /// A JSON *number* must mean what the same digit means as a string.
-    ///
-    /// Callers reach this dispatcher with already-parsed JSON —
-    /// `cognee-cli config set single_process 1` parses its argument before
-    /// dispatching, and a JS or Python binding passing the `1` the docs list
-    /// as accepted sends a number. Both used to fall through to `as_bool` and
-    /// be rejected with "expects a boolean", so the documented value failed on
-    /// the documented spelling while the suite stayed green: it only ever
-    /// tested `Value::String("1")`, which is not what either caller sends.
-    #[test]
-    fn single_process_accepts_the_json_numbers_the_docs_list() {
-        let cm = ConfigManager::new(Settings::default());
-
-        cm.set("single_process", serde_json::json!(1))
-            .expect("`1` is documented as accepted");
-        assert_eq!(cm.read().single_process, Some(true));
-
-        cm.set("single_process", serde_json::json!(0))
-            .expect("`0` is documented as accepted");
-        assert_eq!(cm.read().single_process, Some(false));
-
-        // And a number agrees with the string spelling of itself, which is the
-        // invariant the shared parser exists to hold.
-        for raw in ["1", "0"] {
-            cm.set("single_process", serde_json::json!(raw))
-                .expect("string form");
-            let as_string = cm.read().single_process;
-            cm.set(
-                "single_process",
-                serde_json::Value::Number(raw.parse::<u64>().expect("digit").into()),
-            )
-            .expect("number form");
-            assert_eq!(
-                cm.read().single_process,
-                as_string,
-                "`{raw}` and \"{raw}\" must not mean different things"
-            );
-        }
-    }
-
-    /// The config snapshot must keep "derived" and "explicitly false" apart —
-    /// reporting `false` for an unset value would tell an operator the sweep
-    /// was refused when nobody had said anything.
-    #[test]
-    fn single_process_snapshot_distinguishes_null_from_false() {
-        let cm = ConfigManager::new(Settings::default());
-        assert_eq!(
-            cm.get_settings().get("single_process"),
-            Some(&serde_json::Value::Null)
-        );
-
-        cm.set_single_process(false);
-        assert_eq!(
-            cm.get_settings().get("single_process"),
-            Some(&serde_json::Value::Bool(false))
-        );
-    }
-
     #[test]
     #[serial_test::serial]
     fn overlay_picks_up_llm_network_retries() {
@@ -3361,15 +3167,13 @@ mod tests {
         let env = MapEnv::new()
             .with("OPENAI_MODEL", "alias-model")
             .with("LLM_NETWORK_RETRIES", "7")
-            .with("LLM_PROVIDER", "")
-            .with(cognee_database::SINGLE_PROCESS_ENV, "true");
+            .with("LLM_PROVIDER", "");
         let mut s = Settings::default();
         s.overlay_from(&env);
 
         assert_eq!(s.llm().model, "alias-model");
         assert_eq!(s.llm().network_retries, 7);
         assert_eq!(s.llm().provider, Settings::default().llm().provider);
-        assert_eq!(s.single_process, Some(true));
     }
 
     #[test]

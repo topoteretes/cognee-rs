@@ -7,15 +7,18 @@
 //! permission-checked wrapper), plus [`RunSweeper`] — the same artifact
 //! deletion path selected by *pipeline run* rather than by dataset, which is
 //! how a failed cognify run is rolled back — and
-//! [`sweep_orphaned_run_artifacts`], which applies that same rollback at
-//! startup to the runs a killed process never got to fail.
+//! [`recover_stale_pipeline_runs`], which applies that same rollback at
+//! startup to the runs a killed process never got to fail (Python's
+//! `cognee/modules/cognify/recovery.py`).
 
 mod authorized;
 mod startup_recovery;
 mod sweep;
 
 pub use authorized::AuthorizedDeleteService;
-pub use startup_recovery::{OrphanArtifactSweep, sweep_orphaned_run_artifacts};
+pub use startup_recovery::{
+    ABANDONED_RUN_ERROR, DEFAULT_STALE_RUN_MIN_AGE, RecoveryReport, recover_stale_pipeline_runs,
+};
 pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -886,9 +889,9 @@ impl DeleteService {
             deleted_links += 1;
         }
 
-        // For data-scoped deletion, invalidate the pipeline cache for each
-        // affected dataset after detaching. This ensures re-running cognify
-        // will reprocess the dataset since its data composition has changed.
+        // For data-scoped deletion, drop the `pipeline_runs` history of each
+        // affected dataset after detaching: those rows described a dataset
+        // composition that no longer exists.
         if request.scope.is_data_item() {
             let mut invalidated_datasets: HashSet<Uuid> = HashSet::new();
             for (dataset_id, _) in &targets.links_to_detach {
@@ -6153,7 +6156,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_data_deletion_invalidates_pipeline_cache() {
+    async fn test_data_deletion_removes_the_datasets_pipeline_runs() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
         let (dataset_id, data_id) =
@@ -6214,7 +6217,7 @@ mod tests {
                 .unwrap();
         assert!(
             status_after.is_none(),
-            "pipeline run should be invalidated after data deletion"
+            "the dataset's pipeline run history should be removed with the data"
         );
     }
 

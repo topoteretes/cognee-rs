@@ -141,7 +141,6 @@
     "session.feedback_llm_timeout_ms",
     "session.store",
     "session.ttl_seconds",
-    "single_process",
     "skip_connection_test",
     "skip_preflight",
     "storage.backend",
@@ -201,7 +200,6 @@
     "strict_config",
     "skip_preflight",
     "skip_connection_test",
-    "single_process",
     "llm.provider",
     "llm.model",
     "llm.api_key",
@@ -12688,73 +12686,6 @@
   "set session_ttl_seconds <- {\"a\":1}": {
     "err": true
   },
-  "set single_process <- \"\"": {
-    "ok": {}
-  },
-  "set single_process <- \"1\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- \"s\"": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- \"true\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- -1": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 0": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 1": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- 1.5": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 5000000000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 70000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- [1]": {
-    "err": true
-  },
-  "set single_process <- false": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- null": {
-    "ok": {}
-  },
-  "set single_process <- true": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- {\"a\":1}": {
-    "err": true
-  },
   "set skip_connection_test <- \"\"": {
     "err": true
   },
@@ -16112,13 +16043,6 @@
     }
   },
   "unset session_ttl_seconds": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset single_process": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

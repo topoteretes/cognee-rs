@@ -234,6 +234,12 @@ pub struct Pipeline {
     /// batch for `*Batch` tasks (via `dispatch_batch`). Individual tasks may
     /// override it via [`TaskInfo::rate_limiter`]. `None` means no throttling.
     pub rate_limiter: Option<Arc<dyn RateLimiter>>,
+    /// The run-ownership token written into the `STARTED` row's `run_info` as
+    /// `{"recovery_lock": …}` (Python's `log_pipeline_run_start(recovery_token=…)`),
+    /// so startup recovery can prove the run abandoned. The caller holds the
+    /// matching [`crate::RunOwnership`] for the run's lifetime. `None` writes
+    /// `{}` and makes the run unrecoverable by recovery.
+    pub recovery_lock: Option<Uuid>,
 }
 
 impl Pipeline {
@@ -249,6 +255,7 @@ impl Pipeline {
             concurrency: 1,
             telemetry_settings: None,
             rate_limiter: None,
+            recovery_lock: None,
         }
     }
 
@@ -321,6 +328,13 @@ impl Pipeline {
     /// (reactive backoff).
     pub fn with_rate_limiter(mut self, rl: Arc<dyn RateLimiter>) -> Self {
         self.rate_limiter = Some(rl);
+        self
+    }
+
+    /// Record the run-ownership token in the `STARTED` row. See
+    /// [`Pipeline::recovery_lock`].
+    pub fn with_recovery_lock(mut self, token: Option<Uuid>) -> Self {
+        self.recovery_lock = token;
         self
     }
 
@@ -507,6 +521,7 @@ impl<I: Value, O: Value> PipelineBuilder<I, O> {
             concurrency: self.concurrency,
             telemetry_settings: None,
             rate_limiter: None,
+            recovery_lock: None,
         }
     }
 }
@@ -537,6 +552,8 @@ pub struct PipelineRunInfo {
     /// When the run reached a terminal state (`Completed` or `Errored`).
     /// `None` while the run is still in flight.
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Recovery token for the `STARTED` row; see [`Pipeline::recovery_lock`].
+    pub recovery_lock: Option<Uuid>,
 }
 
 impl PipelineRunInfo {
@@ -585,7 +602,7 @@ impl std::fmt::Display for PipelineRunStatus {
 /// `Uuid::nil()` → `"00000000-…"`. Those produce different hashes;
 /// callers pass `None` for absent user_id/dataset_id, so swapping in
 /// `ids::pipeline_id` would silently change stored pipeline IDs.
-fn deterministic_pipeline_id(
+pub fn deterministic_pipeline_id(
     name: Option<&str>,
     user_id: Option<Uuid>,
     dataset_id: Option<Uuid>,
@@ -889,6 +906,7 @@ async fn execute_unscoped(
         status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
         completed_at: None,
+        recovery_lock: pipeline.recovery_lock,
     };
 
     // Propagate `run_id` into the pipeline context so tasks can attribute
@@ -2084,6 +2102,7 @@ mod tests {
             status: PipelineRunStatus::Started,
             started_at: chrono::Utc::now(),
             completed_at: None,
+            recovery_lock: None,
         };
         assert_eq!(info.elapsed_seconds(), None);
     }
@@ -2102,6 +2121,7 @@ mod tests {
             status: PipelineRunStatus::Completed,
             started_at,
             completed_at: Some(now),
+            recovery_lock: None,
         };
         let elapsed = info
             .elapsed_seconds()

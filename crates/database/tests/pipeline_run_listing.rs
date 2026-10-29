@@ -241,7 +241,7 @@ async fn tie_break_suite(db: Arc<DatabaseConnection>) {
 }
 
 /// `log_pipeline_run_entry` stores the triggering user; the legacy
-/// `log_pipeline_run` stores NULL; orphan resets keep the user.
+/// `log_pipeline_run` stores NULL; closing an orphan keeps the user.
 async fn user_id_write_suite(db: Arc<DatabaseConnection>) {
     let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&db));
     let user = Uuid::new_v4();
@@ -273,7 +273,11 @@ async fn user_id_write_suite(db: Arc<DatabaseConnection>) {
     assert_eq!(latest.user_id, Some(user));
 
     // The Started row is an orphan; its Errored successor keeps the user.
-    assert_eq!(repo.reset_orphans("restart").await.unwrap(), 1);
+    assert!(
+        repo.reset_orphan_run(ds, "cognify_pipeline", latest.id, "restart")
+            .await
+            .unwrap()
+    );
     let rows = repo
         .list_runs(&PipelineRunListQuery {
             dataset_id: Some(ds),

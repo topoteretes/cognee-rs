@@ -950,32 +950,6 @@ void cg_sdk_set_graph_context(const CgSdk*        sdk,
                                void*               user_data);
 
 /**
- * Reset the pipeline run status for a specific pipeline within a dataset.
- *
- * dataset_id    — UUID string (C string).
- * pipeline_name — pipeline name (C string).
- *
- * result_json on success: "null" (D9 — void op).
- */
-void cg_sdk_reset_pipeline_run_status(const CgSdk*        sdk,
-                                       const char*         dataset_id,
-                                       const char*         pipeline_name,
-                                       CgSdkResultCallback callback,
-                                       void*               user_data);
-
-/**
- * Reset all pipeline run statuses for a dataset.
- *
- * dataset_id — UUID string (C string).
- *
- * result_json on success: "null" (D9 — void op).
- */
-void cg_sdk_reset_dataset_pipeline_run_status(const CgSdk*        sdk,
-                                               const char*         dataset_id,
-                                               CgSdkResultCallback callback,
-                                               void*               user_data);
-
-/**
  * Get or create the default user account.
  *
  * result_json on success: User JSON object.

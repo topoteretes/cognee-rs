@@ -291,17 +291,11 @@ const ctx = await c.sessions.getGraphContext("session-uuid");
 await c.sessions.setGraphContext("session-uuid", "new context");
 ```
 
-## Users and pipeline-run admin
+## Users
 
 ```ts
 // Resolve (or lazily create) the default user for this handle.
 const user = await c.users.getOrCreateDefault();
-
-// Unblock a dataset stuck in "running" state so it can be re-cognified.
-await c.users.resetPipelineRunStatus(datasetId, "cognify_pipeline");
-
-// Reset all pipeline-run statuses for a dataset at once.
-await c.users.resetDatasetPipelineRunStatus(datasetId);
 ```
 
 ## Data lifecycle

@@ -839,24 +839,6 @@ class Cognee:
 
     # -- Admin ----------------------------------------------------------------
 
-    async def reset_pipeline_run_status(
-        self,
-        dataset_id: str,
-        pipeline_name: str,
-    ) -> None:
-        """Reset the run status for a specific pipeline within a dataset.
-
-        Raises :exc:`CogneeValidationError` if *dataset_id* is not a valid UUID.
-        """
-        ...
-
-    async def reset_dataset_pipeline_run_status(self, dataset_id: str) -> None:
-        """Reset all pipeline run statuses for a dataset.
-
-        Raises :exc:`CogneeValidationError` if *dataset_id* is not a valid UUID.
-        """
-        ...
-
     async def get_or_create_default_user(self) -> dict[str, Any]:
         """Get or create the default user account.
 

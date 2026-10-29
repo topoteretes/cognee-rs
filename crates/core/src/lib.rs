@@ -21,6 +21,7 @@ pub mod pipeline;
 pub mod progress;
 pub mod provenance;
 pub mod rate_limiter;
+pub mod run_ownership;
 pub mod runtime;
 pub mod sentinels;
 pub mod task;
@@ -45,6 +46,7 @@ pub use provenance::{
     stamp_tree, stamp_tree_dyn,
 };
 pub use rate_limiter::{RateLimiter, SemaphoreLimiter, TokenBucketLimiter};
+pub use run_ownership::RunOwnership;
 pub use runtime::AsyncRuntime;
 pub use sentinels::{DroppedSentinel, PassthroughSentinel, is_dropped, is_passthrough};
 pub use task::{

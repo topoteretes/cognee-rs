@@ -420,44 +420,6 @@ static KEYS: &[KeySpec] = &[
     row!(strict_config: bool, env ["COGNEE_STRICT_CONFIG"]),
     row!(skip_preflight: bool, env ["COGNEE_SKIP_PREFLIGHT"]),
     row!(skip_connection_test: bool, env ["COGNEE_SKIP_CONNECTION_TEST"]),
-    KeySpec {
-        key: "single_process",
-        key_aliases: &[],
-        env: &[cognee_database::SINGLE_PROCESS_ENV],
-        secret: false,
-        persisted: true,
-        // Both paths go through `parse_single_process_override`, so the env var
-        // and `cognee_database::single_process_from_env` cannot drift. The raw
-        // value is used (no empty filter): a blank value means "derive".
-        overlay: |s, env| {
-            if let Some(v) = env
-                .get(cognee_database::SINGLE_PROCESS_ENV)
-                .and_then(|raw| cognee_database::parse_single_process_override(&raw))
-            {
-                s.single_process = Some(v);
-            }
-        },
-        // `null` restores the derived answer. A string or a JSON number goes
-        // through the env var's parser, so `"1"`, `1` and
-        // `COGNEE_SINGLE_PROCESS=1` mean the same, and a blank string means
-        // "derive" rather than a silent `false`.
-        set: |s, key, v| {
-            s.single_process = if v.is_null() {
-                None
-            } else if v.is_string() || v.is_number() {
-                let raw = v
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| v.to_string());
-                cognee_database::parse_single_process_override(&raw)
-            } else {
-                Some(as_bool(key, &v)?)
-            };
-            Ok(())
-        },
-        get: |s| serde_json::to_value(s.single_process).unwrap_or(Value::Null),
-        reset: |s, d| s.single_process = d.single_process,
-    },
 ];
 
 /// [`builtin_schema`], once something has built it. `Settings`' `Debug` reads

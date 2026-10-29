@@ -216,17 +216,6 @@ export interface NativeBindings {
   ): Promise<CogneeDeleteResult>;
   cogneeDeleteAllDatasets(handle: NativeBox): Promise<CogneeDeleteResult[]>;
 
-  // Pipeline-run resets (Phase 5).
-  cogneeResetPipelineRunStatus(
-    handle: NativeBox,
-    datasetId: string,
-    pipelineName: string
-  ): Promise<void>;
-  cogneeResetDatasetPipelineRunStatus(
-    handle: NativeBox,
-    datasetId: string
-  ): Promise<void>;
-
   // Default user (Phase 5).
   cogneeGetOrCreateDefaultUser(handle: NativeBox): Promise<CogneeUser>;
 

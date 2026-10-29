@@ -3,30 +3,24 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Regression test: a dataset must be cognifiable more than once, so data can
-//! be loaded in waves (`add` → `cognify` → `add` → `cognify`).
-//!
-//! Before the fix, `cognify()` consulted `check_pipeline_run_qualification`
-//! unconditionally, so the COMPLETED `pipeline_runs` row left by the first run
-//! made every later run a silent no-op — new data added to the dataset was
-//! never extracted. Python only consults that layer behind
-//! `if use_pipeline_cache:` (`modules/pipelines/operations/pipeline.py`), and
-//! both public entry points pass `use_pipeline_cache=False`, so upstream a
-//! repeat cognify always re-runs.
+//! A dataset must be cognifiable more than once, so data can be loaded in
+//! waves (`add` → `cognify` → `add` → `cognify`), and concurrent runs on one
+//! dataset are serialized by the per-dataset lock — as in Python, where
+//! `run_pipeline_per_dataset` takes `get_dataset_lock(dataset.id)` and has had
+//! no run-history gate since `dc0b4ad6a`. A run killed mid-flight is recovered
+//! at startup from its ownership marker (`modules/cognify/recovery.py`).
 //!
 //! **These tests must use a real [`SeaOrmPipelineRunRepository`].** The rest of
-//! the crate's tests pass `NoopPipelineRunRepository`, whose
-//! `get_pipeline_run_by_dataset` returns `Ok(None)` → `Qualification::Proceed`,
-//! which is precisely why the bug shipped with a green suite. The first test
-//! asserts the COMPLETED row actually exists before re-running, so it cannot
-//! silently degrade into a vacuous pass.
+//! the crate's tests pass `NoopPipelineRunRepository`, which records nothing,
+//! so a test of the `pipeline_runs` trail against it would be vacuous.
 //!
 //! Runs fully offline (mock LLM / embeddings / graph / vector) — a real CI gate.
 
 use std::sync::Arc;
 
-use cognee_cognify::tasks::CLAIM_STALE_AFTER;
 use cognee_cognify::{CognifyConfig, CognifyError, CognifyResult, cognify};
+use cognee_core::pipeline_run_registry::{recovery_lock_of, run_info_for_started};
+use cognee_core::{DatasetLocks, RunOwnership};
 use cognee_database::ops::graph_storage::{RunScope, get_nodes_for_run, upsert_nodes};
 use cognee_database::{
     DatabaseConnection, GraphNode, IngestDb, PipelineRunRepository, PipelineRunStatus,
@@ -53,7 +47,7 @@ Bob is a data scientist at DataCorp, an analytics company. \
 He joined the research team last spring.";
 
 /// The `Pipeline.name` the cognify DAG stamps, and therefore the
-/// `pipeline_runs.pipeline_name` the gate reads. Mirrors
+/// `pipeline_runs.pipeline_name` of its rows. Mirrors
 /// `tasks::COGNIFY_PIPELINE_STAMP_NAME` (not re-exported from the crate root).
 const COGNIFY_PIPELINE: &str = "cognify_pipeline";
 
@@ -118,11 +112,8 @@ struct Harness {
     pipeline_run_repo: Arc<dyn PipelineRunRepository>,
     ingest: AddPipeline,
     owner_id: Uuid,
-    /// The relational URL this harness connected to. A real one, because the
-    /// single-process assertion the startup sweep is gated on is derived from
-    /// it — hardcoding a string in the test would assert nothing about the
-    /// deployment the harness actually is.
-    db_url: String,
+    /// Where this harness's runs keep their ownership markers.
+    ownership_dir: std::path::PathBuf,
 }
 
 impl Harness {
@@ -136,6 +127,7 @@ impl Harness {
         let db_path = temp_dir.path().join("cognee.db");
         std::fs::File::create(&db_path).expect("create sqlite db file");
         let db_url = format!("sqlite://{}", db_path.display());
+        let ownership_dir = temp_dir.path().join("pipeline_run_locks");
         let db = connect(&db_url).await.expect("connect");
         initialize(&db).await.expect("initialize");
         let database: Arc<DatabaseConnection> = Arc::new(db);
@@ -170,57 +162,25 @@ impl Harness {
             pipeline_run_repo,
             ingest,
             owner_id: Uuid::nil(),
-            db_url,
+            ownership_dir,
         }
     }
 
-    /// The startup recovery step, in the shape both callers use it: resolve
-    /// the single-process assertion from the relational URL, and — only if it
-    /// holds — undo all *three* things a killed run leaves behind, in the
-    /// order the production callers do it.
-    ///
-    /// 1. Roll back the graph/vector artifacts the dead run had already
-    ///    written, through the same `RunSweeper` a live failure uses.
-    /// 2. Retire the `pipeline_runs` row it left at `Started`.
-    /// 3. Release the claim it could not release itself.
-    ///
-    /// Rollback first is not cosmetic: step 2 is what makes the dataset
-    /// runnable again, so doing it earlier opens a window in which a fresh run
-    /// starts while the rollback is still deleting the corpse's nodes.
-    ///
-    /// Returns `(rows reset, claims released)` — the two relational gates.
-    /// Both must be cleared to unwedge a dataset:
-    /// `check_pipeline_run_qualification` reads the `pipeline_runs` row before
-    /// any claim is consulted, so a sweep that dropped only the claim would
-    /// leave the run refused exactly as before. What the rollback did is
-    /// asserted through the stores themselves, not through a count.
-    ///
-    /// `configured` stands in for an explicit `COGNEE_SINGLE_PROCESS` /
-    /// `Settings::single_process`; `None` derives it. Passed in rather than
-    /// read from the environment so two tests asserting opposite outcomes
-    /// cannot race each other through a process-global.
-    async fn startup_sweep(&self, relational_db_url: &str, configured: Option<bool>) -> (u64, u64) {
-        if !cognee_database::resolve_single_process(relational_db_url, configured) {
-            return (0, 0);
-        }
-        cognee_delete::sweep_orphaned_run_artifacts(
+    /// Startup recovery, as `CogneeServices::build` runs it: every in-flight
+    /// run whose ownership marker can be claimed is rolled back and closed.
+    /// `min_age` is the eligibility floor (Python's
+    /// `STALE_RUN_RECOVERY_MIN_AGE_SECONDS`).
+    async fn recover(&self, min_age: std::time::Duration) -> cognee_delete::RecoveryReport {
+        cognee_delete::recover_stale_pipeline_runs(
             self.pipeline_run_repo.as_ref(),
             self.database.clone(),
             Arc::clone(&self.graph_db),
             Arc::clone(&self.vector_db),
+            &DatasetLocks::global(),
+            &self.ownership_dir,
+            min_age,
         )
-        .await;
-        let reset = self
-            .pipeline_run_repo
-            .reset_orphans("test_startup_orphan_reset")
-            .await
-            .expect("reset_orphans");
-        let released = self
-            .pipeline_run_repo
-            .release_all_pipeline_run_claims("test_startup_sweep")
-            .await
-            .expect("release_all_pipeline_run_claims");
-        (reset, released)
+        .await
     }
 
     /// Materialise one entity the way a cognify run does: an ownership-ledger
@@ -383,11 +343,11 @@ impl Harness {
         .await
     }
 
-    /// Write a bare `Started` row for the cognify pipeline, standing in for a
-    /// run that is still in flight (or was killed mid-run). Returns the
-    /// `pipeline_run_id` it used — the same id the ownership ledger keys on,
-    /// so a caller can attribute artifacts to that run.
-    async fn seed_started_row(&self, dataset_id: Uuid) -> Uuid {
+    /// Write a `Started` row for the cognify pipeline carrying `recovery_lock`
+    /// the way the executor does, standing in for a run that is in flight or
+    /// was killed mid-run. Returns the `pipeline_run_id` it used — the same id
+    /// the ownership ledger keys on, so a caller can attribute artifacts to it.
+    async fn seed_started_row(&self, dataset_id: Uuid, recovery_lock: Option<Uuid>) -> Uuid {
         let pipeline_run_id = Uuid::new_v4();
         self.pipeline_run_repo
             .log_pipeline_run(
@@ -396,11 +356,23 @@ impl Harness {
                 COGNIFY_PIPELINE,
                 Some(dataset_id),
                 PipelineRunStatus::Started,
-                None,
+                Some(run_info_for_started(recovery_lock)),
             )
             .await
             .expect("log_pipeline_run");
         pipeline_run_id
+    }
+
+    /// Every cognify row of the dataset, oldest first.
+    async fn cognify_rows(&self, dataset_id: Uuid) -> Vec<cognee_database::PipelineRun> {
+        let mut rows = self
+            .pipeline_run_repo
+            .list_recent(Some(dataset_id), 100)
+            .await
+            .expect("list_recent");
+        rows.retain(|r| r.pipeline_name == COGNIFY_PIPELINE);
+        rows.sort_by_key(|r| r.created_at);
+        rows
     }
 
     /// Latest `pipeline_runs` status for the cognify pipeline on this dataset.
@@ -413,9 +385,22 @@ impl Harness {
     }
 }
 
-/// Keep the graph focused and the run cheap — no summaries or triplet embeddings.
-fn base_config() -> CognifyConfig {
-    CognifyConfig::default().with_summarization(false)
+impl Harness {
+    /// A cheap config — no summaries — that keeps its ownership markers inside
+    /// this harness's temp dir, as `Settings::cognify_config` does under the
+    /// system root.
+    fn config(&self) -> CognifyConfig {
+        CognifyConfig::default()
+            .with_summarization(false)
+            .with_run_ownership_dir(&self.ownership_dir)
+    }
+
+    /// Marker directories still on disk.
+    fn markers(&self) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(&self.ownership_dir)
+            .map(|dir| dir.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default()
+    }
 }
 
 /// The regression test for this issue: a second wave of data added to an
@@ -424,7 +409,7 @@ fn base_config() -> CognifyConfig {
 async fn second_cognify_wave_is_processed_not_skipped() {
     let h = Harness::new().await;
     let dataset_name = "repeat_cognify_waves";
-    let config = base_config();
+    let config = h.config();
 
     // ── Wave 1 ──────────────────────────────────────────────────────────────
     let items_1 = h.add(dataset_name, WAVE_1_TEXT).await;
@@ -438,12 +423,11 @@ async fn second_cognify_wave_is_processed_not_skipped() {
     );
 
     // Guard against a vacuous pass: the trail must really carry a COMPLETED
-    // row, i.e. the repository is live and the gate has something to find.
+    // row, i.e. the repository is live.
     assert_eq!(
         h.latest_cognify_status(dataset_id).await,
         Some(PipelineRunStatus::Completed),
-        "wave 1 must leave a COMPLETED pipeline_runs row — without it this test \
-         would pass even with the bug present"
+        "wave 1 must leave a COMPLETED pipeline_runs row"
     );
 
     // ── Wave 2: more data into the same dataset ─────────────────────────────
@@ -463,8 +447,7 @@ async fn second_cognify_wave_is_processed_not_skipped() {
     let result_2 = h.cognify(dataset_id, all_items, &config).await;
     assert!(
         !result_2.already_completed,
-        "wave 2 must extract: a COMPLETED row from wave 1 must not skip the run \
-         when the pipeline cache is off (the default)"
+        "wave 2 must extract: a COMPLETED row from wave 1 must not skip the run"
     );
     assert!(
         !result_2.entities.is_empty(),
@@ -476,299 +459,285 @@ async fn second_cognify_wave_is_processed_not_skipped() {
     );
 }
 
-/// The cache still works when a caller explicitly opts in — the flag is what
-/// selects the behaviour, matching Python's `use_pipeline_cache` parameter.
+/// Python's observable behaviour with no run-history gate (`dc0b4ad6a`): a
+/// second cognify of an unchanged dataset is a run of its own — a fresh
+/// `STARTED` / `COMPLETED` pair under a new `pipeline_run_id` — that skips
+/// every already-completed item (`run_tasks_data_item.py:207-218`), instead of
+/// being short-circuited by the dataset's last `COMPLETED` row.
 #[tokio::test]
-async fn pipeline_cache_opt_in_short_circuits_the_second_run() {
+async fn a_second_cognify_on_an_unchanged_dataset_writes_a_fresh_pair_and_skips_every_item() {
     let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_cache_on";
-    let config = base_config().with_pipeline_cache(true);
+    let dataset_name = "repeat_cognify_unchanged";
+    let config = h.config();
 
     let items = h.add(dataset_name, WAVE_1_TEXT).await;
     let dataset_id = h.dataset_id(dataset_name).await;
 
-    let result_1 = h.cognify(dataset_id, items.clone(), &config).await;
+    let first = h.cognify(dataset_id, items.clone(), &config).await;
+    assert!(!first.already_completed && !first.entities.is_empty());
+    let after_first = h.cognify_rows(dataset_id).await;
+    let statuses = |rows: &[cognee_database::PipelineRun]| {
+        rows.iter().map(|r| r.status.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        statuses(&after_first),
+        vec![PipelineRunStatus::Started, PipelineRunStatus::Completed],
+        "the first run writes its pair and no INITIATED row"
+    );
+    let nodes_after_first = h.graph_db.get_graph_data().await.map(|(n, _)| n.len()).ok();
+
+    let second = h.cognify(dataset_id, items, &config).await;
     assert!(
-        !result_1.already_completed,
-        "the first run has no prior row to hit"
+        second.already_completed,
+        "every item was cognified by the first run, so the second skips them all"
+    );
+    assert!(
+        second.entities.is_empty() && second.chunks.is_empty(),
+        "a skipped item is never classified, chunked or extracted"
     );
     assert_eq!(
-        h.latest_cognify_status(dataset_id).await,
-        Some(PipelineRunStatus::Completed),
+        second.prior_pipeline_run_id,
+        Some(after_first[0].pipeline_run_id),
+        "the no-op names the run that did the work"
     );
 
-    let result_2 = h.cognify(dataset_id, items, &config).await;
-    assert!(
-        result_2.already_completed,
-        "with the cache on, a COMPLETED dataset must short-circuit"
+    let after_second = h.cognify_rows(dataset_id).await;
+    assert_eq!(
+        statuses(&after_second),
+        vec![
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Completed,
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Completed,
+        ],
+        "the second run is a fresh STARTED / COMPLETED pair"
     );
-    assert!(
-        result_2.prior_pipeline_run_id.is_some(),
-        "the short-circuit must report the prior run id"
+    assert_ne!(
+        after_second[2].pipeline_run_id, after_second[0].pipeline_run_id,
+        "under its own pipeline_run_id"
     );
-    assert!(
-        result_2.entities.is_empty(),
-        "a short-circuited run does no extraction"
+    assert_eq!(
+        second.pipeline_run_id,
+        Some(after_second[2].pipeline_run_id)
+    );
+    assert_eq!(
+        h.graph_db.get_graph_data().await.map(|(n, _)| n.len()).ok(),
+        nodes_after_first,
+        "and the graph is untouched"
     );
 }
 
-/// The concurrency guard must survive the fix: a run still in flight (a
-/// `Started` row) rejects a second run *regardless* of the cache flag.
-///
-/// Python can gate this verdict on `use_pipeline_cache` because
-/// `run_pipeline_per_dataset` serializes on `get_dataset_lock(dataset.id)`
-/// ("concurrent runs are kept safe by the per-dataset lock, not by this
-/// check"). Rust has no such lock, so this row check is the only thing keeping
-/// two concurrent cognify runs off one dataset — gating it on the cache flag
-/// would have silently removed that protection.
+/// `DATASET_PROCESSING_INITIATED` stays in the stored-row enum for rows an
+/// older writer left (Python keeps it too, `PipelineRun.py:13`), and such a row
+/// is just history: it gates nothing and is read back as `INITIATED`.
 #[tokio::test]
-async fn a_started_run_still_rejects_a_concurrent_run_with_the_cache_off() {
+async fn a_stored_initiated_row_neither_blocks_the_run_nor_fails_to_read() {
     let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_concurrent";
-    let config = base_config();
-    assert!(
-        !config.use_pipeline_cache,
-        "this test is about the cache being OFF"
-    );
-
-    let items = h.add(dataset_name, WAVE_1_TEXT).await;
-    let dataset_id = h.dataset_id(dataset_name).await;
-
-    h.seed_started_row(dataset_id).await;
-    assert_eq!(
-        h.latest_cognify_status(dataset_id).await,
-        Some(PipelineRunStatus::Started),
-    );
-
-    let err = h
-        .try_cognify(dataset_id, items, &config)
-        .await
-        .expect_err("a run already in flight must be rejected");
-    assert!(
-        matches!(err, CognifyError::PipelineAlreadyRunning { .. }),
-        "expected PipelineAlreadyRunning, got {err:?}"
-    );
-}
-
-/// A claim held by someone else blocks a run, and the run succeeds again once
-/// that claim is released.
-///
-/// This is the "two simultaneous starts" case in deterministic form. The state
-/// that matters is *a claim being held while a second caller enters the run*,
-/// and pre-taking the claim reproduces exactly that without depending on task
-/// interleaving — a timing-based race would be flaky in both directions (both
-/// callers could serialize in time and legitimately succeed). The atomicity of
-/// the claim itself is covered by `concurrent_claims_grant_exactly_one` in
-/// `cognee-database`, which contends on the real primary key.
-#[tokio::test]
-async fn a_claim_held_elsewhere_blocks_the_run() {
-    let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_claimed";
-    let config = base_config();
-
-    let items = h.add(dataset_name, WAVE_1_TEXT).await;
-    let dataset_id = h.dataset_id(dataset_name).await;
-
-    // Stand in for a run already in flight elsewhere — in another process, or
-    // in the window before it has written its `Started` row.
-    let elsewhere = Uuid::new_v4();
-    assert!(
-        h.pipeline_run_repo
-            .try_claim_pipeline_run(dataset_id, COGNIFY_PIPELINE, elsewhere, CLAIM_STALE_AFTER)
-            .await
-            .expect("foreign claim"),
-        "the foreign claim must be granted first"
-    );
-
-    let err = h
-        .try_cognify(dataset_id, items.clone(), &config)
-        .await
-        .expect_err("a claimed dataset must not be cognified concurrently");
-    assert!(
-        matches!(err, CognifyError::PipelineAlreadyRunning { .. }),
-        "expected PipelineAlreadyRunning, got {err:?}"
-    );
+    let config = h.config();
+    let items = h.add("repeat_cognify_initiated", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_initiated").await;
 
     h.pipeline_run_repo
-        .release_pipeline_run_claim(dataset_id, COGNIFY_PIPELINE, elsewhere)
+        .log_pipeline_run(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            COGNIFY_PIPELINE,
+            Some(dataset_id),
+            PipelineRunStatus::Initiated,
+            None,
+        )
         .await
-        .expect("release foreign claim");
-
-    let result = h.cognify(dataset_id, items, &config).await;
-    assert!(
-        !result.already_completed && !result.entities.is_empty(),
-        "the run must proceed once the claim is free"
-    );
-}
-
-/// A completed run must not leave its claim behind — otherwise the very next
-/// wave would be rejected instead of processed.
-#[tokio::test]
-async fn a_finished_run_releases_its_claim() {
-    let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_release";
-    let config = base_config();
-
-    let items = h.add(dataset_name, WAVE_1_TEXT).await;
-    let dataset_id = h.dataset_id(dataset_name).await;
-    h.cognify(dataset_id, items, &config).await;
-
-    // If the run leaked its claim, this could not be granted.
-    assert!(
-        h.pipeline_run_repo
-            .try_claim_pipeline_run(
-                dataset_id,
-                COGNIFY_PIPELINE,
-                Uuid::new_v4(),
-                CLAIM_STALE_AFTER
-            )
-            .await
-            .expect("claim after run"),
-        "the claim must be free once the run has finished"
-    );
-}
-
-/// A run killed mid-flight, modelled as the two blockers it really leaves
-/// behind — a `Started` row **and** a claim — and cleared by the startup sweep.
-///
-/// Seeding only the claim would make this test pass against a sweep that
-/// clears only the claim, which is worthless: the `Started` row is read
-/// *first* by `check_pipeline_run_qualification` and returns `AlreadyRunning`
-/// before the claim is ever consulted. That row also never ages out, where the
-/// claim at least does after a day — so the half-fix would leave the dataset
-/// permanently wedged for exactly the embedded consumer (the Android app, the
-/// Python/C/TS bindings) this exists for, which has neither an HTTP server nor
-/// a CLI to unblock with.
-#[tokio::test]
-async fn a_killed_run_is_fully_cleared_when_single_process_is_asserted() {
-    let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_swept";
-    let config = base_config();
-
-    let items = h.add(dataset_name, WAVE_1_TEXT).await;
-    let dataset_id = h.dataset_id(dataset_name).await;
-
-    // Gate 1: the row the killed run wrote when it started.
-    h.seed_started_row(dataset_id).await;
-    // Gate 2: its claim, which outlives the process that took it — nothing
-    // will ever release it, because `release_pipeline_run_claim` filters on
-    // this `claim_id`, and it died with its holder.
-    let dead_holder = Uuid::new_v4();
-    assert!(
-        h.pipeline_run_repo
-            .try_claim_pipeline_run(dataset_id, COGNIFY_PIPELINE, dead_holder, CLAIM_STALE_AFTER)
-            .await
-            .expect("claim from the killed run"),
-        "the killed run's claim must be granted first"
-    );
-
-    assert!(
-        matches!(
-            h.try_cognify(dataset_id, items.clone(), &config)
-                .await
-                .expect_err("the leftovers must block the run"),
-            CognifyError::PipelineAlreadyRunning { .. }
-        ),
-        "without a sweep the dataset stays wedged"
-    );
-
-    // Restart, with single-process asserted the way an embedder must now
-    // assert it: the harness runs on a SQLite *file*, which derives `false`
-    // precisely because sibling processes can open it.
-    let db_url = h.db_url.clone();
-    assert_eq!(
-        h.startup_sweep(&db_url, None).await,
-        (0, 0),
-        "a file-backed SQLite URL must not sweep on its own — a sibling process \
-         can hold these very rows"
-    );
-    assert_eq!(
-        h.startup_sweep(&db_url, Some(true)).await,
-        (1, 1),
-        "the sweep must report both the row it retired and the claim it dropped"
-    );
-
-    // Both gates gone, so the dataset runs again — and the assertion that
-    // catches a claim-only sweep is this one, not the counts above.
+        .expect("an old INITIATED row");
     assert_eq!(
         h.latest_cognify_status(dataset_id).await,
-        Some(PipelineRunStatus::Errored),
-        "the orphaned Started row must have been retired, not left in flight"
+        Some(PipelineRunStatus::Initiated),
+        "the stored row round-trips through the conversion layer"
     );
+
     let result = h.cognify(dataset_id, items, &config).await;
     assert!(
         !result.already_completed && !result.entities.is_empty(),
-        "the dataset must be runnable again immediately after the sweep"
+        "an INITIATED row must not stop the run"
     );
 }
 
-/// The third thing a killed run leaves behind, and the one nothing used to
-/// clear: the graph nodes, vector points and ownership rows it had already
-/// written.
-///
-/// A run that fails while its process is alive is rolled back by
-/// `cognify::rollback::on_run_failed`, which sweeps
-/// `SweepScope::whole_run(run, dataset)`. A SIGKILL never reaches that code,
-/// and because a cognify completion marker is written only on success, the
-/// next run re-processes every item on top of the corpse. Until this landed,
-/// startup recovery wrote a status row and nothing else, so those artifacts
-/// stayed in the graph forever — attributed to a run that will never finish,
-/// which means no later run-scoped sweep ever selects them again either.
-///
-/// Python does roll this back, and in this order: `cognify_rollback_handler`
-/// runs *before* the status reset in `modules/cognify/recovery.py`.
-///
-/// Non-vacuity: the artifacts are asserted present before the sweep and the
-/// ledger row is seeded explicitly, because a rollback selects on
-/// `graph_nodes.pipeline_run_id` — seed a graph node alone and a
-/// do-nothing rollback would pass.
+/// A stale `STARTED` row — a process killed mid-run, or a run still going in
+/// another process — is not a gate any more: Python has none, and the next run
+/// proceeds.
 #[tokio::test]
-async fn a_killed_runs_partial_artifacts_are_rolled_back_before_its_row_is_retired() {
+async fn an_unrecovered_started_row_does_not_refuse_the_next_run() {
     let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_rollback";
-    let config = base_config();
+    let config = h.config();
+    let items = h.add("repeat_cognify_stale_row", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_stale_row").await;
+
+    h.seed_started_row(dataset_id, None).await;
+    assert_eq!(
+        h.latest_cognify_status(dataset_id).await,
+        Some(PipelineRunStatus::Started)
+    );
+
+    let result = h.cognify(dataset_id, items, &config).await;
+    assert!(
+        !result.already_completed && !result.entities.is_empty(),
+        "the run proceeds"
+    );
+}
+
+/// The per-dataset lock serializes: a second run on a dataset whose lock is
+/// held **waits** for it and then proceeds, instead of being refused.
+///
+/// Deterministic: the lock is taken by the test, so "a run is in flight" does
+/// not depend on task interleaving.
+#[tokio::test]
+async fn a_concurrent_second_run_waits_for_the_dataset_lock_instead_of_being_refused() {
+    let h = Harness::new().await;
+    let config = h.config();
+    let items = h.add("repeat_cognify_lock", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_lock").await;
+
+    let guard = DatasetLocks::global().lock(dataset_id).await;
+    let run = h.try_cognify(dataset_id, items, &config);
+    tokio::pin!(run);
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(400), &mut run)
+            .await
+            .is_err(),
+        "the run must still be waiting on the lock, not finished or refused"
+    );
+    assert!(
+        h.cognify_rows(dataset_id).await.is_empty(),
+        "and it has written nothing"
+    );
+
+    drop(guard);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), &mut run)
+        .await
+        .expect("the run proceeds once the lock is released")
+        .expect("and succeeds");
+    assert!(!result.already_completed && !result.entities.is_empty());
+}
+
+/// Two runs started together on one dataset both complete, one after the
+/// other: their `STARTED` / `COMPLETED` rows never interleave.
+#[tokio::test]
+async fn two_simultaneous_runs_on_one_dataset_both_complete_in_sequence() {
+    let h = Harness::new().await;
+    let config = h.config();
+    let items = h.add("repeat_cognify_two", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_two").await;
+
+    let (a, b) = tokio::join!(
+        h.try_cognify(dataset_id, items.clone(), &config),
+        h.try_cognify(dataset_id, items.clone(), &config),
+    );
+    a.expect("the first run completes");
+    b.expect("the second is not refused");
+
+    let statuses: Vec<_> = h
+        .cognify_rows(dataset_id)
+        .await
+        .into_iter()
+        .map(|r| r.status)
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Completed,
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Completed,
+        ],
+        "serialized: the second run starts only after the first completed"
+    );
+}
+
+/// A real run records its ownership marker in the `STARTED` row (Python's
+/// `log_pipeline_run_start(recovery_token=…)`) and removes the marker once the
+/// run reached a terminal status.
+#[tokio::test]
+async fn a_run_records_its_recovery_lock_and_removes_the_marker_when_it_finishes() {
+    let h = Harness::new().await;
+    let config = h.config();
+    let items = h.add("repeat_cognify_marker", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_marker").await;
+
+    h.cognify(dataset_id, items, &config).await;
+
+    let rows = h.cognify_rows(dataset_id).await;
+    let started = rows
+        .iter()
+        .find(|r| r.status == PipelineRunStatus::Started)
+        .expect("a STARTED row");
+    let token = recovery_lock_of(started.run_info.as_ref())
+        .expect("the STARTED row carries {\"recovery_lock\": …}");
+    assert_eq!(
+        started
+            .run_info
+            .as_ref()
+            .map(|i| i.as_object().map(|o| o.len())),
+        Some(Some(1)),
+        "and nothing else"
+    );
+    let completed = rows
+        .iter()
+        .find(|r| r.status == PipelineRunStatus::Completed)
+        .expect("a COMPLETED row");
+    assert_eq!(
+        completed.run_info.as_ref().map(|i| i.to_string()),
+        Some("{}".to_string()),
+        "COMPLETED stays an empty object"
+    );
+    assert!(
+        !h.ownership_dir.join(token.to_string()).exists() && h.markers().is_empty(),
+        "a finished run leaves no marker behind"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Startup recovery (Python `modules/cognify/recovery.py`)
+// ---------------------------------------------------------------------------
+
+/// A run killed mid-flight leaves a `STARTED` row carrying its marker (whose OS
+/// lock died with the process) and the artifacts it had already written.
+/// Recovery rolls those back and closes the run with the abandoned-run error;
+/// the next cognify proceeds.
+///
+/// Non-vacuity: the artifacts are asserted present first and the ledger row is
+/// seeded explicitly, because a rollback selects on
+/// `graph_nodes.pipeline_run_id` — a do-nothing rollback must fail here.
+#[tokio::test]
+async fn a_stale_started_row_left_by_a_killed_process_is_recovered_and_the_next_cognify_proceeds() {
+    let h = Harness::new().await;
+    let dataset_name = "repeat_cognify_recovered";
+    let config = h.config();
 
     let items = h.add(dataset_name, WAVE_1_TEXT).await;
     let dataset_id = h.dataset_id(dataset_name).await;
     let data_id = items[0].id;
 
-    // The killed run: a `Started` row, a claim nothing can release, and two
-    // entities it had already written before it died.
-    let dead_run = h.seed_started_row(dataset_id).await;
-    let dead_holder = Uuid::new_v4();
-    assert!(
-        h.pipeline_run_repo
-            .try_claim_pipeline_run(dataset_id, COGNIFY_PIPELINE, dead_holder, CLAIM_STALE_AFTER)
-            .await
-            .expect("claim from the killed run"),
-        "the killed run's claim must be granted first"
-    );
+    // The killed run: its marker (lock released, as the OS does on exit), its
+    // `STARTED` row, and two entities it had already written.
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    let token = marker.token().expect("marker created");
+    drop(marker);
+    let dead_run = h.seed_started_row(dataset_id, Some(token)).await;
     let slug_a = h.seed_run_artifact(dataset_id, data_id, dead_run).await;
     let slug_b = h.seed_run_artifact(dataset_id, data_id, dead_run).await;
 
-    // A second run's artifact in the same dataset, which must survive: the
-    // rollback is scoped to one run, never to the dataset. Without this the
-    // test would pass against a blanket delete.
-    let live_run = Uuid::new_v4();
-    let slug_live = h.seed_run_artifact(dataset_id, data_id, live_run).await;
+    // Another run's artifact in the same dataset, which must survive: the
+    // rollback is scoped to one run, never to the dataset.
+    let other_run = Uuid::new_v4();
+    let slug_other = h.seed_run_artifact(dataset_id, data_id, other_run).await;
 
-    // The premise, asserted rather than assumed.
     assert_eq!(h.ledger_rows_for_run(dead_run, dataset_id).await, 2);
-    assert_eq!(h.ledger_rows_for_run(live_run, dataset_id).await, 1);
     assert!(h.graph_has(slug_a).await && h.graph_has(slug_b).await);
     assert_eq!(h.entity_points().await, 3);
 
-    // A non-single-process restart must leave every one of them alone.
-    assert_eq!(h.startup_sweep(&h.db_url.clone(), None).await, (0, 0));
-    assert_eq!(
-        h.ledger_rows_for_run(dead_run, dataset_id).await,
-        2,
-        "a shared database must not have its artifacts rolled back — they may \
-         belong to a live peer's run"
-    );
-
-    // And now the restart that does assert it.
-    assert_eq!(h.startup_sweep(&h.db_url.clone(), Some(true)).await, (1, 1));
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 1, "{report:?}");
+    assert_eq!(report.failed, 0, "{report:?}");
 
     assert_eq!(
         h.ledger_rows_for_run(dead_run, dataset_id).await,
@@ -784,23 +753,36 @@ async fn a_killed_runs_partial_artifacts_are_rolled_back_before_its_row_is_retir
         1,
         "the dead run's vector points must be gone, and only those"
     );
+    assert_eq!(h.ledger_rows_for_run(other_run, dataset_id).await, 1);
+    assert!(h.graph_has(slug_other).await);
 
-    assert_eq!(
-        h.ledger_rows_for_run(live_run, dataset_id).await,
-        1,
-        "the other run's ownership row must survive — the rollback is scoped to \
-         one run, not to the dataset"
+    let latest = h
+        .pipeline_run_repo
+        .get_pipeline_run_by_dataset(dataset_id, COGNIFY_PIPELINE)
+        .await
+        .unwrap()
+        .expect("a row");
+    assert_eq!(latest.status, PipelineRunStatus::Errored);
+    assert_eq!(latest.pipeline_run_id, dead_run);
+    let error = latest
+        .run_info
+        .as_ref()
+        .and_then(|i| i.get("error"))
+        .and_then(|e| e.as_str())
+        .expect("{\"error\": …}");
+    assert_eq!(error, cognee_delete::ABANDONED_RUN_ERROR);
+    assert!(
+        error.starts_with("AbandonedPipelineRunError: ") && error.contains("(Status code: 500)"),
+        "Python's `str(AbandonedPipelineRunError())`"
     );
     assert!(
-        h.graph_has(slug_live).await,
-        "the other run's graph node must survive"
+        !h.ownership_dir.join(token.to_string()).exists(),
+        "the closed run's marker is removed"
     );
 
-    // The status row was retired too, and the dataset runs again for real.
-    assert_eq!(
-        h.latest_cognify_status(dataset_id).await,
-        Some(PipelineRunStatus::Errored),
-    );
+    // A second recovery finds nothing left to do.
+    assert_eq!(h.recover(std::time::Duration::ZERO).await.candidates, 0);
+
     let result = h.cognify(dataset_id, items, &config).await;
     assert!(
         !result.already_completed && !result.entities.is_empty(),
@@ -808,78 +790,93 @@ async fn a_killed_runs_partial_artifacts_are_rolled_back_before_its_row_is_retir
     );
 }
 
-/// The safety half: where single-process is *not* asserted, the sweep must not
-/// run at all.
-///
-/// A claim in a multi-process or multi-replica deployment may belong to a live
-/// peer, and dropping it — or retiring the `Started` row that peer's run is
-/// still writing against — would re-admit exactly the concurrent run the claim
-/// exists to prevent. So both leftovers survive and keep refusing: the pre-fix
-/// behaviour, preserved deliberately.
+/// The safety half: a run whose writer is alive holds its marker's OS lock, so
+/// recovery cannot claim it and must leave the row and its artifacts alone —
+/// however old the row is.
 #[tokio::test]
-async fn a_killed_runs_leftovers_survive_when_single_process_is_not_asserted() {
+async fn a_run_whose_writer_is_alive_is_not_recovered() {
     let h = Harness::new().await;
-    let dataset_name = "repeat_cognify_not_swept";
-    let config = base_config();
+    let items = h.add("repeat_cognify_alive", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_alive").await;
 
-    let items = h.add(dataset_name, WAVE_1_TEXT).await;
-    let dataset_id = h.dataset_id(dataset_name).await;
+    let live_marker = RunOwnership::acquire(&h.ownership_dir);
+    let run = h.seed_started_row(dataset_id, live_marker.token()).await;
+    let slug = h.seed_run_artifact(dataset_id, items[0].id, run).await;
 
-    h.seed_started_row(dataset_id).await;
-    let peer_holder = Uuid::new_v4();
-    assert!(
-        h.pipeline_run_repo
-            .try_claim_pipeline_run(dataset_id, COGNIFY_PIPELINE, peer_holder, CLAIM_STALE_AFTER)
-            .await
-            .expect("peer claim"),
-        "the peer's claim must be granted first"
-    );
-
-    // Two shared deployments that must both be left alone: a Postgres every
-    // replica connects to, and the shipped default relational URL — a SQLite
-    // *file*, which every cognee process started in that directory opens.
-    for shared in [
-        "postgres://user:pw@shared-host:5432/cognee",
-        "sqlite:./cognee.db?mode=rwc",
-    ] {
-        assert_eq!(
-            h.startup_sweep(shared, None).await,
-            (0, 0),
-            "{shared} is reachable by sibling processes and must not be swept"
-        );
-    }
-
-    let held = h
-        .pipeline_run_repo
-        .get_pipeline_run_claim(dataset_id, COGNIFY_PIPELINE)
-        .await
-        .expect("get_pipeline_run_claim")
-        .expect("the peer's claim must survive");
-    assert_eq!(
-        held.claim_id, peer_holder,
-        "the surviving claim must still be the peer's, not a rewritten one"
-    );
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 0, "{report:?}");
+    assert_eq!(report.skipped_unverifiable, 1, "{report:?}");
     assert_eq!(
         h.latest_cognify_status(dataset_id).await,
         Some(PipelineRunStatus::Started),
-        "the peer's in-flight row must not be retired underneath it"
+        "the live run's row must not be retired underneath it"
     );
-    assert!(
-        matches!(
-            h.try_cognify(dataset_id, items, &config)
-                .await
-                .expect_err("the peer's run must still block this one"),
-            CognifyError::PipelineAlreadyRunning { .. }
-        ),
-        "cross-process exclusion must be unaffected by the single-process sweep"
-    );
+    assert!(h.graph_has(slug).await, "nor its artifacts rolled back");
 
-    // And the explicit override is how a deployment that really does own its
-    // database opts in — same URL, opposite answer.
+    // Once the writer is gone, the same row is recoverable.
+    drop(live_marker);
+    assert_eq!(h.recover(std::time::Duration::ZERO).await.recovered, 1);
+    assert!(!h.graph_has(slug).await);
+}
+
+/// A `STARTED` row with no marker (an older writer, a run started without an
+/// ownership directory, another machine) cannot be proven abandoned and is
+/// never recovered.
+#[tokio::test]
+async fn a_started_row_without_a_marker_is_never_recovered() {
+    let h = Harness::new().await;
+    let items = h.add("repeat_cognify_no_marker", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_no_marker").await;
+
+    let run = h.seed_started_row(dataset_id, None).await;
+    let slug = h.seed_run_artifact(dataset_id, items[0].id, run).await;
+    // A token whose marker is not on this filesystem is just as unverifiable.
+    h.seed_started_row(dataset_id, Some(Uuid::new_v4())).await;
+
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 0, "{report:?}");
+    assert_eq!(report.skipped_unverifiable, 2, "{report:?}");
+    assert!(h.graph_has(slug).await);
+}
+
+/// Age is only an eligibility floor: a run younger than it is treated as live
+/// even when its marker could be claimed.
+#[tokio::test]
+async fn a_run_younger_than_the_age_floor_is_not_recovered() {
+    let h = Harness::new().await;
+    h.add("repeat_cognify_young", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_young").await;
+
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    h.seed_started_row(dataset_id, marker.token()).await;
+    drop(marker);
+
+    let report = h.recover(cognee_delete::DEFAULT_STALE_RUN_MIN_AGE).await;
+    assert_eq!(report.skipped_young, 1, "{report:?}");
+    assert_eq!(report.recovered, 0, "{report:?}");
     assert_eq!(
-        h.startup_sweep("postgres://user:pw@shared-host:5432/cognee", Some(true))
-            .await,
-        (1, 1),
-        "an operator asserting single-process must get the sweep on any backend"
+        h.latest_cognify_status(dataset_id).await,
+        Some(PipelineRunStatus::Started)
     );
+}
+
+/// A dataset whose lock this process holds has a run of ours in flight:
+/// recovery leaves it for later (Python's `lock.locked()` check).
+#[tokio::test]
+async fn a_dataset_locked_in_this_process_is_skipped_by_recovery() {
+    let h = Harness::new().await;
+    h.add("repeat_cognify_locked_recovery", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_locked_recovery").await;
+
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    h.seed_started_row(dataset_id, marker.token()).await;
+    drop(marker);
+
+    let guard = DatasetLocks::global().lock(dataset_id).await;
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.skipped_dataset_locked, 1, "{report:?}");
+    assert_eq!(report.recovered, 0, "{report:?}");
+    drop(guard);
+
+    assert_eq!(h.recover(std::time::Duration::ZERO).await.recovered, 1);
 }
