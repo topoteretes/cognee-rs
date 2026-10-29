@@ -86,7 +86,9 @@ fn empty_object() -> serde_json::Value {
 /// `updates` overlaid on a stored `memify_metadata` value, as Python's cache
 /// adapters merge it (`{**existing, **updates}`): every stage writes only its
 /// own keys, so a write never drops another stage's flag. A missing or
-/// non-object stored value is replaced.
+/// non-object stored value is replaced. Used by the file and Redis stores (the
+/// relational store merges in `cognee_database`).
+#[cfg(any(feature = "fs", feature = "redis"))]
 pub(crate) fn merge_memify_metadata(
     existing: Option<serde_json::Value>,
     updates: &HashMap<String, bool>,
