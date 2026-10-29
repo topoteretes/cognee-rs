@@ -37,6 +37,8 @@ uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+regex.workspace = true
+schemars.workspace = true
 
 # relational backend (feature-gated)
 cognee-database = { path = "../database", version = "0.2.0", optional = true }
@@ -62,6 +64,11 @@ required-features = ["fs"]
 name = "relational_store_tests"
 path = "tests/relational_store_tests.rs"
 required-features = ["relational-store"]
+
+[[test]]
+name = "agent_context_extraction"
+path = "tests/agent_context_extraction.rs"
+required-features = ["fs"]
 
 [[test]]
 name = "test_session_manager_trace"
