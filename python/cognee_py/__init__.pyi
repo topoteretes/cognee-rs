@@ -31,6 +31,7 @@ from cognee_py._native import (
     CogneeServiceBuildError as CogneeServiceBuildError,
     CogneeUserBootstrapError as CogneeUserBootstrapError,
     CogneeRuntimeError as CogneeRuntimeError,
+    CogneeImproveAbortedError as CogneeImproveAbortedError,
     CogneeValidationError as CogneeValidationError,
     CogneeUnsupportedError as CogneeUnsupportedError,
     CogneeFeatureNotBuiltError as CogneeFeatureNotBuiltError,

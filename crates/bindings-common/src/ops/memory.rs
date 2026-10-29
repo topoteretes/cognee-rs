@@ -460,11 +460,27 @@ pub async fn run_improve(
         cognify_config: &cognify_config,
     })
     .await
-    .map_err(|e| SdkError::Runtime(format!("improve failed: {e}")))?;
+    .map_err(improve_error)?;
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
     Ok(improve_result_json(&result))
+}
+
+/// The binding error of a failed `improve()`. A fatal-stage abort keeps its
+/// partial result ([`SdkError::ImproveAborted`]), as Python's raised error
+/// carries `improve_result`; anything else is a runtime error.
+fn improve_error(error: cognee::api::ApiError) -> SdkError {
+    match error {
+        cognee::api::ApiError::ImproveAborted { result, .. } => SdkError::ImproveAborted {
+            message: result
+                .error
+                .clone()
+                .unwrap_or_else(|| "a fatal improve stage errored".to_string()),
+            improve_result: Box::new(improve_result_json(&result)),
+        },
+        other => SdkError::Runtime(format!("improve failed: {other}")),
+    }
 }
 
 /// Serialise an [`ImproveResult`] to the binding wire shape: Python's
@@ -503,6 +519,33 @@ pub fn improve_result_json(result: &ImproveResult) -> serde_json::Value {
 mod tests {
     use super::*;
     use cognee::api::StageResult;
+
+    // Python attaches `improve_result` to the error a fatal-stage abort
+    // raises; the binding error keeps it in the wire shape.
+    #[test]
+    fn an_aborted_improve_keeps_its_partial_result() {
+        let mut result = ImproveResult::new("docs", vec!["s1".to_string()]);
+        result
+            .stages
+            .push(StageResult::errored("persist_session_qa", "boom"));
+        result.error = Some("boom".to_string());
+        let error = improve_error(cognee::api::ApiError::ImproveAborted {
+            result: Box::new(result.clone()),
+            budget_exhausted: false,
+        });
+        assert_eq!(error.code(), "IMPROVE_ABORTED");
+        assert_eq!(error.to_string(), "improve failed: boom");
+        assert_eq!(error.improve_result(), Some(&improve_result_json(&result)));
+        assert!(
+            error
+                .detailed_message()
+                .starts_with("improve failed: boom\nimprove_result: {")
+        );
+
+        let other = improve_error(cognee::api::ApiError::Improve("lookup".to_string()));
+        assert_eq!(other.code(), "RUNTIME_ERROR");
+        assert!(other.improve_result().is_none());
+    }
 
     #[test]
     fn improve_result_json_is_camel_case_with_the_computed_status() {

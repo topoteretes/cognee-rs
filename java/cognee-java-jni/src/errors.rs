@@ -28,5 +28,5 @@ pub(crate) fn throw_cognee_exception(env: &mut JNIEnv, code: &str, message: &str
 
 /// Throw a `CogneeException` from an `SdkError` (uses its stable `code()`).
 pub(crate) fn throw_sdk_error(env: &mut JNIEnv, err: SdkError) {
-    throw_cognee_exception(env, err.code(), &err.to_string());
+    throw_cognee_exception(env, err.code(), &err.detailed_message());
 }

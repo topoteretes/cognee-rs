@@ -92,7 +92,7 @@ where
         let framed = env.with_local_frame::<_, (), jni::errors::Error>(16, |env| {
             let settled = match outcome {
                 Ok(Ok(value)) => complete_ok(env, global.as_obj(), &value.to_string()),
-                Ok(Err(sdk)) => complete_err(env, global.as_obj(), sdk.code(), &sdk.to_string()),
+                Ok(Err(sdk)) => complete_err(env, global.as_obj(), sdk.code(), &sdk.detailed_message()),
                 Err(join_err) => {
                     let msg = if join_err.is_panic() {
                         "native task panicked"

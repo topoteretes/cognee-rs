@@ -195,6 +195,7 @@ export {
   ValidationError,
   UnsupportedError,
   FeatureNotBuiltError,
+  ImproveAbortedError,
   UnknownConfigKeyError,
   ConfigTypeMismatchError,
   wrapNativeError,

@@ -25,5 +25,10 @@ pub fn throw_sdk_error<'cx, T>(cx: &mut impl Context<'cx>, err: SdkError) -> Neo
     let kind_val = cx.string(code);
     obj.set(cx, "code", code_val)?;
     obj.set(cx, "kind", kind_val)?;
+    // An aborted improve keeps its partial result (`ImproveAbortedError`).
+    if let Some(result) = err.improve_result() {
+        let result = crate::json::parse_js(cx, &result.to_string())?;
+        obj.set(cx, "improveResult", result)?;
+    }
     cx.throw(js_err)
 }

@@ -23,6 +23,7 @@ create_exception!(cognee_py, CogneeComponentError, CogneeError);
 create_exception!(cognee_py, CogneeServiceBuildError, CogneeError);
 create_exception!(cognee_py, CogneeUserBootstrapError, CogneeError);
 create_exception!(cognee_py, CogneeRuntimeError, CogneeError);
+create_exception!(cognee_py, CogneeImproveAbortedError, CogneeRuntimeError);
 create_exception!(cognee_py, CogneeValidationError, CogneeError);
 create_exception!(cognee_py, CogneeUnsupportedError, CogneeError);
 create_exception!(cognee_py, CogneeFeatureNotBuiltError, CogneeError);
@@ -45,7 +46,25 @@ pub fn sdk_error_to_py(e: SdkError) -> PyErr {
         SdkError::Validation(_) => CogneeValidationError::new_err(msg),
         SdkError::Unsupported(_) => CogneeUnsupportedError::new_err(msg),
         SdkError::FeatureNotBuilt(_) => CogneeFeatureNotBuiltError::new_err(msg),
+        SdkError::ImproveAborted { improve_result, .. } => {
+            improve_aborted_to_py(msg, &improve_result)
+        }
     }
+}
+
+/// A [`CogneeImproveAbortedError`] whose `improve_result` attribute holds the
+/// partial result, as Python cognee's raised error does. Without the
+/// interpreter (finalizing) the attribute is left off; the message stands.
+fn improve_aborted_to_py(msg: String, improve_result: &serde_json::Value) -> PyErr {
+    let err = CogneeImproveAbortedError::new_err(msg);
+    crate::gil::attach_best_effort("improve_result attribute", |py| {
+        let attached = crate::json::serde_to_py(py, improve_result)
+            .and_then(|value| err.value(py).setattr("improve_result", value));
+        if let Err(e) = attached {
+            tracing::debug!("could not attach improve_result to the error: {e}");
+        }
+    });
+    err
 }
 
 /// Wrap a plain validation message string as a [`CogneeValidationError`].
@@ -84,6 +103,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "CogneeRuntimeError",
         m.py().get_type::<CogneeRuntimeError>(),
+    )?;
+    m.add(
+        "CogneeImproveAbortedError",
+        m.py().get_type::<CogneeImproveAbortedError>(),
     )?;
     m.add(
         "CogneeValidationError",

@@ -311,7 +311,7 @@ pub unsafe extern "C" fn cg_sdk_warm(
             }
             Err(e) => {
                 let code = CgErrorCode::from(&e);
-                let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
+                let msg = CString::new(e.detailed_message()).unwrap_or_else(|_| {
                     CString::new("(error message contained null byte)")
                         .expect("literal has no null bytes")
                 });
@@ -399,7 +399,7 @@ pub unsafe extern "C" fn cg_sdk_owner_id(
             }
             Err(e) => {
                 let code = CgErrorCode::from(&e);
-                let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
+                let msg = CString::new(e.detailed_message()).unwrap_or_else(|_| {
                     CString::new("(error message contained null byte)")
                         .expect("literal has no null bytes")
                 });
@@ -818,7 +818,7 @@ where
                     // parameter (async convention; thread-local is for sync paths
                     // only — see `set_last_error_from` doc comment).
                     let code = CgErrorCode::from(&e);
-                    let msg = CString::new(e.to_string()).unwrap_or_else(|_| {
+                    let msg = CString::new(e.detailed_message()).unwrap_or_else(|_| {
                         CString::new("(error message contained null byte)")
                             .expect("literal has no null bytes")
                     });

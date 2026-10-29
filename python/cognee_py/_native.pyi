@@ -57,6 +57,15 @@ class CogneeRuntimeError(CogneeError):
     """A runtime error occurred in the Rust core."""
     ...
 
+class CogneeImproveAbortedError(CogneeRuntimeError):
+    """``improve()`` stopped at its fatal stage (``persist_session_qa``).
+
+    ``improve_result`` holds the partial result — the stages that ran before
+    the abort and the skipped rest — as Python cognee attaches it to the
+    raised error.
+    """
+    improve_result: dict[str, Any]
+
 class CogneeValidationError(CogneeError):
     """Input validation failed (bad arguments, wrong types, unknown keys)."""
     ...

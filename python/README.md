@@ -519,6 +519,7 @@ All async ops raise subclasses of `CogneeError`:
 | `CogneeServiceBuildError` | Service warm-up failed (engine could not be constructed). |
 | `CogneeUserBootstrapError` | Default user resolution failed during `warm()`. |
 | `CogneeRuntimeError` | Pipeline or search runtime failure. |
+| `CogneeImproveAbortedError` | `improve()` stopped at its fatal stage; a `CogneeRuntimeError` whose `improve_result` holds the partial result. |
 | `CogneeUnsupportedError` | Operation not available for the current backend configuration. |
 | `CogneeFeatureNotBuiltError` | Feature was not compiled into this build (e.g. `visualization`). |
 | `CogneeUnknownConfigKeyError` | Unknown config key passed to `config.set_*` or constructor. |

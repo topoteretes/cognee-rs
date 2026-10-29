@@ -53,6 +53,18 @@ pub enum SdkError {
     #[allow(dead_code)]
     #[error("feature not built: {0}")]
     FeatureNotBuilt(String),
+
+    /// `improve()` stopped at its fatal stage (`persist_session_qa`). Carries
+    /// the partial result — the binding wire shape of what ran before the
+    /// abort — as Python attaches `improve_result` to the raised error.
+    #[error("improve failed: {message}")]
+    ImproveAborted {
+        /// The fatal stage's error.
+        message: String,
+        /// The partial `ImproveResult`, in the binding wire shape
+        /// ([`crate::ops::memory::improve_result_json`]).
+        improve_result: Box<serde_json::Value>,
+    },
 }
 
 impl SdkError {
@@ -70,6 +82,25 @@ impl SdkError {
             SdkError::Validation(_) => "VALIDATION_ERROR",
             SdkError::Unsupported(_) => "UNSUPPORTED",
             SdkError::FeatureNotBuilt(_) => "FEATURE_NOT_BUILT",
+            SdkError::ImproveAborted { .. } => "IMPROVE_ABORTED",
+        }
+    }
+
+    /// The partial `ImproveResult` of an aborted improve, if this is one.
+    pub fn improve_result(&self) -> Option<&serde_json::Value> {
+        match self {
+            SdkError::ImproveAborted { improve_result, .. } => Some(improve_result),
+            _ => None,
+        }
+    }
+
+    /// The message for a binding that carries only a code and a message (C,
+    /// Java): [`Display`](std::fmt::Display), plus the partial
+    /// `ImproveResult` as JSON for an aborted improve so it is not lost.
+    pub fn detailed_message(&self) -> String {
+        match self.improve_result() {
+            Some(result) => format!("{self}\nimprove_result: {result}"),
+            None => self.to_string(),
         }
     }
 }

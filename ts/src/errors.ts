@@ -81,6 +81,21 @@ export class FeatureNotBuiltError extends CogneeError {
   }
 }
 
+/**
+ * `improve()` stopped at its fatal stage (`persist_session_qa`).
+ * `improveResult` holds the partial result — the stages that ran before the
+ * abort and the skipped rest — as Python cognee attaches `improve_result` to
+ * the raised error.
+ */
+export class ImproveAbortedError extends CogneeError {
+  improveResult: unknown = undefined;
+
+  constructor(message: string) {
+    super(message, "IMPROVE_ABORTED");
+    this.name = "ImproveAbortedError";
+  }
+}
+
 /** An unknown config key was passed to `configSet` / a bulk setter. */
 export class UnknownConfigKeyError extends CogneeError {
   constructor(message: string) {
@@ -106,6 +121,7 @@ const KIND_TO_CLASS: Record<string, new (msg: string) => CogneeError> = {
   VALIDATION_ERROR: ValidationError,
   UNSUPPORTED: UnsupportedError,
   FEATURE_NOT_BUILT: FeatureNotBuiltError,
+  IMPROVE_ABORTED: ImproveAbortedError,
   UNKNOWN_CONFIG_KEY: UnknownConfigKeyError,
   CONFIG_TYPE_MISMATCH: ConfigTypeMismatchError,
 };
@@ -144,6 +160,9 @@ export function wrapNativeError(e: unknown): CogneeError {
         ? new Cls(msg)
         : // Unknown kind: construct the base class directly so kind/code are set.
           new CogneeError(msg, kind);
+    if (wrapped instanceof ImproveAbortedError) {
+      wrapped.improveResult = obj["improveResult"];
+    }
     // Preserve the original native stack trace if available.
     if (typeof obj["stack"] === "string") {
       wrapped.stack = obj["stack"];

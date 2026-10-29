@@ -76,6 +76,9 @@ impl From<&SdkError> for CgErrorCode {
             SdkError::Validation(_) => CgErrorCode::SdkValidation,
             SdkError::Unsupported(_) => CgErrorCode::Unsupported,
             SdkError::FeatureNotBuilt(_) => CgErrorCode::FeatureNotBuilt,
+            // A runtime failure whose message carries the partial
+            // `ImproveResult` JSON (`SdkError::detailed_message`).
+            SdkError::ImproveAborted { .. } => CgErrorCode::RuntimeError,
         }
     }
 }
@@ -133,7 +136,7 @@ pub extern "C" fn cg_last_error_clear() {
 /// `cg_sdk_waiter_wait` after unblocking, or inside `cg_sdk_new`).
 #[allow(dead_code)] // used in unit test below and future sync SDK paths (phases 3–7)
 pub(crate) fn set_last_error_from(err: &SdkError) -> CgErrorCode {
-    set_last_error(err.to_string());
+    set_last_error(err.detailed_message());
     CgErrorCode::from(err)
 }
 
@@ -203,6 +206,13 @@ mod tests {
             (
                 SdkError::FeatureNotBuilt("test".to_string()),
                 CgErrorCode::FeatureNotBuilt,
+            ),
+            (
+                SdkError::ImproveAborted {
+                    message: "test".to_string(),
+                    improve_result: Box::new(serde_json::json!({"status": "errored"})),
+                },
+                CgErrorCode::RuntimeError,
             ),
         ];
 
