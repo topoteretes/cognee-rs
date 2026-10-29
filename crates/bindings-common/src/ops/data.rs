@@ -172,7 +172,8 @@ pub async fn forget(
 /// - `"tenant"`: tenant UUID string
 /// - `"nodeSet"`: JSON array of node identifier strings
 /// - `"preferredLoaders"`: JSON object mapping MIME type / extension → loader name
-/// - `"incrementalLoading"`: bool (default `false`)
+/// - `"incrementalLoading"`: bool (default `true`, as Python's `update()`:
+///   the re-cognify skips the dataset's other, already-cognified items)
 ///
 /// Returns `{"dataId":"…","deleteResult":{…},"cognifyResult":{…}}`; `dataId`
 /// is the document's id, unchanged by the update (a pre-fork id resolves to the
@@ -218,13 +219,10 @@ pub async fn update(
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
                 .collect()
         });
-    let incremental_loading = opts
-        .get("incrementalLoading")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let incremental_loading = update_incremental_loading(opts);
 
-    // Resolved before `update` deletes the old item: an unregistered extractor
-    // kind fails here, with nothing deleted.
+    // Resolved before `update` drops the item's memory: an unregistered
+    // extractor kind fails here, with nothing touched.
     let cognify_config =
         super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?;
 
@@ -344,4 +342,30 @@ pub async fn prune_system(
         "metadataPruned": result.metadata_pruned,
         "cachePruned": result.cache_pruned,
     }))
+}
+
+/// `update`'s `incrementalLoading` option. Python's `update()` defaults it to
+/// `True` (`cognee/api/v1/update/update.py:42`): the re-cognify processes the
+/// replaced document and skips the dataset's other, already-cognified items.
+fn update_incremental_loading(opts: &serde_json::Value) -> bool {
+    opts.get("incrementalLoading")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod update_opts_tests {
+    use super::update_incremental_loading;
+
+    #[test]
+    fn incremental_loading_defaults_to_true_as_in_python() {
+        assert!(update_incremental_loading(&serde_json::Value::Null));
+        assert!(update_incremental_loading(&serde_json::json!({})));
+        assert!(!update_incremental_loading(
+            &serde_json::json!({"incrementalLoading": false})
+        ));
+        assert!(update_incremental_loading(
+            &serde_json::json!({"incrementalLoading": true})
+        ));
+    }
 }

@@ -30,7 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extensions, MIME types, loader, hashes, size and metadata are rewritten,
   metadata and node set as a PATCH, the cognify marker cleared when the content
   changed; a row of another dataset is refused), and the document is cognified.
-  `update()` takes exactly one replacement item. `UpdateResult` is now
+  `update()` takes exactly one replacement item, and the bindings'
+  `incrementalLoading` option of `update` now defaults to `true`, as Python's
+  (the re-cognify skips the dataset's other, already-cognified items). The
+  metadata PATCH follows Python's `merge_existing_row_metadata`: an item with
+  no metadata (a plain text, file or URL) keeps the stored keys and only
+  refreshes `_cognee.source_uri`, an explicit `{}` clears them, an object
+  replaces them. `UpdateResult` is now
   `{ data_id, delete_result, cognify_result }`: `deleted_data_id` and
   `new_data` are gone (the bindings' `deletedDataId` / `newData` become
   `dataId`). Replacement content equal to another row's leaves two rows, as in
