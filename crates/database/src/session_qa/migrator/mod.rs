@@ -1,6 +1,7 @@
 use sea_orm_migration::prelude::*;
 
 mod m20260914_000001_baseline;
+mod m20261031_000001_drop_session_graph_context;
 
 pub struct SessionMigrator;
 
@@ -11,6 +12,9 @@ impl MigratorTrait for SessionMigrator {
     }
 
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20260914_000001_baseline::Migration)]
+        vec![
+            Box::new(m20260914_000001_baseline::Migration),
+            Box::new(m20261031_000001_drop_session_graph_context::Migration),
+        ]
     }
 }

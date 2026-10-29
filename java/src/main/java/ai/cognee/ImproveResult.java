@@ -11,5 +11,4 @@ public record ImproveResult(
         @JsonProperty("stages") List<ImproveStageResult> stages,
         @JsonProperty("feedbackEntriesProcessed") long feedbackEntriesProcessed,
         @JsonProperty("feedbackEntriesApplied") long feedbackEntriesApplied,
-        @JsonProperty("sessionsPersisted") long sessionsPersisted,
-        @JsonProperty("edgesSynced") long edgesSynced) {}
+        @JsonProperty("sessionsPersisted") long sessionsPersisted) {}

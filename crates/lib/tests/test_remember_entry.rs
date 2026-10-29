@@ -186,23 +186,6 @@ impl SessionStore for InMemorySessionStore {
         Ok(succeeds)
     }
 
-    async fn get_graph_context(
-        &self,
-        _session_id: &str,
-        _user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        Ok(None)
-    }
-
-    async fn set_graph_context(
-        &self,
-        _session_id: &str,
-        _user_id: Option<&str>,
-        _context: &str,
-    ) -> Result<(), SessionError> {
-        Ok(())
-    }
-
     async fn save_trace_step(
         &self,
         user_id: &str,

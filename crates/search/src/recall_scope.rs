@@ -50,15 +50,13 @@ pub struct RecallOptions {
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
-/// by Python's `_search_session`, `_search_trace`, `_fetch_graph_context`,
-/// and `_run_graph` helpers in `cognee/api/v1/recall/recall.py`.
+/// by Python's `_search_session`, `_search_trace` and `_run_graph` helpers in `cognee/api/v1/recall/recall.py`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecallSource {
     Session,
     Graph,
     Trace,
-    GraphContext,
 }
 
 impl RecallSource {
@@ -68,31 +66,33 @@ impl RecallSource {
             RecallSource::Session => "session",
             RecallSource::Graph => "graph",
             RecallSource::Trace => "trace",
-            RecallSource::GraphContext => "graph_context",
         }
     }
 }
 
 /// Scope selector. Mirrors Python's
-/// `RecallScope = Literal["auto", "graph", "session", "trace", "graph_context", "all"]`
-/// (`cognee/memory/entries.py:75`). `Auto` is the sentinel returned by
-/// `normalize_scope(None)` and is resolved into concrete sources inside
-/// `recall()`. `All` never appears in a normalized list — it expands to the
-/// four concrete sources during normalization.
+/// `RecallScope` (`cognee/memory/entries.py:170`). `Auto` is the sentinel
+/// returned by `normalize_scope(None)` and is resolved into concrete sources
+/// inside `recall()`. `All` never appears in a normalized list — it expands to
+/// the concrete sources during normalization. The `graph_context` token is
+/// still accepted but is only a deprecated alias of `graph` (see
+/// [`normalize_scope`]); there is no graph-context source any more
+/// (Python `3401da38a`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecallScope {
     Auto,
+    #[serde(alias = "graph_context")]
     Graph,
     Session,
     Trace,
-    GraphContext,
 }
 
 impl RecallScope {
-    /// The four concrete sources, in the canonical order Python uses when
-    /// expanding `"all"` (`entries.py:106`).
-    pub const ALL: &'static [Self] = &[Self::Graph, Self::Session, Self::Trace, Self::GraphContext];
+    /// The concrete sources, in the canonical order Python uses when
+    /// expanding `"all"` (`entries.py:238-243`; Rust has no `session_context`
+    /// source).
+    pub const ALL: &'static [Self] = &[Self::Graph, Self::Session, Self::Trace];
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn as_wire(&self) -> &'static str {
@@ -101,7 +101,6 @@ impl RecallScope {
             Self::Graph => "graph",
             Self::Session => "session",
             Self::Trace => "trace",
-            Self::GraphContext => "graph_context",
         }
     }
 
@@ -111,7 +110,8 @@ impl RecallScope {
             "graph" => Some(Self::Graph),
             "session" => Some(Self::Session),
             "trace" => Some(Self::Trace),
-            "graph_context" => Some(Self::GraphContext),
+            // Deprecated alias: Python maps it to `graph` (`entries.py:185,232-236`).
+            "graph_context" => Some(Self::Graph),
             _ => None,
         }
     }
@@ -123,7 +123,6 @@ impl RecallScope {
             RecallScope::Graph => Some(RecallSource::Graph),
             RecallScope::Session => Some(RecallSource::Session),
             RecallScope::Trace => Some(RecallSource::Trace),
-            RecallScope::GraphContext => Some(RecallSource::GraphContext),
         }
     }
 }
@@ -161,7 +160,10 @@ impl From<Vec<String>> for ScopeInput {
 /// mirroring Python's `normalize_scope` at `cognee/memory/entries.py:81-115`.
 ///
 /// - `None` -> `[Auto]` (Python: `["auto"]`).
-/// - `"all"` -> `[Graph, Session, Trace, GraphContext]` (`entries.py:105-106`).
+/// - `"all"` -> `[Graph, Session, Trace]` (`entries.py:238-243`).
+/// - `"graph_context"` -> `Graph`, with a deprecation warning (Python
+///   `_DEPRECATED_SCOPE_ALIASES`, `entries.py:185,232-236`); the snapshot it
+///   used to read is gone.
 /// - Single string -> singleton list.
 /// - List of strings -> order-preserving dedup (`entries.py:108-115`).
 /// - Unknown values -> `Err(SearchError::InvalidInput(...))` with the
@@ -204,18 +206,25 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
         )));
     }
 
-    // `"all"` short-circuits to the canonical four-source list, in fixed order
-    // (`entries.py:105-106`).
+    if raw.iter().any(|s| s == "graph_context") {
+        tracing::warn!(
+            "recall scope 'graph_context' is deprecated and now maps to 'graph'; use scope='graph' instead"
+        );
+    }
+
+    // `"all"` short-circuits to the canonical source list, in fixed order
+    // (`entries.py:238-243`).
     if raw.iter().any(|s| s == "all") {
         return Ok(RecallScope::ALL.to_vec());
     }
 
     // Order-preserving dedup (`entries.py:108-115`).
-    let mut seen: HashSet<&str> = HashSet::new();
+    // Aliases are resolved first, so `["graph", "graph_context"]` is `[Graph]`.
+    let mut seen: HashSet<RecallScope> = HashSet::new();
     let mut out: Vec<RecallScope> = Vec::with_capacity(raw.len());
     for s in &raw {
-        if seen.insert(s.as_str())
-            && let Some(scope) = RecallScope::from_wire(s)
+        if let Some(scope) = RecallScope::from_wire(s)
+            && seen.insert(scope)
         {
             out.push(scope);
         }
@@ -228,10 +237,9 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
 pub struct RecallItem {
     /// The source of this result.
     pub source: RecallSource,
-    /// Content (question, answer, search result text, trace fields, or graph_context snapshot).
+    /// Content (question, answer, search result text or trace fields).
     pub content: serde_json::Value,
-    /// Relevance score (keyword overlap for session/trace, similarity for graph,
-    /// constant `1.0` for graph_context which is not query-matched).
+    /// Relevance score (keyword overlap for session/trace, similarity for graph).
     pub score: f64,
 }
 
@@ -397,28 +405,6 @@ pub async fn search_trace(
             }
         })
         .collect())
-}
-
-/// Mirrors Python `_fetch_graph_context` (`recall.py:289-314`). Reads the
-/// pre-computed snapshot via `SessionManager::get_graph_context` -- not a
-/// graph-DB walk.
-pub async fn fetch_graph_context(
-    session_id: Option<&str>,
-    user_id: Option<&str>,
-    sm: Option<&SessionManager>,
-) -> Result<Vec<RecallItem>, SearchError> {
-    let (Some(_sid), Some(sm)) = (session_id, sm) else {
-        return Ok(vec![]);
-    };
-    let snapshot_opt = sm.get_graph_context(session_id, user_id).await?;
-    match snapshot_opt {
-        Some(snapshot) if !snapshot.is_empty() => Ok(vec![RecallItem {
-            source: RecallSource::GraphContext,
-            content: serde_json::Value::String(snapshot),
-            score: 1.0,
-        }]),
-        _ => Ok(vec![]),
-    }
 }
 
 /// Lifted from the original recall body — runs the graph search via the
@@ -637,12 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn recall_source_graph_context_serializes_correctly() {
-        let g = serde_json::to_string(&RecallSource::GraphContext).expect("serialize");
-        assert_eq!(g, "\"graph_context\"");
-    }
-
-    #[test]
     fn test_normalize_scope_none_returns_auto() {
         let out = normalize_scope(None).expect("normalize");
         assert_eq!(out, vec![RecallScope::Auto]);
@@ -654,7 +634,8 @@ mod tests {
             ("graph", RecallScope::Graph),
             ("session", RecallScope::Session),
             ("trace", RecallScope::Trace),
-            ("graph_context", RecallScope::GraphContext),
+            // Deprecated alias of `graph` (Python `_DEPRECATED_SCOPE_ALIASES`).
+            ("graph_context", RecallScope::Graph),
             ("auto", RecallScope::Auto),
         ] {
             let out = normalize_scope(Some(ScopeInput::from(s))).expect("normalize");
@@ -684,14 +665,9 @@ mod tests {
         let out = normalize_scope(Some(ScopeInput::from("all"))).expect("normalize");
         assert_eq!(
             out,
-            vec![
-                RecallScope::Graph,
-                RecallScope::Session,
-                RecallScope::Trace,
-                RecallScope::GraphContext,
-            ]
+            vec![RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
         );
-        // `"all"` mixed in with other values still expands to canonical four.
+        // `"all"` mixed in with other values still expands to canonical list.
         let out2 = normalize_scope(Some(ScopeInput::Many(vec![
             "session".to_string(),
             "all".to_string(),
@@ -699,13 +675,25 @@ mod tests {
         .expect("normalize");
         assert_eq!(
             out2,
-            vec![
-                RecallScope::Graph,
-                RecallScope::Session,
-                RecallScope::Trace,
-                RecallScope::GraphContext,
-            ]
+            vec![RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
         );
+    }
+
+    #[test]
+    fn test_normalize_scope_graph_context_is_a_graph_alias() {
+        let out = normalize_scope(Some(ScopeInput::Many(vec![
+            "graph".to_string(),
+            "graph_context".to_string(),
+            "session".to_string(),
+        ])))
+        .expect("normalize");
+        assert_eq!(out, vec![RecallScope::Graph, RecallScope::Session]);
+    }
+
+    #[test]
+    fn recall_scope_graph_context_deserializes_as_graph() {
+        let parsed: RecallScope = serde_json::from_str("\"graph_context\"").expect("deserialize");
+        assert_eq!(parsed, RecallScope::Graph);
     }
 
     #[test]
@@ -735,12 +723,7 @@ mod tests {
     fn recall_scope_all_constant_matches_canonical_order() {
         assert_eq!(
             RecallScope::ALL,
-            &[
-                RecallScope::Graph,
-                RecallScope::Session,
-                RecallScope::Trace,
-                RecallScope::GraphContext,
-            ]
+            &[RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
         );
     }
 
@@ -751,7 +734,6 @@ mod tests {
             ("\"graph\"", RecallScope::Graph),
             ("\"session\"", RecallScope::Session),
             ("\"trace\"", RecallScope::Trace),
-            ("\"graph_context\"", RecallScope::GraphContext),
         ] {
             let parsed: RecallScope = serde_json::from_str(s).expect("deserialize");
             assert_eq!(parsed, expected);
@@ -765,7 +747,6 @@ mod tests {
         assert_eq!(RecallScope::Graph.as_wire(), "graph");
         assert_eq!(RecallScope::Session.as_wire(), "session");
         assert_eq!(RecallScope::Trace.as_wire(), "trace");
-        assert_eq!(RecallScope::GraphContext.as_wire(), "graph_context");
     }
 
     // -----------------------------------------------------------------------

@@ -174,7 +174,7 @@ impl PyCognee {
     ///
     /// Returns a dict with camelCase keys:
     /// ``stagesRun``, ``stages``, ``feedbackEntriesProcessed``,
-    /// ``feedbackEntriesApplied``, ``sessionsPersisted``, ``edgesSynced``.
+    /// ``feedbackEntriesApplied``, ``sessionsPersisted``.
     fn improve<'py>(
         &self,
         py: Python<'py>,

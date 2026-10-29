@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Graph-session sync is removed, as in Python `3401da38a` (SDK-1039).**
+  `improve()` no longer runs a `sync_graph_to_session` stage, so
+  `ImproveResult::edges_synced` / `edgesSynced` (library, CLI log, every
+  binding and the C header) and `ImproveParams::checkpoint_store` are gone, and
+  so is the `remember(...)` `checkpoint_store` argument. Session completions no
+  longer prepend "Background knowledge from the knowledge graph:", and recall
+  has no `graph_context` source. The session snapshot API is deleted:
+  `SessionStore::{get,set}_graph_context`, `SessionManager::{get,set}_graph_context`,
+  `cognee::session::{get,set}_graph_context`, `SessionContext::graph_context`,
+  `cognee_database` `CheckpointStore` / `SeaOrmCheckpointStore` /
+  `RelationalDb::checkpoints()`, and the `getGraphContext` / `setGraphContext`
+  bindings (`cg_sdk_get_graph_context` / `cg_sdk_set_graph_context`, the Python,
+  TypeScript and Java methods). The recall scope token `graph_context` is still
+  accepted, but as Python does it is a deprecated alias of `graph`, and `all`
+  expands to `graph`, `session`, `trace`. Two migrations drop the tables:
+  `graph_sync_checkpoints` (main database) and `session_graph_context` (session
+  database). The `improve` flag `build_global_context_index` is accepted but the
+  stage, whose only output was that snapshot, now logs a warning and does
+  nothing; Python's bucket/root-summary pipeline is still not ported.
+
 - **`data_per_batch` and `EMBEDDING_ONNX_BATCH_SIZE` are removed; ONNX batches
   by `embedding.batch_size` (SDK-1039).** `data_per_batch`
   (`cognify.data_per_batch`, `COGNEE_DATA_PER_BATCH`,

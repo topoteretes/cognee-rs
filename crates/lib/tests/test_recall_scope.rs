@@ -9,7 +9,7 @@
 //! `cognee/memory/entries.py:81-115`) for:
 //!   * `auto` resolution per `(session_id, datasets, query_type)`,
 //!   * scope-driven source fan-out across `graph` / `session` / `trace` /
-//!     `graph_context`,
+//!     (`graph_context` is a deprecated alias of `graph`),
 //!   * graceful degradation when `session_id` is `None`,
 //!   * Rust-only ergonomics: empty `Vec<RecallScope>` collapses to `[Auto]`.
 
@@ -281,17 +281,18 @@ async fn test_scope_trace_returns_trace_entries() {
     );
 }
 
+/// Graph-session sync is gone (Python `3401da38a`), so there is no
+/// `graph_context` source. The `graph_context` token is still accepted and, as
+/// in Python (`_DEPRECATED_SCOPE_ALIASES`), means `graph`: no error, and no
+/// item with a graph-context source.
 #[tokio::test]
-async fn test_scope_graph_context_returns_subgraph() {
+async fn test_scope_graph_context_token_is_a_graph_alias() {
     let h = build_harness().await;
-    let snapshot = "graph-knowledge: rust borrow checker; entity:Rust; rel:has_feature.";
-    h.manager
-        .set_graph_context(Some(SESSION_ID), Some(USER_ID), snapshot)
-        .await
-        .expect("set graph context");
+    let scopes = normalize_scope(Some(ScopeInput::from("graph_context"))).expect("accepted");
+    assert_eq!(scopes, vec![RecallScope::Graph]);
 
     let result = recall(
-        "doesn't matter -- not query-matched",
+        "anything",
         None,
         None,
         None,
@@ -302,22 +303,23 @@ async fn test_scope_graph_context_returns_subgraph() {
         &h.orchestrator,
         Some(&*h.store),
         Some(&h.manager),
-        Some(vec![RecallScope::GraphContext]),
+        Some(scopes),
         None,
     )
     .await
     .expect("recall ok");
 
-    assert_eq!(result.items.len(), 1);
-    assert_eq!(result.items[0].source, RecallSource::GraphContext);
-    assert_eq!(
-        result.items[0].content,
-        serde_json::Value::String(snapshot.to_string())
+    assert!(
+        result.items.iter().all(|i| i.source == RecallSource::Graph),
+        "the alias runs the graph source only"
     );
+    let wire = serde_json::to_string(&result.items.iter().map(|i| i.source).collect::<Vec<_>>())
+        .expect("serialize");
+    assert!(!wire.contains("graph_context"), "got {wire}");
 }
 
 #[tokio::test]
-async fn test_scope_all_merges_four_sources() {
+async fn test_scope_all_merges_three_sources() {
     let h = build_harness().await;
     seed_qa(&*h.store, "session q rust", "session a rust").await;
     seed_trace(
@@ -327,11 +329,6 @@ async fn test_scope_all_merges_four_sources() {
         "trace ctx rust",
     )
     .await;
-    h.manager
-        .set_graph_context(Some(SESSION_ID), Some(USER_ID), "graph-context rust note")
-        .await
-        .expect("set graph context");
-
     let result = recall(
         "rust",
         None,
@@ -348,7 +345,6 @@ async fn test_scope_all_merges_four_sources() {
             RecallScope::Graph,
             RecallScope::Session,
             RecallScope::Trace,
-            RecallScope::GraphContext,
         ]),
         None,
     )
@@ -360,7 +356,6 @@ async fn test_scope_all_merges_four_sources() {
     assert!(sources.contains(&RecallSource::Graph));
     assert!(sources.contains(&RecallSource::Session));
     assert!(sources.contains(&RecallSource::Trace));
-    assert!(sources.contains(&RecallSource::GraphContext));
 
     // Order: caller asked Graph first, so the first item should be Graph.
     assert_eq!(

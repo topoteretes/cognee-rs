@@ -178,11 +178,6 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
     }
 }
 
-fn graph_context_key(user_id: Option<&str>, session_id: &str) -> String {
-    let uid = user_id.unwrap_or("default");
-    format!("graph_knowledge:{uid}:{session_id}")
-}
-
 fn trace_key(user_id: &str, session_id: &str) -> String {
     format!("cognee:trace:{user_id}:{session_id}")
 }
@@ -416,30 +411,6 @@ impl SessionStore for RedisSessionStore {
         Ok(true)
     }
 
-    async fn get_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        let key = graph_context_key(user_id, session_id);
-        let mut conn = self.conn.clone();
-        let result: Option<String> = conn.get(&key).await.map_err(map_err)?;
-        Ok(result)
-    }
-
-    async fn set_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), SessionError> {
-        let key = graph_context_key(user_id, session_id);
-        let mut conn = self.conn.clone();
-        conn.set::<_, _, ()>(&key, context).await.map_err(map_err)?;
-        self.apply_session_ttl(&mut conn, &key).await?;
-        Ok(())
-    }
-
     async fn save_trace_step(
         &self,
         user_id: &str,
@@ -525,7 +496,7 @@ mod tests {
     async fn session_ttl_expires_every_written_key() {
         use redis::AsyncCommands;
 
-        use super::{RedisSessionStore, graph_context_key, session_key, trace_key};
+        use super::{RedisSessionStore, session_key, trace_key};
         use crate::session_store::SessionStore;
         use crate::types::SessionTraceStep;
 
@@ -547,10 +518,6 @@ mod tests {
             .with_session_ttl_seconds(120);
         store
             .create_qa_entry(&session, Some(user), "q", "a", None)
-            .await
-            .unwrap();
-        store
-            .set_graph_context(&session, Some(user), "ctx")
             .await
             .unwrap();
         store
@@ -577,11 +544,7 @@ mod tests {
             .get_multiplexed_async_connection()
             .await
             .unwrap();
-        for key in [
-            session_key(Some(user), &session),
-            graph_context_key(Some(user), &session),
-            trace_key(user, &session),
-        ] {
+        for key in [session_key(Some(user), &session), trace_key(user, &session)] {
             let ttl: i64 = conn.ttl(&key).await.unwrap();
             assert!((1..=120).contains(&ttl), "{key}: ttl {ttl}");
             let _: () = conn.del(&key).await.unwrap();

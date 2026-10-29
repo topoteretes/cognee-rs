@@ -15,9 +15,6 @@ pub mod pipeline_run;
 pub mod pipeline_run_payload_field;
 pub mod task_run;
 
-// Graph sync checkpoints (Stage 4 of improve()):
-pub mod graph_sync_checkpoint;
-
 // P6 sync_operations (cloud sync state):
 pub mod sync_operation;
 

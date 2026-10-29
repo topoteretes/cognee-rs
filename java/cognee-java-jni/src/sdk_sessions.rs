@@ -1,4 +1,4 @@
-//! Session ops: getSession, addFeedback, deleteFeedback, get/setGraphContext.
+//! Session ops: getSession, addFeedback, deleteFeedback.
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
@@ -98,57 +98,6 @@ pub extern "system" fn Java_ai_cognee_internal_Native_deleteFeedback<'l>(
         };
         spawn_future(env, &future, async move {
             sessions::run_delete_feedback(&state, &session, &qa).await
-        });
-    })
-}
-
-/// `getGraphContext(handle, sessionId, future)`
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_ai_cognee_internal_Native_getGraphContext<'l>(
-    mut env: JNIEnv<'l>,
-    _class: JClass<'l>,
-    handle: jlong,
-    session_id: JString<'l>,
-    future: JObject<'l>,
-) {
-    guard_void(&mut env, |env| {
-        let Some(state) = checked_handle(env, handle, &future) else {
-            return;
-        };
-        let session = match arg_string(env, &session_id) {
-            Ok(v) => v,
-            Err(e) => return throw_sdk_error(env, e),
-        };
-        spawn_future(env, &future, async move {
-            sessions::run_get_graph_context(&state, &session).await
-        });
-    })
-}
-
-/// `setGraphContext(handle, sessionId, context, future)`
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_ai_cognee_internal_Native_setGraphContext<'l>(
-    mut env: JNIEnv<'l>,
-    _class: JClass<'l>,
-    handle: jlong,
-    session_id: JString<'l>,
-    context: JString<'l>,
-    future: JObject<'l>,
-) {
-    guard_void(&mut env, |env| {
-        let Some(state) = checked_handle(env, handle, &future) else {
-            return;
-        };
-        let session = match arg_string(env, &session_id) {
-            Ok(v) => v,
-            Err(e) => return throw_sdk_error(env, e),
-        };
-        let context = match arg_string(env, &context) {
-            Ok(v) => v,
-            Err(e) => return throw_sdk_error(env, e),
-        };
-        spawn_future(env, &future, async move {
-            sessions::run_set_graph_context(&state, &session, &context).await
         });
     })
 }

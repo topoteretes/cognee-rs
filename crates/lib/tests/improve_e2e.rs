@@ -20,7 +20,7 @@ use cognee::api::improve::{
 };
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_ingestion::AddPipeline;
@@ -112,7 +112,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -143,8 +142,6 @@ async fn make_harness() -> Harness {
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
-
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -157,7 +154,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -184,7 +180,6 @@ async fn improve_without_sessions_runs_no_stage() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -230,7 +225,6 @@ async fn improve_skips_stage1_when_session_backends_missing() {
         session_store: None,
         session_manager: None,
         add_pipeline: None,
-        checkpoint_store: None,
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -275,7 +269,6 @@ async fn improve_omits_distill_sessions_when_no_qa() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -333,7 +326,6 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: true,
@@ -404,7 +396,6 @@ async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: true,
@@ -457,7 +448,6 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -476,28 +466,81 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
     assert_eq!(stage.reason.as_deref(), Some(REASON_OPT_IN_DISABLED));
 }
 
-/// Stage 3b (`global_context_index`) is opt-in. With the flag set, not running
-/// in background, a `session_manager` present, and >= 1 graph edge, the stage
-/// formats the edges into the session graph-context and records its name.
-/// Mirrors Python `test_improve_global_context_index_opt_in`
-/// (test_improve_global_context_index.py:56-92).
+/// Stage 3b (`global_context_index`) is opt-in, and Rust has no
+/// `global_context_index_pipeline`. Its former stand-in stored a flat edge list
+/// in the session graph-context snapshot, which is gone with graph-session sync
+/// (Python `3401da38a`). With the flag set the request is acknowledged and the
+/// stage is not recorded, in foreground and background mode alike; nothing is
+/// written to the session store.
 #[tokio::test]
-async fn improve_records_global_context_index_when_opted_in() {
+async fn improve_does_not_record_global_context_index_when_opted_in() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
 
-    // Seed exactly one edge so `get_graph_data()` returns a non-empty edge set
-    // and the stage takes its store-and-record branch.
     h.graph_db
         .add_edge("node_a", "node_b", "related_to", None)
         .await
         .unwrap();
 
+    for run_in_background in [false, true] {
+        let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+        let r = improve(ImproveParams {
+            dataset_name: "ds_gcidx".to_string(),
+            session_ids: None,
+            owner_id: owner,
+            tenant_id: None,
+            feedback_alpha: 0.1,
+            llm,
+            storage: Arc::clone(&h.storage),
+            graph_db: h.graph_db.clone() as Arc<_>,
+            vector_db: h.vector_db.clone() as Arc<_>,
+            embedding_engine: h.embedding_engine.clone() as Arc<_>,
+            ontology_resolver: Arc::clone(&h.ontology),
+            db: Some(h.db.clone()),
+            session_store: Some(Arc::clone(&h.session_store)),
+            session_manager: Some(Arc::clone(&h.session_manager)),
+            add_pipeline: Some(&h.add_pipeline),
+            cognify_config: &config,
+            build_global_context_index: true,
+            build_truth_subspace: false,
+            run_in_background,
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            !r.stages_run.contains(&"global_context_index".to_string()),
+            "global_context_index is not implemented (background={run_in_background}); got {:?}",
+            r.stages_run
+        );
+    }
+}
+
+/// Graph-session sync is gone (Python `3401da38a`): `improve()` over a session
+/// records no `sync_graph_to_session` stage and writes no graph snapshot or
+/// "Background knowledge" prefix into the session.
+#[tokio::test]
+async fn improve_with_sessions_records_no_graph_sync_stage() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let user_id = owner.to_string();
+    let session_id = "no_graph_sync_session";
+    let config = CognifyConfig::default();
+
+    h.session_store
+        .create_qa_entry(session_id, Some(&user_id), "q?", "a.", None)
+        .await
+        .unwrap();
+    h.graph_db
+        .add_edge("node_a", "node_b", "related_to", None)
+        .await
+        .unwrap();
+
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let r = improve(ImproveParams {
-        dataset_name: "ds_gcidx".to_string(),
-        session_ids: None,
+        dataset_name: "ds_no_sync".to_string(),
+        session_ids: Some(vec![session_id.to_string()]),
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: 0.1,
@@ -511,9 +554,8 @@ async fn improve_records_global_context_index_when_opted_in() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
-        build_global_context_index: true,
+        build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
     })
@@ -521,80 +563,9 @@ async fn improve_records_global_context_index_when_opted_in() {
     .unwrap();
 
     assert!(
-        r.stages_run.contains(&"global_context_index".to_string()),
-        "global_context_index must be recorded when opted in with >= 1 edge; got {:?}",
+        !r.stages_run.iter().any(|s| s.contains("sync_graph")),
+        "no graph-session sync stage may run; got {:?}",
         r.stages_run
-    );
-
-    // The formatted edge line is stored under the synthetic global-context key so
-    // any session can read it; assert the exact "src → rel → tgt" rendering.
-    let stored = h
-        .session_manager
-        .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
-        .await
-        .unwrap();
-    assert_eq!(
-        stored,
-        Some("node_a → related_to → node_b".to_string()),
-        "the seeded edge must be formatted into the stored global context"
-    );
-}
-
-/// Companion: in background mode Stage 3b is skipped even with the flag set and
-/// edges present, because ordered background pipeline chaining is unsupported.
-/// The stage name is NOT recorded and no global context is stored. Mirrors
-/// Python `test_improve_skips_global_context_index_in_background`
-/// (test_improve_global_context_index.py:95-121).
-#[tokio::test]
-async fn improve_skips_global_context_index_in_background() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    h.graph_db
-        .add_edge("node_a", "node_b", "related_to", None)
-        .await
-        .unwrap();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_gcidx_bg".to_string(),
-        session_ids: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: h.graph_db.clone() as Arc<_>,
-        vector_db: h.vector_db.clone() as Arc<_>,
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        build_global_context_index: true,
-        build_truth_subspace: false,
-        run_in_background: true,
-    })
-    .await
-    .unwrap();
-
-    assert!(
-        !r.stages_run.contains(&"global_context_index".to_string()),
-        "global_context_index must be skipped in background mode; got {:?}",
-        r.stages_run
-    );
-    let stored = h
-        .session_manager
-        .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
-        .await
-        .unwrap();
-    assert!(
-        stored.is_none(),
-        "no global context should be stored in background mode; got {stored:?}"
     );
 }
 
@@ -644,7 +615,6 @@ async fn improve_records_distill_sessions_when_lessons_published() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -667,57 +637,5 @@ async fn improve_records_distill_sessions_when_lessons_published() {
         r.lessons_published > 0,
         "at least one lesson must be published; got {}",
         r.lessons_published
-    );
-}
-
-/// Under per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`) the global
-/// context index stage reads the dataset's own graph: with routing engines that
-/// fail outside a dataset scope, it still runs.
-#[tokio::test]
-async fn improve_reads_the_graph_in_the_dataset_under_per_dataset_storage() {
-    let h = make_harness().await;
-    let owner = Uuid::new_v4();
-    let dataset_id = Uuid::new_v4();
-    IngestDb::create_dataset(
-        &*h.db,
-        Dataset::new("ds_per_dataset".to_string(), owner, None, dataset_id),
-    )
-    .await
-    .unwrap();
-    let stores = cognee_test_utils::PerDatasetMocks::new();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
-    let config = CognifyConfig::default();
-
-    let r = improve(ImproveParams {
-        dataset_name: "ds_per_dataset".to_string(),
-        session_ids: None,
-        owner_id: owner,
-        tenant_id: None,
-        feedback_alpha: 0.1,
-        llm,
-        storage: Arc::clone(&h.storage),
-        graph_db: stores.graph_db(),
-        vector_db: stores.vector_db(),
-        embedding_engine: h.embedding_engine.clone() as Arc<_>,
-        ontology_resolver: Arc::clone(&h.ontology),
-        db: Some(h.db.clone()),
-        session_store: Some(Arc::clone(&h.session_store)),
-        session_manager: Some(Arc::clone(&h.session_manager)),
-        add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
-        cognify_config: &config,
-        build_global_context_index: true,
-        build_truth_subspace: false,
-        run_in_background: false,
-    })
-    .await
-    .unwrap();
-
-    // The dataset's graph has no edges, so the index stage records nothing.
-    assert!(r.stages_run.is_empty(), "got {:?}", r.stages_run);
-    assert_eq!(
-        stores.graph_datasets(),
-        vec![dataset_id],
-        "the stage read the dataset's graph"
     );
 }

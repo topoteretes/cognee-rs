@@ -143,7 +143,6 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             Some(Arc::clone(&database)),
             Some(session_store),
             Some(session_manager),
-            None,
             ontology_resolver,
             cognify_config,
         )

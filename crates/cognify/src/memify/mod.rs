@@ -9,9 +9,9 @@
 //! * [`feedback_weights`] -- apply session feedback to graph weights;
 //! * [`persist_sessions`] -- persist session Q&A into the knowledge graph;
 //! * [`distill_sessions`] -- distill sessions into curated lesson documents;
-//! * [`build_truth_subspace`] -- build the truth-subspace centroids;
-//! * [`sync_graph_session`] -- sync graph edges into the session cache (a
-//!   Rust extension, see SDK-1039 follow-up 1).
+//! * [`build_truth_subspace`] -- build the truth-subspace centroids.
+//!
+//! Graph-to-session sync is gone, as in Python (`3401da38a`).
 //!
 //! Prefer calling them through `cognee::api::improve`.
 
@@ -19,7 +19,6 @@ pub mod build_truth_subspace;
 pub mod distill_sessions;
 pub mod feedback_weights;
 pub mod persist_sessions;
-pub mod sync_graph_session;
 
 pub use build_truth_subspace::{
     NODE_EMBED_BATCH_SIZE, REASON_BACKEND_UNSUPPORTED, TruthBuildStatus, TruthSubspaceResult,
@@ -37,7 +36,4 @@ pub use feedback_weights::{
 pub use persist_sessions::{
     PersistSessionsError, PersistSessionsResult, USER_SESSIONS_NODE_SET,
     persist_sessions_in_knowledge_graph,
-};
-pub use sync_graph_session::{
-    BATCH_SIZE, DEFAULT_MAX_LINES, SyncError, SyncResult, checkpoint_key, sync_graph_to_session,
 };

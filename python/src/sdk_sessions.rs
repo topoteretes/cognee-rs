@@ -1,6 +1,5 @@
 //! Python-facing wrappers for session operations:
-//! `get`, `add_feedback`, `delete_feedback`, `get_graph_context`,
-//! `set_graph_context`.
+//! `get`, `add_feedback`, `delete_feedback`.
 //!
 //! Exposes a `PyCogneeSessions` sub-object (accessible as `cognee.sessions`)
 //! with async methods for each operation. Each method converts Python
@@ -30,8 +29,6 @@ use crate::sdk_error::sdk_error_to_py;
 /// .. code-block:: python
 ///
 ///     entries = await cognee.sessions.get("session-id")
-///     await cognee.sessions.set_graph_context("session-id", "ctx string")
-///     ctx = await cognee.sessions.get_graph_context("session-id")
 #[pyclass(name = "CogneeSessions")]
 pub struct PyCogneeSessions {
     pub(crate) inner: Arc<HandleState>,
@@ -115,50 +112,6 @@ impl PyCogneeSessions {
         let handle = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = sessions::run_delete_feedback(&handle, &session_id, &qa_id)
-                .await
-                .map_err(sdk_error_to_py)?;
-            crate::gil::attach_or_err(|py| serde_to_py(py, &result))
-        })
-    }
-
-    /// Retrieve the graph context snapshot for a session.
-    ///
-    /// .. code-block:: python
-    ///
-    ///     ctx = await cognee.sessions.get_graph_context("session-id")
-    ///     # Returns None if not set, or a str if previously stored.
-    ///
-    /// Returns ``None`` when no context has been stored, or a ``str`` otherwise.
-    fn get_graph_context<'py>(
-        &self,
-        py: Python<'py>,
-        session_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = sessions::run_get_graph_context(&handle, &session_id)
-                .await
-                .map_err(sdk_error_to_py)?;
-            crate::gil::attach_or_err(|py| serde_to_py(py, &result))
-        })
-    }
-
-    /// Store a graph context snapshot for a session.
-    ///
-    /// .. code-block:: python
-    ///
-    ///     await cognee.sessions.set_graph_context("session-id", "some context string")
-    ///
-    /// Returns ``None`` (void op).
-    fn set_graph_context<'py>(
-        &self,
-        py: Python<'py>,
-        session_id: String,
-        context: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = sessions::run_set_graph_context(&handle, &session_id, &context)
                 .await
                 .map_err(sdk_error_to_py)?;
             crate::gil::attach_or_err(|py| serde_to_py(py, &result))

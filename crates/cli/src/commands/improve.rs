@@ -96,7 +96,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             SessionManager::new(Arc::clone(&session_store))
                 .with_feedback_llm_timeout(feedback_llm_timeout),
         );
-        let checkpoint_store = Arc::clone(&database).checkpoints();
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
@@ -119,7 +118,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             session_store: Some(session_store),
             session_manager: Some(session_manager),
             add_pipeline: Some(&add_pipeline),
-            checkpoint_store: Some(checkpoint_store),
             cognify_config: &cognify_config,
         })
         .await
@@ -130,7 +128,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             feedback_processed = result.feedback_entries_processed,
             feedback_applied = result.feedback_entries_applied,
             sessions_persisted = result.sessions_persisted,
-            edges_synced = result.edges_synced,
             "improve completed"
         );
 

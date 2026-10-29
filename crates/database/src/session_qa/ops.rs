@@ -112,14 +112,6 @@ pub async fn delete_session(
 
     let result = delete.exec(db).await.map_err(map_db_err)?;
 
-    // Also delete graph context for this session
-    let mut gc_delete = entity::graph_context::Entity::delete_many()
-        .filter(entity::graph_context::Column::SessionId.eq(session_id));
-    if let Some(uid) = user_id {
-        gc_delete = gc_delete.filter(entity::graph_context::Column::UserId.eq(uid));
-    }
-    let _ = gc_delete.exec(db).await.map_err(map_db_err)?;
-
     Ok(result.rows_affected)
 }
 
@@ -141,13 +133,9 @@ pub async fn delete_qa_entry(
     Ok(result.rows_affected > 0)
 }
 
-/// Delete all rows from the session_qa_entries and session_graph_context tables (prune).
+/// Delete all rows from the session_qa_entries table (prune).
 pub async fn delete_all(db: &DatabaseConnection) -> Result<(), DatabaseError> {
     entity::Entity::delete_many()
-        .exec(db)
-        .await
-        .map_err(map_db_err)?;
-    entity::graph_context::Entity::delete_many()
         .exec(db)
         .await
         .map_err(map_db_err)?;
@@ -205,25 +193,6 @@ pub async fn update_qa_entry(
     // which SeaORM uses as the WHERE clause for the UPDATE statement.
     active.update(db).await.map_err(map_db_err)?;
     Ok(true)
-}
-
-fn graph_context_id(user_id: Option<&str>, session_id: &str) -> String {
-    let uid = user_id.unwrap_or("default");
-    format!("{uid}:{session_id}")
-}
-
-/// Retrieve the graph context for a session.
-pub async fn get_graph_context(
-    db: &DatabaseConnection,
-    session_id: &str,
-    user_id: Option<&str>,
-) -> Result<Option<String>, DatabaseError> {
-    let id = graph_context_id(user_id, session_id);
-    let model = entity::graph_context::Entity::find_by_id(&id)
-        .one(db)
-        .await
-        .map_err(map_db_err)?;
-    Ok(model.map(|m| m.context))
 }
 
 /// Append one agent-trace step. Returns the persisted `trace_id`.
@@ -293,38 +262,4 @@ pub async fn read_trace_steps(
             session_feedback: m.session_feedback,
         })
         .collect())
-}
-
-/// Store (or overwrite) the graph context for a session.
-pub async fn set_graph_context(
-    db: &DatabaseConnection,
-    session_id: &str,
-    user_id: Option<&str>,
-    context: &str,
-) -> Result<(), DatabaseError> {
-    let id = graph_context_id(user_id, session_id);
-
-    // Try to find existing, then update or insert
-    let existing = entity::graph_context::Entity::find_by_id(&id)
-        .one(db)
-        .await
-        .map_err(map_db_err)?;
-
-    if let Some(existing) = existing {
-        let mut active: entity::graph_context::ActiveModel = existing.into();
-        active.context = Set(context.to_string());
-        active.updated_at = Set(Utc::now());
-        active.update(db).await.map_err(map_db_err)?;
-    } else {
-        let model = entity::graph_context::ActiveModel {
-            id: Set(id),
-            session_id: Set(session_id.to_string()),
-            user_id: Set(user_id.map(|s| s.to_string())),
-            context: Set(context.to_string()),
-            updated_at: Set(Utc::now()),
-        };
-        model.insert(db).await.map_err(map_db_err)?;
-    }
-
-    Ok(())
 }

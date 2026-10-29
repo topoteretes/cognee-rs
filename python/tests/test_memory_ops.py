@@ -198,6 +198,6 @@ async def test_improve_result_keys(tmp_path):
     result = await c.improve({"datasetName": "improve_ds"})
     assert isinstance(result, dict)
     for key in ("stagesRun", "stages", "feedbackEntriesProcessed",
-                "feedbackEntriesApplied", "sessionsPersisted", "edgesSynced"):
+                "feedbackEntriesApplied", "sessionsPersisted"):
         assert key in result, f"missing key: {key}"
     assert isinstance(result["stagesRun"], list)

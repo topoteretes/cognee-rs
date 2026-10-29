@@ -198,7 +198,7 @@ async fn baseline_creates_full_table_set_sqlite() {
     // Auth tables (principals, permissions, acls, tenants, users, roles,
     // user_tenants, user_roles, user_api_key, role/user/tenant_default_permissions,
     // principal_configuration) are not part of the OSS schema. The OSS
-    // chain leaves the 16 non-auth tables listed here (the baseline also creates
+    // chain leaves the 15 non-auth tables listed here (the baseline also creates
     // `dataset_data`, which `m20261028_000001_dataset_scoped_data` drops).
     let db = connect("sqlite::memory:").await.expect("connect");
     initialize(&db).await.expect("initialize");
@@ -213,7 +213,6 @@ async fn baseline_creates_full_table_set_sqlite() {
         "pipeline_runs",
         "task_runs",
         "graph_metrics",
-        "graph_sync_checkpoints",
         "sync_operations",
         "notebooks",
         "pipeline_run_payload_fields",
@@ -226,6 +225,11 @@ async fn baseline_creates_full_table_set_sqlite() {
             "missing table {t}: {tables:?}"
         );
     }
+    // `graph_sync_checkpoints` is retired with the graph-session sync stage.
+    assert!(
+        !tables.iter().any(|x| x == "graph_sync_checkpoints"),
+        "graph_sync_checkpoints must be dropped by the sync-removal migration: {tables:?}"
+    );
     // `dataset_data` is retired: membership is `data.dataset_id`.
     assert!(
         !tables.iter().any(|x| x == "dataset_data"),
@@ -306,6 +310,8 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// `b7e4c2a9d6f1`, COG-6089).
 /// Bumped to 13 for `m20261030_000001_drop_pipeline_run_claims`: the Rust-only
 /// exclusive-run claim table goes with the claim (SDK-1039).
+/// Bumped to 14 for `m20261031_000001_drop_graph_sync_checkpoints`: the improve
+/// graph-session sync stage is gone (Python `3401da38a`), and so is its table.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -315,7 +321,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        13,
+        14,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(
