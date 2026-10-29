@@ -27,7 +27,9 @@
 //!    so taking it proves the writer gone. A row with no marker (an older
 //!    writer, a run started without a directory, another machine) is
 //!    unverifiable and left untouched;
-//! 4. the latest row of the run is still `STARTED` once the lock is held.
+//! 4. the latest row of the run is still `STARTED` once the lock is held;
+//! 5. the run's dataset still exists (otherwise the run is left as it is,
+//!    marker included, as in Python).
 //!
 //! Then, in the order that matters: roll the run's artifacts back, and only
 //! then close the run with an `ERRORED` row. A rollback that fails leaves the
@@ -43,7 +45,7 @@ use std::time::Duration;
 
 use cognee_core::pipeline_run_registry::recovery_lock_of;
 use cognee_core::{DatasetLocks, RunOwnership};
-use cognee_database::{PipelineRunRepository, PipelineRunStatus, RelationalDb};
+use cognee_database::{DeleteDb, PipelineRunRepository, PipelineRunStatus, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
 use tracing::{debug, info, warn};
@@ -83,6 +85,9 @@ pub struct RecoveryReport {
     pub skipped_unverifiable: usize,
     /// Runs whose latest row was already terminal once the lock was held.
     pub already_terminal: usize,
+    /// Runs whose dataset row no longer exists. Left `STARTED` with their
+    /// marker in place, as Python's recovery does (`recovery.py:108-111`).
+    pub skipped_missing_dataset: usize,
     /// Runs the rollback or the close failed for; they stay `STARTED` and a
     /// later recovery retries them.
     pub failed: usize,
@@ -118,7 +123,7 @@ pub async fn recover_stale_pipeline_runs(
         return report;
     }
 
-    let sweeper = RunSweeper::new(database, graph_db, vector_db);
+    let sweeper = RunSweeper::new(Arc::clone(&database), graph_db, vector_db);
     // An age too large to represent means nothing is old enough.
     let cutoff = chrono::Duration::from_std(min_age)
         .ok()
@@ -173,6 +178,23 @@ pub async fn recover_stale_pipeline_runs(
             report.already_terminal += 1;
             continue;
         };
+
+        // Python reads the `Dataset` before rolling anything back and leaves
+        // the run alone, marker included, when it is gone
+        // (`recovery.py:108-111`).
+        match DeleteDb::get_dataset_by_id(database.as_ref(), dataset_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                warn!(dataset_id = %dataset_id, "recovery dataset no longer exists");
+                report.skipped_missing_dataset += 1;
+                continue;
+            }
+            Err(e) => {
+                warn!(pipeline_run_id = %current.pipeline_run_id, "recovery failed, will retry: {e}");
+                report.failed += 1;
+                continue;
+            }
+        }
 
         warn!(
             pipeline_run_id = %current.pipeline_run_id,
@@ -230,6 +252,7 @@ pub async fn recover_stale_pipeline_runs(
         skipped_dataset_locked = report.skipped_dataset_locked,
         skipped_unverifiable = report.skipped_unverifiable,
         already_terminal = report.already_terminal,
+        skipped_missing_dataset = report.skipped_missing_dataset,
         failed = report.failed,
         "startup recovery of pipeline runs finished"
     );

@@ -553,25 +553,35 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         run_row_id: Uuid,
         reason: &str,
     ) -> Result<bool, DatabaseError> {
-        // The same row `check_pipeline_run_qualification` reads, so what is
-        // retired here is exactly what would have refused the next run.
-        let Some(latest) = self
-            .get_pipeline_run_by_dataset(dataset_id, pipeline_name)
-            .await?
+        // The observed row, then the latest row of *its run* (Python's
+        // recovery re-reads `get_latest_pipeline_run(pipeline_run_id)`,
+        // `recovery.py:102`). Not the latest row of the `(dataset, pipeline)`
+        // pair: with no gate left, a newer run of the same pipeline on the
+        // same dataset may have run, and finished, since this one was
+        // abandoned, and keying on the pair would leave the abandoned run
+        // `STARTED` forever.
+        let Some(observed) = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::Id.eq(uuid_hex::to_hex(run_row_id)))
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("reset_orphan_run lookup failed: {e}")))?
+            .map(PipelineRun::from)
         else {
             return Ok(false);
         };
+        if observed.dataset_id != Some(dataset_id) || observed.pipeline_name != pipeline_name {
+            return Ok(false);
+        }
+        let Some(latest) = self.get_pipeline_run(observed.pipeline_run_id).await? else {
+            return Ok(false);
+        };
 
-        // Scoped to the row the caller observed. Without this, a real run
-        // started between an operator's report and their clear would be the
-        // latest row by the time we get here, and would be marked `Errored`
-        // while healthy and in flight.
-        //
-        // Compared on `id`, the row primary key, because `pipeline_run_id` does
-        // not identify a run: it is `uuid5(OID, "{pipeline_id}_{dataset_id}")`,
-        // so every run of the same pipeline on the same dataset dispatched by
-        // the HTTP server carries the same value. Comparing that would pass the
-        // guard for precisely the healthy newcomer it exists to spare.
+        // Scoped to the row the caller observed: a row written for the run
+        // since (its own terminal row or, where `pipeline_run_id` is the
+        // deterministic `uuid5(OID, "{pipeline_id}_{dataset_id}")` an HTTP
+        // dispatcher mints, a newer run sharing the id) leaves nothing for
+        // this call to close, and a healthy in-flight run must never be
+        // marked `Errored`.
         if latest.id != run_row_id {
             return Ok(false);
         }

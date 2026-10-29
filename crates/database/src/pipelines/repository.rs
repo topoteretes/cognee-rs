@@ -306,20 +306,19 @@ pub trait PipelineRunRepository: Send + Sync {
     /// Startup recovery calls this after it has rolled the run back, and only
     /// for a run whose ownership marker it claimed (the writer is gone).
     ///
-    /// Scoped to the row the caller observed: a real run can start between the
-    /// recovery's read and this write, and retiring by pair alone would write
-    /// an `Errored` successor over that healthy in-flight run.
+    /// Closes the row only while it is still the latest row of **its own
+    /// run** (`pipeline_run_id`), as Python's recovery re-reads
+    /// `get_latest_pipeline_run(pipeline_run_id)`. A newer run of the same
+    /// pipeline on the same dataset does not stop it: the abandoned run is
+    /// closed even when a later run has completed since. `dataset_id` and
+    /// `pipeline_name` must match the observed row.
     ///
-    /// The scope is `pipeline_runs.id` — the row primary key, a fresh UUIDv4
-    /// per transition — and **not** `pipeline_run_id`, which does not identify
-    /// a run. `pipeline_run_id` is `uuid5(OID, "{pipeline_id}_{dataset_id}")`
-    /// (see `cognee_core::pipeline_run_registry::ids::pipeline_run_id`), so for
-    /// every dataset whose rows the HTTP server wrote, a *different, healthy*
-    /// run started since the operator's report carries the identical value.
-    /// Scoping by it would let exactly the newcomer this guard exists to
-    /// protect through. The reuse is Python parity and deliberate — a
-    /// re-cognify of a dataset is meant to return the same `pipeline_run_id` —
-    /// so the guard is what has to change, not the id.
+    /// Scoped to the row primary key `id`, a fresh UUIDv4 per transition:
+    /// a row written for the run since (its own terminal row or, where an
+    /// HTTP dispatcher mints the deterministic
+    /// `uuid5(OID, "{pipeline_id}_{dataset_id}")` run id, a newer run sharing
+    /// it) means there is nothing left to close, and a healthy in-flight run
+    /// is never marked `Errored`.
     ///
     /// Writes an `Errored` successor rather than deleting, keeping the
     /// new-row-per-transition audit trail intact.
