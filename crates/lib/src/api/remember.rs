@@ -736,7 +736,13 @@ async fn remember_session(
             owner_id,
             tenant_id,
             dataset_name: dataset_name.to_string(),
-            dataset_id: None,
+            // The dataset the session bridge would improve, as on the
+            // permanent path (Python passes the resolved `dataset_id`).
+            dataset_id: Some(cognee_ingestion::generate_dataset_id(
+                dataset_name,
+                owner_id,
+                tenant_id,
+            )),
             session_id: Some(session_id.to_string()),
             session_ids: vec![session_id.to_string()],
         })

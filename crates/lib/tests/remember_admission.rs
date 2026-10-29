@@ -150,6 +150,7 @@ async fn admission_check_skips_the_automatic_improve() {
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].session_id.as_deref(), Some("sess-admission"));
         assert_eq!(seen[0].session_ids, vec!["sess-admission".to_string()]);
+        assert!(seen[0].dataset_id.is_some());
         assert_eq!(seen[1].session_id, None);
         assert!(seen[1].session_ids.is_empty());
         assert_eq!(seen[1].dataset_name, "ds_admission");
