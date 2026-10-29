@@ -104,6 +104,8 @@ fn metadata_value_is_dlt_sourced(value: &serde_json::Value) -> bool {
         .and_then(|source| source.as_str())
         .map(|source| source == "dlt")
         .unwrap_or(false)
+        // Rows written before SDK-1039 P19 nested an item's metadata here when
+        // it clashed with the Rust-only URL keys; nothing writes it any more.
         || value
             .get("data_item_external_metadata")
             .map(metadata_value_is_dlt_sourced)
@@ -420,24 +422,22 @@ mod tests {
     }
 
     #[test]
-    fn classifies_extracted_html_url_text_as_text_document() {
+    fn classifies_fetched_url_page_as_text_document() {
         let data = vec![
             Data::builder(
                 Uuid::new_v4(),
                 "text_hash",
                 "file:///storage/text_hash.txt",
-                "file:///storage/source.html",
+                "file:///storage/text_hash.html",
                 "txt",
                 "text/plain",
                 "hash123",
                 Uuid::new_v4(),
             )
-            .original_extension("html")
-            .original_mime_type("text/html")
-            .loader_engine("beautiful_soup_loader")
-            .external_metadata(
-                r#"{"source":"url","url":"https://example.test","content_type":"text/html"}"#,
-            )
+            .original_extension("txt")
+            .original_mime_type("text/plain")
+            .loader_engine("text_loader")
+            .external_metadata(r#"{"_cognee":{"source_uri":"https://example.test"}}"#)
             .build(),
         ];
 
@@ -639,7 +639,7 @@ mod tests {
         let data = vec![make_data_with_metadata(
             "text/plain",
             "txt",
-            r#"{"_cognee":{"source_uri":"file:///tmp/a.txt"},"tags":["x","é"],"empty":{}}"#,
+            r#"{"_cognee":{"source_uri":"file:///tmp/a.txt"},"tags":["x","é","😀"],"empty":{}}"#,
         )];
         let docs = classify_documents(&data);
         assert_eq!(docs.len(), 1);
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(
             docs[0].external_metadata.as_deref(),
             Some(
-                "{\n    \"_cognee\": {\n        \"source_uri\": \"file:///tmp/a.txt\"\n    },\n    \"tags\": [\n        \"x\",\n        \"\\u00e9\"\n    ],\n    \"empty\": {}\n}"
+                "{\n    \"_cognee\": {\n        \"source_uri\": \"file:///tmp/a.txt\"\n    },\n    \"tags\": [\n        \"x\",\n        \"\\u00e9\",\n        \"\\ud83d\\ude00\"\n    ],\n    \"empty\": {}\n}"
             )
         );
     }
