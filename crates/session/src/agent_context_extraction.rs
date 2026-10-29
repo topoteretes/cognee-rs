@@ -179,17 +179,61 @@ impl AgentContextSection {
     }
 }
 
+impl std::str::FromStr for AgentContextSection {
+    type Err = String;
+
+    /// Python's `section_valid`: trimmed and lowercased before it is checked.
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let normalized = raw.trim().to_lowercase();
+        [
+            Self::ToolRules,
+            Self::WorkflowState,
+            Self::SuccessPatterns,
+            Self::FailureLessons,
+            Self::EnvironmentFacts,
+        ]
+        .into_iter()
+        .find(|section| section.as_str() == normalized)
+        .ok_or_else(|| format!("section must be one of the agent sections, got {raw:?}"))
+    }
+}
+
+/// A lesson's `section`, normalized as Python's validator does.
+fn deserialize_section<'de, D>(deserializer: D) -> Result<AgentContextSection, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    raw.parse().map_err(serde::de::Error::custom)
+}
+
+/// A lesson's `confidence` as Python's `confidence_clamp` reads it: `null`
+/// is 0, and a number is clamped to `[0, 1]`.
+fn deserialize_confidence<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    Ok(value.unwrap_or(0.0).clamp(0.0, 1.0))
+}
+
 /// One lesson the batch pass proposes (Python's agent candidate variants).
+///
+/// Parsed as leniently as Python's validators: the section is trimmed and
+/// lowercased first and a `null` confidence is 0 — a lesson Python accepts
+/// must not fail the whole batch here, or the session's watermark never
+/// advances.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentLesson {
     /// Which kind of tool/workflow lesson the content is.
+    #[serde(deserialize_with = "deserialize_section")]
     pub section: AgentContextSection,
     /// One short, self-contained sentence: a takeaway, not a description of
     /// one specific call.
     pub content: String,
     /// Confidence from 0 to 1. Only lessons with confidence >= 0.75 are
     /// stored.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_confidence")]
     pub confidence: f64,
 }
 
@@ -609,5 +653,40 @@ mod tests {
              - [failure_lessons] Old lesson about uv.\n\nTRACES:\n- step [ok]"
         );
         assert_eq!(build_extraction_input("x", &[]), "TRACES:\nx");
+    }
+
+    // Python's validators lowercase the section and read a `null` confidence
+    // as 0: such a lesson parses (and is gated out by its confidence) instead
+    // of failing the batch.
+    #[test]
+    fn lessons_parse_as_leniently_as_python() {
+        let extraction: AgentContextExtraction = serde_json::from_value(serde_json::json!({
+            "lessons": [
+                {"section": " Tool_Rules ", "content": "Quote paths.", "confidence": 0.9},
+                {"section": "failure_lessons", "content": "Retry once.", "confidence": null},
+                {"section": "environment_facts", "content": "Rust 1.91.", "confidence": 3}
+            ]
+        }))
+        .unwrap();
+        let parsed: Vec<_> = extraction
+            .lessons
+            .iter()
+            .map(|l| (l.section, l.confidence))
+            .collect();
+        assert_eq!(
+            parsed,
+            [
+                (AgentContextSection::ToolRules, 0.9),
+                (AgentContextSection::FailureLessons, 0.0),
+                (AgentContextSection::EnvironmentFacts, 1.0),
+            ]
+        );
+        assert!(
+            serde_json::from_value::<AgentLesson>(serde_json::json!({
+                "section": "goals", "content": "x", "confidence": 1
+            }))
+            .is_err(),
+            "a section outside the agent profile is still rejected"
+        );
     }
 }

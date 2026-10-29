@@ -238,16 +238,19 @@ async fn update_edge_weights(
 
 /// Mark the QA entry's `memify_metadata["feedback_weights_applied"] = success`
 /// via the session manager.
+///
+/// Sends only its own key: `memify_metadata` updates merge keys (Python's
+/// `update_qa`), so a stale snapshot of the other keys written back here
+/// would clobber a flag another stage (`update_user_preferences`'s
+/// `preference_*`) set since it was read.
 async fn mark_feedback_processed(
     session_manager: &SessionManager,
     session_id: &str,
     user_id: &str,
     qa_id: &str,
-    current_metadata: Option<&HashMap<String, bool>>,
     success: bool,
 ) -> Result<(), FeedbackError> {
-    let mut meta: HashMap<String, bool> = current_metadata.cloned().unwrap_or_default();
-    meta.insert(FEEDBACK_WEIGHTS_APPLIED_KEY.to_string(), success);
+    let meta = HashMap::from([(FEEDBACK_WEIGHTS_APPLIED_KEY.to_string(), success)]);
 
     session_manager
         .update_qa(
@@ -323,7 +326,6 @@ pub async fn apply_feedback_weights_pipeline(
                     session_id,
                     &user_id_str,
                     &entry.id.to_string(),
-                    entry.memify_metadata.as_ref(),
                     false,
                 )
                 .await?;
@@ -340,7 +342,6 @@ pub async fn apply_feedback_weights_pipeline(
                 session_id,
                 &user_id_str,
                 &entry.id.to_string(),
-                entry.memify_metadata.as_ref(),
                 success,
             )
             .await?;
