@@ -567,6 +567,24 @@ async fn improve_with_sessions_records_no_graph_sync_stage() {
         "no graph-session sync stage may run; got {:?}",
         r.stages_run
     );
+    // The fs store kept the snapshot at `{user}/_graph_context_{session}.json`;
+    // nothing may write it any more.
+    let snapshot = h
+        ._sess_dir
+        .path()
+        .join(&user_id)
+        .join(format!("_graph_context_{session_id}.json"));
+    assert!(!snapshot.exists(), "no graph snapshot may be written");
+    let entries = h
+        .session_store
+        .get_all_qa_entries(session_id, Some(&user_id))
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1, "the session keeps only its own Q&A");
+    assert!(
+        !entries[0].answer.contains("Background knowledge"),
+        "no graph prefix may be stored"
+    );
 }
 
 /// Stage 2c (`distill_sessions`) is recorded by the orchestrator ONLY when a

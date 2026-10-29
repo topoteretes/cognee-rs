@@ -310,6 +310,10 @@ async fn test_scope_graph_context_token_is_a_graph_alias() {
     .expect("recall ok");
 
     assert!(
+        !result.items.is_empty(),
+        "the alias must run the graph source, not an empty snapshot leg"
+    );
+    assert!(
         result.items.iter().all(|i| i.source == RecallSource::Graph),
         "the alias runs the graph source only"
     );

@@ -196,6 +196,16 @@ async fn search_session_history_has_no_graph_prefix() {
         .create_qa_entry(session_id, None, "prior question", "prior answer", None)
         .await
         .unwrap();
+    // A graph snapshot the removed sync stage left on disk (the fs store kept
+    // it at `{user}/_graph_context_{session}.json`) must not be read back.
+    std::fs::write(
+        dir.path()
+            .join("sessions")
+            .join("default")
+            .join(format!("_graph_context_{session_id}.json")),
+        "\"Alice -> knows -> Bob\"",
+    )
+    .unwrap();
 
     let captured: Arc<Mutex<Vec<SessionContext>>> = Arc::new(Mutex::new(vec![]));
     let retriever = Arc::new(FakeGraphRetriever::capturing(Arc::clone(&captured)));
@@ -223,6 +233,10 @@ async fn search_session_history_has_no_graph_prefix() {
     assert!(
         !fh.contains("Background knowledge"),
         "formatted_history must carry no graph-knowledge prefix; got: {fh:?}"
+    );
+    assert!(
+        !fh.contains("Alice -> knows -> Bob"),
+        "a legacy graph snapshot must not reach the completion; got: {fh:?}"
     );
 }
 
