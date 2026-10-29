@@ -187,18 +187,45 @@ async fn add_audio_stores_transcript_as_python_does() {
         .expect("audio add succeeds with an audio loader");
 
     assert_eq!(rows.len(), 1);
-    let original_mime = rows[0].original_mime_type.clone().unwrap_or_default();
-    assert!(
-        original_mime.starts_with("audio/"),
-        "original_mime_type {original_mime:?} must be an audio type"
-    );
+    // Python's `filetype` names a WAV `audio/x-wav`.
     assert_python_media_row(
         &storage,
         &rows[0],
         WAV_BYTES,
         TRANSCRIPT,
         "wav",
-        &original_mime,
+        "audio/x-wav",
+        "audio_loader",
+    )
+    .await;
+}
+
+/// SDK-1039 P20: `infer` calls an M4A `audio/m4a`, which is not in
+/// `audio_loader`'s MIME list; Python's `filetype` calls it `audio/mp4`, which
+/// is. The sniffed type is translated, so an `.m4a` is transcribed and the row
+/// says `m4a` / `audio/mp4`, as in Python.
+#[tokio::test]
+async fn add_m4a_uses_the_audio_loader_with_python_mime() {
+    let mut m4a = b"\0\0\0\x20ftypM4A \0\0\0\0M4A mp42isom".to_vec();
+    m4a.resize(64, 0);
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, storage) = make_pipeline(&dir, 1).await;
+    let rows = pipeline
+        .add(
+            vec![file_input(&dir, "voice.m4a", &m4a)],
+            "audio",
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .expect("m4a add succeeds with an audio loader");
+    assert_python_media_row(
+        &storage,
+        &rows[0],
+        &m4a,
+        TRANSCRIPT,
+        "m4a",
+        "audio/mp4",
         "audio_loader",
     )
     .await;
