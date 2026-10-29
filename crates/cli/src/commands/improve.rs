@@ -124,10 +124,8 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .map_err(|error| CliError::Runtime(format!("Improve failed: {error}")))?;
 
         info!(
-            stages_run = ?result.stages_run,
-            feedback_processed = result.feedback_entries_processed,
-            feedback_applied = result.feedback_entries_applied,
-            sessions_persisted = result.sessions_persisted,
+            status = result.status().as_str(),
+            stages = %result.stage_summary(),
             "improve completed"
         );
 

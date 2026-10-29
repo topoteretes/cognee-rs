@@ -25,14 +25,19 @@ pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{
-    ImproveParams, ImproveResult, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS,
-    REASON_OPT_IN_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
+    IMPROVE_STAGES, ImproveParams, ImproveResult, ImproveStatus, REASON_BACKEND_UNSUPPORTED,
+    REASON_IMPROVE_IN_PROGRESS, REASON_NO_SESSION_IDS, REASON_NOT_IMPLEMENTED,
+    REASON_OPT_IN_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, StageResult, StageStatus,
+    TRUTH_SUBSPACE_STAGE, improve,
 };
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{
     RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,
     normalize_scope, recall,
 };
-pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember, remember_entry};
+pub use remember::{
+    AutoImproveAdmission, AutoImproveContext, RememberItemInfo, RememberResult, RememberStatus,
+    clear_auto_improve_admission, register_auto_improve_admission, remember, remember_entry,
+};
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

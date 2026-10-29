@@ -115,9 +115,11 @@ describe("memory ops (Tier-A — no LLM)", () => {
           datasetName: "improve_test_ds",
         });
         expect(typeof result).toBe("object");
-        expect(Array.isArray(result.stagesRun)).toBe(true);
-        expect(typeof result.feedbackEntriesProcessed).toBe("number");
-        expect(typeof result.sessionsPersisted).toBe("number");
+        // Python's nine stages, always reported.
+        expect(Array.isArray(result.stages)).toBe(true);
+        expect(result.stages.length).toBe(9);
+        expect(typeof result.status).toBe("string");
+        expect(result.sessionIds).toEqual([]);
       } finally {
         cleanup(h.tmpDir);
       }
@@ -199,14 +201,14 @@ describeMaybe("memory ops (Tier-B — live LLM)", () => {
   );
 
   it(
-    "cogneeImprove returns ImproveResult with stagesRun array",
+    "cogneeImprove returns an ImproveResult with Python's nine stages",
     async () => {
       const result = await native.cogneeImprove(handle, {
         datasetName: "mem_b_ds",
       });
-      expect(Array.isArray(result.stagesRun)).toBe(true);
-      expect(typeof result.feedbackEntriesProcessed).toBe("number");
-      expect(typeof result.sessionsPersisted).toBe("number");
+      expect(Array.isArray(result.stages)).toBe(true);
+      expect(result.stages.length).toBe(9);
+      expect(typeof result.status).toBe("string");
     },
     120_000
   );

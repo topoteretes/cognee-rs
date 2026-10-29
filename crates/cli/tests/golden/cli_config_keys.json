@@ -72,6 +72,7 @@
     "graph_extraction.backend",
     "graph_model",
     "graph_prompt_path",
+    "improve.auto_enabled",
     "llm.anthropic.base_url",
     "llm.api_key",
     "llm.api_version",
@@ -292,6 +293,7 @@
     "search.hybrid.summarize_overflow",
     "search.hybrid.summarize_batch",
     "search.hybrid.overflow_summary_file",
+    "improve.auto_enabled",
     "storage.backend",
     "storage.bucket_name",
     "ontology.file_path",
@@ -6856,6 +6858,100 @@
     "err": true
   },
   "set huggingface_tokenizer <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"1\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"s\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- \"true\"": {
+    "err": true
+  },
+  "set improve.auto_enabled <- -1": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 0": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 1": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 1.5": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 5000000000": {
+    "err": true
+  },
+  "set improve.auto_enabled <- 70000": {
+    "err": true
+  },
+  "set improve.auto_enabled <- [1]": {
+    "err": true
+  },
+  "set improve.auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "set improve.auto_enabled <- null": {
+    "err": true
+  },
+  "set improve.auto_enabled <- true": {
+    "ok": {}
+  },
+  "set improve.auto_enabled <- {\"a\":1}": {
+    "err": true
+  },
+  "set improve_auto_enabled <- \"\"": {
+    "err": true
+  },
+  "set improve_auto_enabled <- \"1\"": {
+    "err": true
+  },
+  "set improve_auto_enabled <- \"s\"": {
+    "err": true
+  },
+  "set improve_auto_enabled <- \"true\"": {
+    "err": true
+  },
+  "set improve_auto_enabled <- -1": {
+    "err": true
+  },
+  "set improve_auto_enabled <- 0": {
+    "err": true
+  },
+  "set improve_auto_enabled <- 1": {
+    "err": true
+  },
+  "set improve_auto_enabled <- 1.5": {
+    "err": true
+  },
+  "set improve_auto_enabled <- 5000000000": {
+    "err": true
+  },
+  "set improve_auto_enabled <- 70000": {
+    "err": true
+  },
+  "set improve_auto_enabled <- [1]": {
+    "err": true
+  },
+  "set improve_auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "set improve_auto_enabled <- null": {
+    "err": true
+  },
+  "set improve_auto_enabled <- true": {
+    "ok": {}
+  },
+  "set improve_auto_enabled <- {\"a\":1}": {
     "err": true
   },
   "set llm.anthropic.base_url <- \"\"": {
@@ -15095,6 +15191,20 @@
     }
   },
   "unset huggingface_tokenizer": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.auto_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve_auto_enabled": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

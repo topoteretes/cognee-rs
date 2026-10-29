@@ -1366,6 +1366,20 @@ which are not part of this repository.
 When on, each search records one query row and one result row. They carry the
 searched dataset's `dataset_id` when exactly one dataset was searched.
 
+## Improve (self-improvement)
+
+The `improve` engine section holds the one knob Rust takes from Python's
+`ImproveConfig` (env prefix `IMPROVE_`):
+
+| Env var | Key (alias) | Default | Effect |
+|---|---|---|---|
+| `IMPROVE_AUTO_ENABLED` | `improve.auto_enabled` (`improve_auto_enabled`) | `true` | Kill switch for the automatic `improve()` that follows `remember()`. Off, `remember()` skips the improve even for `self_improvement=true` and reports no `improve`; an explicit `improve()` call is unaffected. The CLI and the bindings read it through `Settings::auto_improve_enabled()`; a caller of the lib `remember()` applies it itself. |
+
+Python's other `IMPROVE_*` keys (`IMPROVE_DEBOUNCE_*`, `IMPROVE_STAGES_DISABLED`,
+`IMPROVE_REVIEW_CONFLICTS`, the trace-window and distillation caps) are not
+ported: Rust has no debounce, no per-stage switches and none of the stages they
+tune.
+
 ## Ontology
 
 The `ontology` section is registered by the ontology-resolver kind. Resolvers are

@@ -763,9 +763,11 @@ class Cognee:
     ) -> Any:
         """One-call add + cognify + optional self-improvement.
 
-        Accepted *opts* keys: ``sessionId``, ``selfImprovement``, ``tenant``
-        (``snake_case`` spellings accepted too).
-        Returns the ``RememberResult`` as a dict.
+        Accepted *opts* keys: ``sessionId``, ``selfImprovement`` (default
+        ``True``, as in Python), ``tenant`` (``snake_case`` spellings accepted
+        too). Returns the ``RememberResult`` as a dict; when the automatic
+        improve ran it carries ``improve`` (the ``ImproveResult``, snake_case),
+        and ``improve_error`` / ``improve_skipped`` when set.
         """
         ...
 
@@ -789,8 +791,9 @@ class Cognee:
         *opts* must contain ``"datasetName"`` (camelCase) or
         ``"dataset_name"`` (normalised).
 
-        Returns a dict with camelCase keys: ``stagesRun``, ``stages``,
-        ``feedbackEntriesProcessed``, ``feedbackEntriesApplied``, ``sessionsPersisted``.
+        Returns Python's ``ImproveResult`` as a dict with camelCase keys:
+        ``datasetId``, ``datasetName``, ``sessionIds``, ``stages`` (one record
+        per stage), ``background``, ``finished``, ``error``, ``status``.
         """
         ...
 

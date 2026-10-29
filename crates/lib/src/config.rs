@@ -522,6 +522,15 @@ impl Settings {
         }
     }
 
+    /// Whether the automatic improve after `remember()` is enabled
+    /// (`improve.auto_enabled`, Python's `IMPROVE_AUTO_ENABLED`). Callers pass
+    /// `self_improvement && auto_improve_enabled()` to `remember()`; an
+    /// explicit `improve()` is never gated.
+    pub fn auto_improve_enabled(&self) -> bool {
+        self.section::<cognee_components::ImproveSettings>()
+            .auto_enabled
+    }
+
     /// The retriever tuning a `SearchBuilder` is built with (the `search` and
     /// `search.hybrid` sections).
     pub fn search_tuning(&self) -> cognee_search::SearchTuning {
@@ -2705,6 +2714,21 @@ mod tests {
         assert!(cm.read().search_tuning().auto_feedback);
         cm.set("session.caching", serde_json::json!(false)).unwrap();
         assert!(!cm.read().search_tuning().auto_feedback);
+    }
+
+    /// `IMPROVE_AUTO_ENABLED` (`improve.auto_enabled`) defaults on and is the
+    /// kill switch for the automatic improve after `remember()`.
+    #[test]
+    fn auto_improve_is_on_by_default_and_has_a_kill_switch() {
+        let cm = ConfigManager::new(Settings::default());
+        assert!(cm.read().auto_improve_enabled());
+        cm.set("improve.auto_enabled", serde_json::json!(false))
+            .unwrap();
+        assert!(!cm.read().auto_improve_enabled());
+        // Python's flat name resolves to the same key.
+        cm.set("improve_auto_enabled", serde_json::json!(true))
+            .unwrap();
+        assert!(cm.read().auto_improve_enabled());
     }
 
     #[test]

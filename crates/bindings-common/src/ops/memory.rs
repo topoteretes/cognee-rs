@@ -18,11 +18,14 @@
 //! through `serde_json::to_value`, so their result keys are **snake_case** —
 //! deliberately, to preserve Python-SDK wire parity (Python's
 //! `RememberResult.to_dict()` emits snake_case; the HTTP v2 remember DTO makes
-//! the same carve-out). See issue #46.
+//! the same carve-out). See issue #46. That includes the nested `improve`
+//! (Python's `ImproveResult`, with `duration_ms` in its stages), which
+//! `remember` reports when its automatic improve ran, next to `improve_error`
+//! and `improve_skipped`; each is present only when set.
 //!
 //! ### `remember` opts
 //! ```json
-//! {"sessionId":"...", "selfImprovement":bool, "tenant":"<uuid>",
+//! {"sessionId":"...", "selfImprovement":bool (default true), "tenant":"<uuid>",
 //!  "extractor":"auto"|"llm"|"gliner", "graphBackend":...}
 //! ```
 //!
@@ -219,10 +222,8 @@ pub async fn run_remember(
             "`extractor` is not supported when `sessionId` is provided".to_string(),
         ));
     }
-    let self_improvement = opts
-        .get("selfImprovement")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let self_improvement =
+        resolve_self_improvement(opts, state.cm.settings().auto_improve_enabled());
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
@@ -263,6 +264,17 @@ pub async fn run_remember(
 
     serde_json::to_value(&result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
+}
+
+/// Whether `remember` runs its automatic improve: `opts.selfImprovement`,
+/// defaulting to `true` as Python's `remember(self_improvement=True)` does,
+/// gated by the `IMPROVE_AUTO_ENABLED` kill switch (`improve.auto_enabled`;
+/// an explicit `true` does not override it).
+pub fn resolve_self_improvement(opts: &serde_json::Value, auto_enabled: bool) -> bool {
+    opts.get("selfImprovement")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+        && auto_enabled
 }
 
 /// Store a single typed memory entry (QA, trace, or feedback).
@@ -362,8 +374,14 @@ pub async fn run_improve(
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
-    // Per-stage records, Python's `ImproveResult.stages`. Only the truth
-    // stage reports one so far.
+    Ok(improve_result_json(&result))
+}
+
+/// The camelCase wire form of an [`cognee::api::ImproveResult`]: Python's
+/// `ImproveResult` fields (`datasetId`, `datasetName`, `sessionIds`, `stages`,
+/// `background`, `finished`, `error`, `status`), one stage record per stage of
+/// [`cognee::api::IMPROVE_STAGES`].
+pub fn improve_result_json(result: &cognee::api::ImproveResult) -> serde_json::Value {
     let stages: Vec<serde_json::Value> = result
         .stages
         .iter()
@@ -379,11 +397,70 @@ pub async fn run_improve(
         })
         .collect();
 
-    Ok(json!({
-        "stagesRun": result.stages_run,
+    json!({
+        "datasetId": result.dataset_id,
+        "datasetName": result.dataset_name,
+        "sessionIds": result.session_ids,
         "stages": stages,
-        "feedbackEntriesProcessed": result.feedback_entries_processed,
-        "feedbackEntriesApplied": result.feedback_entries_applied,
-        "sessionsPersisted": result.sessions_persisted,
-    }))
+        "background": result.background,
+        "finished": result.finished,
+        "error": result.error,
+        "status": result.status().as_str(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cognee::api::{ImproveResult, StageResult};
+
+    #[test]
+    fn self_improvement_defaults_to_true() {
+        assert!(resolve_self_improvement(&serde_json::Value::Null, true));
+        assert!(resolve_self_improvement(&json!({}), true));
+        assert!(resolve_self_improvement(
+            &json!({"selfImprovement": true}),
+            true
+        ));
+        assert!(!resolve_self_improvement(
+            &json!({"selfImprovement": false}),
+            true
+        ));
+    }
+
+    #[test]
+    fn the_kill_switch_overrides_an_explicit_true() {
+        assert!(!resolve_self_improvement(&json!({}), false));
+        assert!(!resolve_self_improvement(
+            &json!({"selfImprovement": true}),
+            false
+        ));
+    }
+
+    #[test]
+    fn improve_result_json_is_camel_case_python_shape() {
+        let result = ImproveResult {
+            dataset_name: Some("ds".to_string()),
+            session_ids: vec!["s1".to_string()],
+            stages: vec![
+                StageResult::skipped("feedback_weights", "no_session_ids"),
+                StageResult::errored("distill_sessions", "boom"),
+            ],
+            ..ImproveResult::default()
+        };
+        let v = improve_result_json(&result);
+        assert_eq!(v["datasetName"], "ds");
+        assert_eq!(v["datasetId"], serde_json::Value::Null);
+        assert_eq!(v["sessionIds"], json!(["s1"]));
+        assert_eq!(v["background"], false);
+        assert_eq!(v["finished"], true);
+        assert_eq!(v["status"], "errored");
+        assert_eq!(v["stages"][0]["status"], "skipped");
+        assert_eq!(v["stages"][0]["reason"], "no_session_ids");
+        assert_eq!(v["stages"][0]["durationMs"], 0);
+        assert_eq!(v["stages"][1]["error"], "boom");
+        for gone in ["stagesRun", "feedbackEntriesProcessed", "sessionsPersisted"] {
+            assert!(v.get(gone).is_none(), "{gone} must be gone");
+        }
+    }
 }

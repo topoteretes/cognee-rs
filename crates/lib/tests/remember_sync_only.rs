@@ -149,7 +149,10 @@ fn remember_result_has_no_inner_field_in_json() {
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        improve_result: None,
+        improve: None,
+        improve_error: None,
+        after_run_error: None,
+        improve_skipped: None,
     };
     let json = r.to_dict();
     let obj = json.as_object().expect("object");
@@ -228,6 +231,107 @@ async fn remember_session_self_improvement_inline() {
     // Synchronous: always terminal on return.
     assert_eq!(result.status, RememberStatus::SessionStored);
     assert!(result.done());
+    // D20: the inline improve is reported on `improve`, or, when it failed
+    // outright, on `improve_error`; it never flips the status or `error`.
+    assert!(result.error.is_none());
+    assert!(
+        result.improve.is_some() ^ result.improve_error.is_some(),
+        "improve ran or failed, exactly one is reported: {result:?}"
+    );
+}
+
+/// Session-mode remember reports the improve it ran: the nine stages in
+/// Python's order, with `improve_error` set from the errored stages
+/// (Python `_improve_error_text`) and `error` left alone.
+#[tokio::test]
+async fn remember_session_reports_the_improve_stages() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    let result = remember(
+        vec![DataInput::Text("inline improve report".to_string())],
+        "ds_session_report",
+        Some("sess-report"),
+        true,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        cognify_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+    )
+    .await
+    .expect("remember session with inline improve");
+
+    assert_eq!(result.status, RememberStatus::SessionStored);
+    assert!(result.error.is_none());
+    let improve = result.improve.as_ref().expect("session improve reported");
+    let names: Vec<&str> = improve.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, cognee::api::IMPROVE_STAGES);
+    assert_eq!(improve.session_ids, vec!["sess-report".to_string()]);
+    assert_eq!(result.improve_error, improve.error_text());
+
+    // The wire form (Python `to_dict`): `improve` nests the result with its
+    // computed status; the unset improve fields are absent.
+    let dict = result.to_dict();
+    assert_eq!(dict["improve"]["status"], improve.status().as_str());
+    assert_eq!(dict["improve"]["session_ids"][0], "sess-report");
+    assert_eq!(
+        dict["improve"]["stages"].as_array().map(Vec::len),
+        Some(names.len())
+    );
+    assert!(dict.get("improve_skipped").is_none());
+    assert!(dict.get("after_run_error").is_none());
+}
+
+/// A fatal improve failure (`persist_session_qa` cannot cognify the session
+/// Q&A) is reported on `improve_error`, with no `improve` and the remember's
+/// status and `error` untouched (Python `RememberResult.improve_error`).
+#[tokio::test]
+async fn remember_session_improve_failure_goes_to_improve_error() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    // An LLM with nothing to answer: the session Q&A cannot be cognified.
+    let result = remember(
+        vec![DataInput::Text("this cannot be cognified".to_string())],
+        "ds_session_fail",
+        Some("sess-fail"),
+        true,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        mock_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+    )
+    .await
+    .expect("a failed improve never fails the remember");
+
+    assert_eq!(result.status, RememberStatus::SessionStored);
+    assert!(
+        result.error.is_none(),
+        "error stays clear: {:?}",
+        result.error
+    );
+    assert!(result.improve.is_none());
+    let error = result.improve_error.as_deref().expect("improve_error set");
+    assert!(error.contains("persist_session_qa"), "{error}");
+    assert_eq!(result.to_dict()["improve_error"], error);
 }
 
 /// SDK-1039 P3: permanent mode with `self_improvement=true` runs `improve()`
@@ -263,16 +367,24 @@ async fn remember_permanent_self_improvement_runs_improve() {
     assert_eq!(result.status, RememberStatus::Completed);
     assert!(result.error.is_none(), "improve error: {:?}", result.error);
     assert!(
-        result.improve_result.is_some(),
+        result.improve.is_some(),
         "self_improvement=true must run improve()"
     );
+    assert!(result.improve_error.is_none(), "{:?}", result.improve_error);
+    assert!(result.improve_skipped.is_none());
     // improve() has no memify/triplet stage (SDK-1115), so nothing wrote the
     // `Triplet_text` collection.
-    let improve = result.improve_result.as_ref().expect("improve ran");
+    let improve = result.improve.as_ref().expect("improve ran");
+    // Permanent mode runs improve without sessions: Python's nine stages, all
+    // skipped, so the result's status is `skipped`.
+    let names: Vec<&str> = improve.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, cognee::api::IMPROVE_STAGES);
+    assert_eq!(improve.status(), cognee::api::ImproveStatus::Skipped);
+    assert_eq!(result.to_dict()["improve"]["status"], "skipped");
     assert!(
-        !improve.stages_run.iter().any(|stage| stage == "memify"),
+        improve.stage("memify").is_none(),
         "improve must not report a memify stage: {:?}",
-        improve.stages_run
+        improve.stage_summary()
     );
     assert!(
         !h.vector_db
@@ -304,5 +416,5 @@ async fn remember_permanent_self_improvement_runs_improve() {
     )
     .await
     .expect("permanent remember without self-improvement");
-    assert!(result.improve_result.is_none());
+    assert!(result.improve.is_none());
 }

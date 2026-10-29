@@ -27,7 +27,8 @@ use crate::sdk_ops::parse_c_str_or_fire;
 /// `inputs_json` is a `CogneeDataInput` object **or** array.
 /// `dataset_name` is the target dataset name.
 /// `opts_json` may be `NULL` or a JSON object with optional fields:
-///   `"sessionId"` (string), `"selfImprovement"` (boolean), `"tenant"` (UUID string).
+///   `"sessionId"` (string), `"selfImprovement"` (boolean, default `true`),
+///   `"tenant"` (UUID string).
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread, never
 /// synchronously from this call.
@@ -157,9 +158,9 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
 ///   `"feedbackAlpha"` (float, default 0.1), `"tenant"` (UUID string).
 ///
 /// On success `result_json` is a JSON object:
-///   `{"stagesRun":[…],"stages":[…],"feedbackEntriesProcessed":N,
-///     "feedbackEntriesApplied":N,"sessionsPersisted":N}`
-///   where each `stages` entry is `{"stage":"…","status":"…","reason":…,
+///   `{"datasetId":…,"datasetName":…,"sessionIds":[…],"stages":[…],
+///     "background":false,"finished":true,"error":null,"status":"…"}`
+///   with one `stages` entry per improve stage, each `{"stage":"…","status":"…","reason":…,
 ///   "error":…,"counts":{…},"durationMs":N}`.
 ///
 /// Async (D4, R1): callback fires on a tokio worker thread.

@@ -18,6 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`remember` and `improve` results match Python (SDK-1039).**
+  - `ImproveResult` is Python's `ImproveResult`: `dataset_id`, `dataset_name`,
+    `session_ids`, `stages`, `background`, `finished`, `error` and the computed
+    `status`. `stages` always has one `StageResult` per stage of Python's
+    `DEFAULT_STAGES`, in order (`feedback_weights`, `persist_session_qa`,
+    `persist_agent_traces`, `extract_agent_context`, `distill_sessions`,
+    `update_user_preferences`, `build_truth_subspace`, `review_conflicts`,
+    `global_context_index`), with Python's gate reasons (`no_session_ids`,
+    `opt_in_disabled`, `backend_unsupported`). A stage Rust does not port
+    reports `skipped` with the Rust-only reason `not_implemented`. `stages_run`
+    and the counters `feedback_entries_processed`, `feedback_entries_applied`,
+    `sessions_persisted`, `sessions_distilled` and `lessons_published` are gone;
+    the figures are the `counts` of the stage that produced them. The bindings'
+    `improve` result is `{datasetId, datasetName, sessionIds, stages,
+    background, finished, error, status}` (the old `stagesRun`,
+    `feedbackEntries*` and `sessionsPersisted` keys are removed).
+  - `persist_session_qa` is fatal, as in Python: when it errors, `improve()`
+    returns the error instead of continuing (it used to log a warning).
+  - `RememberResult` serializes `improve` (the `ImproveResult`), `improve_error`,
+    `after_run_error` and `improve_skipped`, each only when set. `improve_result`
+    (formerly `#[serde(skip)]`) is renamed `improve`. A failed improve is
+    reported on `improve_error` and no longer on `error`; session-mode remember
+    reports the improve it ran inline (it used to drop it).
+  - **`selfImprovement` now defaults to `true` in every binding** (Python's
+    `self_improvement=True`); pass `false` to keep the old behaviour.
+  - New `IMPROVE_AUTO_ENABLED` setting (`improve.auto_enabled`, default `true`):
+    the kill switch for the automatic improve after `remember()`. The CLI and
+    the bindings apply it; a caller of the lib `remember()` applies
+    `Settings::auto_improve_enabled()` itself.
+  - New `register_auto_improve_admission` / `clear_auto_improve_admission`: a
+    host check that can decline the automatic improve with a reason, reported as
+    `RememberResult::improve_skipped` (Python's admission hook).
 - **Graph-session sync is removed, as in Python `3401da38a` (SDK-1039).**
   `improve()` no longer runs a `sync_graph_to_session` stage, so
   `ImproveResult::edges_synced` / `edgesSynced` (library, CLI log, every

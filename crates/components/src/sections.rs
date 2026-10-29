@@ -852,6 +852,20 @@ config_section! {
 }
 
 config_section! {
+    /// The self-improvement loop (Python's `ImproveConfig`, env prefix
+    /// `IMPROVE_`). An engine section, registered with the kind sections.
+    pub struct ImproveSettings in "improve" {
+        /// Kill switch for the automatic `improve()` that follows `remember()`
+        /// (Python `IMPROVE_AUTO_ENABLED`, default on). Off, `remember()` skips
+        /// the improve even for `self_improvement=true`; an explicit `improve()`
+        /// call is unaffected.
+        pub auto_enabled: bool = true => {
+            env: ["IMPROVE_AUTO_ENABLED"], alias: ["improve_auto_enabled"], secret: false,
+        },
+    }
+}
+
+config_section! {
     /// The HYBRID_COMPLETION retriever's context budget. An engine section.
     pub struct HybridSearchSettings in "search.hybrid" {
         /// Context budget in tokens; unset uses the LLM's context length, 0

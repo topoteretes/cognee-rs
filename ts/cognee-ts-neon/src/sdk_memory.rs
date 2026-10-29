@@ -26,11 +26,12 @@ use crate::sdk::CogneeHandle;
 
 /// `cogneeRemember(handle, dataInput, datasetName, opts?) -> Promise<RememberResult>`
 ///
-/// opts: `{ sessionId?, selfImprovement?, tenant? }`
+/// opts: `{ sessionId?, selfImprovement? (default true), tenant? }`
 ///
 /// `RememberResult` derives `Serialize` — result is passed through
-/// `serde_json::to_value` directly (cognify_result / improve_result fields are
-/// `#[serde(skip)]` so they are invisible to JS).
+/// `serde_json::to_value` directly (`cognify_result` is `#[serde(skip)]` so it
+/// is invisible to JS; `improve`, `improve_error` and `improve_skipped` appear
+/// only when set).
 pub fn cognee_remember(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);
@@ -114,8 +115,8 @@ pub fn cognee_remember_entry(mut cx: FunctionContext) -> JsResult<JsPromise> {
 ///
 /// opts: `{ datasetName, sessionIds?, nodeName?, feedbackAlpha?, tenant? }`
 ///
-/// `ImproveResult` does NOT derive `Serialize` → hand-built JSON (done in the
-/// shared `run_improve` in bindings-common).
+/// The camelCase result is hand-built in the shared `run_improve` in
+/// bindings-common.
 pub fn cognee_improve(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);

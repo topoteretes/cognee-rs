@@ -463,13 +463,22 @@ describe("Phase-5 memory ops (Tier-B — skips without LLM creds)", () => {
     expect(result.dataset_name).toBe("tier_b_remember");
   });
 
-  it("cogneeImprove returns ImproveResult with stagesRun array", async () => {
+  it("cogneeImprove returns an ImproveResult with Python's nine stages", async () => {
     const result = await native.cogneeImprove(handle, {
       datasetName: "tier_b_remember",
     });
-    expect(Array.isArray(result.stagesRun)).toBe(true);
-    expect(typeof result.feedbackEntriesProcessed).toBe("number");
-    expect(typeof result.sessionsPersisted).toBe("number");
+    expect(result.stages.map((s) => s.stage)).toEqual([
+      "feedback_weights",
+      "persist_session_qa",
+      "persist_agent_traces",
+      "extract_agent_context",
+      "distill_sessions",
+      "update_user_preferences",
+      "build_truth_subspace",
+      "review_conflicts",
+      "global_context_index",
+    ]);
+    expect(typeof result.status).toBe("string");
     // Without session ids the truth stage reports the orchestrator's skip reason.
     const truth = result.stages.find((s) => s.stage === "build_truth_subspace");
     expect(truth?.status).toBe("skipped");

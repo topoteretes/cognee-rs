@@ -443,7 +443,7 @@ export interface CogneeRecallResult {
 export interface CogneeRememberOptions {
   /** Session ID — switches to session-memory mode (no graph writes). */
   sessionId?: string;
-  /** Run `improve()` after cognify, or on the session in session mode (default false). */
+  /** Run `improve()` after cognify, or on the session in session mode (default true, as in Python). */
   selfImprovement?: boolean;
   /** Tenant UUID string (multi-tenant scoping). */
   tenant?: string;
@@ -519,6 +519,16 @@ export interface CogneeRememberResult {
   entry_type: string | null;
   /** Typed-entry id from the session manager; `null` on the file/text path. */
   entry_id: string | null;
+  /**
+   * The automatic `improve()` that followed the remember, when it ran. Absent
+   * when it was turned off, declined (`improve_skipped`) or failed
+   * (`improve_error`).
+   */
+  improve?: CogneeRememberImprove;
+  /** Why the automatic improve failed; the remember itself succeeded. Present only when set. */
+  improve_error?: string;
+  /** Why a host admission check declined the automatic improve. Present only when set. */
+  improve_skipped?: string;
 }
 
 /** A typed memory entry for `cogneeRememberEntry`. */
@@ -571,14 +581,48 @@ export interface CogneeImproveStage {
   durationMs: number;
 }
 
-/** Result of `cogneeImprove`. Hand-built from `ImproveResult` (not Serialize). */
+/**
+ * Result of `cogneeImprove`: Python's `ImproveResult`, camelCase. Hand-built
+ * from the Rust `ImproveResult` (the nested `improve` of a
+ * `CogneeRememberResult` is snake_case instead, as `remember` results are).
+ */
 export interface CogneeImproveResult {
-  stagesRun: string[];
-  /** Per-stage records; only `build_truth_subspace` reports one so far. */
+  datasetId: string | null;
+  datasetName: string | null;
+  sessionIds: string[];
+  /**
+   * One record per stage of Python's `DEFAULT_STAGES`, in order:
+   * `feedback_weights`, `persist_session_qa`, `persist_agent_traces`,
+   * `extract_agent_context`, `distill_sessions`, `update_user_preferences`,
+   * `build_truth_subspace`, `review_conflicts`, `global_context_index`. A stage
+   * Rust does not port is `skipped` with reason `not_implemented` once the
+   * run-level gates (`no_session_ids`, `opt_in_disabled`) pass.
+   */
   stages: CogneeImproveStage[];
-  feedbackEntriesProcessed: number;
-  feedbackEntriesApplied: number;
-  sessionsPersisted: number;
+  background: boolean;
+  finished: boolean;
+  /** Set when a fatal stage aborted the run. */
+  error: string | null;
+  status: "completed" | "errored" | "skipped" | "running";
+}
+
+/** Python's `ImproveResult` as nested in a `CogneeRememberResult` (snake_case). */
+export interface CogneeRememberImprove {
+  dataset_id: string | null;
+  dataset_name: string | null;
+  session_ids: string[];
+  stages: Array<{
+    stage: string;
+    status: "completed" | "already_completed" | "skipped" | "errored";
+    reason: string | null;
+    error: string | null;
+    counts: Record<string, number>;
+    duration_ms: number;
+  }>;
+  background: boolean;
+  finished: boolean;
+  error: string | null;
+  status: "completed" | "errored" | "skipped" | "running";
 }
 
 /** Target for `cogneeForget`. */
