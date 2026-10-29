@@ -66,6 +66,9 @@ impl GraphCompletionRetriever {
             params
                 .global_context_index_top_k
                 .unwrap_or(DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K),
+            // The prelude is a follow-up retrieval: under `Membership`
+            // scoping it applies the search's datasets itself.
+            params.dataset_ids.as_deref(),
             self.core.graph_db.as_ref(),
             self.core.vector_db.as_ref(),
             self.core.embedding_engine.as_ref(),
@@ -163,6 +166,13 @@ impl SearchRetriever for GraphCompletionRetriever {
     ) -> Result<Option<Vec<Message>>, SearchError> {
         self.build_completion_messages(query, context, session, params)
             .await
+    }
+
+    /// With the global context index on, no triplets still leave the
+    /// prelude, which Python's `get_context_from_objects` returns as the
+    /// context — so the preview is built from it.
+    fn previews_empty_context(&self, params: &SearchParams) -> bool {
+        params.include_global_context_index.unwrap_or(false)
     }
 
     async fn get_completion(
@@ -860,6 +870,47 @@ mod tests {
             "Graph=World summary:\nTopics: Person (2)\n\nRelevant areas:\n\
              alpha.md\nPerson: Alice\n\nbeta.md\nPerson: Bob"
         );
+    }
+
+    /// Python's `get_context_from_objects` returns the prelude as the context
+    /// when no triplet was found, so the `only_context` preview is asked for
+    /// its prompt then — but only with the index on.
+    #[test]
+    fn an_empty_retrieval_is_previewed_only_with_the_index_on() {
+        let llm = Arc::new(TestLlm::default());
+        let retriever = retriever_over(
+            TestGraphDb {
+                empty: true,
+                nodes: vec![],
+                edges: vec![],
+            },
+            HashMap::new(),
+            &llm,
+        );
+        assert!(!retriever.previews_empty_context(&SearchParams::default()));
+        assert!(retriever.previews_empty_context(&SearchParams {
+            include_global_context_index: Some(true),
+            ..Default::default()
+        }));
+    }
+
+    /// A dataset-scoped search reads only its datasets' index: the fixture's
+    /// summaries carry no `dataset_id`, so a scoped prelude is empty and, with
+    /// no triplets, there is no prompt (a miss stays a miss).
+    #[tokio::test]
+    async fn a_scoped_prelude_reads_only_its_datasets_index() {
+        let llm = Arc::new(TestLlm::default());
+        let retriever = retriever_with_global_context(&llm).await;
+        let params = SearchParams {
+            include_global_context_index: Some(true),
+            dataset_ids: Some(vec![Uuid::new_v4()]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages("who?", &vec![], &SessionContext::default(), &params)
+            .await
+            .unwrap();
+        assert!(messages.is_none(), "{messages:?}");
     }
 
     fn retriever_over(

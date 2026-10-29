@@ -1097,7 +1097,7 @@ impl SearchOrchestrator {
             // every dataset's prompt (Python's `SharedSessionHistory`).
             let mut session_context: Option<SessionContext> = None;
             let mut prompt_for = async |context: &SearchContext| {
-                if context.is_empty() {
+                if context.is_empty() && !retriever.previews_empty_context(&params) {
                     return Ok::<_, SearchError>(None);
                 }
                 if session_context.is_none() {

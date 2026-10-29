@@ -117,7 +117,12 @@ bucket and root summaries with Python's prompts) is
 `GlobalContextIndexMethod::Llm`; `improve()` does not use it, as Python's stage
 does not. A graph completion search with `include_global_context_index`
 prepends the root and the `global_context_index_top_k` (3) nearest bucket
-summaries to its context (`World summary:` / `Relevant areas:`).
+summaries to its context (`World summary:` / `Relevant areas:`). A
+dataset-scoped search reads only its datasets' root and summaries (their
+`dataset_id`), so datasets sharing one graph and vector store never see each
+other's index. With no triplet found, the prelude alone is the context, and an
+`only_context` search previews the prompt built from it, as Python's
+`get_context_from_objects` does.
 
 `global_context_index` reports `already_completed` (`no_writes_since_last_improve`)
 when no `pipeline_runs` row other than a `search`, a `recall` or a host's

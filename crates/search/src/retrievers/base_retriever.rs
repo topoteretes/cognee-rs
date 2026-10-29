@@ -110,6 +110,16 @@ pub trait SearchRetriever: Send + Sync {
         Ok(None)
     }
 
+    /// Whether an `only_context` preview asks this retriever for its prompt
+    /// even when retrieval found nothing — for a retriever whose prompt has
+    /// context of its own beyond the retrieved items (graph completion's
+    /// global context index prelude, Python's `get_context_from_objects`).
+    /// Such a retriever's [`completion_messages`](Self::completion_messages)
+    /// returns `None` when it has nothing either, so a miss stays a miss.
+    fn previews_empty_context(&self, _params: &SearchParams) -> bool {
+        false
+    }
+
     /// The `only_context` result for a non-empty `context` when
     /// [`completion_messages`](Self::completion_messages) builds no prompt.
     /// `None` (the default) returns the context items. A retriever whose
