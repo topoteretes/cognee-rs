@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the points up (`VectorDB::retrieve`) and count, and delete, only those found.
   With per-dataset storage the dataset's own store is dropped whole and cannot
   be probed, so no `Triplet_text` point is counted there, previewed or run.
+  The legacy cleanup is best-effort, as Python's is: a failed `Triplet_text`
+  lookup or delete is a warning on the result and counts no point, instead
+  of failing the delete.
 - **The event-graph `temporal_cognify` pipeline is removed (SDK-1039).**
   Python deprecated `temporal_cognify` and ignores it (cognee 1.6.2 was the
   last release in which it built the event graph); by the SDK-1115 rule Rust

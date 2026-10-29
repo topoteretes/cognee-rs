@@ -1398,7 +1398,7 @@ impl DeleteService {
             // The dataset's own vector store is gone and was never reachable
             // from here, so no legacy `Triplet_text` point is counted; the
             // preview counts the same way.
-            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await?;
+            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
             graph_node_count += gn;
             vector_point_count += vp;
         } else {
@@ -1869,7 +1869,7 @@ impl DeleteService {
             } else {
                 self.vector_db.as_ref()
             };
-            let (gn, vp) = ledger_artifact_counts(triplet_store, &nodes, &edges).await?;
+            let (gn, vp) = ledger_artifact_counts(triplet_store, &nodes, &edges).await;
             graph_nodes += gn;
             vector_points += vp;
         }
@@ -2369,12 +2369,13 @@ pub(crate) async fn delete_graph_artifacts(
 /// `triplet_store` is the vector store probed for legacy `Triplet_text`
 /// points (see [`existing_triplet_vector_ids`]); `None` counts none, for a
 /// dataset whose own databases are dropped whole and cannot be probed from
-/// here.
+/// here. A failed probe counts none, as the run then deletes none
+/// (best-effort, as in Python).
 async fn ledger_artifact_counts(
     triplet_store: Option<&Arc<dyn VectorDB>>,
     nodes: &[GraphNode],
     edges: &[GraphEdge],
-) -> Result<(usize, usize), DeleteError> {
+) -> (usize, usize) {
     // Unique node slugs = graph nodes to delete
     let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
     // Count vector points from indexed_fields
@@ -2393,13 +2394,19 @@ async fn ledger_artifact_counts(
     // writes them (SDK-1115), so most edges have none. Execution counts the
     // same way.
     let triplet_points = match triplet_store {
-        Some(vector_db) => existing_triplet_vector_ids(vector_db, edges).await?.len(),
+        Some(vector_db) => match existing_triplet_vector_ids(vector_db, edges).await {
+            Ok(ids) => ids.len(),
+            Err(error) => {
+                warn!("{error}; counting no legacy Triplet_text points");
+                0
+            }
+        },
         None => 0,
     };
-    Ok((
+    (
         unique_slugs.len(),
         node_points + edge_type_points + triplet_points,
-    ))
+    )
 }
 
 /// The legacy `Triplet_text` point ids of `edges` that exist in `vector_db`,
@@ -2411,10 +2418,14 @@ async fn ledger_artifact_counts(
 /// `provenance_delete_planner.py:113-122`). Only the points found here are
 /// deleted and counted, so neither the preview nor the run reports a point
 /// that was never written. A missing collection has none.
+///
+/// The error is a message, not a [`DeleteError`]: the legacy cleanup is
+/// best-effort, as Python's is (it swallows any `Triplet_text` failure), so
+/// callers degrade it to a warning instead of failing the delete.
 async fn existing_triplet_vector_ids(
     vector_db: &Arc<dyn VectorDB>,
     edges: &[GraphEdge],
-) -> Result<Vec<Uuid>, DeleteError> {
+) -> Result<Vec<Uuid>, String> {
     if edges.is_empty() {
         return Ok(Vec::new());
     }
@@ -2422,9 +2433,7 @@ async fn existing_triplet_vector_ids(
         .has_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
         .await
         .map_err(|e| {
-            DeleteError::VectorCleanup(format!(
-                "Failed to check vector collection {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}"
-            ))
+            format!("Failed to check vector collection {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}")
         })?;
     if !exists {
         return Ok(Vec::new());
@@ -2435,9 +2444,7 @@ async fn existing_triplet_vector_ids(
         .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &candidates)
         .await
         .map_err(|e| {
-            DeleteError::VectorCleanup(format!(
-                "Failed to look up vector points in {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}"
-            ))
+            format!("Failed to look up vector points in {TRIPLET_DATA_TYPE}_{TRIPLET_FIELD}: {e}")
         })?;
     let found: BTreeSet<Uuid> = found.into_iter().map(|result| result.id).collect();
     Ok(found.into_iter().collect())
@@ -2485,7 +2492,17 @@ pub(crate) async fn delete_vector_artifacts(
                 .push(*edge_type_id);
         }
 
-        let triplet_ids = existing_triplet_vector_ids(vector_db, edges).await?;
+        // Best-effort, as in Python: a failed probe or delete of the legacy
+        // collection is a warning, never a failed delete.
+        let triplet_ids = match existing_triplet_vector_ids(vector_db, edges).await {
+            Ok(ids) => ids,
+            Err(error) => {
+                warnings.push(format!(
+                    "{error}; legacy Triplet_text points were not cleaned up"
+                ));
+                Vec::new()
+            }
+        };
         if !triplet_ids.is_empty() {
             by_collection
                 .entry((TRIPLET_DATA_TYPE.to_string(), TRIPLET_FIELD.to_string()))
@@ -2508,15 +2525,21 @@ pub(crate) async fn delete_vector_artifacts(
                 })?;
 
             if exists {
-                vector_db
-                    .delete_points(data_type, field_name, ids)
-                    .await
-                    .map_err(|e| {
-                        DeleteError::VectorCleanup(format!(
+                let deleted = vector_db.delete_points(data_type, field_name, ids).await;
+                match deleted {
+                    Ok(_) => total_deleted += ids.len(),
+                    Err(e) if data_type == TRIPLET_DATA_TYPE && field_name == TRIPLET_FIELD => {
+                        warnings.push(format!(
+                            "Failed to delete vector points from {data_type}_{field_name}: {e}; \
+                             legacy Triplet_text points were not cleaned up"
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(DeleteError::VectorCleanup(format!(
                             "Failed to delete vector points from {data_type}_{field_name}: {e}"
-                        ))
-                    })?;
-                total_deleted += ids.len();
+                        )));
+                    }
+                }
             }
         }
 
@@ -3667,6 +3690,186 @@ mod tests {
         assert_eq!(preview.vector_points_to_delete, 1);
         let result = svc.execute(&request).await.expect("execute should succeed");
         assert_eq!(result.deleted_vector_points, 1);
+    }
+
+    /// A store whose legacy `Triplet_text` lookup (`fail_retrieve`) or delete
+    /// (`fail_delete`) fails; every other collection works.
+    struct FailingTripletVectorDb {
+        inner: MockVectorDB,
+        fail_retrieve: bool,
+        fail_delete: bool,
+    }
+
+    impl FailingTripletVectorDb {
+        fn is_triplet(data_type: &str, field_name: &str) -> bool {
+            data_type == TRIPLET_DATA_TYPE && field_name == TRIPLET_FIELD
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl VectorDB for FailingTripletVectorDb {
+        async fn create_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            dimension: usize,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner
+                .create_collection(data_type, field_name, dimension)
+                .await
+        }
+        async fn has_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<bool> {
+            self.inner.has_collection(data_type, field_name).await
+        }
+        async fn index_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            points: &[cognee_vector::VectorPoint],
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner.index_points(data_type, field_name, points).await
+        }
+        async fn search_similar(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            query: &[f32],
+            limit: usize,
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.inner
+                .search_similar(data_type, field_name, query, limit)
+                .await
+        }
+        async fn delete_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner.delete_collection(data_type, field_name).await
+        }
+        async fn delete_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            point_ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<()> {
+            if self.fail_delete && Self::is_triplet(data_type, field_name) {
+                return Err(cognee_vector::VectorDBError::StorageError(
+                    "injected delete failure".to_string(),
+                ));
+            }
+            self.inner
+                .delete_points(data_type, field_name, point_ids)
+                .await
+        }
+        async fn retrieve(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            if self.fail_retrieve && Self::is_triplet(data_type, field_name) {
+                return Err(cognee_vector::VectorDBError::StorageError(
+                    "injected retrieve failure".to_string(),
+                ));
+            }
+            self.inner.retrieve(data_type, field_name, ids).await
+        }
+        async fn collection_size(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<usize> {
+            self.inner.collection_size(data_type, field_name).await
+        }
+    }
+
+    /// The legacy `Triplet_text` cleanup is best-effort, as in Python
+    /// (`delete_from_graph_and_vector.py:108-113` swallows any exception): a
+    /// failed lookup or delete leaves a warning, counts no point, and does
+    /// not fail the delete or keep the other collections from being cleaned.
+    #[tokio::test]
+    async fn a_failing_triplet_cleanup_is_a_warning_not_an_error() {
+        let edge = GraphEdge {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            data_id: Uuid::new_v4(),
+            dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
+            source_node_id: Uuid::new_v4(),
+            destination_node_id: Uuid::new_v4(),
+            relationship_name: String::new(),
+            label: None,
+            attributes: None,
+            created_at: chrono::Utc::now(),
+        };
+        let edge_type_id = Uuid::new_v4();
+        for (fail_retrieve, fail_delete) in [(true, false), (false, true)] {
+            let store = FailingTripletVectorDb {
+                inner: MockVectorDB::new(),
+                fail_retrieve,
+                fail_delete,
+            };
+            seed_legacy_triplet_points(&store.inner, std::slice::from_ref(&edge)).await;
+            store
+                .create_collection("EdgeType", "relationship_name", 3)
+                .await
+                .unwrap();
+            store
+                .index_points(
+                    "EdgeType",
+                    "relationship_name",
+                    &[cognee_vector::VectorPoint::new(
+                        edge_type_id,
+                        vec![1.0, 0.0, 0.0],
+                    )],
+                )
+                .await
+                .unwrap();
+            let store: Arc<dyn VectorDB> = Arc::new(store);
+
+            let (deleted, warnings) = delete_vector_artifacts(
+                Some(&store),
+                &[],
+                std::slice::from_ref(&edge),
+                &[edge_type_id],
+            )
+            .await
+            .expect("a Triplet_text failure must not fail the delete");
+            assert_eq!(
+                deleted, 1,
+                "only the EdgeType point is deleted (retrieve {fail_retrieve}, delete {fail_delete})"
+            );
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(warnings[0].contains("Triplet_text"), "{warnings:?}");
+            assert_eq!(
+                store
+                    .collection_size("EdgeType", "relationship_name")
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        let store: Arc<dyn VectorDB> = Arc::new(FailingTripletVectorDb {
+            inner: MockVectorDB::new(),
+            fail_retrieve: true,
+            fail_delete: false,
+        });
+        store
+            .create_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD, 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            ledger_artifact_counts(Some(&store), &[], std::slice::from_ref(&edge)).await,
+            (0, 0),
+            "a failed lookup counts no Triplet point, as the run deletes none"
+        );
     }
 
     /// An edge carrying a description must have its `EdgeType` vector removed.
