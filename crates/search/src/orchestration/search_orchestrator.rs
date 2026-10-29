@@ -1,6 +1,7 @@
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
 use crate::orchestration::{SearchTypeRegistry, prepare_search_result};
+use crate::query_router::RoutingConstraints;
 use crate::retrievers::DatasetScoping;
 use crate::types::{
     SearchContext, SearchError, SearchOutput, SearchParams, SearchPrompt, SearchRequest,
@@ -178,6 +179,9 @@ pub struct SearchOrchestrator {
     /// searched in its own databases, one retriever run per dataset. See
     /// [`Self::with_per_dataset_storage`].
     per_dataset_storage: bool,
+    /// What this deployment can run, for recall's routing. See
+    /// [`Self::with_routing_constraints`].
+    routing_constraints: RoutingConstraints,
 }
 
 /// One dataset's answer under per-dataset storage, or the single answer of a
@@ -216,6 +220,7 @@ impl SearchOrchestrator {
             default_system_prompt_path: None,
             log_search_history: true,
             per_dataset_storage: false,
+            routing_constraints: RoutingConstraints::default(),
         }
     }
 
@@ -381,6 +386,19 @@ impl SearchOrchestrator {
     pub fn with_search_history_logging(mut self, enabled: bool) -> Self {
         self.log_search_history = enabled;
         self
+    }
+
+    /// Set what this deployment can run: recall resolves its search type
+    /// against it. The default allows everything; [`crate::SearchBuilder`]
+    /// sets it from its LLM and `allow_cypher_query`.
+    pub fn with_routing_constraints(mut self, constraints: RoutingConstraints) -> Self {
+        self.routing_constraints = constraints;
+        self
+    }
+
+    /// What this deployment can run, for recall's routing.
+    pub fn routing_constraints(&self) -> RoutingConstraints {
+        self.routing_constraints
     }
 
     pub async fn get_history(

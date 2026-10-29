@@ -9,6 +9,7 @@ use cognee_session::SessionManager;
 use cognee_vector::VectorDB;
 
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry};
+use crate::query_router::RoutingConstraints;
 use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     FeedbackRetriever, FeelingLuckyRetriever, GraphCompletionContextExtensionRetriever,
@@ -457,6 +458,10 @@ impl SearchBuilder {
             registry.register(Arc::clone(retriever));
         }
 
+        let routing_constraints = RoutingConstraints {
+            llm_available: llm.is_configured(),
+            cypher_allowed: self.tuning.allow_cypher_query,
+        };
         let mut orchestrator = SearchOrchestrator::new(registry)
             .with_database(self.database)
             .with_llm(llm)
@@ -465,7 +470,8 @@ impl SearchBuilder {
             .with_default_feedback_influence(self.tuning.default_feedback_influence)
             .with_default_system_prompt_path(self.tuning.default_system_prompt_path)
             .with_search_history_logging(self.log_search_history)
-            .with_per_dataset_storage(self.per_dataset_storage);
+            .with_per_dataset_storage(self.per_dataset_storage)
+            .with_routing_constraints(routing_constraints);
         if self.tuning.access_tracking {
             orchestrator = orchestrator.with_access_tracking();
         }
@@ -509,6 +515,7 @@ mod tests {
     use cognee_session::SessionContext;
 
     use super::SearchBuilder;
+    use crate::query_router::RoutingConstraints;
     use crate::retrievers::SearchRetriever;
     use crate::types::{
         SearchContext, SearchError, SearchOutput, SearchParams, SearchRequest, SearchType,
@@ -957,6 +964,33 @@ mod tests {
             })
             .build();
         assert_eq!(tuned.tuning_flags(), (true, true));
+    }
+
+    /// The orchestrator's routing constraints come from the builder's LLM
+    /// and `allow_cypher_query`.
+    #[test]
+    fn routing_constraints_come_from_the_llm_and_the_cypher_setting() {
+        let unconstrained = builder().build().routing_constraints();
+        assert_eq!(unconstrained, RoutingConstraints::default());
+
+        let constrained = SearchBuilder::new(
+            Arc::new(TestVectorDb),
+            Arc::new(TestEmbedding),
+            Arc::new(TestGraphDb),
+            Arc::new(cognee_llm::UnconfiguredLlm::new("openai")),
+            Arc::new(TestDatabase),
+        )
+        .with_tuning(super::SearchTuning {
+            allow_cypher_query: false,
+            ..super::SearchTuning::default()
+        })
+        .build()
+        .routing_constraints();
+        let expected = RoutingConstraints {
+            llm_available: false,
+            cypher_allowed: false,
+        };
+        assert_eq!(constrained, expected);
     }
 
     #[tokio::test]

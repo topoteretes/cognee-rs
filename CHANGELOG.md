@@ -24,14 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback. With no LLM, `CHUNKS_LEXICAL` and `CODING_RULES` run as they are,
   `HYBRID_COMPLETION`, `GRAPH_COMPLETION` and `RAG_COMPLETION` — routed or
   explicit — run with `only_context`, and any other routed type becomes the
-  fallback with `only_context`. Recall reads the constraints from
-  `RecallOptions::routing_constraints`; the default allows everything.
+  fallback with `only_context`. Recall reads the constraints from the search
+  orchestrator, which `SearchBuilder` sets from its LLM (`Llm::is_configured`)
+  and `search.allow_cypher_query`; an orchestrator built by hand allows
+  everything unless given `with_routing_constraints`.
 
   **Migration.** `route_query` takes `&RoutingConstraints` (pass
   `&RoutingConstraints::default()` for the previous behaviour), and
-  `RouteDecision` has an `only_context` field. `RecallOptions` has a
-  `routing_constraints` field, so a struct literal must set it or end with
-  `..Default::default()`.
+  `RouteDecision` has an `only_context` field.
 
 - **The session graph-context feature is removed; `graph_context` recall is an
   alias of `graph` (SDK-1044).** Mirrors Python 3401da38a ("Remove graph

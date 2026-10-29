@@ -111,10 +111,6 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                 tenant_id,
                 neighborhood_depth: args.neighborhood_depth.map(usize::from),
                 neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),
-                routing_constraints: cm
-                    .routing_constraints()
-                    .await
-                    .map_err(|e| CliError::Runtime(format!("{e}")))?,
                 ..Default::default()
             }),
         )

@@ -20,8 +20,8 @@ use uuid::Uuid;
 use crate::observability::{COGNEE_RECALL_ROUTE_RULE, COGNEE_SEARCH_TYPE};
 use crate::types::SearchError;
 use crate::{
-    ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, SearchOrchestrator, SearchRequest,
-    SearchResponse, SearchType, default_route, pinned_route, route_query,
+    ROUTER_FALLBACK_TYPE, RouteDecision, SearchOrchestrator, SearchRequest, SearchResponse,
+    SearchType, default_route, pinned_route, route_query,
 };
 
 /// Advanced tuning options forwarded from `cognee::api::recall::RecallOptions`.
@@ -48,9 +48,6 @@ pub struct RecallOptions {
     /// `None` means a tenant-less caller: it reaches only datasets that have
     /// no tenant.
     pub tenant_id: Option<Uuid>,
-    /// What the deployment can run: routing resolves the search type against
-    /// it. The default allows everything.
-    pub routing_constraints: RoutingConstraints,
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
@@ -484,7 +481,7 @@ pub async fn run_graph(
         },
     };
 
-    let constraints = options.map(|o| o.routing_constraints).unwrap_or_default();
+    let constraints = search_orchestrator.routing_constraints();
     let fallback = default_route(&constraints);
     // `routed_rule` is set only when the router chose the type, so the retry
     // below never second-guesses an explicit type.
