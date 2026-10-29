@@ -314,7 +314,7 @@ async fn update_qa_entry_sets_feedback() {
             "s1",
             None,
             &qa_id,
-            cognee_session::SessionQAUpdate {
+            SessionQAUpdate {
                 feedback_text: Some(Some("Excellent".to_string())),
                 feedback_score: Some(Some(5)),
                 ..Default::default()
@@ -346,7 +346,7 @@ async fn update_qa_entry_clears_feedback() {
             "s1",
             None,
             &qa_id,
-            cognee_session::SessionQAUpdate {
+            SessionQAUpdate {
                 feedback_text: Some(Some("Good".to_string())),
                 feedback_score: Some(Some(4)),
                 ..Default::default()
@@ -361,7 +361,7 @@ async fn update_qa_entry_clears_feedback() {
             "s1",
             None,
             &qa_id,
-            cognee_session::SessionQAUpdate {
+            SessionQAUpdate {
                 feedback_text: Some(None),
                 feedback_score: Some(None),
                 ..Default::default()

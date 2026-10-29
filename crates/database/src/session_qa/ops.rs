@@ -230,11 +230,9 @@ pub async fn update_qa_entry(
         active.used_graph_element_ids = Set(ids.clone());
     }
     if let Some(ref mm) = updates.memify_metadata {
-        let merged = match mm {
-            Some(new) => Some(merge_memify_metadata(existing_metadata.as_deref(), new)),
-            None => None,
-        };
-        active.memify_metadata = Set(merged);
+        active.memify_metadata = Set(mm
+            .as_ref()
+            .map(|new| merge_memify_metadata(existing_metadata.as_deref(), new)));
     }
 
     // The `id` field is already `Unchanged` from the `.into()` conversion,

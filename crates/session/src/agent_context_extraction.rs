@@ -63,6 +63,7 @@ const MAX_SERIALIZED_VALUE_LENGTH: usize = 1000;
 /// Items kept from a list or object in a sanitized trace output.
 const MAX_TRACE_CONTAINER_ITEMS: usize = 20;
 
+#[allow(clippy::expect_used, reason = "the patterns are fixed and unit-tested")]
 fn regex(pattern: &str) -> Regex {
     Regex::new(pattern).expect("the redaction patterns are fixed and valid")
 }

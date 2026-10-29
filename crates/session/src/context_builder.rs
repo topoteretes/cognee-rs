@@ -264,7 +264,8 @@ mod tests {
         let again =
             CandidateContextUpdate::new(CONTEXT_PROFILE_QA, "rules", "  CITE   sources", 0.9);
         let a = apply_candidate_updates(&manager, "s", "u", "f1", &[first]).await;
-        let b = apply_candidate_updates(&manager, "s", "u", "f2", &[again.clone()]).await;
+        let b =
+            apply_candidate_updates(&manager, "s", "u", "f2", std::slice::from_ref(&again)).await;
         assert_eq!(a, b);
         // The same source again links nothing new.
         apply_candidate_updates(&manager, "s", "u", "f2", &[again]).await;
