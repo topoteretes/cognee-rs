@@ -202,6 +202,41 @@ async fn add_audio_stores_transcript_as_python_does() {
     .await;
 }
 
+/// Python's image loader also claims `jpeg`, `jpe` and `tiff`, so those are
+/// described too rather than stored as a raw blob.
+#[tokio::test]
+async fn add_jpeg_and_tiff_use_the_image_loader() {
+    for (name, mime) in [
+        ("photo.jpeg", "image/jpeg"),
+        ("photo.jpe", "image/jpeg"),
+        ("scan.tiff", "image/tiff"),
+    ] {
+        let dir = TempDir::new().expect("tempdir");
+        let (pipeline, storage) = make_pipeline(&dir, 1).await;
+        let rows = pipeline
+            .add(
+                vec![file_input(&dir, name, PNG_BYTES)],
+                "images",
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name}: add failed: {e}"));
+        assert_eq!(rows.len(), 1);
+        let ext = name.rsplit('.').next().expect("extension");
+        assert_python_media_row(
+            &storage,
+            &rows[0],
+            PNG_BYTES,
+            DESCRIPTION,
+            ext,
+            mime,
+            "image_loader",
+        )
+        .await;
+    }
+}
+
 /// The same image under two names is one `data` row, as the lane's
 /// `test_add_image_deduplication_within_rust` expects.
 #[tokio::test]

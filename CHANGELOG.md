@@ -698,7 +698,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LoaderRegistry::register_image_loader` / `register_audio_loader`,
   `process_input_with_loaders`, `make_process_input_task_with_loaders`. An
   `AddPipeline` built without a registry keeps the default loaders and still
-  rejects images and audio.
+  rejects images and audio. As Python's image loader does, `add` also sends
+  `.jpeg`, `.jpe` and `.tiff` files to the image loader. Before this change
+  they were stored as raw blobs.
 
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send

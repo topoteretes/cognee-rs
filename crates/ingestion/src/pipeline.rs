@@ -271,9 +271,7 @@ pub async fn process_input_with_loaders(
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
         let registry = loaders;
-        let doc_type = cognee_models::doc_type_for_extension(&original_extension)
-            .unwrap_or("text")
-            .to_string();
+        let doc_type = add_time_doc_type(&original_extension).to_string();
 
         // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
         //
@@ -813,6 +811,21 @@ fn unwrap_data_item(input: &DataInput) -> &DataInput {
     }
 }
 
+/// The document type whose loader runs on a file at `add`.
+///
+/// [`cognee_models::doc_type_for_extension`] mirrors Python's cognify-time
+/// `EXTENSION_TO_DOCUMENT_CLASS`, but Python's `add` picks a loader through
+/// `LoaderEngine`, whose image loader also claims `jpeg`, `jpe` and `tiff`
+/// (`cognee/infrastructure/loaders/core/image_loader.py`). Those go to the
+/// image loader here too, so a `.jpeg` is described rather than stored as a
+/// raw blob. Anything unmapped falls back to `"text"`.
+fn add_time_doc_type(extension: &str) -> &'static str {
+    match extension.to_lowercase().as_str() {
+        "jpeg" | "jpe" | "tiff" => "image",
+        other => cognee_models::doc_type_for_extension(other).unwrap_or("text"),
+    }
+}
+
 /// Build a minimal [`Document`] descriptor passed to a [`DocumentLoader`] at
 /// ADD time. Only the metadata fields loaders read are populated; the content
 /// bytes are passed separately to `extract`.
@@ -822,9 +835,7 @@ fn build_loader_descriptor(
     extension: &str,
     mime_type: &str,
 ) -> Document {
-    let doc_type = cognee_models::doc_type_for_extension(extension)
-        .unwrap_or("text")
-        .to_string();
+    let doc_type = add_time_doc_type(extension).to_string();
     let mut base = DataPoint::new("Document", None);
     base.id = data_id;
     Document {
@@ -1922,6 +1933,19 @@ mod tests {
     use mockito::{Server, ServerGuard};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Python's image loader claims `jpeg`, `jpe` and `tiff` at `add`, which
+    /// its cognify-time `EXTENSION_TO_DOCUMENT_CLASS` lacks (SDK-1039 P15).
+    #[test]
+    fn add_time_doc_type_routes_python_image_loader_extensions() {
+        for ext in ["jpeg", "JPEG", "jpe", "tiff", "png", "jpg", "tif"] {
+            assert_eq!(add_time_doc_type(ext), "image", "{ext}");
+        }
+        assert_eq!(add_time_doc_type("wav"), "audio");
+        assert_eq!(add_time_doc_type("pdf"), "pdf");
+        assert_eq!(add_time_doc_type("unknown-ext"), "text");
+        assert_eq!(add_time_doc_type(""), "text");
+    }
 
     async fn make_pipeline() -> (AddPipeline, Arc<cognee_database::DatabaseConnection>) {
         let db = connect("sqlite::memory:").await.unwrap();
