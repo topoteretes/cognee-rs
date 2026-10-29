@@ -1324,7 +1324,7 @@ Three `Settings` fields tune the search orchestrator itself, lowered by the same
 | Env var | `Settings` field | Default | Effect |
 |---|---|---|---|
 | `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of every search's retrieved context, as Python does on every retrieval (Python's flag, also default off). On a plain completion search the context is then fetched by the search itself and handed to the retriever, so it is still fetched once. `FEEDBACK` searches retrieve no data and are not tracked. |
-| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset, and only while `session.caching` is on (Python's `caching and auto_feedback`). **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
+| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset, and only while `session.caching` is on (Python's `caching and auto_feedback`). The same switch gates improve's `extract_agent_context` stage (`auto_feedback_disabled` when off). **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
 | — | `default_system_prompt_path` | `answer_simple_question.txt` | System prompt file for a search that names neither a system prompt nor a prompt path. The default (Python's file name for the built-in prompt) and an empty value leave each retriever's own compiled-in prompt; any other value is read as a file. Rust-only (Python has no such setting). |
 
 ### Triplet retriever hub cap
@@ -1496,11 +1496,11 @@ binding / `cognee-cli config set`), and is ignored with a warning from env.
 
 | Env var | `Settings` field | Default | Effect |
 |---|---|---|---|
-| `DEFAULT_FEEDBACK_INFLUENCE` | `default_feedback_influence` | `0.0` | Blend weight of the learned feedback signal in graph search, in [0, 1]. Not yet the retrievers' default: a search passes its own `feedback_influence`. |
-| `PREFERENCE_ALPHA` | `preference_alpha` | `0.3` | How far one rating pulls a personal `prefers` weight, in (0, 1]. Read by `update_user_preferences` (not ported yet). |
-| `PREFERENCE_BETA` | `preference_beta` | `0.02` | Per-turn decay of an untouched `prefers` weight, in [0, 1). Not read yet. |
-| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization; gates improve's `update_user_preferences` stage. |
-| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most personalization may move a ranking score, in [0, 1]. Not read yet. |
+| `DEFAULT_FEEDBACK_INFLUENCE` | `default_feedback_influence` | `0.0` | Blend weight of the learned feedback signal in graph search, in [0, 1]: the `feedback_influence` of a search request that sets none. |
+| `PREFERENCE_ALPHA` | `preference_alpha` | `0.3` | How far one rating pulls a personal `prefers` weight, in (0, 1]. Read by improve's `update_user_preferences`. |
+| `PREFERENCE_BETA` | `preference_beta` | `0.02` | Per-turn decay of an untouched `prefers` weight, in [0, 1); applied on read, by the preference update and by the retrievers. |
+| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization: gates improve's `update_user_preferences` stage and the retrievers' preference read (graph and RAG completion). Off, nothing is written or read. |
+| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most a personal `prefers` weight may move a ranking score, in [0, 1] (graph triplet ranking, RAG chunk ranking). |
 
 ## Ontology
 

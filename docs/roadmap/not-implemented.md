@@ -72,24 +72,38 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 `improve()` runs Python's nine stages in order and reports one `StageResult`
 each. Not yet ported — they report a skip reason instead of running:
 
-- **`extract_agent_context`** — skipped `not_ported` (or `session_manager_unavailable` /
-  `no_llm_configured` by its gates). Ported in SDK-1044 step 6.
-- **`update_user_preferences`** — skipped `personalization_disabled`, or `not_ported` once
-  `personalization_enabled` is on. Ported in SDK-1044 step 6.
 - **`review_conflicts`** — skipped `opt_in_disabled` unless opted in with
   `improve.review_conflicts` (there is no per-call argument yet), then `no_llm_configured` or
   `not_ported` (SDK-1038).
 
 Improve settings that exist but are not read by any stage yet: `improve.trace_window_steps`,
 `improve.trace_windows_per_run` (SDK-1047), `improve.distill_max_batches_per_run` (SDK-1049) and
-`improve.effective_date_key` (SDK-1038). Of the personalization knobs only `personalization_enabled`
-is read (the `update_user_preferences` gate); `preference_alpha`, `preference_beta` and
-`personalization_influence` wait for the stage and the retrieval side (SDK-1044 step 6), and
-`default_feedback_influence` is not yet the retrievers' default (a search passes its own
-`feedback_influence`). Python's host admission check for the automatic improve
+`improve.effective_date_key` (SDK-1038). Python's host admission check for the automatic improve
 (`register_auto_improve_admission`) is not ported.
 
 Partial stages:
+
+- **`extract_agent_context`** — the improve stage is ported; the trace-write hooks are not.
+  Python also extracts on every trace write while automatic session context is on (a no-LLM
+  `failure_lessons` lesson per errored step, and an LLM batch every 10 traces), inside
+  `SessionManager.add_agent_trace_step`; Rust's `add_agent_trace_step` stores the step only, so
+  lessons appear when `improve()` runs. The passes exist as `cognee_session::
+  extract_live_agent_context` / `extract_pending_agent_context`. The rendered session guidance
+  block that serves the lessons (Python's `build_active_context_block`) is not ported.
+- **`update_user_preferences`** — ported. Differences: the graph trait has no edge delete, so a
+  retired `prefers` edge is always rewritten as neutral (weight 0.5, turn 0) — Python's fallback
+  for backends without `delete_edge_triples` — and the node is always written in full (every
+  adapter's node write is an upsert). The feedback rows that infer ratings
+  (`referenced_qa_rating`) and the `preferences`-section entries that become the preference
+  text are written by Python's session-turn analysis (`prepare_session_turn`), which is not
+  ported (SDK-1045); in Rust an explicit `feedback_score` (`add_feedback`) is the rating source,
+  and stored entries of either kind are honoured.
+- **Personalized retrieval** — graph completions (triplet ranking) and RAG completion (chunk
+  re-ranking, preference text as guidance) read the preferences. Not yet: the hybrid search's
+  chunk-lane factor and guidance (SDK-1045), and the session guidance block's `Preferences`
+  section. Rust appends the preference text on session searches too, since it has no session
+  guidance block; Python serves it there through that block. RAG scores are similarities in
+  Rust, so the factor is applied in score space (Python scales the distance).
 
 - **`global_context_index`** — opt-in via `build_global_context_index`; builds Python's
   default `from_entities` index. Differences: a document's name comes from its data item

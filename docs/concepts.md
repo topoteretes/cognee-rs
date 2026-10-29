@@ -111,7 +111,17 @@ deleting or pruning a session removes them. The table holds one row per
 `(user_id, session_id, entry_id)` (unique index `uq_session_context_entry`, as
 Python's `uq_cache_session_context_entry`), so a create of an existing entry id
 replaces it in place; a session without a user is the `"default"` user's, as on
-the file and Redis stores.
+the file and Redis stores. `apply_candidate_updates` is the one
+writer of guidance entries (confidence ≥ 0.75, at most 280 characters, an exact
+duplicate links its new source instead of a second entry); improve's
+`extract_agent_context` stage feeds it the `agent`-profile lessons it draws
+from the session's trace steps.
+
+With **personalization** on (`personalization_enabled`), improve's
+`update_user_preferences` stage keeps one internal `UserPreference` node per
+user and dataset, with weighted `prefers` edges to the graph nodes the user's
+rated answers used and the user's stated preferences as text; graph and RAG
+searches by that user rank by those weights and carry that text.
 
 ### Node Sets
 

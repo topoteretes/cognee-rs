@@ -79,10 +79,51 @@ except that a failure in `persist_session_qa` (losing session Q&A would be data
 loss) stops the run with `ApiError::ImproveAborted` carrying the partial
 result, and an exhausted LLM budget skips every later stage with
 `budget_exhausted`. The stages that draft text with an LLM are skipped with
-`no_llm_configured` when none is configured. `extract_agent_context`,
-`update_user_preferences` (gated by `personalization_enabled`) and
-`review_conflicts` (opt-in via `improve.review_conflicts`) are not
-ported yet and always report a skip reason.
+`no_llm_configured` when none is configured. `review_conflicts` (opt-in via
+`improve.review_conflicts`) is not ported yet and always reports a skip
+reason.
+
+`extract_agent_context` runs while automatic session context is on
+(`auto_feedback` with session caching; otherwise `auto_feedback_disabled`)
+and an LLM is configured. Per session it reads the trace steps newer than the
+session's extraction watermark (plus 3 already-processed ones, at most 40),
+shows the model the session's existing agent lessons with Python's prompt,
+and stores at most 5 new lessons as `agent`-profile session-context entries
+(sections `tool_rules`, `workflow_state`, `success_patterns`,
+`failure_lessons`, `environment_facts`). A lesson is stored only with
+confidence ≥ 0.75 and at most 280 characters; one whose normalized text an
+entry of the same section already has is not stored again. The watermark
+advances only after the session's extraction succeeded. Counts: `lessons`,
+`sessions_failed`; the stage is `errored` when any session failed, and the
+other sessions still run. Error texts shown to the model are redacted
+(tokens, secrets, UUIDs, long numbers).
+
+`update_user_preferences` runs while `personalization_enabled` is on. It folds
+the sessions' turns into one `UserPreference` node per (user, dataset), an
+internal node (never embedded, never returned by a search) in the
+`user_preferences` node set, and weighted `prefers` edges from it to the graph
+nodes the turns' answers used (`used_graph_element_ids.node_ids`). A turn's
+rating is its `feedback_score`, else the rating a feedback row inferred for
+it; a rating `r` pulls each node's weight toward `(r - 1) / 4` by
+`preference_alpha`, from its decayed value
+`0.5 + (w - 0.5) * (1 - preference_beta)^(idle turns)`. Every turn advances
+the node's turn counter once; an edge that decayed to within 0.01 of neutral
+is retired. The node's text collects the usable `preferences`-section
+session-context entries newer than its watermark, newest first, capped at
+2000 characters on line boundaries. Turns are marked in `memify_metadata`
+(`preference_turn_counted`, `preference_weights_applied`), so a re-run
+counts and applies each once. Counts: `turns_applied`, `edges_written`,
+`edges_pruned`, `text_lines_added`; nothing to fold is `completed` with the
+reason `no_changes`.
+
+With personalization on, searches read these back for the requesting user in
+the search's single dataset: the decayed `prefers` weights scale the matched
+nodes' distances in graph triplet ranking (every graph completion type) and
+re-rank RAG completion's chunks (fetching `wide_search_top_k` candidates
+first, then trimming to `top_k`), by at most `personalization_influence`;
+graph and RAG completion also append the preference text (under
+`## What this user prefers`) to the question and context. The hybrid search
+does not use them yet.
 
 A run holds its dataset's lock for its whole length, then a claim on every
 session it targets (`session:{user_id}:{session_id}`), and releases both once
