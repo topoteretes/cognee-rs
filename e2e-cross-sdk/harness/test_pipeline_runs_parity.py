@@ -16,9 +16,12 @@ after an ``add`` + ``cognify`` run:
    ``cognee/tests/unit/modules/pipelines/test_run_info_has_no_data.py``):
      - no row carries a ``data`` key;
      - STARTED → ``{}`` or ``{"recovery_lock": …}``, plus ``progress`` once the
-       run ticks (``log_pipeline_run_start.py``, ``log_pipeline_run_progress.py``).
-       ``recovery_lock`` and ``progress`` are Python-only: Rust has no recovery
-       lock and no in-row progress, so its STARTED row is ``{}``;
+       run ticks (``log_pipeline_run_start.py:27``,
+       ``log_pipeline_run_progress.py``). Both SDKs write ``recovery_lock``
+       (the run's ownership marker for startup recovery, SDK-1039 P22: Python
+       ``run_tasks.py:96`` / ``run_ownership.py``, Rust
+       ``cognee_core::RunOwnership``); ``progress`` is Python-only, Rust has no
+       in-row progress ticks;
      - COMPLETED → ``{}`` (``log_pipeline_run_complete.py``). Rust may add its
        documented ``cognify_failures`` key on a run that completed with files
        outstanding;
@@ -151,7 +154,9 @@ def _statuses_for_run(rows: list[dict], pipeline_run_id: str) -> list[str]:
 
 # The run_info keys each status may carry, per SDK. Python-only keys are
 # tolerated on the Python side only; Rust-only keys on the Rust side only.
-STARTED_KEYS = {"Python": {"recovery_lock", "progress"}, "Rust": set()}
+# `recovery_lock` is on both sides since the ownership-marker port (the premise
+# "Rust has no recovery lock" held only until then).
+STARTED_KEYS = {"Python": {"recovery_lock", "progress"}, "Rust": {"recovery_lock"}}
 COMPLETED_KEYS = {"Python": set(), "Rust": {"cognify_failures"}}
 ERRORED_KEYS = {"Python": {"error"}, "Rust": {"error"}}
 
@@ -216,7 +221,7 @@ def test_run_info_shape_parity(both_cognified):
     """``run_info`` follows Python's post-COG-6089 contract on both sides.
 
     No ``data`` key anywhere; STARTED ⊆ ``{recovery_lock, progress}``
-    (Python-only keys); COMPLETED is ``{}`` (Rust may add ``cognify_failures``);
+    (Rust: ``{recovery_lock}``); COMPLETED is ``{}`` (Rust may add ``cognify_failures``);
     ERRORED is ``{"error": …}``.
     """
     py_ws, rust_ws = both_cognified

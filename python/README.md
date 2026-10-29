@@ -361,23 +361,13 @@ await cognee.sessions.add_feedback("session-uuid", "qa-uuid", "Great answer!", 5
 await cognee.sessions.delete_feedback("session-uuid", "qa-uuid")
 ```
 
-### Users and pipeline-run admin
+### Users
 
 ```python
 # Get or create the default user account
 user = await cognee.get_or_create_default_user()
 print(user["id"], user["email"])
-
-# Reset the pipeline run status for a specific pipeline within a dataset
-await cognee.reset_pipeline_run_status(dataset_id, pipeline_name)
-
-# Reset all pipeline run statuses for a dataset
-await cognee.reset_dataset_pipeline_run_status(dataset_id)
 ```
-
-`dataset_id` is a UUID string. `pipeline_name` is the pipeline name string.
-Both reset methods return `None` on success and raise `CogneeValidationError` if
-`dataset_id` is not a valid UUID.
 
 ### Data lifecycle
 

@@ -94,7 +94,7 @@ pub trait DeleteDb: Send + Sync {
     /// Delete all `pipeline_runs` rows for a given dataset.
     ///
     /// Needed for data-scoped deletion where the dataset itself is not deleted
-    /// (FK cascade does not fire) but the pipeline cache should be invalidated.
+    /// (FK cascade does not fire) but its run history no longer describes it.
     async fn delete_pipeline_runs_by_dataset(&self, dataset_id: Uuid)
     -> Result<u64, DatabaseError>;
 

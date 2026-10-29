@@ -36,11 +36,6 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Export(args) => export::run(args, Arc::clone(cm)),
-        // Operator triage, not a pipeline step: a sequence that pauses to
-        // ask a human whether a claim's holder is dead is not a sequence.
-        Commands::PipelineUnblock(_) => Err(CliError::Validation(
-            "pipeline-unblock is not allowed inside run-sequence".to_string(),
-        )),
         // Store maintenance, not a pipeline step. A sequence is a scripted
         // add/cognify/search workload replayed with per-step timings, and an
         // HNSW build over an existing collection takes an unbounded amount of

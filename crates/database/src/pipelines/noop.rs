@@ -79,22 +79,9 @@ impl PipelineRunRepository for NoopPipelineRunRepository {
         Ok(Vec::new())
     }
 
-    /// Nothing to release: this repository never records a claim, so it never
-    /// refuses a run either. Spelled out rather than inherited from the trait
-    /// default so "no persistence, no exclusion, nothing to recover" is
-    /// visible at the implementation.
-    async fn release_all_pipeline_run_claims(&self, _reason: &str) -> Result<u64, DatabaseError> {
-        Ok(0)
-    }
-
-    /// No rows, so no orphans — the counterpart of the `Ok(0)` below, spelled
-    /// out for the same reason.
-    async fn list_orphan_runs(&self) -> Result<Vec<PipelineRunRow>, DatabaseError> {
+    /// No rows, so nothing was left in flight.
+    async fn list_unterminated_runs(&self) -> Result<Vec<PipelineRunRow>, DatabaseError> {
         Ok(Vec::new())
-    }
-
-    async fn reset_orphans(&self, _reason: &str) -> Result<u64, DatabaseError> {
-        Ok(0)
     }
 
     async fn set_payload_field(
@@ -180,7 +167,12 @@ mod tests {
                 .expect("list_recent_with_attribution")
                 .is_empty()
         );
-        assert_eq!(repo.reset_orphans("test").await.expect("reset_orphans"), 0);
+        assert!(
+            repo.list_unterminated_runs()
+                .await
+                .expect("list_unterminated_runs")
+                .is_empty()
+        );
         assert!(
             repo.get_pipeline_run(Uuid::new_v4())
                 .await

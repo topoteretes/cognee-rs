@@ -11,21 +11,35 @@
 //! | `COMPLETED` | `{}`                                            | `{}`      |
 //! | `ERRORED`   | `{"error": …}`                                  | `{"error": …}` |
 //!
-//! Rust has no recovery lock and no in-row progress ticks (task progress is
-//! published through the progress token and the payload-field table instead),
-//! so its `STARTED` row is `{}`. Rust-only additions are additive keys such as
-//! cognify's `cognify_failures` on a tolerantly completed run.
+//! The `STARTED` row carries `{"recovery_lock": "<token>"}` when the run holds
+//! an ownership marker ([`crate::RunOwnership`]), as in Python, and `{}`
+//! otherwise. Rust has no in-row progress ticks (task progress is published
+//! through the progress token and the payload-field table instead). Rust-only
+//! additions are additive keys such as cognify's `cognify_failures` on a
+//! tolerantly completed run.
 //!
 //! Python writes no `INITIATED` row at all since `dc0b4ad6a`; neither does any
-//! Rust pipeline run. [`run_info_for_initiated`] remains only for the explicit,
-//! opt-in re-arm API (`cognee::reset_pipeline_run_status`) that pairs with the
-//! opt-in pipeline cache.
+//! Rust pipeline run. Old rows that carry that status are still read.
 
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
-/// `run_info` for the `STARTED` row: `{}`.
-pub fn run_info_for_started() -> Value {
-    Value::Object(Map::new())
+/// `run_info` for the `STARTED` row: `{"recovery_lock": <token>}`, or `{}` for
+/// a run with no ownership marker, as Python's `log_pipeline_run_start` writes.
+pub fn run_info_for_started(recovery_lock: Option<Uuid>) -> Value {
+    let mut m = Map::new();
+    if let Some(token) = recovery_lock {
+        m.insert("recovery_lock".into(), Value::String(token.to_string()));
+    }
+    Value::Object(m)
+}
+
+/// The ownership token a `STARTED` row's `run_info` carries, if any.
+pub fn recovery_lock_of(run_info: Option<&Value>) -> Option<Uuid> {
+    run_info?
+        .get("recovery_lock")?
+        .as_str()
+        .and_then(|raw| Uuid::parse_str(raw).ok())
 }
 
 /// `run_info` for the `COMPLETED` row: `{}`, as Python's
@@ -42,13 +56,6 @@ pub fn run_info_for_errored(error: &str) -> Value {
     Value::Object(m)
 }
 
-/// `run_info` for an `INITIATED` row: `{}`.
-///
-/// No pipeline run writes this status. Only the explicit re-arm API does.
-pub fn run_info_for_initiated() -> Value {
-    Value::Object(Map::new())
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -60,7 +67,21 @@ mod tests {
 
     #[test]
     fn started_run_info_is_empty_object() {
-        assert_eq!(run_info_for_started().to_string(), "{}");
+        assert_eq!(run_info_for_started(None).to_string(), "{}");
+    }
+
+    /// Python's `log_pipeline_run_start(recovery_token=…)`.
+    #[test]
+    fn started_run_info_carries_the_recovery_lock() {
+        let token = Uuid::new_v4();
+        let info = run_info_for_started(Some(token));
+        assert_eq!(
+            info.to_string(),
+            format!("{{\"recovery_lock\":\"{token}\"}}")
+        );
+        assert_eq!(recovery_lock_of(Some(&info)), Some(token));
+        assert_eq!(recovery_lock_of(Some(&run_info_for_started(None))), None);
+        assert_eq!(recovery_lock_of(None), None);
     }
 
     #[test]
@@ -81,10 +102,10 @@ mod tests {
     #[test]
     fn no_row_carries_a_data_key() {
         for info in [
-            run_info_for_started(),
+            run_info_for_started(None),
+            run_info_for_started(Some(Uuid::new_v4())),
             run_info_for_completed(),
             run_info_for_errored("boom"),
-            run_info_for_initiated(),
         ] {
             assert!(info.get("data").is_none(), "{info}");
         }

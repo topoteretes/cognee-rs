@@ -11,8 +11,7 @@ use crate::types::{DatabaseError, GraphEdge, GraphNode, PipelineRun};
 
 /// The relational provenance ledger cognify writes and run rollback reads:
 /// which graph nodes and edges each pipeline run produced, per data item,
-/// which data items a run completed, and the dataset-level run rows the
-/// pipeline cache checks.
+/// which data items a run completed, and the dataset-level run rows.
 #[async_trait]
 pub trait ProvenanceDb: Send + Sync {
     /// Upsert the provenance rows for a batch of graph nodes and edges, in one

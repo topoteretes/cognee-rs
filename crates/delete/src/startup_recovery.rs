@@ -1,174 +1,237 @@
-//! Rolling back the runs a killed process left in flight, at startup.
+//! Recovering the pipeline runs a killed process left in flight.
+//!
+//! Port of Python's `cognee/modules/cognify/recovery.py`
+//! (`recover_stale_pipeline_runs_on_startup`).
 //!
 //! [`RunSweeper`] rolls back *one* run that the process running it watched
 //! fail. A run killed by SIGKILL, an OOM kill or an Android process kill is
 //! never watched failing by anybody: the code that would have swept it
 //! (`cognee_cognify::rollback::on_run_failed`) dies with it. What survives is
-//! a `pipeline_runs` row still at `Initiated`/`Started`, whatever the run had
-//! already written into the graph and vector stores, and — because a cognify
+//! a `pipeline_runs` row still at `STARTED`, whatever the run had already
+//! written into the graph and vector stores, and — because a cognify
 //! completion marker is written only on success — *no* marker for any of the
-//! items it processed.
+//! items it processed. The next run would extract the same entities again on
+//! top of the ones the corpse left behind.
 //!
-//! So the next run re-processes every item and extracts the same entities
-//! again, on top of the ones the corpse left behind. This module is the
-//! missing half: given a repository, it asks which runs are still in flight
-//! and rolls each one back through the very same [`RunSweeper`] the live
-//! failure path uses, so recovery converges on the state a clean failure
-//! would have left.
+//! # Proving a run abandoned
 //!
-//! Python does this too, and does it in the same order — `cognify_rollback_handler`
-//! runs *before* the status reset in `modules/cognify/recovery.py`.
+//! A `STARTED` row is a *candidate*, not proof: a live run is in flight with
+//! the same row. Recovery therefore requires all of:
 //!
-//! # Only sound where one process owns the database
+//! 1. the row is older than `min_age` (an eligibility floor, never the proof);
+//! 2. nobody in this process holds the dataset's lock
+//!    ([`DatasetLocks::try_lock`]), so no run of ours is working on it;
+//! 3. the row's `run_info.recovery_lock` names an ownership marker on this
+//!    filesystem whose OS lock can be taken without blocking
+//!    ([`RunOwnership::claim`]). The OS drops that lock when its holder dies,
+//!    so taking it proves the writer gone. A row with no marker (an older
+//!    writer, a run started without a directory, another machine) is
+//!    unverifiable and left untouched;
+//! 4. the latest row of the run is still `STARTED` once the lock is held.
 //!
-//! "Still in flight" and "dead" are the same observation only when no peer
-//! process could be running right now. Callers MUST gate this on
-//! `Settings::resolved_single_process` / `COGNEE_SINGLE_PROCESS` — the same
-//! assertion that gates
-//! [`release_all_pipeline_run_claims`](cognee_database::PipelineRunRepository::release_all_pipeline_run_claims)
-//! — and MUST call it before starting any run of their own. Without that,
-//! this deletes a live peer's graph artifacts mid-run.
+//! Then, in the order that matters: roll the run's artifacts back, and only
+//! then close the run with an `ERRORED` row. A rollback that fails leaves the
+//! run `STARTED`, so a later recovery retries it.
 //!
-//! # Ordering
-//!
-//! Sweep first, retire the status rows second. The status row is what makes
-//! the dataset runnable again; retiring it first would open a window in which
-//! a new run can start while the sweep is still deleting the dead run's
-//! nodes.
+//! No gate depends on the outcome: a run is never refused because a row says
+//! `STARTED`, so an unrecovered row costs nothing but a stale status and the
+//! dead run's partial artifacts.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-use cognee_database::{PipelineRunRepository, RelationalDb};
+use cognee_core::pipeline_run_registry::recovery_lock_of;
+use cognee_core::{DatasetLocks, RunOwnership};
+use cognee_database::{PipelineRunRepository, PipelineRunStatus, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_vector::VectorDB;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{RunSweeper, SweepScope};
 
-/// What [`sweep_orphaned_run_artifacts`] did.
+/// The pipeline whose failed runs have artifacts to roll back. Any other
+/// pipeline's abandoned run is only closed, as in Python's `ROLLBACK_HANDLERS`.
+const COGNIFY_PIPELINE_NAME: &str = "cognify_pipeline";
+
+/// The error recorded on a run recovery closes: Python's
+/// `str(AbandonedPipelineRunError())`.
+pub const ABANDONED_RUN_ERROR: &str = "AbandonedPipelineRunError: Pipeline run was abandoned: \
+     its process stopped before the run finished. Startup recovery rolled the run back; re-run \
+     the pipeline. (Status code: 500)";
+
+/// Python's `STALE_RUN_MIN_AGE_SECONDS` default: one hour.
+pub const DEFAULT_STALE_RUN_MIN_AGE: Duration = Duration::from_secs(3600);
+
+/// What [`recover_stale_pipeline_runs`] did.
 ///
 /// Reported rather than returned as an error because every step is
-/// best-effort: refusing to start the SDK over a recovery convenience would
-/// turn a recoverable wedge into a hard startup failure.
+/// best-effort: refusing to start the SDK over a recovery convenience would be
+/// worse than leaving a stale row.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OrphanArtifactSweep {
+pub struct RecoveryReport {
     /// Runs the repository reported as still in flight.
-    pub runs_found: usize,
-    /// Runs whose artifacts were swept without the sweeper reporting a
-    /// problem.
-    pub runs_swept: usize,
-    /// Runs the sweep could not complete — the ledger rows survive, so a
-    /// later recovery converges. Counted, not returned: the caller retires
-    /// the status rows either way (see the note in the module docs).
-    pub runs_failed: usize,
-    /// Runs skipped because their `pipeline_runs` row carries no
-    /// `dataset_id`, so no scope can be built for them. A run-scoped sweep
-    /// needs both halves of the key; a dataset-less sweep would either select
-    /// nothing or, if it ignored the dataset, reach outside the run.
-    pub runs_without_dataset: usize,
+    pub candidates: usize,
+    /// Runs rolled back and closed as abandoned.
+    pub recovered: usize,
+    /// Runs younger than the age floor.
+    pub skipped_young: usize,
+    /// Runs whose dataset a run of this process holds the lock of.
+    pub skipped_dataset_locked: usize,
+    /// Runs whose ownership cannot be verified (no marker, or a live writer),
+    /// or whose row names no dataset.
+    pub skipped_unverifiable: usize,
+    /// Runs whose latest row was already terminal once the lock was held.
+    pub already_terminal: usize,
+    /// Runs the rollback or the close failed for; they stay `STARTED` and a
+    /// later recovery retries them.
+    pub failed: usize,
     pub graph_nodes_deleted: usize,
     pub vector_points_deleted: usize,
-    pub provenance_nodes_deleted: usize,
-    pub provenance_edges_deleted: usize,
 }
 
-/// Roll back the graph/vector artifacts of every pipeline run the repository
-/// still reports as in flight.
+/// Roll back and close every pipeline run whose writer is provably gone.
 ///
-/// Call this **before**
-/// [`reset_orphans`](cognee_database::PipelineRunRepository::reset_orphans),
-/// and only under the single-process assertion — see the module docs for both
-/// conditions.
-///
-/// Never fails. Each run is swept independently through
-/// [`RunSweeper::sweep_logging_failure`], so one unreachable store or one
-/// corrupt run does not abort recovery for the rest, and the caller still
-/// retires every status row afterwards. That last point is the deliberate
-/// half: a run whose sweep failed keeps its ownership-ledger rows, which are
-/// the record of what still needs sweeping, but its status row is retired
-/// anyway. Leaving the row would wedge the dataset *permanently* — that gate
-/// never expires and this is the only path that clears it for an embedded
-/// consumer — which is strictly worse than the duplicate entities a re-run
-/// may now produce.
-///
-/// Scope is always [`SweepScope::whole_run`]: everything that one run created
-/// in one dataset, and nothing else. Never a blanket delete — a dataset holds
-/// artifacts from every run that ever touched it, and all but this one are
-/// live.
-pub async fn sweep_orphaned_run_artifacts(
+/// Never fails; see the module docs for the conditions and their order.
+/// `ownership_dir` is the directory run-ownership markers live in
+/// (`CognifyConfig::run_ownership_dir`).
+pub async fn recover_stale_pipeline_runs(
     repo: &dyn PipelineRunRepository,
     database: Arc<dyn RelationalDb>,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,
-) -> OrphanArtifactSweep {
-    let mut report = OrphanArtifactSweep::default();
+    locks: &DatasetLocks,
+    ownership_dir: &Path,
+    min_age: Duration,
+) -> RecoveryReport {
+    let mut report = RecoveryReport::default();
 
-    let orphans = match repo.list_orphan_runs().await {
-        Ok(orphans) => orphans,
+    let candidates = match repo.list_unterminated_runs().await {
+        Ok(candidates) => candidates,
         Err(e) => {
-            warn!(
-                "startup rollback could not list the runs left in flight (non-fatal); a killed \
-                 run's partial graph artifacts stay in the store and the next run will extract \
-                 them again: {e}"
-            );
+            warn!("startup recovery could not list the runs left in flight (non-fatal): {e}");
             return report;
         }
     };
-
-    report.runs_found = orphans.len();
-    if orphans.is_empty() {
+    report.candidates = candidates.len();
+    if candidates.is_empty() {
         return report;
     }
 
     let sweeper = RunSweeper::new(database, graph_db, vector_db);
+    // An age too large to represent means nothing is old enough.
+    let cutoff = chrono::Duration::from_std(min_age)
+        .ok()
+        .and_then(|age| chrono::Utc::now().checked_sub_signed(age))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
 
-    for orphan in orphans {
-        let Some(dataset_id) = orphan.dataset_id else {
-            report.runs_without_dataset += 1;
-            warn!(
-                pipeline_run_id = %orphan.pipeline_run_id,
-                pipeline_name = %orphan.pipeline_name,
-                "startup rollback skipped a run left in flight: its pipeline_runs row names no \
-                 dataset, so there is no scope to sweep"
+    for candidate in candidates {
+        if candidate.created_at > cutoff {
+            debug!(
+                pipeline_run_id = %candidate.pipeline_run_id,
+                "skipping recovery: the run started less than {}s ago, treating it as live",
+                min_age.as_secs()
             );
+            report.skipped_young += 1;
+            continue;
+        }
+        let Some(dataset_id) = candidate.dataset_id else {
+            report.skipped_unverifiable += 1;
+            continue;
+        };
+
+        let Some(_dataset_lock) = locks.try_lock(dataset_id) else {
+            report.skipped_dataset_locked += 1;
+            continue;
+        };
+
+        let Some(token) = recovery_lock_of(candidate.run_info.as_ref()) else {
+            report.skipped_unverifiable += 1;
+            continue;
+        };
+        let Some(mut ownership) = RunOwnership::claim(ownership_dir, token) else {
+            debug!(
+                pipeline_run_id = %candidate.pipeline_run_id,
+                "run is active or its ownership cannot be verified; skipping recovery"
+            );
+            report.skipped_unverifiable += 1;
+            continue;
+        };
+
+        // A writer or another recoverer may have finished since the candidate
+        // was listed.
+        let current = match repo.get_pipeline_run(candidate.pipeline_run_id).await {
+            Ok(current) => current,
+            Err(e) => {
+                warn!(pipeline_run_id = %candidate.pipeline_run_id, "recovery failed, will retry: {e}");
+                report.failed += 1;
+                continue;
+            }
+        };
+        let Some(current) = current.filter(|c| c.status == PipelineRunStatus::Started) else {
+            ownership.mark_closed();
+            report.already_terminal += 1;
             continue;
         };
 
         warn!(
-            pipeline_run_id = %orphan.pipeline_run_id,
+            pipeline_run_id = %current.pipeline_run_id,
             dataset_id = %dataset_id,
-            pipeline_name = %orphan.pipeline_name,
-            started_at = %orphan.created_at,
-            "rolling back a pipeline run a previous process left in flight"
+            pipeline_name = %current.pipeline_name,
+            started_at = %current.created_at,
+            "recovering a pipeline run its process abandoned"
         );
 
-        let outcome = sweeper
-            .sweep_logging_failure(&SweepScope::whole_run(orphan.pipeline_run_id, dataset_id))
-            .await;
+        if current.pipeline_name == COGNIFY_PIPELINE_NAME {
+            let outcome = sweeper
+                .sweep_logging_failure(&SweepScope::whole_run(current.pipeline_run_id, dataset_id))
+                .await;
+            report.graph_nodes_deleted += outcome.graph_nodes_deleted;
+            report.vector_points_deleted += outcome.vector_points_deleted;
+            if !outcome.warnings.is_empty() {
+                // Python lets the handler's exception abort this run's
+                // recovery: the row stays STARTED and the next pass retries.
+                report.failed += 1;
+                continue;
+            }
+        }
 
-        report.graph_nodes_deleted += outcome.graph_nodes_deleted;
-        report.vector_points_deleted += outcome.vector_points_deleted;
-        report.provenance_nodes_deleted += outcome.provenance_nodes_deleted;
-        report.provenance_edges_deleted += outcome.provenance_edges_deleted;
-
-        if outcome.warnings.is_empty() {
-            report.runs_swept += 1;
-        } else {
-            report.runs_failed += 1;
+        match repo
+            .reset_orphan_run(
+                dataset_id,
+                &current.pipeline_name,
+                current.id,
+                ABANDONED_RUN_ERROR,
+            )
+            .await
+        {
+            // The latest row is no longer the one observed (a newer run, or
+            // someone else closed it first): nothing left for us to close.
+            Ok(false) => {
+                ownership.mark_closed();
+                report.already_terminal += 1;
+            }
+            Ok(true) => {
+                ownership.mark_closed();
+                report.recovered += 1;
+                info!(pipeline_run_id = %current.pipeline_run_id, "recovery closed run as abandoned");
+            }
+            Err(e) => {
+                warn!(pipeline_run_id = %current.pipeline_run_id, "recovery failed, will retry: {e}");
+                report.failed += 1;
+            }
         }
     }
 
     info!(
-        runs_found = report.runs_found,
-        runs_swept = report.runs_swept,
-        runs_failed = report.runs_failed,
-        runs_without_dataset = report.runs_without_dataset,
-        graph_nodes_deleted = report.graph_nodes_deleted,
-        vector_points_deleted = report.vector_points_deleted,
-        provenance_nodes_deleted = report.provenance_nodes_deleted,
-        provenance_edges_deleted = report.provenance_edges_deleted,
-        "startup rollback of runs left in flight by a previous process finished"
+        candidates = report.candidates,
+        recovered = report.recovered,
+        skipped_young = report.skipped_young,
+        skipped_dataset_locked = report.skipped_dataset_locked,
+        skipped_unverifiable = report.skipped_unverifiable,
+        already_terminal = report.already_terminal,
+        failed = report.failed,
+        "startup recovery of pipeline runs finished"
     );
-
     report
 }
