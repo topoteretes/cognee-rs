@@ -55,8 +55,9 @@ rules search that finds nothing, is retried as `HYBRID_COMPLETION`. With no
 LLM API key, recall still routes: `CHUNKS_LEXICAL` and `CODING_RULES` run as
 they are, and any other routed type falls back to `HYBRID_COMPLETION`; it and an
 explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION` or `RAG_COMPLETION` return
-their context instead of an answer (`only_context`). With
-`ALLOW_CYPHER_QUERY=false` a Cypher type falls back too. It is session-aware (reads
+their context instead of an answer (`only_context`). No rule routes to
+`CYPHER` or `NATURAL_LANGUAGE`; requested explicitly with
+`ALLOW_CYPHER_QUERY=false`, they are refused. It is session-aware (reads
 session history when given a `--session-id`) and graph-backed. Results are
 returned to the caller (printed to stdout by the CLI).
 
