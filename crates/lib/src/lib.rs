@@ -166,9 +166,6 @@ pub mod error;
 /// Product-analytics telemetry.
 pub mod telemetry;
 
-pub use api::notebooks::{
-    NotebookError, create_notebook, delete_notebook, list_notebooks, update_notebook,
-};
 pub use api::{DatasetDb, DatasetError, DatasetManager};
 pub use background_tasks::{
     BackgroundTasks, pending_background_tasks, spawn_background_task, wait_for_background_tasks,

@@ -28,7 +28,6 @@ import type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -61,7 +60,6 @@ export type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -231,21 +229,6 @@ export interface NativeBindings {
 
   // Default user (Phase 5).
   cogneeGetOrCreateDefaultUser(handle: NativeBox): Promise<CogneeUser>;
-
-  // Notebooks (Phase 5).
-  cogneeListNotebooks(handle: NativeBox): Promise<CogneeNotebook[]>;
-  cogneeCreateNotebook(
-    handle: NativeBox,
-    name: string,
-    cells?: unknown,
-    deletable?: boolean
-  ): Promise<CogneeNotebook>;
-  cogneeUpdateNotebook(
-    handle: NativeBox,
-    id: string,
-    patch: { name?: string; cells?: unknown }
-  ): Promise<CogneeNotebook | null>;
-  cogneeDeleteNotebook(handle: NativeBox, id: string): Promise<boolean>;
 
   // Session ops (Phase 5).
   cogneeGetSession(

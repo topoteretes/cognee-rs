@@ -17,8 +17,8 @@
 // `user_list_users_*`, `acl_authorized_dataset_ids_*`). This file covers
 // the remaining ops modules only.
 use cognee_database::{
-    CostByModelRow, DatabaseConnection, NotebookDb, SearchHistoryDb, SessionLifecycleDb, connect,
-    initialize, ops, seed_tutorials_if_first_call,
+    CostByModelRow, DatabaseConnection, SearchHistoryDb, SessionLifecycleDb, connect, initialize,
+    ops,
 };
 use cognee_test_utils::{CapturedSpan, SpanCapture};
 use uuid::Uuid;
@@ -102,21 +102,6 @@ async fn graph_storage_get_nodes_by_dataset_emits_span() {
     );
 }
 
-// ─── ops/notebooks.rs (NotebookDb trait impl) ────────────────────────────────
-
-#[tokio::test]
-async fn notebooks_list_by_owner_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-
-    let _ = NotebookDb::list_by_owner(&db, Uuid::new_v4()).await;
-
-    assert_relational_span(
-        &capture.spans(),
-        "cognee.db.relational.notebooks.list_by_owner",
-    );
-}
-
 // ─── ops/pipeline_runs.rs ────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -191,35 +176,10 @@ async fn task_runs_update_task_run_status_emits_span() {
     );
 }
 
-// ─── ops/tutorial_seeder.rs ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn tutorial_seeder_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-    let user_id = Uuid::new_v4();
-
-    // Best-effort: this seeds tutorial notebooks and may succeed or fail
-    // depending on schema availability — what matters is the span fires.
-    let _ = seed_tutorials_if_first_call(&db, user_id).await;
-
-    // The tutorial seeder span itself doesn't record cognee.db.system
-    // (it's a higher-level orchestrator that delegates to NotebookDb
-    // ops), so we only assert the span name fires.
-    let spans = capture.spans();
-    assert!(
-        spans
-            .iter()
-            .any(|s| s.name == "cognee.db.relational.tutorial_seeder.seed_tutorials_if_first_call"),
-        "expected tutorial seeder span; got: {:?}",
-        spans.iter().map(|s| &s.name).collect::<Vec<_>>(),
-    );
-}
-
 // ─── compile-time export sanity ──────────────────────────────────────────────
 
 #[allow(dead_code)]
 fn _exports_compile(_db: &DatabaseConnection, _user: Uuid, _ds: Uuid, _perm: &str) {
     // Touch a remaining OSS trait so the import is recognised as used.
-    let _: &dyn NotebookDb = _db;
+    let _: &dyn SearchHistoryDb = _db;
 }

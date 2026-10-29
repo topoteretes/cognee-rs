@@ -22,9 +22,8 @@ from cognee_py._native import (
     CogneeConfig as CogneeConfig,
     # SDK datasets sub-object
     CogneeDatasets as CogneeDatasets,
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     CogneeSessions as CogneeSessions,
-    CogneeNotebooks as CogneeNotebooks,
     # SDK-tier exceptions
     CogneeError as CogneeError,
     CogneeComponentError as CogneeComponentError,

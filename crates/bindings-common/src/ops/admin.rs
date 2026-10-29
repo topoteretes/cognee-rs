@@ -1,7 +1,6 @@
-//! Shared async admin and notebook operations:
+//! Shared async admin operations:
 //! `reset_pipeline_run_status`, `reset_dataset_pipeline_run_status`,
-//! `get_or_create_default_user`, `list_notebooks`, `create_notebook`,
-//! `update_notebook`, `delete_notebook`.
+//! `get_or_create_default_user`.
 //!
 //! These functions contain the pure-Rust async logic shared between every
 //! language binding surface (C API, Neon JS, Python). Each function takes a
@@ -18,9 +17,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use cognee::api::get_or_create_default_user;
-use cognee::api::notebooks::{create_notebook, delete_notebook, list_notebooks, update_notebook};
 use cognee::api::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
-use cognee::database::{NotebookDb, NotebookUpdatePatch};
 
 use crate::{HandleState, SdkError};
 
@@ -109,106 +106,4 @@ pub async fn run_get_or_create_default_user(
 
     serde_json::to_value(&user)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize User: {e}")))
-}
-
-// ---------------------------------------------------------------------------
-// Notebook ops.
-// ---------------------------------------------------------------------------
-
-/// List all notebooks for the current owner.
-///
-/// Returns a JSON array of `Notebook` objects.
-pub async fn run_list_notebooks(state: &HandleState) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let notebooks = list_notebooks(&nb_db, owner_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("list_notebooks failed: {e}")))?;
-
-    serde_json::to_value(&notebooks)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize notebooks: {e}")))
-}
-
-/// Create a new notebook.
-///
-/// `cells` must be a JSON array (use `serde_json::Value::Array(vec![])` for empty).
-/// `deletable` controls whether the notebook can be deleted (always `true` to match
-/// Python lib behavior — callers should pass `true`).
-/// Returns a `Notebook` JSON object.
-pub async fn run_create_notebook(
-    state: &HandleState,
-    name: String,
-    cells: serde_json::Value,
-    deletable: bool,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let notebook = create_notebook(&nb_db, owner_id, name, cells, deletable)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("create_notebook failed: {e}")))?;
-
-    serde_json::to_value(&notebook)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize Notebook: {e}")))
-}
-
-/// Update a notebook's name and/or cells.
-///
-/// `patch_json` is an object with optional `"name"` (string) and/or `"cells"` (array) fields.
-/// Returns a `Notebook` JSON object, or `serde_json::Value::Null` if not found.
-pub async fn run_update_notebook(
-    state: &HandleState,
-    id_str: &str,
-    patch_json: serde_json::Value,
-) -> Result<serde_json::Value, SdkError> {
-    let id = Uuid::parse_str(id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid notebook id UUID: {e}")))?;
-
-    let patch = NotebookUpdatePatch {
-        name: patch_json
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        // Explicit null must behave like a missing key (leave cells unchanged),
-        // matching how a null `name` is treated by the `as_str` filter above —
-        // otherwise `{"cells": None}` from Python would silently clear cells.
-        cells: patch_json.get("cells").filter(|v| !v.is_null()).cloned(),
-    };
-
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let result = update_notebook(&nb_db, id, owner_id, patch)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("update_notebook failed: {e}")))?;
-
-    match result {
-        Some(nb) => serde_json::to_value(&nb)
-            .map_err(|e| SdkError::Runtime(format!("failed to serialize Notebook: {e}"))),
-        None => Ok(serde_json::Value::Null),
-    }
-}
-
-/// Delete a notebook by UUID.
-///
-/// Returns `serde_json::Value::Bool(true)` if deleted, `Bool(false)` if not found.
-pub async fn run_delete_notebook(
-    state: &HandleState,
-    id_str: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let id = Uuid::parse_str(id_str)
-        .map_err(|e| SdkError::Validation(format!("invalid notebook id UUID: {e}")))?;
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let nb_db: Arc<dyn NotebookDb> = Arc::clone(&svc.database) as Arc<dyn NotebookDb>;
-
-    let removed = delete_notebook(&nb_db, id, owner_id)
-        .await
-        .map_err(|e| SdkError::Runtime(format!("delete_notebook failed: {e}")))?;
-
-    Ok(serde_json::Value::Bool(removed))
 }
