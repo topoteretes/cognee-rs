@@ -26,6 +26,7 @@ pub mod temporal_event;
 mod timestamp;
 mod triplet;
 mod user;
+mod user_preference;
 
 pub use backend_overrides::{BackendConfig, BackendOverrides};
 pub use data::Data;
@@ -51,6 +52,7 @@ pub use timestamp::{
 };
 pub use triplet::Triplet;
 pub use user::User;
+pub use user_preference::UserPreference;
 
 // `Role` and `Tenant` are not part of this crate; a downstream ACL
 // implementation owns them.

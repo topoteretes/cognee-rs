@@ -3,8 +3,9 @@
 //! Port of `cognee/modules/retrieval/hybrid/ranking.py`, including the
 //! truth-subspace boost (`use_truth_weight` / `q_coords` / `truth_state_by_id`
 //! / `current_truth_epoch`, see [`rank_chunk_summary_pairs`]). Python's
-//! per-user `personal_weights` / `personal_influence` factor is not ported:
-//! Rust has no user-preference store to source it from yet.
+//! per-user `personal_weights` / `personal_influence` factor is not applied
+//! here yet: the store and its read exist ([`crate::user_preferences`], used
+//! by the graph and RAG retrievers), the hybrid lanes are SDK-1045.
 //!
 //! # Divergence: the default fusion is no longer rank-only RRF
 //!

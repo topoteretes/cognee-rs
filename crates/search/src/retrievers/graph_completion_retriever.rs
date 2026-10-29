@@ -12,6 +12,7 @@ use cognee_session::SessionContext;
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::graph_core::{GraphPrompts, GraphRetrieverCore, complete};
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
+use crate::user_preferences::{append_preference_guidance, load_for_search};
 use crate::utils::{
     DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K, build_global_context_prelude, render_edges_context,
     skip_completion_on_empty_context,
@@ -43,9 +44,14 @@ impl GraphCompletionRetriever {
             context_items = context.len(),
             "Graph context assembled:\n{graph_context_text}"
         );
-        self.prompts
-            .messages(query, &graph_context_text, session, params)
-            .map(Some)
+        let mut messages = self
+            .prompts
+            .messages(query, &graph_context_text, session, params)?;
+        // Python's sessionless guidance site: the user's stated preferences
+        // follow the question and context (empty without personalization).
+        let preferences = load_for_search(self.core.graph_db.as_ref(), params).await;
+        append_preference_guidance(&mut messages, &preferences.rendered_text());
+        Ok(Some(messages))
     }
 
     /// The rendered triplets, behind the global context index prelude when

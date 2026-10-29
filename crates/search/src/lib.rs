@@ -16,6 +16,9 @@ pub mod retrievers;
 mod test_support;
 /// Core search types: `SearchType`, `SearchParams`, `SearchResult`, etc.
 pub mod types;
+/// Per-user `prefers` weights and preference text: the store `improve()`
+/// writes and the read the retrievers personalize with.
+pub mod user_preferences;
 /// Shared search utilities (completion helpers, etc.).
 pub mod utils;
 
@@ -42,3 +45,4 @@ pub use types::{
     SearchGraphNode, SearchItem, SearchOutput, SearchParams, SearchRequest, SearchResponse,
     SearchType,
 };
+pub use user_preferences::{ActivePreferences, PreferenceConfig, load_active_preferences};

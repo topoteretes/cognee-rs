@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::Arc;
 
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphNode, NeighborhoodScope};
@@ -124,6 +125,13 @@ pub struct GraphRetrievalConfig {
     /// `None` through, and `relevant_ids[:None]` is the whole list. Ignored
     /// without `neighborhood_depth`. Must be at least 1.
     pub neighborhood_seed_top_k: Option<usize>,
+    /// The requesting user's effective `prefers` weights by node id (Python's
+    /// `personal_weights`, from [`crate::user_preferences`]). Empty — the
+    /// default — ranks exactly as an un-personalized search.
+    pub personal_weights: Arc<HashMap<String, f32>>,
+    /// The most a personal weight may move an element's distance
+    /// (`personalization_influence`); see [`rank_edge_score`].
+    pub personal_influence: f32,
 }
 
 impl Default for GraphRetrievalConfig {
@@ -139,6 +147,8 @@ impl Default for GraphRetrievalConfig {
             neighbor_cap: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            personal_weights: Arc::default(),
+            personal_influence: 0.0,
         }
     }
 }
@@ -707,7 +717,12 @@ impl ProjectedGraph {
         graph
     }
 
-    fn node_element(&self, node_id: &str, distance: f32) -> TripletElement {
+    fn node_element(
+        &self,
+        node_id: &str,
+        distance: f32,
+        config: &GraphRetrievalConfig,
+    ) -> TripletElement {
         let (importance_weight, feedback_weight) = self
             .node_weights
             .get(node_id)
@@ -717,6 +732,7 @@ impl ProjectedGraph {
             distance,
             importance_weight,
             feedback_weight,
+            personal_weight: config.personal_weights.get(node_id).copied(),
         }
     }
 
@@ -782,10 +798,11 @@ impl ProjectedGraph {
                     };
 
                     let score = rank_edge_score(
-                        self.node_element(source_id, source_dist),
-                        self.node_element(target_id, target_dist),
+                        self.node_element(source_id, source_dist, config),
+                        self.node_element(target_id, target_dist, config),
                         edge,
                         config.feedback_influence,
+                        config.personal_influence,
                         default_penalty,
                     );
                     Some((index, score))

@@ -176,6 +176,10 @@ pub struct SearchOrchestrator {
     /// Whether a session search detects feedback when the request leaves
     /// `auto_feedback_detection` unset.
     auto_feedback_default: bool,
+    /// Stamped on every search's params while personalization is enabled.
+    personalization: crate::user_preferences::PreferenceConfig,
+    /// `feedback_influence` of a request that leaves it unset.
+    default_feedback_influence: f32,
     /// System prompt file for requests that name neither a system prompt nor
     /// a prompt path.
     default_system_prompt_path: Option<String>,
@@ -219,6 +223,8 @@ impl SearchOrchestrator {
             llm: None,
             enable_access_tracking: false,
             auto_feedback_default: false,
+            personalization: crate::user_preferences::PreferenceConfig::default(),
+            default_feedback_influence: 0.0,
             default_system_prompt_path: None,
             log_search_history: true,
             per_dataset_storage: false,
@@ -352,6 +358,25 @@ impl SearchOrchestrator {
     /// setting). Detection also needs an LLM ([`Self::with_llm`]).
     pub fn with_auto_feedback_default(mut self, enabled: bool) -> Self {
         self.auto_feedback_default = enabled;
+        self
+    }
+
+    /// Personalize searches for the requesting user (the
+    /// `personalization_*` / `preference_*` settings): with `enabled`, their
+    /// `prefers` weights re-rank graph and RAG retrieval and their preference
+    /// text guides the completion. Off by default.
+    pub fn with_personalization(
+        mut self,
+        personalization: crate::user_preferences::PreferenceConfig,
+    ) -> Self {
+        self.personalization = personalization;
+        self
+    }
+
+    /// The feedback-weight influence of a request that leaves
+    /// `feedback_influence` unset (Python's `default_feedback_influence`).
+    pub fn with_default_feedback_influence(mut self, influence: f32) -> Self {
+        self.default_feedback_influence = influence;
         self
     }
 
@@ -1070,7 +1095,11 @@ impl SearchOrchestrator {
         keep_context: bool,
         session_turn: bool,
     ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
-        let params = SearchParams::from(request);
+        let mut params = SearchParams::from(request);
+        params.personalization = Some(self.personalization).filter(|config| config.enabled);
+        if params.feedback_influence.is_none() && self.default_feedback_influence > 0.0 {
+            params.feedback_influence = Some(self.default_feedback_influence);
+        }
         let include_context =
             request.only_context() || request.use_combined_context() || keep_context;
         let context = if include_context {

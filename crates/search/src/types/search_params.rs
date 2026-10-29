@@ -131,6 +131,15 @@ pub struct SearchParams {
     /// merged triplets). Python's `retriever_specific_config.decomposition_mode`.
     /// Default when `None`: `"answer_per_subquery"`.
     pub decomposition_mode: Option<String>,
+
+    /// The requesting user, whose `prefers` weights and preference text
+    /// personalize the graph and RAG completions (`SearchRequest.user_id`).
+    pub user_id: Option<Uuid>,
+
+    /// The personalization settings, stamped by the orchestrator while
+    /// `personalization_enabled` is on; `None` searches un-personalized.
+    #[serde(skip)]
+    pub personalization: Option<crate::user_preferences::PreferenceConfig>,
 }
 
 impl SearchParams {
@@ -259,6 +268,9 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("decomposition_mode"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            user_id: req.user_id,
+            // The orchestrator stamps it from its tuning.
+            personalization: None,
         }
     }
 }

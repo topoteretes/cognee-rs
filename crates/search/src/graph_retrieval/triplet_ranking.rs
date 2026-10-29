@@ -4,8 +4,9 @@
 //!
 //! A triplet's score is the sum over its three elements (source node, target
 //! node, edge) of each element's cosine distance to the query, first scaled by
-//! the element's `importance_weight` and then blended with its
-//! `feedback_weight`. Lower is better.
+//! the element's `importance_weight`, then blended with its `feedback_weight`
+//! and finally scaled by the requesting user's `prefers` weight (Python's
+//! `_personal_distance`). Lower is better.
 
 use serde_json::Value;
 
@@ -37,6 +38,9 @@ pub struct TripletElement {
     /// `feedback_weight`, clamped to `[0, 1]` when blended. Ignored when the
     /// feedback influence is not positive.
     pub feedback_weight: f32,
+    /// The requesting user's effective `prefers` weight on this node (Python's
+    /// `personal_weight` attribute); `None` for an edge or an unrated node.
+    pub personal_weight: Option<f32>,
 }
 
 impl TripletElement {
@@ -46,6 +50,7 @@ impl TripletElement {
             distance,
             importance_weight: DEFAULT_ELEMENT_WEIGHT,
             feedback_weight: DEFAULT_ELEMENT_WEIGHT,
+            personal_weight: None,
         }
     }
 }
@@ -60,31 +65,71 @@ impl TripletElement {
 /// never blended, keeping missing elements below real matches; an importance
 /// weight above about 1.69 scales the default 6.5 penalty to 2 or less, and
 /// that element *is* blended (see [`TripletElement::importance_weight`]).
+///
+/// `personal_influence` scales an element with a
+/// [`TripletElement::personal_weight`] (see [`personalize`]).
 pub fn rank_edge_score(
     source: TripletElement,
     target: TripletElement,
     edge: TripletElement,
     feedback_influence: f32,
+    personal_influence: f32,
     distance_penalty: f32,
 ) -> f32 {
     [source, target, edge]
         .into_iter()
-        .map(|element| element_distance(element, feedback_influence, distance_penalty))
+        .map(|element| {
+            element_distance(
+                element,
+                feedback_influence,
+                personal_influence,
+                distance_penalty,
+            )
+        })
         .sum()
 }
 
 fn element_distance(
     element: TripletElement,
     feedback_influence: f32,
+    personal_influence: f32,
     distance_penalty: f32,
 ) -> f32 {
     let distance = (2.0 - element.importance_weight) * element.distance;
-    blend_feedback(
+    let blended = blend_feedback(
         distance,
         element.feedback_weight,
         feedback_influence,
         distance_penalty,
+    );
+    personalize(
+        distance,
+        blended,
+        element.personal_weight,
+        personal_influence,
+        distance_penalty,
     )
+}
+
+/// Python's `_personal_distance`: scale the feedback-blended distance by the
+/// user's `personal_factor` (distance space: a preferred element's distance
+/// shrinks). The *raw* importance-scaled distance decides eligibility, the
+/// same `[0, 2]` / penalty test the feedback blend applies, so a fallback
+/// penalty is never scaled like a real match.
+fn personalize(
+    raw: f32,
+    blended: f32,
+    personal_weight: Option<f32>,
+    personal_influence: f32,
+    distance_penalty: f32,
+) -> f32 {
+    if personal_influence <= 0.0 || raw >= distance_penalty || !(0.0..=2.0).contains(&raw) {
+        return blended;
+    }
+    match personal_weight {
+        Some(weight) => blended * (1.0 - personal_influence * (2.0 * weight - 1.0)),
+        None => blended,
+    }
 }
 
 /// Python's `_effective_distance`: blend a cosine distance with a feedback
@@ -175,6 +220,7 @@ mod tests {
             distance,
             importance_weight,
             feedback_weight,
+            personal_weight: None,
         }
     }
 
@@ -185,6 +231,7 @@ mod tests {
             TripletElement::new(0.2),
             TripletElement::new(0.3),
             0.0,
+            0.0,
             PENALTY,
         );
         assert_close(score, 1.5 * 0.6);
@@ -193,7 +240,7 @@ mod tests {
     #[test]
     fn unmatched_elements_take_the_scaled_penalty() {
         let unmatched = TripletElement::new(PENALTY);
-        let score = rank_edge_score(unmatched, unmatched, unmatched, 0.0, PENALTY);
+        let score = rank_edge_score(unmatched, unmatched, unmatched, 0.0, 0.0, PENALTY);
         assert_close(score, 3.0 * 1.5 * PENALTY);
     }
 
@@ -205,12 +252,14 @@ mod tests {
             element(0.4, 1.0, 0.5),
             TripletElement::new(PENALTY),
             0.0,
+            0.0,
             PENALTY,
         );
         let unimportant = rank_edge_score(
             element(0.4, 0.0, 0.5),
             element(0.4, 0.0, 0.5),
             TripletElement::new(PENALTY),
+            0.0,
             0.0,
             PENALTY,
         );
@@ -223,9 +272,9 @@ mod tests {
     /// distance. The old similarity-space blend raised it.
     #[test]
     fn positive_feedback_lowers_the_distance() {
-        let liked = element_distance(element(0.4, 1.0, 1.0), 0.5, PENALTY);
-        let neutral = element_distance(element(0.4, 1.0, 0.5), 0.5, PENALTY);
-        let disliked = element_distance(element(0.4, 1.0, 0.0), 0.5, PENALTY);
+        let liked = element_distance(element(0.4, 1.0, 1.0), 0.5, 0.0, PENALTY);
+        let neutral = element_distance(element(0.4, 1.0, 0.5), 0.5, 0.0, PENALTY);
+        let disliked = element_distance(element(0.4, 1.0, 0.0), 0.5, 0.0, PENALTY);
         // ((1 - 0.5) * 0.2 + 0.5 * (1 - w)) * 2
         assert_close(liked, 0.2);
         assert_close(neutral, 0.7);
@@ -250,7 +299,10 @@ mod tests {
         assert_eq!(blend_feedback(PENALTY, 1.0, 0.5, PENALTY), PENALTY);
         assert_eq!(blend_feedback(-0.1, 1.0, 0.5, PENALTY), -0.1);
         // 1.5 * 1.5 = 2.25 > 2: Python leaves it as is.
-        assert_close(element_distance(element(1.5, 0.5, 1.0), 0.5, PENALTY), 2.25);
+        assert_close(
+            element_distance(element(1.5, 0.5, 1.0), 0.5, 0.0, PENALTY),
+            2.25,
+        );
     }
 
     #[test]
@@ -296,12 +348,50 @@ mod tests {
     fn high_importance_lets_the_penalty_be_blended() {
         let unmatched = element(PENALTY, 1.9, 1.0);
         // (2 - 1.9) * 6.5 = 0.65, fully blended towards w = 1.0 -> 0.0.
-        assert_close(element_distance(unmatched, 1.0, PENALTY), 0.0);
+        assert_close(element_distance(unmatched, 1.0, 0.0, PENALTY), 0.0);
         // Above 2 the factor is negative: the penalty becomes a reward.
         assert_close(
-            element_distance(element(PENALTY, 5.0, 0.5), 0.0, PENALTY),
+            element_distance(element(PENALTY, 5.0, 0.5), 0.0, 0.0, PENALTY),
             -3.0 * PENALTY,
         );
+    }
+
+    // Python `_personal_distance`: a liked node's distance shrinks, a
+    // disliked one's grows, a neutral one's is untouched, and the penalty is
+    // never scaled.
+    #[test]
+    fn a_personal_weight_scales_real_distances_only() {
+        let with = |distance: f32, weight: Option<f32>| TripletElement {
+            personal_weight: weight,
+            ..element(distance, 1.0, 0.5)
+        };
+        assert_close(
+            element_distance(with(0.4, Some(1.0)), 0.0, 0.3, PENALTY),
+            0.4 * 0.7,
+        );
+        assert_close(
+            element_distance(with(0.4, Some(0.0)), 0.0, 0.3, PENALTY),
+            0.4 * 1.3,
+        );
+        assert_close(
+            element_distance(with(0.4, Some(0.5)), 0.0, 0.3, PENALTY),
+            0.4,
+        );
+        assert_close(element_distance(with(0.4, None), 0.0, 0.3, PENALTY), 0.4);
+        assert_close(
+            element_distance(with(0.4, Some(1.0)), 0.0, 0.0, PENALTY),
+            0.4,
+        );
+        assert_close(
+            element_distance(with(PENALTY, Some(1.0)), 0.0, 0.3, PENALTY),
+            PENALTY,
+        );
+        // Applied on top of the feedback blend: ((0.5 * 0.2 + 0.5 * 0) * 2) * 0.7.
+        let blended = TripletElement {
+            personal_weight: Some(1.0),
+            ..element(0.4, 1.0, 1.0)
+        };
+        assert_close(element_distance(blended, 0.5, 0.3, PENALTY), 0.2 * 0.7);
     }
 
     #[test]

@@ -1,7 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_embedding::EmbeddingEngine;
+use cognee_graph::GraphDBTrait;
 use cognee_llm::{GenerationOptions, Llm, Message};
 use cognee_vector::VectorDB;
 use tracing::debug;
@@ -11,6 +13,7 @@ use cognee_session::SessionContext;
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_node_filtered;
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
+use crate::user_preferences::{append_preference_guidance, load_for_search, personal_factor};
 use crate::utils::{
     build_messages_with_history, render_user_prompt, resolve_system_prompt,
     skip_completion_on_empty_context,
@@ -19,11 +22,17 @@ use crate::utils::{
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
 const CHUNKS_FIELD_NAME: &str = "text";
 const DEFAULT_TOP_K: usize = 10;
+/// Candidates fetched before the personalized re-sort trims to `top_k`
+/// (Python's `CompletionRetriever.wide_search_top_k` default).
+const DEFAULT_WIDE_SEARCH_TOP_K: usize = 100;
 
 pub struct CompletionRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     llm: Arc<dyn Llm>,
+    /// Where the requesting user's preference node lives; without one the
+    /// retriever never personalizes.
+    graph_db: Option<Arc<dyn GraphDBTrait>>,
     top_k: usize,
     system_prompt: Option<String>,
     system_prompt_path: Option<String>,
@@ -32,6 +41,55 @@ pub struct CompletionRetriever {
 }
 
 impl CompletionRetriever {
+    /// Read the requesting user's preferences from `graph_db` (their
+    /// `prefers` weights re-rank the chunks, their preference text is the
+    /// completion's guidance). Without it nothing is personalized.
+    #[must_use]
+    pub fn with_graph_db(mut self, graph_db: Arc<dyn GraphDBTrait>) -> Self {
+        self.graph_db = Some(graph_db);
+        self
+    }
+
+    async fn preferences(&self, params: &SearchParams) -> crate::ActivePreferences {
+        match &self.graph_db {
+            Some(graph_db) => load_for_search(graph_db.as_ref(), params).await,
+            None => crate::ActivePreferences::default(),
+        }
+    }
+
+    /// Keep the weights whose key is a chunk of `DocumentChunk_text`
+    /// (Python's `_weights_matching_collection`): weights on graph entities
+    /// can never match a chunk, so they must not widen the fetch. A failed
+    /// lookup fails open to the unfiltered weights.
+    async fn weights_matching_chunks(&self, weights: HashMap<String, f64>) -> HashMap<String, f64> {
+        let ids: Vec<uuid::Uuid> = weights
+            .keys()
+            .filter_map(|id| uuid::Uuid::parse_str(id).ok())
+            .collect();
+        let rows = match self
+            .vector_db
+            .retrieve(CHUNKS_DATA_TYPE, CHUNKS_FIELD_NAME, &ids)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                debug!(%error, "preference weight collection check failed open");
+                return weights;
+            }
+        };
+        let mut present: HashSet<String> = HashSet::new();
+        for row in rows {
+            if let Some(id) = row.metadata.get("id").and_then(|id| id.as_str()) {
+                present.insert(id.to_string());
+            }
+            present.insert(row.id.to_string());
+        }
+        weights
+            .into_iter()
+            .filter(|(id, _)| present.contains(id))
+            .collect()
+    }
+
     /// The system + user messages a completion over `context` sends, or
     /// `None` when the rendered context is empty. Shared by `get_completion`
     /// and the `only_context` preview.
@@ -79,6 +137,25 @@ impl CompletionRetriever {
         )))
     }
 
+    /// [`Self::build_completion_messages`] with the user's preference text as
+    /// guidance after the question and context (Python's sessionless
+    /// `SessionPrompt(guidance=load_preference_text())`).
+    async fn personalized_messages(
+        &self,
+        query: &str,
+        context: &SearchContext,
+        session: &SessionContext,
+        params: &SearchParams,
+    ) -> Result<Option<Vec<Message>>, SearchError> {
+        let Some(mut messages) = self.build_completion_messages(query, context, session, params)?
+        else {
+            return Ok(None);
+        };
+        let preferences = self.preferences(params).await;
+        append_preference_guidance(&mut messages, &preferences.rendered_text());
+        Ok(Some(messages))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         vector_db: Arc<dyn VectorDB>,
@@ -94,6 +171,7 @@ impl CompletionRetriever {
             vector_db,
             embedding_engine,
             llm,
+            graph_db: None,
             top_k: top_k.unwrap_or(DEFAULT_TOP_K),
             system_prompt,
             system_prompt_path,
@@ -133,16 +211,39 @@ impl SearchRetriever for CompletionRetriever {
             SearchError::InvalidInput("embedding engine returned no vectors".to_string())
         })?;
 
-        search_node_filtered(
+        // Loaded before the search because it decides the limit: weights that
+        // can match a chunk widen the fetch to `wide_search_top_k`, so
+        // personalization can change which chunks make the cut, not just
+        // their order. Otherwise the fetch and order are un-personalized.
+        let top_k = params.top_k_or(self.top_k);
+        let mut weights = self.preferences(params).await.weights;
+        if !weights.is_empty() {
+            weights = self.weights_matching_chunks(weights).await;
+        }
+        let limit = if weights.is_empty() {
+            top_k
+        } else {
+            top_k.max(params.wide_search_top_k_or(DEFAULT_WIDE_SEARCH_TOP_K))
+        };
+
+        let mut context = search_node_filtered(
             self.vector_db.as_ref(),
             CHUNKS_DATA_TYPE,
             CHUNKS_FIELD_NAME,
             &query_vector,
-            params.top_k_or(self.top_k),
+            limit,
             params.node_name.as_deref(),
             params.node_name_filter_operator.as_deref().unwrap_or("OR"),
         )
-        .await
+        .await?;
+        if !weights.is_empty() {
+            let influence = params
+                .personalization
+                .map_or(0.0, |config| config.influence);
+            sort_by_personal_score(&mut context, &weights, influence);
+            context.truncate(top_k);
+        }
+        Ok(context)
     }
 
     async fn completion_messages(
@@ -152,7 +253,8 @@ impl SearchRetriever for CompletionRetriever {
         session: &SessionContext,
         params: &SearchParams,
     ) -> Result<Option<Vec<Message>>, SearchError> {
-        self.build_completion_messages(query, context, session, params)
+        self.personalized_messages(query, context, session, params)
+            .await
     }
 
     async fn get_completion(
@@ -167,8 +269,9 @@ impl SearchRetriever for CompletionRetriever {
             None => self.get_context(query, params).await?,
         };
 
-        let Some(messages) =
-            self.build_completion_messages(query, &completion_context, session, params)?
+        let Some(messages) = self
+            .personalized_messages(query, &completion_context, session, params)
+            .await?
         else {
             return Ok(skip_completion_on_empty_context());
         };
@@ -192,6 +295,32 @@ impl SearchRetriever for CompletionRetriever {
             Ok(SearchOutput::Text(completion.content))
         }
     }
+}
+
+/// Stable re-sort of chunk hits by personalized score (Python's
+/// `_stable_sort_by_personal_distance`). Rust scores are similarities, so a
+/// preferred chunk's score grows by `personal_factor` in score space; a
+/// chunk with no weight keeps its score and ties keep the engine's order.
+/// The chunk id is `payload["id"]`, falling back to the hit id.
+fn sort_by_personal_score(
+    context: &mut SearchContext,
+    weights: &HashMap<String, f64>,
+    influence: f64,
+) {
+    let personalized = |item: &crate::types::SearchItem| -> f64 {
+        let score = f64::from(item.score.unwrap_or(f32::NEG_INFINITY));
+        let id = item
+            .payload
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(str::to_string)
+            .or_else(|| item.id.map(|id| id.to_string()));
+        match id.and_then(|id| weights.get(&id)) {
+            Some(weight) => score * personal_factor(*weight, influence, false),
+            None => score,
+        }
+    };
+    context.sort_by(|a, b| personalized(b).total_cmp(&personalized(a)));
 }
 
 #[cfg(test)]
@@ -590,5 +719,124 @@ mod tests {
         let prompt = llm.last_messages.lock().unwrap()[1].content.clone();
         assert!(prompt.contains("in both sets"), "got: {prompt}");
         assert!(!prompt.contains("only in x"), "got: {prompt}");
+    }
+
+    /// Python's `test_weights_wide_fetch_reorder_and_trim` and
+    /// `test_preference_text_passed_as_guidance` (test_rag_personalization.py):
+    /// a liked chunk the engine ranked second makes the `top_k` cut, and the
+    /// user's preference text follows the question and context.
+    #[tokio::test]
+    async fn preferences_rerank_the_chunks_and_guide_the_answer() {
+        let db = cognee_vector::BruteForceVectorDB::new();
+        db.create_collection("DocumentChunk", "text", 2)
+            .await
+            .unwrap();
+        let (near, liked) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let point = |id: Uuid, text: &str, vector: Vec<f32>| VectorPoint {
+            id,
+            vector,
+            metadata: HashMap::from([
+                ("id".to_string(), json!(id.to_string())),
+                ("text".to_string(), json!(text)),
+            ]),
+        };
+        db.index_points(
+            "DocumentChunk",
+            "text",
+            &[
+                point(near, "the nearest chunk", vec![0.4, 0.6]),
+                point(liked, "the liked chunk", vec![0.6, 0.4]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        for id in [near, liked] {
+            cognee_graph::GraphDBTrait::add_node_raw(
+                graph.as_ref(),
+                json!({"id": id.to_string(), "type": "DocumentChunk"}),
+            )
+            .await
+            .unwrap();
+        }
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        let (u, d) = (user.to_string(), dataset.to_string());
+        crate::user_preferences::upsert_preference_node(
+            graph.as_ref(),
+            &u,
+            &d,
+            "Answer in one sentence",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        crate::user_preferences::write_prefers_edges(
+            graph.as_ref(),
+            &u,
+            &d,
+            &std::collections::BTreeMap::from([(liked.to_string(), 1.0)]),
+            1,
+        )
+        .await
+        .unwrap();
+
+        let llm = Arc::new(TestLlm {
+            response_text: "answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = CompletionRetriever::new(
+            Arc::new(db),
+            Arc::new(TestEmbeddingEngine),
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_graph_db(graph);
+        let text = |context: &SearchContext| context[0].payload["text"].clone();
+
+        let plain = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            ..SearchParams::default()
+        };
+        let context = retriever.get_context("q", &plain).await.unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(text(&context), json!("the nearest chunk"));
+
+        let personalized = SearchParams {
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..plain
+        };
+        let context = retriever.get_context("q", &personalized).await.unwrap();
+        assert_eq!(context.len(), 1, "trimmed back to top_k");
+        assert_eq!(text(&context), json!("the liked chunk"));
+
+        retriever
+            .get_completion(
+                "q",
+                Some(context),
+                &SessionContext::default(),
+                &personalized,
+            )
+            .await
+            .unwrap();
+        let messages = llm.last_messages.lock().unwrap().clone();
+        assert!(
+            messages[1].content.ends_with(&format!(
+                "\n\n{}\nAnswer in one sentence",
+                crate::user_preferences::PREFERENCE_RENDER_HEADER
+            )),
+            "{}",
+            messages[1].content
+        );
     }
 }

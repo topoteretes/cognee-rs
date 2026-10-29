@@ -3,9 +3,9 @@
 //! Port of Python's `InternalDataPoint` (`cognee/infrastructure/engine/models/
 //! InternalDataPoint.py`). Internal nodes hold per-user or system state inside
 //! the shared graph — in Python, `UserPreference` — and are recognized by an
-//! `is_internal` property on the raw node, never by type name. Rust writes no
-//! such node yet, but a graph shared with the Python SDK can hold them, so the
-//! read paths that Python filters must filter here too.
+//! `is_internal` property on the raw node, never by type name. Rust writes
+//! them too ([`crate::UserPreference`]), so the read paths that Python filters
+//! must filter here as well.
 
 use serde_json::{Map, Value};
 

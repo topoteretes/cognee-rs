@@ -21,6 +21,7 @@ use crate::graph_retrieval::{
     brute_force_triplet_search, brute_force_triplet_search_batch, validate_query_batch,
 };
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
+use crate::user_preferences::load_for_search;
 use crate::utils::{
     EMPTY_GRAPH_MESSAGE, build_messages_with_history, render_graph_user_prompt,
     resolve_system_prompt,
@@ -94,7 +95,30 @@ impl GraphRetrieverCore {
                 .as_deref()
                 .unwrap_or("OR")
                 .to_string(),
+            ..GraphRetrievalConfig::default()
         }
+    }
+
+    /// [`Self::retrieval_config`] with the requesting user's `prefers`
+    /// weights (Python's `get_triplets` passing `load_preference_weights()`
+    /// into the triplet search); without personalization they stay empty and
+    /// the ranking is un-personalized.
+    async fn personalized_config(&self, params: &SearchParams) -> GraphRetrievalConfig {
+        let mut config = self.retrieval_config(params);
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        if let Some(settings) = params.personalization
+            && !preferences.weights.is_empty()
+        {
+            config.personal_weights = Arc::new(
+                preferences
+                    .weights
+                    .into_iter()
+                    .map(|(id, weight)| (id, weight as f32))
+                    .collect(),
+            );
+            config.personal_influence = settings.influence as f32;
+        }
+        config
     }
 
     /// The ranked triplets for `query`, best first.
@@ -108,7 +132,7 @@ impl GraphRetrieverCore {
             self.vector_db.as_ref(),
             self.embedding_engine.as_ref(),
             self.graph_db.as_ref(),
-            &self.retrieval_config(params),
+            &self.personalized_config(params).await,
         )
         .await
     }
@@ -131,7 +155,7 @@ impl GraphRetrieverCore {
             self.vector_db.as_ref(),
             self.embedding_engine.as_ref(),
             self.graph_db.as_ref(),
-            &self.retrieval_config(params),
+            &self.personalized_config(params).await,
         )
         .await
     }
@@ -386,6 +410,99 @@ mod tests {
                 .count(),
             1,
             "{calls:?}"
+        );
+    }
+
+    /// Python's `get_triplets` with `personal_weights`: the requesting
+    /// user's `prefers` weight shrinks a liked node's distance, so its triplet
+    /// outranks an otherwise tied one; without personalization the tie keeps
+    /// its id order.
+    #[tokio::test]
+    async fn a_preferred_node_ranks_its_triplet_first() {
+        let (a, b, hub) = (
+            uuid::Uuid::from_u128(10),
+            uuid::Uuid::from_u128(11),
+            uuid::Uuid::from_u128(12),
+        );
+        let vector_db = MockVectorDB::new();
+        vector_db
+            .create_collection("Entity", "name", 2)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "Entity",
+                "name",
+                &[
+                    VectorPoint::new(a, vec![1.0, 1.0]),
+                    VectorPoint::new(b, vec![1.0, 1.0]),
+                ],
+            )
+            .await
+            .unwrap();
+        let graph = Arc::new(MockGraphDB::new());
+        for id in [a, b, hub] {
+            graph
+                .add_node_raw(json!({ "id": id.to_string(), "name": id.to_string() }))
+                .await
+                .unwrap();
+        }
+        for source in [a, b] {
+            graph
+                .add_edge(&source.to_string(), &hub.to_string(), "rel", None)
+                .await
+                .unwrap();
+        }
+        let core = GraphRetrieverCore::new(
+            Arc::new(vector_db),
+            Arc::new(AlignedEmbedding),
+            graph.clone(),
+            None,
+            None,
+            None,
+        );
+        let user = uuid::Uuid::new_v4();
+        let dataset = uuid::Uuid::new_v4();
+        let (u, d) = (user.to_string(), dataset.to_string());
+        crate::user_preferences::upsert_preference_node(graph.as_ref(), &u, &d, "", 1, "")
+            .await
+            .unwrap();
+        crate::user_preferences::write_prefers_edges(
+            graph.as_ref(),
+            &u,
+            &d,
+            &std::collections::BTreeMap::from([(b.to_string(), 1.0), (a.to_string(), 0.2)]),
+            1,
+        )
+        .await
+        .unwrap();
+
+        let first_source = |context: SearchContext| context[0].payload["source_id"].clone();
+        let plain = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            ..SearchParams::default()
+        };
+        // Personalization off: the tie breaks on the id.
+        assert_eq!(
+            first_source(core.search("q", &plain).await.unwrap()),
+            json!(a.to_string())
+        );
+
+        let personalized = SearchParams {
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..plain
+        };
+        let context = core.search("q", &personalized).await.unwrap();
+        assert_eq!(first_source(context.clone()), json!(b.to_string()));
+        // The internal preference node never reaches the context.
+        assert!(
+            context
+                .iter()
+                .all(|item| item.payload["relationship"] != "prefers")
         );
     }
 }
