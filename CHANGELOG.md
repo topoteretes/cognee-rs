@@ -27,9 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python), and the loader is the first,
   in Python's priority order, that accepts the name's extension or the sniffed
   extension together with the sniffed MIME type. The `data` row stores the
-  **sniffed** `original_extension` / `original_mime_type`. So a PNG with no
-  extension, or named `.jpg`, goes to `image_loader` and is recorded as
-  `png` / `image/png`, and UTF-8 text named `notes.conf` is `text_loader`,
+  **sniffed** `original_extension` / `original_mime_type`. So a PNG named
+  `.jpg` goes to `image_loader` and is recorded as `png` / `image/png`, and UTF-8 text named `notes.conf` is `text_loader`,
   `txt` / `text/plain`. An image routed to `image_loader` whose NAME has no
   image extension (for example a PNG with no extension) fails with
   `IngestionError::ImageMimeTypeUndetermined`, because Python's vision call
