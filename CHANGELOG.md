@@ -48,15 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     instead of failing with `PipelineAlreadyRunning`. Re-cognifying a complete
     dataset still skips every item, and now writes its own `STARTED` /
     `COMPLETED` pair, as Python's run does.
-  - A run writes `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an
+  - A `cognify` or `add` run writes `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an
     OS file lock on `<system_root>/pipeline_run_locks/<token>/owner.lock`
     (`cognee_core::RunOwnership`; `Pipeline::recovery_lock`,
     `PipelineRunInfo::recovery_lock`, `CognifyConfig::run_ownership_dir`,
-    `run_info_for_started(Option<Uuid>)`). `cognee_delete::recover_stale_pipeline_runs`
+    `run_info_for_started(Option<Uuid>)`, `AddPipeline::with_run_ownership_dir`,
+    `Settings::run_ownership_dir`). `cognee_delete::recover_stale_pipeline_runs`
     (replacing `sweep_orphaned_run_artifacts`) rolls back and closes an
     abandoned run with `{"error": "AbandonedPipelineRunError: …"}`, only when it
-    can claim the marker, so it is safe with any number of processes. The
-    bindings run it once per database per process, at the first operation.
+    can claim the marker, so it is safe with any number of processes; it is
+    keyed by the run, so a run abandoned before a newer run completed on the
+    dataset is still closed, and a run whose dataset is gone is left alone, as
+    in Python. Its age floor is the new key
+    `cognify.stale_run_recovery_min_age_seconds`
+    (`COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, default `3600`, as in Python).
+    The bindings run it once per database per process, at the first operation.
     `PipelineRunRepository::list_orphan_runs` became `list_unterminated_runs`.
   - `DATASET_PROCESSING_INITIATED` rows written by older versions are still read
     (Python keeps the enum value too) and gate nothing.

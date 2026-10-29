@@ -2633,6 +2633,38 @@
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"a\\\":1}\"": {},
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"  \"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"-1\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"0\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 0
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"1\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 1
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"1.5\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"42\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 42
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"5000000000\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 5000000000
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"70000\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 70000
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"TRUE\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"[1]\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"abc\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"false\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"no\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"on\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"require\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"true\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"v\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"yes\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_STRICT_CONFIG=\"  \"": {},
   "COGNEE_STRICT_CONFIG=\"\"": {},
   "COGNEE_STRICT_CONFIG=\"-1\"": {},

@@ -29,6 +29,7 @@
     "cognify.max_chunk_failure_ratio",
     "cognify.raise_incremental_loading_errors",
     "cognify.rollback_scope",
+    "cognify.stale_run_recovery_min_age_seconds",
     "cognify.token_counter",
     "cognify.tolerate_summarization_failures",
     "data_root_directory",
@@ -284,6 +285,7 @@
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
+    "cognify.stale_run_recovery_min_age_seconds",
     "cognify.data_per_batch",
     "cognify.extraction_strategy",
     "cognify.cascade_rounds",
@@ -2756,6 +2758,59 @@
     "err": true
   },
   "set cognify.rollback_scope <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"1\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"s\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"true\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- -1": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 0": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 0
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 1": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 1
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 1.5": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 5000000000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 5000000000
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 70000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 70000
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- [1]": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- false": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- null": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- true": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- {\"a\":1}": {
     "err": true
   },
   "set cognify.token_counter <- \"\"": {
@@ -14689,6 +14744,13 @@
     }
   },
   "unset cognify.rollback_scope": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.stale_run_recovery_min_age_seconds": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

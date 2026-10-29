@@ -3698,6 +3698,7 @@ async fn cognify_in_scope(
                         user_id,
                         tenant_id,
                         dataset_id,
+                        effective_config.run_ownership_dir.as_deref(),
                     )
                     .await,
                 );
@@ -3717,11 +3718,7 @@ async fn cognify_in_scope(
             // `STARTED` row, so startup recovery can prove a run abandoned. Marked
             // closed once the run reached a terminal status; a process that dies
             // mid-run leaves it behind, with its OS lock released.
-            let mut ownership = effective_config
-                .run_ownership_dir
-                .as_deref()
-                .map(cognee_core::RunOwnership::acquire);
-            let pipeline = build_cognify_pipeline(
+            let mut pipeline = build_cognify_pipeline(
                 Arc::clone(&storage),
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
@@ -3730,11 +3727,6 @@ async fn cognify_in_scope(
                 Arc::clone(&database),
                 Arc::clone(&ontology_resolver),
                 effective_config.clone(),
-            )
-            .with_recovery_lock(
-                ownership
-                    .as_ref()
-                    .and_then(cognee_core::RunOwnership::token),
             );
 
             // The executor re-derives `PipelineRunInfo.pipeline_id` from
@@ -3805,6 +3797,15 @@ async fn cognify_in_scope(
                     None
                 }
             };
+            // Taken right before the run, so no early return above strands a
+            // marker that no row names.
+            let mut ownership = effective_config
+                .run_ownership_dir
+                .as_deref()
+                .map(cognee_core::RunOwnership::acquire);
+            pipeline.recovery_lock = ownership
+                .as_ref()
+                .and_then(cognee_core::RunOwnership::token);
             let executed = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
                 .await
                 .map_err(unwrap_execution_error);
@@ -3887,15 +3888,18 @@ async fn cognify_in_scope(
 /// Write the `STARTED` / `COMPLETED` pair of a run that found every data item
 /// already cognified, and return its run id.
 ///
-/// The rows are what the executor's watcher writes for a run: `{}` on both,
-/// no recovery marker (nothing runs between them, so there is nothing to
-/// recover). Best-effort like the watcher's own writes.
+/// The rows are what the executor's watcher writes for a run: the `STARTED`
+/// row carries the run's `recovery_lock` when `ownership_dir` is set, as
+/// every Python run does (`run_tasks.py:96`), and `COMPLETED` is `{}`; the
+/// marker is removed once the pair is written. Best-effort like the
+/// watcher's own writes.
 async fn record_run_without_work(
     repo: &Arc<dyn PipelineRunRepository>,
     pipeline_name: &str,
     user_id: Option<Uuid>,
     tenant_id: Option<Uuid>,
     dataset_id: Uuid,
+    ownership_dir: Option<&std::path::Path>,
 ) -> Uuid {
     use cognee_core::pipeline::{
         PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineWatcher,
@@ -3903,6 +3907,7 @@ async fn record_run_without_work(
     use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 
     let watcher = DbPipelineWatcher::new(Arc::clone(repo));
+    let mut ownership = ownership_dir.map(cognee_core::RunOwnership::acquire);
     let now = chrono::Utc::now();
     let mut run = PipelineRunInfo {
         run_id: Uuid::new_v4(),
@@ -3919,12 +3924,17 @@ async fn record_run_without_work(
         status: CoreStatus::Started,
         started_at: now,
         completed_at: None,
-        recovery_lock: None,
+        recovery_lock: ownership
+            .as_ref()
+            .and_then(cognee_core::RunOwnership::token),
     };
     watcher.on_pipeline_run_started(&run).await;
     run.status = CoreStatus::Completed;
     run.completed_at = Some(chrono::Utc::now());
     watcher.on_pipeline_run_completed(&run, 0).await;
+    if let Some(ownership) = ownership.as_mut() {
+        ownership.mark_closed();
+    }
     run.run_id
 }
 

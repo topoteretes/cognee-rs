@@ -364,6 +364,22 @@ impl Settings {
     /// (`cognify.token_counter`, else derived from the embedding provider) and
     /// the failure policy (the `cognify` section). Per-call options are applied
     /// on top by the caller.
+    /// The directory run-ownership markers live in,
+    /// `<system_root>/pipeline_run_locks` (Python `run_ownership._lock_path`).
+    pub fn run_ownership_dir(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(&self.system_root_directory).join("pipeline_run_locks")
+    }
+
+    /// Startup recovery's age floor
+    /// (`cognify.stale_run_recovery_min_age_seconds`, Python's
+    /// `COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS`).
+    pub fn stale_run_recovery_min_age(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.section::<cognee_components::CognifySettings>()
+                .stale_run_recovery_min_age_seconds,
+        )
+    }
+
     pub fn cognify_config(&self) -> cognee_cognify::CognifyConfig {
         use cognee_cognify::{FailureStop, RollbackScope};
 
@@ -440,9 +456,7 @@ impl Settings {
         }
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
-        cfg = cfg.with_run_ownership_dir(
-            std::path::PathBuf::from(&self.system_root_directory).join("pipeline_run_locks"),
-        );
+        cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
         if let Some(schema) = &self.summarization_schema {
             // Validated when it was set; checked again because a bulk-loaded
             // config could still carry one that fails.

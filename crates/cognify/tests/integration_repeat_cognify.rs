@@ -148,7 +148,9 @@ impl Harness {
             ))
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
-            .with_database(database.clone());
+            .with_database(database.clone())
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            .with_run_ownership_dir(&ownership_dir);
 
         Self {
             _temp_dir: temp_dir,
@@ -520,6 +522,14 @@ async fn a_second_cognify_on_an_unchanged_dataset_writes_a_fresh_pair_and_skips_
         second.pipeline_run_id,
         Some(after_second[2].pipeline_run_id)
     );
+    assert!(
+        recovery_lock_of(after_second[2].run_info.as_ref()).is_some(),
+        "its STARTED row carries a recovery_lock, as every Python run's does"
+    );
+    assert!(
+        h.markers().is_empty(),
+        "and its marker is gone once it closed"
+    );
     assert_eq!(
         h.graph_db.get_graph_data().await.map(|(n, _)| n.len()).ok(),
         nodes_after_first,
@@ -879,4 +889,145 @@ async fn a_dataset_locked_in_this_process_is_skipped_by_recovery() {
     drop(guard);
 
     assert_eq!(h.recover(std::time::Duration::ZERO).await.recovered, 1);
+}
+
+/// Recovery is keyed by the run, not by the dataset's latest row: a run
+/// abandoned before a newer run of the same pipeline completed on the dataset
+/// is still rolled back and closed (Python `get_unterminated_pipeline_runs`
+/// partitions by `pipeline_run_id`; `recovery.py:102` re-reads the run's own
+/// latest row). With no gate left, that newer run is the normal case.
+#[tokio::test]
+async fn a_run_abandoned_before_a_newer_completed_run_is_still_recovered() {
+    let h = Harness::new().await;
+    let config = h.config();
+    let items = h.add("repeat_cognify_overtaken", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_overtaken").await;
+
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    let token = marker.token().expect("marker created");
+    drop(marker);
+    let dead_run = h.seed_started_row(dataset_id, Some(token)).await;
+    let slug = h.seed_run_artifact(dataset_id, items[0].id, dead_run).await;
+
+    // The next cognify is not refused by the stale row, and completes.
+    let result = h.cognify(dataset_id, items, &config).await;
+    assert!(!result.already_completed);
+    assert_eq!(
+        h.latest_cognify_status(dataset_id).await,
+        Some(PipelineRunStatus::Completed)
+    );
+
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 1, "{report:?}");
+    let dead = h
+        .pipeline_run_repo
+        .get_pipeline_run(dead_run)
+        .await
+        .expect("get_pipeline_run")
+        .expect("rows exist");
+    assert_eq!(dead.status, PipelineRunStatus::Errored);
+    assert!(!h.graph_has(slug).await, "the dead run is rolled back");
+    assert!(
+        !h.ownership_dir.join(token.to_string()).exists(),
+        "and its marker removed"
+    );
+    assert_eq!(
+        h.recover(std::time::Duration::ZERO).await.candidates,
+        0,
+        "nothing is left in flight"
+    );
+}
+
+/// Python reads the run's `Dataset` first and leaves the run alone when it is
+/// gone (`recovery.py:106-111`): no rollback, no `ERRORED` row, marker kept.
+#[tokio::test]
+async fn a_run_whose_dataset_is_gone_is_left_for_later() {
+    let h = Harness::new().await;
+    let gone_dataset = Uuid::new_v4();
+
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    let token = marker.token().expect("marker created");
+    drop(marker);
+    let run = h.seed_started_row(gone_dataset, Some(token)).await;
+
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.skipped_missing_dataset, 1, "{report:?}");
+    assert_eq!(report.recovered, 0, "{report:?}");
+    let latest = h
+        .pipeline_run_repo
+        .get_pipeline_run(run)
+        .await
+        .expect("get_pipeline_run")
+        .expect("rows exist");
+    assert_eq!(latest.status, PipelineRunStatus::Started);
+    assert!(
+        h.ownership_dir.join(token.to_string()).exists(),
+        "the marker stays, as Python's does"
+    );
+}
+
+/// `add` runs hold an ownership marker too, as every Python run does
+/// (`run_tasks.py:96`): the `STARTED` row of `add_pipeline` carries
+/// `{"recovery_lock": …}`, the marker goes once the run closed, and an
+/// abandoned `add` run is closed by recovery without a rollback (Python's
+/// `ROLLBACK_HANDLERS` has only cognify).
+#[tokio::test]
+async fn add_runs_carry_a_recovery_lock_and_an_abandoned_one_is_closed() {
+    let h = Harness::new().await;
+    h.add("repeat_cognify_add_marker", WAVE_1_TEXT).await;
+    let dataset_id = h.dataset_id("repeat_cognify_add_marker").await;
+
+    let rows = h
+        .pipeline_run_repo
+        .list_recent(None, 100)
+        .await
+        .expect("list_recent");
+    let started = rows
+        .iter()
+        .find(|r| r.pipeline_name == "add_pipeline" && r.status == PipelineRunStatus::Started)
+        .expect("an add_pipeline STARTED row");
+    assert!(
+        recovery_lock_of(started.run_info.as_ref()).is_some(),
+        "{:?}",
+        started.run_info
+    );
+    assert!(
+        h.markers().is_empty(),
+        "the finished add removed its marker"
+    );
+
+    // An abandoned add run on the dataset.
+    let marker = RunOwnership::acquire(&h.ownership_dir);
+    let token = marker.token().expect("marker created");
+    drop(marker);
+    let run = Uuid::new_v4();
+    h.pipeline_run_repo
+        .log_pipeline_run(
+            run,
+            Uuid::new_v4(),
+            "add_pipeline",
+            Some(dataset_id),
+            PipelineRunStatus::Started,
+            Some(run_info_for_started(Some(token))),
+        )
+        .await
+        .expect("log_pipeline_run");
+
+    let report = h.recover(std::time::Duration::ZERO).await;
+    assert_eq!(report.recovered, 1, "{report:?}");
+    let latest = h
+        .pipeline_run_repo
+        .get_pipeline_run(run)
+        .await
+        .expect("get_pipeline_run")
+        .expect("rows exist");
+    assert_eq!(latest.status, PipelineRunStatus::Errored);
+    assert_eq!(
+        latest
+            .run_info
+            .as_ref()
+            .and_then(|i| i.get("error"))
+            .and_then(|e| e.as_str()),
+        Some(cognee_delete::ABANDONED_RUN_ERROR)
+    );
 }

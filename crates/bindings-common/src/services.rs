@@ -160,18 +160,16 @@ async fn recover_abandoned_runs(
     graph_db: &Arc<dyn GraphDBTrait>,
     vector_db: &Arc<dyn VectorDB>,
 ) {
-    let (relational_db_url, ownership_dir) = {
+    let (relational_db_url, ownership_dir, min_age) = {
         // Snapshot under the read guard and drop it before the `.await`:
         // `RwLockReadGuard` is `!Send`, and this future is awaited from PyO3
         // bindings that require `Send`.
         let settings = cm.settings();
         (
             settings.resolved_relational_db_url(),
-            settings.cognify_config().run_ownership_dir,
+            settings.run_ownership_dir(),
+            settings.stale_run_recovery_min_age(),
         )
-    };
-    let Some(ownership_dir) = ownership_dir else {
-        return;
     };
 
     // Every builder awaits this gate, not just the first, so a second builder
@@ -185,7 +183,7 @@ async fn recover_abandoned_runs(
             Arc::clone(vector_db),
             &DatasetLocks::global(),
             &ownership_dir,
-            cognee::delete::DEFAULT_STALE_RUN_MIN_AGE,
+            min_age,
         )
         .await;
         if report.recovered > 0 || report.failed > 0 {
@@ -250,6 +248,8 @@ impl CogneeServices {
 
         recover_abandoned_runs(cm, &pipeline_run_repo, &database, &graph_db, &vector_db).await;
 
+        // Taken out of the guard here: the builder chain below awaits.
+        let run_ownership_dir = cm.settings().run_ownership_dir();
         let add_pipeline = Arc::new(
             AddPipeline::new(
                 Arc::clone(&storage),
@@ -263,6 +263,9 @@ impl CogneeServices {
             // One lock registry for pipeline runs, `add` and `delete`, as in
             // Python (`infrastructure/locks/dataset_lock.py`).
             .with_dataset_locks(DatasetLocks::global())
+            // Every Python run holds an ownership marker (`run_tasks.py:96`),
+            // `add` included, so recovery can close an abandoned one.
+            .with_run_ownership_dir(run_ownership_dir)
             // Python runs its image and audio loaders at `add`.
             .with_loader_registry(cm.add_loader_registry().await),
         );
