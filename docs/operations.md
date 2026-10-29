@@ -336,7 +336,8 @@ Unified orchestration across 18 retrieval strategies selected by `SearchType`
 chunks/summaries/entities/edge-facts and
 1-hop graph-neighborhood expansion around matched entities, then answers via
 LLM completion). A hybrid search falls back to `GraphCompletion` when it sets
-`node_type`, `neighborhood_depth` or `feedback_influence`, or when the
+`node_type`, `neighborhood_depth` or a positive `feedback_influence` (an unset
+one takes `DEFAULT_FEEDBACK_INFLUENCE`, so a positive default falls back too), or when the
 `DocumentChunk_text` collection is missing; setting `wide_search_top_k` or
 `triplet_distance_penalty` with hybrid is an error. Entry: [`cognee-search`](../crates/search/)
 (`SearchBuilder` / `SearchOrchestrator`).

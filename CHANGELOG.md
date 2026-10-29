@@ -18,6 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Agent context, user preferences and personalized retrieval (SDK-1044).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | `ImproveParams`, `SessionAutoImprove` | `personalization_enabled: bool` | `personalization: cognee_search::PreferenceConfig`, `auto_feedback: bool` |
+  | `cognee::api::remember` | `…, personalization_enabled: bool` | `…, personalization: PreferenceConfig, auto_feedback: bool` |
+  | Session QA `memify_metadata` updates | replaced the whole map | merge keys (Python's `update_qa`); `feedback_weights` sends only its own key |
+  | `SearchRetriever` | — | `previews_empty_context(&params)` (provided; graph completion with the global context index previews the prelude alone) |
+  | RAG completion turns | recorded no used ids | record the chunks' ids (`used_graph_element_ids.node_ids`) |
+  | RAG personalization | scaled the similarity | scales the distance (`1 - score`), as Python |
+  | Hybrid fallback | read only an explicit `feedback_influence` | a positive `DEFAULT_FEEDBACK_INFLUENCE` also defers hybrid to graph completion |
+  | `AgentLesson` parsing | exact lowercase section, numeric confidence | section trimmed and lowercased, `null` confidence is 0, clamped to [0, 1] |
+
+  The stages `extract_agent_context` and `update_user_preferences` are ported.
+  The preference text is inert on Rust-only data until session-turn
+  preparation lands (SDK-1045).
+
 - **Improve waits on its dataset and sessions; one dataset lock registry;
   deletes and writing improves are changes (SDK-1044).**
 

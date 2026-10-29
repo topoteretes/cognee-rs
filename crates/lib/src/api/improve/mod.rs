@@ -235,11 +235,15 @@ fn skip_stages(result: &mut ImproveResult, stages: &[StageKind], reason: &str) {
 
 /// Counts that say how much a stage wrote: when a stage reports any of them,
 /// it wrote iff one is positive.
-const WRITE_COUNTS: [&str; 6] = [
+const WRITE_COUNTS: [&str; 10] = [
     "entries_applied",
     "sessions_persisted",
     "windows",
+    "lessons",
     "documents",
+    "edges_written",
+    "edges_pruned",
+    "text_lines_added",
     "anchors",
     "nodes_scored",
 ];
