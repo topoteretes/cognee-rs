@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
-use cognee::api::improve::{ImproveParams, improve};
+use cognee::api::improve::{
+    IMPROVE_STAGES, ImproveParams, ImproveStatus, REASON_IMPROVE_IN_PROGRESS,
+    REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED, StageStatus, improve,
+};
 use cognee_cognify::CognifyConfig;
 use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
@@ -96,7 +99,11 @@ async fn make_harness() -> Harness {
 async fn improve_with_sessions_records_trace_stage() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    // `persist_session_qa` is fatal: the LLM must be able to cognify the Q&A.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
+        MockLlm::new(vec![r#"{"nodes":[],"edges":[]}"#.to_string(); 8])
+            .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+    );
     let config = CognifyConfig::default();
 
     let session_id = "sync-sess-improve";
@@ -132,12 +139,17 @@ async fn improve_with_sessions_records_trace_stage() {
     .await
     .unwrap();
 
-    // persist_trace_steps is always recorded when sessions are supplied.
-    assert!(
-        r.stages_run.contains(&"persist_trace_steps".to_string()),
-        "expected persist_trace_steps stage; got {:?}",
-        r.stages_run
+    // The persist_agent_traces stage runs (not skipped) when sessions are
+    // supplied, even with no traces to persist.
+    let traces = r
+        .stage("persist_agent_traces")
+        .expect("persist_agent_traces is always reported");
+    assert_ne!(
+        traces.status,
+        StageStatus::Skipped,
+        "expected persist_agent_traces to run; got {r:?}"
     );
+    assert_eq!(r.session_ids, vec![session_id.to_string()]);
 }
 
 // ---------------------------------------------------------------------------
@@ -175,11 +187,19 @@ async fn improve_without_sessions_runs_no_stage() {
     .await
     .unwrap();
 
-    assert!(
-        r.stages_run.is_empty(),
-        "without sessions no stage should run; got {:?}",
-        r.stages_run
-    );
+    // Python reports every stage: the session-fed ones skip with
+    // `no_session_ids`, the opt-in ones with `opt_in_disabled`.
+    let names: Vec<&str> = r.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, IMPROVE_STAGES);
+    for stage in &r.stages {
+        assert_eq!(stage.status, StageStatus::Skipped, "{stage:?}");
+        let expected = match stage.stage.as_str() {
+            "review_conflicts" | "global_context_index" => REASON_OPT_IN_DISABLED,
+            _ => REASON_NO_SESSION_IDS,
+        };
+        assert_eq!(stage.reason.as_deref(), Some(expected), "{stage:?}");
+    }
+    assert_eq!(r.status(), ImproveStatus::Skipped);
 }
 
 // ---------------------------------------------------------------------------
@@ -227,10 +247,12 @@ async fn improve_skips_when_locked() {
 
     // When skipped due to lock, improve() returns the default result with no
     // stages run.
+    assert_eq!(r.status(), ImproveStatus::Skipped);
     assert!(
-        r.stages_run.is_empty(),
-        "improve should run no stages when locked; got {:?}",
-        r.stages_run
+        r.stages
+            .iter()
+            .all(|s| s.reason.as_deref() == Some(REASON_IMPROVE_IN_PROGRESS)),
+        "improve should run no stages when locked; got {r:?}"
     );
 
     // After the held guard drops, the same session can be improved again.

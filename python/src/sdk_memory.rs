@@ -102,7 +102,7 @@ impl PyCognee {
     ///     result = await cognee.remember({"type": "text", "text": "Fact A"}, "mem_ds")
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
-    /// ``sessionId``, ``selfImprovement``, ``tenant``.
+    /// ``sessionId``, ``selfImprovement`` (default ``True``), ``tenant``.
     ///
     /// Returns the ``RememberResult`` as a dict.
     #[pyo3(signature = (inputs, dataset_name, opts=None))]
@@ -166,15 +166,15 @@ impl PyCognee {
     /// .. code-block:: python
     ///
     ///     result = await cognee.improve({"datasetName": "my_ds"})
-    ///     print(result["stagesRun"])
+    ///     print(result["status"], [s["stage"] for s in result["stages"]])
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
     /// ``feedbackAlpha`` (float, default 0.1), ``tenant`` (UUID str).
     ///
-    /// Returns a dict with camelCase keys:
-    /// ``stagesRun``, ``stages``, ``feedbackEntriesProcessed``,
-    /// ``feedbackEntriesApplied``, ``sessionsPersisted``.
+    /// Returns a dict with camelCase keys (Python's ``ImproveResult``):
+    /// ``datasetId``, ``datasetName``, ``sessionIds``, ``stages`` (one record
+    /// per stage), ``background``, ``finished``, ``error``, ``status``.
     fn improve<'py>(
         &self,
         py: Python<'py>,

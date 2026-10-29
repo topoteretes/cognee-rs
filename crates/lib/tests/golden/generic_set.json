@@ -7950,6 +7950,126 @@
     "err": "TypeMismatch",
     "key": "huggingface_tokenizer"
   },
+  "improve.auto_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "improve.auto_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve.auto_enabled <- true": {
+    "ok": {}
+  },
+  "improve.auto_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.auto_enabled"
+  },
+  "improve_auto_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- false": {
+    "ok": {
+      "improve.auto_enabled": false
+    }
+  },
+  "improve_auto_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
+  "improve_auto_enabled <- true": {
+    "ok": {}
+  },
+  "improve_auto_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve_auto_enabled"
+  },
   "llm.anthropic.base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""

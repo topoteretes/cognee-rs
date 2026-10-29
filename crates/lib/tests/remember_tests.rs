@@ -306,9 +306,18 @@ async fn display_and_to_dict_on_session_result() {
         obj.get("dataset_name").and_then(|v| v.as_str()),
         Some("ds_display")
     );
-    // cognify_result, improve_result are #[serde(skip)] — absent.
+    // cognify_result is #[serde(skip)]; the improve fields (Python `to_dict`)
+    // appear only when set, and the old `improve_result` name is gone.
     assert!(!obj.contains_key("cognify_result"));
-    assert!(!obj.contains_key("improve_result"));
+    for absent in [
+        "improve_result",
+        "improve",
+        "improve_error",
+        "after_run_error",
+        "improve_skipped",
+    ] {
+        assert!(!obj.contains_key(absent), "{absent}");
+    }
     // inner is gone from the struct entirely.
     assert!(!obj.contains_key("inner"));
 }

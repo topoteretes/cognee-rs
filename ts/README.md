@@ -237,7 +237,7 @@ Composite add + cognify with an optional improvement pass.
 
 ```ts
 await c.remember({ type: "text", text: "…" }, "my-dataset", {
-  selfImprovement: true,   // run improve() after cognify
+  selfImprovement: true,   // run improve() after cognify (the default)
   sessionId: "session-id", // session-only mode (no graph writes)
 });
 ```

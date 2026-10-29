@@ -15,7 +15,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee::api::improve::{
-    ImproveParams, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS, REASON_OPT_IN_DISABLED,
+    DISTILL_SESSIONS_STAGE, FEEDBACK_WEIGHTS_STAGE, GLOBAL_CONTEXT_INDEX_STAGE, IMPROVE_STAGES,
+    ImproveParams, PERSIST_AGENT_TRACES_STAGE, PERSIST_SESSION_QA_STAGE,
+    REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS, REASON_NOT_IMPLEMENTED,
+    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
     StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
 use cognee::models::Dataset;
@@ -189,8 +192,15 @@ async fn improve_without_sessions_runs_no_stage() {
     .unwrap();
 
     // Python has no triplet-enrichment stage (SDK-1115), and neither does Rust:
-    // without sessions and without the opt-in global index, nothing runs.
-    assert!(r.stages_run.is_empty(), "got {:?}", r.stages_run);
+    // the result lists Python's nine stages, every one skipped without sessions
+    // and without the opt-ins.
+    let names: Vec<&str> = r.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, IMPROVE_STAGES);
+    assert!(
+        r.stages.iter().all(|s| s.status == StageStatus::Skipped),
+        "got {}",
+        r.stage_summary()
+    );
     // The session-fed truth stage reports the orchestrator's gate reason.
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Skipped);
@@ -204,11 +214,9 @@ async fn improve_skips_stage1_when_session_backends_missing() {
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
     let config = CognifyConfig::default();
 
-    // Provide session_ids but no session_store/manager — stages 1, 2, 4
-    // should all be skipped (with warnings), the remaining stages still run.
-    // Stage 2b (persist_trace_steps) is gated on `has_sessions` so its name IS
-    // pushed to stages_run even when it skips/no-ops due to missing backends,
-    // matching Python's convention of recording every attempted stage.
+    // Provide session_ids but no session_store/manager: the stages that need
+    // them are skipped with `session_manager_unavailable`, and the stage
+    // that reads traces through the (absent) manager still reports.
     let r = improve(ImproveParams {
         dataset_name: "ds_nosess".to_string(),
         session_ids: Some(vec!["s1".to_string()]),
@@ -233,20 +241,28 @@ async fn improve_skips_stage1_when_session_backends_missing() {
     .await
     .unwrap();
 
-    assert_eq!(
-        r.stages_run,
-        vec!["persist_trace_steps".to_string()],
-        "with sessions, persist_trace_steps is always recorded even when backends are missing"
-    );
+    for name in [
+        FEEDBACK_WEIGHTS_STAGE,
+        PERSIST_SESSION_QA_STAGE,
+        DISTILL_SESSIONS_STAGE,
+    ] {
+        let stage = r.stage(name).expect("stage reported");
+        assert_eq!(stage.status, StageStatus::Skipped, "{stage:?}");
+        assert_eq!(
+            stage.reason.as_deref(),
+            Some(REASON_SESSION_MANAGER_UNAVAILABLE),
+            "{stage:?}"
+        );
+    }
+    let traces = r.stage(PERSIST_AGENT_TRACES_STAGE).expect("stage reported");
+    assert_eq!(traces.status, StageStatus::Completed, "{traces:?}");
 }
 
-/// Stage 2c is default-off in the "no lesson" sense: a session with no Q&A
-/// gates at `NoQaEntries`, so `distill_sessions` is NOT pushed onto
-/// `stages_run` (Python parity: pushed only when a lesson is published). This
-/// proves the zero-change guarantee — providing a session that yields nothing
-/// does not add the stage.
+/// A session with no Q&A gates at `NoQaEntries`: `distill_sessions` completes
+/// with zero documents (Python reports `documents=0` the same way), and no
+/// lessons are published.
 #[tokio::test]
-async fn improve_omits_distill_sessions_when_no_qa() {
+async fn improve_distill_sessions_publishes_nothing_when_no_qa() {
     let h = make_harness().await;
     let owner = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
@@ -277,15 +293,46 @@ async fn improve_omits_distill_sessions_when_no_qa() {
     .await
     .unwrap();
 
-    assert!(
-        !r.stages_run.contains(&"distill_sessions".to_string()),
-        "distill_sessions must be absent when the session has no Q&A; got {:?}",
-        r.stages_run
+    let distill = r.stage(DISTILL_SESSIONS_STAGE).expect("stage reported");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
+    assert_eq!(distill.counts.get("documents"), Some(&0));
+    assert_eq!(distill.counts.get("sessions_completed"), Some(&0));
+    // The other session stages ran too (proving the pipeline itself ran).
+    assert_ne!(
+        r.stage(PERSIST_AGENT_TRACES_STAGE).expect("stage").status,
+        StageStatus::Skipped
     );
-    assert_eq!(r.sessions_distilled, 0);
-    assert_eq!(r.lessons_published, 0);
-    // The always-run stages are still present (proving the pipeline itself ran).
-    assert!(r.stages_run.contains(&"persist_trace_steps".to_string()));
+    assert_eq!(r.session_ids, vec!["empty_session".to_string()]);
+
+    // With sessions, every stage is reported in Python's order, and the
+    // stages Rust does not port report what Python's gates give with default
+    // config: `extract_agent_context` would run (`not_implemented`),
+    // `update_user_preferences` is off without PERSONALIZATION_ENABLED,
+    // and the opt-in stages were not opted into.
+    let names: Vec<&str> = r.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, IMPROVE_STAGES);
+    for (name, reason) in [
+        ("extract_agent_context", REASON_NOT_IMPLEMENTED),
+        ("update_user_preferences", REASON_PERSONALIZATION_DISABLED),
+        (TRUTH_SUBSPACE_STAGE, REASON_OPT_IN_DISABLED),
+        ("review_conflicts", REASON_OPT_IN_DISABLED),
+        (GLOBAL_CONTEXT_INDEX_STAGE, REASON_OPT_IN_DISABLED),
+    ] {
+        let stage = r.stage(name).expect("stage reported");
+        assert_eq!(
+            (stage.status, stage.reason.as_deref()),
+            (StageStatus::Skipped, Some(reason)),
+            "{stage:?}"
+        );
+    }
+    for name in [FEEDBACK_WEIGHTS_STAGE, PERSIST_SESSION_QA_STAGE] {
+        assert_ne!(
+            r.stage(name).expect("stage reported").status,
+            StageStatus::Skipped,
+            "{name} runs with sessions: {}",
+            r.stage_summary()
+        );
+    }
 }
 
 /// Stage 2d (`build_truth_subspace`) is opt-in. With sessions present, the flag
@@ -334,11 +381,6 @@ async fn improve_records_build_truth_subspace_when_opted_in() {
     .await
     .unwrap();
 
-    assert!(
-        r.stages_run.contains(&"build_truth_subspace".to_string()),
-        "build_truth_subspace must be recorded when opted in with a resolvable dataset; got {:?}",
-        r.stages_run
-    );
     // The stage record mirrors Python's `BuildTruthSubspaceStage`: an empty
     // session distils no learnings, so the build completes with nothing built.
     let stage = truth_stage(&r);
@@ -407,11 +449,6 @@ async fn improve_skips_build_truth_subspace_on_an_unsupported_backend() {
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Skipped);
     assert_eq!(stage.reason.as_deref(), Some(REASON_BACKEND_UNSUPPORTED));
-    assert!(
-        !r.stages_run.contains(&TRUTH_SUBSPACE_STAGE.to_string()),
-        "a skipped build never ran; got {:?}",
-        r.stages_run
-    );
 }
 
 /// Companion to [`improve_records_build_truth_subspace_when_opted_in`]: with the
@@ -456,11 +493,6 @@ async fn improve_omits_build_truth_subspace_when_disabled() {
     .await
     .unwrap();
 
-    assert!(
-        !r.stages_run.contains(&"build_truth_subspace".to_string()),
-        "build_truth_subspace must be absent when the flag is false; got {:?}",
-        r.stages_run
-    );
     let stage = truth_stage(&r);
     assert_eq!(stage.status, StageStatus::Skipped);
     assert_eq!(stage.reason.as_deref(), Some(REASON_OPT_IN_DISABLED));
@@ -509,10 +541,11 @@ async fn improve_does_not_record_global_context_index_when_opted_in() {
         .await
         .unwrap();
 
-        assert!(
-            !r.stages_run.contains(&"global_context_index".to_string()),
-            "global_context_index is not implemented (background={run_in_background}); got {:?}",
-            r.stages_run
+        let stage = r.stage(GLOBAL_CONTEXT_INDEX_STAGE).expect("stage reported");
+        assert_eq!(
+            (stage.status, stage.reason.as_deref()),
+            (StageStatus::Skipped, Some(REASON_NOT_IMPLEMENTED)),
+            "global_context_index is not implemented (background={run_in_background}); got {stage:?}"
         );
     }
 }
@@ -537,7 +570,12 @@ async fn improve_with_sessions_records_no_graph_sync_stage() {
         .await
         .unwrap();
 
-    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(MockLlm::empty());
+    // An LLM that can cognify the session Q&A: `persist_session_qa` is fatal,
+    // so a failed persist would fail the run.
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
+        MockLlm::new(vec![r#"{"nodes":[],"edges":[]}"#.to_string(); 8])
+            .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+    );
     let r = improve(ImproveParams {
         dataset_name: "ds_no_sync".to_string(),
         session_ids: Some(vec![session_id.to_string()]),
@@ -563,9 +601,9 @@ async fn improve_with_sessions_records_no_graph_sync_stage() {
     .unwrap();
 
     assert!(
-        !r.stages_run.iter().any(|s| s.contains("sync_graph")),
-        "no graph-session sync stage may run; got {:?}",
-        r.stages_run
+        !r.stages.iter().any(|s| s.stage.contains("sync_graph")),
+        "no graph-session sync stage may run; got {}",
+        r.stage_summary()
     );
     // The fs store kept the snapshot at `{user}/_graph_context_{session}.json`;
     // nothing may write it any more.
@@ -641,19 +679,19 @@ async fn improve_records_distill_sessions_when_lessons_published() {
     .await
     .unwrap();
 
+    let distill = r.stage(DISTILL_SESSIONS_STAGE).expect("stage reported");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
     assert!(
-        r.stages_run.contains(&"distill_sessions".to_string()),
-        "distill_sessions must be recorded when a lesson is published; got {:?}",
-        r.stages_run
+        distill
+            .counts
+            .get("sessions_completed")
+            .copied()
+            .unwrap_or(0)
+            > 0,
+        "at least one session must be distilled; got {distill:?}"
     );
     assert!(
-        r.sessions_distilled > 0,
-        "at least one session must be distilled; got {}",
-        r.sessions_distilled
-    );
-    assert!(
-        r.lessons_published > 0,
-        "at least one lesson must be published; got {}",
-        r.lessons_published
+        distill.counts.get("documents").copied().unwrap_or(0) > 0,
+        "at least one lesson must be published; got {distill:?}"
     );
 }

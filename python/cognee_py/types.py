@@ -142,6 +142,7 @@ class RememberOpts(TypedDict, total=False):
     """Options accepted by :meth:`Cognee.remember`."""
 
     session_id: str
+    # Run ``improve()`` after the remember (default ``True``, as in Python).
     self_improvement: bool
     tenant: str
 
@@ -312,18 +313,38 @@ class ImproveStageResult(TypedDict):
     durationMs: int
 
 
+# ``ImproveResult.stages`` always lists Python's nine stages in this order.
+IMPROVE_STAGE_NAMES = (
+    "feedback_weights",
+    "persist_session_qa",
+    "persist_agent_traces",
+    "extract_agent_context",
+    "distill_sessions",
+    "update_user_preferences",
+    "build_truth_subspace",
+    "review_conflicts",
+    "global_context_index",
+)
+
+
 class ImproveResult(TypedDict):
     """Result of :meth:`Cognee.improve` (snake_case view).
 
     The native method returns the same data with camelCase keys.
     """
 
-    stages_run: list[str]
-    # Per-stage records; only ``build_truth_subspace`` reports one so far.
+    dataset_id: str | None
+    dataset_name: str | None
+    session_ids: list[str]
+    # One record per stage of Python's ``DEFAULT_STAGES``, in order. A stage
+    # Rust does not port is reported ``skipped`` with reason ``not_implemented``
+    # once the run-level gates (``no_session_ids``, ``opt_in_disabled``) pass.
     stages: list[ImproveStageResult]
-    feedback_entries_processed: int
-    feedback_entries_applied: int
-    sessions_persisted: int
+    background: bool
+    finished: bool
+    error: str | None
+    # "completed" | "errored" | "skipped" | "running"
+    status: str
 
 
 __all__ = [

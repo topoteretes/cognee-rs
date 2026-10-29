@@ -582,12 +582,20 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *
  *   CogneeDataInput — same discriminated union as cg_sdk_add (see above).
  *
- *   RememberResult — JSON object (fields vary; cognify_result/improve_result
- *     are skipped in serialisation via #[serde(skip)]).
+ *   RememberResult — JSON object, snake_case (fields vary; cognify_result is
+ *     skipped in serialisation via #[serde(skip)]). When the automatic improve
+ *     ran it carries "improve" (an ImproveResult in snake_case, with
+ *     "duration_ms" per stage); "improve_error" and "improve_skipped" appear
+ *     only when set.
  *
- *   ImproveResult — {"stagesRun":[…],"stages":[ImproveStage…],
- *                    "feedbackEntriesProcessed":N,"feedbackEntriesApplied":N,
- *                    "sessionsPersisted":N}
+ *   ImproveResult — {"datasetId":"…"|null,"datasetName":"…"|null,
+ *                    "sessionIds":[…],"stages":[ImproveStage…],
+ *                    "background":false,"finished":true,"error":null|"…",
+ *                    "status":"completed"|"errored"|"skipped"}
+ *     "stages" has one entry per stage, in order: feedback_weights,
+ *     persist_session_qa, persist_agent_traces, extract_agent_context,
+ *     distill_sessions, update_user_preferences, build_truth_subspace,
+ *     review_conflicts, global_context_index.
  *
  *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
  *                    "skipped"|"errored","reason":null|"…","error":null|"…",
@@ -600,7 +608,8 @@ void cg_sdk_recall(const CgSdk*        sdk,
  * inputs_json   — CogneeDataInput object or array (required).
  * dataset_name  — target dataset name (required).
  * opts_json     — NULL or JSON object with optional keys:
- *                 "sessionId" (string), "selfImprovement" (bool),
+ *                 "sessionId" (string), "selfImprovement" (bool, default
+ *                 true),
  *                 "tenant" (UUID string).
  *
  * result_json on success: RememberResult JSON object.

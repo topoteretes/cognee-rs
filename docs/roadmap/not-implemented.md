@@ -72,8 +72,8 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 Shipped in task 20 as sanctioned partials for 0.1.0:
 
 - **`build_global_context_index` stage (Stage 3b)** — the `build_global_context_index: bool` flag
-  is accepted, but the stage is **not implemented**: it logs a warning, records nothing in
-  `stages_run` and writes nothing. Rust's earlier stand-in stored a raw edge list in the session
+  is accepted, but the stage is **not implemented**: it logs a warning, reports the
+  `global_context_index` stage as `skipped` with reason `not_implemented` and writes nothing. Rust's earlier stand-in stored a raw edge list in the session
   graph-context slot; that slot is gone with graph-session sync (Python `3401da38a`), and nothing
   ever read the stored list. What is missing is Python's reference implementation
   (`global_context_index_pipeline`): chunk the edge list into buckets and run an LLM summarization

@@ -5170,6 +5170,60 @@
   "HUGGINGFACE_TOKENIZER=\"{\\\"ssl\\\":true}\"": {
     "embedding.ollama.huggingface_tokenizer": "{\"ssl\":true}"
   },
+  "IMPROVE_AUTO_ENABLED=\"  \"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"\"": {},
+  "IMPROVE_AUTO_ENABLED=\"-1\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"0\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"1\"": {},
+  "IMPROVE_AUTO_ENABLED=\"1.5\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"42\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"5000000000\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"70000\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"TRUE\"": {},
+  "IMPROVE_AUTO_ENABLED=\"[1]\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"abc\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"false\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"no\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"on\"": {},
+  "IMPROVE_AUTO_ENABLED=\"require\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"true\"": {},
+  "IMPROVE_AUTO_ENABLED=\"v\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"yes\"": {},
+  "IMPROVE_AUTO_ENABLED=\"{\\\"a\\\":1}\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "improve.auto_enabled": false
+  },
+  "IMPROVE_AUTO_ENABLED=\"{\\\"ssl\\\":true}\"": {
+    "improve.auto_enabled": false
+  },
   "LLM_API_KEY=\"  \"": {
     "embedding.api_key": "  ",
     "llm.api_key": "  "
