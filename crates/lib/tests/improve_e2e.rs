@@ -1403,7 +1403,7 @@ async fn a_cancelled_run_lets_the_next_improve_run() {
     let config = CognifyConfig::default();
     let locks = Arc::new(DatasetLocks::new());
     let owner = Uuid::new_v4();
-    create_dataset(&h, "ds_cancel", owner).await;
+    let dataset = create_dataset(&h, "ds_cancel", owner).await;
     // The first run takes the dataset, then waits on a session someone holds.
     let _session = cognee_session::acquire_improve_lock_many(cognee_session::improve_lock_keys(
         ["cancel_held"],
@@ -1422,7 +1422,23 @@ async fn a_cancelled_run_lets_the_next_improve_run() {
     first.dataset_locks = Some(Arc::clone(&locks));
     // Boxed so that dropping it drops the run itself.
     let mut first = Box::pin(improve(first));
-    assert!(tokio::time::timeout(SHORT, &mut first).await.is_err());
+    // Polled until it holds the dataset (the registry's lock no longer comes
+    // free): a future only progresses while polled, and on a loaded machine
+    // one slice may not reach the hold.
+    let deadline = std::time::Instant::now() + LONG;
+    loop {
+        assert!(tokio::time::timeout(SHORT, &mut first).await.is_err());
+        if tokio::time::timeout(SHORT, locks.lock(dataset))
+            .await
+            .is_err()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first run never took the dataset"
+        );
+    }
 
     let mut second = params(&h, &config, "ds_cancel", None, mock_llm());
     second.owner_id = owner;
