@@ -28,6 +28,7 @@ the Rust ``dataset_scoped_data_migration`` test.
 """
 
 import hashlib
+import json
 import uuid
 
 import pytest
@@ -79,11 +80,17 @@ def _set_legacy_id(db_path, row_id, legacy_hex):
 
 
 def _python_update(py_ws, data_id, dataset_id, text):
+    # `chunk_level_diff=False`: Python's full-rebuild path (`update.py:309-337`),
+    # the one Rust ports. Python's default chunk-level path is not ported (it
+    # also keeps the id, but leaves the row's metadata untouched, stale
+    # `_cognee.source_uri` included), so the row comparison below is only
+    # like-for-like on the full-rebuild path.
     script = (
         "import asyncio, uuid\n"
         "async def main():\n"
         f"    result = await cognee.update(data_id=uuid.UUID({data_id!r}), "
-        f"data={text!r}, dataset_id=uuid.UUID({dataset_id!r}))\n"
+        f"data={text!r}, dataset_id=uuid.UUID({dataset_id!r}), "
+        "chunk_level_diff=False)\n"
         "    print('RESULT', result)\n"
         "asyncio.run(main())\n"
     )
@@ -151,6 +158,29 @@ def test_update_keeps_the_data_id(both_cognified, by_legacy_id):
             assert row.get("legacy_id") is not None, (
                 f"{sdk}: the row lost its legacy id"
             )
+
+    # The refreshed row's metadata is Python's PATCH (`merge_existing_row_metadata`):
+    # a text replacement carries no metadata and no source, so both SDKs keep
+    # the stored metadata and node set, and drop the stored `_cognee.source_uri`
+    # (it described the old file).
+    after = {
+        sdk: _only_row(ws, db)[0]
+        for sdk, ws, db in (("python", py_ws, py_db), ("rust", rust_ws, rust_db))
+    }
+
+    def _json(value):
+        return json.loads(value) if isinstance(value, str) else value
+
+    for column, parse in (
+        ("external_metadata", _json),
+        ("node_set", _json),
+        ("loader_engine", str),
+        ("name", str),
+    ):
+        assert parse(after["python"][column]) == parse(after["rust"][column]), (
+            f"{column} differs after update: "
+            f"python={after['python'][column]!r} rust={after['rust'][column]!r}"
+        )
 
 
 def test_update_of_an_unknown_id_is_rejected(both_added):
