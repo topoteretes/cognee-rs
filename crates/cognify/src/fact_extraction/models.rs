@@ -140,28 +140,40 @@ fn check_identifier(field: &str, value: &str) -> Result<(), String> {
 
 /// Node in a knowledge graph.
 ///
-/// Represents an entity or concept extracted from text.
-/// Nodes are akin to Wikipedia nodes - they represent distinct entities.
+/// Represents an entity or concept extracted from text. Nodes are akin to Wikipedia nodes - they represent distinct entities.
 ///
 /// # Fields
 /// * `id` - Unique identifier (human-readable, not an integer)
 /// * `name` - Display name of the entity
 /// * `node_type` - Type classification (e.g., "PERSON", "ORGANIZATION", "CONCEPT")
 /// * `description` - Brief description of the entity
+//
+// Everything `schemars` derives from this type is sent to the model (see
+// [`cognee_llm::schema::generate_json_schema`]), so the schema is pinned to
+// Python's `KnowledgeGraph.model_json_schema()` (SDK-1039 D13): the struct
+// description and the titles below are Python's, and NO field carries a
+// description (Python's `Node` has none) -- which is why the field notes are `//`
+// comments, not `///`. Only `Edge.description` has one, as in Python. The golden
+// test `the_model_facing_schema_matches_python` compares with a dump of Python's.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(title = "Node", description = "Node in a knowledge graph.")]
 pub struct Node {
-    /// Unique identifier for the node (human-readable, e.g., "Albert Einstein")
+    // Unique identifier for the node (human-readable, e.g., "Albert Einstein")
+    #[schemars(title = "Id")]
     pub id: String,
 
-    /// Display name of the entity
+    // Display name of the entity
+    #[schemars(title = "Name")]
     pub name: String,
 
-    /// Entity type (e.g., "PERSON", "ORGANIZATION", "CONCEPT")
-    /// Use uppercase for consistency with Python
+    // Entity type (e.g., "PERSON", "ORGANIZATION", "CONCEPT"); Python's prompt
+    // asks for Title-case labels, the typing rules live in the prompt.
     #[serde(rename = "type")]
+    #[schemars(title = "Type")]
     pub node_type: String,
 
-    /// Brief description of the entity (1-2 sentences)
+    // Brief description of the entity (1-2 sentences)
+    #[schemars(title = "Description")]
     pub description: String,
 }
 
@@ -175,25 +187,32 @@ pub struct Node {
 /// * `target_node_id` - ID of the target node
 /// * `relationship_name` - Type of relationship (use snake_case, e.g., "works_at")
 /// * `description` - Concrete one-sentence fact expressed by this edge
+//
+// Model-facing schema: see the note on [`Node`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(title = "Edge", description = "Edge in a knowledge graph.")]
 pub struct Edge {
-    /// ID of the source node
+    // ID of the source node
+    #[schemars(title = "Source Node Id")]
     pub source_node_id: String,
 
-    /// ID of the target node
+    // ID of the target node
+    #[schemars(title = "Target Node Id")]
     pub target_node_id: String,
 
-    /// Type of relationship (snake_case, e.g., "works_at", "founded", "located_in")
+    // Type of relationship (snake_case, e.g., "works_at", "founded", "located_in")
+    #[schemars(title = "Relationship Name")]
     pub relationship_name: String,
 
-    // The doc comment below is part of the LLM's JSON schema (schemars), so the
-    // replay cassettes hash it: "+ Triplet" is stale since cognify stopped
-    // embedding triplets (SDK-1039), but rewording it means re-recording.
-    /// Concrete one-sentence fact expressed by this edge, using endpoint names.
-    /// Mirrors Python `KnowledgeGraph.Edge.description` (data_models.py:62-71).
-    /// Becomes the `edge_text` graph-edge property, feeding EdgeType + Triplet
-    /// embeddings. Optional because older/custom outputs may omit it.
+    // The one description the model sees, equal to Python's
+    // `Edge.description` (`cognee/shared/data_models.py`). Becomes the
+    // `edge_text` graph-edge property that feeds the EdgeType embeddings.
+    // Optional because older/custom outputs may omit it.
     #[serde(default)]
+    #[schemars(
+        title = "Description",
+        description = "Concrete one-sentence fact expressed by this edge, using endpoint names."
+    )]
     pub description: Option<String>,
 }
 
@@ -205,55 +224,45 @@ pub struct Edge {
 /// # Fields
 /// * `nodes` - List of extracted entities and concepts
 /// * `edges` - List of relationships between nodes
+//
+// Model-facing schema: see the note on [`Node`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(description = "Knowledge graph.")]
 pub struct KnowledgeGraph {
-    /// List of nodes (entities and concepts).
-    ///
-    /// Intentionally NOT `#[serde(default)]`: schemars honours serde `default`
-    /// by emitting a JSON-schema `"default"` and dropping the field from the
-    /// `required` array, which advertises the field as optional to the model.
-    /// gpt-oss-120b (and other non-strict tool-callers) then omit it. Requiring
-    /// `nodes`/`edges` here makes schemars list them in `required` (forcing the
-    /// model to return both) and makes a payload missing either field fail typed
-    /// deserialization, driving the adapter's corrective-retry loop instead of
-    /// silently yielding a 0-edge graph. Mirrors what instructor does in Python,
-    /// where its TOOLS-mode schema builder re-adds non-default fields to
-    /// `required` (Python's `default_factory` emits no schema `"default"`).
+    // List of nodes (entities and concepts).
     //
-    // NOT part of the doc comment above, for the same reason the note on `edges`
-    // is a `//`: `schemars` copies `///` into the model-facing schema, and the
-    // model has no business knowing about a private Rust bound. Deserialized
-    // through `deserialize_nodes_checked`, which rejects an oversized `Node.id`
-    // — see [`MAX_IDENTIFIER_CHARS`].
+    // Intentionally NOT `#[serde(default)]`: schemars honours serde `default`
+    // by emitting a JSON-schema `"default"` and dropping the field from the
+    // `required` array, which advertises the field as optional to the model.
+    // gpt-oss-120b (and other non-strict tool-callers) then omit it. Requiring
+    // `nodes`/`edges` here makes schemars list them in `required` (forcing the
+    // model to return both) and makes a payload missing either field fail typed
+    // deserialization, driving the adapter's corrective-retry loop instead of
+    // silently yielding a 0-edge graph. Mirrors what instructor does in Python,
+    // where its TOOLS-mode schema builder re-adds non-default fields to
+    // `required` (Python's `default_factory` emits no schema `"default"`).
+    //
+    // Deserialized through `deserialize_nodes_checked`, which rejects an
+    // oversized `Node.id` -- see [`MAX_IDENTIFIER_CHARS`]. Keeping this note
+    // off a `///` also keeps the private bound out of the model's schema.
     #[serde(deserialize_with = "deserialize_nodes_checked")]
+    #[schemars(title = "Nodes")]
     pub nodes: Vec<Node>,
 
-    /// List of edges (relationships between nodes). NOT `#[serde(default)]` — see
-    /// the note on `nodes`. An empty graph must send `{"nodes":[],"edges":[]}`.
-    //
-    // NOT a doc comment, deliberately. `schemars` copies every `///` on a field
-    // straight into that property's JSON-schema `description`, and this struct's
-    // schema is what `generate_json_schema` hands the model on every extraction
-    // call — so a `///` here would spend prompt tokens telling the model about a
-    // private Rust deserializer, and condition it on the existence of a
-    // tolerance it should never aim at. `the_model_facing_schema_carries_no_
-    // implementation_detail` below pins that.
-    //
-    // It would also INVALIDATE EVERY COMMITTED STRUCTURED-OUTPUT CASSETTE —
-    // that is, every recorded call that sends a schema; plain chat entries hash
-    // messages only and are unaffected. `cassette::input_hash`
-    // hashes the canonicalized schema alongside the messages, and while
-    // `canonicalize` sorts object keys — so property *order* does not matter —
-    // it serialises every value, `description` strings included. Editing or
-    // adding a `///` on any type reachable from this schema therefore changes
-    // the hash of every recorded call, and the replay lane
-    // (`COGNEE_TEST_REPLAY=1`, which is how CI runs) fails on a cassette miss.
-    // Re-record with `COGNEE_RECORD_LLM=1` when that is genuinely intended.
+    // List of edges (relationships between nodes). NOT `#[serde(default)]` --
+    // see the note on `nodes`. An empty graph must send `{"nodes":[],"edges":[]}`.
     //
     // Deserialized through `deserialize_edges_lenient`, which drops a small
-    // number of malformed entries instead of failing the whole graph. See that
-    // function for why the model emits them.
+    // number of malformed entries instead of failing the whole graph.
+    //
+    // The schema is what `generate_json_schema` hands the model on every
+    // extraction call, and `cassette::input_hash` hashes it with the messages:
+    // changing anything `schemars` renders from this type changes the hash of
+    // every recorded structured-output call, so the replay lane
+    // (`COGNEE_TEST_REPLAY=1`) fails on a cassette miss until the cassettes are
+    // re-recorded with `COGNEE_RECORD_LLM=1`.
     #[serde(deserialize_with = "deserialize_edges_lenient")]
+    #[schemars(title = "Edges")]
     pub edges: Vec<Edge>,
 }
 
@@ -1065,19 +1074,21 @@ mod tests {
     /// `description`, and this schema is sent to the model on every extraction
     /// call. Describing a private Rust deserializer there spends prompt tokens
     /// and, worse, tells the model a tolerance exists. The comment on the field
-    /// is therefore a plain `//`; this test is what keeps it that way.
+    /// is therefore a plain `//`; this test is what keeps it that way. (Since
+    /// D13 no field but `Edge.description` has a description at all, and
+    /// `the_model_facing_schema_matches_python` pins that.)
     #[test]
     fn the_model_facing_schema_carries_no_implementation_detail() {
         let schema = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
         let rendered = schema.to_string();
 
-        // Precondition: field docs really do reach the model, so the assertion
-        // below is testing something. `nodes` keeps its `///` and its text is
-        // in the schema.
+        // Precondition: schema text really does reach the model, so the
+        // assertions below test something. `Edge.description` is the one field
+        // description (D13) and its text is in the schema.
         assert!(
-            rendered.contains("serde(default)") || rendered.contains("schemars honours serde"),
-            "precondition failed: field doc comments are expected to appear in the \
-             generated schema, so this test would be vacuous. Schema: {rendered}"
+            rendered.contains("Concrete one-sentence fact expressed by this edge"),
+            "precondition failed: `Edge.description` is expected in the generated \
+             schema, so this test would be vacuous. Schema: {rendered}"
         );
 
         for leak in [
@@ -1187,5 +1198,139 @@ mod tests {
             "nodes must precede edges: the model cannot reference a node id in an \
              edge it has not declared yet"
         );
+    }
+
+    /// What the model reads of a schema: per definition, the description and
+    /// title, and per property its title, description and type set. Key order,
+    /// `$schema`, `definitions` vs `$defs`, `anyOf [T, null]` vs `type [T, null]`
+    /// and the `default` keyword are spelling, not content, and are normalised
+    /// away; `required` is compared on its own below.
+    fn model_visible(schema: &serde_json::Value) -> serde_json::Value {
+        use serde_json::{Value, json};
+        fn types(prop: &Value) -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            let mut push = |v: &Value| match v {
+                Value::String(t) => out.push(t.clone()),
+                Value::Array(ts) => {
+                    out.extend(ts.iter().filter_map(|t| t.as_str()).map(String::from))
+                }
+                _ => {}
+            };
+            push(&prop["type"]);
+            for branch in prop["anyOf"].as_array().into_iter().flatten() {
+                push(&branch["type"]);
+            }
+            if let Some(items) = prop.get("items") {
+                let target = items["$ref"]
+                    .as_str()
+                    .map(|r| r.rsplit('/').next().unwrap_or(r));
+                out.push(format!(
+                    "[{}]",
+                    target.or(items["type"].as_str()).unwrap_or("?")
+                ));
+            }
+            out.sort();
+            out
+        }
+        fn object(def: &Value) -> Value {
+            let props: serde_json::Map<String, Value> = def["properties"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(name, prop)| {
+                    (
+                        name.clone(),
+                        json!({
+                            "title": prop["title"],
+                            "description": prop["description"],
+                            "types": types(prop),
+                        }),
+                    )
+                })
+                .collect();
+            json!({"title": def["title"], "description": def["description"], "properties": props})
+        }
+        let defs = schema
+            .get("$defs")
+            .or_else(|| schema.get("definitions"))
+            .and_then(|d| d.as_object())
+            .expect("the schema has definitions");
+        let mut out = serde_json::Map::new();
+        out.insert("KnowledgeGraph".into(), object(schema));
+        for (name, def) in defs {
+            out.insert(name.clone(), object(def));
+        }
+        Value::Object(out)
+    }
+
+    /// The model-facing `KnowledgeGraph` schema carries the same text as
+    /// Python's `KnowledgeGraph.model_json_schema()` (SDK-1039 D13): same
+    /// titles, same struct descriptions, no field description except
+    /// `Edge.description`. The fixture is a dump from Python 1d3ed15, taken in
+    /// the cross-SDK harness image:
+    ///   python -c 'import json; from cognee.shared.data_models import KnowledgeGraph;
+    ///              print(json.dumps(KnowledgeGraph.model_json_schema(), indent=2, sort_keys=True))'
+    #[test]
+    fn the_model_facing_schema_matches_python() {
+        let python: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/graph_extraction/python_knowledge_graph_schema.json"
+        ))
+        .expect("fixture is JSON");
+        let rust = cognee_llm::schema::generate_json_schema::<KnowledgeGraph>();
+        assert_eq!(
+            model_visible(&rust),
+            model_visible(&python),
+            "the schema the model reads drifted from Python's"
+        );
+        // Exactly one field description, `Edge.description`, as in Python.
+        let described: Vec<&str> = ["Node", "Edge"]
+            .into_iter()
+            .flat_map(|def| {
+                rust["definitions"][def]["properties"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, p)| p.get("description").is_some())
+                    .map(move |(name, _)| {
+                        if def == "Edge" {
+                            name.as_str()
+                        } else {
+                            "Node.?"
+                        }
+                    })
+            })
+            .collect();
+        assert_eq!(
+            described,
+            ["description"],
+            "only Edge.description may be described"
+        );
+        // `required`: Python lists the fields without a default. Rust also
+        // requires `Node.name` and `KnowledgeGraph.nodes/edges` (a deliberate
+        // typed-deserialization choice, see the notes on the fields; strict mode
+        // requires every property anyway). Everything else must agree.
+        let req = |v: &serde_json::Value| -> Vec<String> {
+            let mut r: Vec<String> = v["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            r.sort();
+            r
+        };
+        assert!(
+            req(&python).is_empty(),
+            "Python's nodes/edges have default_factory"
+        );
+        assert_eq!(req(&rust), ["edges", "nodes"]);
+        assert_eq!(
+            req(&rust["definitions"]["Edge"]),
+            req(&python["$defs"]["Edge"])
+        );
+        let mut node = req(&python["$defs"]["Node"]);
+        node.push("name".into());
+        node.sort();
+        assert_eq!(req(&rust["definitions"]["Node"]), node);
     }
 }

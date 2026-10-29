@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "Edge": {
+      "description": "Edge in a knowledge graph.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Concrete one-sentence fact expressed by this edge, using endpoint names.",
+          "title": "Description"
+        },
+        "relationship_name": {
+          "title": "Relationship Name",
+          "type": "string"
+        },
+        "source_node_id": {
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "target_node_id": {
+          "title": "Target Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_node_id",
+        "target_node_id",
+        "relationship_name"
+      ],
+      "title": "Edge",
+      "type": "object"
+    },
+    "Node": {
+      "description": "Node in a knowledge graph.",
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "description"
+      ],
+      "title": "Node",
+      "type": "object"
+    }
+  },
+  "description": "Knowledge graph.",
+  "properties": {
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/Edge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "title": "Nodes",
+      "type": "array"
+    }
+  },
+  "title": "KnowledgeGraph",
+  "type": "object"
+}

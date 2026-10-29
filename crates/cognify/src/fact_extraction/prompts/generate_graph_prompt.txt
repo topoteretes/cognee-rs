@@ -12,15 +12,12 @@ The aim is to achieve simplicity and clarity in the knowledge graph.
 # 1. Labeling Nodes
 **Consistency**: Ensure you use basic or elementary types for node labels.
   - For example, when you identify an entity representing a person, always label it as **"Person"**.
-  - Avoid using more specific terms like "Mathematician" or "Scientist", keep those as "profession" property.
+  - Avoid using more specific terms like "Mathematician" or "Scientist", keep the profession in the node's description.
   - Don't use too generic terms like "Entity".
 **Node IDs**: Never utilize integers as node IDs.
   - Node IDs should be names or human-readable identifiers found in the text.
 **Node Names**: Every node MUST include a "name" field.
   - Use the most complete human-readable name for the entity (e.g., "Albert Einstein", "Python").
-**Node Descriptions**: Every node MUST include a "description" field.
-  - Provide a brief 1-2 sentence description of the entity, grounded in the source text.
-  - Do not add outside knowledge. If the text says little about the entity, keep it short.
 # 2. Timestamps
 A point in time is a node of type **"Timestamp"**. Do not use type "Date".
   - Its name and id are the normalized time string: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or `YYYY-MM-DD HH:MM:SS`.
@@ -44,10 +41,10 @@ similar concrete node can own (`World War I` --`begins_at`--> `1914`).
 If timestamps are present, extract the Timestamp nodes and the nodes that own them first,
 then the remaining entities and relationships.
 # 3. Handling Numerical Data
-  - **Property Format**: Properties must be in a key-value format.
-  - **Quotation Marks**: Never use escaped single or double quotes within property values.
+  - **Keep them in the description**: counts, amounts, and measurements belong in the
+    description of the node or edge they qualify, not in a node of their own.
+  - **Quotation Marks**: Never use escaped single or double quotes within a description.
   - **Naming Convention**: Use snake_case for relationship names, e.g., `acted_in`.
-  - Keep counts, amounts, and measurements as properties, not as nodes.
 # 4. Coreference Resolution
   - **Maintain Entity Consistency**: When extracting entities, it's vital to ensure consistency.
   If an entity, is mentioned multiple times in the text but is referred to by different names or pronouns,

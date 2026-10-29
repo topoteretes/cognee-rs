@@ -15,15 +15,14 @@ use crate::error::CognifyError;
 
 /// Default system prompt for knowledge graph extraction.
 ///
-/// Vendored from Python's
-/// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt`, with one
-/// intentional Rust-only addition: the "Node Descriptions" instruction (see the
-/// drift guard in the inline `#[cfg(test)]` block below). Python advertises
-/// `Node.description` as required only via the injected schema in instructor's
-/// JSON mode, which is absent in tool/function/`json_schema` modes and on
-/// providers that reject `json_schema` (e.g. Groq) — so a non-strict model omits
-/// the field and hard-fails cognify (issue #66). Reinforcing it in the prompt
-/// text closes that gap. Any future re-sync from Python MUST preserve this line.
+/// Vendored byte-for-byte from Python's
+/// `cognee/infrastructure/llm/prompts/generate_graph_prompt.txt` (Python
+/// `1d3ed15`, which includes `71d702212`), minus the trailing Jinja
+/// `{% if temporal_hints %}` block that [`default_graph_prompt_with_hints`]
+/// renders in code. There is no Rust-only text in it (SDK-1039 D12): the
+/// former "Node Descriptions" paragraph is gone, so the request carries the
+/// same instructions as Python's. The drift guard `graph_prompt_matches_python`
+/// compares it with a checked-in copy of Python's file.
 const DEFAULT_GRAPH_PROMPT: &str = include_str!("prompts/generate_graph_prompt.txt");
 
 /// Python's file name for [`DEFAULT_GRAPH_PROMPT`].
@@ -792,39 +791,49 @@ mod tests {
         assert_eq!(prompts[1], "custom");
     }
 
+    /// Python's file verbatim, as a fixture next to the schema golden.
+    const PYTHON_GRAPH_PROMPT: &str =
+        include_str!("../../tests/fixtures/graph_extraction/python_generate_graph_prompt.txt");
+
     #[test]
-    fn graph_prompt_matches_vendored_txt() {
-        // Drift guard: const must equal the vendored .txt byte-for-byte.
-        // Re-sync from Python, then RE-APPLY the Rust-only "Node Descriptions"
-        // addition (issue #66) — do not blindly overwrite:
-        //   cp /tmp/cognee-python/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
-        //     crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
-        //   # then restore the "Node Descriptions" block under "# 1. Labeling Nodes"
+    fn graph_prompt_matches_python() {
+        // Drift guard: the const is the vendored .txt, and the .txt is Python's
+        // file up to its Jinja temporal-hints block (rendered in code, see
+        // `default_graph_prompt_with_hints`). Re-sync with:
+        //   cp <cognee>/cognee/infrastructure/llm/prompts/generate_graph_prompt.txt \
+        //     crates/cognify/tests/fixtures/graph_extraction/python_generate_graph_prompt.txt
+        //   # and the same file minus its `{% if temporal_hints %}` block to
+        //   # crates/cognify/src/fact_extraction/prompts/generate_graph_prompt.txt
         let vendored = include_str!("prompts/generate_graph_prompt.txt");
         assert_eq!(
             DEFAULT_GRAPH_PROMPT, vendored,
             "const drifted from vendored .txt"
         );
-        // Python markers the old Rust prompt did NOT have:
-        assert!(
-            vendored.contains("Every edge should include a description"),
-            "edge-description paragraph missing — not the Python prompt"
+        let (head, jinja) = PYTHON_GRAPH_PROMPT
+            .split_once("{% if temporal_hints %}")
+            .expect("Python's prompt ends with the temporal-hints Jinja block");
+        assert_eq!(
+            vendored, head,
+            "the vendored prompt must be Python's prompt up to its temporal-hints block"
         );
-        // Rust-only addition (issue #66): non-strict LLMs (e.g. Groq) omit node
-        // `description` unless the prompt demands it. Guard against a re-sync
-        // from Python silently dropping this line.
-        assert!(
-            vendored.contains(r#"Every node MUST include a "description" field"#),
-            "Node-description instruction missing — issue #66 fix regressed"
+        // Rendered with hints, the code path equals Python's Jinja output.
+        let rendered = default_graph_prompt_with_hints(&["H1".to_string(), "H2".to_string()])
+            .expect("hints render");
+        let block = jinja
+            .split_once("{% endif %}")
+            .expect("block ends with endif")
+            .0
+            .split_once("{% for hint in temporal_hints %}")
+            .expect("block loops over the hints");
+        assert_eq!(
+            rendered,
+            format!("{head}{}H1\nH2\n", block.0),
+            "the temporal-hints block drifted from Python's template"
         );
-        assert!(
-            vendored.contains(r#"label it as **"Person"**"#),
-            "Title-case 'Person' missing — UPPERCASE Rust prompt regressed"
-        );
-        assert!(
-            !vendored.contains("the entity type label in uppercase"),
-            "old UPPERCASE-forcing line still present"
-        );
+        // Instructions removed by Python 71d702212 / Rust-only text must be gone.
+        assert!(!vendored.contains("Node Descriptions"));
+        assert!(!vendored.contains("Property Format"));
+        assert!(!vendored.contains(r#""profession" property"#));
     }
 
     // ----- Multi-chunk batching (issue #19) -----
