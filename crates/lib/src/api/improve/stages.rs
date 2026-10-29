@@ -716,8 +716,11 @@ impl ImproveStages<'_> {
             }
             None => false,
         };
-        let result = if unchanged {
-            StageResult::already_completed(KIND.name(), REASON_NO_WRITES_SINCE_LAST_IMPROVE)
+        let (result, budget_exhausted) = if unchanged {
+            (
+                StageResult::already_completed(KIND.name(), REASON_NO_WRITES_SINCE_LAST_IMPROVE),
+                false,
+            )
         } else {
             self.build_global_context_index(dataset_id).await
         };
@@ -729,7 +732,7 @@ impl ImproveStages<'_> {
         };
         StageRun {
             result,
-            budget_exhausted: false,
+            budget_exhausted,
             stamp,
         }
     }
@@ -739,14 +742,23 @@ impl ImproveStages<'_> {
     ///
     /// Counts `nodes_written`, the index nodes whose text changed (Rust
     /// extra). A dataset that does not exist yet has nothing to index.
-    async fn build_global_context_index(&mut self, dataset_id: Option<Uuid>) -> StageResult {
+    ///
+    /// Also says whether it failed on an exhausted LLM budget (the LLM
+    /// methods).
+    async fn build_global_context_index(
+        &mut self,
+        dataset_id: Option<Uuid>,
+    ) -> (StageResult, bool) {
         const STAGE: &str = StageKind::GlobalContextIndex.name();
         let Some(dataset_id) = dataset_id else {
             info!("improve: dataset not found; no global context index to build");
-            return StageResult::completed(STAGE);
+            return (StageResult::completed(STAGE), false);
         };
         let Some(db) = self.db.as_ref() else {
-            return StageResult::errored(STAGE, "relational database is required");
+            return (
+                StageResult::errored(STAGE, "relational database is required"),
+                false,
+            );
         };
         let store = cognee_cognify::IndexStore {
             graph_db: self.graph_db.as_ref(),
@@ -765,9 +777,16 @@ impl ImproveStages<'_> {
                     nodes = written.len(),
                     "improve: global context index updated"
                 );
-                StageResult::completed(STAGE).with_counts([("nodes_written", count(written.len()))])
+                (
+                    StageResult::completed(STAGE)
+                        .with_counts([("nodes_written", count(written.len()))]),
+                    false,
+                )
             }
-            Err(e) => StageResult::errored(STAGE, format!("global context index failed: {e}")),
+            Err(e) => (
+                StageResult::errored(STAGE, format!("global context index failed: {e}")),
+                e.is_budget_exhausted(),
+            ),
         }
     }
 }
