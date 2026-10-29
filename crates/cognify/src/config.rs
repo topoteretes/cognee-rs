@@ -342,15 +342,6 @@ pub struct CognifyConfig {
     /// `WebPage -> PART_OF -> WebSite` edges.
     pub create_web_page_nodes: bool,
 
-    /// Python's `data_per_batch` (default: 20), which bounds how many data
-    /// items Python's `run_tasks` processes at once.
-    ///
-    /// Accepted and validated for parity, but no Rust stage reads it since the
-    /// event-graph `temporal_cognify` pipeline, its only reader, was removed:
-    /// the default pipeline bounds graph extraction by `chunks_per_batch` and
-    /// `max_parallel_extractions` instead.
-    pub data_per_batch: usize,
-
     /// How to count tokens when chunking text. Default `TikToken` (what an
     /// unconfigured, OpenAI-family deployment resolves to); cognee sets it
     /// from `cognify.token_counter` and the embedding provider via
@@ -600,7 +591,6 @@ impl Default for CognifyConfig {
             run_ownership_dir: None,
 
             create_web_page_nodes: true,
-            data_per_batch: 20,
 
             // Plain defaults: cognee fills these from the `cognify` config
             // section when it lowers `Settings` (`Settings::cognify_config`).
@@ -729,12 +719,6 @@ impl CognifyConfig {
     /// Enable or disable WebPage/WebSite provenance graph construction.
     pub fn with_web_page_nodes(mut self, enable: bool) -> Self {
         self.create_web_page_nodes = enable;
-        self
-    }
-
-    /// Set Python's `data_per_batch` (see [`Self::data_per_batch`]).
-    pub fn with_data_per_batch(mut self, batch_size: usize) -> Self {
-        self.data_per_batch = batch_size;
         self
     }
 
@@ -953,12 +937,6 @@ impl CognifyConfig {
             ));
         }
 
-        if self.data_per_batch == 0 {
-            return Err(ConfigError::InvalidParameter(
-                "data_per_batch must be greater than 0".to_string(),
-            ));
-        }
-
         // Zero rounds would run no cascade stage at all: every chunk would come
         // back as an empty graph, with no LLM call and no error.
         if self.extraction_strategy == (ExtractionStrategy::Cascade { rounds: 0 }) {
@@ -1155,9 +1133,6 @@ mod tests {
 
         // No ownership marker unless the settings name a directory
         assert!(config.run_ownership_dir.is_none());
-
-        // Advanced defaults
-        assert_eq!(config.data_per_batch, 20);
     }
 
     #[test]

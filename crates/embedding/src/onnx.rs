@@ -372,6 +372,13 @@ impl EmbeddingEngine for OnnxEmbeddingEngine {
         self.config.batch_size
     }
 
+    fn max_concurrent_batches(&self) -> usize {
+        crate::config::concurrent_batches(
+            self.config.max_concurrent_data_points,
+            self.config.batch_size,
+        )
+    }
+
     fn max_sequence_length(&self) -> usize {
         self.config.max_sequence_length
     }

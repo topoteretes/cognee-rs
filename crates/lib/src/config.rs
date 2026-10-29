@@ -451,9 +451,6 @@ impl Settings {
         if cognify.chunks_per_batch > 0 {
             cfg = cfg.with_chunks_per_batch(cognify.chunks_per_batch as usize);
         }
-        if cognify.data_per_batch > 0 {
-            cfg = cfg.with_data_per_batch(cognify.data_per_batch as usize);
-        }
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
@@ -2533,27 +2530,6 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn overlay_onnx_batch_size_is_independent_of_request_batch() {
-        // SAFETY: test is serial — no other thread reads/writes env concurrently.
-        unsafe { std::env::set_var("EMBEDDING_ONNX_BATCH_SIZE", "8") };
-        let mut s = Settings::default();
-        s.overlay_from_env();
-        unsafe { std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE") };
-
-        assert_eq!(
-            s.section::<cognee_components::OnnxEmbeddingConfig>()
-                .batch_size,
-            8
-        );
-        // The HTTP request batch is untouched by the ONNX override.
-        assert_eq!(
-            s.embedding().batch_size,
-            Settings::default().embedding().batch_size
-        );
-    }
-
-    #[test]
-    #[serial_test::serial]
     fn overlay_picks_up_ontology_resolver() {
         // SAFETY: test is serial — no other thread reads/writes env concurrently.
         unsafe { std::env::set_var("ONTOLOGY_RESOLVER", "custom") };
@@ -2901,8 +2877,6 @@ mod tests {
 
         let cm = ConfigManager::new(Settings::default());
         cm.set("chunks_per_batch", serde_json::json!(64)).unwrap();
-        cm.set("cognify.data_per_batch", serde_json::json!(3))
-            .unwrap();
         cm.set(
             "graph_prompt_path",
             serde_json::json!(prompt.to_str().unwrap()),
@@ -2926,7 +2900,6 @@ mod tests {
         let settings = cm.read();
         let cognify = settings.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 64);
-        assert_eq!(cognify.data_per_batch, 3);
         assert_eq!(
             cognify.custom_extraction_prompt.as_deref(),
             Some("extract a graph, custom edition")
@@ -2953,7 +2926,6 @@ mod tests {
         let s = Settings::default();
         let cognify = s.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 2000);
-        assert_eq!(cognify.data_per_batch, 20);
         assert!(cognify.custom_extraction_prompt.is_none());
         assert!(cognify.summary_schema.is_none());
         let tuning = s.search_tuning();
@@ -2965,11 +2937,9 @@ mod tests {
         // the built-in prompt.
         let mut s = Settings::default();
         s.set_key("chunks_per_batch", serde_json::json!(0)).unwrap();
-        s.set_key("data_per_batch", serde_json::json!(0)).unwrap();
         s.graph_prompt_path = "/definitely/not/a/prompt.txt".to_string();
         let cognify = s.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 2000);
-        assert_eq!(cognify.data_per_batch, 20);
         assert!(cognify.custom_extraction_prompt.is_none());
     }
 
@@ -3041,18 +3011,14 @@ mod tests {
         );
     }
 
-    /// `CHUNKS_PER_BATCH` is Python's env name; `COGNEE_DATA_PER_BATCH` the
-    /// Rust one (Python has none).
+    /// `CHUNKS_PER_BATCH` is Python's env name.
     #[test]
     fn cognify_batch_sizes_bind_from_env() {
-        let env = MapEnv::new()
-            .with("CHUNKS_PER_BATCH", "128")
-            .with("COGNEE_DATA_PER_BATCH", "5");
+        let env = MapEnv::new().with("CHUNKS_PER_BATCH", "128");
         let mut s = Settings::default();
         s.overlay_from(&env);
         let cognify = s.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 128);
-        assert_eq!(cognify.data_per_batch, 5);
     }
 
     /// The engine sections lower into the pipeline configs: the env vars the

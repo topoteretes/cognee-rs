@@ -1557,36 +1557,6 @@
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":true}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"  \"": {},
-  "COGNEE_DATA_PER_BATCH=\"\"": {},
-  "COGNEE_DATA_PER_BATCH=\"-1\"": {},
-  "COGNEE_DATA_PER_BATCH=\"0\"": {
-    "cognify.data_per_batch": 0
-  },
-  "COGNEE_DATA_PER_BATCH=\"1\"": {
-    "cognify.data_per_batch": 1
-  },
-  "COGNEE_DATA_PER_BATCH=\"1.5\"": {},
-  "COGNEE_DATA_PER_BATCH=\"42\"": {
-    "cognify.data_per_batch": 42
-  },
-  "COGNEE_DATA_PER_BATCH=\"5000000000\"": {},
-  "COGNEE_DATA_PER_BATCH=\"70000\"": {
-    "cognify.data_per_batch": 70000
-  },
-  "COGNEE_DATA_PER_BATCH=\"TRUE\"": {},
-  "COGNEE_DATA_PER_BATCH=\"[1]\"": {},
-  "COGNEE_DATA_PER_BATCH=\"abc\"": {},
-  "COGNEE_DATA_PER_BATCH=\"false\"": {},
-  "COGNEE_DATA_PER_BATCH=\"no\"": {},
-  "COGNEE_DATA_PER_BATCH=\"on\"": {},
-  "COGNEE_DATA_PER_BATCH=\"require\"": {},
-  "COGNEE_DATA_PER_BATCH=\"true\"": {},
-  "COGNEE_DATA_PER_BATCH=\"v\"": {},
-  "COGNEE_DATA_PER_BATCH=\"yes\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"a\\\":1}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_DATA_ROOT_DIRECTORY=\"  \"": {
     "data_root_directory": "  "
   },
@@ -4015,36 +3985,6 @@
   "EMBEDDING_MODEL_PATH=abc + COGNEE_E2E_EMBED_MODEL_PATH=2": {
     "embedding.onnx.model_path": "abc"
   },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"  \"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"-1\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"0\"": {
-    "embedding.onnx.batch_size": 0
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"1\"": {
-    "embedding.onnx.batch_size": 1
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"1.5\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"42\"": {
-    "embedding.onnx.batch_size": 42
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"5000000000\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"70000\"": {
-    "embedding.onnx.batch_size": 70000
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"TRUE\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"[1]\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"abc\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"false\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"no\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"on\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"require\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"true\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"v\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"yes\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"a\\\":1}\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_PROVIDER=\"  \"": {
     "embedding.provider": "  "
   },

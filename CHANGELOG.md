@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`data_per_batch` and `EMBEDDING_ONNX_BATCH_SIZE` are removed; ONNX batches
+  by `embedding.batch_size` (SDK-1039).** `data_per_batch`
+  (`cognify.data_per_batch`, `COGNEE_DATA_PER_BATCH`,
+  `CognifyConfig::data_per_batch` / `with_data_per_batch`) was read by no stage;
+  Python's value is a per-call argument with no config or env name, so the key
+  only invited settings Rust ignored. `embedding.onnx.batch_size`
+  (`EMBEDDING_ONNX_BATCH_SIZE`) is gone: Python's fastembed engine is built
+  with the single `EMBEDDING_BATCH_SIZE`, and the Rust ONNX engine now does the
+  same (inference batch = `embedding.batch_size`), and also honours
+  `embedding.max_concurrent_data_points` for its in-flight batches. Setting a
+  removed key is now an unknown-key error / ignored env var. This also removes
+  a direct environment read from `cognee-embedding`.
+
 - **The pipeline-cache gate, the reset API and the `AlreadyRunning` gate are
   gone; runs are serialized by a per-dataset lock and a killed run is recovered
   at startup (SDK-1039, Python `dc0b4ad6a`).** Python removed
@@ -195,8 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TEMPORAL search uses for the question's window, stays at the crate root).
   `graph_schema` together with the flag is no longer a validation error.
   `cognee-cli pipeline-unblock --pipeline` knows only `cognify_pipeline`.
-  `data_per_batch` stays, as Python's parameter, but no Rust stage reads it
-  now. A dataset an older build cognified with the flag keeps `Event` nodes
+  `data_per_batch` was kept at that point and has since been removed. A dataset an older build cognified with the flag keeps `Event` nodes
   that nothing reads (TEMPORAL answers on it with plain hybrid results);
   rebuild it with a memory-only forget and a fresh cognify, as Python advises.
   The store-wide wipe still lists the legacy `Event_name` collection.
