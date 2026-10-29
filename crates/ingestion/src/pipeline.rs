@@ -119,11 +119,40 @@ pub struct ProcessedInput {
 /// Process a single [`DataInput`]: resolve URLs, stream to storage, compute
 /// content hash, and extract all metadata needed to create a [`Data`] record.
 ///
-/// This is the first step of the ingest pipeline (Task 1).
-#[instrument(name = "ingestion.process_input", skip(input, storage))]
+/// This is the first step of the ingest pipeline (Task 1). It extracts text
+/// with [`LoaderRegistry::default_registry`], which has no image or audio
+/// loader; use [`process_input_with_loaders`] to pass a registry that has them.
 pub async fn process_input(
     input: &DataInput,
     storage: &dyn StorageTrait,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_with_loaders(
+        input,
+        storage,
+        &LoaderRegistry::default_registry(),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+    .await
+}
+
+/// Like [`process_input`], but extracts text with `loaders`.
+///
+/// As in Python's `ingest_data`, the loader for the input's document type runs
+/// at `add`: an image or audio file is stored as its description or transcript
+/// (`text_<content_hash>.txt`, `txt` / `text/plain`), and
+/// `original_data_location` keeps the raw file. An input whose document type
+/// has no loader in `loaders` fails with
+/// [`IngestionError::UnsupportedDocumentType`].
+#[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
+pub async fn process_input_with_loaders(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    loaders: &LoaderRegistry,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
@@ -241,10 +270,8 @@ pub async fn process_input(
         // Non-URL path: run the document loader at ADD time and store the
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
-        let registry = LoaderRegistry::default_registry();
-        let doc_type = cognee_models::doc_type_for_extension(&original_extension)
-            .unwrap_or("text")
-            .to_string();
+        let registry = loaders;
+        let doc_type = add_time_doc_type(&original_extension).to_string();
 
         // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
         //
@@ -259,7 +286,8 @@ pub async fn process_input(
         // bytes verbatim instead of running text extraction. This only affects
         // the generic-text fallback path: files routed to a real loader by
         // their extension (text/csv/html/pdf — actually-text content; or
-        // image/audio — `UnsupportedDocumentType`) are unchanged.
+        // image/audio — their loader when `loaders` has one, else
+        // `UnsupportedDocumentType`) are unchanged.
         let is_text_doc_type = doc_type == "text";
         if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
             let stored_name = format!("text_{content_hash}.bin");
@@ -783,6 +811,21 @@ fn unwrap_data_item(input: &DataInput) -> &DataInput {
     }
 }
 
+/// The document type whose loader runs on a file at `add`.
+///
+/// [`cognee_models::doc_type_for_extension`] mirrors Python's cognify-time
+/// `EXTENSION_TO_DOCUMENT_CLASS`, but Python's `add` picks a loader through
+/// `LoaderEngine`, whose image loader also claims `jpeg`, `jpe` and `tiff`
+/// (`cognee/infrastructure/loaders/core/image_loader.py`). Those go to the
+/// image loader here too, so a `.jpeg` is described rather than stored as a
+/// raw blob. Anything unmapped falls back to `"text"`.
+fn add_time_doc_type(extension: &str) -> &'static str {
+    match extension.to_lowercase().as_str() {
+        "jpeg" | "jpe" | "tiff" => "image",
+        other => cognee_models::doc_type_for_extension(other).unwrap_or("text"),
+    }
+}
+
 /// Build a minimal [`Document`] descriptor passed to a [`DocumentLoader`] at
 /// ADD time. Only the metadata fields loaders read are populated; the content
 /// bytes are passed separately to `extract`.
@@ -792,9 +835,7 @@ fn build_loader_descriptor(
     extension: &str,
     mime_type: &str,
 ) -> Document {
-    let doc_type = cognee_models::doc_type_for_extension(extension)
-        .unwrap_or("text")
-        .to_string();
+    let doc_type = add_time_doc_type(extension).to_string();
     let mut base = DataPoint::new("Document", None);
     base.id = data_id;
     Document {
@@ -1260,9 +1301,28 @@ fn preserve_ingestion_error(e: Box<dyn std::error::Error>) -> TaskError {
 }
 
 /// Build a [`TypedTask`] that streams a [`DataInput`] to storage, hashes its
-/// content, and returns a self-contained [`ProcessedInput`].
+/// content, and returns a self-contained [`ProcessedInput`]. Text is extracted
+/// with [`LoaderRegistry::default_registry`].
 pub fn make_process_input_task(
     storage: Arc<dyn StorageTrait>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_with_loaders(
+        storage,
+        Arc::new(LoaderRegistry::default_registry()),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+}
+
+/// Like [`make_process_input_task`], but extracts text with `loaders` (see
+/// [`process_input_with_loaders`]).
+pub fn make_process_input_task_with_loaders(
+    storage: Arc<dyn StorageTrait>,
+    loaders: Arc<LoaderRegistry>,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
@@ -1270,11 +1330,19 @@ pub fn make_process_input_task(
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
+        let loaders = Arc::clone(&loaders);
         Box::pin(async move {
-            process_input(&input, &*storage, hash_algorithm, owner_id, tenant_id)
-                .await
-                .map(Box::new)
-                .map_err(preserve_ingestion_error)
+            process_input_with_loaders(
+                &input,
+                &*storage,
+                &loaders,
+                hash_algorithm,
+                owner_id,
+                tenant_id,
+            )
+            .await
+            .map(Box::new)
+            .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -1418,6 +1486,7 @@ pub fn build_add_pipeline_with_acl(
         owner_id,
         tenant_id,
         acl_db,
+        Arc::new(LoaderRegistry::default_registry()),
         AddParamsInjection::default(),
     )
 }
@@ -1437,6 +1506,7 @@ fn build_add_pipeline_internal(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
+    loaders: Arc<LoaderRegistry>,
     add_params: AddParamsInjection,
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
@@ -1447,7 +1517,13 @@ fn build_add_pipeline_internal(
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
-        make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
+        make_process_input_task_with_loaders(
+            Arc::clone(&storage),
+            loaders,
+            hash_algorithm,
+            owner_id,
+            tenant_id,
+        ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
         database,
@@ -1499,6 +1575,8 @@ pub struct AddPipeline {
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     // ─── Concurrency (SDK-636) ────────────────────────────────────────────
     dataset_locks: Option<Arc<DatasetLocks>>,
+    // ─── Add-time loaders (SDK-1039) ──────────────────────────────────────
+    loaders: Arc<LoaderRegistry>,
 }
 
 impl AddPipeline {
@@ -1523,6 +1601,7 @@ impl AddPipeline {
             db_connection: None,
             pipeline_run_repo: None,
             dataset_locks: None,
+            loaders: Arc::new(LoaderRegistry::default_registry()),
         }
     }
 
@@ -1543,6 +1622,7 @@ impl AddPipeline {
             db_connection: None,
             pipeline_run_repo: None,
             dataset_locks: None,
+            loaders: Arc::new(LoaderRegistry::default_registry()),
         }
     }
 
@@ -1571,6 +1651,19 @@ impl AddPipeline {
     /// against.
     pub fn with_dataset_locks(mut self, locks: Arc<DatasetLocks>) -> Self {
         self.dataset_locks = Some(locks);
+        self
+    }
+
+    /// Extract text at `add` with `loaders` instead of
+    /// [`LoaderRegistry::default_registry`].
+    ///
+    /// Python runs its image and audio loaders at `add`, so an embedder that
+    /// has an LLM or a transcriber passes a registry with
+    /// [`LoaderRegistry::register_image_loader`] /
+    /// [`LoaderRegistry::register_audio_loader`]. Without one, an image or
+    /// audio input fails with [`IngestionError::UnsupportedDocumentType`].
+    pub fn with_loader_registry(mut self, loaders: Arc<LoaderRegistry>) -> Self {
+        self.loaders = loaders;
         self
     }
 
@@ -1694,6 +1787,7 @@ impl AddPipeline {
             owner_id,
             tenant_id,
             self.acl_db.clone(),
+            Arc::clone(&self.loaders),
             add_params_inj,
         );
 
@@ -1839,6 +1933,19 @@ mod tests {
     use mockito::{Server, ServerGuard};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Python's image loader claims `jpeg`, `jpe` and `tiff` at `add`, which
+    /// its cognify-time `EXTENSION_TO_DOCUMENT_CLASS` lacks (SDK-1039 P15).
+    #[test]
+    fn add_time_doc_type_routes_python_image_loader_extensions() {
+        for ext in ["jpeg", "JPEG", "jpe", "tiff", "png", "jpg", "tif"] {
+            assert_eq!(add_time_doc_type(ext), "image", "{ext}");
+        }
+        assert_eq!(add_time_doc_type("wav"), "audio");
+        assert_eq!(add_time_doc_type("pdf"), "pdf");
+        assert_eq!(add_time_doc_type("unknown-ext"), "text");
+        assert_eq!(add_time_doc_type(""), "text");
+    }
 
     async fn make_pipeline() -> (AddPipeline, Arc<cognee_database::DatabaseConnection>) {
         let db = connect("sqlite::memory:").await.unwrap();

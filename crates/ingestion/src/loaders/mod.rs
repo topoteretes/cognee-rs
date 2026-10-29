@@ -106,8 +106,9 @@ pub enum LoaderOutput {
 /// Maps document type strings to their corresponding [`DocumentLoader`]
 /// implementations.
 ///
-/// The registry is constructed once per cognify pipeline run and passed
-/// to `extract_chunks_from_documents`.
+/// The add pipeline runs it on each input at ingest time (Python parity,
+/// `ingest_data.py`), and cognify runs it again on the stored text in
+/// `extract_chunks_from_documents`.
 pub struct LoaderRegistry {
     loaders: HashMap<String, Arc<dyn DocumentLoader>>,
 }
@@ -155,6 +156,25 @@ impl LoaderRegistry {
         registry.register("unstructured", Arc::new(unstructured::UnstructuredLoader));
 
         registry
+    }
+
+    /// Register the vision-LLM [`image::ImageLoader`] for `"image"` documents.
+    ///
+    /// Python's image loader runs at `add` (`ingest_data.py`), so the add
+    /// pipeline registers it whenever an LLM is available, as cognify does.
+    #[cfg(feature = "image-loader")]
+    pub fn register_image_loader(&mut self, llm: Arc<dyn cognee_llm::Llm>) {
+        self.register("image", Arc::new(image::ImageLoader::new(llm)));
+    }
+
+    /// Register the Whisper [`audio::AudioLoader`] for `"audio"` documents.
+    ///
+    /// Python's audio loader runs at `add` (`ingest_data.py`), so the add
+    /// pipeline registers it whenever a transcriber is available, as cognify
+    /// does.
+    #[cfg(feature = "audio-loader")]
+    pub fn register_audio_loader(&mut self, transcriber: Arc<dyn cognee_llm::Transcriber>) {
+        self.register("audio", Arc::new(audio::AudioLoader::new(transcriber)));
     }
 }
 

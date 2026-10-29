@@ -343,7 +343,9 @@ impl CogneeServices {
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
             .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            // Python runs its image and audio loaders at `add`.
+            .with_loader_registry(cm.add_loader_registry().await),
         );
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase

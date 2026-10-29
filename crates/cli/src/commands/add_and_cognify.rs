@@ -108,7 +108,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_graph_db(graph_db_for_add)
             .with_vector_db(vector_db_for_add)
             .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            // Python runs its image and audio loaders at `add`.
+            .with_loader_registry(cm.add_loader_registry().await);
 
         let inputs = args
             .data
