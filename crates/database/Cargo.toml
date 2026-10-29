@@ -25,7 +25,6 @@ cognee-models     = { path = "../models", version = "0.2.0" }
 cognee-utils      = { path = "../utils", version = "0.2.0" }
 async-trait.workspace = true
 chrono.workspace  = true
-include_dir = "0.7"
 # `log::LevelFilter` for sqlx statement-log levels; only the sqlite path needs it.
 log = { workspace = true, optional = true }
 sea-orm = { version = "1.1", features = [

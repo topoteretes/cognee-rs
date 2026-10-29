@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The notebooks feature is removed (SDK-1039).** Python removed
+  `cognee/modules/notebooks` and both bundled tutorials in `52bcc7494`. Rust
+  follows: gone are the `cognee::api::notebooks` module and its
+  `list_notebooks` / `create_notebook` / `update_notebook` / `delete_notebook`
+  / `NotebookError` re-exports; `cognee_database`'s `NotebookDb`, `Notebook`,
+  `NotebookUpdatePatch`, the `notebook` entity, `ops::notebooks` and the
+  tutorial seeder (`seed_tutorials_if_first_call`, `TUTORIAL_BASICS_ID`,
+  `TUTORIAL_PYTHON_DEV_ID`) with its bundled `assets/notebooks/tutorials`;
+  `NotebookDb` as a `RelationalDb` supertrait; and the binding surfaces —
+  Python `cognee.notebooks` / `CogneeNotebooks`, TS `c.notebooks` /
+  `CogneeNotebook` / `CogneeNotebookObject` and the `cognee*Notebook(s)`
+  natives, Java `notebooks()` / `CogneeNotebooks` / `CogneeNotebook`, and the
+  C API's `cg_sdk_{list,create,update,delete}_notebook(s)`. The `notebooks`
+  table stays: like Python, whose migration chain creates it and never drops
+  it, the baseline migration keeps creating it and nothing reads it.
+- **Delete counts a legacy `Triplet_text` point only when it exists
+  (SDK-1039).** The delete preview and the delete run both counted one
+  `Triplet_text` point per deleted edge, whether or not the point existed;
+  cognify no longer writes them (SDK-1115), so both overcounted. Both now look
+  the points up (`VectorDB::retrieve`) and count, and delete, only those found.
+  With per-dataset storage the dataset's own store is dropped whole and cannot
+  be probed, so no `Triplet_text` point is counted there, previewed or run.
 - **The event-graph `temporal_cognify` pipeline is removed (SDK-1039).**
   Python deprecated `temporal_cognify` and ignores it (cognee 1.6.2 was the
   last release in which it built the event graph); by the SDK-1115 rule Rust

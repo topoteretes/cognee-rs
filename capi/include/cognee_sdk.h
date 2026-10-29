@@ -862,14 +862,13 @@ void cg_sdk_delete_all_datasets(const CgSdk*        sdk,
                                  CgSdkResultCallback callback,
                                  void*               user_data);
 
-/* ── Admin / session / pipeline-run / user / notebook ops (Phase 6) ──────── */
+/* ── Admin / session / pipeline-run / user ops (Phase 6) ───────────────── */
 /*
  * All ops are async (D4, R1).
  *
  * Wire shapes (camelCase, D3):
  *   SessionQAEntry — JSON object with session QA history fields.
  *   User           — JSON object with user fields.
- *   Notebook       — JSON object with notebook fields.
  *   bool results   → "true" | "false" (D9 strict JSON bool).
  *   void results   → "null" (D9).
  *   get_graph_context → quoted JSON string "\"<ctx>\"" (D9) or "null" (D9).
@@ -984,57 +983,6 @@ void cg_sdk_reset_dataset_pipeline_run_status(const CgSdk*        sdk,
 void cg_sdk_get_or_create_default_user(const CgSdk*        sdk,
                                         CgSdkResultCallback callback,
                                         void*               user_data);
-
-/**
- * List all notebooks for the current owner.
- *
- * result_json on success: JSON array of Notebook objects.
- */
-void cg_sdk_list_notebooks(const CgSdk*        sdk,
-                            CgSdkResultCallback callback,
-                            void*               user_data);
-
-/**
- * Create a new notebook.
- *
- * name       — notebook name (required, non-null).
- * cells_json — NULL (interpreted as []) or a JSON array of cells.
- * deletable  — non-zero = true, zero = false.
- *
- * result_json on success: Notebook JSON object.
- */
-void cg_sdk_create_notebook(const CgSdk*        sdk,
-                              const char*         name,
-                              const char*         cells_json,
-                              int                 deletable,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
-
-/**
- * Update a notebook's name and/or cells.
- *
- * id         — UUID string (C string).
- * patch_json — JSON object with optional "name" (string) and/or "cells" (array).
- *
- * result_json on success: Notebook JSON object, or "null" (D9) if not found.
- */
-void cg_sdk_update_notebook(const CgSdk*        sdk,
-                              const char*         id,
-                              const char*         patch_json,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
-
-/**
- * Delete a notebook by UUID.
- *
- * id — UUID string (C string).
- *
- * result_json on success: "true" if deleted, "false" if not found (D9).
- */
-void cg_sdk_delete_notebook(const CgSdk*        sdk,
-                              const char*         id,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
 
 /* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
 /*

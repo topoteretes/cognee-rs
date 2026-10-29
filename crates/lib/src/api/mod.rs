@@ -15,7 +15,6 @@ pub mod datasets;
 pub mod error;
 pub mod forget;
 pub mod improve;
-pub mod notebooks;
 pub mod pipeline_runs;
 pub mod prune;
 pub mod recall;

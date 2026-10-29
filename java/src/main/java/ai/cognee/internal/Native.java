@@ -114,14 +114,6 @@ public final class Native {
             String pipelineName, CompletableFuture<String> future);
     public static native void resetDatasetPipelineRunStatus(long handle, String datasetId,
             CompletableFuture<String> future);
-    // notebooks
-    public static native void listNotebooks(long handle, CompletableFuture<String> future);
-    public static native void createNotebook(long handle, String name, String cellsJson,
-            boolean deletable, CompletableFuture<String> future);
-    public static native void updateNotebook(long handle, String id, String patchJson,
-            CompletableFuture<String> future);
-    public static native void deleteNotebook(long handle, String id,
-            CompletableFuture<String> future);
 
     // visualization
     public static native void visualize(long handle, String optsJson,

@@ -7,8 +7,8 @@ use crate::ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 use crate::pipelines::{PipelineRunRepository, SeaOrmPipelineRunRepository};
 use crate::sync::{SeaOrmSyncOperationRepository, SyncOperationRepository};
 use crate::traits::{
-    DatasetConfigDb, DatasetDatabaseDb, DeleteDb, IngestDb, NotebookDb, ProvenanceDb,
-    SearchHistoryDb, SessionLifecycleDb, SessionQaDb,
+    DatasetConfigDb, DatasetDatabaseDb, DeleteDb, IngestDb, ProvenanceDb, SearchHistoryDb,
+    SessionLifecycleDb, SessionQaDb,
 };
 use crate::types::DatabaseError;
 
@@ -37,7 +37,6 @@ pub trait RelationalDb:
     + IngestDb
     + DeleteDb
     + SearchHistoryDb
-    + NotebookDb
     + DatasetConfigDb
     + DatasetDatabaseDb
     + SessionLifecycleDb

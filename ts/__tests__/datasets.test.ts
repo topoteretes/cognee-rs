@@ -1,6 +1,6 @@
 /**
  * Phase-5 Tier-A tests — DatasetManager, forget, prune, sessions,
- * notebooks, pipeline-run resets, and user ops.
+ * pipeline-run resets, and user ops.
  *
  * All tests are Tier-A: NO LLM / NO embedding network calls.
  * Config follows the same pattern as add.test.ts:
@@ -50,7 +50,7 @@ function cleanupTmpDir(dir: string) {
 // Suite setup
 // ---------------------------------------------------------------------------
 
-describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", () => {
+describe("Phase-5 DatasetManager, forget, prune, sessions (Tier-A)", () => {
   let tmpDir: string;
   let handle: NativeBox;
   const email = "phase5_tier_a@example.com";
@@ -474,96 +474,6 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
       await native.cogneeSetGraphContext(handle, sessionId, payload);
       const retrieved = await native.cogneeGetGraphContext(handle, sessionId);
       expect(retrieved).toBe(payload);
-    });
-  });
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Notebooks
-  // ──────────────────────────────────────────────────────────────────────────
-
-  describe("notebooks", () => {
-    it("listNotebooks seeds tutorial notebooks on first call", async () => {
-      const h = makeTempHandle("nb_list@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const notebooks = await native.cogneeListNotebooks(h.handle);
-        expect(Array.isArray(notebooks)).toBe(true);
-        // Tutorial seeder inserts 2 notebooks on the first list call.
-        expect(notebooks.length).toBeGreaterThanOrEqual(2);
-        for (const nb of notebooks) {
-          expect(typeof nb.id).toBe("string");
-          expect(typeof nb.name).toBe("string");
-        }
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-
-    it("createNotebook creates a notebook and returns it", async () => {
-      const h = makeTempHandle("nb_create@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const nb = await native.cogneeCreateNotebook(
-          h.handle,
-          "My Test Notebook",
-          [{ type: "code", content: "print('hello')" }],
-          true
-        );
-        expect(typeof nb.id).toBe("string");
-        expect(nb.name).toBe("My Test Notebook");
-        expect(nb.deletable).toBe(true);
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-
-    it("updateNotebook updates name and returns updated notebook", async () => {
-      const h = makeTempHandle("nb_update@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const created = await native.cogneeCreateNotebook(
-          h.handle,
-          "Original Name"
-        );
-        const updated = await native.cogneeUpdateNotebook(
-          h.handle,
-          created.id,
-          { name: "Updated Name" }
-        );
-        expect(updated).not.toBeNull();
-        expect(updated?.name).toBe("Updated Name");
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-
-    it("updateNotebook for nonexistent id returns null", async () => {
-      const result = await native.cogneeUpdateNotebook(
-        handle,
-        "00000000-0000-0000-0000-000000000099",
-        { name: "Ghost" }
-      );
-      expect(result).toBeNull();
-    });
-
-    it("deleteNotebook returns true for an existing notebook", async () => {
-      const h = makeTempHandle("nb_delete@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const nb = await native.cogneeCreateNotebook(h.handle, "To Delete");
-        const removed = await native.cogneeDeleteNotebook(h.handle, nb.id);
-        expect(removed).toBe(true);
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-
-    it("deleteNotebook returns false for a nonexistent id", async () => {
-      const removed = await native.cogneeDeleteNotebook(
-        handle,
-        "00000000-0000-0000-0000-000000000099"
-      );
-      expect(removed).toBe(false);
     });
   });
 });

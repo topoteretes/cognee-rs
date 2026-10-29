@@ -527,57 +527,6 @@ class CogneeSessions:
         ...
 
 # ---------------------------------------------------------------------------
-# CogneeNotebooks
-# ---------------------------------------------------------------------------
-
-class CogneeNotebooks:
-    """Notebook management sub-object.
-
-    Accessible as ``cognee.notebooks`` on every :class:`Cognee` instance::
-
-        nbs = await cognee.notebooks.list()
-        nb  = await cognee.notebooks.create("My Notebook")
-        await cognee.notebooks.delete(nb["id"])
-    """
-
-    async def list(self) -> list[dict[str, Any]]:
-        """List all notebooks for the current owner.
-
-        Returns a list of ``Notebook`` dicts (each has ``"id"`` and ``"name"``).
-        """
-        ...
-
-    async def create(
-        self,
-        name: str,
-        cells: Optional[list[Any]] = None,
-        deletable: bool = True,
-    ) -> dict[str, Any]:
-        """Create a new notebook.
-
-        *cells* defaults to an empty list.  ``deletable`` is forced to
-        ``True`` (Python-library parity).
-        Returns the created ``Notebook`` dict.
-        """
-        ...
-
-    async def update(
-        self, id: str, patch: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
-        """Update a notebook's ``name`` and/or ``cells``.
-
-        Returns the updated ``Notebook`` dict, or ``None`` if not found.
-        """
-        ...
-
-    async def delete(self, id: str) -> bool:
-        """Delete a notebook by UUID.
-
-        Returns ``True`` if deleted, ``False`` if not found.
-        """
-        ...
-
-# ---------------------------------------------------------------------------
 # Cognee — the main SDK handle
 # ---------------------------------------------------------------------------
 
@@ -607,11 +556,6 @@ class Cognee:
     @property
     def sessions(self) -> CogneeSessions:
         """Session management surface for this handle."""
-        ...
-
-    @property
-    def notebooks(self) -> CogneeNotebooks:
-        """Notebook management surface for this handle."""
         ...
 
     async def warm(self) -> None:

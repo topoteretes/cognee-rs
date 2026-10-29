@@ -3,7 +3,6 @@ mod dataset_config_db;
 mod dataset_database_db;
 mod delete_db;
 mod ingest_db;
-mod notebook_db;
 mod provenance_db;
 mod relational_db;
 mod search_db;
@@ -15,7 +14,6 @@ pub use dataset_config_db::{DatasetConfigDb, DatasetConfiguration, DatasetConfig
 pub use dataset_database_db::{DatasetDatabaseDb, DatasetDatabaseRecord, DatasetStorageLifecycle};
 pub use delete_db::DeleteDb;
 pub use ingest_db::IngestDb;
-pub use notebook_db::{Notebook, NotebookDb, NotebookUpdatePatch};
 pub use provenance_db::ProvenanceDb;
 pub use relational_db::{DatasetDb, RelationalDb};
 pub use search_db::SearchHistoryDb;
