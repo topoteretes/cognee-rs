@@ -118,7 +118,7 @@ def test_camel_to_snake_conversions():
         "searchTypeUsed": "search_type_used",
         "autoRouted": "auto_routed",
         "deleteResult": "delete_result",
-        "deletedDataId": "deleted_data_id",
+        "dataId": "data_id",
         "serviceUrl": "service_url",
     }
     for camel, expected in cases.items():

@@ -33,6 +33,14 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::get_data(self.inner.as_ref(), id).await
     }
 
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        DeleteDb::resolve_data_id(self.inner.as_ref(), dataset_id, data_id).await
+    }
+
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
         DeleteDb::delete_data(self.inner.as_ref(), id).await
     }
