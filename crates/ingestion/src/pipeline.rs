@@ -1186,8 +1186,8 @@ fn with_node_set_in_external_metadata(
 
 /// Where an add's content came from, as Python's `_source_uri_from_input`
 /// reports it (`ingest_data.py:140-181`): an explicit `source_uri` string in
-/// the item's own metadata wins; otherwise a URL is its own locator and a
-/// local file is its absolute `file://` URI. Raw text, binary uploads and
+/// the item's own metadata wins; otherwise a URL or `s3://` path is its own
+/// locator and a local file is its absolute `file://` URI. Raw text, binary uploads and
 /// anything else have none.
 fn source_uri_from_input(input: &DataInput) -> Option<String> {
     if let DataInput::DataItem {
@@ -1200,7 +1200,8 @@ fn source_uri_from_input(input: &DataInput) -> Option<String> {
         return Some(explicit.trim().to_string());
     }
     match unwrap_data_item(input) {
-        DataInput::Url(url) => Some(url.clone()),
+        // Python returns an `http`, `https`, `s3` or `file` locator as given.
+        DataInput::Url(url) | DataInput::S3Path(url) => Some(url.clone()),
         DataInput::FilePath(path) => Some(file_uri(path)),
         _ => None,
     }
@@ -2257,6 +2258,14 @@ mod tests {
 
             assert_eq!(processed.raw_source_uri, None);
             assert_eq!(processed.original_location, url);
+            // Every URL add records where it came from (`ingest_data.py:157-164`).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    processed.external_metadata.as_deref().unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({"_cognee": {"source_uri": url}})
+            );
             assert_eq!(processed.stored_extension, expected_ext);
             assert_eq!(processed.stored_mime_type, expected_mime);
             assert_eq!(
@@ -3515,6 +3524,33 @@ mod tests {
             Some("s3://b/k".to_string())
         );
         assert_eq!(path_to_file_uri("/tmp/a b.txt"), "file:///tmp/a%20b.txt");
+        // `urllib.parse.quote` percent-encodes the UTF-8 bytes, upper-case hex.
+        assert_eq!(
+            path_to_file_uri("/tmp/caf\u{e9}/x+y.txt"),
+            "file:///tmp/caf%C3%A9/x%2By.txt"
+        );
+        // `Path.resolve()`: a relative path is made absolute.
+        let relative = path_to_file_uri("Cargo.toml");
+        let absolute = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert_eq!(relative, format!("file://{}", absolute.display()));
+        // `s3://` is kept as given, as Python keeps an `s3` locator.
+        assert_eq!(
+            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into())),
+            Some("s3://bucket/key.txt".to_string())
+        );
+        // A blank explicit `source_uri` does not win (`explicit.strip()`).
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": "   "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("https://example.com/a".to_string())
+        );
+        // Neither does one that is not a string.
+        assert_eq!(
+            source_uri_from_input(&item(r#"{"source_uri": 7}"#, DataInput::Text("x".into()))),
+            None
+        );
     }
 
     #[test]
