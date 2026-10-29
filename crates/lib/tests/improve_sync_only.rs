@@ -6,7 +6,7 @@
 //! Tests verifying that `improve()` is sync-only (no `run_in_background`).
 //!
 //! (a) Signature has no `run_in_background`.
-//! (b) When sessions are supplied, all four stages run (or gracefully skip
+//! (b) When sessions are supplied, every session stage runs (or gracefully skips
 //!     when backends are missing).
 //! (c) When sessions are not supplied, no stage runs.
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use cognee::api::improve::{ImproveParams, improve};
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
@@ -38,7 +38,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -66,7 +65,6 @@ async fn make_harness() -> Harness {
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -79,7 +77,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -127,7 +124,6 @@ async fn improve_with_sessions_records_trace_stage() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -171,7 +167,6 @@ async fn improve_without_sessions_runs_no_stage() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,
@@ -222,7 +217,6 @@ async fn improve_skips_when_locked() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         cognify_config: &config,
         build_global_context_index: false,
         build_truth_subspace: false,

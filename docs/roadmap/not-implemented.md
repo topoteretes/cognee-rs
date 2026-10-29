@@ -72,16 +72,13 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 Shipped in task 20 as sanctioned partials for 0.1.0:
 
 - **`build_global_context_index` stage (Stage 3b)** — the `build_global_context_index: bool` flag
-  and the `"global_context_index"` entry in `stages_run` are wired. The current implementation
-  reads all graph edges via `get_graph_data()`, formats them as `"source → relationship → target"`
-  lines, and stores the result in the session's graph-context slot (keyed
-  `"_global_context_index"`). What is **not** yet implemented:
-  - Bucket/root summarization: Python's reference implementation chunks the edge list into buckets
-    and runs an LLM summarization pass to produce a condensed global context rather than a raw edge
-    dump. The Rust version stores the raw edge list, which is token-inefficient for large graphs.
-  - TODO: add `global_context_index_pipeline()` in `cognee-cognify` (mirrors Python
-    `session_manager.py: build_global_context_index`) that does bucket summarization with the LLM
-    before writing to the session store.
+  is accepted, but the stage is **not implemented**: it logs a warning, records nothing in
+  `stages_run` and writes nothing. Rust's earlier stand-in stored a raw edge list in the session
+  graph-context slot; that slot is gone with graph-session sync (Python `3401da38a`), and nothing
+  ever read the stored list. What is missing is Python's reference implementation
+  (`global_context_index_pipeline`): chunk the edge list into buckets and run an LLM summarization
+  pass to produce bucket and root summaries.
+  - TODO: add `global_context_index_pipeline()` in `cognee-cognify`.
 
 - **`persist_trace_steps` stage (Stage 2b)** — trace steps whose `session_feedback` field is
   non-empty are collected and run through the standard `add → cognify` path (tagged to the

@@ -158,7 +158,7 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
 ///
 /// On success `result_json` is a JSON object:
 ///   `{"stagesRun":[…],"stages":[…],"feedbackEntriesProcessed":N,
-///     "feedbackEntriesApplied":N,"sessionsPersisted":N,"edgesSynced":N}`
+///     "feedbackEntriesApplied":N,"sessionsPersisted":N}`
 ///   where each `stages` entry is `{"stage":"…","status":"…","reason":…,
 ///   "error":…,"counts":{…},"durationMs":N}`.
 ///

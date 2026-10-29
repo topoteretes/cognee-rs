@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult};
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb, SessionLifecycleDb};
+use cognee_database::{PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -215,7 +215,6 @@ pub async fn remember(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
 ) -> Result<RememberResult, ApiError> {
@@ -268,7 +267,6 @@ pub async fn remember(
             db,
             session_store,
             session_manager,
-            checkpoint_store,
             ontology_resolver,
             cognify_config,
             start,
@@ -292,7 +290,6 @@ pub async fn remember(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         ontology_resolver,
         &cognify_config,
         start,
@@ -332,7 +329,6 @@ async fn run_permanent_inner(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PermanentOutcome, ApiError> {
@@ -424,7 +420,6 @@ async fn run_permanent_inner(
             session_store,
             session_manager,
             add_pipeline: Some(add_pipeline),
-            checkpoint_store,
             cognify_config,
             build_global_context_index: false,
             build_truth_subspace: false,
@@ -469,7 +464,6 @@ async fn remember_permanent_blocking(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -489,7 +483,6 @@ async fn remember_permanent_blocking(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         ontology_resolver,
         cognify_config,
     )
@@ -541,7 +534,6 @@ async fn remember_session(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     start: Instant,
@@ -603,7 +595,6 @@ async fn remember_session(
             session_store,
             session_manager,
             add_pipeline: Some(add_pipeline.as_ref()),
-            checkpoint_store,
             cognify_config: &cognify_config,
             // Global context index and background mode are not used by the
             // inline remember() improve path.

@@ -70,10 +70,10 @@ pub use memify::{
     CuratorBatchOutput, DistillError, DistillSessionsResult, DistillationResult,
     DistillationStatus, FeedbackApplyResult, FeedbackError, NODE_EMBED_BATCH_SIZE,
     PersistSessionsError, PersistSessionsResult, ProposedLesson, REASON_BACKEND_UNSUPPORTED,
-    RejectionReason, SyncError, SyncResult, TruthBuildStatus, TruthSubspaceResult, WrittenLesson,
+    RejectionReason, TruthBuildStatus, TruthSubspaceResult, WrittenLesson,
     apply_feedback_weights_pipeline, build_truth_subspace, distill_session,
     distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph,
-    render_lesson_document, sync_graph_to_session,
+    render_lesson_document,
 };
 
 /// Re-export of the truth-subspace default slot capacity so callers (e.g.

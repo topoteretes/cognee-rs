@@ -14,7 +14,7 @@
  *      an empty mock store → CG_OK, well-formed JSON array.
  *
  *   3. cg_sdk_recall with each scope variant that does NOT invoke an LLM on an
- *      empty store ("session", "trace", "graph_context") → CG_OK, result
+ *      empty store ("session", "trace") → CG_OK, result
  *      object with "items", "searchTypeUsed", "autoRouted", "searchResponse"
  *      keys.
  *
@@ -279,8 +279,8 @@ int main(void)
 
     /* ── Test 3: cg_sdk_recall with non-LLM scope variants ──────────────── */
     /*
-     * "session", "trace", and "graph_context" scopes query the session store
-     * and graph context respectively — they do NOT call the LLM on an empty
+     * "session" and "trace" scopes query the session store and trace steps
+     * respectively — they do NOT call the LLM on an empty
      * store and return CG_OK with empty items.
      *
      * "auto" and "graph" dispatch to graph search which calls the LLM;
@@ -288,7 +288,7 @@ int main(void)
      */
     printf("=== Test 3: cg_sdk_recall with non-LLM scope variants ===\n");
     {
-        const char *non_llm_scopes[] = { "session", "trace", "graph_context" };
+        const char *non_llm_scopes[] = { "session", "trace" };
         int n_scopes = (int)(sizeof(non_llm_scopes) / sizeof(non_llm_scopes[0]));
         char opts_buf[128];
 
@@ -314,7 +314,7 @@ int main(void)
                         cg_last_error_message() ? cg_last_error_message() : "(none)");
             }
         }
-        printf("  non-LLM scope variants (session/trace/graph_context) OK\n");
+        printf("  non-LLM scope variants (session/trace) OK\n");
     }
 
     /* ── Test 4: cg_sdk_recall scope as string array ─────────────────────── */

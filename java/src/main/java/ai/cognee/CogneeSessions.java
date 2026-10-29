@@ -44,18 +44,4 @@ public final class CogneeSessions {
         cognee.dispatchVoid(h -> Native.deleteFeedback(h, sessionId, qaId, f));
         return f.thenApply(json -> Json.fromJson(json, Boolean.class));
     }
-
-    /** Returns the stored graph context, or null if none. */
-    public CompletableFuture<String> getGraphContext(String sessionId) {
-        CompletableFuture<String> f = new CompletableFuture<>();
-        cognee.dispatchVoid(h -> Native.getGraphContext(h, sessionId, f));
-        // The op completes with a JSON string ("..." or null).
-        return f.thenApply(json -> Json.fromJson(json, String.class));
-    }
-
-    public CompletableFuture<Void> setGraphContext(String sessionId, String context) {
-        CompletableFuture<String> f = new CompletableFuture<>();
-        cognee.dispatchVoid(h -> Native.setGraphContext(h, sessionId, context, f));
-        return f.thenApply(s -> null);
-    }
 }

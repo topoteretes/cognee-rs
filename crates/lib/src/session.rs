@@ -1,8 +1,7 @@
 //! Public session management API — thin wrappers over `SessionManager`.
 //!
 //! Mirrors the Python `cognee/api/v1/session/session.py` functions:
-//! `get_session`, `add_feedback`, `delete_feedback`, `get_graph_context`,
-//! `set_graph_context`.
+//! `get_session`, `add_feedback`, `delete_feedback`.
 
 pub use cognee_session::{
     SessionContext, SessionError, SessionManager, SessionQAEntry, SessionQAUpdate, SessionStore,
@@ -60,26 +59,5 @@ pub async fn delete_feedback(
 ) -> Result<bool, SessionError> {
     manager
         .delete_feedback(Some(session_id), user_id, qa_id)
-        .await
-}
-
-/// Retrieve the graph knowledge snapshot for a session.
-pub async fn get_graph_context(
-    manager: &SessionManager,
-    session_id: &str,
-    user_id: Option<&str>,
-) -> Result<Option<String>, SessionError> {
-    manager.get_graph_context(Some(session_id), user_id).await
-}
-
-/// Store (or overwrite) the graph knowledge snapshot for a session.
-pub async fn set_graph_context(
-    manager: &SessionManager,
-    session_id: &str,
-    user_id: Option<&str>,
-    context: &str,
-) -> Result<(), SessionError> {
-    manager
-        .set_graph_context(Some(session_id), user_id, context)
         .await
 }

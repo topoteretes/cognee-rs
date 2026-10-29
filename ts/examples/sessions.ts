@@ -21,7 +21,6 @@
  * 2. Searches with a sessionId to persist a QA entry to that session.
  * 3. Retrieves the stored session history.
  * 4. Adds and then removes feedback on a QA entry.
- * 5. Stores and reads back a graph-context snapshot on the session.
  */
 
 import { Cognee } from "../src";
@@ -109,14 +108,6 @@ async function main(): Promise<void> {
     const removed = await cognee.sessions.deleteFeedback(sessionId, qaId);
     console.log("deleteFeedback returned:", removed);
   }
-
-  // ── Step 6: graph-context snapshot ────────────────────────────────────────
-  const ctxBefore = await cognee.sessions.getGraphContext(sessionId);
-  console.log(`\nGraph context before set: ${JSON.stringify(ctxBefore)}`);
-
-  await cognee.sessions.setGraphContext(sessionId, '{"nodes": ["newton"]}');
-  const ctxAfter = await cognee.sessions.getGraphContext(sessionId);
-  console.log(`Graph context after set: ${JSON.stringify(ctxAfter)}`);
 }
 
 main().catch((err) => {

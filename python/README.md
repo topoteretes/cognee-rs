@@ -108,7 +108,7 @@ credentials.
 |---|---|---|
 | [`add_cognify_search.py`](examples/add_cognify_search.py) | `python examples/add_cognify_search.py` | Core add → cognify → search pipeline |
 | [`datasets.py`](examples/datasets.py) | `python examples/datasets.py` | Dataset listing, status, deletion |
-| [`sessions.py`](examples/sessions.py) | `python examples/sessions.py` | QA history, feedback, graph-context snapshots |
+| [`sessions.py`](examples/sessions.py) | `python examples/sessions.py` | QA history and feedback |
 | [`config.py`](examples/config.py) | `python examples/config.py` | Programmatic config (LLM / embedding / DBs) |
 | [`visualize.py`](examples/visualize.py) | `python examples/visualize.py` | Render knowledge graph to HTML |
 
@@ -359,9 +359,6 @@ entries = await cognee.sessions.get("session-uuid", {"last_n": 10})
 
 await cognee.sessions.add_feedback("session-uuid", "qa-uuid", "Great answer!", 5)
 await cognee.sessions.delete_feedback("session-uuid", "qa-uuid")
-
-ctx = await cognee.sessions.get_graph_context("session-uuid")
-await cognee.sessions.set_graph_context("session-uuid", "new context")
 ```
 
 ### Users

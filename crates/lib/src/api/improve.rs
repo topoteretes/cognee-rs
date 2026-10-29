@@ -6,9 +6,10 @@
 //!    then persist agent trace steps (Stage 2b), then distill each session's
 //!    Q&A into curated, entity-anchored lesson documents tagged with the
 //!    `session_learnings` node-set (Stage 2c).
-//! 3. Sync recent graph edges into the session's `graph_context`.
 //!
 //! Python's triplet-enrichment stage is gone (SDK-1115), and so is Rust's.
+//! So is graph-session sync (Python `3401da38a`): `improve()` no longer writes
+//! a graph snapshot into sessions.
 //!
 //! Each stage is wrapped in a warning-only handler so that a failure in one
 //! stage does not abort subsequent stages (matches Python semantics).
@@ -17,12 +18,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cognee_cognify::memify::sync_graph_session::DEFAULT_MAX_LINES;
 use cognee_cognify::{
     CognifyConfig, apply_feedback_weights_pipeline, distill_sessions_in_knowledge_graph,
-    persist_sessions_in_knowledge_graph, sync_graph_to_session,
+    persist_sessions_in_knowledge_graph,
 };
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -179,8 +179,6 @@ pub struct ImproveResult {
     pub sessions_distilled: usize,
     /// Total number of distilled lesson documents published (Stage 2c).
     pub lessons_published: usize,
-    /// Total number of edges newly synced into session contexts (Stage 4).
-    pub edges_synced: usize,
 }
 
 /// Parameters for [`improve`].
@@ -197,7 +195,7 @@ pub struct ImproveResult {
 /// `vector_db_config`, `graph_db_config`) are not carried (SDK-1115): a REST
 /// client that still sends them has them ignored by the HTTP layer.
 pub struct ImproveParams<'a> {
-    /// Dataset name to operate on (Stage 2 persistence + Stage 4 lookup).
+    /// Dataset name to operate on (Stage 2 persistence).
     pub dataset_name: String,
     /// Session ids that drive Stages 1, 2, and 4. `None` or empty skips them.
     pub session_ids: Option<Vec<String>>,
@@ -243,16 +241,14 @@ pub struct ImproveParams<'a> {
     /// Ontology resolver handle.
     pub ontology_resolver: Arc<dyn OntologyResolver>,
 
-    /// Metadata DB connection. Required for Stage 4 (dataset lookup).
+    /// Metadata DB connection. Dataset lookup.
     pub db: Option<Arc<dyn RelationalDb>>,
     /// Session backing store. Required for Stages 1 and 2.
     pub session_store: Option<Arc<dyn SessionStore>>,
-    /// Session manager. Required for Stages 1 and 4.
+    /// Session manager. Required for Stage 1.
     pub session_manager: Option<Arc<SessionManager>>,
     /// Add pipeline (borrowed). Required for Stage 2.
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Checkpoint store. Required for Stage 4.
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
 
     /// Borrowed cognify configuration used by Stage 2 persistence.
     pub cognify_config: &'a CognifyConfig,
@@ -261,7 +257,7 @@ pub struct ImproveParams<'a> {
 /// Bidirectional session-graph bridge.
 ///
 /// Background dispatch is a host-side concern — this function is strictly
-/// synchronous. Stage 4 always runs when sessions are present.
+/// synchronous.
 ///
 /// All inputs are passed via [`ImproveParams`] (see Decision 8 / LIB-04).
 /// The id of the owner's dataset `name` in `tenant`, or `None` when there is
@@ -301,7 +297,6 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
         session_store,
         session_manager,
         add_pipeline,
-        checkpoint_store,
         cognify_config,
         build_global_context_index,
         build_truth_subspace,
@@ -745,7 +740,7 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
                 warn!("improve stage 2d: relational database required; not building");
                 StageResult::errored(TRUTH_SUBSPACE_STAGE, "relational database required")
             }
-            // Resolve the dataset the same way Stage 4 does.
+            // Resolve the dataset by name.
             Some(database) => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
                 &**database,
                 &dataset_name,
@@ -825,156 +820,20 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     };
     result.stages.push(truth_stage);
 
-    let later_dataset = dataset_id_by_name(db.as_ref(), &dataset_name, owner_id, tenant_id).await?;
-
     // ---- Stage 3: Global Context Index (opt-in) ----
     //
-    // Mirrors Python's `_build_global_context_index` (improve.py:201-213).
-    // When `build_global_context_index` is `true` and not running in background:
-    // build a graph summary and store it in the session graph-context so the
-    // search side can prepend it as background knowledge.
-    //
-    // Partial 0.1.0 implementation: retrieves graph summaries already stored as
-    // TextSummary nodes and concatenates them as the global context. Python's full
-    // implementation (`global_context_index_pipeline`) also builds bucket and root
-    // summaries via an LLM pass.
-    // TODO(parity): implement bucket/root summary indexing via a dedicated
-    // `global_context_index_pipeline` function in cognee-cognify that mirrors
-    // Python's `bucketing_strategy="graph"` / `max_bucket_size=4` pass.
+    // Python's `global_context_index_pipeline` builds bucket and root summaries
+    // with an LLM pass. Rust has no such pipeline. The stand-in it had stored a
+    // flat edge list in the session graph-context snapshot, which Python removed
+    // with graph-session sync (`3401da38a`) and which nothing read, so the
+    // stand-in is gone too: the request is acknowledged and skipped.
+    // TODO(parity): implement `global_context_index_pipeline`
+    // (`bucketing_strategy="graph"`, `max_bucket_size=4`).
     if build_global_context_index {
-        if run_in_background {
-            warn!(
-                "improve stage 3: global context index skipped in background mode \
-                 because ordered background pipeline chaining is not supported"
-            );
-        } else if let Some(sm) = session_manager.as_ref() {
-            // Partial 0.1.0: read all graph edges via `get_graph_data()` and format
-            // as "source_id → relationship → target_id" lines, then store as the
-            // global context so any session can prepend it as background knowledge.
-            // TODO(parity): replace with a full `global_context_index_pipeline` that
-            // uses LLM bucket/root summarisation (`bucketing_strategy="graph"`,
-            // `max_bucket_size=4`) matching Python's `_build_global_context_index`.
-            match maybe_with_dataset(later_dataset, graph_db.get_graph_data()).await {
-                Ok((_nodes, edges)) if !edges.is_empty() => {
-                    let global_context = edges
-                        .iter()
-                        .map(|(src, tgt, rel, _props)| format!("{src} → {rel} → {tgt}"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let user_id_str = owner_id.to_string();
-                    // Store under a synthetic global-context key so any session can read it.
-                    let global_session_key = "_global_context_index";
-                    match sm
-                        .set_graph_context(
-                            Some(global_session_key),
-                            Some(&user_id_str),
-                            &global_context,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            info!(
-                                edges = edges.len(),
-                                "improve stage 3 (global_context_index) complete"
-                            );
-                            result.stages_run.push("global_context_index".to_string());
-                        }
-                        Err(e) => {
-                            warn!(
-                                "improve stage 3: failed to store global context (non-fatal): {e}"
-                            );
-                        }
-                    }
-                }
-                Ok(_) => {
-                    info!("improve stage 3: graph has no edges; skipping global_context_index");
-                }
-                Err(e) => {
-                    warn!("improve stage 3: failed to load graph data (non-fatal): {e}");
-                }
-            }
-        } else {
-            warn!("improve stage 3: session_manager is required; skipping global_context_index");
-        }
-    }
-
-    // ---- Stage 4: Sync Graph to Session Cache ----
-    //
-    // Stage 4 always runs when sessions are present (background dispatch is host-side).
-    if has_sessions {
-        #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
-        let sids = session_ids
-            .as_ref()
-            .expect("has_sessions guarantees session_ids is Some with non-empty vec");
-        match (
-            db.as_ref(),
-            session_manager.as_ref(),
-            checkpoint_store.as_ref(),
-        ) {
-            (Some(dbc), Some(mgr), Some(ckstore)) => {
-                // Stage 4 requires a dataset UUID. Resolve from the name.
-                let dataset_id_opt = cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-                    &**dbc,
-                    &dataset_name,
-                    owner_id,
-                    tenant_id,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|ds| ds.id);
-                let Some(dataset_id) = dataset_id_opt else {
-                    warn!(
-                        dataset_name = %dataset_name,
-                        "improve stage 4: dataset not found; skipping sync_graph_to_session"
-                    );
-                    return Ok(result);
-                };
-
-                let user_id_str = owner_id.to_string();
-                let mut total_synced = 0usize;
-                let mut any_ran = false;
-                for sid in sids {
-                    match sync_graph_to_session(
-                        &user_id_str,
-                        sid,
-                        dataset_id,
-                        dbc.as_ref(),
-                        mgr.as_ref(),
-                        ckstore.as_ref(),
-                        DEFAULT_MAX_LINES,
-                    )
-                    .await
-                    {
-                        Ok(r) => {
-                            info!(
-                                session_id = sid,
-                                synced = r.synced,
-                                total = r.total,
-                                "improve stage 4: session synced"
-                            );
-                            total_synced += r.synced;
-                            any_ran = true;
-                        }
-                        Err(e) => {
-                            warn!(
-                                session_id = sid,
-                                "improve stage 4 failed for session (non-fatal): {e}"
-                            );
-                        }
-                    }
-                }
-                result.edges_synced = total_synced;
-                if any_ran {
-                    result.stages_run.push("sync_graph_to_session".to_string());
-                }
-            }
-            _ => {
-                warn!(
-                    "improve stage 4: db, session_manager, and checkpoint_store are required; skipping sync_graph_to_session"
-                );
-            }
-        }
+        warn!(
+            run_in_background,
+            "improve stage 3: global_context_index is not implemented; skipping"
+        );
     }
 
     Ok(result)
@@ -993,7 +852,6 @@ mod tests {
         assert_eq!(result.sessions_persisted, 0);
         assert_eq!(result.sessions_distilled, 0);
         assert_eq!(result.lessons_published, 0);
-        assert_eq!(result.edges_synced, 0);
         assert!(result.stages.is_empty());
     }
 

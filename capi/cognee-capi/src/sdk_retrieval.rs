@@ -122,7 +122,8 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "autoRoute"   — boolean (default false)
 ///   "sessionId"   — string
 ///   "scope"       — string or string array:
-///                   "auto" | "graph" | "session" | "trace" | "graph_context"
+///                   "auto" | "graph" | "session" | "trace"
+///                   ("graph_context" is a deprecated alias of "graph")
 ///                   (absent/null → "auto" default applied by recall())
 ///   "neighborhoodDepth", "neighborhoodSeedTopK" — as for `cg_sdk_search`
 ///

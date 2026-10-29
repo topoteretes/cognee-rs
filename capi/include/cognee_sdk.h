@@ -491,8 +491,9 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *   FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, CHUNKS_LEXICAL,
  *   GRAPH_REPORT, HYBRID_COMPLETION
  *
- * RecallScope strings (5 valid values):
- *   "auto" | "graph" | "session" | "trace" | "graph_context"
+ * RecallScope strings (4 valid values):
+ *   "auto" | "graph" | "session" | "trace"
+ *   ("graph_context" is still accepted as a deprecated alias of "graph".)
  *   Absent/null scope → "auto" default applied internally.
  */
 
@@ -552,7 +553,8 @@ void cg_sdk_search(const CgSdk*        sdk,
  *   "autoRoute"  — boolean (default false)
  *   "sessionId"  — string
  *   "scope"      — string or string array of RecallScope values:
- *                  "auto" | "graph" | "session" | "trace" | "graph_context"
+ *                  "auto" | "graph" | "session" | "trace"
+ *                  ("graph_context" is a deprecated alias of "graph")
  *                  Absent or null → "auto" default applied by recall().
  *   "neighborhoodDepth", "neighborhoodSeedTopK" — as for cg_sdk_search
  *
@@ -585,7 +587,7 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *
  *   ImproveResult — {"stagesRun":[…],"stages":[ImproveStage…],
  *                    "feedbackEntriesProcessed":N,"feedbackEntriesApplied":N,
- *                    "sessionsPersisted":N,"edgesSynced":N}
+ *                    "sessionsPersisted":N}
  *
  *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
  *                    "skipped"|"errored","reason":null|"…","error":null|"…",
@@ -871,7 +873,6 @@ void cg_sdk_delete_all_datasets(const CgSdk*        sdk,
  *   User           — JSON object with user fields.
  *   bool results   → "true" | "false" (D9 strict JSON bool).
  *   void results   → "null" (D9).
- *   get_graph_context → quoted JSON string "\"<ctx>\"" (D9) or "null" (D9).
  */
 
 /**
@@ -919,35 +920,6 @@ void cg_sdk_delete_feedback(const CgSdk*        sdk,
                               const char*         qa_id,
                               CgSdkResultCallback callback,
                               void*               user_data);
-
-/**
- * Get the graph context stored in a session.
- *
- * session_id — session identifier.
- * (No opts_json — mirrors neon which also has no opts for this op.)
- *
- * result_json on success: quoted JSON string "\"<ctx>\"" (D9) when present,
- * or "null" (D9) when absent.
- */
-void cg_sdk_get_graph_context(const CgSdk*        sdk,
-                               const char*         session_id,
-                               CgSdkResultCallback callback,
-                               void*               user_data);
-
-/**
- * Set the graph context stored in a session.
- *
- * session_id — session identifier.
- * context    — context string to store.
- * (No opts_json — mirrors neon.)
- *
- * result_json on success: "null" (D9 — void op).
- */
-void cg_sdk_set_graph_context(const CgSdk*        sdk,
-                               const char*         session_id,
-                               const char*         context,
-                               CgSdkResultCallback callback,
-                               void*               user_data);
 
 /**
  * Get or create the default user account.

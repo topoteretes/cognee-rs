@@ -389,72 +389,6 @@ async fn update_qa_entry_not_found() {
 }
 
 #[tokio::test]
-async fn graph_context_round_trip() {
-    let store = setup_store().await;
-
-    // Initially no context
-    let ctx = store.get_graph_context("s1", None).await.unwrap();
-    assert!(ctx.is_none());
-
-    // Set
-    store
-        .set_graph_context("s1", None, "Some graph data")
-        .await
-        .unwrap();
-
-    let ctx = store.get_graph_context("s1", None).await.unwrap();
-    assert_eq!(ctx.as_deref(), Some("Some graph data"));
-
-    // Overwrite
-    store
-        .set_graph_context("s1", None, "Updated graph data")
-        .await
-        .unwrap();
-
-    let ctx = store.get_graph_context("s1", None).await.unwrap();
-    assert_eq!(ctx.as_deref(), Some("Updated graph data"));
-}
-
-#[tokio::test]
-async fn graph_context_isolated_by_user() {
-    let store = setup_store().await;
-
-    store
-        .set_graph_context("s1", Some("user-1"), "context for user 1")
-        .await
-        .unwrap();
-    store
-        .set_graph_context("s1", Some("user-2"), "context for user 2")
-        .await
-        .unwrap();
-
-    let ctx1 = store.get_graph_context("s1", Some("user-1")).await.unwrap();
-    let ctx2 = store.get_graph_context("s1", Some("user-2")).await.unwrap();
-
-    assert_eq!(ctx1.as_deref(), Some("context for user 1"));
-    assert_eq!(ctx2.as_deref(), Some("context for user 2"));
-}
-
-#[tokio::test]
-async fn delete_session_also_removes_graph_context() {
-    let store = setup_store().await;
-
-    store
-        .create_qa_entry("s1", None, "q", "a", None)
-        .await
-        .unwrap();
-    store
-        .set_graph_context("s1", None, "some context")
-        .await
-        .unwrap();
-
-    store.delete_session("s1", None).await.unwrap();
-
-    let ctx = store.get_graph_context("s1", None).await.unwrap();
-    assert!(ctx.is_none());
-}
-
-#[tokio::test]
 async fn session_manager_add_and_delete_feedback() {
     let store = setup_store().await;
     let sm = SessionManager::new(store as Arc<dyn SessionStore>);
@@ -474,23 +408,6 @@ async fn session_manager_add_and_delete_feedback() {
     // Delete feedback
     let ok = sm.delete_feedback(Some("s1"), None, &qa_id).await.unwrap();
     assert!(ok);
-}
-
-#[tokio::test]
-async fn session_manager_graph_context_round_trip() {
-    let store = setup_store().await;
-    let sm = SessionManager::new(store as Arc<dyn SessionStore>);
-
-    // No context initially
-    let ctx = sm.get_graph_context(Some("s1"), None).await.unwrap();
-    assert!(ctx.is_none());
-
-    sm.set_graph_context(Some("s1"), None, "knowledge snapshot")
-        .await
-        .unwrap();
-
-    let ctx = sm.get_graph_context(Some("s1"), None).await.unwrap();
-    assert_eq!(ctx.as_deref(), Some("knowledge snapshot"));
 }
 
 // -------------------------------------------------------------------------

@@ -24,7 +24,6 @@ What it does
 2. Searches with a ``session_id`` to persist a QA entry to that session.
 3. Retrieves the stored session history.
 4. Adds and then removes feedback on a QA entry.
-5. Stores and reads back a graph-context snapshot on the session.
 """
 
 import asyncio
@@ -120,14 +119,6 @@ async def main() -> None:
         print(f"\nRemoving feedback from QA entry {qa_id!r}...")
         removed = await cognee.sessions.delete_feedback(session_id, qa_id)
         print(f"delete_feedback returned: {removed}")
-
-    # ── Step 6: graph-context snapshot ────────────────────────────────────────
-    context_before = await cognee.sessions.get_graph_context(session_id)
-    print(f"\nGraph context before set: {context_before!r}")
-
-    await cognee.sessions.set_graph_context(session_id, '{"nodes": ["newton"]}')
-    context_after = await cognee.sessions.get_graph_context(session_id)
-    print(f"Graph context after set: {context_after!r}")
 
 
 if __name__ == "__main__":
