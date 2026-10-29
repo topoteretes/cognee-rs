@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use cognee_cognify::graph_backend::MockChunkGraphExtractor;
 use cognee_cognify::tasks::{
-    ExtractedChunks, SUMMARIZE_TEXT_TASK_NAME, extract_graph_from_data,
+    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME, ExtractedChunks, extract_graph_from_data,
     make_extract_graph_and_summarize_task, summarize_text,
 };
 use cognee_cognify::{
@@ -481,7 +481,7 @@ async fn fused_stage_delivers_backend_summaries() {
         assert_eq!(summary.model, "mock-backend");
         assert_eq!(
             summary.base.source_task.as_deref(),
-            Some(SUMMARIZE_TEXT_TASK_NAME),
+            Some(EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME),
             "backend summaries bypass make_summarize_text_task, so the extraction \
              task body has to stamp them — the provenance parity harness keys off \
              this literal"
