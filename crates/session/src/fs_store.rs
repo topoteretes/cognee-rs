@@ -104,6 +104,14 @@ fn session_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf
     base.join(uid).join(format!("{session_id}.json"))
 }
 
+/// Where the removed graph-session sync kept a session's graph snapshot. Only
+/// [`FsSessionStore::delete_session`] still touches it, to clean it up.
+fn legacy_graph_context_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf {
+    let uid = user_id.unwrap_or("default");
+    base.join(uid)
+        .join(format!("_graph_context_{session_id}.json"))
+}
+
 async fn load_entries(path: &Path) -> Result<Vec<FsQAEntry>, SessionError> {
     match fs::read_to_string(path).await {
         Ok(contents) if !contents.is_empty() => serde_json::from_str(&contents)
@@ -298,6 +306,16 @@ impl SessionStore for FsSessionStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(SessionError::StoreError(format!("fs delete error: {e}"))),
         };
+
+        // One-release cleanup of the graph snapshot the removed graph-session
+        // sync wrote, as Python's `SessionManager.delete_session` does
+        // (`session_manager.py:951-967`). Best-effort: a failure is ignored.
+        let _ = fs::remove_file(legacy_graph_context_file(
+            &self.base_dir,
+            user_id,
+            session_id,
+        ))
+        .await;
 
         Ok(existed)
     }
@@ -653,5 +671,27 @@ mod tests {
             .as_ref()
             .expect("should have memify metadata");
         assert_eq!(mm.get("feedback_weights_applied"), Some(&false));
+    }
+
+    /// A graph snapshot left by the removed graph-session sync is deleted with
+    /// its session, as Python's one-release cleanup does
+    /// (`session_manager.py:951-967`).
+    #[tokio::test]
+    async fn delete_session_removes_a_legacy_graph_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir creation must succeed");
+        let store = FsSessionStore::new(dir.path());
+        store
+            .create_qa_entry("sess1", Some("u"), "q1?", "a1", None)
+            .await
+            .expect("create should succeed");
+        let legacy = legacy_graph_context_file(dir.path(), Some("u"), "sess1");
+        std::fs::write(&legacy, "\"old snapshot\"").expect("seed legacy snapshot");
+
+        let deleted = store
+            .delete_session("sess1", Some("u"))
+            .await
+            .expect("delete should succeed");
+        assert!(deleted);
+        assert!(!legacy.exists(), "legacy snapshot must be removed");
     }
 }

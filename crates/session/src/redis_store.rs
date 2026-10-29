@@ -290,6 +290,14 @@ impl SessionStore for RedisSessionStore {
         let key = session_key(user_id, session_id);
         let mut conn = self.conn.clone();
         let deleted: i64 = conn.del(&key).await.map_err(map_err)?;
+        // One-release cleanup of the graph snapshot key the removed
+        // graph-session sync wrote, as Python's `SessionManager.delete_session`
+        // does (`session_manager.py:951-967`). Best-effort: a failure is ignored.
+        let legacy_key = format!(
+            "graph_knowledge:{}:{session_id}",
+            user_id.unwrap_or("default")
+        );
+        let _: Result<i64, _> = conn.del(&legacy_key).await;
         Ok(deleted > 0)
     }
 
