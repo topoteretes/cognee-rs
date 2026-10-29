@@ -145,9 +145,11 @@ pub async fn process_input(
 /// As in Python's `ingest_data`, the loader for the input's document type runs
 /// at `add`: an image or audio file is stored as its description or transcript
 /// (`text_<content_hash>.txt`, `txt` / `text/plain`), and
-/// `original_data_location` keeps the raw file. An input whose document type
-/// has no loader in `loaders` fails with
-/// [`IngestionError::UnsupportedDocumentType`].
+/// `original_data_location` keeps the raw file. The loader is chosen by the
+/// sniffed content type, as Python's `LoaderEngine.get_loader` does
+/// (`file_type.rs`): a file no loader claims fails with
+/// [`IngestionError::NoLoaderForFile`], and one whose document type has no
+/// loader in `loaders` fails with [`IngestionError::UnsupportedDocumentType`].
 #[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
 pub async fn process_input_with_loaders(
     input: &DataInput,
@@ -206,6 +208,10 @@ pub async fn process_input_with_loaders(
     let mut stored_extension = stored_extension;
     let mut stored_mime_type = stored_mime_type;
     let mut loader_engine = loader_engine;
+    // For files the row records the SNIFFED extension and MIME type, as
+    // Python's `get_file_metadata` does; set below once the bytes are in hand.
+    let mut original_extension = original_extension;
+    let mut original_mime_type = original_mime_type;
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
     // the fetched content (a page as its raw HTML text); for everything else
@@ -275,31 +281,49 @@ pub async fn process_input_with_loaders(
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
         let registry = loaders;
-        let doc_type = add_time_doc_type(&original_extension).to_string();
 
-        // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
-        //
-        // Rust classifies by extension only, so a file with no (or an unknown)
-        // extension falls back to `doc_type = "text"` and the text loader. The
-        // text loader rejects non-UTF-8 bytes, which would make `add` fail for
-        // generic binary blobs that have no specific loader — a regression
-        // introduced by running loaders at ADD time (task 17).
-        //
-        // Match the pre-task-17 behaviour: when the would-be loader is the
-        // *text* loader but the bytes are not valid UTF-8 text, store the RAW
-        // bytes verbatim instead of running text extraction. This only affects
-        // the generic-text fallback path: files routed to a real loader by
-        // their extension (text/csv/html/pdf — actually-text content; or
-        // image/audio — their loader when `loaders` has one, else
-        // `UnsupportedDocumentType`) are unchanged.
-        let is_text_doc_type = doc_type == "text";
-        if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
-            let stored_name = format!("text_{content_hash}.bin");
-            let location = storage.store(&collected, &stored_name).await?;
-            // Raw bytes are stored verbatim, so `raw_content_hash` equals the
-            // (content-only) `content_hash` of those same bytes.
-            (location, content_hash.clone())
+        // Route by content type, as Python's `LoaderEngine.get_loader` does:
+        // sniff the bytes (`guess_file_type`), then take the first loader
+        // whose `can_handle` accepts the path or the sniffed extension with
+        // the sniffed MIME type. A file no loader claims fails the add
+        // (Python: "No loader found"). Non-UTF-8 bytes routed to the text
+        // loader fail in it (D15; Python: `UnreadableFileContentError`), so
+        // there is no raw-blob fallback.
+        let doc_type = if resolved_url_metadata.is_some() {
+            // A fetched HTML page: its raw markup goes through `text_loader`
+            // (D14), and its metadata comes from the response.
+            "text".to_string()
         } else {
+            let sniffed = crate::file_type::guess_file_type(&collected, &original_extension);
+            let doc_type = crate::file_type::route_loader(&original_extension, &sniffed)
+                .ok_or_else(|| {
+                    Box::new(IngestionError::NoLoaderForFile {
+                        extension: sniffed.extension.clone(),
+                        mime_type: sniffed.mime.clone(),
+                    }) as Box<dyn std::error::Error>
+                })?;
+            // Python's vision call takes the MIME type from the NAME
+            // (`mimetypes.guess_type`, `native_adapter.py:633-638`), so an
+            // image whose name does not say "image" is routed to the image
+            // loader and then fails there.
+            let name_is_image = mime_guess::from_path(&file_name)
+                .first()
+                .is_some_and(|mime| mime.type_() == mime_guess::mime::IMAGE);
+            if doc_type == "image" && !name_is_image {
+                return Err(Box::new(IngestionError::ImageMimeTypeUndetermined {
+                    name: file_name,
+                }));
+            }
+            // A local HTML file keeps the path's metadata (D14); every other
+            // file is described by what the bytes are.
+            if doc_type != "html" {
+                original_extension = sniffed.extension;
+                original_mime_type = sniffed.mime;
+            }
+            doc_type.to_string()
+        };
+
+        {
             let loader = registry.get(&doc_type).ok_or_else(|| {
                 Box::new(IngestionError::UnsupportedDocumentType {
                     document_type: doc_type.clone(),
@@ -311,6 +335,7 @@ pub async fn process_input_with_loaders(
             let descriptor = build_loader_descriptor(
                 data_id,
                 &extract_name(input, &content_hash),
+                &doc_type,
                 &original_extension,
                 &original_mime_type,
             );
@@ -815,31 +840,17 @@ fn unwrap_data_item(input: &DataInput) -> &DataInput {
     }
 }
 
-/// The document type whose loader runs on a file at `add`.
-///
-/// [`cognee_models::doc_type_for_extension`] mirrors Python's cognify-time
-/// `EXTENSION_TO_DOCUMENT_CLASS`, but Python's `add` picks a loader through
-/// `LoaderEngine`, whose image loader also claims `jpeg`, `jpe` and `tiff`
-/// (`cognee/infrastructure/loaders/core/image_loader.py`). Those go to the
-/// image loader here too, so a `.jpeg` is described rather than stored as a
-/// raw blob. Anything unmapped falls back to `"text"`.
-fn add_time_doc_type(extension: &str) -> &'static str {
-    match extension.to_lowercase().as_str() {
-        "jpeg" | "jpe" | "tiff" => "image",
-        other => cognee_models::doc_type_for_extension(other).unwrap_or("text"),
-    }
-}
-
 /// Build a minimal [`Document`] descriptor passed to a [`DocumentLoader`] at
 /// ADD time. Only the metadata fields loaders read are populated; the content
 /// bytes are passed separately to `extract`.
 fn build_loader_descriptor(
     data_id: Uuid,
     name: &str,
+    doc_type: &str,
     extension: &str,
     mime_type: &str,
 ) -> Document {
-    let doc_type = add_time_doc_type(extension).to_string();
+    let doc_type = doc_type.to_string();
     let mut base = DataPoint::new("Document", None);
     base.id = data_id;
     Document {
@@ -1948,6 +1959,19 @@ pub enum IngestionError {
     /// extension (the relevant loader feature is disabled in this build).
     #[error("Unsupported document type at ingest: {document_type}")]
     UnsupportedDocumentType { document_type: String },
+    /// No add-time loader claims the file: neither its name's extension nor
+    /// the extension its bytes sniff as is handled with the sniffed MIME type.
+    /// Python raises "No loader found" (`LoaderEngine.load_file`).
+    #[error("No loader found for a '{extension}' file of type '{mime_type}'")]
+    NoLoaderForFile {
+        extension: String,
+        mime_type: String,
+    },
+    /// The file was routed to the image loader by its content, but its name
+    /// does not carry an image extension, so the vision call has no MIME type
+    /// (Python: `ValueError: Could not determine MIME type for image file`).
+    #[error("Could not determine MIME type for image file: {name}. Is the extension correct?")]
+    ImageMimeTypeUndetermined { name: String },
     /// A node set — the add call's or one in a data item's
     /// `external_metadata["node_set"]` — is not a list of non-empty names.
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
@@ -1979,16 +2003,46 @@ mod tests {
     use tempfile::NamedTempFile;
 
     /// Python's image loader claims `jpeg`, `jpe` and `tiff` at `add`, which
-    /// its cognify-time `EXTENSION_TO_DOCUMENT_CLASS` lacks (SDK-1039 P15).
+    /// its cognify-time `EXTENSION_TO_DOCUMENT_CLASS` lacks (SDK-1039 P15); the
+    /// route needs the MIME type as well (P20).
     #[test]
-    fn add_time_doc_type_routes_python_image_loader_extensions() {
-        for ext in ["jpeg", "JPEG", "jpe", "tiff", "png", "jpg", "tif"] {
-            assert_eq!(add_time_doc_type(ext), "image", "{ext}");
+    fn add_time_routing_claims_python_image_loader_extensions() {
+        use crate::file_type::{FileType, route_loader};
+        let sniffed = |mime: &str, ext: &str| FileType {
+            mime: mime.to_string(),
+            extension: ext.to_string(),
+        };
+        for (ext, mime, sniffed_ext) in [
+            ("jpeg", "image/jpeg", "jpg"),
+            ("JPEG", "image/jpeg", "jpg"),
+            ("jpe", "image/jpeg", "jpg"),
+            ("tiff", "image/tiff", "tif"),
+            ("png", "image/png", "png"),
+            ("jpg", "image/jpeg", "jpg"),
+            ("tif", "image/tiff", "tif"),
+        ] {
+            assert_eq!(
+                route_loader(ext, &sniffed(mime, sniffed_ext)),
+                Some("image"),
+                "{ext}"
+            );
         }
-        assert_eq!(add_time_doc_type("wav"), "audio");
-        assert_eq!(add_time_doc_type("pdf"), "pdf");
-        assert_eq!(add_time_doc_type("unknown-ext"), "text");
-        assert_eq!(add_time_doc_type(""), "text");
+        assert_eq!(
+            route_loader("wav", &sniffed("audio/x-wav", "wav")),
+            Some("audio")
+        );
+        assert_eq!(
+            route_loader("pdf", &sniffed("application/pdf", "pdf")),
+            Some("pdf")
+        );
+        assert_eq!(
+            route_loader("unknown-ext", &sniffed("text/plain", "txt")),
+            Some("text")
+        );
+        assert_eq!(
+            route_loader("", &sniffed("text/plain", "txt")),
+            Some("text")
+        );
     }
 
     async fn make_pipeline() -> (AddPipeline, Arc<cognee_database::DatabaseConnection>) {

@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`add` routes loaders by the file's content, as Python does (SDK-1039).**
+  The bytes are sniffed (new `infer` dependency, the counterpart of Python's
+  `filetype`; `.txt`, `.csv`, `.md`, `.json`, `.xml` and `.yaml` are not
+  sniffed, and unrecognised bytes are plain text; only the first 8192 bytes are
+  read, and a type is named as `filetype` 1.2.0 names it, so an `.m4a` is
+  `audio/mp4` and an `.ico` is `image/x-icon`, which no loader claims, as in
+  Python), and the loader is the first,
+  in Python's priority order, that accepts the name's extension or the sniffed
+  extension together with the sniffed MIME type. The `data` row stores the
+  **sniffed** `original_extension` / `original_mime_type`. So a PNG named
+  `.jpg` goes to `image_loader` and is recorded as `png` / `image/png`, and UTF-8 text named `notes.conf` is `text_loader`,
+  `txt` / `text/plain`. An image routed to `image_loader` whose NAME has no
+  image extension (for example a PNG with no extension) fails with
+  `IngestionError::ImageMimeTypeUndetermined`, because Python's vision call
+  takes the MIME type from the name (`native_adapter.py:633-638`). **Breaking:** non-UTF-8 bytes routed to the text loader
+  (for example a PNG named `.txt`) now fail the add, as Python's
+  `UnreadableFileContentError` does, instead of being stored as a
+  `text_<hash>.bin` blob, and a file no loader claims (for example a `.zip`)
+  fails with `IngestionError::NoLoaderForFile` (Python: "No loader found")
+  instead of falling back to the text loader. **Differences kept:** a local
+  `.html` file still goes to the HTML text extractor and keeps its `html` /
+  `text/html` metadata (D14), and Rust has no `code_loader`, so source files
+  are read by the text loader.
+
 - **URL add stores the raw page and `external_metadata` is Python's (SDK-1039).**
   `add` of an `http(s)` URL that returns HTML now stores the page as Python's
   `text_loader` does: the fetched HTML is kept whole (`original_data_location`
