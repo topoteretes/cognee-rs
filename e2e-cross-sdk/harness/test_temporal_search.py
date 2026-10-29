@@ -87,7 +87,15 @@ def both_cognified(tmp_path):
     )
 
     # ── Rust: add + default cognify ─────────────────────────────────────
-    write_rust_config(rust_ws)
+    # Python's default structured-output request is a strict ``json_schema``
+    # response_format (litellm_native; strict is accepted for KnowledgeGraph,
+    # captured in e2e-cross-sdk/capture/RESULTS.md). Rust's default ``auto`` mode
+    # sends a forced tool call instead, and with it gpt-4o-mini returned no
+    # Timestamp node in about a third of the captured runs, where the same prompt
+    # and schema under ``json_schema`` (Python's request) did far better. So the
+    # Rust side is pinned to Python's request shape here, to compare like with
+    # like. Changing Rust's default mode is a separate decision (SDK-630).
+    write_rust_config(rust_ws, extra={"llm_structured_output_mode": "json_schema"})
 
     result = run_rust_cli(
         rust_ws,

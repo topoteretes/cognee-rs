@@ -2,43 +2,43 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "6fda48030417a9d75c73c806e04475eb184fd3d4d303c5e738c6a4495a6897b9": {
+    "aa6dfb09bec9a5c3cfd2571eea8698f93a8e7956c12b3451745c918a9e9fc59e": {
       "method": "structured_output",
       "user_input_preview": "Artificial intelligence enables machines to simulate human intelligence.",
       "schema_name": "KnowledgeGraph",
       "response": {
         "nodes": [
           {
-            "id": "Artificial_Intelligence",
-            "name": "Artificial Intelligence",
-            "type": "CONCEPT",
+            "id": "artificial_intelligence",
+            "name": "Artificial intelligence",
+            "type": "Concept",
             "description": "Artificial intelligence enables machines to simulate human intelligence."
           },
           {
-            "id": "Machines",
+            "id": "machines",
             "name": "Machines",
-            "type": "CONCEPT",
-            "description": "Machines capable of simulating human intelligence through artificial intelligence."
+            "type": "Entity",
+            "description": "Machines that can simulate human intelligence."
           },
           {
-            "id": "Human_Intelligence",
-            "name": "Human Intelligence",
-            "type": "CONCEPT",
-            "description": "Human intelligence that artificial intelligence aims to simulate in machines."
+            "id": "human_intelligence",
+            "name": "Human intelligence",
+            "type": "Concept",
+            "description": "Human intelligence that can be simulated by machines through artificial intelligence."
           }
         ],
         "edges": [
           {
-            "source_node_id": "Artificial_Intelligence",
-            "target_node_id": "Machines",
+            "source_node_id": "artificial_intelligence",
+            "target_node_id": "machines",
             "relationship_name": "enables",
-            "description": "Artificial Intelligence enables Machines to simulate human intelligence."
+            "description": "Artificial intelligence enables machines."
           },
           {
-            "source_node_id": "Artificial_Intelligence",
-            "target_node_id": "Human_Intelligence",
-            "relationship_name": "simulates",
-            "description": "Artificial Intelligence enables Machines to simulate Human Intelligence."
+            "source_node_id": "machines",
+            "target_node_id": "human_intelligence",
+            "relationship_name": "simulate",
+            "description": "Machines simulate human intelligence."
           }
         ]
       }
