@@ -145,9 +145,11 @@ pub async fn process_input(
 /// As in Python's `ingest_data`, the loader for the input's document type runs
 /// at `add`: an image or audio file is stored as its description or transcript
 /// (`text_<content_hash>.txt`, `txt` / `text/plain`), and
-/// `original_data_location` keeps the raw file. An input whose document type
-/// has no loader in `loaders` fails with
-/// [`IngestionError::UnsupportedDocumentType`].
+/// `original_data_location` keeps the raw file. The loader is chosen by the
+/// sniffed content type, as Python's `LoaderEngine.get_loader` does
+/// (`file_type.rs`): a file no loader claims fails with
+/// [`IngestionError::NoLoaderForFile`], and one whose document type has no
+/// loader in `loaders` fails with [`IngestionError::UnsupportedDocumentType`].
 #[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
 pub async fn process_input_with_loaders(
     input: &DataInput,

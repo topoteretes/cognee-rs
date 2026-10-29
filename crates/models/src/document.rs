@@ -32,10 +32,11 @@ pub struct Document {
 /// Map a file extension to a document type string, returning `None` for
 /// unrecognised extensions.
 ///
-/// Public wrapper over the internal [`extension_to_doc_type`] mapping so the
-/// ingestion pipeline can pick the right loader at ADD time using the same
+/// Public wrapper over the internal [`extension_to_doc_type`] mapping, the
 /// extension → document-type table that [`classify_documents`] uses at cognify
-/// time.
+/// time. At ADD time the ingestion pipeline routes by sniffed content type
+/// instead and consults this table only for the office (`unstructured`)
+/// formats.
 pub fn doc_type_for_extension(ext: &str) -> Option<&'static str> {
     extension_to_doc_type(ext)
 }

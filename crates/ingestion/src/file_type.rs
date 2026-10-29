@@ -49,19 +49,106 @@ pub(crate) fn guess_file_type(bytes: &[u8], path_ext: &str) -> FileType {
         "yaml" | "yml" => return FileType::new("application/yaml", "yaml"),
         _ => {}
     }
-    match infer::get(bytes) {
-        // Python's `filetype` has no matchers for text formats (html, xml,
-        // shell scripts), so they stay plain text there.
-        Some(kind)
-            if !matches!(
-                kind.matcher_type(),
-                infer::MatcherType::Text | infer::MatcherType::Custom
-            ) =>
-        {
-            FileType::new(kind.mime_type(), kind.extension())
-        }
-        _ => FileType::new("text/plain", "txt"),
+    sniff(bytes).unwrap_or_else(|| FileType::new("text/plain", "txt"))
+}
+
+/// How many leading bytes `filetype` reads (`filetype/utils.py`,
+/// `_NUM_SIGNATURE_BYTES`).
+const SIGNATURE_BYTES: usize = 8192;
+
+/// `filetype.guess` (1.2.0, the version Python pins): the type of the first
+/// [`SIGNATURE_BYTES`] bytes as `filetype` names it, or `None`.
+///
+/// `infer` does the matching, but the two packages do not have the same
+/// table. `filetype` has image matchers `infer` lacks (`dwg`, `xcf`, `jpx`,
+/// `apng`) or draws differently (`heic`), checked here first in `filetype`'s
+/// own order, before any other image; `infer`'s answer is then renamed to
+/// `filetype`'s MIME type and extension (`m4a` is `audio/mp4`, `ico` is
+/// `image/x-icon`, ...), and a type `filetype` does not know is `None`.
+fn sniff(bytes: &[u8]) -> Option<FileType> {
+    let buf = &bytes[..bytes.len().min(SIGNATURE_BYTES)];
+    if buf.starts_with(b"AC10") {
+        return Some(FileType::new("image/vnd.dwg", "dwg"));
     }
+    if buf.starts_with(b"gimp xcf ") {
+        return Some(FileType::new("image/x-xcf", "xcf"));
+    }
+    if buf.len() > 50 && buf.starts_with(&[0, 0, 0, 0x0C]) && &buf[16..24] == b"ftypjp2 " {
+        return Some(FileType::new("image/jpx", "jpx"));
+    }
+    if is_apng(buf) {
+        return Some(FileType::new("image/apng", "apng"));
+    }
+    if is_heic(buf) {
+        return Some(FileType::new("image/heic", "heic"));
+    }
+    let kind = infer::get(buf)?;
+    let (mime, extension) = match kind.extension() {
+        // Same name in both packages.
+        ext @ ("jpg" | "png" | "gif" | "webp" | "cr2" | "tif" | "bmp" | "jxr" | "psd" | "avif"
+        | "mp4" | "m4v" | "mkv" | "webm" | "mov" | "avi" | "wmv" | "mpg" | "flv"
+        | "midi" | "mp3" | "ogg" | "flac" | "wav" | "amr" | "aac" | "aiff" | "woff"
+        | "woff2" | "ttf" | "otf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
+        | "odt" | "ods" | "odp" | "epub" | "zip" | "tar" | "gz" | "bz2" | "7z" | "xz"
+        | "pdf" | "swf" | "rtf" | "eot" | "ps" | "nes" | "crx" | "cab" | "ar" | "Z"
+        | "lz" | "rpm" | "dcm" | "zst" | "lz4" | "wasm" | "elf") => (kind.mime_type(), ext),
+        // Renamed: `infer`'s name -> `filetype`'s.
+        "m4a" => ("audio/mp4", "m4a"),
+        "opus" => ("audio/ogg", "ogg"),
+        "ico" => ("image/x-icon", "ico"),
+        "rar" => ("application/x-rar-compressed", "rar"),
+        "sqlite" => ("application/x-sqlite3", "sqlite"),
+        "deb" => ("application/x-deb", "deb"),
+        "exe" | "dll" => ("application/x-msdownload", "exe"),
+        // `filetype` has no matcher (text formats such as html, xml and shell
+        // scripts among them), so the bytes are plain text there.
+        _ => return None,
+    };
+    Some(FileType::new(mime, extension))
+}
+
+/// `filetype`'s `Apng.match`: a PNG whose `acTL` chunk comes before any
+/// `IDAT`/`IEND`.
+fn is_apng(buf: &[u8]) -> bool {
+    if buf.len() <= 8 || !buf.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return false;
+    }
+    let mut i = 8;
+    while buf.len() > i {
+        let Some(len_bytes) = buf.get(i..i + 4) else {
+            return false;
+        };
+        let data_length =
+            u32::from_be_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+        i += 4;
+        match buf.get(i..i + 4) {
+            Some(b"IDAT" | b"IEND") | None => return false,
+            Some(b"acTL") => return true,
+            Some(_) => {}
+        }
+        i = i.saturating_add(8).saturating_add(data_length as usize);
+    }
+    false
+}
+
+/// `filetype`'s `Heic.match`: an ISO-BMFF `ftyp` box whose major brand is
+/// `heic`, or `mif1`/`msf1` with a compatible `heic` brand.
+fn is_heic(buf: &[u8]) -> bool {
+    if buf.len() < 16 || &buf[4..8] != b"ftyp" {
+        return false;
+    }
+    let ftyp_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    if buf.len() < ftyp_len {
+        return false;
+    }
+    let major = &buf[8..12];
+    if major == b"heic" {
+        return true;
+    }
+    (major == b"mif1" || major == b"msf1")
+        && (16..ftyp_len)
+            .step_by(4)
+            .any(|i| buf.get(i..i + 4) == Some(b"heic".as_slice()))
 }
 
 /// Source-file extensions `code_loader` claims
@@ -301,6 +388,104 @@ mod tests {
         assert_eq!(route(&[b'P', b'K', 3, 4, 0, 0, 0, 0], "zip"), None);
         // PNG with a code extension: code_loader claims it by name, as Python.
         assert_eq!(route(PNG, "py"), Some("text"));
+    }
+
+    fn ft(bytes: &[u8]) -> (String, String) {
+        let t = guess_file_type(bytes, "");
+        (t.mime, t.extension)
+    }
+
+    fn pair(mime: &str, ext: &str) -> (String, String) {
+        (mime.to_string(), ext.to_string())
+    }
+
+    /// `infer` names some types differently from Python's `filetype` 1.2.0;
+    /// the row must carry `filetype`'s names, and routing uses them.
+    #[test]
+    fn infer_names_are_translated_to_filetype_names() {
+        let mut m4a = b"\0\0\0\x20ftypM4A \0\0\0\0M4A mp42isom".to_vec();
+        m4a.resize(64, 0);
+        assert_eq!(ft(&m4a), pair("audio/mp4", "m4a"));
+        // So an `.m4a` reaches the audio loader, as in Python.
+        assert_eq!(route(&m4a, "m4a"), Some("audio"));
+        assert_eq!(route(&m4a, ""), Some("audio"));
+
+        let ico = [0u8, 0, 1, 0, 1, 0, 16, 16, 0, 0];
+        assert_eq!(ft(&ico), pair("image/x-icon", "ico"));
+        // `image/x-icon` is not in image_loader's MIME list: Python finds no
+        // loader for an icon.
+        assert_eq!(route(&ico, "ico"), None);
+
+        let mut opus = b"OggS\0\x02".to_vec();
+        opus.resize(28, 0);
+        opus.extend_from_slice(b"OpusHead");
+        opus.resize(64, 0);
+        assert_eq!(ft(&opus), pair("audio/ogg", "ogg"));
+
+        assert_eq!(
+            ft(b"Rar!\x1a\x07\x00rest"),
+            pair("application/x-rar-compressed", "rar")
+        );
+        assert_eq!(
+            ft(b"MZ\x90\x00rest-of-exe"),
+            pair("application/x-msdownload", "exe")
+        );
+        // A type `filetype` has no matcher for is plain text there.
+        assert_eq!(ft(&[0xFF, 0x0A, 0x00, 0x00]), pair("text/plain", "txt"));
+    }
+
+    /// Image types `filetype` matches and `infer` does not (or differently)
+    /// route to the image loader, as in Python.
+    #[test]
+    fn filetype_only_image_matchers() {
+        let dwg = b"AC1018\0\0\0\0\0rest";
+        assert_eq!(ft(dwg), pair("image/vnd.dwg", "dwg"));
+        assert_eq!(route(dwg, ""), Some("image"));
+
+        let xcf = b"gimp xcf v011\0rest";
+        assert_eq!(ft(xcf), pair("image/x-xcf", "xcf"));
+
+        let mut jpx = vec![
+            0u8, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A,
+        ];
+        jpx.extend_from_slice(&[0, 0, 0, 0x14]);
+        jpx.extend_from_slice(b"ftypjp2 ");
+        jpx.resize(64, 0);
+        assert_eq!(ft(&jpx), pair("image/jpx", "jpx"));
+        assert_eq!(route(&jpx, "jp2"), Some("image"));
+
+        let mut apng = PNG.to_vec(); // signature + IHDR length/type
+        apng.extend_from_slice(&[0; 13 + 4]); // IHDR data + CRC
+        apng.extend_from_slice(&[0, 0, 0, 8]);
+        apng.extend_from_slice(b"acTL");
+        apng.resize(80, 0);
+        assert_eq!(ft(&apng), pair("image/apng", "apng"));
+        // A plain PNG (IDAT before any acTL) stays `png`.
+        let mut png = PNG.to_vec();
+        png.extend_from_slice(&[0; 13 + 4]);
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(b"IDAT");
+        assert_eq!(ft(&png), pair("image/png", "png"));
+
+        let mut heic = vec![0u8, 0, 0, 0x18];
+        heic.extend_from_slice(b"ftypheic\0\0\0\0mif1heic");
+        heic.resize(40, 0);
+        assert_eq!(ft(&heic), pair("image/heic", "heic"));
+        let mut mif1 = vec![0u8, 0, 0, 0x18];
+        mif1.extend_from_slice(b"ftypmif1\0\0\0\0mif1heic");
+        mif1.resize(40, 0);
+        assert_eq!(ft(&mif1), pair("image/heic", "heic"));
+        assert_eq!(route(&mif1, "HEIC"), Some("image"));
+    }
+
+    /// `filetype` reads the first 8192 bytes only.
+    #[test]
+    fn only_the_signature_bytes_are_read() {
+        let mut long = PNG.to_vec();
+        long.resize(SIGNATURE_BYTES * 2, b'a');
+        assert_eq!(ft(&long), pair("image/png", "png"));
+        // An empty file is plain text.
+        assert_eq!(ft(b""), pair("text/plain", "txt"));
     }
 
     #[test]

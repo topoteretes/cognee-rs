@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`add` routes loaders by the file's content, as Python does (SDK-1039).**
   The bytes are sniffed (new `infer` dependency, the counterpart of Python's
   `filetype`; `.txt`, `.csv`, `.md`, `.json`, `.xml` and `.yaml` are not
-  sniffed, and unrecognised bytes are plain text), and the loader is the first,
+  sniffed, and unrecognised bytes are plain text; only the first 8192 bytes are
+  read, and a type is named as `filetype` 1.2.0 names it, so an `.m4a` is
+  `audio/mp4` and an `.ico` is `image/x-icon`, which no loader claims, as in
+  Python), and the loader is the first,
   in Python's priority order, that accepts the name's extension or the sniffed
   extension together with the sniffed MIME type. The `data` row stores the
   **sniffed** `original_extension` / `original_mime_type`. So a PNG with no
