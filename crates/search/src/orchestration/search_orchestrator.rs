@@ -118,11 +118,26 @@ fn split_prompt_messages(messages: Option<Vec<Message>>) -> (Option<String>, Opt
 }
 
 fn build_used_graph_element_ids(
+    search_type: SearchType,
     context: Option<&[crate::types::SearchItem]>,
 ) -> Option<UsedGraphElementIds> {
     let items = context?;
     let mut node_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut edge_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // RAG completion's items are scored chunks, not triplets: Python's
+    // `CompletionRetriever.extract_context_object_ids` records each chunk's
+    // `payload["id"]`, else its `id`, so feedback can weight (and preferences
+    // can point at) the chunks an answer used.
+    if search_type == SearchType::RagCompletion {
+        node_ids.extend(items.iter().filter_map(|item| {
+            item.payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| item.id.map(|id| id.to_string()))
+        }));
+    }
 
     for item in items {
         if let Some(src) = item.payload.get("source_id").and_then(|v| v.as_str()) {
@@ -607,7 +622,7 @@ impl SearchOrchestrator {
                 "{knob} requires search_type GRAPH_COMPLETION"
             )));
         }
-        let reason = match requested_graph_only_filter(request) {
+        let reason = match requested_graph_only_filter(request, self.default_feedback_influence) {
             Some(filter) => Some(format!("{filter} is set")),
             None => hybrid.unavailable_reason().await,
         };
@@ -1041,12 +1056,18 @@ impl SearchOrchestrator {
         match &merged.result {
             _ if request.only_context() => {}
             SearchOutput::Text(answer) => {
-                self.save_session_turn(request, answer, merged_context(&merged).as_deref())
-                    .await;
+                self.save_session_turn(
+                    request,
+                    search_type,
+                    answer,
+                    merged_context(&merged).as_deref(),
+                )
+                .await;
             }
             SearchOutput::Texts(answers) if !answers.is_empty() => {
                 self.save_session_turn(
                     request,
+                    search_type,
                     &answers.join("\n\n"),
                     merged_context(&merged).as_deref(),
                 )
@@ -1243,7 +1264,7 @@ impl SearchOrchestrator {
             .await?;
 
         if session_turn && let SearchOutput::Text(ref answer) = output {
-            self.save_session_turn(request, answer, context.as_deref())
+            self.save_session_turn(request, search_type, answer, context.as_deref())
                 .await;
         }
 
@@ -1364,6 +1385,7 @@ impl SearchOrchestrator {
     async fn save_session_turn(
         &self,
         request: &SearchRequest,
+        search_type: SearchType,
         answer: &str,
         context: Option<&[crate::types::SearchItem]>,
     ) {
@@ -1386,7 +1408,7 @@ impl SearchOrchestrator {
         // pipeline can trace which graph elements produced the answer.
         // Items from graph-traversal retrievers carry `source_id`/`target_id`
         // payload fields; pure-RAG items carry neither.
-        let used_graph_element_ids = build_used_graph_element_ids(context);
+        let used_graph_element_ids = build_used_graph_element_ids(search_type, context);
 
         let _ = sm
             .save_qa(
@@ -4475,7 +4497,7 @@ mod tests {
         let context = vec![item(
             json!({ "kind": "chunk", "id": "chunk-1", "text": "t" }),
         )];
-        let ids = super::build_used_graph_element_ids(Some(&context))
+        let ids = super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&context))
             .expect("chunk id should yield Some");
         assert_eq!(ids.node_ids, vec!["chunk-1".to_string()]);
         assert!(ids.edge_ids.is_empty(), "hybrid path never emits edge_ids");
@@ -4492,7 +4514,7 @@ mod tests {
                 { "source_id": "entity-1", "target_id": "tennis-id" }
             ]
         }))];
-        let ids = super::build_used_graph_element_ids(Some(&context))
+        let ids = super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&context))
             .expect("entity ids should yield Some");
         // entity id + both endpoints, entity-1 deduped despite three mentions.
         assert_eq!(
@@ -4514,7 +4536,10 @@ mod tests {
             "text": "Acme acquired Initech."
         }))];
         // A fact-only batch yields no node ids and no edge ids -> None.
-        assert!(super::build_used_graph_element_ids(Some(&context)).is_none());
+        assert!(
+            super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&context))
+                .is_none()
+        );
     }
 
     #[test]
@@ -4534,7 +4559,7 @@ mod tests {
                 "edges": [ { "source_id": "entity-1", "target_id": "acme-id" } ]
             })),
         ];
-        let ids = super::build_used_graph_element_ids(Some(&context))
+        let ids = super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&context))
             .expect("mixed batch should yield Some");
         assert_eq!(
             ids.node_ids,
@@ -4549,10 +4574,43 @@ mod tests {
         assert_eq!(ids.edge_ids, vec!["gt-edge".to_string()]);
     }
 
+    /// Python `CompletionRetriever.extract_context_object_ids`: a RAG
+    /// completion records its chunks' ids (`payload["id"]`, else `id`) so
+    /// `prefers` edges and feedback weights can reach chunks; other types
+    /// never take a bare item id.
+    #[test]
+    fn used_ids_record_rag_chunks() {
+        let chunk_id = Uuid::new_v4();
+        let context = vec![
+            crate::types::SearchItem {
+                id: None,
+                score: Some(0.1),
+                payload: json!({"id": "chunk-a", "text": "Alice likes tea."}),
+            },
+            crate::types::SearchItem {
+                id: Some(chunk_id),
+                score: Some(0.2),
+                payload: json!({"text": "Bob likes coffee."}),
+            },
+        ];
+        let ids = super::build_used_graph_element_ids(SearchType::RagCompletion, Some(&context))
+            .expect("chunk ids");
+        let mut expected = vec!["chunk-a".to_string(), chunk_id.to_string()];
+        expected.sort();
+        assert_eq!(ids.node_ids, expected);
+        assert!(ids.edge_ids.is_empty());
+        assert!(
+            super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&context))
+                .is_none()
+        );
+    }
+
     #[test]
     fn used_ids_empty_and_none_return_none() {
-        assert!(super::build_used_graph_element_ids(None).is_none());
-        assert!(super::build_used_graph_element_ids(Some(&[])).is_none());
+        assert!(super::build_used_graph_element_ids(SearchType::GraphCompletion, None).is_none());
+        assert!(
+            super::build_used_graph_element_ids(SearchType::GraphCompletion, Some(&[])).is_none()
+        );
     }
 
     // ── Access tracking on the default completion path ───────────────────

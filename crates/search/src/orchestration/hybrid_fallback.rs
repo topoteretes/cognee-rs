@@ -12,14 +12,26 @@ pub(crate) fn passed_graph_only_knob(request: &SearchRequest) -> Option<&'static
 }
 
 /// The first set filter that only graph completion supports, which makes hybrid fall back.
-pub(crate) fn requested_graph_only_filter(request: &SearchRequest) -> Option<&'static str> {
+///
+/// `default_feedback_influence` is the orchestrator's (Python's
+/// `default_feedback_influence`), which an unset `feedback_influence` takes:
+/// a positive default defers hybrid to graph completion as an explicit one
+/// does.
+pub(crate) fn requested_graph_only_filter(
+    request: &SearchRequest,
+    default_feedback_influence: f32,
+) -> Option<&'static str> {
     if request.node_type.as_deref().is_some_and(|t| t != "NodeSet") {
         return Some("node_type");
     }
     if request.neighborhood_depth.is_some() {
         return Some("neighborhood_depth");
     }
-    if request.feedback_influence_or_default() > 0.0 {
+    if request
+        .feedback_influence
+        .unwrap_or(default_feedback_influence)
+        > 0.0
+    {
         return Some("feedback_influence");
     }
     None
@@ -62,10 +74,24 @@ mod tests {
         ];
         for (extra, expected) in cases {
             assert_eq!(
-                requested_graph_only_filter(&request(extra)),
+                requested_graph_only_filter(&request(extra), 0.0),
                 expected,
                 "{extra}"
             );
         }
+    }
+
+    // A positive orchestrator default is the influence of a request that sets
+    // none, so hybrid defers to graph completion; an explicit 0 opts out.
+    #[test]
+    fn a_default_feedback_influence_defers_hybrid() {
+        assert_eq!(
+            requested_graph_only_filter(&request(""), 0.4),
+            Some("feedback_influence")
+        );
+        assert_eq!(
+            requested_graph_only_filter(&request(r#", "feedback_influence": 0.0"#), 0.4),
+            None
+        );
     }
 }

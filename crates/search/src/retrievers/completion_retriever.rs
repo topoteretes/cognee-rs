@@ -297,18 +297,23 @@ impl SearchRetriever for CompletionRetriever {
     }
 }
 
-/// Stable re-sort of chunk hits by personalized score (Python's
-/// `_stable_sort_by_personal_distance`). Rust scores are similarities, so a
-/// preferred chunk's score grows by `personal_factor` in score space; a
-/// chunk with no weight keeps its score and ties keep the engine's order.
-/// The chunk id is `payload["id"]`, falling back to the hit id.
+/// Stable re-sort of chunk hits by personalized distance (Python's
+/// `_stable_sort_by_personal_distance`). Rust scores are similarities, so
+/// each is taken back to Python's distance space (`1 - score`, never
+/// negative for a cosine similarity) and a preferred chunk's distance shrinks
+/// by `personal_factor`; scaling the similarity instead would demote a liked
+/// chunk whose similarity is negative. A chunk with no weight keeps its
+/// distance, and ties keep the engine's order. The chunk id is
+/// `payload["id"]`, falling back to the hit id.
 fn sort_by_personal_score(
     context: &mut SearchContext,
     weights: &HashMap<String, f64>,
     influence: f64,
 ) {
-    let personalized = |item: &crate::types::SearchItem| -> f64 {
-        let score = f64::from(item.score.unwrap_or(f32::NEG_INFINITY));
+    let personalized_distance = |item: &crate::types::SearchItem| -> f64 {
+        let distance = item
+            .score
+            .map_or(f64::INFINITY, |score| 1.0 - f64::from(score));
         let id = item
             .payload
             .get("id")
@@ -316,11 +321,11 @@ fn sort_by_personal_score(
             .map(str::to_string)
             .or_else(|| item.id.map(|id| id.to_string()));
         match id.and_then(|id| weights.get(&id)) {
-            Some(weight) => score * personal_factor(*weight, influence, false),
-            None => score,
+            Some(weight) => distance * personal_factor(*weight, influence, true),
+            None => distance,
         }
     };
-    context.sort_by(|a, b| personalized(b).total_cmp(&personalized(a)));
+    context.sort_by(|a, b| personalized_distance(a).total_cmp(&personalized_distance(b)));
 }
 
 #[cfg(test)]
@@ -744,8 +749,11 @@ mod tests {
             "DocumentChunk",
             "text",
             &[
-                point(near, "the nearest chunk", vec![0.4, 0.6]),
-                point(liked, "the liked chunk", vec![0.6, 0.4]),
+                // Distances from the query [0.4, 0.6]: ~0.077 and ~0.100. The
+                // liked chunk's shrinks by the 0.3 influence to ~0.070, ahead
+                // of the nearest (Python's distance-space re-rank).
+                point(near, "the nearest chunk", vec![0.6, 0.4]),
+                point(liked, "the liked chunk", vec![0.63, 0.37]),
             ],
         )
         .await
@@ -838,5 +846,34 @@ mod tests {
             "{}",
             messages[1].content
         );
+    }
+
+    // Python ranks in distance space: a liked chunk's distance shrinks. With
+    // a negative similarity, scaling the similarity instead would push the
+    // liked chunk down; in distance space it still moves up.
+    #[test]
+    fn a_liked_chunk_moves_up_even_with_a_negative_similarity() {
+        let item = |id: &str, score: f32| crate::types::SearchItem {
+            id: None,
+            score: Some(score),
+            payload: serde_json::json!({"id": id}),
+        };
+        let mut context = vec![item("neutral", -0.15), item("liked", -0.2)];
+        let weights = HashMap::from([("liked".to_string(), 1.0)]);
+        super::sort_by_personal_score(&mut context, &weights, 0.3);
+        let order: Vec<_> = context
+            .iter()
+            .map(|i| i.payload["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(order, ["liked", "neutral"]);
+
+        // No weights: the engine's order stands, ties included.
+        let mut context = vec![item("a", 0.5), item("b", 0.5), item("c", 0.9)];
+        super::sort_by_personal_score(&mut context, &HashMap::new(), 0.3);
+        let order: Vec<_> = context
+            .iter()
+            .map(|i| i.payload["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(order, ["c", "a", "b"]);
     }
 }
