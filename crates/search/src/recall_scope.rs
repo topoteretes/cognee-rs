@@ -503,7 +503,7 @@ pub async fn run_graph(
     // a UUID) there is nothing the caller can be shown to read, so the graph
     // source contributes nothing — the same answer as a caller who may read no
     // dataset (Python: zero per-dataset tasks, `[]`). It is not an error:
-    // recall's other sources (session, trace, graph context) and its auto-mode
+    // recall's other sources (session, trace) and its auto-mode
     // fall-through still run. Python has no such case, since `recall()`
     // resolves a missing user to the default user first.
     if search_orchestrator.scopes_unfiltered_search() && owner_id.is_none() && !has_dataset_filter {
