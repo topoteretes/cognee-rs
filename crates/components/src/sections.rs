@@ -381,11 +381,6 @@ config_section! {
         pub tokenizer_path: String = String::new() => {
             env: ["EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"], alias: ["embedding_tokenizer_path"], secret: false,
         },
-        /// Inference batch size (leading tensor dimension), independent of
-        /// `embedding.batch_size`.
-        pub batch_size: u32 = 32 => {
-            env: ["EMBEDDING_ONNX_BATCH_SIZE"], alias: ["embedding_onnx_batch_size"], secret: false,
-        },
     }
 }
 
@@ -820,12 +815,6 @@ config_section! {
         /// recovered. Eligibility only; the run's ownership marker is the proof.
         pub stale_run_recovery_min_age_seconds: u64 = 3600 => {
             env: ["COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS"], alias: [], secret: false,
-        },
-        /// Python's `data_per_batch` cognify parameter; 0 uses the default, 20.
-        /// Accepted for parity; no Rust stage reads it since the temporal
-        /// cognify pipeline was removed (SDK-1039).
-        pub data_per_batch: u32 = 20 => {
-            env: ["COGNEE_DATA_PER_BATCH"], alias: ["data_per_batch"], secret: false,
         },
         /// Graph extraction strategy: `single_pass` (default; one LLM call per
         /// chunk) or `cascade` (Python's multi-round

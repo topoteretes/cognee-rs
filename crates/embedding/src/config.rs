@@ -172,8 +172,15 @@ pub struct OnnxEmbeddingConfig {
     /// Maximum sequence length in tokens (truncate if longer)
     pub max_sequence_length: usize,
 
-    /// Batch size for ONNX inference (max texts per inference call)
+    /// Batch size for ONNX inference (max texts per inference call). Not a
+    /// knob of its own: it is the resolved `embedding.batch_size`, as Python's
+    /// fastembed engine is built with `EMBEDDING_BATCH_SIZE`.
     pub batch_size: usize,
+
+    /// Python's `embedding_max_concurrent_data_points`; bounds the in-flight
+    /// batches at `max(1, max_concurrent_data_points / batch_size)`. Mirrors
+    /// `embedding.max_concurrent_data_points`.
+    pub max_concurrent_data_points: usize,
 
     /// How `last_hidden_state` is reduced to one vector — see [`OnnxPooling`].
     ///
@@ -262,6 +269,7 @@ impl OnnxEmbeddingConfig {
             dimensions: 384,
             max_sequence_length: 512,
             batch_size: 32,
+            max_concurrent_data_points: DEFAULT_MAX_CONCURRENT_DATA_POINTS,
             pooling,
             query_instruction,
         }
@@ -280,6 +288,7 @@ impl OnnxEmbeddingConfig {
             dimensions: 384,
             max_sequence_length: 256,
             batch_size: 32,
+            max_concurrent_data_points: DEFAULT_MAX_CONCURRENT_DATA_POINTS,
             pooling,
             query_instruction,
         }
@@ -302,8 +311,8 @@ impl OnnxEmbeddingConfig {
 /// - `EMBEDDING_API_KEY` — API key (fallback: `LLM_API_KEY`)
 /// - `EMBEDDING_API_VERSION` — API version string
 /// - `EMBEDDING_MAX_COMPLETION_TOKENS` — maximum tokens (default: 8191)
-/// - `EMBEDDING_BATCH_SIZE` — texts per embedding request (default: 32)
-/// - `EMBEDDING_ONNX_BATCH_SIZE` — ONNX inference batch size (default: 32; `onnx` feature only)
+/// - `EMBEDDING_BATCH_SIZE` — texts per embedding request, and the ONNX
+///   inference batch (default: 32)
 /// - `HUGGINGFACE_TOKENIZER` — HuggingFace tokenizer identifier
 ///
 /// `max_concurrent_data_points` is read only through the `embedding` config
@@ -677,14 +686,6 @@ impl EmbeddingConfig {
             config.batch_size = n;
         }
 
-        #[cfg(feature = "onnx")]
-        if let Ok(val) = std::env::var("EMBEDDING_ONNX_BATCH_SIZE")
-            && let Ok(n) = val.trim().parse::<usize>()
-            && n > 0
-        {
-            config.onnx.batch_size = n;
-        }
-
         // HUGGINGFACE_TOKENIZER
         if let Ok(val) = std::env::var("HUGGINGFACE_TOKENIZER") {
             let val = val.trim().to_string();
@@ -705,6 +706,21 @@ impl EmbeddingConfig {
         }
     }
 
+    /// The ONNX engine config this configuration builds: one batch knob, as
+    /// Python's fastembed engine (built with `EMBEDDING_BATCH_SIZE`,
+    /// `get_embedding_engine.py:127-133`), so the inference batch is
+    /// `batch_size` itself (a `0` keeps the ONNX default), and the in-flight
+    /// batches follow `max_concurrent_data_points`.
+    #[cfg(feature = "onnx")]
+    pub fn onnx_engine_config(&self) -> OnnxEmbeddingConfig {
+        let mut onnx = self.onnx.clone();
+        if self.batch_size > 0 {
+            onnx.batch_size = self.batch_size;
+        }
+        onnx.max_concurrent_data_points = self.max_concurrent_data_points;
+        onnx
+    }
+
     /// Create an embedding engine based on this configuration.
     ///
     /// Dispatches to the appropriate engine implementation based on
@@ -714,7 +730,8 @@ impl EmbeddingConfig {
         match self.effective_provider() {
             #[cfg(feature = "onnx")]
             EmbeddingProvider::Onnx | EmbeddingProvider::Fastembed => {
-                let engine = OnnxEmbeddingEngine::with_auto_download(self.onnx.clone()).await?;
+                let engine =
+                    OnnxEmbeddingEngine::with_auto_download(self.onnx_engine_config()).await?;
                 Ok(Arc::new(engine))
             }
             #[cfg(not(feature = "onnx"))]
@@ -784,6 +801,55 @@ mod tests {
         let engine = default.create_engine().await.expect("mock engine builds");
         assert_eq!(engine.batch_size(), 32);
         assert_eq!(engine.max_concurrent_batches(), 4);
+    }
+
+    /// SDK-1039 P23: under the ONNX provider the engine batches by
+    /// `embedding.batch_size` (no ONNX knob of its own, as Python's fastembed
+    /// engine) and spends `embedding.max_concurrent_data_points` on in-flight
+    /// batches; a `0` batch keeps the ONNX default.
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn onnx_engine_config_takes_the_embedding_batch_settings() {
+        let config = EmbeddingConfig {
+            provider: EmbeddingProvider::Onnx,
+            batch_size: 8,
+            max_concurrent_data_points: 40,
+            ..EmbeddingConfig::default()
+        };
+        let onnx = config.onnx_engine_config();
+        assert_eq!(onnx.batch_size, 8);
+        assert_eq!(onnx.max_concurrent_data_points, 40);
+
+        let zero = EmbeddingConfig {
+            provider: EmbeddingProvider::Onnx,
+            batch_size: 0,
+            ..EmbeddingConfig::default()
+        };
+        assert_eq!(
+            zero.onnx_engine_config().batch_size,
+            OnnxEmbeddingConfig::default().batch_size
+        );
+    }
+
+    /// SDK-1039 P23: `EMBEDDING_BATCH_SIZE` reaches the ONNX config through
+    /// the legacy `from_env` path too; `EMBEDDING_ONNX_BATCH_SIZE` is dead.
+    #[test]
+    #[cfg(feature = "onnx")]
+    #[serial]
+    fn from_env_onnx_batch_follows_embedding_batch_size() {
+        // SAFETY: see test_from_env_mock_embedding_true
+        unsafe {
+            std::env::set_var("EMBEDDING_PROVIDER", "onnx");
+            std::env::set_var("EMBEDDING_BATCH_SIZE", "8");
+            std::env::set_var("EMBEDDING_ONNX_BATCH_SIZE", "5");
+        }
+        let config = EmbeddingConfig::from_env();
+        unsafe {
+            std::env::remove_var("EMBEDDING_PROVIDER");
+            std::env::remove_var("EMBEDDING_BATCH_SIZE");
+            std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE");
+        }
+        assert_eq!(config.onnx_engine_config().batch_size, 8);
     }
 
     /// `{:?}` never prints the API key.
@@ -963,17 +1029,6 @@ mod tests {
         unsafe { std::env::remove_var("EMBEDDING_API_KEY") };
         unsafe { std::env::remove_var("LLM_API_KEY") };
         assert_eq!(config.api_key, Some("embed-key".to_string()));
-    }
-
-    #[test]
-    #[cfg(feature = "onnx")]
-    #[serial]
-    fn from_env_onnx_batch_size_override() {
-        // SAFETY: see test_from_env_mock_embedding_true
-        unsafe { std::env::set_var("EMBEDDING_ONNX_BATCH_SIZE", "8") };
-        let config = EmbeddingConfig::from_env();
-        unsafe { std::env::remove_var("EMBEDDING_ONNX_BATCH_SIZE") };
-        assert_eq!(config.onnx.batch_size, 8);
     }
 
     #[test]

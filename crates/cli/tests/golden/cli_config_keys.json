@@ -22,7 +22,6 @@
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
-    "cognify.data_per_batch",
     "cognify.extraction_strategy",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
@@ -49,7 +48,6 @@
     "embedding.mock",
     "embedding.model",
     "embedding.ollama.huggingface_tokenizer",
-    "embedding.onnx.batch_size",
     "embedding.onnx.model_path",
     "embedding.onnx.tokenizer_path",
     "embedding.openai_compatible.api_version",
@@ -286,7 +284,6 @@
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
     "cognify.stale_run_recovery_min_age_seconds",
-    "cognify.data_per_batch",
     "cognify.extraction_strategy",
     "cognify.cascade_rounds",
     "search.allow_cypher_query",
@@ -323,7 +320,6 @@
     "aws.bearer_token",
     "embedding.onnx.model_path",
     "embedding.onnx.tokenizer_path",
-    "embedding.onnx.batch_size",
     "embedding.ollama.huggingface_tokenizer",
     "embedding.openai_compatible.api_version"
   ],
@@ -2403,57 +2399,6 @@
   "set cognify.chunks_per_batch <- {\"a\":1}": {
     "err": true
   },
-  "set cognify.data_per_batch <- \"\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"1\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"s\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"true\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- -1": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "set cognify.data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "set cognify.data_per_batch <- 1.5": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 5000000000": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "set cognify.data_per_batch <- [1]": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- false": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- null": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- true": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- {\"a\":1}": {
-    "err": true
-  },
   "set cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },
@@ -2909,57 +2854,6 @@
     }
   },
   "set cognify.tolerate_summarization_failures <- {\"a\":1}": {
-    "err": true
-  },
-  "set data_per_batch <- \"\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"1\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"s\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"true\"": {
-    "err": true
-  },
-  "set data_per_batch <- -1": {
-    "err": true
-  },
-  "set data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "set data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "set data_per_batch <- 1.5": {
-    "err": true
-  },
-  "set data_per_batch <- 5000000000": {
-    "err": true
-  },
-  "set data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "set data_per_batch <- [1]": {
-    "err": true
-  },
-  "set data_per_batch <- false": {
-    "err": true
-  },
-  "set data_per_batch <- null": {
-    "err": true
-  },
-  "set data_per_batch <- true": {
-    "err": true
-  },
-  "set data_per_batch <- {\"a\":1}": {
     "err": true
   },
   "set data_root_directory <- \"\"": {
@@ -4153,57 +4047,6 @@
   "set embedding.ollama.huggingface_tokenizer <- {\"a\":1}": {
     "err": true
   },
-  "set embedding.onnx.batch_size <- \"\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"1\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"s\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"true\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- -1": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "set embedding.onnx.batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "set embedding.onnx.batch_size <- 1.5": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 5000000000": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "set embedding.onnx.batch_size <- [1]": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- false": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- null": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- true": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- {\"a\":1}": {
-    "err": true
-  },
   "set embedding.onnx.model_path <- \"\"": {
     "ok": {}
   },
@@ -5126,57 +4969,6 @@
     "err": true
   },
   "set embedding_model_path <- {\"a\":1}": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"1\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"s\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"true\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- -1": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "set embedding_onnx_batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "set embedding_onnx_batch_size <- 1.5": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 5000000000": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "set embedding_onnx_batch_size <- [1]": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- false": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- null": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- true": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- {\"a\":1}": {
     "err": true
   },
   "set embedding_provider <- \"\"": {
@@ -14701,13 +14493,6 @@
       "relational.port": 1
     }
   },
-  "unset cognify.data_per_batch": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
   "unset cognify.extraction_strategy": {
     "ok": {
       "chunk_size": 7,
@@ -14765,13 +14550,6 @@
     }
   },
   "unset cognify.tolerate_summarization_failures": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset data_per_batch": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -14938,13 +14716,6 @@
       "relational.port": 1
     }
   },
-  "unset embedding.onnx.batch_size": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
   "unset embedding.onnx.model_path": {
     "ok": {
       "chunk_size": 7,
@@ -15065,13 +14836,6 @@
     }
   },
   "unset embedding_model_path": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset embedding_onnx_batch_size": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

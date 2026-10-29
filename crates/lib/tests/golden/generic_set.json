@@ -2504,69 +2504,6 @@
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
   },
-  "cognify.data_per_batch <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- -1": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "cognify.data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "cognify.data_per_batch <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "cognify.data_per_batch <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- false": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- null": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- true": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
   "cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },
@@ -3126,69 +3063,6 @@
   "cognify.tolerate_summarization_failures <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognify.tolerate_summarization_failures"
-  },
-  "data_per_batch <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- -1": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "data_per_batch <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "data_per_batch <- [1]": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- false": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- null": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- true": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
   },
   "data_root_directory <- \"\"": {
     "ok": {
@@ -4640,69 +4514,6 @@
     "err": "TypeMismatch",
     "key": "embedding.ollama.huggingface_tokenizer"
   },
-  "embedding.onnx.batch_size <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- -1": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "embedding.onnx.batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "embedding.onnx.batch_size <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "embedding.onnx.batch_size <- [1]": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- false": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- null": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- true": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
   "embedding.onnx.model_path <- \"\"": {
     "ok": {}
   },
@@ -5831,69 +5642,6 @@
   "embedding_model_path <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "embedding_model_path"
-  },
-  "embedding_onnx_batch_size <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- -1": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "embedding_onnx_batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "embedding_onnx_batch_size <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "embedding_onnx_batch_size <- [1]": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- false": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- null": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- true": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
   },
   "embedding_provider <- \"\"": {
     "ok": {
