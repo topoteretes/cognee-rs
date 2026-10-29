@@ -80,6 +80,11 @@ audio-loader = ["dep:cognee-llm"]
 # Every other test target here is still auto-discovered; listing these does not
 # opt out of that (`autotests` stays at its edition-2018+ default of `true`).
 [[test]]
+name = "image_audio_add_loaders"
+path = "tests/image_audio_add_loaders.rs"
+required-features = ["image-loader", "audio-loader"]
+
+[[test]]
 name = "html_extraction"
 path = "tests/html_extraction.rs"
 required-features = ["html-loader"]
