@@ -140,7 +140,8 @@ impl PyCognee {
     /// - ``auto_route`` / ``autoRoute`` — bool (default ``False``)
     /// - ``session_id`` / ``sessionId`` — session UUID string
     /// - ``scope`` — ``str`` or ``list[str]``:
-    ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"`` | ``"graph_context"``
+    ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"``
+    ///   (``"graph_context"`` is a deprecated alias of ``"graph"``)
     /// - ``neighborhood_depth`` / ``neighborhoodDepth``,
     ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK`` — as for ``search``
     #[pyo3(signature = (query, opts=None))]

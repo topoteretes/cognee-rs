@@ -216,7 +216,10 @@ export type SearchTypeString =
   | "GRAPH_REPORT"
   | "HYBRID_COMPLETION";
 
-/** Recall scope wire names (snake_case; "all" expands to all four concrete scopes). */
+/**
+ * Recall scope wire names (snake_case; "all" expands to the three concrete
+ * scopes). "graph_context" is a deprecated alias of "graph".
+ */
 export type RecallScopeString =
   | "auto"
   | "graph"
@@ -412,12 +415,12 @@ export interface CogneeSearchResponse {
 /**
  * A single recall result item. Mirrors `cognee_search::RecallItem` (Serialize).
  *
- * `source` is one of `"session"`, `"graph"`, `"trace"`, `"graph_context"`
+ * `source` is one of `"session"`, `"graph"`, `"trace"`
  * (snake_case, matching the `RecallSource` serde rename).
  * `content` is a heterogeneous JSON value whose shape depends on the source.
  */
 export interface CogneeRecallItem {
-  source: "session" | "graph" | "trace" | "graph_context";
+  source: "session" | "graph" | "trace";
   content: Record<string, unknown>;
   score: number;
 }

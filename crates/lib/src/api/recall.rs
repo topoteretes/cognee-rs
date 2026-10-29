@@ -10,8 +10,8 @@
 //! `cognee.memory.entries.normalize_scope()`.
 //!
 //! As of LIB-08 the scope-routing primitives (`RecallScope`, `RecallSource`,
-//! `ScopeInput`, `RecallItem`, `normalize_scope`) and the four source helpers
-//! (`search_session`, `search_trace`, `fetch_graph_context`, `run_graph`) live
+//! `ScopeInput`, `RecallItem`, `normalize_scope`) and the source helpers
+//! (`search_session`, `search_trace`, `run_graph`) live
 //! in `cognee_search::recall_scope`. They are re-exported here so existing
 //! call sites (`api::mod.rs`, `lib.rs::prelude`, integration tests) compile
 //! unchanged.
@@ -20,7 +20,7 @@ use cognee_search::observability::{
     COGNEE_RECALL_SCOPE, COGNEE_RECALL_SOURCE, COGNEE_RESULT_COUNT, COGNEE_SEARCH_QUERY,
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
-use cognee_search::recall_scope::{fetch_graph_context, run_graph, search_session, search_trace};
+use cognee_search::recall_scope::{run_graph, search_session, search_trace};
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
@@ -174,9 +174,6 @@ pub async fn recall(
                     .await
                     .map_err(|e| ApiError::Search(e.to_string()))?
             }
-            RecallScope::GraphContext => fetch_graph_context(session_id, user_id, session_manager)
-                .await
-                .map_err(|e| ApiError::Search(e.to_string()))?,
             RecallScope::Graph => {
                 let (items, used_type, was_auto, response) = run_graph(
                     query_text,
