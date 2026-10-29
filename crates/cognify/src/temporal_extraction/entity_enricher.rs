@@ -94,7 +94,7 @@ impl TemporalEntityEnricher {
                 Some(options),
             )
             .await
-            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+            .map_err(CognifyError::from_fact_extraction_llm)?;
 
         // Match enriched entries back to events by name (same approach as Python).
         let enriched_map: HashMap<String, Vec<EventAttribute>> = enriched

@@ -213,7 +213,17 @@ async fn execute_stages<E: StageExecutor>(
             }
         };
         let errored = run.result.status == StageStatus::Errored;
-        let budget_exhausted = errored && run.budget_exhausted;
+        // Python's `StageResult.budget_exhausted`: the stage's typed signal,
+        // else its recorded error text (`is_budget_exhausted_record`), so a
+        // stage that could only render the provider's failure still stops
+        // the run.
+        let budget_exhausted = errored
+            && (run.budget_exhausted
+                || run
+                    .result
+                    .error
+                    .as_deref()
+                    .is_some_and(cognee_llm::is_budget_exhausted_message));
         if errored {
             warn!(
                 stage = stage.name(),
@@ -661,6 +671,43 @@ mod tests {
             result.stages[2..]
                 .iter()
                 .all(|s| s.reason.as_deref() == Some(REASON_BUDGET_EXHAUSTED))
+        );
+    }
+
+    // Python `StageResult.budget_exhausted` falls back to the recorded error
+    // (`is_budget_exhausted_record`): a stage that could only render the
+    // provider's 402 — here `feedback_weights`, which reports no typed flag —
+    // still stops the run.
+    #[tokio::test]
+    async fn a_rendered_budget_error_stops_the_run() {
+        let mut executor = Scripted::default().with(
+            StageKind::FeedbackWeights,
+            Script::Error("graph write failed: LLM payment required: credit exhausted"),
+        );
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(end, LoopEnd::Finished);
+        assert_eq!(executor.calls, ["feedback_weights"]);
+        assert!(
+            result.stages[1..]
+                .iter()
+                .all(|s| s.reason.as_deref() == Some(REASON_BUDGET_EXHAUSTED))
+        );
+
+        // A LiteLLM budget sentence, in a fatal stage: aborts with the reason.
+        let mut executor = Scripted::default().with(
+            StageKind::PersistSessionQa,
+            Script::Error("Budget has been exceeded! Current cost: 2.0, Max budget: 1.0"),
+        );
+        let (result, end) = run_loop(&mut executor, true, &[]).await;
+        assert_eq!(
+            end,
+            LoopEnd::Aborted {
+                budget_exhausted: true
+            }
+        );
+        assert_eq!(
+            result.stages[2].reason.as_deref(),
+            Some(REASON_BUDGET_EXHAUSTED)
         );
     }
 

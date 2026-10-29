@@ -91,3 +91,87 @@ impl LlmError {
         }
     }
 }
+
+/// LiteLLM's three budget-rejection sentences, matched whole — Python's
+/// `_BUDGET_SENTENCE_RE` (`cognee/infrastructure/llm/exceptions.py`):
+///
+/// 1. `Budget has been exceeded! [Scope=...] Current cost: X, Max budget: Y`
+/// 2. `ExceededBudget: [End ]User=<id> over budget. Spend=X, Budget=Y`
+/// 3. `LiteLLM {Virtual Key|End User}: <id>, exceeded budget for model=<m>`
+///
+/// Matching the whole sentence rather than fragments keeps a document that
+/// merely mentions a budget from classifying; the bounded gaps keep the scan
+/// linear.
+static BUDGET_SENTENCE_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    #[allow(clippy::expect_used, reason = "the pattern is a compile-time constant")]
+    regex::Regex::new(concat!(
+        r"(?is)Budget has been exceeded!.{0,200}?Max budget:\s*[\d.]+",
+        r"|ExceededBudget:.{0,200}?Budget=[\d.]+",
+        r"|LiteLLM (?:Virtual Key|End User):.{0,200}?exceeded budget for model=\S{1,100}",
+    ))
+    .expect("budget sentence pattern compiles")
+});
+
+/// The rendered prefixes of this crate's and the cognify crate's typed
+/// payment-required errors (`LlmError::PaymentRequired`,
+/// `CognifyError::PaymentRequired`). A stage that had to render one into text
+/// still classifies, as Python's `is_budget_exhausted_record` matches the
+/// recorded `LLMPaymentRequiredError` class name.
+const PAYMENT_REQUIRED_RENDERINGS: [&str; 2] = ["LLM payment required: ", "Payment required: "];
+
+/// Whether a *rendered* failure signals LLM budget or payment exhaustion —
+/// Python's `is_budget_exhausted_record`, for an error that only survived as
+/// text (a stage result's `error`, a cognify failure-report entry).
+///
+/// Two signals: the rendering of a typed payment-required error, then one of
+/// LiteLLM's whole budget sentences.
+#[must_use]
+pub fn is_budget_exhausted_message(text: &str) -> bool {
+    PAYMENT_REQUIRED_RENDERINGS
+        .iter()
+        .any(|prefix| text.contains(prefix))
+        || BUDGET_SENTENCE_RE.is_match(text)
+}
+
+#[cfg(test)]
+mod budget_message_tests {
+    use super::*;
+
+    #[test]
+    fn typed_renderings_classify() {
+        assert!(is_budget_exhausted_message(
+            &LlmError::PaymentRequired("out of credit".into()).to_string()
+        ));
+        assert!(is_budget_exhausted_message(
+            "cognify of the trace feedback failed: LLM payment required: 402"
+        ));
+        assert!(!is_budget_exhausted_message(
+            &LlmError::RateLimitExceeded("slow down".into()).to_string()
+        ));
+    }
+
+    // Python `test_budget_sentence_*`: the three LiteLLM shapes, whole.
+    #[test]
+    fn litellm_sentences_classify() {
+        for text in [
+            "Budget has been exceeded! Current cost: 1.2, Max budget: 1.0",
+            "ExceededBudget: User=abc over budget. Spend=3.1, Budget=3.0",
+            "LiteLLM Virtual Key: sk-123, exceeded budget for model=gpt-4o",
+            "wrapped: litellm.BudgetExceededError: budget has been exceeded! \
+             [Scope=team] Current cost: 9, max budget: 5",
+        ] {
+            assert!(is_budget_exhausted_message(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn fragments_do_not_classify() {
+        for text in [
+            "the team exceeded its budget last quarter",
+            "Budget has been exceeded! but no figures follow",
+            "Max budget: 5",
+        ] {
+            assert!(!is_budget_exhausted_message(text), "{text}");
+        }
+    }
+}

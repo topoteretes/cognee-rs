@@ -60,6 +60,9 @@ base64.workspace = true
 # Error handling
 thiserror.workspace = true
 
+# Budget-exhaustion sentence matching (`is_budget_exhausted_message`)
+regex.workspace = true
+
 # HTTP client (for API-based implementations)
 reqwest = { workspace = true, features = ["multipart"] }
 # Version floors for reqwest's compiled-in TLS roots (see the workspace note).

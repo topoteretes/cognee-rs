@@ -1218,13 +1218,16 @@ pub async fn extract_graph_from_data(
                             chunk_id = %chunk_id,
                             "graph extraction failed for chunk: {e}"
                         );
-                        failures.record(StageFailure {
-                            stage: FailureStage::GraphExtraction,
-                            data_id: document_id,
-                            chunk_id: Some(chunk_id),
-                            error: e.to_string(),
-                            fails_item: true,
-                        });
+                        failures.record_error(
+                            StageFailure {
+                                stage: FailureStage::GraphExtraction,
+                                data_id: document_id,
+                                chunk_id: Some(chunk_id),
+                                error: e.to_string(),
+                                fails_item: true,
+                            },
+                            &e,
+                        );
                         batch_failed = true;
                     }
                 }
@@ -2014,13 +2017,16 @@ pub async fn extract_dynamic_graphs_from_data(
                 }),
                 Err(error) => {
                     warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
-                    failures.record(StageFailure {
-                        stage: FailureStage::GraphExtraction,
-                        data_id,
-                        chunk_id: Some(chunk_id),
-                        error: error.to_string(),
-                        fails_item: true,
-                    });
+                    failures.record_error(
+                        StageFailure {
+                            stage: FailureStage::GraphExtraction,
+                            data_id,
+                            chunk_id: Some(chunk_id),
+                            error: error.to_string(),
+                            fails_item: true,
+                        },
+                        &error,
+                    );
                     batch_failed = true;
                 }
             }
@@ -2292,13 +2298,16 @@ pub async fn summarize_text(
                 // tolerance on the failure is still listed and still counted in
                 // the total, but it stays out of `failed_items`, out of the
                 // chunk-failure ratio, and out of every fatality decision.
-                failures.record(StageFailure {
-                    stage: FailureStage::Summarization,
-                    data_id,
-                    chunk_id: Some(*chunk_id),
-                    error: error.to_string(),
-                    fails_item: !config.tolerate_summarization_failures,
-                });
+                failures.record_error(
+                    StageFailure {
+                        stage: FailureStage::Summarization,
+                        data_id,
+                        chunk_id: Some(*chunk_id),
+                        error: error.to_string(),
+                        fails_item: !config.tolerate_summarization_failures,
+                    },
+                    error,
+                );
             }
             // A file whose summaries were never dispatched has not been fully
             // processed, so it must not end the run marked complete. This is
@@ -3007,13 +3016,16 @@ pub async fn extract_temporal_events(
                         chunk_id = %chunk_id,
                         "temporal event extraction failed for chunk: {e}"
                     );
-                    failures.record(StageFailure {
-                        stage: FailureStage::TemporalExtraction,
-                        data_id: document_id,
-                        chunk_id: Some(chunk_id),
-                        error: e.to_string(),
-                        fails_item: true,
-                    });
+                    failures.record_error(
+                        StageFailure {
+                            stage: FailureStage::TemporalExtraction,
+                            data_id: document_id,
+                            chunk_id: Some(chunk_id),
+                            error: e.to_string(),
+                            fails_item: true,
+                        },
+                        &e,
+                    );
                     extraction_failed_chunks.insert(chunk_id);
                     batch_failed = true;
                 }
@@ -3068,13 +3080,16 @@ pub async fn extract_temporal_events(
                         chunk_id = %chunk_id,
                         "temporal entity enrichment failed for the batch this chunk fed: {e}"
                     );
-                    failures.record(StageFailure {
-                        stage: FailureStage::TemporalEnrichment,
-                        data_id: *document_id,
-                        chunk_id: Some(*chunk_id),
-                        error: e.to_string(),
-                        fails_item: true,
-                    });
+                    failures.record_error(
+                        StageFailure {
+                            stage: FailureStage::TemporalEnrichment,
+                            data_id: *document_id,
+                            chunk_id: Some(*chunk_id),
+                            error: e.to_string(),
+                            fails_item: true,
+                        },
+                        &e,
+                    );
                 }
                 batch_failed = true;
             }

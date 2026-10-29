@@ -272,6 +272,13 @@ pub struct FailureReport {
     total_chunks: usize,
     total_items: usize,
     cap: usize,
+    /// At least one recorded failure was an exhausted LLM budget (HTTP 402,
+    /// [`crate::CognifyError::PaymentRequired`]). The entries render their
+    /// errors as text, so the typed signal is kept here for callers that
+    /// stop on it — the improve orchestrator (Python's
+    /// `StageResult.budget_exhausted`).
+    #[serde(default)]
+    budget_exhausted: bool,
 }
 
 impl Default for FailureReport {
@@ -286,6 +293,7 @@ impl Default for FailureReport {
             total_chunks: 0,
             total_items: 0,
             cap: FailurePolicy::DEFAULT_REPORT_CAP,
+            budget_exhausted: false,
         }
     }
 }
@@ -324,6 +332,23 @@ impl FailureReport {
         if self.entries.len() < self.cap {
             self.entries.push(failure);
         }
+    }
+
+    /// Record one failure caused by `error`, noting an exhausted LLM budget.
+    ///
+    /// [`Self::record`] for a site that still holds the typed error: the
+    /// entry keeps only its rendering, so the budget signal is lifted onto the
+    /// report before it is lost.
+    pub fn record_error(&mut self, failure: StageFailure, error: &crate::CognifyError) {
+        if error.is_budget_exhausted() {
+            self.budget_exhausted = true;
+        }
+        self.record(failure);
+    }
+
+    /// Whether any recorded failure was an exhausted LLM budget.
+    pub fn budget_exhausted(&self) -> bool {
+        self.budget_exhausted
     }
 
     /// Drop from the ratio numerator every chunk outside `keep`.
@@ -397,6 +422,7 @@ impl FailureReport {
     pub fn absorb(&mut self, other: &FailureReport) {
         self.total += other.total;
         self.summarization_failures += other.summarization_failures;
+        self.budget_exhausted |= other.budget_exhausted;
         // Unioned, not added: the two branches work the same chunks, so the
         // same `chunk_id` can appear on both sides.
         self.failed_chunks
@@ -1172,5 +1198,39 @@ mod tests {
         let mut right = without;
         right.absorb(&with_totals);
         assert_eq!((right.total_items(), right.total_chunks()), (7, 21));
+    }
+
+    // An exhausted budget survives the rendering of the entry: the report
+    // keeps the typed signal, a sibling's absorb carries it, and the run's
+    // `RunFailed` classifies as budget exhaustion.
+    #[test]
+    fn record_error_lifts_the_budget_signal_onto_the_report() {
+        let mut report = FailureReport::default();
+        report.record_error(
+            item_failure(FailureStage::GraphExtraction, Uuid::new_v4(), None),
+            &crate::CognifyError::LlmError("timeout".into()),
+        );
+        assert!(!report.budget_exhausted());
+
+        let mut sibling = FailureReport::default();
+        sibling.record_error(
+            item_failure(FailureStage::Summarization, Uuid::new_v4(), None),
+            &crate::CognifyError::PaymentRequired("402".into()),
+        );
+        assert!(sibling.budget_exhausted());
+        report.absorb(&sibling);
+        assert!(report.budget_exhausted());
+        assert_eq!(report.total(), 2);
+
+        let run_failed = crate::CognifyError::RunFailed {
+            report: Box::new(report),
+        };
+        assert!(run_failed.is_budget_exhausted());
+        assert!(
+            !crate::CognifyError::RunFailed {
+                report: Box::default()
+            }
+            .is_budget_exhausted()
+        );
     }
 }

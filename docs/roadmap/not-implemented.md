@@ -99,12 +99,6 @@ Partial stages:
   (SDK-1047 / SDK-1049): every run persists and distills the sessions' full Q&A, and
   `distill_sessions` reports no `entries_uncurated` count.
 
-- **Budget exhaustion inside cognify** — an exhausted LLM budget is recognised from the typed
-  `LlmError::PaymentRequired` (carried as `CognifyError::PaymentRequired`): the distillation
-  curator/writer calls and any cognify step that returns the LLM error directly. A budget failure
-  that cognify's per-chunk failure report records only as text is not recognised, so that stage
-  errors (aborting the run for `persist_session_qa`) without the `budget_exhausted` reason.
-
 ## HTTP server
 
 `cognee-http-server` is not in this repository; its known gaps (server, notebook

@@ -70,7 +70,7 @@ pub mod unconfigured;
 pub use adapters::{AnthropicAdapter, OpenAIAdapter};
 pub use config::{LlmConfig, LlmProvider};
 pub use dynamic_model::DynamicGraphModel;
-pub use error::{LlmError, LlmResult};
+pub use error::{LlmError, LlmResult, is_budget_exhausted_message};
 pub use factory::build_openai_compatible_adapter;
 pub use llm_trait::{Llm, LlmExt};
 pub use responses_client::{OpenAIResponsesClient, ResponsesClient, ResponsesRequest};

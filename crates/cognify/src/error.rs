@@ -120,9 +120,24 @@ impl CognifyError {
         }
     }
 
-    /// Whether this error signals an exhausted LLM budget.
+    /// [`Self::from_llm`] for the extractors that report their LLM failures
+    /// as [`Self::FactExtractionError`]: an exhausted budget stays typed.
+    pub fn from_fact_extraction_llm(error: cognee_llm::LlmError) -> Self {
+        match error {
+            cognee_llm::LlmError::PaymentRequired(message) => Self::PaymentRequired(message),
+            other => Self::FactExtractionError(other.to_string()),
+        }
+    }
+
+    /// Whether this error signals an exhausted LLM budget: the typed
+    /// [`Self::PaymentRequired`], or a run that failed with a budget failure
+    /// among the ones its report collected.
     pub fn is_budget_exhausted(&self) -> bool {
-        matches!(self, Self::PaymentRequired(_))
+        match self {
+            Self::PaymentRequired(_) => true,
+            Self::RunFailed { report } => report.budget_exhausted(),
+            _ => false,
+        }
     }
 }
 

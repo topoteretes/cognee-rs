@@ -169,6 +169,29 @@ impl From<StageResult> for StageRun {
     }
 }
 
+/// A stage-internal failure: its rendered message, and whether it was an
+/// exhausted LLM budget (kept typed until the message is all that is left).
+#[derive(Debug)]
+struct StageFailure {
+    message: String,
+    budget_exhausted: bool,
+}
+
+impl From<String> for StageFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            budget_exhausted: false,
+        }
+    }
+}
+
+impl From<&str> for StageFailure {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
+}
+
 /// The two halves of a stage the orchestrator drives: its own gate and its
 /// run. Split out so the loop can be tested with scripted stages.
 pub(crate) trait StageExecutor {
@@ -250,7 +273,7 @@ impl StageExecutor for ImproveStages<'_> {
         match stage {
             StageKind::FeedbackWeights => self.feedback_weights().await.into(),
             StageKind::PersistSessionQa => self.persist_session_qa().await,
-            StageKind::PersistAgentTraces => self.persist_agent_traces().await.into(),
+            StageKind::PersistAgentTraces => self.persist_agent_traces().await,
             StageKind::DistillSessions => self.distill_sessions().await,
             StageKind::BuildTruthSubspace => self.build_truth_subspace().await.into(),
             StageKind::GlobalContextIndex => self.global_context_index().await.into(),
@@ -402,10 +425,10 @@ impl ImproveStages<'_> {
     /// cognified as one document under the `agent_trace_feedbacks` node-set.
     /// There is no per-session trace watermark yet (SDK-1047), so `windows`
     /// counts the sessions that contributed text.
-    async fn persist_agent_traces(&mut self) -> StageResult {
+    async fn persist_agent_traces(&mut self) -> StageRun {
         const STAGE: &str = StageKind::PersistAgentTraces.name();
         let Some(manager) = self.session_manager.as_ref() else {
-            return StageResult::errored(STAGE, "session manager is required");
+            return StageResult::errored(STAGE, "session manager is required").into();
         };
         let user_id = self.owner_id.to_string();
         let mut trace_texts: Vec<String> = Vec::new();
@@ -421,7 +444,8 @@ impl ImproveStages<'_> {
                         STAGE,
                         format!("could not read the trace steps of session {sid}: {e}"),
                     )
-                    .with_counts([("sessions", self.sessions()), ("windows", 0)]);
+                    .with_counts([("sessions", self.sessions()), ("windows", 0)])
+                    .into();
                 }
             };
             let before = trace_texts.len();
@@ -441,7 +465,7 @@ impl ImproveStages<'_> {
             }
         }
         if trace_texts.is_empty() {
-            return StageResult::already_completed(STAGE, REASON_NO_NEW_TRACE_STEPS);
+            return StageResult::already_completed(STAGE, REASON_NO_NEW_TRACE_STEPS).into();
         }
 
         let counts = [("sessions", self.sessions()), ("windows", count(windows))];
@@ -451,15 +475,18 @@ impl ImproveStages<'_> {
                     trace_items = trace_texts.len(),
                     windows, "improve: agent trace feedback persisted"
                 );
-                StageResult::completed(STAGE).with_counts(counts)
+                StageResult::completed(STAGE).with_counts(counts).into()
             }
-            Err(e) => StageResult::errored(STAGE, e).with_counts(counts),
+            Err(e) => StageRun {
+                result: StageResult::errored(STAGE, e.message).with_counts(counts),
+                budget_exhausted: e.budget_exhausted,
+            },
         }
     }
 
-    async fn cognify_trace_texts(&mut self, text: String) -> Result<(), String> {
+    async fn cognify_trace_texts(&mut self, text: String) -> Result<(), StageFailure> {
         let (Some(pipeline), Some(database)) = (self.add_pipeline, self.db.clone()) else {
-            return Err("add pipeline and relational database are required".to_string());
+            return Err("add pipeline and relational database are required".into());
         };
         let add_params = AddParams {
             node_set: Some(vec![AGENT_TRACE_FEEDBACKS_NODE_SET.to_string()]),
@@ -474,16 +501,19 @@ impl ImproveStages<'_> {
                 &add_params,
             )
             .await
-            .map_err(|e| format!("add of the trace feedback failed: {e}"))?;
+            .map_err(|e| StageFailure::from(format!("add of the trace feedback failed: {e}")))?;
         if data_rows.is_empty() {
-            return Err("add of the trace feedback returned no rows".to_string());
+            return Err("add of the trace feedback returned no rows".into());
         }
-        let dataset_id = self
-            .dataset_id()
-            .await?
-            .ok_or_else(|| format!("dataset '{}' not found after add", self.dataset_name))?;
+        let dataset_id = self.dataset_id().await?.ok_or_else(|| {
+            StageFailure::from(format!(
+                "dataset '{}' not found after add",
+                self.dataset_name
+            ))
+        })?;
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
+        let thread_pool = thread_pool()?;
         cognee_cognify::tasks::cognify(
             data_rows,
             dataset_id,
@@ -497,13 +527,16 @@ impl ImproveStages<'_> {
             Arc::clone(&self.embedding_engine),
             database,
             pipeline_run_repo,
-            thread_pool()?,
+            thread_pool,
             Arc::clone(&self.ontology_resolver),
             self.cognify_config,
         )
         .await
         .map(|_| ())
-        .map_err(|e| format!("cognify of the trace feedback failed: {e}"))
+        .map_err(|e| StageFailure {
+            budget_exhausted: e.is_budget_exhausted(),
+            message: format!("cognify of the trace feedback failed: {e}"),
+        })
     }
 
     /// Stage 5: distill each session's Q&A into lessons (`session_learnings`).

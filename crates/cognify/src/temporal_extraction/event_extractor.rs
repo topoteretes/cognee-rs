@@ -68,7 +68,7 @@ impl TemporalEventExtractor {
                 Some(options),
             )
             .await
-            .map_err(|e| CognifyError::FactExtractionError(e.to_string()))?;
+            .map_err(CognifyError::from_fact_extraction_llm)?;
 
         let events = raw
             .events
