@@ -834,6 +834,12 @@ mod tests {
         assert!(!vendored.contains("Node Descriptions"));
         assert!(!vendored.contains("Property Format"));
         assert!(!vendored.contains(r#""profession" property"#));
+        // Python's own guard (`test_generate_graph_prompt_does_not_request_properties`,
+        // cognee/tests/unit/shared/test_data_models.py, 71d702212): the schema has
+        // no field to carry key-value properties, so the prompt never asks for one.
+        let lower = vendored.to_lowercase();
+        assert!(!lower.contains("property"), "prompt asks for a property");
+        assert!(!lower.contains("properties"), "prompt asks for properties");
     }
 
     // ----- Multi-chunk batching (issue #19) -----
