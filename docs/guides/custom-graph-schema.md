@@ -244,8 +244,9 @@ differs.
 Only the single-pass LLM extractor honours a custom schema: `validate()` rejects
 `graph_schema` together with a `graph_backend` or the `cascade` extraction
 strategy, as Python raises for a custom `graph_model` with a non-LLM extractor.
-Finally, `validate()` compiles the schema, so an invalid one fails before any document
-is classified or chunked, as Python builds the model class before running.
+Finally, `validate()` compiles the schema, so an invalid one fails before any
+document is classified or chunked, as Python builds the model class before
+running.
 
 ### Example (programmatic)
 
@@ -466,11 +467,12 @@ or environment variable for either.
 an omitted or empty `graph_model`. Every entry point validates before any side
 effect, so `add-and-cognify` adds nothing when the options are invalid: an
 attachment other than `"direct"` / `"all"` (case-sensitive, as Python compares
-it), an attachment without a schema, a schema that does not compile, or a
-schema combined with a graph backend or the `cascade` strategy is a validation error (exit code 2 in the CLI, `VALIDATION_ERROR` in
-the bindings). In the bindings a wrongly-typed value for any known cognify
-option is an error too, and an unknown option is logged as a warning, as
-Python's `cognify()` forwards unknown keywords instead of raising.
+it), an attachment without a schema, a schema that does not compile, or a schema
+combined with a graph backend or the `cascade` strategy is a validation error
+(exit code 2 in the CLI, `VALIDATION_ERROR` in the bindings). In the bindings a
+wrongly-typed value for any known cognify option is an error too, and an unknown
+option is logged as a warning, as Python's `cognify()` forwards unknown keywords
+instead of raising.
 
 ### Ownership and deletion
 
