@@ -67,6 +67,18 @@ pub struct AddParams {
     /// parameter. Defaults to `false`; callers that want Python-parity should
     /// set this to `true`.
     pub incremental_loading: bool,
+
+    /// Pin the one item of the call to an existing data id (Python's
+    /// `DataItem(data, data_id=...)`, which `update()` uses). The id is
+    /// resolved first (exact, then `legacy_id`; see
+    /// [`IngestDb::resolve_data_id`]) and an unknown id is kept as the new
+    /// row's id. A pinned item skips the content-hash lookup and refreshes the
+    /// row in place: name, locations, extensions, MIME types, loader, both
+    /// hashes, size and metadata (a PATCH: absent keeps the stored value), and
+    /// the cognify completion marker is cleared when the content changed. A
+    /// row that belongs to another dataset is refused. A pinned add takes
+    /// exactly one input (`update()` replaces one document).
+    pub pinned_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +122,10 @@ pub struct ProcessedInput {
     pub node_set: Option<Vec<String>>,
     /// Importance weight for ranking (0.0 to 1.0).
     pub importance_weight: Option<f64>,
+    /// The call's [`AddParams::pinned_id`]: when set, [`persist_data`]
+    /// refreshes (or creates under that id) the pinned row instead of
+    /// deduplicating by content hash.
+    pub pinned_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +414,7 @@ pub async fn process_input_with_loaders(
         external_metadata,
         node_set: None,
         importance_weight: None,
+        pinned_id: None,
     })
 }
 
@@ -646,22 +663,49 @@ pub async fn persist_data_with_acl_and_locks(
     // compare-and-swap on `updated_at`, which neither SQLite nor the
     // `IngestDb` trait offers today; it is not worth a cross-process lock for
     // a refresh whose inputs are the caller's own re-add.
-    let _data_guard = data_id_locks()
-        .lock(content_lock_key(
-            dataset.id,
-            &processed.content_hash,
-            owner_id,
-            tenant_id,
-        ))
-        .await;
+    //
+    // A pinned item has an identity instead of a lookup: it is locked by its
+    // id, and skips the dedup lookup below.
+    let _data_guard = match processed.pinned_id {
+        Some(pin) => data_id_locks().lock(pin).await,
+        None => {
+            data_id_locks()
+                .lock(content_lock_key(
+                    dataset.id,
+                    &processed.content_hash,
+                    owner_id,
+                    tenant_id,
+                ))
+                .await
+        }
+    };
+
+    // A pinned item refreshes its row in place (see
+    // `persist_pinned_row`); a pin that matches no row creates one under the
+    // pinned id.
+    let mut new_row_id = processed.data_id;
+    if let Some(pin) = processed.pinned_id {
+        let resolved = database
+            .resolve_data_id(dataset.id, pin)
+            .await?
+            .unwrap_or(pin);
+        if let Some(row) = database.get_data(resolved).await? {
+            return persist_pinned_row(processed, database, dataset.id, row).await;
+        }
+        new_row_id = resolved;
+    }
 
     // Dedup is a lookup, not an identity (Python `identify_many`): the row
     // holding this content in this dataset for this owner and tenant, if any.
     // The same content in another dataset is another row.
-    if let Some(mut existing_data) = database
-        .find_data_in_dataset(dataset.id, &processed.content_hash, owner_id, tenant_id)
-        .await?
-    {
+    let existing = if processed.pinned_id.is_some() {
+        None
+    } else {
+        database
+            .find_data_in_dataset(dataset.id, &processed.content_hash, owner_id, tenant_id)
+            .await?
+    };
+    if let Some(mut existing_data) = existing {
         let data_id = existing_data.id;
         // Python's `ingest_data` update branch rewrites the existing row's
         // `node_set` and `external_metadata` from the re-add's values. Only
@@ -731,7 +775,7 @@ pub async fn persist_data_with_acl_and_locks(
         return Ok(existing_data);
     }
 
-    let data_id = processed.data_id;
+    let data_id = new_row_id;
     let external_metadata = match node_set {
         Some(names) => {
             with_node_set_in_external_metadata(processed.external_metadata.as_deref(), names)
@@ -782,6 +826,169 @@ pub async fn persist_data_with_acl_and_locks(
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Refresh the pinned row `row` in place with the re-ingested item — the
+/// existing-row branch of Python's `ingest_data` for a pinned `DataItem`
+/// (`ingest_data.py:517-581`).
+///
+/// A row of another dataset is refused and never mutated. Everything the item
+/// describes is rewritten (name, locations, extensions, MIME types, loader,
+/// both hashes, size, owner, tenant); the metadata and node set are a PATCH
+/// ([`merge_pinned_row_metadata`]); `label` and `importance_weight` follow the
+/// same rule (absent keeps the stored value). The cognify completion marker is
+/// cleared only when the content changed.
+async fn persist_pinned_row(
+    processed: &ProcessedInput,
+    database: &dyn IngestDb,
+    dataset_id: Uuid,
+    mut row: Data,
+) -> Result<Data, Box<dyn std::error::Error>> {
+    if row.dataset_id != Some(dataset_id) {
+        info!(
+            data_id = %row.id,
+            owning_dataset = ?row.dataset_id,
+            pinned_from = %dataset_id,
+            "foreign pin refused"
+        );
+        return Err(IngestionError::PinnedIdNotInDataset {
+            data_id: row.id,
+            dataset_id,
+        }
+        .into());
+    }
+
+    let content_changed = row.content_hash != processed.content_hash;
+    let requested_node_set = processed.node_set.as_deref();
+    let (external_metadata, row_node_set) = merge_pinned_row_metadata(
+        row.external_metadata.as_deref(),
+        row.node_set.as_deref(),
+        processed.external_metadata.as_deref(),
+        requested_node_set,
+        content_changed,
+    )?;
+
+    row.name = processed.name.clone();
+    row.raw_data_location = processed.raw_data_uri.clone();
+    row.original_data_location = processed.original_location.clone();
+    row.extension = processed.stored_extension.clone();
+    row.mime_type = processed.stored_mime_type.clone();
+    row.original_extension = Some(processed.original_extension.clone());
+    row.original_mime_type = Some(processed.original_mime_type.clone());
+    row.loader_engine = Some(processed.loader_engine.clone());
+    row.owner_id = processed.owner_id;
+    row.content_hash = processed.content_hash.clone();
+    row.raw_content_hash = Some(processed.raw_content_hash.clone());
+    row.data_size = processed.data_size;
+    row.tenant_id = processed.tenant_id;
+    row.external_metadata = external_metadata;
+    row.node_set = row_node_set;
+    if let Some(label) = &processed.label {
+        row.label = Some(label.clone());
+    }
+    if let Some(weight) = processed.importance_weight {
+        row.importance_weight = Some(weight);
+    }
+    if content_changed {
+        row.pipeline_status = None;
+    }
+
+    let saved = database.update_data(row).await?;
+    info!(data_id = %saved.id, content_changed, "pinned row refreshed");
+    Ok(saved)
+}
+
+/// The `external_metadata` and `node_set` column a re-ingested (pinned) row
+/// ends up with: Python's `merge_existing_row_metadata`
+/// (`ingest_data.py:61-113`), a PATCH.
+///
+/// * `item_metadata` is what the item carries, already holding its
+///   `_cognee.source_uri` ([`merge_external_metadata`]). An empty object means
+///   the item brought none, so the stored metadata is kept; anything else
+///   replaces it.
+/// * When the content changed, a stored `_cognee.source_uri` described the
+///   old content, so it is dropped unless the item carries a new one.
+/// * `node_set`: `None` keeps the stored one, a list replaces it (the union of
+///   the call's and the item's own), an empty one clears it. It is mirrored
+///   under `external_metadata["node_set"]`.
+fn merge_pinned_row_metadata(
+    stored_metadata: Option<&str>,
+    stored_node_set: Option<&str>,
+    item_metadata: Option<&str>,
+    node_set: Option<&[String]>,
+    content_changed: bool,
+) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    let as_object = |text: Option<&str>| match text.map(serde_json::from_str::<serde_json::Value>) {
+        Some(Ok(serde_json::Value::Object(map))) => map,
+        _ => serde_json::Map::new(),
+    };
+    let item = as_object(item_metadata);
+    let mut metadata = if item.is_empty() {
+        as_object(stored_metadata)
+    } else {
+        item.clone()
+    };
+
+    let carries_source_uri = item
+        .get("_cognee")
+        .and_then(|c| c.get("source_uri"))
+        .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()));
+    if content_changed && !carries_source_uri {
+        let emptied = match metadata.get_mut("_cognee") {
+            Some(serde_json::Value::Object(cognee)) => {
+                cognee.remove("source_uri");
+                cognee.is_empty()
+            }
+            _ => false,
+        };
+        if emptied {
+            metadata.remove("_cognee");
+        }
+    }
+
+    // The item's own node set (a list in its metadata) counts as passed.
+    let item_node_set: Option<Vec<String>> = item.get("node_set").and_then(|v| {
+        v.as_array().map(|names| {
+            names
+                .iter()
+                .filter_map(|n| n.as_str().map(str::to_string))
+                .collect()
+        })
+    });
+    let requested: Option<Vec<String>> = match (node_set, item_node_set) {
+        (None, None) => None,
+        (call, item) => {
+            let mut union: Vec<String> = Vec::new();
+            for name in call
+                .unwrap_or_default()
+                .iter()
+                .cloned()
+                .chain(item.unwrap_or_default())
+            {
+                if !union.contains(&name) {
+                    union.push(name);
+                }
+            }
+            Some(union)
+        }
+    };
+    let resolved: Option<Vec<String>> = match requested {
+        None => stored_node_set
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .filter(|names| !names.is_empty()),
+        Some(names) => Some(names).filter(|names| !names.is_empty()),
+    };
+    match &resolved {
+        Some(names) => {
+            metadata.insert("node_set".to_string(), serde_json::json!(names));
+        }
+        None => {
+            metadata.remove("node_set");
+        }
+    }
+    let node_set_column = resolved.as_ref().map(serde_json::to_string).transpose()?;
+    let metadata_column = serde_json::to_string(&serde_json::Value::Object(metadata))?;
+    Ok((Some(metadata_column), node_set_column))
+}
 
 /// The process-wide per-content locks [`persist_data_with_acl_and_locks`]
 /// holds across its dedup lookup and its read-modify-write of one data row,
@@ -1085,9 +1292,9 @@ fn same_json(stored: Option<&str>, candidate: Option<&str>) -> bool {
 ///
 /// [`AddPipeline::add_with_params`] runs this first, so a bad name fails the
 /// whole call rather than one item mid-run. It is public for callers that do
-/// irreversible work *before* they add — `cognee::api::update` deletes the
-/// document it replaces first, and must refuse a node set the add would
-/// refuse while the old data is still there.
+/// irreversible work *before* they add — `cognee::api::update` drops the
+/// document's memory first, and must refuse a node set the add would refuse
+/// while that memory is still there.
 pub fn validate_add_inputs(
     inputs: &[DataInput],
     node_set: Option<&[String]>,
@@ -1448,6 +1655,8 @@ struct AddParamsInjection {
     node_set: Option<Vec<String>>,
     importance_weight: Option<f64>,
     target_dataset_id: Option<Uuid>,
+    /// [`AddParams::pinned_id`].
+    pinned_id: Option<Uuid>,
     /// Identity locks serializing dataset create-and-grant against concurrent
     /// writers, or `None` for the unsynchronised single-caller default. Wired
     /// by embedders that serve concurrent requests — see
@@ -1475,6 +1684,7 @@ fn make_persist_data_task_with_acl_and_params(
         if let Some(w) = add_params.importance_weight {
             processed.importance_weight = Some(w);
         }
+        processed.pinned_id = add_params.pinned_id;
         let override_ds = add_params.target_dataset_id;
         let dataset_locks = add_params.dataset_locks.clone();
         let database = Arc::clone(&database);
@@ -1824,12 +2034,21 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // A pin names one row, so it can only go with one item (Python's
+        // `update()` refuses a list, `update.py:201-206`).
+        if params.pinned_id.is_some() && inputs.len() != 1 {
+            return Err(IngestionError::PinnedIdNeedsOneItem {
+                items: inputs.len(),
+            }
+            .into());
+        }
 
         // ── Add-params injected per item (Decision 7) ────────────────────
         let add_params_inj = AddParamsInjection {
             node_set: params.node_set.clone(),
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
+            pinned_id: params.pinned_id,
             dataset_locks: self.dataset_locks.clone(),
         };
 
@@ -1977,6 +2196,15 @@ pub enum IngestionError {
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
     #[error("Invalid node_set: {reason}")]
     InvalidNodeSet { reason: String },
+    /// An add pinned to a data id ([`AddParams::pinned_id`]) got a number of
+    /// items other than one.
+    #[error("A pinned add replaces exactly one item; got {items}.")]
+    PinnedIdNeedsOneItem { items: usize },
+    /// The pinned data id names a row of another dataset. The owning dataset
+    /// is deliberately not named: it would tell a caller with no access to it
+    /// which dataset holds the id.
+    #[error("Data id {data_id} is not available in dataset {dataset_id}.")]
+    PinnedIdNotInDataset { data_id: Uuid, dataset_id: Uuid },
 }
 
 // ---------------------------------------------------------------------------
@@ -3668,6 +3896,257 @@ mod tests {
         ));
     }
 
+    /// Process `text` for `owner_id` and persist it pinned to `pin` in the
+    /// dataset `name` (`None`: unpinned).
+    async fn persist_text(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner_id: Uuid,
+        name: &str,
+        text: &str,
+        pin: Option<Uuid>,
+    ) -> Result<Data, Box<dyn std::error::Error>> {
+        let mut processed = process_input(
+            &DataInput::Text(text.into()),
+            storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.pinned_id = pin;
+        persist_data(&processed, db, name, owner_id, None).await
+    }
+
+    /// A pinned item refreshes its row in place: the id, owner, creation time
+    /// and (here) the cognify marker of unchanged content survive; changed
+    /// content rewrites the hashes and locations and clears the marker.
+    #[tokio::test]
+    async fn a_pinned_persist_refreshes_the_row_and_keeps_its_id() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let old = persist_text(&db, &storage, owner_id, "ds", "old content", None)
+            .await
+            .unwrap();
+        let dataset_id = old.dataset_id.unwrap();
+        ops::data::mark_cognify_pipeline_status_complete(&db, old.id, dataset_id)
+            .await
+            .unwrap();
+
+        // Same content, pinned: the row is kept, the marker too.
+        let same = persist_text(&db, &storage, owner_id, "ds", "old content", Some(old.id))
+            .await
+            .unwrap();
+        assert_eq!(same.id, old.id);
+        assert!(
+            same.pipeline_status.is_some(),
+            "unchanged content keeps the marker"
+        );
+
+        // New content, pinned: same id, new hash and locations, marker cleared.
+        let new = persist_text(&db, &storage, owner_id, "ds", "new content", Some(old.id))
+            .await
+            .unwrap();
+        assert_eq!(new.id, old.id);
+        assert_ne!(new.content_hash, old.content_hash);
+        assert_ne!(new.raw_data_location, old.raw_data_location);
+        assert_eq!(new.created_at, old.created_at);
+        let stored = IngestDb::get_data(&db, old.id).await.unwrap().unwrap();
+        assert_eq!(stored.content_hash, new.content_hash);
+        assert!(
+            stored.pipeline_status.is_none(),
+            "changed content clears the cognify marker"
+        );
+        let in_dataset = cognee_database::DeleteDb::get_dataset_data(&db, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(in_dataset.len(), 1, "still one row");
+    }
+
+    /// A pin resolves through `legacy_id`, and keeps it.
+    #[tokio::test]
+    async fn a_pinned_persist_resolves_a_legacy_id() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut forked = persist_text(&db, &storage, owner_id, "ds", "content", None)
+            .await
+            .unwrap();
+        let legacy = Uuid::new_v4();
+        forked.legacy_id = Some(legacy);
+        IngestDb::update_data(&db, forked.clone()).await.unwrap();
+
+        let refreshed = persist_text(&db, &storage, owner_id, "ds", "changed", Some(legacy))
+            .await
+            .unwrap();
+        assert_eq!(refreshed.id, forked.id, "resolved to the forked row");
+        let stored = IngestDb::get_data(&db, forked.id).await.unwrap().unwrap();
+        assert_eq!(stored.legacy_id, Some(legacy), "the legacy id is kept");
+        assert!(
+            IngestDb::get_data(&db, legacy).await.unwrap().is_none(),
+            "no row was created under the legacy id"
+        );
+    }
+
+    /// A pin that names no row creates one under that id (dlt derives stable
+    /// ids this way); content equal to ANOTHER row's gets a row of its own,
+    /// since a pinned item skips the content-hash lookup.
+    #[tokio::test]
+    async fn a_pinned_persist_of_an_unknown_id_creates_it_and_skips_dedup() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let first = persist_text(&db, &storage, owner_id, "ds", "same content", None)
+            .await
+            .unwrap();
+        let pin = Uuid::new_v4();
+        let second = persist_text(&db, &storage, owner_id, "ds", "same content", Some(pin))
+            .await
+            .unwrap();
+        assert_eq!(second.id, pin, "created under the pinned id");
+        assert_ne!(second.id, first.id, "no dedup onto the other row");
+        let rows = cognee_database::DeleteDb::get_dataset_data(&db, first.dataset_id.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "two rows hold the content");
+    }
+
+    /// A pinned id that belongs to a row of another dataset is refused and
+    /// the row is not touched.
+    #[tokio::test]
+    async fn a_foreign_pin_is_refused_and_leaves_the_row_alone() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let theirs = persist_text(&db, &storage, owner_id, "ds_a", "theirs", None)
+            .await
+            .unwrap();
+        persist_text(&db, &storage, owner_id, "ds_b", "mine", None)
+            .await
+            .unwrap();
+
+        let err = persist_text(
+            &db,
+            &storage,
+            owner_id,
+            "ds_b",
+            "overwrite",
+            Some(theirs.id),
+        )
+        .await
+        .expect_err("a row of another dataset");
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::PinnedIdNotInDataset { .. })
+            ),
+            "got {err}"
+        );
+        let stored = IngestDb::get_data(&db, theirs.id).await.unwrap().unwrap();
+        assert_eq!(stored.content_hash, theirs.content_hash, "row untouched");
+    }
+
+    /// The metadata of a pinned refresh is a PATCH: an item without metadata
+    /// keeps the stored one, an item with metadata replaces it; node set
+    /// likewise (`None` keeps, a list replaces, an empty list clears); a
+    /// content change drops the stored `_cognee.source_uri`.
+    #[test]
+    fn pinned_metadata_is_a_patch() {
+        let stored = r#"{"k":"v","node_set":["a"],"_cognee":{"source_uri":"file:///old"}}"#;
+        let stored_ns = Some(r#"["a"]"#);
+
+        // Nothing carried: stored kept (source uri too, content unchanged).
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, false).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
+            serde_json::from_str::<serde_json::Value>(stored).unwrap()
+        );
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // Content changed without a new source: the stale source uri goes.
+        let (meta, _) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, true).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
+            serde_json::json!({"k": "v", "node_set": ["a"]})
+        );
+
+        // The item brings metadata: it replaces the stored one.
+        let (meta, ns) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            Some(r#"{"x":1,"_cognee":{"source_uri":"https://new"}}"#),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&meta.unwrap()).unwrap(),
+            serde_json::json!({"x": 1, "_cognee": {"source_uri": "https://new"}, "node_set": ["a"]})
+        );
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // A node set replaces; an empty one clears.
+        let names = vec!["b".to_string()];
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, Some(&names), false).unwrap();
+        assert_eq!(ns.as_deref(), Some(r#"["b"]"#));
+        assert!(meta.unwrap().contains(r#""node_set":["b"]"#));
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, Some(&[]), false).unwrap();
+        assert_eq!(ns, None);
+        assert!(!meta.unwrap().contains("node_set"));
+    }
+
+    /// A pinned add takes exactly one item.
+    #[tokio::test]
+    async fn a_pinned_add_refuses_other_than_one_item() {
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+        let vector_db: Arc<dyn VectorDB> = Arc::new(cognee_vector::MockVectorDB::new());
+        let pipeline = AddPipeline::new(Arc::clone(&storage), db.clone() as Arc<dyn IngestDb>)
+            .with_thread_pool(Arc::new(
+                cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+            ))
+            .with_graph_db(graph_db)
+            .with_vector_db(vector_db)
+            .with_database(db.clone());
+        let params = AddParams {
+            pinned_id: Some(Uuid::new_v4()),
+            ..AddParams::default()
+        };
+        let err = pipeline
+            .add_with_params(
+                vec![DataInput::Text("a".into()), DataInput::Text("b".into())],
+                "ds",
+                Uuid::new_v4(),
+                None,
+                &params,
+            )
+            .await
+            .expect_err("two items");
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::PinnedIdNeedsOneItem { items: 2 })
+            ),
+            "got {err}"
+        );
+    }
+
     /// A direct `persist_data*` caller whose node set is refused must not
     /// leave an empty dataset behind: the names are checked before the
     /// dataset is resolved or created (and before the owner is granted on it).
@@ -3904,8 +4383,18 @@ mod tests {
             }
             Ok(snapshot)
         }
+        async fn resolve_data_id(
+            &self,
+            dataset_id: Uuid,
+            data_id: Uuid,
+        ) -> Result<Option<Uuid>, cognee_database::DatabaseError> {
+            IngestDb::resolve_data_id(&*self.inner, dataset_id, data_id).await
+        }
         async fn create_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
             IngestDb::create_data(&*self.inner, d).await
+        }
+        async fn update_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
+            IngestDb::update_data(&*self.inner, d).await
         }
         async fn update_data_node_set(
             &self,

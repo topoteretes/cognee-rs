@@ -28,6 +28,7 @@ pub enum Commands {
     Remember(RememberArgs),
     Recall(RecallArgs),
     Forget(ForgetArgs),
+    Update(UpdateArgs),
     Improve(ImproveArgs),
     Delete(DeleteArgs),
     Export(ExportArgs),
@@ -784,6 +785,37 @@ pub struct ForgetArgs {
     /// Forget everything the current owner owns.
     #[arg(long = "all", default_value_t = false)]
     pub all: bool,
+
+    #[arg(long = "tenant-id")]
+    pub tenant_id: Option<String>,
+}
+
+/// Arguments for `cognee-cli update` — replace one document, keeping its id.
+///
+/// The counterpart of the Python `cognee.update()` SDK function (Python has no
+/// CLI verb for it). The document keeps its `data_id`: its memory is dropped,
+/// the replacement is re-added pinned to the same id, and the document is
+/// cognified again. `--data-id` may also be a pre-fork (legacy) id.
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Inline text or a file path: the replacement content.
+    pub data: String,
+
+    /// The document to replace (UUID).
+    #[arg(long = "data-id")]
+    pub data_id: String,
+
+    /// Dataset name; defaults to the `default_dataset_name` setting.
+    #[arg(long = "dataset-name", short = 'd')]
+    pub dataset_name: Option<String>,
+
+    /// Node-set names for the replacement (repeatable).
+    #[arg(long = "node-set")]
+    pub node_set: Vec<String>,
+
+    /// Graph extractor for the re-cognify run (see `remember --extractor`).
+    #[arg(long = "extractor")]
+    pub extractor: Option<String>,
 
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,

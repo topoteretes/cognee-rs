@@ -70,7 +70,22 @@ pub trait IngestDb: Send + Sync {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<Data>, DatabaseError>;
 
+    /// Resolve a caller-supplied data id to the canonical row id in
+    /// `dataset_id`: the exact id, else the row whose `legacy_id` it is
+    /// (Python's `resolve_data_id`). `None` when the id is unknown there.
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError>;
+
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError>;
+
+    /// Write the whole row `d` (matched by `d.id`) and stamp `updated_at`.
+    /// Used by a pinned add (`update()`), which refreshes the row in place the
+    /// way Python's `ingest_data` merges it. A missing row is
+    /// [`DatabaseError::NotFound`].
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError>;
 
     /// Set the `node_set` and `external_metadata` columns of an existing Data
     /// record (and stamp `updated_at`), leaving every other column as it is.
@@ -165,8 +180,20 @@ impl IngestDb for DatabaseConnection {
         data::find_data_in_dataset(self, dataset_id, content_hash, owner_id, tenant_id).await
     }
 
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        data::resolve_data_id(self, dataset_id, data_id).await
+    }
+
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         data::create_data(self, d).await
+    }
+
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
+        data::update_data(self, d).await
     }
 
     async fn update_data_node_set(

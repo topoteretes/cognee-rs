@@ -30,7 +30,7 @@
 //! ### Result shapes (all camelCase)
 //!
 //! `forget`:       `{"target":"…","deleteResult":{…}}`
-//! `update`:       `{"deletedDataId":"…","deleteResult":{…},"newData":[…],"cognifyResult":{…}}`
+//! `update`:       `{"dataId":"…","deleteResult":{…},"cognifyResult":{…}}`
 //! `prune_data`:   `null`
 //! `prune_system`: `{"dataPruned":bool,"graphPruned":bool,"vectorPruned":bool,
 //!                   "metadataPruned":bool,"cachePruned":bool}`
@@ -174,7 +174,9 @@ pub async fn forget(
 /// - `"preferredLoaders"`: JSON object mapping MIME type / extension → loader name
 /// - `"incrementalLoading"`: bool (default `false`)
 ///
-/// Returns `{"deletedDataId":"…","deleteResult":{…},"newData":[…],"cognifyResult":{…}}`.
+/// Returns `{"dataId":"…","deleteResult":{…},"cognifyResult":{…}}`; `dataId`
+/// is the document's id, unchanged by the update (a pre-fork id resolves to the
+/// row it forked into).
 pub async fn update(
     state: &HandleState,
     data_id_str: &str,
@@ -253,8 +255,6 @@ pub async fn update(
 
     let delete_result_json = serde_json::to_value(&result.delete_result)
         .map_err(|e| SdkError::Runtime(format!("failed to serialize delete_result: {e}")))?;
-    let new_data_val = serde_json::to_value(&result.new_data)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize new_data: {e}")))?;
     let cognify_result_val = result
         .cognify_result
         .as_ref()
@@ -264,9 +264,8 @@ pub async fn update(
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "update").await;
 
     Ok(json!({
-        "deletedDataId": result.deleted_data_id.to_string(),
+        "dataId": result.data_id.to_string(),
         "deleteResult": delete_result_json,
-        "newData": new_data_val,
         "cognifyResult": cognify_result_val,
     }))
 }

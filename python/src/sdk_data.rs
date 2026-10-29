@@ -162,10 +162,10 @@ impl PyCognee {
     ///         {"type": "text", "text": "Updated content"},
     ///         "my_dataset",
     ///     )
-    ///     print(result["deletedDataId"], result["newData"])
+    ///     print(result["dataId"])
     ///
-    /// Returns a dict with keys ``deletedDataId``, ``deleteResult``,
-    /// ``newData``, and ``cognifyResult`` (all camelCase).
+    /// Returns a dict with keys ``dataId`` (the document's id, unchanged
+    /// by the update), ``deleteResult`` and ``cognifyResult`` (all camelCase).
     #[pyo3(signature = (data_id, new_data, dataset_name, opts=None))]
     fn update<'py>(
         &self,

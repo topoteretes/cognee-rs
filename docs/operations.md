@@ -287,7 +287,7 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | Operation | What it does | rustdoc |
 |---|---|---|
 | **delete** | Cascading removal of data/datasets across relational → graph → vector → file storage (with dry-run preview). | [`cognee-delete`](../crates/delete/) `DeleteService` |
-| **update** | Re-ingest changed data and re-cognify the affected subset. | `api::update` |
+| **update** | Replace one document and re-cognify it. The document **keeps its `data_id`** (a pre-fork `legacy_id` resolves to the row it forked into; an unknown id is a 404): its memory is dropped, the row is re-added pinned to the same id, and cognify rebuilds it. | `api::update` |
 | **prune** | Reset system or all state (`prune_system` / `prune_data`). | `api::prune` |
 | **visualize** | Render the graph to a single-file d3.js HTML page (Graph / Schema / Memory / Semantic tabs + inspector). | [`cognee-visualization`](../crates/visualization/) |
 | **export** | Write the graph as a COGX archive — the portable format Python cognee re-imports, locally or by uploading the packed `.cogx.tar.gz` to its remember endpoint. | [`cognee-migration`](../crates/migration/) |

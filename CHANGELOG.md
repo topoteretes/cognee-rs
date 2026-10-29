@@ -18,6 +18,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`update()` keeps the data id, and legacy data ids resolve (SDK-1039).**
+  As in Python (`update.py`, `resolve_data_id`): the id passed to `update()` is
+  resolved in the dataset (the exact id, else the `legacy_id` a row got when
+  the dataset-scoping migration forked it from a row shared by several
+  datasets; an id that resolves to nothing is `ApiError::UpdateTargetNotFound`,
+  HTTP 404, and never creates a document). The row is then **refreshed in
+  place** instead of replaced: the document's graph and vector memory is
+  dropped (memory-only forget), the replacement is added pinned to the same id
+  (`AddParams::pinned_id`: no content-hash lookup, the row's name, locations,
+  extensions, MIME types, loader, hashes, size and metadata are rewritten,
+  metadata and node set as a PATCH, the cognify marker cleared when the content
+  changed; a row of another dataset is refused), and the document is cognified.
+  `update()` takes exactly one replacement item. `UpdateResult` is now
+  `{ data_id, delete_result, cognify_result }`: `deleted_data_id` and
+  `new_data` are gone (the bindings' `deletedDataId` / `newData` become
+  `dataId`). Replacement content equal to another row's leaves two rows, as in
+  Python. Delete by a legacy id (`DataInDataset`, and `Data` with a dataset
+  name) resolves it the same way, and `DeleteResult::data_id` reports the
+  resolved id. The `IngestDb` / `DeleteDb` traits gain `resolve_data_id`
+  (`IngestDb` also `update_data`), and `ProcessedInput` gains `pinned_id`.
+  New `cognee-cli update <data> --data-id <UUID> -d <dataset>` drives it
+  (Python has no CLI verb for it).
+  The dataset-scoping migration now clears the cognify marker of the rows it
+  forks, so the next cognify rebuilds them under their new ids (it cannot
+  reach the graph and vector stores: the old memory is dropped by deleting or
+  updating the item, which the repointed ledger finds under the new id).
 - **`add` routes loaders by the file's content, as Python does (SDK-1039).**
   The bytes are sniffed (new `infer` dependency, the counterpart of Python's
   `filetype`; `.txt`, `.csv`, `.md`, `.json`, `.xml` and `.yaml` are not

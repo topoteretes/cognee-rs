@@ -44,6 +44,15 @@ impl DeleteScope {
     }
 }
 
+/// The resolved item id of a single-item delete ([`DeleteResult::data_id`]).
+fn resolved_data_id(request: &DeleteRequest, targets: &ResolvedDeleteTargets) -> Option<Uuid> {
+    if request.scope.is_data_item() {
+        targets.candidate_data_ids.first().copied()
+    } else {
+        None
+    }
+}
+
 /// Map a `DeleteScope` variant to a human-readable label matching Python's
 /// `COGNEE_FORGET_TARGET` values.
 fn scope_label(scope: &DeleteScope) -> &'static str {
@@ -212,6 +221,13 @@ pub struct DeleteResult {
     pub deleted_search_queries: usize,
     pub pruned_sessions: bool,
     pub warnings: Vec<String>,
+    /// The canonical id of the item a single-item delete (`Data` /
+    /// `DataInDataset`) acted on: the row id the requested id resolved to,
+    /// which differs from the request when a pre-fork `legacy_id` was passed
+    /// (Python's delete receipt reports the resolved `data_id`). `None` for
+    /// every other scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_id: Option<Uuid>,
 }
 
 #[derive(Debug, Error)]
@@ -270,6 +286,7 @@ impl std::ops::AddAssign for DeleteResult {
             deleted_search_queries,
             pruned_sessions,
             warnings,
+            data_id,
         } = rhs;
         self.deleted_datasets += deleted_datasets;
         self.deleted_dataset_links += deleted_dataset_links;
@@ -287,6 +304,7 @@ impl std::ops::AddAssign for DeleteResult {
         self.deleted_search_queries += deleted_search_queries;
         self.pruned_sessions |= pruned_sessions;
         self.warnings.extend(warnings);
+        self.data_id = self.data_id.or(data_id);
     }
 }
 
@@ -1109,6 +1127,7 @@ impl DeleteService {
             deleted_search_queries,
             pruned_sessions,
             warnings,
+            data_id: resolved_data_id(request, &targets),
         })
     }
 
@@ -1226,6 +1245,7 @@ impl DeleteService {
             deleted_search_queries: 0,
             pruned_sessions: false,
             warnings,
+            data_id: resolved_data_id(request, targets),
         })
     }
 
@@ -1984,6 +2004,12 @@ impl DeleteService {
             None => None,
         };
 
+        // In a named dataset, a pre-fork id resolves to the row it forked into.
+        let data_id = match &named_dataset {
+            Some(dataset) => self.resolve_data_id_in(dataset.id, data_id).await?,
+            None => data_id,
+        };
+
         let data = self.database.get_data(data_id).await.map_err(|error| {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
         })?;
@@ -2102,6 +2128,24 @@ impl DeleteService {
         })
     }
 
+    /// `data_id` resolved in `dataset_id` (exact id, else `legacy_id`); an id
+    /// unknown in the dataset stays as given, so the missing-row handling of
+    /// the callers still applies.
+    async fn resolve_data_id_in(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Uuid, DeleteError> {
+        Ok(self
+            .database
+            .resolve_data_id(dataset_id, data_id)
+            .await
+            .map_err(|error| {
+                DeleteError::Runtime(format!("Failed to resolve data {data_id}: {error}"))
+            })?
+            .unwrap_or(data_id))
+    }
+
     /// The dataset `dataset_name` of `owner_id` in `tenant_id` (strict
     /// equality, `None` ⇔ tenant-less; `get_dataset_ids.py:29-34@37f788bd2`),
     /// or a validation error naming it.
@@ -2196,6 +2240,9 @@ impl DeleteService {
         delete_dataset_if_empty: bool,
     ) -> Result<ResolvedDeleteTargets, DeleteError> {
         let dataset = self.dataset_by_id(dataset_id).await?;
+        // Every id ever issued keeps resolving: the exact id, else the
+        // recorded original (`legacy_id`) of a row forked from a shared one.
+        let data_id = self.resolve_data_id_in(dataset.id, data_id).await?;
         let data = self.database.get_data(data_id).await.map_err(|error| {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
         })?;
@@ -5311,6 +5358,59 @@ mod tests {
             .await
             .expect_err("an item outside the dataset must be refused");
         assert!(matches!(err, DeleteError::Validation(_)), "{err:?}");
+    }
+
+    /// SDK-1039 P21. A pre-fork id (the `legacy_id` of a forked row) resolves
+    /// in the dataset: the delete acts on the forked row and its receipt
+    /// reports the resolved id, as Python's does. From another dataset the
+    /// legacy id resolves to nothing and no row is touched.
+    #[tokio::test]
+    async fn data_in_dataset_resolves_a_legacy_id_and_reports_the_resolved_id() {
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "fork_ds").await;
+        let (other_dataset, _) = seed_dataset_with_data(&db, &storage, owner, "other_ds").await;
+        mock_grant_all_perms(&acl, owner, dataset_id).await;
+        mock_grant_all_perms(&acl, owner, other_dataset).await;
+
+        let legacy = Uuid::new_v4();
+        let mut row = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        row.legacy_id = Some(legacy);
+        ops::data::update_data(&db, row).await.unwrap();
+
+        let request = |dataset_id| DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id,
+                data_id: legacy,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        // In the other dataset the legacy id is unknown: the missing-row path
+        // runs and nothing is detached.
+        let result = svc
+            .execute(&request(other_dataset), owner, None)
+            .await
+            .expect("an unknown id is the missing-row path");
+        assert_eq!(result.deleted_dataset_links, 0);
+        assert!(
+            ops::data::get_data(&db, data_id).await.unwrap().is_some(),
+            "the forked row is untouched"
+        );
+
+        let result = svc
+            .execute(&request(dataset_id), owner, None)
+            .await
+            .expect("the legacy id resolves in the fork's dataset");
+        assert_eq!(result.deleted_dataset_links, 1);
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(
+            result.data_id,
+            Some(data_id),
+            "the receipt names the resolved id"
+        );
     }
 
     #[tokio::test]
