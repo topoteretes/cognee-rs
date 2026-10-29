@@ -136,7 +136,10 @@ via cognify's `--ontology-file`; see [configuration.md](configuration.md).
 
 **Loaders** handle file-format reading at ingest: a loader registry dispatches by
 MIME type / extension to per-format loaders (text, PDF, CSV, HTML, image, audio,
-and the `unstructured` office formats), most behind feature flags. **Chunkers**
+and the `unstructured` office formats), most behind feature flags. As in Python,
+they run at `add`, which stores the extracted text (an image's vision-LLM
+description, an audio file's transcript) and keeps the source file in
+`original_data_location`. **Chunkers**
 then segment a document into token-bounded pieces through a word → sentence →
 paragraph hierarchy, sizing chunks with a pluggable `TokenCounter`
 (`WordCounter`, or the feature-gated HuggingFace / tiktoken counters).

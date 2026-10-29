@@ -83,7 +83,9 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_thread_pool(thread_pool)
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(Arc::clone(&database))
+        // Python runs its image and audio loaders at `add`.
+        .with_loader_registry(cm.add_loader_registry().await);
 
         let session_store: Arc<dyn SessionStore> = cm
             .session_store()
