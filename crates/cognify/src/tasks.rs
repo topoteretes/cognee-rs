@@ -1533,36 +1533,28 @@ pub async fn extract_graph_from_data(
 struct WebPageMetadata {
     url: String,
     domain: String,
-    title: Option<String>,
 }
 
+/// The page a document was fetched from: Python's `_cognee.source_uri`, which
+/// `add` writes for a URL (`ingest_data.py:92-100`). Only an `http(s)` URL
+/// counts. The page title is not known: `add` keeps the raw page and does not
+/// parse it.
 fn parse_web_page_metadata(document: &Document) -> Option<WebPageMetadata> {
     let metadata = document.external_metadata.as_ref()?;
     let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    let source = value.get("source").and_then(|v| v.as_str())?;
-    if source != "url" {
-        return None;
-    }
-
     let url = value
-        .get("final_url")
-        .or_else(|| value.get("url"))
+        .get("_cognee")
+        .and_then(|v| v.get("source_uri"))
         .and_then(|v| v.as_str())?;
     let parsed = Url::parse(url).ok()?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
     let domain = parsed.host_str()?.to_ascii_lowercase();
-    let title = value
-        .get("title")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
 
     Some(WebPageMetadata {
         url: parsed.to_string(),
         domain,
-        title,
     })
 }
 
@@ -1644,7 +1636,6 @@ pub async fn create_web_page_nodes(
             "id": page_id_str,
             "type": "WebPage",
             "url": metadata.url,
-            "title": metadata.title,
             "content": document_content_preview(document.base.id, chunks),
         });
         let site_node = json!({
@@ -1663,10 +1654,7 @@ pub async fn create_web_page_nodes(
             document.base.id,
             page_id,
             "WebPage",
-            metadata
-                .title
-                .clone()
-                .unwrap_or_else(|| metadata.url.clone()),
+            metadata.url.clone(),
             &page_node,
         ));
         prov_nodes.push(web_page_provenance_row(
@@ -8921,15 +8909,8 @@ mod tests {
         .expect("seed dataset");
     }
 
-    fn url_metadata(url: &str, final_url: &str, title: &str) -> String {
-        json!({
-            "source": "url",
-            "url": url,
-            "final_url": final_url,
-            "content_type": "text/html",
-            "title": title,
-        })
-        .to_string()
+    fn url_metadata(source_uri: &str) -> String {
+        json!({"_cognee": {"source_uri": source_uri}}).to_string()
     }
 
     #[tokio::test]
@@ -9644,11 +9625,7 @@ mod tests {
         let final_url = "https://Example.com/path?q=1";
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/start",
-                final_url,
-                "Example title",
-            )),
+            Some(url_metadata(final_url)),
         )];
         let chunks = vec![test_chunk(chunk_id, doc_id, "Visible page content")];
 
@@ -9675,10 +9652,7 @@ mod tests {
             page.get("url").and_then(|v| v.as_str()),
             Some("https://example.com/path?q=1")
         );
-        assert_eq!(
-            page.get("title").and_then(|v| v.as_str()),
-            Some("Example title")
-        );
+        assert!(!page.contains_key("title"), "add does not parse the page");
         assert_eq!(
             page.get("content").and_then(|v| v.as_str()),
             Some("Visible page content")
@@ -9711,11 +9685,7 @@ mod tests {
         let long_text = "a".repeat(650);
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/long",
-                "https://example.com/long",
-                "Long",
-            )),
+            Some(url_metadata("https://example.com/long")),
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, &long_text)];
 
@@ -9750,11 +9720,14 @@ mod tests {
             test_document_with_metadata(Uuid::new_v4(), Some("{not valid json".to_string()));
         let non_url_doc = test_document_with_metadata(
             Uuid::new_v4(),
-            Some(json!({"source": "dlt", "url": "https://example.com"}).to_string()),
+            Some(
+                json!({"source": "dlt", "_cognee": {"source_uri": "file:///tmp/a.csv"}})
+                    .to_string(),
+            ),
         );
         let bad_url_doc = test_document_with_metadata(
             Uuid::new_v4(),
-            Some(json!({"source": "url", "final_url": "not a url"}).to_string()),
+            Some(json!({"_cognee": {"source_uri": "not a url"}}).to_string()),
         );
         let chunks = vec![
             test_chunk(Uuid::new_v4(), doc_with_invalid_json.base.id, "a"),
@@ -9784,11 +9757,7 @@ mod tests {
         let doc_id = Uuid::new_v4();
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/idempotent",
-                "https://example.com/idempotent",
-                "Idempotent",
-            )),
+            Some(url_metadata("https://example.com/idempotent")),
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, "content")];
 
@@ -9816,11 +9785,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "content")],
             documents: vec![test_document_with_metadata(
                 doc_id,
-                Some(url_metadata(
-                    "https://example.com/wired",
-                    "https://example.com/wired",
-                    "Wired",
-                )),
+                Some(url_metadata("https://example.com/wired")),
             )],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -12206,22 +12171,8 @@ mod tests {
         let doc_a = Uuid::new_v4();
         let doc_b = Uuid::new_v4();
         let documents = vec![
-            test_document_with_metadata(
-                doc_a,
-                Some(url_metadata(
-                    "https://example.com/a",
-                    "https://example.com/a",
-                    "A",
-                )),
-            ),
-            test_document_with_metadata(
-                doc_b,
-                Some(url_metadata(
-                    "https://example.com/b",
-                    "https://example.com/b",
-                    "B",
-                )),
-            ),
+            test_document_with_metadata(doc_a, Some(url_metadata("https://example.com/a"))),
+            test_document_with_metadata(doc_b, Some(url_metadata("https://example.com/b"))),
         ];
         let chunks = vec![
             test_chunk(Uuid::new_v4(), doc_a, "first"),

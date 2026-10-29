@@ -64,13 +64,6 @@ INDEX_SCHEMA_DEFAULTS = {
 KNOWN_TYPE_GAPS = {
     # Rust chunks do not carry their document's external_metadata (SDK-1057).
     ("DocumentChunk_text", "external_metadata"),
-    # Both SDKs copy Document.external_metadata into the row as is, but the
-    # Documents differ: Python's classify_documents stores
-    # ``json.dumps(data.external_metadata)``, always a JSON string (``"null"``
-    # or ``"{}"`` for an item added without metadata), while Rust leaves the
-    # field None when the data item has no metadata. A
-    # classify_documents gap, not a payload one (SDK-1039 P6 notes).
-    ("TextDocument_name", "external_metadata"),
 }
 
 _START, _END = "<<<PAYLOADS>>>", "<<<END>>>"
