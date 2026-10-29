@@ -222,6 +222,8 @@ export type RecallScopeString =
   | "graph"
   | "session"
   | "trace"
+  /** Deprecated alias of `"graph"` (as in Python); kept so existing callers type-check. */
+  | "graph_context"
   | "all";
 
 /** Options accepted by `cogneeSearch`. All fields are optional. */

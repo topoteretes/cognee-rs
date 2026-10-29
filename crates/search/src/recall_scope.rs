@@ -208,7 +208,7 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
 
     if raw.iter().any(|s| s == "graph_context") {
         tracing::warn!(
-            "recall scope 'graph_context' is deprecated and now maps to 'graph'; use scope='graph' instead"
+            "Recall scope 'graph_context' is deprecated and now maps to 'graph'. Use scope='graph' instead."
         );
     }
 

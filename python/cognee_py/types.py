@@ -132,6 +132,7 @@ class RecallOpts(TypedDict, total=False):
     auto_route: bool
     session_id: str
     #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"`` | ``"all"``
+    #: (``"graph_context"`` is still accepted as a deprecated alias of ``"graph"``)
     scope: Union[str, list[str]]
     neighborhood_depth: int
     neighborhood_seed_top_k: int
