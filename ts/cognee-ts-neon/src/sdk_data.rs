@@ -66,7 +66,7 @@ pub fn cognee_forget(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 /// `cogneeUpdate(handle, dataId, newData, datasetName, opts?) -> Promise<UpdateResult>`
 ///
-/// Hand-built JSON: `{ deletedDataId, deleteResult, newData, cognifyResult }`.
+/// Hand-built JSON: `{ dataId, deleteResult, cognifyResult }`.
 pub fn cognee_update(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);

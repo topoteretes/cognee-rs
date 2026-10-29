@@ -13,7 +13,7 @@ use crate::error::CliError;
 use super::visualize;
 use super::{
     add, add_and_cognify, cognify, config, delete, export, forget, improve, recall, remember,
-    search,
+    search, update,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -32,6 +32,7 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
         Commands::Recall(args) => recall::run(args, Arc::clone(cm)),
         Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
+        Commands::Update(args) => update::run(args, Arc::clone(cm)),
         Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Export(args) => export::run(args, Arc::clone(cm)),

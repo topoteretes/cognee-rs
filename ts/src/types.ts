@@ -623,9 +623,9 @@ export interface CogneeUpdateOptions {
 
 /** Result of `cogneeUpdate`. Hand-built JSON. */
 export interface CogneeUpdateResult {
-  deletedDataId: string;
+  /** The document's id, unchanged by the update. */
+  dataId: string;
   deleteResult: CogneeDeleteResultDetail;
-  newData: CogneeDataRecord[];
   cognifyResult: CogneeCognifyResult | null;
 }
 

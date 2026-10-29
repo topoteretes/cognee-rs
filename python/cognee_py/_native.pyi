@@ -741,8 +741,8 @@ class Cognee:
     ) -> dict[str, Any]:
         """Replace a data item with new content and re-cognify.
 
-        Returns a dict with camelCase keys: ``deletedDataId``, ``deleteResult``,
-        ``newData``, ``cognifyResult``.
+        Returns a dict with camelCase keys: ``dataId`` (the document's id,
+        unchanged by the update), ``deleteResult``, ``cognifyResult``.
         """
         ...
 

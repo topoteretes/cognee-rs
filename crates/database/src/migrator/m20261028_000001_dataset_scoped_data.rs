@@ -19,8 +19,13 @@
 //!      provenance ledger is repointed for those datasets: `nodes.data_id`
 //!      **and** `edges.data_id` (Python's ledger has only `nodes`; Rust's
 //!      also records edges per data item, and its delete path reads both).
-//!      The graph and vector stores still carry the original id in their
-//!      document nodes until the item is re-cognified;
+//!      The fork's cognify completion marker (`pipeline_status`) is cleared,
+//!      so the next cognify rebuilds it under its new id (SDK-1039 D16: there
+//!      is no startup re-key, as Python's `rekey_fork_document_ids` has). The
+//!      graph and vector stores still carry the original id in their document
+//!      nodes until then; a SQL migration cannot reach them, and the repointed
+//!      ledger is what lets a delete or `update()` of the fork (by its new or
+//!      its legacy id) drop that old memory;
 //!    - **no membership:** an unreachable orphan, left untouched.
 //! 3. Drops `dataset_data`. Membership is now exactly `data.dataset_id`.
 //!
@@ -276,6 +281,17 @@ async fn split_shared_row(
         values.push(data_id.into());
         conn.execute(statement(backend, &insert_sql, values))
             .await?;
+        // The fork is re-cognified under its new id (D16): its cognify
+        // completion marker is cleared, so the next incremental cognify
+        // rebuilds it instead of skipping it as already processed. The marker
+        // was copied from the original row and describes memory keyed by the
+        // original id.
+        conn.execute(statement(
+            backend,
+            "UPDATE data SET pipeline_status = NULL WHERE id = {}",
+            [new_id.as_str().into()],
+        ))
+        .await?;
 
         for table in ledger_tables {
             conn.execute(statement(

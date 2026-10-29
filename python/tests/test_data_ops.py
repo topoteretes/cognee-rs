@@ -199,7 +199,7 @@ async def test_prune_system_camelcase_opts(tmp_path):
 @SKIP_IF_NO_UPDATE
 @pytest.mark.asyncio
 async def test_update_result_shape(tmp_path):
-    """update() returns a dict with deletedDataId, deleteResult, newData, cognifyResult."""
+    """update() returns a dict with dataId, deleteResult, cognifyResult."""
     c, data_id = await _cognee_with_data(tmp_path)
     result = await c.update(
         data_id,
@@ -207,9 +207,9 @@ async def test_update_result_shape(tmp_path):
         "test_ds",
     )
     assert isinstance(result, dict)
-    for key in ("deletedDataId", "deleteResult", "newData", "cognifyResult"):
+    for key in ("dataId", "deleteResult", "cognifyResult"):
         assert key in result, f"missing key: {key}"
-    assert result["deletedDataId"] == data_id
+    assert result["dataId"] == data_id, "the document keeps its id"
 
 
 @SKIP_IF_NO_UPDATE

@@ -1,22 +1,23 @@
 //! Data replacement API -- `update()`.
 //!
-//! Three-step pipeline: add the new data -> remove the old data -> re-cognify.
-//! The old data is removed only once the new data is stored, so an add that
-//! fails leaves the old data intact.
+//! Resolve the target id -> drop the document's memory (the row stays) ->
+//! re-add pinned to the same id -> re-cognify.
 //!
-//! Equivalent to Python's `cognee.api.v1.update.update()`.
+//! Equivalent to Python's `cognee.api.v1.update.update()` full-rebuild path
+//! (`update.py:215-337`): the document KEEPS its `data_id`, owner and
+//! pre-fork `legacy_id` by construction, because the row is never deleted.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
-use cognee_database::{AclDb, PipelineRunRepository, RelationalDb};
+use cognee_database::{AclDb, DeleteDb, PipelineRunRepository, RelationalDb};
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteResult, DeleteScope, DeleteService};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_llm::Llm;
-use cognee_models::{Data, DataInput};
+use cognee_models::DataInput;
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -24,67 +25,57 @@ use uuid::Uuid;
 
 use super::error::ApiError;
 
-/// Result of an `update()` operation.
+/// Result of an `update()` operation (Python's `UpdateResult`, `data_id`
+/// first: the id the document keeps).
 #[derive(Debug)]
 pub struct UpdateResult {
-    /// ID of the data item that was replaced. When the new data has the same
-    /// content, the add dedups onto the same row (dataset-scoped dedup by
-    /// content hash, owner and tenant), so the row is kept and only its graph
-    /// and vector memory is dropped and rebuilt.
-    pub deleted_data_id: Uuid,
-    /// Remove phase summary: a soft delete of the old item from the dataset,
-    /// or — when the new data re-added the same item — a memory-only delete.
+    /// The document's id: the row the requested id resolved to (the exact id,
+    /// or the row whose pre-fork `legacy_id` it was). It is unchanged by the
+    /// update: the row is refreshed in place, never replaced.
+    pub data_id: Uuid,
+    /// The memory-only delete that dropped the document's graph and vector
+    /// memory (and its cognify completion marker) before the re-add.
     pub delete_result: DeleteResult,
-    /// Newly added data items.
-    pub new_data: Vec<Data>,
-    /// Cognify phase result (optional -- only present when cognify was run).
+    /// Cognify phase result (`None` only when cognify did not run).
     pub cognify_result: Option<CognifyResult>,
 }
 
-/// Replace data in a dataset: add new -> remove old -> re-cognify.
+/// Replace one document of a dataset, keeping its data id: resolve ->
+/// memory-only forget -> pinned add -> re-cognify.
 ///
 /// # Order of operations
 ///
 /// First the preconditions, none of which mutate anything: the `write`
-/// check, the node-set validation the add would apply, and a dry run of the
-/// step-2 delete (the dataset exists and holds `data_id`). Then:
+/// check, exactly one replacement item, the node-set validation the add would
+/// apply, and the target: `data_id` is resolved in `dataset_id` (the exact id,
+/// else the row whose `legacy_id` it is; [`DeleteDb::resolve_data_id`]) and an
+/// id that resolves to nothing is [`ApiError::UpdateTargetNotFound`] — a stale
+/// or mistyped id never silently creates a second document. A dry run of the
+/// step-1 delete also checks that the dataset exists and holds the row. Then:
 ///
-/// 1. The new data is added. Any add failure — a missing backend, an
-///    unreadable file, a loader or storage error, the dataset vanishing —
-///    returns here with the old data untouched.
-/// 2. The old data is removed. If the add produced `data_id` itself (the
-///    replacement's content equals the old content), the row is kept and only
-///    its memory is dropped (a memory-only delete, which also clears its
-///    cognify completion marker so step 3 rebuilds it under the new node set);
-///    otherwise the old item is soft-deleted from the dataset as before.
-/// 3. The added items are cognified.
+/// 1. The document's memory (graph nodes, edges, vectors, its cognify
+///    completion marker) is dropped; the row and its stored files stay.
+/// 2. The replacement is added **pinned** to the resolved id
+///    ([`AddParams::pinned_id`]): the content-hash lookup is skipped and the
+///    row is refreshed in place with the new content, name and metadata (its
+///    cognify marker cleared if the content changed).
+/// 3. The document is cognified.
 ///
-/// This follows Python's ordering principle — the v1.6.4 `update()` never
-/// deletes the document row; it drops the document's memory, re-adds pinned
-/// to the same id, and re-cognifies, so "a re-add that fails leaves a document
-/// to re-cognify rather than a document that is gone". Rust does not pin the
-/// replacement to the old id: new content is a new row with a fresh `uuid4`
-/// and the old row has to go; doing that after the add keeps the same
-/// guarantee.
-///
-/// Remaining windows: if step 2 fails, both the new and the old item are in
-/// the dataset (nothing is lost; the call errors and can be retried, or the
-/// old item deleted). If step 3 fails, the new item is stored but not
-/// cognified, as with any failed cognify. A replacement with the same content
-/// keeps the stored row, so only its `node_set` is refreshed by the re-add —
-/// a new label or other `external_metadata` keys on an identical-content
-/// replacement are not written (the plain re-add refresh's existing scope).
+/// This is Python's order. A re-add that fails after step 1 leaves a document
+/// with no memory that the next cognify rebuilds from its stored content, not
+/// a document that is gone.
 ///
 /// # Arguments
-/// * `data_id` - ID of the data item to replace.
-/// * `new_data` - Replacement data inputs.
+/// * `data_id` - ID of the data item to replace (the id the caller holds: the
+///   current one or a pre-fork `legacy_id`).
+/// * `new_data` - The replacement: exactly one input.
 /// * `dataset_id` - Explicit dataset UUID (no re-derivation from name).
 /// * `dataset_name` - Dataset name: only the add pipeline's name/lock key; both
 ///   the delete and the add target `dataset_id`.
 /// * `owner_id` / `tenant_id` - Ownership context.
 /// * `node_set` - Optional graph node identifiers for access-control grouping.
 /// * `preferred_loaders` - Optional MIME-type-to-loader-name overrides.
-/// * `incremental_loading` - When `true`, skip re-adding content already present.
+/// * `incremental_loading` - Applied to the cognify phase.
 /// * `acl_db` - Optional ACL backend; when provided, a `write` permission check
 ///   is performed before any mutation.
 /// * `delete_service` - Pre-configured [`DeleteService`].
@@ -99,11 +90,12 @@ pub struct UpdateResult {
 /// `cognee/modules/users/exceptions/exceptions.py:42-51@37f788bd2`). A failing
 /// ACL backend is `ApiError::InvalidArgument`. A `node_set` (the call's, or
 /// one in an item's `external_metadata`) that is not a list of non-empty
-/// names is `ApiError::Ingestion` (Python's `InvalidNodeSetError`). A
-/// dataset that does not exist, or does not hold `data_id`, is the delete
-/// service's error. All of these, and every add failure, are raised **before**
-/// the old data is touched. Propagates errors from the remove and cognify
-/// phases.
+/// names, or a replacement that is not exactly one item, is
+/// `ApiError::Ingestion` (Python's `InvalidNodeSetError` / `IngestionError`).
+/// A `data_id` unknown in the dataset is `ApiError::UpdateTargetNotFound`
+/// (404). A dataset that does not exist is the delete service's error. All of
+/// these are raised **before** anything is touched. Propagates errors from the
+/// forget, add and cognify phases.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
     data_id: Uuid,
@@ -132,60 +124,69 @@ pub async fn update(
         require_write_permission(acl, owner_id, tenant_id, dataset_id).await?;
     }
 
-    // ── Refuse what the add would refuse, before anything is stored ─────────
+    // ── Refuse what the add would refuse, before anything is touched ────────
+    // `update()` replaces exactly one document (`update.py:201-206`).
+    if new_data.len() != 1 {
+        return Err(ApiError::Ingestion(format!(
+            "update() replaces exactly one document; got a list of {} items.",
+            new_data.len()
+        )));
+    }
+    // The document is resolved, and cognify run, through the relational
+    // database; refuse now rather than after the memory is dropped.
+    let database = db
+        .clone()
+        .ok_or_else(|| ApiError::Cognify("update requires a relational database".to_string()))?;
+
     // `add_with_params` validates the call's `node_set` and every item's
     // `external_metadata["node_set"]` itself; checking here as well refuses a
-    // bad name before the delete dry run below does any work.
+    // bad name before the memory is dropped.
+    cognee_ingestion::validate_add_inputs(&new_data, node_set.as_deref())
+        .map_err(|e| ApiError::Ingestion(e.to_string()))?;
+
+    // ── Resolve the target ───────────────────────────────────────────────────
+    // The document KEEPS its id through updates. The incoming id (exact, then
+    // the pre-fork `legacy_id`) is resolved once, up front. An id that
+    // resolves to nothing is a caller error, not a create: ids are random
+    // uuid4s, so a stale or mistyped id can never match, and silently creating
+    // a second document would hide the mistake as duplication.
+    let pinned_id = DeleteDb::resolve_data_id(database.as_ref(), dataset_id, data_id)
+        .await
+        .map_err(|e| ApiError::InvalidArgument(format!("failed to resolve data {data_id}: {e}")))?
+        .ok_or(ApiError::UpdateTargetNotFound {
+            data_id,
+            dataset_id,
+        })?;
+
+    // A dry run of the step-1 delete (target resolution only, no mutation) by
+    // the authorized `dataset_id`, not by name: a by-name scope is re-resolved
+    // without a tenant predicate and could reach a same-named dataset in
+    // another tenant. A missing dataset, or an item the dataset does not hold,
+    // fails here, before the memory is dropped.
+    delete_service
+        .preview(&forget_memory_request(dataset_id, pinned_id))
+        .await?;
+
+    // ── Step 1: drop the document's memory; the row and its files stay ───────
+    let delete_result = delete_service
+        .execute(&forget_memory_request(dataset_id, pinned_id))
+        .await?;
+
+    // ── Step 2: re-add, pinned to the document's own id ──────────────────────
     let params = AddParams {
         node_set,
         preferred_loaders,
         dataset_id: Some(dataset_id),
         importance_weight: None,
         incremental_loading,
+        pinned_id: Some(pinned_id),
     };
-    cognee_ingestion::validate_add_inputs(&new_data, params.node_set.as_deref())
-        .map_err(|e| ApiError::Ingestion(e.to_string()))?;
-    // Step 3 needs the relational database; refuse now rather than after the
-    // old data is removed.
-    if !new_data.is_empty() && db.is_none() {
-        return Err(ApiError::Cognify(
-            "cognify requires a relational database".to_string(),
-        ));
-    }
-
-    // ── The old item is there to replace ─────────────────────────────────────
-    // By the authorized `dataset_id`, not by name: a by-name scope is
-    // re-resolved without a tenant predicate and could detach the item from a
-    // same-named dataset in another tenant — not the one the write check just
-    // authorized. Python's `update()` is driven by `dataset_id` throughout
-    // (`cognee/api/v1/update/update.py:36@37f788bd2`); the add also targets it
-    // (`AddParams::dataset_id`).
-    //
-    // A dry run of the step-2 delete (target resolution only, no mutation):
-    // a missing dataset or an item the dataset does not hold fails here, as it
-    // did when the delete ran first, rather than after the new data is added.
-    delete_service
-        .preview(&remove_old_data_request(dataset_id, data_id, false))
-        .await?;
-
-    // ── Step 1: Add the new data ─────────────────────────────────────────────
-    // Before anything is removed: an add failure returns with the old data
-    // intact. Python's `update()` gets the same guarantee by never deleting
-    // the row (`forget(memory_only=True)` + a pinned re-add, update.py@f154b32).
     let data_items = add_pipeline
         .add_with_params(new_data, dataset_name, owner_id, tenant_id, &params)
         .await
         .map_err(|e| ApiError::Ingestion(e.to_string()))?;
 
-    // ── Step 2: Remove the old data ──────────────────────────────────────────
-    // When the replacement has the old content, the add deduped onto the same
-    // dataset-scoped row (refreshing its node set): keep it, and drop only
-    // its memory — which also clears its cognify completion marker, so step 3
-    // rebuilds it under the new node set rather than skipping it.
-    let same_item = data_items.iter().any(|item| item.id == data_id);
-    let delete_result = remove_old_data(delete_service, dataset_id, data_id, same_item).await?;
-
-    // ── Step 3: Re-cognify (if data was added) ───────────────────────────────
+    // ── Step 3: Re-cognify ───────────────────────────────────────────────────
     let cognify_result = if !data_items.is_empty() {
         // OSS build has no DB-backed user lookup (there is no `users` table
         // in the OSS schema), so we always fall back to `None`.
@@ -193,9 +194,6 @@ pub async fn update(
         // stamp.
         let user_email: Option<String> = None;
 
-        let database = db.clone().ok_or_else(|| {
-            ApiError::Cognify("cognify requires a relational database".to_string())
-        })?;
         let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
             cognee_core::RayonThreadPool::with_default_threads()
                 .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
@@ -241,38 +239,24 @@ pub async fn update(
     };
 
     Ok(UpdateResult {
-        deleted_data_id: data_id,
+        data_id: pinned_id,
         delete_result,
-        new_data: data_items,
         cognify_result,
     })
 }
 
-/// Step 2 of [`update`]: remove `data_id` from the dataset `dataset_id` — by
-/// id (see the comment at the call site). `memory_only` keeps the row and
-/// drops its graph and vector memory (the replacement re-added the same item).
-async fn remove_old_data(
-    delete_service: &DeleteService,
-    dataset_id: Uuid,
-    data_id: Uuid,
-    memory_only: bool,
-) -> Result<DeleteResult, ApiError> {
-    Ok(delete_service
-        .execute(&remove_old_data_request(dataset_id, data_id, memory_only))
-        .await?)
-}
-
-/// The delete [`remove_old_data`] runs, also dry-run before the add.
-fn remove_old_data_request(dataset_id: Uuid, data_id: Uuid, memory_only: bool) -> DeleteRequest {
+/// The memory-only delete [`update`] runs as step 1, also dry-run before it:
+/// the document's graph and vector memory and its cognify completion marker go,
+/// the row and its files stay (Python's `forget(memory_only=True)`).
+fn forget_memory_request(dataset_id: Uuid, data_id: Uuid) -> DeleteRequest {
     DeleteRequest {
         scope: DeleteScope::DataInDataset {
             dataset_id,
             data_id,
             delete_dataset_if_empty: false,
         },
-        // Python update() → datasets.delete_data defaults mode="soft" (datasets.py:147).
         mode: DeleteMode::Soft,
-        memory_only,
+        memory_only: true,
     }
 }
 
@@ -316,6 +300,7 @@ async fn require_write_permission(
 )]
 mod tests {
     use super::*;
+    use cognee_models::Data;
     use cognee_test_utils::MockAclDb;
 
     /// Scenario: the caller holds `write` on the dataset only through a role.
@@ -410,11 +395,12 @@ mod tests {
     }
 
     /// Review loop 2 #1. One data item is attached to `"x"` in T1 (seeded
-    /// first) and to the tenant-less `"x"`. Updating it in the tenant-less
-    /// dataset must detach it there only. The old by-name delete step
-    /// re-resolved `"x"` with no tenant predicate and could hit the T1 row.
+    /// first) and to the tenant-less `"x"`. Deleting it in the tenant-less
+    /// dataset (by id, as `update()`'s forget does) must detach it there only.
+    /// A by-name delete re-resolved `"x"` with no tenant predicate and could
+    /// hit the T1 row.
     #[tokio::test]
-    async fn delete_step_targets_the_authorized_dataset_id_not_a_same_named_row() {
+    async fn delete_targets_the_authorized_dataset_id_not_a_same_named_row() {
         use cognee_database::{DeleteDb, IngestDb, connect, initialize};
         use cognee_models::Dataset;
         let db = Arc::new(connect("sqlite::memory:").await.unwrap());
@@ -463,7 +449,16 @@ mod tests {
             db.clone() as Arc<dyn DeleteDb>,
         );
 
-        remove_old_data(&delete_service, untenanted.id, data.id, false)
+        delete_service
+            .execute(&DeleteRequest {
+                scope: DeleteScope::DataInDataset {
+                    dataset_id: untenanted.id,
+                    data_id: data.id,
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            })
             .await
             .unwrap();
 
@@ -638,8 +633,12 @@ mod tests {
             let storage: Arc<dyn StorageTrait> = Arc::new(cognee_storage::MockStorage::new());
             let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
             let vector_db: Arc<dyn VectorDB> = Arc::new(cognee_vector::MockVectorDB::new());
+            // Graph and vector stores wired as in a real setup, so the
+            // memory-only forget really drops the document's memory.
             let delete_service =
-                DeleteService::new(Arc::clone(&storage), db.clone() as Arc<dyn DeleteDb>);
+                DeleteService::new(Arc::clone(&storage), db.clone() as Arc<dyn DeleteDb>)
+                    .with_graph_db(Arc::clone(&graph_db))
+                    .with_vector_db(Arc::clone(&vector_db));
             let add_pipeline = Self::pipeline(&db, &storage, &graph_db, &vector_db, true);
             Self {
                 llm: Arc::new(
@@ -755,13 +754,13 @@ mod tests {
         }
     }
 
-    /// Review finding (#306): `update()` used to delete the old document
-    /// before an add that could still fail, so any add failure lost the old
-    /// data and stored nothing. The add now runs first; a failing add — here
-    /// a file path that does not exist, and a pipeline missing its graph
-    /// backend — leaves the old row in the dataset.
+    /// Python's order (`update.py:309-337`): the memory is dropped, then the
+    /// pinned re-add runs, so an add that fails — here a file path that does
+    /// not exist, and a pipeline missing its graph backend — leaves the
+    /// document's row in the dataset (to be re-cognified), never a document
+    /// that is gone.
     #[tokio::test]
-    async fn a_failing_add_leaves_the_old_data_intact() {
+    async fn a_failing_add_leaves_the_row_in_the_dataset() {
         let fx = Fixture::new().await;
         let old = fx.add("the old content").await;
 
@@ -800,10 +799,11 @@ mod tests {
         assert_eq!(fx.linked().await, vec![old.id]);
     }
 
-    /// An existing item the dataset does not hold is refused before the new
-    /// data is added — as it was when the delete ran first.
+    /// An id the dataset does not hold (an existing row attached to no
+    /// dataset) resolves to nothing: `UpdateTargetNotFound` (Python's 404),
+    /// before anything is dropped or added.
     #[tokio::test]
-    async fn an_item_the_dataset_does_not_hold_is_refused_before_the_add() {
+    async fn an_id_the_dataset_does_not_hold_is_not_found() {
         let fx = Fixture::new().await;
         let old = fx.add("the old content").await;
         let loc = format!("file:///tmp/{}.txt", Uuid::new_v4());
@@ -831,15 +831,17 @@ mod tests {
             )
             .await
             .expect_err("the dataset does not hold that item");
-        assert!(matches!(err, ApiError::DeleteErr(_)), "got {err:?}");
+        assert!(
+            matches!(&err, ApiError::UpdateTargetNotFound { data_id, .. } if *data_id == unattached.id),
+            "got {err:?}"
+        );
         assert_eq!(fx.linked().await, vec![old.id], "nothing was added");
     }
 
-    /// A normal update still replaces the data: the new item is added and
-    /// cognified, the old one is gone from the dataset (and, held by no other
-    /// dataset, deleted).
+    /// A normal update keeps the document's id: the row is refreshed in
+    /// place with the new content, and still the dataset's only row.
     #[tokio::test]
-    async fn an_update_replaces_the_old_data() {
+    async fn an_update_keeps_the_data_id() {
         let fx = Fixture::new().await;
         let old = fx.add("the old content").await;
 
@@ -852,22 +854,127 @@ mod tests {
             )
             .await
             .expect("update succeeds");
-        assert_eq!(result.deleted_data_id, old.id);
-        assert_eq!(result.new_data.len(), 1);
-        let new_id = result.new_data[0].id;
-        assert_ne!(new_id, old.id);
-        assert_eq!(result.delete_result.deleted_data, 1);
+        assert_eq!(result.data_id, old.id);
+        assert_eq!(
+            result.delete_result.deleted_data, 0,
+            "memory-only: no row deleted"
+        );
         assert!(result.cognify_result.is_some());
 
-        assert_eq!(fx.linked().await, vec![new_id]);
-        assert!(fx.row(old.id).await.is_none(), "the old row is deleted");
-        assert!(fx.row(new_id).await.is_some());
+        assert_eq!(fx.linked().await, vec![old.id], "one row, same id");
+        let row = fx.row(old.id).await.expect("the row is kept");
+        assert_ne!(row.content_hash, old.content_hash, "the content changed");
+        assert_eq!(row.dataset_id, Some(fx.dataset_id));
+        assert_eq!(row.owner_id, fx.owner);
     }
 
-    /// A replacement with the old content dedups onto the old row (same
-    /// dataset, content hash, owner and tenant), so it has the old id.
-    /// The cleanup must not delete the row the add just re-attached: it is
-    /// kept, re-tagged with the new node set, and its memory is rebuilt.
+    /// A pre-fork id resolves to the row it forked into: the update acts on
+    /// it, and reports the row's id.
+    #[tokio::test]
+    async fn a_legacy_id_resolves_to_the_forked_row() {
+        let fx = Fixture::new().await;
+        let old = fx.add("the old content").await;
+        let legacy = Uuid::new_v4();
+        let mut forked = fx.row(old.id).await.expect("row");
+        forked.legacy_id = Some(legacy);
+        cognee_database::IngestDb::update_data(fx.db.as_ref(), forked)
+            .await
+            .unwrap();
+
+        let result = fx
+            .update_with(
+                &fx.add_pipeline,
+                legacy,
+                vec![DataInput::Text("the new content".into())],
+                None,
+            )
+            .await
+            .expect("update by the legacy id succeeds");
+        assert_eq!(
+            result.data_id, old.id,
+            "the resolved id, not the legacy one"
+        );
+        assert_eq!(fx.linked().await, vec![old.id]);
+        let row = fx.row(old.id).await.expect("row");
+        assert_eq!(row.legacy_id, Some(legacy), "the legacy id is kept");
+    }
+
+    /// An id that is neither a row id nor a legacy id of the dataset is a
+    /// caller error (404), not a create.
+    #[tokio::test]
+    async fn an_unknown_id_is_not_found_and_creates_nothing() {
+        let fx = Fixture::new().await;
+        let old = fx.add("the old content").await;
+        let err = fx
+            .update_with(
+                &fx.add_pipeline,
+                Uuid::new_v4(),
+                vec![DataInput::Text("new".into())],
+                None,
+            )
+            .await
+            .expect_err("unknown id");
+        assert!(
+            matches!(err, ApiError::UpdateTargetNotFound { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(fx.linked().await, vec![old.id]);
+    }
+
+    /// `update()` replaces exactly one document (`update.py:201-206`).
+    #[tokio::test]
+    async fn update_takes_exactly_one_replacement() {
+        let fx = Fixture::new().await;
+        let old = fx.add("the old content").await;
+        for new_data in [
+            Vec::new(),
+            vec![DataInput::Text("a".into()), DataInput::Text("b".into())],
+        ] {
+            let err = fx
+                .update_with(&fx.add_pipeline, old.id, new_data, None)
+                .await
+                .expect_err("not exactly one item");
+            assert!(
+                matches!(&err, ApiError::Ingestion(msg) if msg.contains("exactly one")),
+                "got {err:?}"
+            );
+        }
+        assert_eq!(fx.linked().await, vec![old.id]);
+    }
+
+    /// Replacement content equal to ANOTHER row's content in the dataset: a
+    /// pinned add skips the content-hash lookup, so the dataset ends with two
+    /// rows holding that content (Python: `data_dataset_content_lookup` is
+    /// non-unique), and the target keeps its id.
+    #[tokio::test]
+    async fn a_replacement_equal_to_another_row_keeps_two_rows() {
+        let fx = Fixture::new().await;
+        let target = fx.add("the target content").await;
+        let other = fx.add("the other content").await;
+
+        let result = fx
+            .update_with(
+                &fx.add_pipeline,
+                target.id,
+                vec![DataInput::Text("the other content".into())],
+                None,
+            )
+            .await
+            .expect("update succeeds");
+        assert_eq!(result.data_id, target.id);
+        let mut linked = fx.linked().await;
+        linked.sort();
+        let mut expected = vec![target.id, other.id];
+        expected.sort();
+        assert_eq!(linked, expected, "two rows, no dedup onto the other row");
+        assert_eq!(
+            fx.row(target.id).await.expect("row").content_hash,
+            other.content_hash
+        );
+    }
+
+    /// A replacement with the old content: the row is kept (as always), its
+    /// node set is re-tagged, and its memory is rebuilt under it.
     #[tokio::test]
     async fn an_update_with_the_same_content_keeps_the_row() {
         let fx = Fixture::new().await;
@@ -882,8 +989,7 @@ mod tests {
             )
             .await
             .expect("update succeeds");
-        assert_eq!(result.new_data.len(), 1);
-        assert_eq!(result.new_data[0].id, old.id);
+        assert_eq!(result.data_id, old.id);
         assert_eq!(result.delete_result.deleted_data, 0, "memory-only");
         assert_eq!(result.delete_result.deleted_dataset_links, 0);
 
@@ -895,6 +1001,54 @@ mod tests {
             !cognify.already_completed,
             "the memory-only delete cleared the completion marker, so the item is \
              re-cognified under its new node set rather than skipped"
+        );
+    }
+
+    /// The document's old memory is dropped before the pinned re-add: after an
+    /// update, the graph holds the new content's chunk under the kept id and
+    /// nothing of the old content (Python: `forget(memory_only=True)` runs
+    /// before the re-add, `update.py:309-319`).
+    #[tokio::test]
+    async fn an_update_drops_the_old_memory() {
+        let mut fx = Fixture::new().await;
+        // Small chunks, so the long first version has chunks (by index) the
+        // short second version does not overwrite: only the forget removes
+        // them.
+        fx.cognify_config = CognifyConfig::default().with_chunk_size(16);
+        let first = "ALPHAOLD the first version. ".repeat(40);
+        let old = fx.add(&first).await;
+        // Cognify the first version (an update with the same content).
+        fx.update_with(
+            &fx.add_pipeline,
+            old.id,
+            vec![DataInput::Text(first.clone())],
+            None,
+        )
+        .await
+        .expect("first cognify");
+        let graph_text = |nodes: &[cognee_graph::GraphNode]| format!("{nodes:?}");
+        let (before, _) = fx.graph_db.get_graph_data().await.unwrap();
+        assert!(
+            graph_text(&before).contains("ALPHAOLD"),
+            "the first version is in the graph"
+        );
+
+        let result = fx
+            .update_with(
+                &fx.add_pipeline,
+                old.id,
+                vec![DataInput::Text("BETANEW second.".into())],
+                None,
+            )
+            .await
+            .expect("update succeeds");
+        assert_eq!(result.data_id, old.id);
+        let (after, _) = fx.graph_db.get_graph_data().await.unwrap();
+        let text = graph_text(&after);
+        assert!(text.contains("BETANEW"), "the new version is in the graph");
+        assert!(
+            !text.contains("ALPHAOLD"),
+            "the old version's memory was dropped: {text}"
         );
     }
 }

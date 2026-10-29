@@ -22,6 +22,7 @@ feature-gated).
 | `recall <query>` | Query memory with auto-routing (session-aware + graph-backed) | `-t/--query-type` (optional — omit to auto-route), `-d/--datasets` (repeatable), `-k/--top-k` (10), `--session-id`, `-f/--output-format` (`pretty`/`json`/`simple`, default `pretty`), `--tenant-id` (strict tenant match; omit = tenant-less data only) | — |
 | `improve` | Enrich memory / bridge sessions (feedback + enrichment stages) | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id` (repeatable), `--feedback-alpha` (`0.1`), `--tenant-id` | — |
 | `forget` | Remove memory (a dataset, a single data item, or everything) | `-d/--dataset-name` \| `--data-id` (UUID; requires `--dataset-name`; conflicts with `--all`) \| `--all`, `--tenant-id` | — |
+| `update <data>` | Replace one document of a dataset, **keeping its `data_id`** (the counterpart of Python's `cognee.update()`; Python has no CLI verb for it): its memory is dropped, `<data>` (inline text or a file path) is re-added pinned to the same id, and the document is cognified again. `--data-id` may be a pre-fork (`legacy_id`) id; an id the dataset does not hold fails with "No document found to update" | `--data-id <UUID>` (required), `-d/--dataset-name` (the `default_dataset_name` setting), `--node-set` (repeatable), `--extractor`, `--tenant-id` | — |
 | `add <inputs…>` | Ingest text / file paths / HTTP(S) URLs into a dataset | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--tenant-id` | — |
 | `cognify` | Build the knowledge graph from one or more datasets | `-d/--datasets`, `--chunk-size`, `--chunker` (`TextChunker`/`LangchainChunker`/`CsvChunker`), `--ontology-file`, `-b/--background`, `--llm-max-retries`, `--llm-max-parallel-requests`, `--graph-schema <FILE>` (a custom graph model's JSON Schema; see [the guide](../guides/custom-graph-schema.md)), `--graph-spec <FILE>` (the same model in the spec DSL; not with `--graph-schema`), `--chunk-attachment` (`direct`/`all`; requires `--graph-schema` or `--graph-spec`), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`, see [Keyless cognify](../configuration.md#keyless-cognify)), `--tenant-id` (strict tenant match; without `--datasets`, the owner's datasets in that tenant) | — |
 | `add-and-cognify <inputs…>` | `add` then `cognify` in one step | union of the above; `--tenant-id` applies to both the add and the dataset lookup; `--graph-schema` / `--graph-spec` / `--chunk-attachment` are validated before anything is added | — |
@@ -62,6 +63,9 @@ cognee-cli improve -d my_dataset --session-id chat-42
 cognee-cli forget --all
 cognee-cli forget -d my_dataset
 cognee-cli forget --data-id 00000000-0000-0000-0000-000000000000 -d my_dataset
+
+# Replace a document, keeping its id
+cognee-cli update "new content" --data-id 00000000-0000-0000-0000-000000000000 -d my_dataset
 ```
 
 `remember` with a `--session-id` records session memory; without one it persists

@@ -3,6 +3,7 @@
 use cognee_database::DatabaseError;
 use cognee_delete::DeleteError;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum DatasetError {
@@ -55,6 +56,17 @@ pub enum ApiError {
 
     #[error("Improve error: {0}")]
     Improve(String),
+
+    /// `update()` was called with a data id that resolves to no document:
+    /// neither an exact row id nor a recorded pre-fork `legacy_id` matched in
+    /// the dataset. Python's `UpdateTargetNotFoundError` (404); `add()` is the
+    /// path for new documents.
+    #[error(
+        "No document found to update: data_id '{data_id}' does not exist in dataset \
+         '{dataset_id}' (neither as a document id nor as a pre-fork legacy id). \
+         Use add() to create new documents."
+    )]
+    UpdateTargetNotFound { data_id: Uuid, dataset_id: Uuid },
 
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),

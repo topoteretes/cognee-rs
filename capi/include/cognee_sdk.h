@@ -678,8 +678,8 @@ void cg_sdk_improve(const CgSdk*        sdk,
  *
  *   ForgetResult  — {"target":"…","deleteResult":{…}}
  *
- *   UpdateResult  — {"deletedDataId":"<uuid>","deleteResult":{…},
- *                    "newData":[…],"cognifyResult":{…}|null}
+ *   UpdateResult  — {"dataId":"<uuid>","deleteResult":{…},
+ *                    "cognifyResult":{…}|null}
  *
  *   PruneResult   — {"dataPruned":bool,"graphPruned":bool,"vectorPruned":bool,
  *                    "metadataPruned":bool,"cachePruned":bool}

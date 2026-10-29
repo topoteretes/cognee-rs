@@ -394,7 +394,7 @@ await cognee.forget({"kind": "dataset", "dataset": {"name": "my-dataset"}})
 # Forget everything
 await cognee.forget({"kind": "all"})
 
-# Replace a data item (delete → re-add → re-cognify)
+# Replace a data item: it keeps its id (forget memory → pinned re-add → re-cognify)
 await cognee.update("old-data-uuid", {"type": "text", "text": "updated content"}, "my-dataset")
 
 # Remove all files from storage (metadata DB untouched)

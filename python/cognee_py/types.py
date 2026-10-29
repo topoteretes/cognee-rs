@@ -274,12 +274,11 @@ class UpdateResult(TypedDict):
     """Result of :meth:`Cognee.update` (snake_case view).
 
     The native method returns the same data with camelCase keys
-    (``deletedDataId``, ``deleteResult``, ``newData``, ``cognifyResult``).
+    (``dataId``, ``deleteResult``, ``cognifyResult``).
     """
 
-    deleted_data_id: str
+    data_id: str
     delete_result: Any
-    new_data: list[Any]
     cognify_result: Any
 
 
