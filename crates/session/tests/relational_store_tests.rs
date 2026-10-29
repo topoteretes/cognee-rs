@@ -807,3 +807,87 @@ async fn create_context_row_upserts_on_its_id() {
         4
     );
 }
+
+// Python `uq_cache_session_context_entry`: a create of an existing entry id
+// replaces its payload in place (one row, same position), and concurrent
+// creates of one entry converge on one row.
+#[tokio::test]
+async fn context_create_upserts_on_the_entry_key() {
+    let store = setup_store().await;
+    for (id, content) in [("e1", "first"), ("e2", "second"), ("e1", "replaced")] {
+        store
+            .create_session_context_entry("s1", Some("u"), guidance(id, content))
+            .await
+            .unwrap();
+    }
+    let rows = store
+        .get_session_context_entries("s1", Some("u"))
+        .await
+        .unwrap();
+    let seen: Vec<_> = rows
+        .iter()
+        .map(|r| (r["id"].as_str().unwrap(), r["content"].as_str().unwrap()))
+        .collect();
+    assert_eq!(seen, [("e1", "replaced"), ("e2", "second")]);
+
+    let mut writes = tokio::task::JoinSet::new();
+    for n in 0..8 {
+        let store = Arc::clone(&store);
+        writes.spawn(async move {
+            store
+                .create_session_context_entry("s2", Some("u"), guidance("wm", &n.to_string()))
+                .await
+        });
+    }
+    while let Some(result) = writes.join_next().await {
+        result.unwrap().unwrap();
+    }
+    assert_eq!(
+        store
+            .get_session_context_entries("s2", Some("u"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+// The relational store keys a session without a user like the file and Redis
+// stores ("default"): it sees only that bucket's rows, never every user's.
+#[tokio::test]
+async fn context_rows_without_a_user_are_their_own_bucket() {
+    let store = setup_store().await;
+    store
+        .create_session_context_entry("s1", Some("u"), guidance("e1", "mine"))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .get_session_context_entries("s1", None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .create_session_context_entry("s1", None, guidance("e1", "anonymous"))
+        .await
+        .unwrap();
+    store
+        .create_session_context_entry("s1", None, guidance("e1", "anonymous again"))
+        .await
+        .unwrap();
+    let anonymous = store.get_session_context_entries("s1", None).await.unwrap();
+    assert_eq!(anonymous.len(), 1);
+    assert_eq!(anonymous[0]["content"], "anonymous again");
+    assert!(
+        !store
+            .update_session_context_entry("s1", None, "e2", guidance("e2", "x"))
+            .await
+            .unwrap()
+    );
+    let mine = store
+        .get_session_context_entries("s1", Some("u"))
+        .await
+        .unwrap();
+    assert_eq!(mine[0]["content"], "mine");
+}

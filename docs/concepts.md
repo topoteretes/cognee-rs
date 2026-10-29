@@ -107,7 +107,11 @@ to remember how far they got. Only `"context"` rows are ever rendered
 (`coerce_active_context_entries`). `SessionManager::{get,create,update}_session_context_entry`
 read and write them on every store (`session_context_entries` table,
 `{session_id}.context.json` file, `session_context:{user}:{session}` Redis list);
-deleting or pruning a session removes them.
+deleting or pruning a session removes them. The table holds one row per
+`(user_id, session_id, entry_id)` (unique index `uq_session_context_entry`, as
+Python's `uq_cache_session_context_entry`), so a create of an existing entry id
+replaces it in place; a session without a user is the `"default"` user's, as on
+the file and Redis stores.
 
 ### Node Sets
 

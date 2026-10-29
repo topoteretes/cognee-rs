@@ -111,7 +111,8 @@ pub mod context_entry {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub session_id: String,
-        pub user_id: Option<String>,
+        /// The owning user; `"default"` for a session without one.
+        pub user_id: String,
         /// The payload's `"id"`, promoted so updates target one row.
         pub entry_id: String,
         /// Per-session insertion sequence; reads are ordered by it.

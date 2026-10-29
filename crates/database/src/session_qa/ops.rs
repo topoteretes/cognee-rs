@@ -122,12 +122,14 @@ pub async fn delete_session(
 
     // And the session-context rows, which count toward "the session existed"
     // as in Python's `delete_session`.
-    let mut ctx_delete = entity::context_entry::Entity::delete_many()
-        .filter(entity::context_entry::Column::SessionId.eq(session_id));
-    if let Some(uid) = user_id {
-        ctx_delete = ctx_delete.filter(entity::context_entry::Column::UserId.eq(uid));
-    }
-    let ctx_result = ctx_delete.exec(db).await.map_err(map_db_err)?;
+    // Context rows are keyed by user like every other context-row op: a
+    // session without a user is the `"default"` bucket, never every user's.
+    let ctx_result = entity::context_entry::Entity::delete_many()
+        .filter(entity::context_entry::Column::SessionId.eq(session_id))
+        .filter(entity::context_entry::Column::UserId.eq(context_user_key(user_id)))
+        .exec(db)
+        .await
+        .map_err(map_db_err)?;
 
     Ok(result.rows_affected + ctx_result.rows_affected)
 }
@@ -345,24 +347,32 @@ pub async fn set_graph_context(
 
 // ── session-context rows ───────────────────────────────────────────────────
 
-/// `session_context_entries` rows of one session (all users when `user_id`
-/// is `None`) holding `entry_id`.
+/// The `user_id` key of a session's context rows: the user, or `"default"`
+/// for a session without one — the bucket the file and Redis stores use.
+/// Python's cache always has a user, and matches it exactly.
+fn context_user_key(user_id: Option<&str>) -> &str {
+    user_id.unwrap_or(DEFAULT_CONTEXT_USER)
+}
+
+/// [`context_user_key`] of a session without a user.
+const DEFAULT_CONTEXT_USER: &str = "default";
+
+/// `session_context_entries` rows of one user's session.
 fn context_entry_query(
     session_id: &str,
     user_id: Option<&str>,
 ) -> sea_orm::Select<entity::context_entry::Entity> {
-    let mut query = entity::context_entry::Entity::find()
-        .filter(entity::context_entry::Column::SessionId.eq(session_id));
-    if let Some(uid) = user_id {
-        query = query.filter(entity::context_entry::Column::UserId.eq(uid));
-    }
-    query
+    entity::context_entry::Entity::find()
+        .filter(entity::context_entry::Column::SessionId.eq(session_id))
+        .filter(entity::context_entry::Column::UserId.eq(context_user_key(user_id)))
 }
 
 /// Create or replace one session-context row keyed by
-/// `(user_id, session_id, entry_id)` — Python's `SqlCacheAdapter` upsert, so
-/// racing update-then-create flows converge on one row. A replaced row keeps
-/// its position in the session's order.
+/// `(user_id, session_id, entry_id)` — Python's `SqlCacheAdapter` upsert:
+/// one `INSERT … ON CONFLICT DO UPDATE` on the `uq_session_context_entry`
+/// index, so concurrent update-then-create flows converge on one row, last
+/// writer wins, on every isolation level. A replaced row keeps its position
+/// in the session's order.
 pub async fn create_context_entry(
     db: &DatabaseConnection,
     session_id: &str,
@@ -370,37 +380,39 @@ pub async fn create_context_entry(
     entry_id: &str,
     payload: String,
 ) -> Result<(), DatabaseError> {
-    let txn = db.begin().await.map_err(map_db_err)?;
+    use sea_orm::sea_query::OnConflict;
+
     let now = Utc::now();
-    let existing = context_entry_query(session_id, user_id)
-        .filter(entity::context_entry::Column::EntryId.eq(entry_id))
-        .all(&txn)
+    // A tie with a concurrent insert only orders the two rows by id; a
+    // replaced row ignores it.
+    let seq = next_context_seq(db, session_id).await?;
+    let row = entity::context_entry::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        session_id: Set(session_id.to_string()),
+        user_id: Set(context_user_key(user_id).to_string()),
+        entry_id: Set(entry_id.to_string()),
+        seq: Set(seq),
+        payload: Set(payload),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+    entity::context_entry::Entity::insert(row)
+        .on_conflict(
+            OnConflict::columns([
+                entity::context_entry::Column::UserId,
+                entity::context_entry::Column::SessionId,
+                entity::context_entry::Column::EntryId,
+            ])
+            .update_columns([
+                entity::context_entry::Column::Payload,
+                entity::context_entry::Column::UpdatedAt,
+            ])
+            .to_owned(),
+        )
+        .exec_without_returning(db)
         .await
         .map_err(map_db_err)?;
-    if existing.is_empty() {
-        let seq = next_context_seq(&txn, session_id).await?;
-        entity::context_entry::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
-            session_id: Set(session_id.to_string()),
-            user_id: Set(user_id.map(str::to_string)),
-            entry_id: Set(entry_id.to_string()),
-            seq: Set(seq),
-            payload: Set(payload),
-            created_at: Set(now),
-            updated_at: Set(now),
-        }
-        .insert(&txn)
-        .await
-        .map_err(map_db_err)?;
-    } else {
-        for model in existing {
-            let mut active: entity::context_entry::ActiveModel = model.into();
-            active.payload = Set(payload.clone());
-            active.updated_at = Set(now);
-            active.update(&txn).await.map_err(map_db_err)?;
-        }
-    }
-    txn.commit().await.map_err(map_db_err)
+    Ok(())
 }
 
 /// The next per-session `seq` (insertion order independent of timestamp
@@ -428,6 +440,7 @@ pub async fn get_context_entries(
 ) -> Result<Vec<String>, DatabaseError> {
     let models = context_entry_query(session_id, user_id)
         .order_by_asc(entity::context_entry::Column::Seq)
+        .order_by_asc(entity::context_entry::Column::Id)
         .all(db)
         .await
         .map_err(map_db_err)?;
@@ -450,8 +463,8 @@ pub async fn update_context_entry(
         .all(&txn)
         .await
         .map_err(map_db_err)?;
-    // Python resolves duplicates to the newest row and writes the merged
-    // payload to every one of them, so stragglers converge.
+    // The unique index keeps this to one row; Python still resolves
+    // duplicates to the newest and writes the merge to every one of them.
     let Some(newest) = rows.first() else {
         return Ok(false);
     };

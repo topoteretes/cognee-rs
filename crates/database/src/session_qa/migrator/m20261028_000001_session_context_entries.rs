@@ -2,9 +2,14 @@
 //! `cache_session_context` table) that hold active guidance entries and the
 //! internal state rows (improve watermarks) of a session.
 //!
-//! One row per `(user_id, session_id, entry_id)`: `entry_id` is promoted from
-//! the payload's `"id"` so an update targets one row directly, and `seq` keeps
-//! reads in insertion order. The payload is the JSON-encoded row object.
+//! One row per `(user_id, session_id, entry_id)`, enforced by the unique index
+//! `uq_session_context_entry` (Python's `uq_cache_session_context_entry`) that
+//! the create upsert targets: `entry_id` is promoted from the payload's `"id"`
+//! so an update targets one row directly, and `seq` keeps reads in insertion
+//! order. The payload is the JSON-encoded row object. `user_id` is never NULL
+//! — SQL treats NULLs as distinct, so a NULL key would escape the unique index
+//! — and the store writes `"default"` for a session without a user, as the
+//! file and Redis stores do.
 
 use sea_orm_migration::prelude::*;
 
@@ -30,7 +35,11 @@ impl MigrationTrait for Migration {
                             .text()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(SessionContextEntries::UserId).text())
+                    .col(
+                        ColumnDef::new(SessionContextEntries::UserId)
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(SessionContextEntries::EntryId)
                             .text()
@@ -68,6 +77,19 @@ impl MigrationTrait for Migration {
                     .col(SessionContextEntries::SessionId)
                     .col(SessionContextEntries::UserId)
                     .col(SessionContextEntries::Seq)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .name("uq_session_context_entry")
+                    .table(SessionContextEntries::Table)
+                    .if_not_exists()
+                    .unique()
+                    .col(SessionContextEntries::UserId)
+                    .col(SessionContextEntries::SessionId)
+                    .col(SessionContextEntries::EntryId)
                     .to_owned(),
             )
             .await?;
