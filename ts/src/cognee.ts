@@ -545,7 +545,8 @@ export class Cognee {
   /**
    * Composite add+cognify with optional graph-improvement pass.
    *
-   * `opts.selfImprovement` runs `improve()` after cognify (or on the session).
+   * `opts.selfImprovement` (default `true`, as in Python) runs `improve()` after
+   * cognify (or on the session) and reports it as `result.improve`.
    * `opts.sessionId` switches to session-memory mode (no graph writes).
    */
   async remember(

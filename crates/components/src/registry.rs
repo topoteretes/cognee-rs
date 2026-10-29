@@ -413,6 +413,7 @@ impl ComponentRegistry {
             <crate::sections::SearchSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::RecallSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::HybridSearchSettings as cognee_config_core::ConfigSection>::schema(),
+            <crate::sections::ImproveSettings as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::OntologyConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphExtractionConfig as cognee_config_core::ConfigSection>::schema(),
