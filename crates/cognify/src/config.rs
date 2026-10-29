@@ -339,11 +339,6 @@ pub struct CognifyConfig {
     /// Python parameter: use_pipeline_cache (default: False; removed upstream)
     pub use_pipeline_cache: bool,
 
-    /// Enable temporal graph construction.
-    /// Python parameter: temporal_cognify (default: False)
-    /// Extracts events and timestamps for temporal reasoning
-    pub temporal_cognify: bool,
-
     /// Create WebPage/WebSite provenance nodes for URL-sourced documents.
     ///
     /// When true, documents whose external metadata was produced by URL
@@ -352,8 +347,13 @@ pub struct CognifyConfig {
     /// `WebPage -> PART_OF -> WebSite` edges.
     pub create_web_page_nodes: bool,
 
-    /// Batch size for data processing in temporal cognify.
-    /// Python parameter: data_per_batch (default: 20)
+    /// Python's `data_per_batch` (default: 20), which bounds how many data
+    /// items Python's `run_tasks` processes at once.
+    ///
+    /// Accepted and validated for parity, but no Rust stage reads it since the
+    /// event-graph `temporal_cognify` pipeline, its only reader, was removed:
+    /// the default pipeline bounds graph extraction by `chunks_per_batch` and
+    /// `max_parallel_extractions` instead.
     pub data_per_batch: usize,
 
     /// How to count tokens when chunking text. Default `TikToken` (what an
@@ -424,7 +424,7 @@ pub struct CognifyConfig {
     /// vector-indexed and ownership-ledgered as a runtime DataPoint graph (see
     /// [`crate::dynamic_graph`]). Only the single-pass LLM extractor honours
     /// it, so [`Self::validate`] rejects it together with `graph_backend`,
-    /// [`ExtractionStrategy::Cascade`] or `temporal_cognify`, and compiles it
+    /// or [`ExtractionStrategy::Cascade`], and compiles it
     /// so an invalid schema fails before the pipeline starts.
     ///
     /// Mirrors Python's `graph_model` parameter.
@@ -604,7 +604,6 @@ impl Default for CognifyConfig {
 
             use_pipeline_cache: false,
 
-            temporal_cognify: false,
             create_web_page_nodes: true,
             data_per_batch: 20,
 
@@ -732,19 +731,13 @@ impl CognifyConfig {
         self
     }
 
-    /// Enable or disable temporal cognify.
-    pub fn with_temporal_cognify(mut self, enable: bool) -> Self {
-        self.temporal_cognify = enable;
-        self
-    }
-
     /// Enable or disable WebPage/WebSite provenance graph construction.
     pub fn with_web_page_nodes(mut self, enable: bool) -> Self {
         self.create_web_page_nodes = enable;
         self
     }
 
-    /// Set data per batch for temporal processing.
+    /// Set Python's `data_per_batch` (see [`Self::data_per_batch`]).
     pub fn with_data_per_batch(mut self, batch_size: usize) -> Self {
         self.data_per_batch = batch_size;
         self
@@ -926,16 +919,6 @@ impl CognifyConfig {
         {
             return Err(ConfigError::InvalidParameter(
                 "graph_schema is only supported by the single_pass extraction strategy".to_string(),
-            ));
-        }
-        // Python pops `temporal_cognify` and runs its custom-model pipeline
-        // regardless; the Rust temporal pipeline never reads a graph schema, so
-        // accepting the pair would silently drop the caller's model. Chunk
-        // attachment needs `graph_schema` (checked above), so this also
-        // rejects chunk attachment under temporal cognify.
-        if self.graph_schema.is_some() && self.temporal_cognify {
-            return Err(ConfigError::InvalidParameter(
-                "graph_schema is not supported with temporal_cognify".to_string(),
             ));
         }
         // Python builds the model class before any task runs. Compiling here
@@ -1179,7 +1162,6 @@ mod tests {
         assert!(!config.use_pipeline_cache);
 
         // Advanced defaults
-        assert!(!config.temporal_cognify);
         assert_eq!(config.data_per_batch, 20);
     }
 
@@ -1215,13 +1197,11 @@ mod tests {
         let config = CognifyConfig::default()
             .with_chunk_size(2000)
             .with_incremental_loading(false)
-            .with_summarization(false)
-            .with_temporal_cognify(true);
+            .with_summarization(false);
 
         assert_eq!(config.max_chunk_size, Some(2000));
         assert!(!config.incremental_loading);
         assert!(!config.enable_summarization);
-        assert!(config.temporal_cognify);
     }
 
     #[test]
@@ -1549,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_attachment_requires_custom_non_temporal_graph() {
+    fn chunk_attachment_requires_a_custom_graph() {
         let message = |config: CognifyConfig| match config.validate() {
             Err(ConfigError::InvalidParameter(message)) => message,
             other => panic!("expected InvalidParameter, got {other:?}"),
@@ -1558,39 +1538,12 @@ mod tests {
             message(CognifyConfig::default().with_chunk_attachment(ChunkAttachment::Direct)),
             "chunk_attachment requires graph_schema",
         );
-        // Chunk attachment under temporal cognify is rejected because its
-        // required `graph_schema` is.
-        assert_eq!(
-            message(
-                CognifyConfig::default()
-                    .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
-                    .with_chunk_attachment(ChunkAttachment::All)
-                    .with_temporal_cognify(true)
-            ),
-            "graph_schema is not supported with temporal_cognify",
-        );
         assert!(
             CognifyConfig::default()
                 .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
                 .with_chunk_attachment(ChunkAttachment::Direct)
                 .validate()
                 .is_ok()
-        );
-    }
-
-    /// The temporal pipeline never reads `graph_schema`, so the pair would
-    /// silently drop the caller's model.
-    #[test]
-    fn graph_schema_is_rejected_with_temporal_cognify() {
-        let error = CognifyConfig::default()
-            .with_graph_schema(serde_json::json!({"title": "Graph", "properties": {}}))
-            .with_temporal_cognify(true)
-            .validate()
-            .expect_err("graph_schema + temporal_cognify must be rejected");
-        assert!(
-            matches!(&error, ConfigError::InvalidParameter(message)
-                if message.contains("graph_schema") && message.contains("temporal_cognify")),
-            "{error}"
         );
     }
 

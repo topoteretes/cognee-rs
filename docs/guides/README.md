@@ -11,4 +11,4 @@ and [operations.md](../operations.md).
 | [custom-prompts.md](custom-prompts.md) | Override the LLM prompt used for entity/relationship extraction in cognify. |
 | [custom-graph-schema.md](custom-graph-schema.md) | Supply custom summarization and runtime graph-extraction schemas. |
 | [ontology.md](ontology.md) | Ground extraction with an RDF/OWL/JSON-LD ontology. |
-| [temporal-cognify.md](temporal-cognify.md) | Extract events/timestamps and query them with temporal recall. |
+| [temporal-search.md](temporal-search.md) | Ask time-based questions with `TEMPORAL` search over a default cognify (there is no separate temporal pipeline). |

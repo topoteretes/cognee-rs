@@ -28,7 +28,7 @@ signatures.
 ### Getting started & concepts
 - **[getting-started.md](getting-started.md)** — install/build, configure an LLM, and your first `remember` / `recall`.
 - **[concepts.md](concepts.md)** — the three stores, building blocks (DataPoints, Tasks, Pipelines), and key terminology (Datasets, Sessions, Node Sets, Ontologies, Loaders & Chunkers).
-- **[guides/](guides/README.md)** — focused how-tos: custom prompts, custom graph/summary schema, ontology grounding, temporal cognify.
+- **[guides/](guides/README.md)** — focused how-tos: custom prompts, custom graph/summary schema, ontology grounding, temporal search.
 
 ### Overview & operations
 - **[architecture.md](architecture.md)** — workspace layout, crate-by-crate breakdown, design patterns, key dependencies, and the rustdoc guide. (Single source shared with `.claude/CLAUDE.md`.)

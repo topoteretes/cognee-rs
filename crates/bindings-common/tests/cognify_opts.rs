@@ -143,7 +143,6 @@ fn invalid_values_are_validation_errors() {
         (json!({ "chunkSize": -1 }), "`chunkSize` must be"),
         (json!({ "chunkOverlap": 1.5 }), "`chunkOverlap` must be"),
         (json!({ "summarization": "yes" }), "`summarization` must be"),
-        (json!({ "temporalCognify": 1 }), "`temporalCognify` must be"),
         (json!([1]), "must be an object"),
     ];
     for (opts, expected) in cases {
@@ -216,7 +215,6 @@ fn unknown_keys_are_reported_and_known_ones_are_not() {
         "chunkSize": 10,
         "chunkOverlap": 1,
         "summarization": true,
-        "temporalCognify": false,
         "graphBackend": null,
         "graphSchema": null,
         "graphModel": null,
@@ -226,12 +224,16 @@ fn unknown_keys_are_reported_and_known_ones_are_not() {
         "runInBackground": true,
         // Removed with triplet embedding (SDK-1039): warned about, not honoured.
         "triplet": true,
+        // Removed with the event-graph pipeline (SDK-1039): Python ignores it
+        // with a warning too (`cognify.py` `drop_deprecated_temporal_cognify`).
+        "temporalCognify": true,
     });
     assert_eq!(
         unknown_cognify_opts(&opts),
         vec![
             "chunkAtachment".to_string(),
             "runInBackground".to_string(),
+            "temporalCognify".to_string(),
             "triplet".to_string()
         ]
     );
@@ -334,10 +336,6 @@ async fn cognify_config_with_opts_runs_config_validation() {
         (
             json!({ "chunkAttachment": "all" }),
             "chunk_attachment requires graph_schema",
-        ),
-        (
-            json!({ "graphSchema": schema(), "temporalCognify": true }),
-            "not supported with temporal_cognify",
         ),
         (
             json!({ "graphSchema": { "title": "graph", "properties": {} } }),

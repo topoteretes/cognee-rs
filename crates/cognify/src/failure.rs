@@ -52,8 +52,7 @@ pub enum FailureStop {
     /// The stop is not instantaneous, and it is not per file: each stage stops
     /// at the boundary its own loop offers — a `chunks_per_batch` batch for
     /// graph extraction (default 2000 chunks, so a smaller dataset is one
-    /// batch and every call is dispatched before the failure is seen), a
-    /// `data_per_batch` batch for temporal extraction (default 20 files), and
+    /// batch and every call is dispatched before the failure is seen), and
     /// the in-flight window for summarization, which has no batch loop. This
     /// is an upper bound on wasted spend, not a promise of none;
     /// `docs/configuration.md` has the per-stage table.
@@ -170,14 +169,6 @@ pub enum FailureStage {
     GraphExtraction,
     /// LLM summarization. Failure unit is the chunk; fatality is configurable.
     Summarization,
-    /// LLM temporal event extraction. Failure unit is the chunk.
-    TemporalExtraction,
-    /// LLM temporal entity enrichment. One call covers a whole batch of
-    /// chunks, so one failure is recorded against every chunk that fed it —
-    /// each of those chunks genuinely did fail to be fully processed, and
-    /// attributing the failure to the batch alone would leave it out of the
-    /// chunk failure ratio entirely.
-    TemporalEnrichment,
 }
 
 impl fmt::Display for FailureStage {
@@ -186,8 +177,6 @@ impl fmt::Display for FailureStage {
             FailureStage::Chunking => "chunking",
             FailureStage::GraphExtraction => "graph extraction",
             FailureStage::Summarization => "summarization",
-            FailureStage::TemporalExtraction => "temporal event extraction",
-            FailureStage::TemporalEnrichment => "temporal entity enrichment",
         };
         f.write_str(name)
     }
@@ -627,14 +616,6 @@ mod tests {
             (FailureStage::Chunking, "chunking"),
             (FailureStage::GraphExtraction, "graph extraction"),
             (FailureStage::Summarization, "summarization"),
-            (
-                FailureStage::TemporalExtraction,
-                "temporal event extraction",
-            ),
-            (
-                FailureStage::TemporalEnrichment,
-                "temporal entity enrichment",
-            ),
         ];
         for (stage, expected) in names {
             assert_eq!(stage.to_string(), expected);

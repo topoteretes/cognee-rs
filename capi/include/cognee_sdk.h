@@ -412,10 +412,9 @@ void cg_sdk_add(const CgSdk*        sdk,
  *                      unaffected. Only validation reads it, rejecting
  *                      overlap >= chunk size. Kept for API compat.)
  *   "summarization"  — boolean
- *   "temporalCognify"— boolean
  *   "graphSchema"    — a custom graph model's JSON Schema, as an object or a
  *                      JSON string (alias "graphModel"); {} means the
- *                      default KnowledgeGraph. Not with temporalCognify.
+ *                      default KnowledgeGraph.
  *   "graphSpec"      — the same model in the spec DSL (Python's
  *                      GraphSchemaSpec), as an object or a JSON string,
  *                      compiled into a graphSchema. Not with graphSchema.

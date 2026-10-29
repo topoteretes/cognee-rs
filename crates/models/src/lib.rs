@@ -14,6 +14,7 @@ mod edge_type;
 mod embedding;
 mod entity;
 mod entity_type;
+mod extracted_timestamp;
 pub mod has_datapoint;
 /// Vector payloads in the shape of Python's `IndexSchema`.
 pub mod index_schema;
@@ -22,8 +23,6 @@ mod internal_node;
 pub mod memory;
 /// Permission helpers.
 pub mod permission;
-/// Temporal event and timestamp types for the cognify pipeline.
-pub mod temporal_event;
 mod timestamp;
 mod triplet;
 mod user;
@@ -40,6 +39,7 @@ pub use edge_type::EdgeType;
 pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
+pub use extracted_timestamp::RawExtractedTimestamp;
 pub use has_datapoint::HasDataPoint;
 pub use index_schema::{
     INDEX_SCHEMA_KEYS, INDEX_SCHEMA_METADATA_KEY, INDEX_SCHEMA_TYPE, IndexRefs,
@@ -48,7 +48,6 @@ pub use index_schema::{
 pub use internal_node::{INTERNAL_PROPERTY, is_internal_node, marks_internal};
 pub use memory::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 pub use permission::permissions;
-pub use temporal_event::*;
 pub use timestamp::{
     TimePeriod, Timestamp, TimestampPrecision, month_from_word, normalize_absolute_date,
     parse_time_period, timestamp_overlaps,

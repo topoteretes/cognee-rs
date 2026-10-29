@@ -343,10 +343,6 @@ impl RunContext<'_> {
     }
 
     /// The run id to sweep on, or `None` with an explanation logged.
-    ///
-    /// Both pipelines are swept the same way: the temporal persistence stage
-    /// records ownership of everything it writes, so a temporal sweep selects
-    /// real rows.
     fn sweepable_run_id(&self) -> Option<Uuid> {
         match self.pipeline_run_id {
             Some(run_id) => Some(run_id),
@@ -362,13 +358,9 @@ impl RunContext<'_> {
 
     /// Mark `data_ids` complete for this dataset's cognify pipeline.
     ///
-    /// Gated on `incremental_loading` only. Both branches write under the one
+    /// Gated on `incremental_loading` only. Writes under the one
     /// `cognify_pipeline` key the sweep's clearer and the delete path already
-    /// use, matching Python, whose temporal cognify runs under that same
-    /// pipeline name. The consequence is user-visible and deliberate: a dataset
-    /// a standard run completed is a no-op for a later temporal run, and the
-    /// other way round. Callers who want both graphs over one dataset set
-    /// `with_incremental_loading(false)`.
+    /// use, matching Python.
     ///
     /// A write failure is a warning, never an error. The run completed; a
     /// missing marker only costs a redo, which is always the safe direction.
@@ -1026,11 +1018,9 @@ mod tests {
         data_id
     }
 
-    /// A temporal run is swept like any other. It writes its own ownership
-    /// rows now, so there is no branch left that selects nothing while
-    /// reporting success.
+    /// A started run is swept on its own run id.
     #[tokio::test]
-    async fn a_temporal_run_is_swept_like_a_standard_one() {
+    async fn a_started_run_is_swept_on_its_run_id() {
         let (db, dataset_id, ctx_parts) = run_context_fixture().await;
         let config = CognifyConfig::default();
         let run_id = ctx_parts.3;
@@ -1042,7 +1032,7 @@ mod tests {
             dataset_id,
             pipeline_run_id: Some(run_id),
             pipeline_id: Some(ctx_parts.4),
-            pipeline_name: "temporal-cognify",
+            pipeline_name: "cognify_pipeline",
             processed: Vec::new(),
             config: &config,
         };

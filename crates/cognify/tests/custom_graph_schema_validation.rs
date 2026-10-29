@@ -4,8 +4,7 @@
     reason = "test code — panics are acceptable failures"
 )]
 //! A runtime graph schema is validated before the cognify pipeline starts
-//! (SDK-1124): an invalid schema, or one paired with `temporal_cognify`,
-//! fails `cognify()` before any document is classified, chunked or sent to
+//! (SDK-1124): an invalid schema fails `cognify()` before any document is classified, chunked or sent to
 //! the LLM, as Python builds its model class before running a task.
 //!
 //! Run with: cargo test --package cognee-cognify --test custom_graph_schema_validation
@@ -139,20 +138,6 @@ async fn an_invalid_graph_schema_fails_before_the_pipeline_runs() {
     })))
     .await;
     assert_config_error(result, "research_graph");
-    assert_eq!(llm_calls, 0, "no chunk may reach the LLM");
-    assert_eq!(nodes, 0, "nothing may be written to the graph");
-}
-
-#[tokio::test]
-async fn a_graph_schema_with_temporal_cognify_fails_before_the_pipeline_runs() {
-    let (result, llm_calls, nodes) = run(CognifyConfig::default()
-        .with_graph_schema(json!({
-            "title": "ResearchGraph",
-            "properties": {"name": {"type": "string"}}
-        }))
-        .with_temporal_cognify(true))
-    .await;
-    assert_config_error(result, "temporal_cognify");
     assert_eq!(llm_calls, 0, "no chunk may reach the LLM");
     assert_eq!(nodes, 0, "nothing may be written to the graph");
 }

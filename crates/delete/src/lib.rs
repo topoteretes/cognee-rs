@@ -74,6 +74,9 @@ const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("TextSummary", "text"),
     ("EdgeType", "relationship_name"),
     ("Triplet", "text"),
+    // Legacy: written only by the removed `temporal_cognify` event pipeline
+    // (SDK-1039). Kept so a wipe still clears what older builds wrote, as
+    // `Triplet_text` is.
     ("Event", "name"),
 ];
 

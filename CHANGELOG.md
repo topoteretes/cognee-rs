@@ -18,6 +18,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The event-graph `temporal_cognify` pipeline is removed (SDK-1039).**
+  Python deprecated `temporal_cognify` and ignores it (cognee 1.6.2 was the
+  last release in which it built the event graph); by the SDK-1115 rule Rust
+  goes straight to the post-removal state, with no shim. Default cognify
+  already writes dates as `Timestamp` nodes, and TEMPORAL search reranks by
+  them, so TEMPORAL needs no special cognify. Removed:
+  `CognifyConfig::temporal_cognify` / `with_temporal_cognify`, the CLI's
+  `--temporal-cognify` flag (now an unknown argument), the bindings'
+  `temporalCognify` option (now an unknown key, warned about and ignored, as
+  Python warns and ignores it; also gone from the Python `CognifyOpts`, TS
+  `CogneeCognifyOptions`, Java `CognifyOptions` and C header docs),
+  `build_temporal_cognify_pipeline`, `extract_temporal_events`,
+  `add_temporal_data_points`, their `make_*_task` factories,
+  `ExtractedTemporalEvents`, `AttributedEvent`, the
+  `cognee_cognify::temporal_extraction` module (`TemporalEventExtractor`,
+  `TemporalEntityEnricher`), `FailureStage::{TemporalExtraction,
+  TemporalEnrichment}`, and `cognee_models::{TemporalEvent, EventAttribute,
+  CognifyTimestamp, CognifyInterval, to_cognify_timestamp}` with the public
+  `cognee_models::temporal_event` module (`RawExtractedTimestamp`, which
+  TEMPORAL search uses for the question's window, stays at the crate root).
+  `graph_schema` together with the flag is no longer a validation error.
+  `cognee-cli pipeline-unblock --pipeline` knows only `cognify_pipeline`.
+  `data_per_batch` stays, as Python's parameter, but no Rust stage reads it
+  now. A dataset an older build cognified with the flag keeps `Event` nodes
+  that nothing reads (TEMPORAL answers on it with plain hybrid results);
+  rebuild it with a memory-only forget and a fresh cognify, as Python advises.
+  The store-wide wipe still lists the legacy `Event_name` collection.
+
 - **`TextSummary.source_task` is `extract_graph_and_summarize` (SDK-1039).**
   Summaries were stamped `summarize_text`; Python stamps them with the merged
   task's name (`run_tasks_base._stamp_provenance`, `cognify.py:643-653`).

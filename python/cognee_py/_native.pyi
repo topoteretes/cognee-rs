@@ -698,7 +698,7 @@ class Cognee:
 
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-        ``temporalCognify``, ``graphSchema`` (a custom graph
+        ``graphSchema`` (a custom graph
         model's JSON Schema, as a dict or a JSON string; alias ``graphModel``),
         ``graphSpec`` (the same model in the spec DSL, as a dict or a JSON
         string; see :func:`graph_spec_to_json_schema`) and

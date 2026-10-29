@@ -146,15 +146,6 @@ describe("cognify options (Tier-A, no LLM)", () => {
     ).rejects.toThrow(/invalid `graphSpec`/);
   });
 
-  it("rejects graphSchema with temporalCognify", async () => {
-    await expect(
-      native.cogneeCognify(handle, "missing", {
-        graphSchema: GRAPH_SCHEMA,
-        temporalCognify: true,
-      })
-    ).rejects.toThrow(/temporal_cognify/);
-  });
-
   it("accepts valid options, failing only on the missing dataset", async () => {
     await expect(
       native.cogneeCognify(handle, "missing", {

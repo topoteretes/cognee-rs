@@ -244,11 +244,9 @@ differs.
 Only the single-pass LLM extractor honours a custom schema: `validate()` rejects
 `graph_schema` together with a `graph_backend` or the `cascade` extraction
 strategy, as Python raises for a custom `graph_model` with a non-LLM extractor.
-`validate()` also rejects `graph_schema` together with `temporal_cognify`. This
-is a Rust decision: Python drops `temporal_cognify` and runs the custom model,
-whereas the Rust temporal pipeline would ignore the schema. Finally,
-`validate()` compiles the schema, so an invalid one fails before any document
-is classified or chunked, as Python builds the model class before running.
+Finally, `validate()` compiles the schema, so an invalid one fails before any
+document is classified or chunked, as Python builds the model class before
+running.
 
 ### Example (programmatic)
 
@@ -294,9 +292,7 @@ let config = CognifyConfig::default()
 By default each chunk links to the stored root, or to the children that replace
 a transparent root. Use `with_chunk_attachment(ChunkAttachment::All)` to link
 it to every persisted DataPoint reached by the transparent storage walk.
-Chunk attachment requires a custom graph schema. It is also rejected for
-temporal cognify, by the same Rust decision as `graph_schema` above: Python
-ignores `temporal_cognify` on this path rather than rejecting it.
+Chunk attachment requires a custom graph schema.
 
 ### FromIdentity references (Rust-only keyword)
 
@@ -471,12 +467,12 @@ or environment variable for either.
 an omitted or empty `graph_model`. Every entry point validates before any side
 effect, so `add-and-cognify` adds nothing when the options are invalid: an
 attachment other than `"direct"` / `"all"` (case-sensitive, as Python compares
-it), an attachment without a schema, a schema that does not compile, or a
-schema combined with `temporal_cognify`, a graph backend or the `cascade`
-strategy is a validation error (exit code 2 in the CLI, `VALIDATION_ERROR` in
-the bindings). In the bindings a wrongly-typed value for any known cognify
-option is an error too, and an unknown option is logged as a warning, as
-Python's `cognify()` forwards unknown keywords instead of raising.
+it), an attachment without a schema, a schema that does not compile, or a schema
+combined with a graph backend or the `cascade` strategy is a validation error
+(exit code 2 in the CLI, `VALIDATION_ERROR` in the bindings). In the bindings a
+wrongly-typed value for any known cognify option is an error too, and an unknown
+option is logged as a warning, as Python's `cognify()` forwards unknown keywords
+instead of raising.
 
 ### Ownership and deletion
 

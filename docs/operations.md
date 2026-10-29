@@ -88,19 +88,20 @@ summarize** (conditional) — one fused stage running both concurrently over the
 same chunks, matching Python's `extract_graph_and_summarize` → **add data
 points** (six vector collections + provenance to the relational DB) →
 **extract DLT FK edges**. Configurable via `CognifyConfig`
-(chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
+(chunk strategy, custom prompts/schemas). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
-Dates come out of the default extraction too, with no separate temporal
-pipeline: a node the LLM types `Timestamp` whose name is an absolute time
-(`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes a shared
-`Timestamp` graph node — one per normalized time string, carrying
-`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its
-`precision` — that `*_at` edges point at and every chunk naming it `contains`.
-Timestamps are not embedded. A name that does not parse stays an ordinary
-entity. Year-less dates in the text ("27 April", "four weeks later") are
-resolved against the last stated year earlier in the document and handed to the
-default prompt as normalization hints; a custom prompt receives none.
+Dates come out of the default extraction, with no separate temporal pipeline
+(Rust's event-graph `temporal_cognify` was removed in SDK-1039; Python ignores
+the flag since 1.6.3): a node the LLM types `Timestamp` whose name is an
+absolute time (`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes
+a shared `Timestamp` graph node — one per normalized time string, carrying
+`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its `precision`
+— that `*_at` edges point at and every chunk naming it `contains`. Timestamps
+are not embedded. A name that does not parse stays an ordinary entity. Year-less
+dates in the text ("27 April", "four weeks later") are resolved against the last
+stated year earlier in the document and handed to the default prompt as
+normalization hints; a custom prompt receives none.
 
 An extracted entity's id derives from its **name** (`Entity.id_for(name)`), as in
 Python, so the same name from two chunks or documents is one node; several nodes
@@ -150,8 +151,7 @@ The abort point is a *batch* boundary, not a file boundary, and how much work
 `FailFast` actually saves depends on how big that batch is. Graph extraction
 stops after the batch that contained the failure — `chunks_per_batch`, default
 2000, so a dataset under 2000 chunks is one batch and every extraction call is
-dispatched before the failure is noticed. Temporal extraction stops after
-`data_per_batch`, default 20 files. Summarization has no batch loop: it stops
+dispatched before the failure is noticed. Summarization has no batch loop: it stops
 dispatching as soon as a fatal failure comes back, but the calls already in
 flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
 `FailFast` is an upper bound on wasted spend, not a promise of none — see
@@ -176,11 +176,6 @@ One caveat. **Cancellation is swept**, unlike Python — though there is no
 caller-facing cancel handle on `cognify()` today, and simply dropping the future
 runs no sweep at all.
 
-All of the above applies to the **temporal** pipeline too: it records ownership
-of its events, timestamps, intervals and entity nodes before it writes them, its
-two LLM passes collect failures rather than swallowing them, and a failed
-temporal run converges the same way.
-
 #### Re-cognifying is now incremental — a behaviour change
 
 `incremental_loading` is on by default and now does what it says. A successful
@@ -195,9 +190,7 @@ re-processing everything on every call will see it "stop doing anything"; set
 run marks nothing, and a sweep clears the markers of whatever it rolled back, so
 the next run redoes exactly the work that was lost.
 
-Both branches share one marker key, matching Python, so **a `cognify()` and a
-temporal `cognify()` over the same dataset are no-ops for each other**. Turn
-incremental loading off to build both graphs over one dataset.
+The markers live under Python's one `cognify_pipeline` key.
 
 ### search (retrieval)
 
@@ -283,9 +276,9 @@ and the same cut plain hybrid uses keeps `top_k`. With nothing to rerank by it
 answers with the plain hybrid result and records why: `empty_graph`,
 `no_time_constraint` / `invalid_interval` (no window), `no_temporal_match`,
 `no_candidate_overlap` (`TemporalHybridRetriever::retrieve` returns these
-diagnostics with the context). The `Timestamp` nodes are default cognify's; the
-`Event` nodes of the separate temporal-cognify pipeline are not read, so such a
-graph gets plain hybrid answers, as in Python.
+diagnostics with the context). The `Timestamp` nodes are default cognify's. A
+graph an older build wrote with the removed event-graph pipeline holds `Event`
+nodes nothing reads, so it gets plain hybrid answers, as in Python.
 
 ## Additional operations
 
