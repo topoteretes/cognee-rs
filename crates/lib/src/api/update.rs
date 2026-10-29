@@ -633,8 +633,12 @@ mod tests {
             let storage: Arc<dyn StorageTrait> = Arc::new(cognee_storage::MockStorage::new());
             let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
             let vector_db: Arc<dyn VectorDB> = Arc::new(cognee_vector::MockVectorDB::new());
+            // Graph and vector stores wired as in a real setup, so the
+            // memory-only forget really drops the document's memory.
             let delete_service =
-                DeleteService::new(Arc::clone(&storage), db.clone() as Arc<dyn DeleteDb>);
+                DeleteService::new(Arc::clone(&storage), db.clone() as Arc<dyn DeleteDb>)
+                    .with_graph_db(Arc::clone(&graph_db))
+                    .with_vector_db(Arc::clone(&vector_db));
             let add_pipeline = Self::pipeline(&db, &storage, &graph_db, &vector_db, true);
             Self {
                 llm: Arc::new(
@@ -997,6 +1001,54 @@ mod tests {
             !cognify.already_completed,
             "the memory-only delete cleared the completion marker, so the item is \
              re-cognified under its new node set rather than skipped"
+        );
+    }
+
+    /// The document's old memory is dropped before the pinned re-add: after an
+    /// update, the graph holds the new content's chunk under the kept id and
+    /// nothing of the old content (Python: `forget(memory_only=True)` runs
+    /// before the re-add, `update.py:309-319`).
+    #[tokio::test]
+    async fn an_update_drops_the_old_memory() {
+        let mut fx = Fixture::new().await;
+        // Small chunks, so the long first version has chunks (by index) the
+        // short second version does not overwrite: only the forget removes
+        // them.
+        fx.cognify_config = CognifyConfig::default().with_chunk_size(16);
+        let first = "ALPHAOLD the first version. ".repeat(40);
+        let old = fx.add(&first).await;
+        // Cognify the first version (an update with the same content).
+        fx.update_with(
+            &fx.add_pipeline,
+            old.id,
+            vec![DataInput::Text(first.clone())],
+            None,
+        )
+        .await
+        .expect("first cognify");
+        let graph_text = |nodes: &[cognee_graph::GraphNode]| format!("{nodes:?}");
+        let (before, _) = fx.graph_db.get_graph_data().await.unwrap();
+        assert!(
+            graph_text(&before).contains("ALPHAOLD"),
+            "the first version is in the graph"
+        );
+
+        let result = fx
+            .update_with(
+                &fx.add_pipeline,
+                old.id,
+                vec![DataInput::Text("BETANEW second.".into())],
+                None,
+            )
+            .await
+            .expect("update succeeds");
+        assert_eq!(result.data_id, old.id);
+        let (after, _) = fx.graph_db.get_graph_data().await.unwrap();
+        let text = graph_text(&after);
+        assert!(text.contains("BETANEW"), "the new version is in the graph");
+        assert!(
+            !text.contains("ALPHAOLD"),
+            "the old version's memory was dropped: {text}"
         );
     }
 }
