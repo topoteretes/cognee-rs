@@ -184,6 +184,7 @@ async fn remember_session_returns_session_stored() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await
@@ -223,6 +224,7 @@ async fn remember_session_self_improvement_detached() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await

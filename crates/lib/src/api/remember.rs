@@ -220,8 +220,8 @@ fn auto_improve_config(
 /// `improve_config` is the validated improve settings
 /// ([`Settings::auto_improve_config`](crate::config::Settings::auto_improve_config));
 /// `None` (invalid settings) skips the automatic improve — an improve-only
-/// knob never blocks ingestion. `personalization_enabled` is handed to that
-/// improve.
+/// knob never blocks ingestion. `personalization` and `auto_feedback` are
+/// handed to that improve (see [`ImproveParams`]).
 ///
 /// The permanent mode is synchronous and returns a fully-populated
 /// [`RememberResult`]; background dispatch of it is a host-side concern
@@ -247,7 +247,8 @@ pub async fn remember(
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
-    personalization_enabled: bool,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
 ) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
 
@@ -302,7 +303,8 @@ pub async fn remember(
             ontology_resolver,
             cognify_config,
             improve_config,
-            personalization_enabled,
+            personalization,
+            auto_feedback,
             start,
         )
         .await;
@@ -578,7 +580,8 @@ async fn remember_session(
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
-    personalization_enabled: bool,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
     start: Instant,
 ) -> Result<RememberResult, ApiError> {
     let store = session_store.clone().ok_or_else(|| {
@@ -627,7 +630,8 @@ async fn remember_session(
         tenant_id,
         self_improvement,
         improve_config,
-        personalization_enabled,
+        personalization,
+        auto_feedback,
         llm,
         storage,
         graph_db,
@@ -687,8 +691,11 @@ pub struct SessionAutoImprove {
     pub self_improvement: bool,
     /// The validated improve settings; `None` (invalid settings) skips.
     pub improve_config: Option<ImproveConfig>,
-    /// Handed to the improve.
-    pub personalization_enabled: bool,
+    /// The personalization settings handed to the improve
+    /// ([`ImproveParams::personalization`]).
+    pub personalization: cognee_search::PreferenceConfig,
+    /// Handed to the improve ([`ImproveParams::auto_feedback`]).
+    pub auto_feedback: bool,
     /// LLM handle.
     pub llm: Arc<dyn Llm>,
     /// File storage handle.
@@ -733,7 +740,8 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
         tenant_id,
         self_improvement,
         improve_config,
-        personalization_enabled,
+        personalization,
+        auto_feedback,
         llm,
         storage,
         graph_db,
@@ -774,7 +782,8 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             tenant_id,
             feedback_alpha: None,
             config,
-            personalization_enabled,
+            personalization,
+            auto_feedback,
             llm,
             storage,
             graph_db,

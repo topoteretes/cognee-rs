@@ -30,6 +30,7 @@
 mod config;
 mod result;
 mod stages;
+mod user_preferences;
 mod watermark;
 
 use std::sync::Arc;
@@ -63,9 +64,14 @@ pub use result::{
     StageStatus,
 };
 pub use stages::{
-    DEFAULT_STAGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NOT_PORTED,
-    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
-    REMOVED_STAGE_NAMES, StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
+    DEFAULT_STAGES, REASON_AUTO_FEEDBACK_DISABLED, REASON_NO_LLM_CONFIGURED,
+    REASON_NO_NEW_TRACE_STEPS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
+    REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, REMOVED_STAGE_NAMES,
+    StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
+};
+pub use user_preferences::{
+    PreferenceUpdateResult, REASON_NO_CHANGES, STATUS_COMPLETED, build_rating_map,
+    refresh_preference_text, resolve_turn_rating, update_user_preferences,
 };
 pub use watermark::{
     IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME, REASON_NO_WRITES_SINCE_LAST_IMPROVE,
@@ -104,9 +110,15 @@ pub struct ImproveParams<'a> {
     /// `stages_disabled`, the default `feedback_alpha`, `review_conflicts`.
     /// Checked again before the first stage.
     pub config: ImproveConfig,
-    /// The cognee-wide `personalization_enabled` setting: gates
-    /// `update_user_preferences`.
-    pub personalization_enabled: bool,
+    /// The personalization settings
+    /// ([`Settings::preference_config`](crate::config::Settings::preference_config)):
+    /// `enabled` gates `update_user_preferences`, `alpha` and `beta` drive
+    /// its weight update and decay.
+    pub personalization: cognee_search::PreferenceConfig,
+    /// Automatic session context is on
+    /// ([`Settings::auto_feedback_enabled`](crate::config::Settings::auto_feedback_enabled)):
+    /// gates `extract_agent_context` (`auto_feedback_disabled`).
+    pub auto_feedback: bool,
 
     /// Deprecated in Python (SDK-1115): custom extraction tasks, which Python
     /// runs as a trailing `custom_tasks` stage. Not supported; ignored.
@@ -388,7 +400,8 @@ async fn run_improve(
         tenant_id,
         feedback_alpha,
         config,
-        personalization_enabled,
+        personalization,
+        auto_feedback,
         llm,
         storage,
         graph_db,
@@ -475,7 +488,8 @@ async fn run_improve(
                 // `improve.review_conflicts` (IMPROVE_REVIEW_CONFLICTS) opts in;
                 // Rust has no per-call `review_conflicts` argument yet.
                 review_conflicts: config.review_conflicts,
-                personalization_enabled,
+                personalization,
+                auto_feedback,
                 capabilities,
                 dataset_id,
                 llm,

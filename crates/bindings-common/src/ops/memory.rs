@@ -274,11 +274,12 @@ pub async fn run_remember(
         super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?
     });
 
-    let (improve_config, personalization_enabled) = {
+    let (improve_config, personalization, auto_feedback) = {
         let settings = state.cm.settings();
         (
             settings.auto_improve_config(),
-            settings.personalization_enabled,
+            settings.preference_config(),
+            settings.auto_feedback_enabled(),
         )
     };
     let result = remember(
@@ -301,7 +302,8 @@ pub async fn run_remember(
         svc.ontology_resolver.clone(),
         cognify_config,
         improve_config,
-        personalization_enabled,
+        personalization,
+        auto_feedback,
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
@@ -431,12 +433,16 @@ pub async fn run_improve(
 
     // Explicit wins; otherwise `improve()` uses `improve.feedback_alpha`.
     let feedback_alpha = opts.get("feedbackAlpha").and_then(|v| v.as_f64());
-    let (improve_config, personalization_enabled) = {
+    let (improve_config, personalization, auto_feedback) = {
         let settings = state.cm.settings();
         let config = settings
             .improve_config()
             .map_err(|e| SdkError::Validation(e.to_string()))?;
-        (config, settings.personalization_enabled)
+        (
+            config,
+            settings.preference_config(),
+            settings.auto_feedback_enabled(),
+        )
     };
 
     let tenant_id = opts_tenant(opts)?;
@@ -455,7 +461,8 @@ pub async fn run_improve(
         tenant_id,
         feedback_alpha,
         config: improve_config,
-        personalization_enabled,
+        personalization,
+        auto_feedback,
         extraction_tasks: None,
         enrichment_tasks: None,
         data: None,

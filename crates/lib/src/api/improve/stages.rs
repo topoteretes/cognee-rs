@@ -24,6 +24,7 @@ use cognee_llm::Llm;
 use cognee_models::DataInput;
 use cognee_models::dataset_scope::maybe_with_dataset;
 use cognee_ontology::OntologyResolver;
+use cognee_search::PreferenceConfig;
 use cognee_session::{SessionManager, SessionStore};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -37,6 +38,9 @@ use super::watermark::{
 
 /// Skip reason of `extract_agent_context` without a usable session manager.
 pub const REASON_SESSION_MANAGER_UNAVAILABLE: &str = "session_manager_unavailable";
+/// Skip reason of `extract_agent_context` while automatic session context
+/// is off (`auto_feedback`, or session caching, off).
+pub const REASON_AUTO_FEEDBACK_DISABLED: &str = "auto_feedback_disabled";
 /// Skip reason of `update_user_preferences` while personalization is off.
 pub const REASON_PERSONALIZATION_DISABLED: &str = "personalization_disabled";
 /// Skip reason of an opt-in stage the caller did not opt into.
@@ -238,8 +242,11 @@ pub(crate) struct ImproveStages<'a> {
     pub build_global_context_index: bool,
     /// Opt in to `review_conflicts` (`improve.review_conflicts`).
     pub review_conflicts: bool,
-    /// The cognee-wide `personalization_enabled` setting.
-    pub personalization_enabled: bool,
+    /// The personalization settings (`personalization_enabled`,
+    /// `preference_alpha`, `preference_beta`).
+    pub personalization: PreferenceConfig,
+    /// Automatic session context is on (Python's `is_auto_feedback_enabled`).
+    pub auto_feedback: bool,
     pub capabilities: GraphCapabilities,
     /// The resolved dataset, once it exists; a session-persisting stage may
     /// create it mid-run, so a `None` is looked up again on demand.
@@ -265,29 +272,25 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::FeedbackWeights if !self.capabilities.supports_feedback_weights => {
                 Some(REASON_BACKEND_UNSUPPORTED)
             }
-            StageKind::ExtractAgentContext => Some(
+            StageKind::ExtractAgentContext
                 if !self
                     .session_manager
                     .as_ref()
-                    .is_some_and(|m| m.is_available())
-                {
-                    REASON_SESSION_MANAGER_UNAVAILABLE
-                } else if !self.llm.is_configured() {
-                    REASON_NO_LLM_CONFIGURED
-                } else {
-                    // TODO(SDK-1044 step 6): port the agent-context extraction.
-                    REASON_NOT_PORTED
-                },
-            ),
-            StageKind::DistillSessions if !self.llm.is_configured() => {
+                    .is_some_and(|m| m.is_available()) =>
+            {
+                Some(REASON_SESSION_MANAGER_UNAVAILABLE)
+            }
+            StageKind::ExtractAgentContext if !self.auto_feedback => {
+                Some(REASON_AUTO_FEEDBACK_DISABLED)
+            }
+            StageKind::ExtractAgentContext | StageKind::DistillSessions
+                if !self.llm.is_configured() =>
+            {
                 Some(REASON_NO_LLM_CONFIGURED)
             }
-            StageKind::UpdateUserPreferences => Some(if self.personalization_enabled {
-                // TODO(SDK-1044 step 6): port the preference update.
-                REASON_NOT_PORTED
-            } else {
-                REASON_PERSONALIZATION_DISABLED
-            }),
+            StageKind::UpdateUserPreferences if !self.personalization.enabled => {
+                Some(REASON_PERSONALIZATION_DISABLED)
+            }
             StageKind::BuildTruthSubspace if !self.build_truth_subspace => {
                 Some(REASON_OPT_IN_DISABLED)
             }
@@ -328,13 +331,13 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::FeedbackWeights => self.feedback_weights().await.into(),
             StageKind::PersistSessionQa => self.persist_session_qa().await,
             StageKind::PersistAgentTraces => self.persist_agent_traces().await,
+            StageKind::ExtractAgentContext => self.extract_agent_context().await,
             StageKind::DistillSessions => self.distill_sessions().await,
+            StageKind::UpdateUserPreferences => self.update_user_preferences().await.into(),
             StageKind::BuildTruthSubspace => self.build_truth_subspace().await.into(),
             StageKind::GlobalContextIndex => self.global_context_index().await,
-            // Their gates always skip them (see `gate`).
-            StageKind::ExtractAgentContext
-            | StageKind::UpdateUserPreferences
-            | StageKind::ReviewConflicts => {
+            // Its gate always skips it (see `gate`).
+            StageKind::ReviewConflicts => {
                 StageResult::skipped(stage.name(), REASON_NOT_PORTED).into()
             }
         }
@@ -592,6 +595,122 @@ impl ImproveStages<'_> {
             budget_exhausted: e.is_budget_exhausted(),
             message: format!("cognify of the trace feedback failed: {e}"),
         })
+    }
+
+    /// Stage 4: flush each session's pending trace steps into agent-profile
+    /// lessons (Python's `ExtractAgentContextStage`), with the watermark the
+    /// mid-session extraction shares and `min_new_traces = 1`.
+    ///
+    /// Fail-open per session: one failing session never blocks the others,
+    /// and the stage is `errored` when any failed (an exhausted LLM budget
+    /// when the last failure was a 402).
+    async fn extract_agent_context(&mut self) -> StageRun {
+        const STAGE: &str = StageKind::ExtractAgentContext.name();
+        let Some(manager) = self.session_manager.as_ref() else {
+            return StageResult::errored(STAGE, "session manager is required").into();
+        };
+        let user_id = self.owner_id.to_string();
+        let mut lessons = 0usize;
+        let mut failed = 0usize;
+        let mut last_error: Option<cognee_session::SessionError> = None;
+        for session_id in &self.session_ids {
+            match cognee_session::extract_pending_agent_context(
+                manager,
+                self.llm.as_ref(),
+                session_id,
+                &user_id,
+                1,
+                cognee_session::TRACE_EXTRACTION_OVERLAP,
+                cognee_session::BATCH_TRACE_LIMIT,
+            )
+            .await
+            {
+                Ok(touched) => lessons += touched.len(),
+                Err(error) => {
+                    warn!(
+                        session_id,
+                        %error,
+                        "improve: agent-context extraction failed (non-fatal)"
+                    );
+                    failed += 1;
+                    last_error = Some(error);
+                }
+            }
+        }
+        info!(
+            lessons,
+            sessions_failed = failed,
+            "improve: agent context extracted"
+        );
+        let counts = [
+            ("lessons", count(lessons)),
+            ("sessions_failed", count(failed)),
+        ];
+        match last_error {
+            Some(error) => StageRun::with_budget(
+                StageResult::errored(STAGE, error.to_string()).with_counts(counts),
+                error.is_budget_exhausted(),
+            ),
+            None => StageResult::completed(STAGE).with_counts(counts).into(),
+        }
+    }
+
+    /// Stage 6: fold rated turns and stated preferences into the user's
+    /// `prefers` subgraph (Python's `UpdateUserPreferencesStage`), in the
+    /// dataset's storage scope. `completed` carries the reason `no_changes`
+    /// when there was nothing to fold.
+    async fn update_user_preferences(&mut self) -> StageResult {
+        const STAGE: &str = StageKind::UpdateUserPreferences.name();
+        let Some(manager) = self.session_manager.clone() else {
+            return StageResult::errored(STAGE, "session manager is required");
+        };
+        let dataset_id = match self.dataset_id().await {
+            Ok(Some(id)) => id,
+            // Python's `resolve_preference_scope` raises: the edges must land
+            // in the graph they refer to.
+            Ok(None) => {
+                return StageResult::errored(
+                    STAGE,
+                    format!(
+                        "Dataset '{}' not found or not writable for this user.",
+                        self.dataset_name
+                    ),
+                );
+            }
+            Err(e) => return StageResult::errored(STAGE, e),
+        };
+        let (user_id, dataset_key) = (self.owner_id.to_string(), dataset_id.to_string());
+        let update = super::user_preferences::update_user_preferences(
+            self.graph_db.as_ref(),
+            &manager,
+            &self.personalization,
+            &user_id,
+            &dataset_key,
+            &self.session_ids,
+        );
+        match maybe_with_dataset(Some(dataset_id), update).await {
+            Ok(r) => {
+                info!(
+                    status = r.status,
+                    turns = r.turns_applied,
+                    edges = r.edges_written,
+                    pruned = r.edges_pruned,
+                    text_lines = r.text_lines_added,
+                    "improve: user preferences updated"
+                );
+                let mut result = StageResult::completed(STAGE).with_counts([
+                    ("turns_applied", count(r.turns_applied)),
+                    ("edges_written", count(r.edges_written)),
+                    ("edges_pruned", count(r.edges_pruned)),
+                    ("text_lines_added", count(r.text_lines_added)),
+                ]);
+                if r.status != super::user_preferences::STATUS_COMPLETED {
+                    result.reason = Some(r.status.to_string());
+                }
+                result
+            }
+            Err(e) => StageResult::errored(STAGE, e),
+        }
     }
 
     /// Stage 5: distill each session's Q&A into lessons (`session_learnings`).

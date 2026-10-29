@@ -32,7 +32,8 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     let improve_config = settings
         .improve_config()
         .map_err(|error| CliError::Validation(error.to_string()))?;
-    let personalization_enabled = settings.personalization_enabled;
+    let personalization = settings.preference_config();
+    let auto_feedback = settings.auto_feedback_enabled();
     drop(settings);
 
     let tenant_id = super::parse_tenant_id(args.tenant_id.as_deref())?;
@@ -119,7 +120,8 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             tenant_id,
             feedback_alpha: args.feedback_alpha,
             config: improve_config,
-            personalization_enabled,
+            personalization,
+            auto_feedback,
             extraction_tasks: None,
             enrichment_tasks: None,
             data: None,

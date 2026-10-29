@@ -17,11 +17,12 @@ use async_trait::async_trait;
 use cognee::api::ApiError;
 use cognee::api::improve::{
     DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
-    REASON_ABORTED_BY_FATAL_STAGE, REASON_BACKEND_UNSUPPORTED, REASON_BUDGET_EXHAUSTED,
-    REASON_DISABLED_BY_CONFIG, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS,
-    REASON_NO_SESSION_IDS, REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED,
-    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, StageKind, StageResult, StageStatus,
-    TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
+    REASON_ABORTED_BY_FATAL_STAGE, REASON_AUTO_FEEDBACK_DISABLED, REASON_BACKEND_UNSUPPORTED,
+    REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_CHANGES,
+    REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
+    REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
+    REASON_PERSONALIZATION_DISABLED, StageKind, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE,
+    improve, stage_watermark_key,
 };
 use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
@@ -57,6 +58,8 @@ struct SchemaDispatchLlm {
     accepted_statement: String,
     /// The curator answers HTTP 402 (an exhausted LLM budget) instead.
     curator_out_of_budget: bool,
+    /// The agent-context extraction call fails instead of proposing a lesson.
+    agent_lessons_fail: bool,
 }
 
 #[async_trait]
@@ -81,7 +84,15 @@ impl cognee_llm::Llm for SchemaDispatchLlm {
         _options: Option<GenerationOptions>,
     ) -> Result<Value, LlmError> {
         let schema = json_schema.to_string();
-        if schema.contains("why_learned") {
+        if schema.contains("environment_facts") {
+            // Agent-context extraction (`AgentContextExtraction`).
+            if self.agent_lessons_fail {
+                return Err(LlmError::ApiError("extraction down".to_string()));
+            }
+            Ok(serde_json::json!({
+                "lessons": [{"section": "tool_rules", "content": "Run the indexer before searching.", "confidence": 0.9}]
+            }))
+        } else if schema.contains("why_learned") {
             // Writer/rejecter (`WrittenLesson`) → accept + write.
             Ok(serde_json::json!({
                 "accept": true,
@@ -195,7 +206,8 @@ fn params<'a>(
         tenant_id: None,
         feedback_alpha: None,
         config: cognee::api::ImproveConfig::default(),
-        personalization_enabled: false,
+        personalization: cognee::search::PreferenceConfig::default(),
+        auto_feedback: false,
         llm,
         storage: Arc::clone(&h.storage),
         graph_db: h.graph_db.clone() as Arc<_>,
@@ -226,6 +238,7 @@ fn schema_llm(curator_out_of_budget: bool) -> Arc<dyn cognee_llm::Llm> {
     Arc::new(SchemaDispatchLlm {
         accepted_statement: "TerraScout indexes data nightly.".to_string(),
         curator_out_of_budget,
+        agent_lessons_fail: false,
     })
 }
 
@@ -327,7 +340,11 @@ async fn improve_with_an_empty_session_reports_every_stage() {
                 AlreadyCompleted,
                 Some(REASON_NO_NEW_TRACE_STEPS)
             ),
-            ("extract_agent_context", Skipped, Some(REASON_NOT_PORTED)),
+            (
+                "extract_agent_context",
+                Skipped,
+                Some(REASON_AUTO_FEEDBACK_DISABLED)
+            ),
             ("distill_sessions", Completed, None),
             (
                 "update_user_preferences",
@@ -415,15 +432,15 @@ async fn improve_without_an_llm_skips_the_llm_stages() {
     let h = make_harness().await;
     let config = CognifyConfig::default();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(cognee_llm::UnconfiguredLlm::new("openai"));
-    let r = improve(params(
+    let mut p = params(
         &h,
         &config,
         "ds_keyless",
         Some(vec!["keyless_session".to_string()]),
         llm,
-    ))
-    .await
-    .unwrap();
+    );
+    p.auto_feedback = true;
+    let r = improve(p).await.unwrap();
     for name in ["extract_agent_context", "distill_sessions"] {
         let s = stage(&r, name);
         assert_eq!(s.status, StageStatus::Skipped, "{name}");
@@ -818,26 +835,216 @@ async fn improve_rejects_an_invalid_configuration_before_any_stage() {
     assert!(err.to_string().contains("feedback_alpha"), "{err}");
 }
 
-/// `personalization_enabled` opens the `update_user_preferences` gate; the
-/// stage is not ported yet, so it reports `not_ported` instead of
-/// `personalization_disabled`.
+/// Python's `test_improve_agent_context.py`: with automatic session context
+/// on, each session's pending trace steps become agent lessons, counted as
+/// `lessons`; the watermark makes a re-run find nothing pending. Without it
+/// the stage is skipped with `auto_feedback_disabled`.
 #[tokio::test]
-async fn personalization_enabled_opens_the_user_preferences_gate() {
+async fn extract_agent_context_turns_pending_traces_into_lessons() {
     let h = make_harness().await;
     let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let user = owner.to_string();
+    for session in ["agent_a", "agent_b"] {
+        for step in ["index", "search"] {
+            h.session_manager
+                .add_agent_trace_step(
+                    &user,
+                    Some(session),
+                    step,
+                    "success",
+                    "",
+                    "",
+                    serde_json::json!({}),
+                    None,
+                    "",
+                    false,
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let run = |auto_feedback: bool| {
+        let mut p = params(
+            &h,
+            &config,
+            "ds_agent_context",
+            Some(vec!["agent_a".to_string(), "agent_b".to_string()]),
+            schema_llm(false),
+        );
+        p.owner_id = owner;
+        p.auto_feedback = auto_feedback;
+        p
+    };
+
+    let off = improve(run(false)).await.unwrap();
+    let s = stage(&off, "extract_agent_context");
+    assert_eq!(
+        (s.status, s.reason.as_deref()),
+        (StageStatus::Skipped, Some(REASON_AUTO_FEEDBACK_DISABLED))
+    );
+
+    let r = improve(run(true)).await.unwrap();
+    let s = stage(&r, "extract_agent_context");
+    assert_eq!(s.status, StageStatus::Completed, "{s:?}");
+    assert_eq!(s.counts.get("lessons"), Some(&2));
+    assert_eq!(s.counts.get("sessions_failed"), Some(&0));
+    let rows = h
+        .session_manager
+        .get_session_context_entries(Some("agent_a"), Some(&user))
+        .await
+        .unwrap();
+    let lessons = cognee_session::coerce_active_context_entries(&rows).unwrap();
+    assert_eq!(lessons.len(), 1);
+    assert_eq!(
+        (
+            lessons[0].context_profile.as_str(),
+            lessons[0].section.as_str()
+        ),
+        ("agent", "tool_rules")
+    );
+
+    // Nothing is pending any more.
+    let again = improve(run(true)).await.unwrap();
+    let s = stage(&again, "extract_agent_context");
+    assert_eq!(s.status, StageStatus::Completed);
+    assert_eq!(s.counts.get("lessons"), Some(&0));
+}
+
+/// Python's `test_one_failing_session_does_not_block_others`: an extraction
+/// failure is counted, and errors the stage without aborting the run.
+#[tokio::test]
+async fn a_failed_agent_context_extraction_errors_only_its_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    h.session_manager
+        .add_agent_trace_step(
+            &owner.to_string(),
+            Some("agent_fail"),
+            "index",
+            "error",
+            "",
+            "",
+            serde_json::json!({}),
+            None,
+            "exit 1",
+            false,
+        )
+        .await
+        .unwrap();
+    let llm = Arc::new(SchemaDispatchLlm {
+        accepted_statement: "TerraScout indexes data nightly.".to_string(),
+        curator_out_of_budget: false,
+        agent_lessons_fail: true,
+    });
     let mut p = params(
         &h,
         &config,
-        "ds_personal",
-        Some(vec!["personal_session".to_string()]),
-        mock_llm(),
+        "ds_agent_fail",
+        Some(vec!["agent_fail".to_string()]),
+        llm,
     );
-    p.personalization_enabled = true;
+    p.owner_id = owner;
+    p.auto_feedback = true;
     let r = improve(p).await.unwrap();
-    assert_eq!(
-        stage(&r, "update_user_preferences").reason.as_deref(),
-        Some(REASON_NOT_PORTED)
+    let s = stage(&r, "extract_agent_context");
+    assert_eq!(s.status, StageStatus::Errored);
+    assert!(
+        s.error.as_deref().unwrap().contains("extraction down"),
+        "{s:?}"
     );
+    assert_eq!(s.counts.get("lessons"), Some(&0));
+    assert_eq!(s.counts.get("sessions_failed"), Some(&1));
+    // A non-fatal stage: the later stages still ran.
+    assert_eq!(stage(&r, "distill_sessions").status, StageStatus::Completed);
+    assert_eq!(r.status(), ImproveStatus::Errored);
+}
+
+/// `update_user_preferences` end to end: a turn rated 5 that used two graph
+/// nodes writes two `prefers` edges from the user's preference node; a re-run
+/// with nothing new is `completed` with the reason `no_changes`. Off, the
+/// stage is skipped with `personalization_disabled`.
+#[tokio::test]
+async fn update_user_preferences_writes_prefers_edges() {
+    use cognee::search::user_preferences::{load_preference_state, node_turn_counter};
+
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let user = owner.to_string();
+    for id in ["pref-node-1", "pref-node-2"] {
+        h.graph_db
+            .add_node_raw(serde_json::json!({"id": id, "type": "Entity", "name": id}))
+            .await
+            .unwrap();
+    }
+    let qa_id = h
+        .session_manager
+        .save_qa(
+            Some("personal_session"),
+            Some(&user),
+            "How does TerraScout index data?",
+            "TerraScout indexes nightly.",
+            None,
+            Some(cognee_session::UsedGraphElementIds {
+                node_ids: vec!["pref-node-1".to_string(), "pref-node-2".to_string()],
+                edge_ids: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+    h.session_manager
+        .add_feedback(Some("personal_session"), Some(&user), &qa_id, None, Some(5))
+        .await
+        .unwrap();
+    let run = |enabled: bool| {
+        let mut p = params(
+            &h,
+            &config,
+            "ds_personal",
+            Some(vec!["personal_session".to_string()]),
+            schema_llm(false),
+        );
+        p.owner_id = owner;
+        p.personalization = cognee::search::PreferenceConfig {
+            enabled,
+            ..Default::default()
+        };
+        p
+    };
+
+    let off = improve(run(false)).await.unwrap();
+    assert_eq!(
+        stage(&off, "update_user_preferences").reason.as_deref(),
+        Some(REASON_PERSONALIZATION_DISABLED)
+    );
+
+    let r = improve(run(true)).await.unwrap();
+    let s = stage(&r, "update_user_preferences");
+    assert_eq!(
+        (s.status, s.reason.as_deref()),
+        (StageStatus::Completed, None)
+    );
+    assert_eq!(s.counts.get("turns_applied"), Some(&1));
+    assert_eq!(s.counts.get("edges_written"), Some(&2));
+    let dataset = r.dataset_id.expect("the session stage created the dataset");
+    let (node, weights) = load_preference_state(h.graph_db.as_ref(), &user, &dataset.to_string())
+        .await
+        .unwrap()
+        .expect("the preference node");
+    assert_eq!(node_turn_counter(&node), 1);
+    // 0.5 + 0.3 * (1.0 - 0.5)
+    assert_eq!(weights["pref-node-1"].weight, 0.65);
+    assert_eq!(weights["pref-node-2"].weight, 0.65);
+
+    let again = improve(run(true)).await.unwrap();
+    let s = stage(&again, "update_user_preferences");
+    assert_eq!(
+        (s.status, s.reason.as_deref()),
+        (StageStatus::Completed, Some(REASON_NO_CHANGES))
+    );
+    assert_eq!(s.counts.get("edges_written"), Some(&0));
 }
 
 /// `improve.review_conflicts` opts every run into `review_conflicts`; the

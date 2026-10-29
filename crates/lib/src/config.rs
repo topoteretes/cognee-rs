@@ -207,8 +207,8 @@ pub struct Settings {
     // when set: a value out of range is an error from `ConfigManager::set` and is
     // ignored with a warning from env.
     /// Default blend weight of the learned feedback signal in graph search,
-    /// in [0, 1] (`DEFAULT_FEEDBACK_INFLUENCE`). Not read by the Rust
-    /// retrievers yet: a search passes its own `feedback_influence`.
+    /// in [0, 1] (`DEFAULT_FEEDBACK_INFLUENCE`): the `feedback_influence` of
+    /// a search request that leaves it unset.
     pub default_feedback_influence: f64,
     /// How far one rating pulls a personal `prefers` edge weight toward its
     /// target, in (0, 1] (`PREFERENCE_ALPHA`).
@@ -217,7 +217,8 @@ pub struct Settings {
     /// (`PREFERENCE_BETA`).
     pub preference_beta: f64,
     /// Master switch of per-user preference personalization
-    /// (`PERSONALIZATION_ENABLED`); gates improve's `update_user_preferences`.
+    /// (`PERSONALIZATION_ENABLED`): gates improve's `update_user_preferences`
+    /// and the retrievers' preference read.
     pub personalization_enabled: bool,
     /// The most personalization may move a ranking score, in [0, 1]
     /// (`PERSONALIZATION_INFLUENCE`).
@@ -575,16 +576,36 @@ impl Settings {
             },
             access_tracking: self.enable_last_accessed,
             // Python's `is_auto_feedback_enabled`: `caching and auto_feedback`.
-            auto_feedback: self.auto_feedback
-                && self.section::<cognee_components::SessionConfig>().caching,
+            auto_feedback: self.auto_feedback_enabled(),
             // The built-in prompt's file name selects the retrievers' own
             // defaults: the Rust SDK compiles its prompts in.
+            personalization: self.preference_config(),
+            default_feedback_influence: self.default_feedback_influence as f32,
             default_system_prompt_path: (!is_builtin_prompt_path(
                 &self.default_system_prompt_path,
                 DEFAULT_SYSTEM_PROMPT_PATH,
             ))
             .then(|| self.default_system_prompt_path.trim().to_string()),
         }
+    }
+
+    /// The personalization settings (`personalization_enabled`,
+    /// `preference_alpha`, `preference_beta`, `personalization_influence`):
+    /// read by the search retrievers and by improve's
+    /// `update_user_preferences` stage.
+    pub fn preference_config(&self) -> cognee_search::PreferenceConfig {
+        cognee_search::PreferenceConfig {
+            enabled: self.personalization_enabled,
+            alpha: self.preference_alpha,
+            beta: self.preference_beta,
+            influence: self.personalization_influence,
+        }
+    }
+
+    /// Python's `is_auto_feedback_enabled`: `auto_feedback` while session
+    /// caching is on. Gates improve's `extract_agent_context` stage.
+    pub fn auto_feedback_enabled(&self) -> bool {
+        self.auto_feedback && self.section::<cognee_components::SessionConfig>().caching
     }
 
     /// The improve settings (the `improve` section), validated — Python's

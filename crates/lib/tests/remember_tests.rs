@@ -131,6 +131,7 @@ async fn remember_session_stores_qa_entry() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await
@@ -186,6 +187,7 @@ async fn remember_session_with_caching_off_succeeds_without_storing() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await
@@ -231,6 +233,7 @@ async fn remember_session_self_improvement_runs_in_background() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await
@@ -271,6 +274,7 @@ async fn remember_session_requires_session_store() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await;
@@ -306,6 +310,7 @@ async fn display_and_to_dict_on_session_result() {
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await
@@ -386,6 +391,7 @@ async fn remember_turn(
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         improve_config,
+        cognee::search::PreferenceConfig::default(),
         false,
     )
     .await

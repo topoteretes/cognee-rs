@@ -125,11 +125,12 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
         let cognify_config = Arc::new(cognify_config);
 
-        let (improve_config, personalization_enabled) = {
+        let (improve_config, personalization, auto_feedback) = {
             let settings = cm.settings();
             (
                 settings.auto_improve_config(),
-                settings.personalization_enabled,
+                settings.preference_config(),
+                settings.auto_feedback_enabled(),
             )
         };
         let result = remember(
@@ -152,7 +153,8 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             ontology_resolver,
             cognify_config,
             improve_config,
-            personalization_enabled,
+            personalization,
+            auto_feedback,
         )
         .await
         .map_err(|error| CliError::Runtime(format!("Remember failed: {error}")))?;
