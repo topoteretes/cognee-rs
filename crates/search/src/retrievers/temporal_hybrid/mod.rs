@@ -22,11 +22,12 @@
 //! When there is nothing to rerank by, the result is the plain hybrid result
 //! (cut to `top_k`) and the diagnostics say why ([`TemporalFallbackReason`]).
 //!
-//! This replaced an Event-based `TemporalRetriever` that read only the `Event`
-//! nodes of the separate `temporal_cognify` pipeline and answered everything
-//! else from triplet search. As in Python, graphs from that pipeline now get
-//! plain-hybrid answers; graphs from default cognify, which writes `Timestamp`
-//! nodes, get the rerank.
+//! The `Timestamp` nodes it reranks by come from default cognify, which
+//! extracts dates as `Timestamp` nodes, as in Python. The separate event-graph
+//! `temporal_cognify` pipeline and the Event-based `TemporalRetriever` that read
+//! it are gone (SDK-1039; Python SDK-1115); a graph an older build wrote with
+//! that pipeline holds `Event` nodes nothing reads, so it gets plain-hybrid
+//! answers.
 //!
 //! [`GraphDBTrait::get_timestamps_in_range`]: cognee_graph::GraphDBTrait::get_timestamps_in_range
 //! [`GraphDBTrait::get_temporal_anchors`]: cognee_graph::GraphDBTrait::get_temporal_anchors

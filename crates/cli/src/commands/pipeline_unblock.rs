@@ -35,7 +35,12 @@ use crate::error::CliError;
 /// Pipeline names that take a claim. An unrecognised `--pipeline` would
 /// otherwise look up a pair that cannot exist and report, confidently, that
 /// nothing is blocking.
-const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline", "temporal-cognify"];
+///
+/// Only `cognify_pipeline` claims today: the event-graph `temporal-cognify`
+/// pipeline, which claimed under its own name, was removed (SDK-1039). The
+/// list and the `--pipeline` contract stay so another claiming pipeline can be
+/// added without changing the command's shape.
+const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline"];
 
 /// Recorded on the `Errored` row this command writes, so the audit trail says
 /// who retired the run rather than leaving it looking like a real failure.
@@ -228,18 +233,16 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
 /// The two modes want opposite defaults, so they do not share one.
 ///
 /// *Reporting* is broad on purpose. Naming a pipeline is an optimisation, not a
-/// requirement: defaulting to cognify would answer "nothing is blocking" for a
-/// wedged `temporal-cognify`, which is the confident-wrong-answer
-/// `KNOWN_PIPELINES` exists to prevent — and nothing in the failing cognify
+/// requirement: defaulting to one pipeline would answer "nothing is blocking"
+/// for a dataset wedged on another, which is the confident-wrong-answer
+/// `KNOWN_PIPELINES` exists to prevent — and nothing in the failing run's
 /// output tells the operator which pipeline name to pass. So an omitted
-/// `--pipeline` sweeps both and tells them which one is wedged.
+/// `--pipeline` sweeps every known pipeline and tells them which one is wedged.
 ///
-/// *Clearing* must not inherit that breadth. The two pipelines are
-/// independent — each claims a dataset under its own name — so the operator who
-/// diagnosed a wedged `cognify_pipeline` and reaches for `--clear` would also
-/// retire a `temporal-cognify` run that is alive and mid-flight, marking it
-/// failed and releasing its fresh claim. Nothing in the report they just read
-/// warned them, because the report is *supposed* to cover both. Naming the
+/// *Clearing* must not inherit that breadth. Pipelines claim a dataset
+/// independently, each under its own name, so clearing every one of them would
+/// also retire a run on another pipeline that is alive and mid-flight, marking
+/// it failed and releasing its fresh claim. Naming the
 /// pipeline is therefore required for the destructive path: the operator has
 /// already read which one is wedged, so it costs them a word, and it is the
 /// same word the reporting output tells them to pass.
@@ -386,17 +389,16 @@ mod tests {
         }
     }
 
-    /// Reporting keeps the broad default: a dataset wedged on `temporal-cognify`
-    /// must be found by an operator who only knows cognify failed.
+    /// Reporting keeps the broad default: a dataset wedged on any known
+    /// pipeline must be found by an operator who only knows a run failed.
     #[test]
     fn reporting_without_a_pipeline_covers_every_known_pipeline() {
         let resolved = resolve_pipelines(None, false).expect("reporting needs no pipeline");
         assert_eq!(resolved, KNOWN_PIPELINES);
     }
 
-    /// The destructive path does not inherit that breadth. `--clear` on
-    /// both retires a live `temporal-cognify` run while the operator is
-    /// unblocking cognify.
+    /// The destructive path does not inherit that breadth: `--clear` needs
+    /// the pipeline named.
     #[test]
     fn clearing_without_a_pipeline_is_refused() {
         let message = validation_message(resolve_pipelines(None, true));
@@ -415,8 +417,15 @@ mod tests {
     #[test]
     fn clearing_one_named_pipeline_is_allowed() {
         let resolved =
-            resolve_pipelines(Some("temporal-cognify"), true).expect("a named pipeline clears");
-        assert_eq!(resolved, vec!["temporal-cognify".to_string()]);
+            resolve_pipelines(Some("cognify_pipeline"), true).expect("a named pipeline clears");
+        assert_eq!(resolved, vec!["cognify_pipeline".to_string()]);
+    }
+
+    /// The removed event-graph pipeline's name is no longer known (SDK-1039).
+    #[test]
+    fn the_removed_temporal_pipeline_is_unknown() {
+        let message = validation_message(resolve_pipelines(Some("temporal-cognify"), false));
+        assert!(message.contains("Unknown pipeline"), "got: {message}");
     }
 
     #[test]

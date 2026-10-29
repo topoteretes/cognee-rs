@@ -741,18 +741,15 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
     /// clears it, and so does a restart where `COGNEE_SINGLE_PROCESS` is
     /// asserted.
     ///
-    /// Not fixed here, because the contained version is wrong in two ways.
+    /// Not fixed here, because the contained version is wrong.
     /// The registry does not know the `claim_id` (it is a function-local in
     /// `cognify`), so it would have to read the claim and then delete it —
     /// reintroducing exactly the TOCTOU that
     /// `PipelineRunRepository::try_release_pipeline_run_claim` is holder-scoped
     /// to prevent, and stomping a new holder's claim if the old one had aged
-    /// out in between. And the registry's `pipeline_name` is the caller's
-    /// (`"cognify_pipeline"`), whereas a temporal run claims under
-    /// `"temporal-cognify"`, so the release would silently miss that case. The
-    /// correct fix carries the claim id out of `cognify` into the run slot so
-    /// `abort` can release the exact token it knows about; that is a
-    /// cross-crate change and belongs in its own PR.
+    /// out in between. The correct fix carries the claim id out of `cognify`
+    /// into the run slot so `abort` can release the exact token it knows
+    /// about; that is a cross-crate change and belongs in its own PR.
     async fn abort(&self, run_id: Uuid) -> Result<(), RegistryError> {
         let (abort_handle, event_tx, phase_tx) = {
             let runs = self.runs.read().await;

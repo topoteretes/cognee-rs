@@ -1063,7 +1063,7 @@ prompt and the summary schema:
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
 | `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
-| `COGNEE_DATA_PER_BATCH` | `cognify.data_per_batch` (`data_per_batch`) | data items per temporal-cognify batch (Python's `data_per_batch` parameter, which has no env var); `0` keeps the default | `20` |
+| `COGNEE_DATA_PER_BATCH` | `cognify.data_per_batch` (`data_per_batch`) | Python's `data_per_batch` cognify parameter (which has no env var); accepted and validated, but no Rust stage reads it since the event-graph `temporal_cognify` pipeline, its only reader, was removed (SDK-1039); `0` keeps the default | `20` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
@@ -1147,7 +1147,6 @@ boundary its own loop offers, and only one of them is the first failed file:
 |---|---|---|---|
 | Chunking | the file that failed | — | one file |
 | Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
-| Temporal extraction | the batch that contained the failure | `data_per_batch` | **20 files** |
 | Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
 
 The extraction row is the one to read twice. 2000 is Python's own default
@@ -1237,8 +1236,6 @@ choice — with one exception.
 | Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
 | Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
 | Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
-| Temporal event extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
-| Temporal entity enrichment | chunk | Collected. One LLM call covers a whole batch, so the failure is recorded against **every chunk that fed the batch** and the batch's events are dropped — an event with no attributes carries none of the entity graph the pass exists to produce |
 | Persistence — graph, vector or ledger writes, and embeddings | run | Always fatal, under every combination |
 
 `tolerate_summarization_failures` governs **fatality only**. Either way the
@@ -1294,13 +1291,6 @@ different route — `run_tasks` logs the run start before it looks at any item
 (`operations/run_tasks_data_item.py`) — so a repeat cognify leaves a complete
 run trail there. The two SDKs agree on what a repeat run *did* (nothing) and
 disagree on whether it is visible as a run.
-
-**Temporal runs share the markers.** Both branches write and read the one
-`cognify_pipeline` key, which is what Python does — its temporal cognify runs
-under the same `pipeline_name`. The consequence is user-visible: a `cognify()`
-followed by a temporal `cognify()` over the same dataset is a **no-op**, and the
-other way round. Callers who want both graphs over one dataset must set
-`with_incremental_loading(false)`.
 
 Set `with_incremental_loading(false)` to restore the previous behaviour and
 reprocess everything on every run.
@@ -1587,8 +1577,7 @@ Pass the schema per call instead, as below.
 treats an omitted or empty `graph_model`. Every entry point runs
 `CognifyConfig::validate` before any side effect, so an invalid value (an
 unknown attachment, an attachment without a schema, a schema that does not
-compile, a schema with `temporal_cognify`, a `graph_backend` or the `cascade`
-strategy) fails with a validation error. The binding opts are type-checked as
+compile, a schema with a `graph_backend` or the `cascade` strategy) fails with a validation error. The binding opts are type-checked as
 a whole: a wrongly-typed value for any known cognify option is an error, and an
 unknown key is logged as a warning — Python forwards unknown `cognify()`
 keywords into the LLM call instead of raising. See

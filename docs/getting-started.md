@@ -93,4 +93,4 @@ Each stage and its flags are documented in [operations.md](operations.md).
 - [configuration.md](configuration.md) — every env var and `config` key.
 - [tools/cli.md](tools/cli.md) — the full CLI command reference.
 - [guides/](guides/README.md) — focused how-tos (custom prompts, ontology,
-  temporal cognify, custom schemas).
+  temporal search, custom schemas).

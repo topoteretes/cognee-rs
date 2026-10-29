@@ -406,8 +406,7 @@ impl CogneeServices {
             .await
             .map_err(|e| SdkError::ServiceBuild(format!("ontology resolver: {e}")))?;
 
-        // CognifyConfig from Settings. `with_temporal_cognify` is a per-call
-        // flag (not a Settings field) and is left at default here.
+        // CognifyConfig from Settings.
         let cognify_config = cm.settings().cognify_config();
 
         let checkpoint_store: Arc<dyn CheckpointStore> = Arc::clone(&database).checkpoints();

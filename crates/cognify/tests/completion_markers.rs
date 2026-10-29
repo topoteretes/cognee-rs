@@ -24,10 +24,7 @@ use std::sync::Arc;
 
 use cognee_cognify::{FailureStop, RollbackScope};
 use cognee_test_utils::MockLlm;
-use rollback_harness::{
-    CountingLlm, Harness, TemporalFixtureLlm, canned_graph_response, extraction_config,
-    temporal_config,
-};
+use rollback_harness::{CountingLlm, Harness, canned_graph_response, extraction_config};
 
 /// A clean LLM: canned graph responses, no failing markers.
 fn clean_llm(files: usize) -> Arc<dyn cognee_llm::Llm> {
@@ -287,55 +284,4 @@ async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failur
             .all(|chunk| chunk.document_id == bad)
     );
     assert!(harness.is_marked(bad).await);
-}
-
-/// Temporal marks and skips exactly like a standard run.
-///
-/// This reverses what the previous commit pinned, deliberately. Python's
-/// temporal cognify runs under `pipeline_name="cognify_pipeline"` — the same
-/// string as its standard branch, one `pipeline_executor_func` call for both —
-/// so Python writes and reads one set of markers on both branches. Rust now
-/// matches, which is also what makes the sweep's marker-clearing phase
-/// meaningful for a temporal run instead of a guaranteed no-op.
-///
-/// The user-visible consequence, which the release notes state: a `cognify()`
-/// followed by a temporal `cognify()` over the same dataset is a no-op, and the
-/// other way round. Callers who want both graphs over one dataset set
-/// `with_incremental_loading(false)`.
-#[tokio::test]
-async fn a_temporal_run_marks_and_skips_like_a_standard_one() {
-    let mut harness = Harness::new().await;
-    let only = harness.add_file("Alice joined Acme in 2020.").await;
-
-    let config = temporal_config();
-    harness
-        .run_over(&config, &[only], Arc::new(TemporalFixtureLlm::new()))
-        .await
-        .expect("the temporal run completes");
-
-    assert!(
-        harness.is_marked(only).await,
-        "a completed temporal run marks the items it finished"
-    );
-
-    // Second wave over the same dataset: nothing left to do, and no LLM spend.
-    let second_llm = Arc::new(TemporalFixtureLlm::new());
-    let second_run = harness
-        .run_over(
-            &config,
-            &[only],
-            Arc::clone(&second_llm) as Arc<dyn cognee_llm::Llm>,
-        )
-        .await
-        .expect("the second temporal run is a no-op");
-
-    assert!(
-        second_run.already_completed,
-        "re-cognifying a complete dataset is a no-op on the temporal branch too"
-    );
-    assert_eq!(
-        second_llm.call_count(),
-        0,
-        "a skipped item is never sent to an LLM"
-    );
 }

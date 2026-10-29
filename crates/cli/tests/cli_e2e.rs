@@ -1990,11 +1990,6 @@ fn cognify_rejects_invalid_graph_schema_flags() {
             "Cannot read --graph-schema",
         ),
         (
-            "cognify",
-            vec!["--graph-schema", valid, "--temporal-cognify"],
-            "not supported with temporal_cognify",
-        ),
-        (
             "add-and-cognify",
             vec!["some text", "--chunk-attachment", "direct"],
             "chunk_attachment requires graph_schema",
@@ -2041,6 +2036,28 @@ fn cognify_rejects_invalid_graph_schema_flags() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("invalid value 'everything'"));
+}
+
+/// The event-graph pipeline and its flag are gone (SDK-1039): Python ignores
+/// `temporal_cognify` since 1.6.3, and Rust removed it outright, so the flag
+/// is an unknown argument rather than a silent no-op.
+#[test]
+fn cognify_rejects_the_removed_temporal_cognify_flag() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    for command in ["cognify", "add-and-cognify"] {
+        let mut cmd = make_cmd_in(&config_home, workdir.path());
+        cmd.arg(command);
+        if command == "add-and-cognify" {
+            cmd.arg("some text");
+        }
+        cmd.arg("--temporal-cognify")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "unexpected argument '--temporal-cognify'",
+            ));
+    }
 }
 
 /// A valid `--graph-schema` / `--chunk-attachment` reaches the run: the

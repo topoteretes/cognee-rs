@@ -63,8 +63,8 @@ mod tests {
         let dataset_id = Uuid::new_v4();
 
         let cognify = pipeline_id(user_id, dataset_id, "cognify_pipeline");
-        let temporal = pipeline_id(user_id, dataset_id, "temporal-cognify");
-        assert_ne!(cognify, temporal);
+        let other = pipeline_id(user_id, dataset_id, "add_pipeline");
+        assert_ne!(cognify, other);
     }
 
     #[test]

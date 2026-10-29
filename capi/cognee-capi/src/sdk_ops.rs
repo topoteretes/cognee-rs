@@ -165,7 +165,7 @@ pub unsafe extern "C" fn cg_sdk_add(
 /// `dataset_name` is the name of a dataset that must already exist (created by
 /// a prior `cg_sdk_add` call).  `opts_json` may be `NULL` or a JSON object with
 /// optional keys: `tenant` (UUID string), `chunkSize` (integer), `chunkOverlap`
-/// (integer), `summarization` (boolean), `temporalCognify` (boolean),
+/// (integer), `summarization` (boolean),
 /// `graphSchema` (a custom graph model's JSON Schema, as
 /// an object or a JSON string; alias `graphModel`), `graphSpec` (the same
 /// model in the spec DSL, as an object or a JSON string) and `chunkAttachment`
