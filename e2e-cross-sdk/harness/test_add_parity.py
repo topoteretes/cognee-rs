@@ -2,7 +2,9 @@
 
 All tests in this file are **deterministic** — they compare MD5 hashes,
 dataset UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
-or API key is required.
+or API key is required. The one exception is
+``test_add_public_url_ingests_same_page_in_both``, which needs outbound
+network access to a public page and skips when there is none (SDK-1039 D9).
 
 Data ids are NOT compared across SDKs: both mint a random ``uuid4`` for a new
 ``data`` row and dedup by ``(content_hash, dataset_id, owner_id, tenant_id)``
@@ -12,9 +14,11 @@ and code_repo). The tests check that shape instead (SDK-1039 D7).
 """
 
 import json
+import threading
 import uuid
-from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
 
 from helpers import (
     open_db,
@@ -67,20 +71,6 @@ class _UrlFixtureHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         pass
-
-
-@contextmanager
-def local_url_fixture():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _UrlFixtureHandler)
-    try:
-        import threading
-
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        yield f"http://127.0.0.1:{server.server_port}/page.html"
-    finally:
-        server.shutdown()
-        server.server_close()
 
 
 def _json_metadata(row):
@@ -250,76 +240,155 @@ def test_add_stored_file_content_matches(both_added):
 # ── URL inputs ───────────────────────────────────────────────────────────────
 
 
-def test_add_url_metadata_locations_and_hash_match(tmp_path):
-    """Both SDKs ingest a local URL into matching extracted/raw artifacts."""
+def _url_add_both(tmp_path, url, dataset):
+    """Run ``add <url>`` in both SDKs; return (py_ws, rust_ws, py_result, rust_result)."""
     py_ws = tmp_path / "python_url"
     rust_ws = tmp_path / "rust_url"
     py_ws.mkdir()
     rust_ws.mkdir()
-    dataset = "url_parity"
 
-    with local_url_fixture() as url:
-        py_result = run_python_cli(py_ws, ["add", url, "-d", dataset], check=False)
-        assert py_result.returncode == 0, (
-            f"Python URL add failed:\n{py_result.stdout}\n{py_result.stderr}"
-        )
-
+    py_result = run_python_cli(py_ws, ["add", url, "-d", dataset], check=False)
+    if py_result.returncode == 0:
         py_conn = open_db(python_db_path(py_ws))
-        py_data = query_data(py_conn)
         py_owner = query_datasets(py_conn)[0]["owner_id"]
         py_tenant = query_datasets(py_conn)[0].get("tenant_id")
         py_conn.close()
+    else:
+        py_owner, py_tenant = None, None
 
-        write_rust_config(rust_ws, user_id=str(py_owner))
-        rust_args = ["add", url, "-d", dataset]
-        if py_tenant:
-            rust_args.extend(["--tenant-id", str(py_tenant)])
-        rust_result = run_rust_cli(rust_ws, rust_args, check=False)
-        assert rust_result.returncode == 0, (
-            f"Rust URL add failed:\n{rust_result.stdout}\n{rust_result.stderr}"
+    write_rust_config(rust_ws, **({"user_id": str(py_owner)} if py_owner else {}))
+    rust_args = ["add", url, "-d", dataset]
+    if py_tenant:
+        rust_args.extend(["--tenant-id", str(py_tenant)])
+    rust_result = run_rust_cli(rust_ws, rust_args, check=False)
+    return py_ws, rust_ws, py_result, rust_result
+
+
+def _data_rows(workspace, db_path_fn):
+    path = db_path_fn(workspace)
+    if not path.exists():
+        return []
+    conn = open_db(path)
+    try:
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='data'"
+        ).fetchone() is None:
+            return []
+        return query_data(conn)
+    finally:
+        conn.close()
+
+
+def test_add_loopback_url_rejected_by_both(tmp_path):
+    """Both SDKs refuse a loopback URL, and neither stores anything for it.
+
+    SDK-1039 D9. Both SDKs block loopback/private hosts with no bypass:
+    Python ``cognee/tasks/web_scraper/ssrf_protection.py:53-70``
+    (``SSRFProtectionError``, ``URL host ... points to a non-public address``;
+    the only switch is ``ALLOW_HTTP_REQUESTS=false``, which disables all
+    fetching) and Rust ``crates/ingestion/src/url_crawler/fetcher.rs``
+    (``URL targets a blocked address``; private hosts are allowed only under
+    ``cfg(test)``). The fixture is a real server on 127.0.0.1, so a rejection
+    is the policy and not a connection failure: the server must see no request.
+    """
+    hits = []
+
+    class _Counting(_UrlFixtureHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Counting)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/page.html"
+        py_ws, rust_ws, py_result, rust_result = _url_add_both(
+            tmp_path, url, "url_rejection"
         )
+    finally:
+        server.shutdown()
+        server.server_close()
 
-    py_conn = open_db(python_db_path(py_ws))
-    rust_conn = open_db(rust_db_path(rust_ws))
-    py_row = query_data(py_conn)[0]
-    rust_row = query_data(rust_conn)[0]
-    py_conn.close()
-    rust_conn.close()
+    py_out = f"{py_result.stdout}\n{py_result.stderr}"
+    rust_out = f"{rust_result.stdout}\n{rust_result.stderr}"
 
-    assert py_row["content_hash"] == rust_row["content_hash"]
-    assert py_row["raw_content_hash"] == rust_row["raw_content_hash"]
-    assert py_row["extension"] == rust_row["extension"] == "txt"
-    assert py_row["mime_type"] == rust_row["mime_type"] == "text/plain"
-    assert py_row["original_extension"] == rust_row["original_extension"] == "html"
-    assert py_row["original_mime_type"] == rust_row["original_mime_type"] == "text/html"
-    assert py_row["loader_engine"] == rust_row["loader_engine"] == "beautiful_soup_loader"
-    assert py_row["raw_data_location"].endswith(".txt")
-    assert rust_row["raw_data_location"].endswith(".txt")
-    assert py_row["original_data_location"].endswith(".html")
-    assert rust_row["original_data_location"].endswith(".html")
+    assert py_result.returncode != 0, f"Python accepted a loopback URL:\n{py_out}"
+    assert rust_result.returncode != 0, f"Rust accepted a loopback URL:\n{rust_out}"
+    # Same reason on both sides: a policy rejection of a non-public address.
+    assert "SSRFProtectionError" in py_out or "non-public address" in py_out, py_out
+    assert "blocked address" in rust_out, rust_out
+    # Neither SDK reached the server, and neither stored a data row.
+    assert hits == [], f"a loopback URL was fetched: {hits}"
+    assert _data_rows(py_ws, python_db_path) == []
+    assert _data_rows(rust_ws, rust_db_path) == []
 
-    py_extracted = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
-    rust_extracted = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
-    assert py_extracted == rust_extracted
-    extracted_text = py_extracted.decode()
-    assert "Cross SDK URL heading" in extracted_text
-    assert "Local URL fixture body for add parity." in extracted_text
-    assert "<html>" not in extracted_text
-    assert "window.secret" not in extracted_text
+
+_PUBLIC_URL = "https://example.com/"
+
+
+def _public_network_available():
+    import socket
+
+    try:
+        with socket.create_connection(("example.com", 443), timeout=5):
+            return True
+    except OSError:
+        return False
+
+
+def test_add_public_url_ingests_same_page_in_both(tmp_path):
+    """Both SDKs fetch the same public URL and keep the page's raw bytes.
+
+    Needs outbound network access; skips cleanly when there is none
+    (SDK-1039 D9). The fixture is a public page because both SDKs refuse
+    loopback/private hosts (see the rejection test above).
+
+    This compares only what the two SDKs share. They intentionally differ in
+    how a fetched page is stored, and the test does not hide that:
+
+    * Python (1d3ed15, ``save_data_item_to_storage.py:82-90``) stores the raw
+      HTML as the document (``text_loader``; ``content_hash`` is the HTML's
+      hash) and records only ``external_metadata._cognee.source_uri``.
+    * Rust extracts the page text at add time (``beautiful_soup_loader``;
+      ``content_hash`` is over the extracted text) and records
+      ``source``/``url``/``final_url``/``content_type``/``title``.
+
+    So the checks are: both succeed and write exactly one row; the original
+    (``original_data_location``) bytes are the same fetched HTML; and each
+    SDK records the requested URL as the source, in its own metadata shape.
+    """
+    if not _public_network_available():
+        pytest.skip("no outbound network access to example.com:443")
+
+    py_ws, rust_ws, py_result, rust_result = _url_add_both(
+        tmp_path, _PUBLIC_URL, "url_parity"
+    )
+    assert py_result.returncode == 0, (
+        f"Python URL add failed:\n{py_result.stdout}\n{py_result.stderr}"
+    )
+    assert rust_result.returncode == 0, (
+        f"Rust URL add failed:\n{rust_result.stdout}\n{rust_result.stderr}"
+    )
+
+    py_rows = _data_rows(py_ws, python_db_path)
+    rust_rows = _data_rows(rust_ws, rust_db_path)
+    assert len(py_rows) == len(rust_rows) == 1
+    py_row, rust_row = py_rows[0], rust_rows[0]
+
+    for row in (py_row, rust_row):
+        assert row["original_data_location"].endswith(".html")
+        assert row["raw_data_location"]
 
     py_raw = read_stored_file(py_ws / ".data_storage", py_row["original_data_location"])
     rust_raw = read_stored_file(rust_ws / ".data_storage", rust_row["original_data_location"])
-    assert py_raw == rust_raw == _URL_FIXTURE_HTML
+    assert py_raw == rust_raw, "the two SDKs stored different bytes for the same page"
+    assert b"Example Domain" in py_raw
 
     py_meta = _json_metadata(py_row)
     rust_meta = _json_metadata(rust_row)
-    for key in ("source", "url", "final_url", "content_type", "title"):
-        assert py_meta.get(key) == rust_meta.get(key), (
-            f"URL metadata mismatch for {key}: py={py_meta} rust={rust_meta}"
-        )
-    assert py_meta["source"] == "url"
-    assert py_meta["content_type"] == "text/html; charset=utf-8"
-    assert py_meta["title"] == "Cross SDK URL Fixture"
+    assert py_meta["_cognee"]["source_uri"] == _PUBLIC_URL
+    assert rust_meta["source"] == "url"
+    assert rust_meta["url"] == _PUBLIC_URL
 
 
 # ── Deduplication ────────────────────────────────────────────────────────────
