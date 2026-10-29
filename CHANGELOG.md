@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The session graph-context feature is removed; `graph_context` recall is an
+  alias of `graph` (SDK-1044).** Mirrors Python 3401da38a ("Remove graph
+  session sync").
+
+  | Item | Before | After |
+  |---|---|---|
+  | `cognee_cognify::memify::sync_graph_session` (`sync_graph_to_session`, `checkpoint_key`, `SyncResult`, `SyncError`) | public | **removed** |
+  | `SessionStore` / `SessionManager::{get,set}_graph_context`, `SessionContext.graph_context` | public | **removed**; the fs and Redis stores still delete a legacy snapshot with its session |
+  | `SessionQaDb` graph-context ops, `session_graph_context` table | present | **removed**; migration `m20261029_000001_drop_session_graph_context` drops the table |
+  | `cognee::session::{get,set}_graph_context` | public | **removed** |
+  | Binding graph-context ops (bindings-common `run_{get,set}_graph_context`, C `cg_sdk_{get,set}_graph_context`, Python, TS, Java) | present | **removed** |
+  | `RecallScope::GraphContext`, `RecallSource::GraphContext`, `fetch_graph_context` | present | **removed**; `"graph_context"` normalizes to `"graph"` with a deprecation warning and deserializes as `RecallScope::Graph`; `"all"` is graph, session and trace |
+  | Session history prefix "Background knowledge from the knowledge graph" | prepended | gone |
+
 - **Agent context, user preferences and personalized retrieval (SDK-1044).**
 
   | Item | Before | After |
