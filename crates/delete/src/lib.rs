@@ -320,6 +320,16 @@ impl std::ops::AddAssign for DeletePreview {
     }
 }
 
+/// The `pipeline_runs` name a delete records itself under (Python's `forget`
+/// operation), on every dataset it touched.
+pub const FORGET_PIPELINE_NAME: &str = "forget";
+
+/// Rows that record a change rather than a pipeline run: a delete's
+/// [`FORGET_PIPELINE_NAME`] and the `improve` row an improve run that wrote
+/// to the graph leaves (`cognee::api::improve`). The Initiated resets of a
+/// dataset delete skip them.
+pub const CHANGE_RECORD_PIPELINE_NAMES: [&str; 2] = [FORGET_PIPELINE_NAME, "improve"];
+
 struct ResolvedDeleteTargets {
     datasets_to_delete: Vec<Dataset>,
     links_to_detach: Vec<(Uuid, Uuid)>,
@@ -347,7 +357,9 @@ impl DeleteService {
             vector_db: None,
             session_store: None,
             pipeline_run_repo: None,
-            dataset_locks: None,
+            // Python's forget takes the process's one dataset lock registry;
+            // `with_dataset_locks` swaps in a host's own.
+            dataset_locks: Some(DatasetLocks::global()),
             dataset_storage: None,
         }
     }
@@ -1099,6 +1111,8 @@ impl DeleteService {
             warning_count = warnings.len(),
             "delete execution completed"
         );
+        self.record_forget(&Self::forgotten_datasets(&request.scope, &targets))
+            .await;
 
         Ok(DeleteResult {
             deleted_datasets,
@@ -1219,6 +1233,8 @@ impl DeleteService {
             deleted_graph_nodes,
             deleted_vector_points, "memory-only delete completed"
         );
+        self.record_forget(&Self::forgotten_datasets(&request.scope, targets))
+            .await;
 
         Ok(DeleteResult {
             deleted_datasets: 0,
@@ -1246,6 +1262,58 @@ impl DeleteService {
     ) -> Result<Vec<Uuid>, DeleteError> {
         let targets = self.resolve_targets(request).await?;
         self.compute_deletable_data_ids(&targets).await
+    }
+
+    /// Record the delete as a `forget` row on every dataset it touched — the
+    /// change Python's `forget()` records as its operation row. A watermarked
+    /// improve stage counts every non-read row written after its stamp, so a
+    /// delete must leave one: a data-item delete writes no other row, and a
+    /// dataset delete's Initiated resets are skipped when one is already
+    /// pending. `None` (scope `All`) records one dataset-less row.
+    ///
+    /// Best effort: the delete already happened, and a missed row only costs
+    /// a stale index until the next write, so a failure is logged.
+    async fn record_forget(&self, dataset_ids: &BTreeSet<Option<Uuid>>) {
+        let Some(repo) = self.pipeline_run_repo.as_ref() else {
+            return;
+        };
+        let pipeline = Uuid::new_v5(&Uuid::NAMESPACE_OID, FORGET_PIPELINE_NAME.as_bytes());
+        for dataset_id in dataset_ids {
+            if let Err(e) = repo
+                .log_pipeline_run(
+                    Uuid::new_v4(),
+                    pipeline,
+                    FORGET_PIPELINE_NAME,
+                    *dataset_id,
+                    PipelineRunStatus::Completed,
+                    None,
+                )
+                .await
+            {
+                warn!(?dataset_id, "could not record the forget row: {e}");
+            }
+        }
+    }
+
+    /// The datasets a resolved delete touches, for [`Self::record_forget`].
+    fn forgotten_datasets(
+        scope: &DeleteScope,
+        targets: &ResolvedDeleteTargets,
+    ) -> BTreeSet<Option<Uuid>> {
+        if matches!(scope, DeleteScope::All) {
+            return BTreeSet::from([None]);
+        }
+        targets
+            .datasets_to_delete
+            .iter()
+            .map(|dataset| Some(dataset.id))
+            .chain(
+                targets
+                    .links_to_detach
+                    .iter()
+                    .map(|(dataset_id, _)| Some(*dataset_id)),
+            )
+            .collect()
     }
 
     /// Internal Python-parity helper invoked from the dataset-deletion
@@ -1277,6 +1345,11 @@ impl DeleteService {
         for run in runs {
             if matches!(run.status, PipelineRunStatus::Initiated) {
                 // Python skips runs already pending to avoid duplicate rows.
+                continue;
+            }
+            // Change records, not pipelines a re-run could be short-circuited
+            // by: nothing to reset.
+            if CHANGE_RECORD_PIPELINE_NAMES.contains(&run.pipeline_name.as_str()) {
                 continue;
             }
             let name = run.pipeline_name;
