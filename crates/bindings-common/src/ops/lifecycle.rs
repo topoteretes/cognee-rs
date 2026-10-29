@@ -44,6 +44,37 @@ pub(crate) async fn checkpoint_graph_after(svc: &CogneeServices, op: &'static st
     }
 }
 
+/// Wait for the process-wide background tasks — a session `remember()`'s
+/// detached improve among them — Python's `cognee.wait_for_background_tasks()`.
+///
+/// `opts.timeoutSeconds` (optional, a non-negative number) bounds the wait;
+/// nothing is cancelled when it elapses. Returns
+/// `{"finished": bool, "pending": usize}`: `finished` is `false` only when the
+/// timeout elapsed with work still running.
+pub async fn wait_for_background_tasks(
+    opts: &serde_json::Value,
+) -> Result<serde_json::Value, SdkError> {
+    let timeout = match opts.get("timeoutSeconds") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let seconds = value
+                .as_f64()
+                .filter(|s| s.is_finite() && *s >= 0.0)
+                .ok_or_else(|| {
+                    SdkError::Validation(
+                        "`timeoutSeconds` must be a non-negative number".to_string(),
+                    )
+                })?;
+            Some(std::time::Duration::from_secs_f64(seconds))
+        }
+    };
+    let finished = cognee::wait_for_background_tasks(timeout).await;
+    Ok(json!({
+        "finished": finished,
+        "pending": cognee::pending_background_tasks(),
+    }))
+}
+
 /// Make everything written so far durable, without closing anything.
 ///
 /// Today this is the graph store, which is the only component that buffers
@@ -109,4 +140,24 @@ pub async fn flush(state: &HandleState) -> Result<serde_json::Value, SdkError> {
     let ms = started.elapsed().as_millis() as u64;
     tracing::debug!(flushed, ms, "flush complete");
     Ok(json!({ "flushed": flushed, "warm": true, "ms": ms }))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn wait_for_background_tasks_reports_and_validates() {
+        let done = wait_for_background_tasks(&json!({"timeoutSeconds": 5}))
+            .await
+            .unwrap();
+        assert_eq!(done["finished"], true);
+        assert!(
+            wait_for_background_tasks(&json!({"timeoutSeconds": -1}))
+                .await
+                .is_err()
+        );
+        assert!(wait_for_background_tasks(&json!({})).await.is_ok());
+    }
 }

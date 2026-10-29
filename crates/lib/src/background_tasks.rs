@@ -53,6 +53,10 @@ impl BackgroundTasks {
 
     /// Spawn `future` on the current tokio runtime and count it until it
     /// ends. Must be called from inside a runtime.
+    ///
+    /// A task that panics is logged at `error` (Python's done-callback logs
+    /// the exception of a failed background task); nobody joins a detached
+    /// task, so the panic would otherwise vanish.
     pub fn spawn<F>(&'static self, future: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -61,7 +65,11 @@ impl BackgroundTasks {
         let guard = Running(self);
         tokio::spawn(async move {
             let _guard = guard;
-            future.await;
+            if let Err(error) = tokio::spawn(future).await
+                && error.is_panic()
+            {
+                tracing::error!("background task panicked: {}", panic_message(error));
+            }
         });
     }
 
@@ -98,6 +106,16 @@ impl BackgroundTasks {
             }
         }
     }
+}
+
+/// The message of a panicked task's payload, when it is a string.
+fn panic_message(error: tokio::task::JoinError) -> String {
+    let payload = error.into_panic();
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
 }
 
 /// Spawn `future` as a detached task in the process-wide registry
@@ -202,5 +220,15 @@ mod tests {
     #[tokio::test]
     async fn drain_with_nothing_registered_returns_immediately() {
         assert!(registry().wait(Some(Duration::ZERO)).await);
+    }
+
+    // A panicking task is counted out like any other (and logged), so a drain
+    // does not hang on it.
+    #[tokio::test]
+    async fn a_panicking_task_is_counted_out() {
+        let tasks = registry();
+        tasks.spawn(async { panic!("boom") });
+        assert!(tasks.wait(Some(Duration::from_secs(5))).await);
+        assert_eq!(tasks.pending(), 0);
     }
 }
