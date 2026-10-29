@@ -225,7 +225,7 @@ fn apply_update_to_redis_entry(entry: &mut RedisQAEntry, updates: &SessionQAUpda
     if let Some(ref mm) = updates.memify_metadata {
         entry.memify_metadata = mm
             .as_ref()
-            .map(|v| serde_json::to_value(v).unwrap_or_default());
+            .map(|v| crate::types::merge_memify_metadata(entry.memify_metadata.take(), v));
     }
 }
 

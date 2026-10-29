@@ -13,6 +13,21 @@ fn map_db_err(e: sea_orm::DbErr) -> DatabaseError {
     DatabaseError::QueryError(e.to_string())
 }
 
+/// Overlay the JSON object `new` on the stored JSON object `existing`, as
+/// Python's cache adapters merge `memify_metadata` (`{**existing, **new}`):
+/// each improve stage writes only its own keys. A missing or non-object
+/// stored value is replaced.
+fn merge_memify_metadata(existing: Option<&str>, new: &str) -> String {
+    let stored = existing.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    match (stored, serde_json::from_str::<serde_json::Value>(new)) {
+        (Some(serde_json::Value::Object(mut merged)), Ok(serde_json::Value::Object(update))) => {
+            merged.extend(update);
+            serde_json::Value::Object(merged).to_string()
+        }
+        _ => new.to_string(),
+    }
+}
+
 fn model_to_row(m: entity::Model) -> SessionQaRow {
     SessionQaRow {
         id: m.id,
@@ -192,6 +207,7 @@ pub async fn update_qa_entry(
         return Ok(false);
     };
 
+    let existing_metadata = existing.memify_metadata.clone();
     // Build an ActiveModel with only the fields that need updating
     let mut active: entity::ActiveModel = existing.into();
 
@@ -214,7 +230,11 @@ pub async fn update_qa_entry(
         active.used_graph_element_ids = Set(ids.clone());
     }
     if let Some(ref mm) = updates.memify_metadata {
-        active.memify_metadata = Set(mm.clone());
+        let merged = match mm {
+            Some(new) => Some(merge_memify_metadata(existing_metadata.as_deref(), new)),
+            None => None,
+        };
+        active.memify_metadata = Set(merged);
     }
 
     // The `id` field is already `Unchanged` from the `.into()` conversion,

@@ -89,3 +89,21 @@ pub struct SessionTraceStep {
 fn empty_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
+
+/// `updates` overlaid on a stored `memify_metadata` value, as Python's cache
+/// adapters merge it (`{**existing, **updates}`): every stage writes only its
+/// own keys, so a write never drops another stage's flag. A missing or
+/// non-object stored value is replaced.
+pub(crate) fn merge_memify_metadata(
+    existing: Option<serde_json::Value>,
+    updates: &HashMap<String, bool>,
+) -> serde_json::Value {
+    let mut merged = match existing {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in updates {
+        merged.insert(key.clone(), serde_json::Value::Bool(*value));
+    }
+    serde_json::Value::Object(merged)
+}

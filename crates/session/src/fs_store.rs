@@ -252,7 +252,7 @@ fn apply_update_to_fs_entry(entry: &mut FsQAEntry, updates: &SessionQAUpdate) {
     if let Some(ref mm) = updates.memify_metadata {
         entry.memify_metadata = mm
             .as_ref()
-            .map(|v| serde_json::to_value(v).unwrap_or_default());
+            .map(|v| crate::types::merge_memify_metadata(entry.memify_metadata.take(), v));
     }
 }
 
@@ -813,6 +813,30 @@ mod tests {
             .as_ref()
             .expect("should have memify metadata");
         assert_eq!(mm.get("feedback_weights_applied"), Some(&false));
+
+        // A second write overlays its own keys (Python's `update_qa` merge).
+        store
+            .update_qa_entry(
+                "sess1",
+                None,
+                &qa_id,
+                SessionQAUpdate {
+                    memify_metadata: Some(Some(HashMap::from([(
+                        "preference_turn_counted".to_string(),
+                        true,
+                    )]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update should succeed");
+        let entries = store
+            .get_all_qa_entries("sess1", None)
+            .await
+            .expect("get should succeed");
+        let mm = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(mm.get("feedback_weights_applied"), Some(&false));
+        assert_eq!(mm.get("preference_turn_counted"), Some(&true));
     }
 
     #[tokio::test]

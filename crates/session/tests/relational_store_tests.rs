@@ -314,7 +314,7 @@ async fn update_qa_entry_sets_feedback() {
             "s1",
             None,
             &qa_id,
-            SessionQAUpdate {
+            cognee_session::SessionQAUpdate {
                 feedback_text: Some(Some("Excellent".to_string())),
                 feedback_score: Some(Some(5)),
                 ..Default::default()
@@ -346,7 +346,7 @@ async fn update_qa_entry_clears_feedback() {
             "s1",
             None,
             &qa_id,
-            SessionQAUpdate {
+            cognee_session::SessionQAUpdate {
                 feedback_text: Some(Some("Good".to_string())),
                 feedback_score: Some(Some(4)),
                 ..Default::default()
@@ -361,7 +361,7 @@ async fn update_qa_entry_clears_feedback() {
             "s1",
             None,
             &qa_id,
-            SessionQAUpdate {
+            cognee_session::SessionQAUpdate {
                 feedback_text: Some(None),
                 feedback_score: Some(None),
                 ..Default::default()
@@ -890,4 +890,56 @@ async fn context_rows_without_a_user_are_their_own_bucket() {
         .await
         .unwrap();
     assert_eq!(mine[0]["content"], "mine");
+}
+
+/// `memify_metadata` writes overlay their keys on the stored ones (Python's
+/// `update_qa` merge), so one stage's flag survives another's write.
+#[tokio::test]
+async fn memify_metadata_updates_merge_keys() {
+    let store = setup_store().await;
+    let qa_id = store
+        .create_qa_entry("s1", None, "q1?", "a1", None)
+        .await
+        .unwrap();
+    for (key, value) in [
+        ("feedback_weights_applied", true),
+        ("preference_turn_counted", true),
+        ("feedback_weights_applied", false),
+    ] {
+        store
+            .update_qa_entry(
+                "s1",
+                None,
+                &qa_id,
+                cognee_session::SessionQAUpdate {
+                    memify_metadata: Some(Some(std::collections::HashMap::from([(
+                        key.to_string(),
+                        value,
+                    )]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    let metadata = entries[0].memify_metadata.as_ref().unwrap();
+    assert_eq!(metadata.get("feedback_weights_applied"), Some(&false));
+    assert_eq!(metadata.get("preference_turn_counted"), Some(&true));
+
+    // `Some(None)` still clears it.
+    store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            cognee_session::SessionQAUpdate {
+                memify_metadata: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    assert!(entries[0].memify_metadata.is_none());
 }

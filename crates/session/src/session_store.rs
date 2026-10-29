@@ -14,6 +14,10 @@ use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 ///
 /// For non-optional fields (`question`, `answer`) the outer `Option` controls
 /// whether an update is applied.
+///
+/// `memify_metadata` is merged, not replaced: `Some(Some(map))` overlays
+/// `map`'s keys on the stored ones (Python's `update_qa`), so each improve
+/// stage passes only its own flags.
 #[derive(Debug, Clone, Default)]
 pub struct SessionQAUpdate {
     pub question: Option<String>,
