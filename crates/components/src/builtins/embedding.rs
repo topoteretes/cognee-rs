@@ -183,7 +183,8 @@ pub fn build_embedding_config(
             model_name: inputs.model.clone(),
             dimensions: inputs.dimensions,
             max_sequence_length: inputs.max_sequence_length,
-            batch_size: onnx.batch_size as usize,
+            batch_size: inputs.batch_size,
+            max_concurrent_data_points: inputs.max_concurrent_data_points,
             pooling,
             query_instruction,
         };
@@ -429,6 +430,20 @@ mod tests {
         let config = build_embedding_config(&inputs, &sections, std::path::Path::new(""));
         assert_eq!(config.batch_size, 32);
         assert_eq!(config.max_concurrent_data_points, 150);
+    }
+
+    /// SDK-1039 P23: Python's fastembed engine is built with the single
+    /// `EMBEDDING_BATCH_SIZE`; the ONNX engine follows `embedding.batch_size`
+    /// and `embedding.max_concurrent_data_points`, with no knob of its own.
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn onnx_engine_follows_the_embedding_batch_settings() {
+        let mut inputs = inputs("onnx", false);
+        inputs.batch_size = 8;
+        inputs.max_concurrent_data_points = 40;
+        let config = build_embedding_config(&inputs, &Default::default(), std::path::Path::new(""));
+        assert_eq!(config.onnx.batch_size, 8);
+        assert_eq!(config.onnx.max_concurrent_data_points, 40);
     }
 
     /// The carry-across in `build_embedding_config`: without it the Bedrock
