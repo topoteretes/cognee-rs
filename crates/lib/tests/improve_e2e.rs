@@ -23,6 +23,7 @@ use cognee::api::improve::{
     REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, StageKind, StageResult, StageStatus,
     TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
 };
+use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
 use cognee_core::DatasetLocks;
@@ -881,6 +882,131 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
     );
 }
 
+/// A delete runs no pipeline, but it changes the dataset: like Python's
+/// `forget` operation row, it records a `forget` row the change check counts,
+/// so the next run rebuilds the index (Python `test_watermarks.py`
+/// "deletion").
+#[tokio::test]
+async fn a_data_item_delete_invalidates_the_global_context_index() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let rows = h
+        .add_pipeline
+        .add(
+            vec![cognee::models::DataInput::Text("Alice likes tea.".into())],
+            "ds_forget",
+            owner,
+            None,
+        )
+        .await
+        .unwrap();
+    let dataset_id = IngestDb::get_dataset_by_name_in_tenant(&*h.db, "ds_forget", owner, None)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let run = || {
+        let mut p = params(&h, &config, "ds_forget", None, mock_llm());
+        p.owner_id = owner;
+        p.build_global_context_index = true;
+        improve(p)
+    };
+    let first = run().await.unwrap();
+    assert_eq!(
+        stage(&first, "global_context_index").status,
+        StageStatus::Completed
+    );
+    assert_eq!(
+        stage(&run().await.unwrap(), "global_context_index").status,
+        StageStatus::AlreadyCompleted
+    );
+
+    {
+        use cognee_database::RelationalDb;
+        let delete = cognee_delete::DeleteService::new(
+            Arc::clone(&h.storage),
+            h.db.clone() as Arc<dyn cognee_database::DeleteDb>,
+        )
+        .with_pipeline_run_repo(Arc::clone(&h.db).pipeline_runs());
+        delete
+            .execute(&cognee_delete::DeleteRequest {
+                scope: cognee_delete::DeleteScope::DataInDataset {
+                    dataset_id,
+                    data_id: rows[0].id,
+                    delete_dataset_if_empty: false,
+                },
+                mode: cognee_delete::DeleteMode::Hard,
+                memory_only: false,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        stage(&run().await.unwrap(), "global_context_index").status,
+        StageStatus::Completed,
+        "the delete is a change"
+    );
+}
+
+/// Python counts every non-noop improve as a change. A run whose stage wrote
+/// to the graph records an `improve` row, so the next run rebuilds; a host's
+/// own `improve_pipeline` row (the HTTP server's) does not count, so repeated
+/// index-only runs stay `already_completed`.
+#[tokio::test]
+async fn an_improve_that_wrote_invalidates_the_index_and_a_host_row_does_not() {
+    use cognee_database::{PipelineRunStatus, RelationalDb};
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let owner = Uuid::new_v4();
+    let dataset_id = create_dataset(&h, "ds_improve_write", owner).await;
+    let run = |sessions: Option<Vec<String>>| {
+        let mut p = params(&h, &config, "ds_improve_write", sessions, mock_llm());
+        p.owner_id = owner;
+        p.build_global_context_index = true;
+        improve(p)
+    };
+    run(None).await.unwrap();
+
+    Arc::clone(&h.db)
+        .pipeline_runs()
+        .log_pipeline_run(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            IMPROVE_PIPELINE_NAME,
+            Some(dataset_id),
+            PipelineRunStatus::Completed,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stage(&run(None).await.unwrap(), "global_context_index").status,
+        StageStatus::AlreadyCompleted,
+        "a host's improve row is not a change"
+    );
+
+    // The row a run records after its first writing stage (which stages
+    // count is pinned by the orchestrator's unit tests).
+    Arc::clone(&h.db)
+        .pipeline_runs()
+        .log_pipeline_run(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            IMPROVE_WRITE_PIPELINE_NAME,
+            Some(dataset_id),
+            PipelineRunStatus::Completed,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stage(&run(None).await.unwrap(), "global_context_index").status,
+        StageStatus::Completed,
+        "an improve that wrote is a change"
+    );
+}
+
 /// A run that ends errored saves no stamp, so the next run builds again.
 #[tokio::test]
 async fn an_errored_run_does_not_stamp_the_stage() {
@@ -1084,4 +1210,65 @@ async fn the_stage_adds_ride_on_the_run_dataset_hold() {
         assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
         assert!(r.dataset_id.is_some(), "the stage created the dataset");
     }
+}
+
+/// Python `test_improve_queue.py` "background improve returns at once and
+/// runs after the holder": a session remember's improve is launched detached
+/// and returns at once, waits for the dataset's holder in the process-wide
+/// registry, then runs.
+#[tokio::test]
+async fn a_background_improve_returns_at_once_and_runs_after_the_holder() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+    let dataset_id = create_dataset(&h, "ds_bg_queue", owner).await;
+    seed_qa(&h, owner, "bg_queue").await;
+    let holder = DatasetLocks::global().lock(dataset_id).await;
+
+    let launch = cognee::api::launch_session_auto_improve(cognee::api::SessionAutoImprove {
+        dataset_name: "ds_bg_queue".to_string(),
+        dataset_id: Some(dataset_id),
+        session_id: "bg_queue".to_string(),
+        owner_id: owner,
+        tenant_id: None,
+        self_improvement: true,
+        improve_config: Some(ImproveConfig::default()),
+        personalization_enabled: false,
+        llm: mock_llm(),
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(h.db.clone()),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
+        add_pipeline: Arc::new(locked_add_pipeline(&h, &DatasetLocks::global())),
+        cognify_config: Arc::new(CognifyConfig::default()),
+    });
+    let launched = tokio::time::timeout(SHORT, launch)
+        .await
+        .expect("the launch returns at once");
+    assert!(launched);
+    assert!(
+        !cognee::wait_for_background_tasks(Some(SHORT)).await,
+        "the improve waits for the holder"
+    );
+    let rows = |h: &Harness| {
+        let db = Arc::clone(&h.db);
+        async move {
+            cognee_database::DeleteDb::get_dataset_data(&*db, dataset_id)
+                .await
+                .unwrap()
+                .len()
+        }
+    };
+    assert_eq!(rows(&h).await, 0, "nothing ran while the dataset was held");
+
+    drop(holder);
+    assert!(cognee::wait_for_background_tasks(Some(LONG)).await);
+    assert!(
+        rows(&h).await > 0,
+        "after the holder, the improve persisted the session's Q&A"
+    );
 }

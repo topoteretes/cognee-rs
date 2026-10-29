@@ -1503,7 +1503,9 @@ impl AddPipeline {
             vector_db: None,
             db_connection: None,
             pipeline_run_repo: None,
-            dataset_locks: None,
+            // Python's add takes the process's one dataset lock registry;
+            // `with_dataset_locks` swaps in a host's own.
+            dataset_locks: Some(DatasetLocks::global()),
         }
     }
 

@@ -4545,27 +4545,34 @@ pub async fn cognify(
     ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
-    cognee_models::dataset_scope::with_dataset(
-        dataset_id,
-        cognify_in_scope(
-            data_items,
-            dataset_id,
-            user_id,
-            user_email,
-            tenant_id,
-            llm,
-            storage,
-            graph_db,
-            vector_db,
-            embedding_engine,
-            database,
-            pipeline_run_repo,
-            thread_pool,
-            ontology_resolver,
-            config,
-        ),
-    )
-    .await
+    // Python's cognify runs under the dataset's lock, so add, cognify, memify,
+    // improve and forget on one dataset queue one after another. Re-entrant
+    // for a caller that already holds it (an improve stage).
+    cognee_core::DatasetLocks::global()
+        .hold(
+            [dataset_id],
+            cognee_models::dataset_scope::with_dataset(
+                dataset_id,
+                cognify_in_scope(
+                    data_items,
+                    dataset_id,
+                    user_id,
+                    user_email,
+                    tenant_id,
+                    llm,
+                    storage,
+                    graph_db,
+                    vector_db,
+                    embedding_engine,
+                    database,
+                    pipeline_run_repo,
+                    thread_pool,
+                    ontology_resolver,
+                    config,
+                ),
+            ),
+        )
+        .await
 }
 
 /// [`cognify`], already inside the dataset's scope.

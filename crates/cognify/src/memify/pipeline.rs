@@ -192,22 +192,27 @@ pub async fn memify(
     tenant_id: Option<Uuid>,
     config: &MemifyConfig,
 ) -> Result<MemifyResult, MemifyError> {
-    cognee_models::dataset_scope::maybe_with_dataset(
-        dataset_id,
-        memify_in_scope(
-            graph_db,
-            vector_db,
-            embedding_engine,
-            thread_pool,
-            database,
-            pipeline_run_repo,
+    // Python's memify runs under the dataset's lock (see `cognify`).
+    cognee_core::DatasetLocks::global()
+        .hold(
             dataset_id,
-            user_id,
-            tenant_id,
-            config,
-        ),
-    )
-    .await
+            cognee_models::dataset_scope::maybe_with_dataset(
+                dataset_id,
+                memify_in_scope(
+                    graph_db,
+                    vector_db,
+                    embedding_engine,
+                    thread_pool,
+                    database,
+                    pipeline_run_repo,
+                    dataset_id,
+                    user_id,
+                    tenant_id,
+                    config,
+                ),
+            ),
+        )
+        .await
 }
 
 #[allow(clippy::too_many_arguments)]

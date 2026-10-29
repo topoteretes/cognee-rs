@@ -13,11 +13,17 @@
 //! The dataset has changed since the stamp when any `pipeline_runs` row was
 //! written after it, except for reads (`search`, `recall`) and the rows a host
 //! records an improve run under ([`IMPROVE_PIPELINE_NAME`]). Python excludes
-//! only the stamping run's own row (and the runs it started), counting another
-//! improve as a change. Rust's `improve()` writes no row of its own, and a host
-//! that records one (the HTTP server) closes it after the stamp, so improve
-//! rows are not counted at all: the writes an improve makes are counted through
-//! the add and cognify runs it logs.
+//! only the stamping run's own row (and the runs it started) and noop
+//! improves, counting every other improve as a change. Rust's `improve()`
+//! records its own change instead: right after the first stage that may have
+//! written to the graph (feedback weights, truth-subspace scores, the session
+//! stages...), it logs one [`IMPROVE_WRITE_PIPELINE_NAME`] row
+//! ([`record_graph_write`]). A run that only skipped, or only built the index,
+//! leaves none — so a host's own run rows stay uncounted and repeated
+//! index-only improves do not rebuild. That row precedes the run's own
+//! `global_context_index` stamp, so it never invalidates it. A delete records
+//! a `forget` row on every dataset it touched (`cognee_delete`), Python's
+//! `forget` operation row.
 //! Missing or unreadable state means "changed": being conservative costs extra
 //! work, never lost work.
 
@@ -35,8 +41,13 @@ pub const REASON_NO_WRITES_SINCE_LAST_IMPROVE: &str = "no_writes_since_last_impr
 /// The `pipeline_runs` name a host records an `improve()` run under.
 pub const IMPROVE_PIPELINE_NAME: &str = "improve_pipeline";
 
+/// The `pipeline_runs` name an improve run that wrote to the graph records
+/// its change under (Python's `improve` operation name).
+pub const IMPROVE_WRITE_PIPELINE_NAME: &str = "improve";
+
 /// Runs that are not writes to the dataset: reads (Python
-/// `READ_OPERATION_NAMES`) and improve runs themselves.
+/// `READ_OPERATION_NAMES`) and the host rows of improve runs, whose writes
+/// are counted through [`IMPROVE_WRITE_PIPELINE_NAME`].
 pub(crate) const UNCOUNTED_PIPELINE_NAMES: [&str; 3] = ["search", "recall", IMPROVE_PIPELINE_NAME];
 
 /// The checkpoint key of `stage`'s watermark on `dataset_id`.
@@ -98,6 +109,30 @@ pub(crate) async fn has_dataset_changed_since_last_improve(
             );
             true
         }
+    }
+}
+
+/// Log the [`IMPROVE_WRITE_PIPELINE_NAME`] row of a run that wrote to the
+/// graph of `dataset_id` (`None`: a dataset the run could not resolve; the
+/// any-dataset check still sees it). Best effort: a missed row only leaves an
+/// index stale until the next write, so a failure is logged.
+pub(crate) async fn record_graph_write(runs: &dyn PipelineRunRepository, dataset_id: Option<Uuid>) {
+    let pipeline = Uuid::new_v5(&Uuid::NAMESPACE_OID, IMPROVE_WRITE_PIPELINE_NAME.as_bytes());
+    if let Err(e) = runs
+        .log_pipeline_run(
+            Uuid::new_v4(),
+            pipeline,
+            IMPROVE_WRITE_PIPELINE_NAME,
+            dataset_id,
+            cognee_database::PipelineRunStatus::Completed,
+            None,
+        )
+        .await
+    {
+        warn!(
+            ?dataset_id,
+            "improve: could not record the run's graph write: {e}"
+        );
     }
 }
 

@@ -122,10 +122,25 @@ impl Default for DatasetLocks {
     }
 }
 
+/// The process-wide registry ([`DatasetLocks::global`]).
+static GLOBAL: std::sync::LazyLock<Arc<DatasetLocks>> =
+    std::sync::LazyLock::new(|| Arc::new(DatasetLocks::new()));
+
 impl DatasetLocks {
     /// An empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The process-wide registry — Python's one `dataset_lock` registry. It is
+    /// the default of every writer that is not wired with its own: `add`
+    /// (`AddPipeline`), `cognify` and `memify` (always), `improve` and
+    /// dataset-scoped deletes (`DeleteService`), so in one process they queue
+    /// per dataset. A host that keeps its own registry wires it into the add
+    /// pipeline, the delete service and `improve`; `cognify` and `memify`
+    /// still take this one, so a host sharing everything wires this one.
+    pub fn global() -> Arc<Self> {
+        Arc::clone(&GLOBAL)
     }
 
     /// Whether the current task holds `dataset_id` in this registry through an

@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Improve waits on its dataset and sessions; one dataset lock registry;
+  deletes and writing improves are changes (SDK-1044).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | `cognee-session` improve lock | `try_acquire_improve_lock(session_id) -> bool`, `release_improve_lock`, `ImproveLockGuard` (a concurrent improve of the session skipped) | `acquire_improve_lock_many(&keys) -> ImproveClaim` (waits; released on drop) and `improve_lock_keys(sessions, user)` (`session:{user}:{session}`) |
+  | `ImproveParams` | — | `+ dataset_locks`, `+ checkpoint_store` reads the stage watermarks (struct literals must set them) |
+  | `DatasetLocks` | per-host registries only | `DatasetLocks::global()`, the process-wide registry: the default of `AddPipeline::new` and `DeleteService::new` (was none), and of `improve` |
+  | `cognee_cognify::tasks::cognify`, `memify` | took no dataset lock | hold the dataset in `DatasetLocks::global()` for the run (re-entrant for a caller holding it there), as Python's `dataset_lock` |
+  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`; the Initiated resets skip them) when a pipeline-run repo is wired |
+  | `improve()` | wrote no row of its own | records one `improve` row (`IMPROVE_WRITE_PIPELINE_NAME`) after its first stage that may have written to the graph |
+
+  `global_context_index` is `already_completed` (`no_writes_since_last_improve`)
+  when nothing but reads and host `improve_pipeline` rows ran since its stamp.
+
 - **`improve()` is Python's staged orchestrator and returns its
   `ImproveResult` (SDK-1044).** `cognee::api::improve` runs Python's nine
   stages in registry order and reports one `StageResult` per stage.
