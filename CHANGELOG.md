@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `raw_bytes`. WebPage/WebSite provenance nodes are now derived from an
   `http(s)` `_cognee.source_uri` and no longer carry a `title`. **Documented
   difference:** a local `.html` file keeps Rust's text extraction
-  (`beautiful_soup_loader`); Python chunks the raw HTML for it.
+  (`beautiful_soup_loader`); Python chunks the raw HTML for it. A fetched
+  page is decoded like httpx's `Response.text`: with the Content-Type
+  `charset` (UTF-8 otherwise), undecodable bytes replaced instead of failing
+  the add.
 
 - **The notebooks feature is removed (SDK-1039).** Python removed
   `cognee/modules/notebooks` and both bundled tutorials in `52bcc7494`. Rust
