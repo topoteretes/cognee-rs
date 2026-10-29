@@ -44,9 +44,7 @@ pub async fn resolve_url_input(url: &str) -> Result<ResolvedUrlInput, UrlFetcher
     let (input, stored_extension, stored_mime_type) = if essence == "text/html"
         || essence == "application/xhtml+xml"
     {
-        let html = String::from_utf8(raw_bytes).map_err(|e| {
-            UrlFetcherError::ParseError(format!("Invalid UTF-8 in HTML response from {url}: {e}"))
-        })?;
+        let html = decode_page(&raw_bytes, &fetch_result.content_type);
         // Python stores the fetched page as is and lets `text_loader` read
         // it (`save_data_item_to_storage.py:82-89`): no title, no extraction.
         (
@@ -122,6 +120,24 @@ fn resolve_url_fetcher() -> Result<UrlFetcher, UrlFetcherError> {
     {
         UrlFetcher::new()
     }
+}
+
+/// The page as text, the way Python's crawler reads it: httpx's
+/// `Response.text` (`default_url_crawler.py` `_fetch_httpx`) decodes with the
+/// Content-Type `charset`, falling back to UTF-8, and replaces bytes it
+/// cannot decode instead of failing. A BOM is kept, as Python's codecs keep it.
+#[cfg(feature = "html-loader")]
+fn decode_page(bytes: &[u8], content_type: &str) -> String {
+    let encoding = content_type
+        .split(';')
+        .skip(1)
+        .filter_map(|param| param.split_once('='))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("charset"))
+        .and_then(|(_, label)| {
+            encoding_rs::Encoding::for_label(label.trim().trim_matches('"').as_bytes())
+        })
+        .unwrap_or(encoding_rs::UTF_8);
+    encoding.decode_without_bom_handling(bytes).0.into_owned()
 }
 
 /// Extract the MIME essence (e.g. `"text/html"`) from a full Content-Type
@@ -238,6 +254,32 @@ mod tests {
         assert_eq!(resolved.metadata.stored_extension, "txt");
         assert_eq!(resolved.metadata.stored_mime_type, "text/plain");
         assert_eq!(resolved.metadata.loader_engine, "text_loader");
+    }
+
+    /// httpx's `Response.text`: the `charset` decodes the page, and bytes
+    /// that are not valid in it are replaced rather than failing the add.
+    #[tokio::test]
+    async fn html_is_decoded_like_httpx() {
+        let mut server = server_with_robots().await;
+        let latin1 = format!("{}/latin1", server.url());
+        let _latin1 = server
+            .mock("GET", "/latin1")
+            .with_header("content-type", "text/html; charset=\"ISO-8859-2\"")
+            .with_body(b"<p>\xb1</p>".as_slice())
+            .create_async()
+            .await;
+        let bad = format!("{}/bad", server.url());
+        let _bad = server
+            .mock("GET", "/bad")
+            .with_header("content-type", "text/html")
+            .with_body(b"<p>\xff</p>".as_slice())
+            .create_async()
+            .await;
+
+        let resolved = resolve_url_input(&latin1).await.unwrap();
+        assert!(matches!(resolved.input, DataInput::Text(ref t) if t == "<p>\u{105}</p>"));
+        let resolved = resolve_url_input(&bad).await.unwrap();
+        assert!(matches!(resolved.input, DataInput::Text(ref t) if t == "<p>\u{fffd}</p>"));
     }
 
     #[tokio::test]
