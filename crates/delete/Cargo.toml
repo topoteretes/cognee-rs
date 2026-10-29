@@ -22,6 +22,7 @@ cognee-models = { path = "../models", version = "0.2.0" }
 cognee-session = { path = "../session", version = "0.2.0" }
 cognee-storage = { path = "../storage", version = "0.2.0" }
 cognee-vector = { path = "../vector", version = "0.2.0" }
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -30,7 +31,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-chrono.workspace = true
 cognee-cognify = { path = "../cognify" }
 cognee-database = { path = "../database", features = ["sqlite"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }

@@ -26,8 +26,6 @@ pub mod graph_spec;
 pub mod memify;
 /// Pipeline orchestration module.
 pub mod pipeline;
-/// Qualification module.
-pub mod qualification;
 /// Run-orchestration policy: what a finished run sweeps, marks and records.
 pub mod rollback;
 /// Summarization module.
@@ -83,15 +81,14 @@ pub use memify::{
 /// `cognee-truth-subspace` directly.
 pub use cognee_truth_subspace::DEFAULT_K;
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
-pub use qualification::{Qualification, check_pipeline_run_qualification};
 pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
-    AttributedDynamicGraph, CLAIM_STALE_AFTER, ClassifiedDocuments, CognifyInput,
-    DEFAULT_LEDGER_USER_ID, DynamicExtractionData, ExtractedChunks, ExtractedGraphData,
-    LedgerIdentity, SummarizedChunks, SummarizedData, add_data_points, build_cognify_pipeline,
-    classify_documents, cognify, create_web_page_nodes, extract_chunks_from_documents,
-    extract_dlt_fk_edges, extract_dynamic_graphs_from_data, extract_graph_from_data,
-    make_add_data_points_task, make_classify_documents_task, make_extract_chunks_task,
-    make_extract_graph_and_summarize_task, make_extract_graph_and_summarize_task_with_rank,
-    make_extract_graph_task, make_summarize_text_task, summarize_text,
+    AttributedDynamicGraph, ClassifiedDocuments, CognifyInput, DEFAULT_LEDGER_USER_ID,
+    DynamicExtractionData, ExtractedChunks, ExtractedGraphData, LedgerIdentity, SummarizedChunks,
+    SummarizedData, add_data_points, build_cognify_pipeline, classify_documents, cognify,
+    create_web_page_nodes, extract_chunks_from_documents, extract_dlt_fk_edges,
+    extract_dynamic_graphs_from_data, extract_graph_from_data, make_add_data_points_task,
+    make_classify_documents_task, make_extract_chunks_task, make_extract_graph_and_summarize_task,
+    make_extract_graph_and_summarize_task_with_rank, make_extract_graph_task,
+    make_summarize_text_task, summarize_text,
 };

@@ -102,8 +102,8 @@ impl PipelineWatcher for ScopedRunWatcher {
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // 1. Write durable row — non-fatal on failure.
         //    Python parity: `log_pipeline_run_start` writes no data items
-        //    (COG-6089); Rust has no recovery lock, so the row is `{}`.
-        let run_info = Some(super::run_info_for_started());
+        //    (COG-6089); the row carries the run's recovery token when it has one.
+        let run_info = Some(super::run_info_for_started(run.recovery_lock));
         let db_result = self
             .db
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {

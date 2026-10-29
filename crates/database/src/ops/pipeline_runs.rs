@@ -85,8 +85,8 @@ pub async fn get_pipeline_run(
 /// Delete all `pipeline_runs` rows for a given `dataset_id`.
 ///
 /// This is needed for data-scoped deletion where the dataset itself is not
-/// deleted (so the FK cascade does not fire), but we still want to invalidate
-/// the pipeline cache so the dataset can be re-cognified after data changes.
+/// deleted (so the FK cascade does not fire), but its run history described a
+/// dataset composition that no longer exists.
 ///
 /// Returns the count of deleted rows.
 #[instrument(
@@ -115,10 +115,9 @@ pub async fn delete_pipeline_runs_by_dataset(
 
 /// The latest `pipeline_runs` row for `(pipeline_name, dataset_id)`.
 ///
-/// [`get_latest_pipeline_status`] is this, projected. A pipeline-cache gate
-/// needs the row's `run_info` as well as its status — a run that completed
-/// with files still outstanding is not a cache hit — and reading the two with
-/// separate queries would let the answers come from different rows.
+/// [`get_latest_pipeline_status`] is this, projected. A caller that needs the
+/// row's `run_info` as well as its status should read the whole row: two
+/// separate queries could answer from different rows.
 #[instrument(
     name = "cognee.db.relational.pipeline_runs.get_latest_pipeline_run",
     level = "info",

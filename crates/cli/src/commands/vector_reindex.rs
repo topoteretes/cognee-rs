@@ -17,9 +17,7 @@
 //! repair for both, and the only one — the backfill is an adapter method with
 //! no caller outside tests until now.
 //!
-//! It does the work rather than reporting it first. `pipeline-unblock` reports
-//! first because it cannot tell a dead claim holder from a live run and only
-//! the operator can; there is no such ambiguity here. The build is online,
+//! It does the work rather than reporting it first: the build is online,
 //! idempotent, and skips every collection that already has a usable index, so a
 //! report-only mode would just cost a second invocation to reach the same
 //! place.

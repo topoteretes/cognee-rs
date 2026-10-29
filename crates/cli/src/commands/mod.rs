@@ -16,7 +16,6 @@ pub mod edge_reindex;
 pub mod export;
 pub mod forget;
 pub mod improve;
-pub mod pipeline_unblock;
 pub mod recall;
 pub mod remember;
 pub mod run_sequence;
@@ -36,7 +35,7 @@ use crate::error::CliError;
 
 /// Parse an optional `--tenant-id` flag — the one parser every command
 /// (`add`, `remember`, `improve`, `forget`, `search`, `recall`, `cognify`,
-/// `add-and-cognify`, `pipeline-unblock`, `delete`) uses.
+/// `add-and-cognify`, `delete`) uses.
 ///
 /// The tenant is applied by strict equality wherever a dataset is looked up
 /// (search/recall scoping, `forget --dataset-name`): data written with

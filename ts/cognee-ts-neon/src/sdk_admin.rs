@@ -1,7 +1,6 @@
-//! Phase 5 — admin / session / pipeline-run / user ops.
+//! Phase 5 — admin / session / user ops.
 //!
 //! Covers:
-//!   - Pipeline-run resets (#14)
 //!   - Default user (#15)
 //!   - Session CRUD (#13)
 //!
@@ -19,55 +18,6 @@ use crate::errors::throw_sdk_error;
 use crate::json::{parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
-
-// ---------------------------------------------------------------------------
-// Pipeline-run resets (#14)
-// ---------------------------------------------------------------------------
-
-/// `cogneeResetPipelineRunStatus(handle, datasetId, pipelineName) -> Promise<void>`
-pub fn cognee_reset_pipeline_run_status(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let dataset_id_str = cx.argument::<JsString>(1)?.value(&mut cx);
-    let pipeline_name = cx.argument::<JsString>(2)?.value(&mut cx);
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_reset_pipeline_run_status(&state, &dataset_id_str, &pipeline_name)
-            .await
-            .map(|_| ());
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(()) => Ok(cx.undefined()),
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-/// `cogneeResetDatasetPipelineRunStatus(handle, datasetId) -> Promise<void>`
-pub fn cognee_reset_dataset_pipeline_run_status(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let dataset_id_str = cx.argument::<JsString>(1)?.value(&mut cx);
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_reset_dataset_pipeline_run_status(&state, &dataset_id_str)
-            .await
-            .map(|_| ());
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(()) => Ok(cx.undefined()),
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
 
 // ---------------------------------------------------------------------------
 // Default user (#15)

@@ -110,10 +110,6 @@ public final class Native {
             CompletableFuture<String> future);
     // users / admin
     public static native void getOrCreateDefaultUser(long handle, CompletableFuture<String> future);
-    public static native void resetPipelineRunStatus(long handle, String datasetId,
-            String pipelineName, CompletableFuture<String> future);
-    public static native void resetDatasetPipelineRunStatus(long handle, String datasetId,
-            CompletableFuture<String> future);
 
     // visualization
     public static native void visualize(long handle, String optsJson,

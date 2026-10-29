@@ -368,63 +368,6 @@ describe("Phase-5 DatasetManager, forget, prune, sessions (Tier-A)", () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Pipeline-run resets
-  // ──────────────────────────────────────────────────────────────────────────
-
-  describe("pipeline-run resets", () => {
-    it("resetPipelineRunStatus inserts an INITIATED row without error", async () => {
-      const h = makeTempHandle("reset_pr@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        await native.cogneeAdd(
-          h.handle,
-          { type: "text", text: "reset pipeline run test" },
-          "reset_pr_ds"
-        );
-        const datasets = await native.cogneeListDatasets(h.handle);
-        const ds = datasets.find(
-          (d: { name: string }) => d.name === "reset_pr_ds"
-        );
-        expect(ds).toBeDefined();
-
-        await expect(
-          native.cogneeResetPipelineRunStatus(
-            h.handle,
-            ds!.id,
-            "cognify_pipeline"
-          )
-        ).resolves.toBeUndefined();
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-
-    it("resetDatasetPipelineRunStatus completes without error (no runs)", async () => {
-      const h = makeTempHandle("reset_ds_pr@test.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        await native.cogneeAdd(
-          h.handle,
-          { type: "text", text: "reset dataset pipeline run test" },
-          "reset_ds_pr_ds"
-        );
-        const datasets = await native.cogneeListDatasets(h.handle);
-        const ds = datasets.find(
-          (d: { name: string }) => d.name === "reset_ds_pr_ds"
-        );
-        expect(ds).toBeDefined();
-
-        // With no pipeline runs this is a no-op — must not throw.
-        await expect(
-          native.cogneeResetDatasetPipelineRunStatus(h.handle, ds!.id)
-        ).resolves.toBeUndefined();
-      } finally {
-        cleanupTmpDir(h.tmpDir);
-      }
-    });
-  });
-
-  // ──────────────────────────────────────────────────────────────────────────
   // Sessions
   // ──────────────────────────────────────────────────────────────────────────
 

@@ -233,24 +233,6 @@ export interface CogneeUserObject {
    * returned by `c.ownerId()`.
    */
   getOrCreateDefault(): Promise<CogneeUser>;
-  /**
-   * Reset the pipeline-run status for a single pipeline within a dataset.
-   *
-   * Unblocks a dataset that is stuck in the "running" state so it can be
-   * re-cognified. Equivalent to Python's `reset_pipeline_run_status`.
-   *
-   * @param datasetId    UUID of the dataset.
-   * @param pipelineName Name of the pipeline (e.g. `"cognify_pipeline"`).
-   */
-  resetPipelineRunStatus(datasetId: string, pipelineName: string): Promise<void>;
-  /**
-   * Reset the pipeline-run status for **all** pipelines in a dataset.
-   *
-   * Equivalent to Python's `reset_dataset_pipeline_run_status`.
-   *
-   * @param datasetId UUID of the dataset.
-   */
-  resetDatasetPipelineRunStatus(datasetId: string): Promise<void>;
 }
 
 /**
@@ -403,8 +385,6 @@ export class Cognee {
     // ── users sub-object ─────────────────────────────────────────────────────
     this.users = {
       getOrCreateDefault:             ()                           => native.cogneeGetOrCreateDefaultUser(h),
-      resetPipelineRunStatus:         (datasetId, pipelineName)   => native.cogneeResetPipelineRunStatus(h, datasetId, pipelineName),
-      resetDatasetPipelineRunStatus:  (datasetId)                 => native.cogneeResetDatasetPipelineRunStatus(h, datasetId),
     };
   }
 

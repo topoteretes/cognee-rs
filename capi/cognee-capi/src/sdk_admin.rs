@@ -1,7 +1,6 @@
-//! Phase 6 — admin / session / pipeline-run / user ops:
+//! Phase 6 — admin / session / user ops:
 //! `cg_sdk_get_session`, `cg_sdk_add_feedback`, `cg_sdk_delete_feedback`,
 //! `cg_sdk_get_graph_context`, `cg_sdk_set_graph_context`,
-//! `cg_sdk_reset_pipeline_run_status`, `cg_sdk_reset_dataset_pipeline_run_status`,
 //! `cg_sdk_get_or_create_default_user`.
 //!
 //! All follow the Phase-4 canonical pattern:
@@ -254,82 +253,6 @@ pub unsafe extern "C" fn cg_sdk_set_graph_context(
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
         sessions::run_set_graph_context(&state, &session_str, &context_str).await
-    });
-}
-
-/// Reset the pipeline run status for a specific pipeline within a dataset.
-///
-/// `dataset_id` is a UUID string.  `pipeline_name` is the pipeline name.
-///
-/// Returns `"null"` (D9) on success.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk`, `dataset_id`, `pipeline_name` must be valid non-null null-terminated
-/// UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_reset_pipeline_run_status(
-    sdk: *const CgSdk,
-    dataset_id: *const c_char,
-    pipeline_name: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let ds_str = match parse_c_str_or_fire(dataset_id, "dataset_id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-    let pipe_str = match parse_c_str_or_fire(pipeline_name, "pipeline_name", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        admin::run_reset_pipeline_run_status(&state, &ds_str, &pipe_str).await
-    });
-}
-
-/// Reset all pipeline run statuses for a dataset.
-///
-/// `dataset_id` is a UUID string.
-///
-/// Returns `"null"` (D9) on success.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` and `dataset_id` must be valid non-null null-terminated UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_reset_dataset_pipeline_run_status(
-    sdk: *const CgSdk,
-    dataset_id: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let ds_str = match parse_c_str_or_fire(dataset_id, "dataset_id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        admin::run_reset_dataset_pipeline_run_status(&state, &ds_str).await
     });
 }
 

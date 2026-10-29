@@ -245,33 +245,41 @@ async fn literal_backslash_u0000_text_is_not_mistaken_for_a_nul() {
 }
 
 // ---------------------------------------------------------------------------
-// reset_orphans
+// reset_orphan_run
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn reset_orphans_strips_nul_from_reason() {
+async fn reset_orphan_run_strips_nul_from_reason() {
     let db = sqlite_db().await;
     let dataset_id = Uuid::new_v4();
     create_dataset(&db, dataset_id).await;
     let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&db));
 
-    // One stuck `Started` row for `reset_orphans` to find.
-    repo.log_pipeline_run(
-        Uuid::new_v4(),
-        Uuid::new_v4(),
-        "orphan_pipeline",
-        Some(dataset_id),
-        PipelineRunStatus::Started,
-        None,
-    )
-    .await
-    .expect("seed orphan");
+    // One stuck `Started` row for `reset_orphan_run` to close.
+    let orphan_row = {
+        let run_id = Uuid::new_v4();
+        repo.log_pipeline_run(
+            run_id,
+            Uuid::new_v4(),
+            "orphan_pipeline",
+            Some(dataset_id),
+            PipelineRunStatus::Started,
+            None,
+        )
+        .await
+        .expect("seed orphan")
+    };
 
     let reset = repo
-        .reset_orphans("server_restart\u{0}orphan")
+        .reset_orphan_run(
+            dataset_id,
+            "orphan_pipeline",
+            orphan_row,
+            "server_restart\u{0}orphan",
+        )
         .await
-        .expect("reset_orphans");
-    assert_eq!(reset, 1, "the stuck Started row must be reset");
+        .expect("reset_orphan_run");
+    assert!(reset, "the stuck Started row must be closed");
 
     // Select the Errored row explicitly rather than relying on `created_at`
     // ordering, which can tie with the seed row's timestamp.
@@ -288,8 +296,8 @@ async fn reset_orphans_strips_nul_from_reason() {
     let run_info = errored[0]
         .run_info
         .as_ref()
-        .expect("reset_orphans always writes a reason");
-    assert_no_nul(run_info, "stored reset_orphans reason");
+        .expect("reset_orphan_run always writes a reason");
+    assert_no_nul(run_info, "stored reset_orphan_run reason");
     assert_eq!(run_info, &json!({"error": "server_restartorphan"}));
 }
 

@@ -1345,8 +1345,7 @@ fn edge_reindex_rejects_a_zero_limit() {
         .stderr(predicate::str::contains("0").and(predicate::str::contains("not in")));
 }
 
-/// `run-sequence` refuses `vector-reindex`, the same way it refuses
-/// `pipeline-unblock`: an HNSW build over an existing collection runs for an
+/// `run-sequence` refuses `vector-reindex`: an HNSW build over an existing collection runs for an
 /// unbounded time and that time lands on the following step's measurement,
 /// which is the one thing a sequence file exists to produce.
 ///

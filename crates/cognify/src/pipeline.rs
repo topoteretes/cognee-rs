@@ -56,11 +56,10 @@ pub struct CognifyResult {
     /// `true` when this run had nothing left to do. All other fields are
     /// empty.
     ///
-    /// Two paths set it: the `check_pipeline_run_qualification`
-    /// short-circuit (latest `pipeline_runs` row `COMPLETED` and the pipeline
-    /// cache opted in), and — since completion markers went live — a run whose
-    /// every data item an earlier run had already cognified. Both mean the same
-    /// thing to a caller, which is why they share the flag.
+    /// Set when every data item of the dataset was already cognified by an
+    /// earlier run (the completion markers cover it). Python skips such items
+    /// one by one inside the run; Rust skips them before building the
+    /// pipeline, so the run writes no rows of its own.
     ///
     /// CLI prints "already complete" when set; HTTP-server returns
     /// `200 OK` with `status = "PipelineRunAlreadyCompleted"`. See doc 08-08

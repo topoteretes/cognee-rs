@@ -15,7 +15,6 @@ pub mod datasets;
 pub mod error;
 pub mod forget;
 pub mod improve;
-pub mod pipeline_runs;
 pub mod prune;
 pub mod recall;
 pub mod remember;
@@ -29,7 +28,6 @@ pub use improve::{
     ImproveParams, ImproveResult, REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS,
     REASON_OPT_IN_DISABLED, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
-pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{
     RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,

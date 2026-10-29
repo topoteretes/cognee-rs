@@ -81,8 +81,8 @@ impl PipelineWatcher for DbPipelineWatcher {
 
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // Python parity: `log_pipeline_run_start` writes no data items
-        // (COG-6089); Rust has no recovery lock, so the row is `{}`.
-        let run_info = Some(run_info_for_started());
+        // (COG-6089); the row carries the run's recovery token when it has one.
+        let run_info = Some(run_info_for_started(run.recovery_lock));
         if let Err(e) = self
             .repo
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {

@@ -224,48 +224,22 @@ pub trait PipelineRunRepository: Send + Sync {
             .collect())
     }
 
-    /// The runs [`Self::reset_orphans`] would retire, *before* it retires
-    /// them: the latest row per `pipeline_run_id` that is still `INITIATED` /
-    /// `STARTED` with no more recent successor.
+    /// The latest row per `pipeline_run_id` that is still `INITIATED` /
+    /// `STARTED` with no more recent successor: Python's
+    /// `get_unterminated_pipeline_runs`.
     ///
-    /// # Why this is separate from the reset
+    /// Candidates for startup recovery, not proof of death: a live run is in
+    /// this list too. Recovery proves a writer gone by claiming the run's
+    /// ownership marker (`cognee_core::RunOwnership`) and closes the run
+    /// through [`Self::reset_orphan_run`]. The rows carry both ids a rollback
+    /// needs: `pipeline_run_id` (the ownership-ledger key, *not* `id`, which
+    /// keys this one status transition) and `dataset_id`.
     ///
-    /// Retiring the status row is only half of recovering a killed run. The
-    /// other half is rolling back what the dead run wrote into the graph and
-    /// vector stores — the ownership-ledger rows keyed by its
-    /// `pipeline_run_id` — because a cognify completion marker is written
-    /// only on success, so the next run re-processes every item and extracts
-    /// those entities a second time alongside the ones the corpse left behind.
-    ///
-    /// That rollback lives in `cognee_delete::RunSweeper`, in a crate *above*
-    /// this one (`cognee-delete` depends on `cognee-database`, so the
-    /// dependency cannot be inverted). Splitting "find" from "retire" is what
-    /// lets the caller interleave the two: list, sweep each listed run, then
-    /// reset. `cognee_delete::sweep_orphaned_run_artifacts` is the intended
-    /// consumer, and `Settings::resolved_single_process` is the assertion the
-    /// whole sequence is gated on.
-    ///
-    /// The returned rows carry both ids a sweep needs: `pipeline_run_id` (the
-    /// ownership-ledger key — *not* `id`, which keys this one status
-    /// transition) and `dataset_id`.
-    ///
-    /// The default implementation reports no orphans, matching the
-    /// implementations that persist nothing and therefore never strand one.
-    async fn list_orphan_runs(&self) -> Result<Vec<PipelineRunRow>, DbError> {
+    /// The default implementation reports none, matching the implementations
+    /// that persist nothing and therefore never strand a run.
+    async fn list_unterminated_runs(&self) -> Result<Vec<PipelineRunRow>, DbError> {
         Ok(Vec::new())
     }
-
-    /// Restart-orphan reset: rewrite any row stuck in `STARTED` (or, from an
-    /// older writer, `INITIATED`) without a more recent successor to `ERRORED`,
-    /// with `run_info = {"error": reason}` — Python's ERRORED shape.
-    ///
-    /// Returns the number of rows rewritten.
-    ///
-    /// Selects exactly what [`Self::list_orphan_runs`] returns. A startup
-    /// sweep rolls back the listed runs' artifacts and then calls this; a row
-    /// retired here that the list did not name would have its dataset
-    /// re-opened with a dead run's artifacts still in the graph.
-    async fn reset_orphans(&self, reason: &str) -> Result<u64, DbError>;
 
     /// Upsert a single payload field for a run. Concurrent calls with the
     /// same `(run_id, key)` are last-write-wins per row; calls with different
@@ -314,9 +288,8 @@ pub trait PipelineRunRepository: Send + Sync {
     /// `dataset_id`. Result order is unspecified.
     ///
     /// Supersedes the temporary `list_pipeline_names_for_dataset` helper that
-    /// task 08-05 introduced. Used by
-    /// `cognee::api::pipeline_runs::reset_dataset_pipeline_run_status`
-    /// and the delete crate's prune flow to enumerate pipelines per dataset.
+    /// task 08-05 introduced. Used by the delete crate's prune flow to
+    /// enumerate pipelines per dataset.
     ///
     /// Python parity: matches
     /// [`get_pipeline_runs_by_dataset.py`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/get_pipeline_runs_by_dataset.py).
@@ -325,181 +298,27 @@ pub trait PipelineRunRepository: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<Vec<PipelineRun>, DbError>;
 
-    /// Atomically claim exclusive-run rights for `(dataset_id,
-    /// pipeline_name)`, returning `true` iff the claim was taken.
+    /// Close the abandoned `Initiated`/`Started` row whose primary key is
+    /// `run_row_id` with an `Errored` successor whose `run_info` is
+    /// `{"error": reason}`, as Python's recovery does through
+    /// `log_pipeline_run_error`. Returns whether a successor was written.
     ///
-    /// This exists because reading the latest `pipeline_runs` status is *not*
-    /// mutual exclusion: that read and the `Started` row the executor writes
-    /// later are separate operations, so two callers entering within that
-    /// window both observe the pre-run state and both proceed. A claim closes
-    /// the window because the insert itself is the contended operation.
+    /// Startup recovery calls this after it has rolled the run back, and only
+    /// for a run whose ownership marker it claimed (the writer is gone).
     ///
-    /// A claim whose `claimed_at` is older than `stale_after` is reclaimed —
-    /// otherwise a killed process would wedge the pair forever, since a
-    /// release can only come from the holder. Pick `stale_after` above the
-    /// longest run you expect; too low re-admits a concurrent run into a
-    /// legitimately long one.
+    /// Closes the row only while it is still the latest row of **its own
+    /// run** (`pipeline_run_id`), as Python's recovery re-reads
+    /// `get_latest_pipeline_run(pipeline_run_id)`. A newer run of the same
+    /// pipeline on the same dataset does not stop it: the abandoned run is
+    /// closed even when a later run has completed since. `dataset_id` and
+    /// `pipeline_name` must match the observed row.
     ///
-    /// Callers MUST pair a `true` with [`Self::release_pipeline_run_claim`] on
-    /// every exit path, including errors.
-    ///
-    /// The default implementation always grants the claim, so repositories
-    /// with no durable storage (and existing external implementors) keep
-    /// compiling and behaving as before — with **no** serialization. Only
-    /// override it where the insert can actually contend.
-    async fn try_claim_pipeline_run(
-        &self,
-        _dataset_id: Uuid,
-        _pipeline_name: &str,
-        _claim_id: Uuid,
-        _stale_after: std::time::Duration,
-    ) -> Result<bool, DbError> {
-        Ok(true)
-    }
-
-    /// Release a claim taken with `claim_id`. Idempotent, and scoped to
-    /// `claim_id` so it can never drop a claim another run has since taken
-    /// over (e.g. after this one was reclaimed as stale).
-    ///
-    /// The default implementation does nothing — see
-    /// [`Self::try_claim_pipeline_run`].
-    async fn release_pipeline_run_claim(
-        &self,
-        _dataset_id: Uuid,
-        _pipeline_name: &str,
-        _claim_id: Uuid,
-    ) -> Result<(), DbError> {
-        Ok(())
-    }
-
-    /// The claim currently held on this pair, if any.
-    ///
-    /// Read-only, for an operator asking why a run is being refused. The two
-    /// answers that matter are different: no claim means the refusal came from
-    /// somewhere else, while a claim means this is the exclusion working — and
-    /// its age is the only evidence available about whether the holder is still
-    /// alive.
-    ///
-    /// The default implementation reports none, matching the default
-    /// [`Self::try_claim_pipeline_run`], which never records one.
-    async fn get_pipeline_run_claim(
-        &self,
-        _dataset_id: Uuid,
-        _pipeline_name: &str,
-    ) -> Result<Option<PipelineRunClaim>, DbError> {
-        Ok(None)
-    }
-
-    /// Drop the claim held by `claim_id`, reporting whether a row went.
-    ///
-    /// Scoped to the holder exactly like [`Self::release_pipeline_run_claim`],
-    /// and for the same reason: an operator releases a claim they read a moment
-    /// earlier, and between the read and this call the holder may have finished
-    /// and a *new* run taken the pair. An unscoped delete would kill that live
-    /// run while reporting the dead holder's id.
-    ///
-    /// What it adds over the release above is the return value. A tool acting
-    /// on behalf of an operator has to tell "cleared the claim you saw" apart
-    /// from "it was already gone", and the run path — which releases its own
-    /// claim and cannot care — does not.
-    ///
-    /// Named `try_` rather than `force_` on purpose: it removes nothing unless
-    /// `claim_id` still holds the pair, so a caller that does not have the
-    /// holder's id cannot use it to clear a claim. The only holder-unscoped
-    /// variant is [`Self::release_all_pipeline_run_claims`], which is sound
-    /// solely at startup in a single-process deployment — see the TOCTOU the
-    /// scoping here prevents, which that one avoids by there being no peer
-    /// whose claim it could stomp.
-    ///
-    /// The default implementation reports nothing released.
-    async fn try_release_pipeline_run_claim(
-        &self,
-        _dataset_id: Uuid,
-        _pipeline_name: &str,
-        _claim_id: Uuid,
-    ) -> Result<bool, DbError> {
-        Ok(false)
-    }
-
-    /// Drop **every** exclusive-run claim, returning how many went.
-    ///
-    /// # Only sound where one process per database is asserted
-    ///
-    /// Unlike every other release above, this is unscoped: it does not know
-    /// whose claims it is dropping. That is safe in exactly one situation — a
-    /// process starting up that is the *only* process using this database.
-    /// Every claim it finds was then written by a previous incarnation of
-    /// itself, and every one of those holders is dead by definition, because
-    /// the process that would have held them is the one now starting.
-    ///
-    /// In a multi-process or multi-replica deployment the same call would drop
-    /// a *live* peer's claim and re-admit a concurrent run into it — precisely
-    /// the failure the claim exists to prevent. Callers MUST gate it on
-    /// [`crate::single_process::resolve_single_process`] (or
-    /// `Settings::resolved_single_process`, which wraps it), and MUST call it
-    /// only before any run of their own has taken a claim.
-    ///
-    /// Note what that predicate does **not** grant: a SQLite *file* is shared
-    /// by every process opened against it, so only in-memory SQLite qualifies
-    /// on its own and everything else needs an explicit
-    /// `COGNEE_SINGLE_PROCESS=1`.
-    ///
-    /// # Why it is needed
-    ///
-    /// A claim is released only by its holder
-    /// ([`Self::release_pipeline_run_claim`] filters on `claim_id`), so a
-    /// process killed mid-run — SIGKILL, OOM, an Android process kill — cannot
-    /// release. Liveness is then inferred purely from the age of `claimed_at`,
-    /// against a deliberately generous staleness window (a day), so the pair
-    /// refuses every new run until that window expires.
-    ///
-    /// # Pair it with [`Self::reset_orphans`]
-    ///
-    /// A killed run leaves *two* blockers and the claim is the second of them.
-    /// `check_pipeline_run_qualification` reads the latest `pipeline_runs` row
-    /// first and rejects one left at `Started`, before any claim is consulted —
-    /// and unlike the claim that row never expires. Clearing only the claim
-    /// therefore changes nothing the caller can observe. `cognee-cli
-    /// pipeline-unblock` clears both for this reason; a startup sweep must too.
-    ///
-    /// `reason` is recorded on the log line emitted per released pair, so the
-    /// audit trail says what was dropped and why.
-    ///
-    /// The default implementation releases nothing, matching the default
-    /// [`Self::try_claim_pipeline_run`], which never records a claim.
-    async fn release_all_pipeline_run_claims(&self, _reason: &str) -> Result<u64, DbError> {
-        Ok(0)
-    }
-
-    /// Retire the orphaned `Initiated`/`Started` row whose primary key is
-    /// `run_row_id`, as [`Self::reset_orphans`] does for every pair at once.
-    /// Returns whether a successor was written.
-    ///
-    /// This is the *first* thing that refuses a re-run after a kill, and the
-    /// one with no expiry. `check_pipeline_run_qualification` reads the latest
-    /// row for the pair before any claim is consulted and rejects a `Started`
-    /// one; a killed process leaves that row behind exactly as it leaves its
-    /// claim. The claim ages out on its own after a day — this does not age out
-    /// at all, and the only existing sweep runs at HTTP-server startup, so a
-    /// CLI-only deployment never reaches it.
-    ///
-    /// Scoped to the run the caller observed, for the same reason
-    /// [`Self::try_release_pipeline_run_claim`] is scoped to its holder: an
-    /// operator reports first and clears second, and a real run can start
-    /// between the two. Retiring by pair alone would write an `Errored`
-    /// successor over that healthy in-flight run — marking it failed and
-    /// re-opening the gate it had legitimately closed.
-    ///
-    /// The scope is `pipeline_runs.id` — the row primary key, a fresh UUIDv4
-    /// per transition — and **not** `pipeline_run_id`, which does not identify
-    /// a run. `pipeline_run_id` is `uuid5(OID, "{pipeline_id}_{dataset_id}")`
-    /// (see `cognee_core::pipeline_run_registry::ids::pipeline_run_id`), so for
-    /// every dataset whose rows the HTTP server wrote, a *different, healthy*
-    /// run started since the operator's report carries the identical value.
-    /// Scoping by it would let exactly the newcomer this guard exists to
-    /// protect through. The reuse is Python parity and deliberate — a
-    /// re-cognify of a dataset is meant to return the same `pipeline_run_id` —
-    /// so the guard is what has to change, not the id.
+    /// Scoped to the row primary key `id`, a fresh UUIDv4 per transition:
+    /// a row written for the run since (its own terminal row or, where an
+    /// HTTP dispatcher mints the deterministic
+    /// `uuid5(OID, "{pipeline_id}_{dataset_id}")` run id, a newer run sharing
+    /// it) means there is nothing left to close, and a healthy in-flight run
+    /// is never marked `Errored`.
     ///
     /// Writes an `Errored` successor rather than deleting, keeping the
     /// new-row-per-transition audit trail intact.
@@ -514,17 +333,4 @@ pub trait PipelineRunRepository: Send + Sync {
     ) -> Result<bool, DbError> {
         Ok(false)
     }
-}
-
-/// A held exclusive-run claim, as reported by
-/// [`PipelineRunRepository::get_pipeline_run_claim`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PipelineRunClaim {
-    /// Identifies the holder. Opaque to an operator, but it is what
-    /// distinguishes one wedged claim from a pair that is being re-claimed
-    /// repeatedly by successive live runs.
-    pub claim_id: Uuid,
-    /// When the claim was taken. Its age is the only signal available about
-    /// whether the holder is still running.
-    pub claimed_at: chrono::DateTime<chrono::Utc>,
 }

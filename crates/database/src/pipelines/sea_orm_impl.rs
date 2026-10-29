@@ -4,17 +4,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use cognee_utils::sanitize::sanitize_json;
-use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, JoinType,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, JoinType,
     QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::conversions::{domain_status_to_entity, entity_status_to_domain};
-use crate::entities::{dataset, pipeline_run, pipeline_run_claim, pipeline_run_payload_field};
-use crate::pipelines::repository::PipelineRunClaim;
+use crate::entities::{dataset, pipeline_run, pipeline_run_payload_field};
 use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
@@ -69,14 +67,7 @@ impl SeaOrmPipelineRunRepository {
     /// ordered by `created_at DESC` and keeping the first one seen per
     /// `pipeline_run_id`.
     ///
-    /// **One definition, two callers, deliberately.** Both
-    /// [`PipelineRunRepository::list_orphan_runs`] and
-    /// [`PipelineRunRepository::reset_orphans`] go through this, because
-    /// startup recovery calls them in sequence: list the orphans, roll back
-    /// each one's graph/vector artifacts, *then* retire the rows. If the two
-    /// selections could drift, a row the list missed would still be retired —
-    /// re-opening its dataset with the dead run's partial artifacts left in
-    /// the graph, which is precisely the state the rollback exists to remove.
+    /// The candidate set of [`PipelineRunRepository::list_unterminated_runs`].
     async fn latest_in_flight_rows(&self) -> Result<Vec<pipeline_run::Model>, DatabaseError> {
         let all_rows = pipeline_run::Entity::find()
             .order_by_desc(pipeline_run::Column::CreatedAt)
@@ -104,45 +95,6 @@ impl SeaOrmPipelineRunRepository {
                 )
             })
             .collect())
-    }
-
-    /// `INSERT ... ON CONFLICT DO NOTHING`, returning whether the row was
-    /// written. `false` means a claim already exists for the pair.
-    ///
-    /// SeaORM signals a do-nothing conflict either as `Ok(0)` rows affected or
-    /// as `DbErr::RecordNotInserted` depending on backend and version; both
-    /// mean the same thing here.
-    async fn insert_claim(
-        &self,
-        dataset_hex: &str,
-        pipeline_name: &str,
-        claim_id: Uuid,
-    ) -> Result<bool, DatabaseError> {
-        let row = pipeline_run_claim::ActiveModel {
-            dataset_id: sea_orm::ActiveValue::Set(dataset_hex.to_string()),
-            pipeline_name: sea_orm::ActiveValue::Set(pipeline_name.to_string()),
-            claim_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(claim_id)),
-            claimed_at: sea_orm::ActiveValue::Set(Utc::now()),
-        };
-
-        match pipeline_run_claim::Entity::insert(row)
-            .on_conflict(
-                OnConflict::columns([
-                    pipeline_run_claim::Column::DatasetId,
-                    pipeline_run_claim::Column::PipelineName,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec_without_returning(self.db.as_ref())
-            .await
-        {
-            Ok(rows) => Ok(rows > 0),
-            Err(DbErr::RecordNotInserted) => Ok(false),
-            Err(e) => Err(DatabaseError::QueryError(format!(
-                "insert pipeline_run_claim failed: {e}"
-            ))),
-        }
     }
 
     /// Create a new repository backed by the given database connection.
@@ -467,66 +419,13 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         Ok(rows.into_iter().skip(offset).take(limit).collect())
     }
 
-    async fn list_orphan_runs(&self) -> Result<Vec<PipelineRunRow>, DatabaseError> {
+    async fn list_unterminated_runs(&self) -> Result<Vec<PipelineRunRow>, DatabaseError> {
         Ok(self
             .latest_in_flight_rows()
             .await?
             .into_iter()
             .map(PipelineRun::from)
             .collect())
-    }
-
-    async fn reset_orphans(&self, reason: &str) -> Result<u64, DatabaseError> {
-        let orphan_ids: Vec<String> = self
-            .latest_in_flight_rows()
-            .await?
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
-
-        if orphan_ids.is_empty() {
-            return Ok(0);
-        }
-
-        // Write new ERRORED rows for each orphan (new-row-per-transition pattern).
-        // The row carries Python's ERRORED shape, `{"error": …}` (its startup
-        // recovery closes an abandoned run through `log_pipeline_run_error`),
-        // with `reason` as the message.
-        // `reason` is caller-supplied and lands in the `run_info` json column,
-        // which Postgres rejects on an embedded NUL. Today's only production
-        // caller passes a literal, but the trait takes `&str` from anyone.
-        let reason_info = sanitize_json(json!({"error": reason}));
-        let mut count = 0u64;
-        for orphan_id in &orphan_ids {
-            // Fetch the orphan row to get all its fields.
-            let orphan_opt = pipeline_run::Entity::find_by_id(orphan_id.clone())
-                .one(self.db.as_ref())
-                .await
-                .map_err(|e| {
-                    DatabaseError::QueryError(format!("reset_orphans fetch orphan failed: {e}"))
-                })?;
-
-            if let Some(orphan) = orphan_opt {
-                let new_id = Uuid::new_v4();
-                let active = pipeline_run::ActiveModel {
-                    id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(new_id)),
-                    created_at: sea_orm::ActiveValue::Set(Utc::now()),
-                    status: sea_orm::ActiveValue::Set(pipeline_run::PipelineRunStatus::Errored),
-                    pipeline_run_id: sea_orm::ActiveValue::Set(orphan.pipeline_run_id),
-                    pipeline_name: sea_orm::ActiveValue::Set(orphan.pipeline_name),
-                    pipeline_id: sea_orm::ActiveValue::Set(orphan.pipeline_id),
-                    dataset_id: sea_orm::ActiveValue::Set(orphan.dataset_id),
-                    run_info: sea_orm::ActiveValue::Set(Some(reason_info.clone())),
-                    user_id: sea_orm::ActiveValue::Set(orphan.user_id),
-                };
-                active.insert(self.db.as_ref()).await.map_err(|e| {
-                    DatabaseError::QueryError(format!("reset_orphans insert failed: {e}"))
-                })?;
-                count += 1;
-            }
-        }
-
-        Ok(count)
     }
 
     async fn set_payload_field(
@@ -647,208 +546,6 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         Ok(out)
     }
 
-    /// Take the claim by inserting the `(dataset_id, pipeline_name)` row. The
-    /// composite primary key is the mutual exclusion: concurrent inserts race
-    /// in the database and exactly one commits, so `ON CONFLICT DO NOTHING`
-    /// reporting zero rows written *is* the "someone else holds it" signal.
-    /// Portable across SQLite and Postgres.
-    async fn try_claim_pipeline_run(
-        &self,
-        dataset_id: Uuid,
-        pipeline_name: &str,
-        claim_id: Uuid,
-        stale_after: std::time::Duration,
-    ) -> Result<bool, DatabaseError> {
-        let dataset_hex = uuid_hex::to_hex(dataset_id);
-
-        if self
-            .insert_claim(&dataset_hex, pipeline_name, claim_id)
-            .await?
-        {
-            return Ok(true);
-        }
-
-        // Someone holds it. Reclaim only if their claim has aged out — a
-        // killed process cannot release, and a release is scoped to its own
-        // `claim_id`, so without this the pair would wedge permanently.
-        let Some(existing) = pipeline_run_claim::Entity::find_by_id((
-            dataset_hex.clone(),
-            pipeline_name.to_string(),
-        ))
-        .one(self.db.as_ref())
-        .await
-        .map_err(|e| DatabaseError::QueryError(format!("find pipeline_run_claim failed: {e}")))?
-        else {
-            // Released between our insert and this read — retry once.
-            return self
-                .insert_claim(&dataset_hex, pipeline_name, claim_id)
-                .await;
-        };
-
-        let age = Utc::now().signed_duration_since(existing.claimed_at);
-        let stale_after = chrono::Duration::from_std(stale_after)
-            .map_err(|e| DatabaseError::QueryError(format!("stale_after out of range: {e}")))?;
-        if age < stale_after {
-            return Ok(false);
-        }
-
-        // Delete scoped to the `claim_id` we observed, so we lose the race
-        // rather than stomping a claim taken since the read.
-        let deleted = pipeline_run_claim::Entity::delete_many()
-            .filter(pipeline_run_claim::Column::DatasetId.eq(dataset_hex.clone()))
-            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
-            .filter(pipeline_run_claim::Column::ClaimId.eq(existing.claim_id.clone()))
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| {
-                DatabaseError::QueryError(format!("delete stale pipeline_run_claim failed: {e}"))
-            })?;
-        if deleted.rows_affected == 0 {
-            return Ok(false);
-        }
-
-        tracing::warn!(
-            dataset_id = %dataset_id,
-            pipeline_name = %pipeline_name,
-            stale_claim_id = %existing.claim_id,
-            age_seconds = age.num_seconds(),
-            "reclaimed a stale pipeline-run claim; the previous holder never released it"
-        );
-        self.insert_claim(&dataset_hex, pipeline_name, claim_id)
-            .await
-    }
-
-    async fn release_pipeline_run_claim(
-        &self,
-        dataset_id: Uuid,
-        pipeline_name: &str,
-        claim_id: Uuid,
-    ) -> Result<(), DatabaseError> {
-        pipeline_run_claim::Entity::delete_many()
-            .filter(pipeline_run_claim::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
-            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
-            .filter(pipeline_run_claim::Column::ClaimId.eq(uuid_hex::to_hex(claim_id)))
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| {
-                DatabaseError::QueryError(format!("release pipeline_run_claim failed: {e}"))
-            })?;
-        Ok(())
-    }
-
-    async fn get_pipeline_run_claim(
-        &self,
-        dataset_id: Uuid,
-        pipeline_name: &str,
-    ) -> Result<Option<PipelineRunClaim>, DatabaseError> {
-        let Some(row) = pipeline_run_claim::Entity::find_by_id((
-            uuid_hex::to_hex(dataset_id),
-            pipeline_name.to_string(),
-        ))
-        .one(self.db.as_ref())
-        .await
-        .map_err(|e| DatabaseError::QueryError(format!("find pipeline_run_claim failed: {e}")))?
-        else {
-            return Ok(None);
-        };
-
-        // The column is the same un-hyphenated hex every id column in this
-        // schema uses. A row that does not parse is a corrupt claim rather than
-        // an absent one, and reporting it as absent would tell an operator the
-        // pair is free while the row keeps refusing their runs.
-        let claim_id = uuid_hex::from_hex(&row.claim_id).map_err(|e| {
-            DatabaseError::QueryError(format!(
-                "pipeline_run_claim for dataset {dataset_id} / {pipeline_name} holds an \
-                 unparseable claim_id {:?}: {e}",
-                row.claim_id
-            ))
-        })?;
-
-        Ok(Some(PipelineRunClaim {
-            claim_id,
-            claimed_at: row.claimed_at,
-        }))
-    }
-
-    async fn try_release_pipeline_run_claim(
-        &self,
-        dataset_id: Uuid,
-        pipeline_name: &str,
-        claim_id: Uuid,
-    ) -> Result<bool, DatabaseError> {
-        // Scoped to the holder the caller observed. An unscoped delete would be
-        // simpler and wrong: between their read and this call the holder can
-        // have finished and a new run taken the pair, and this would then kill
-        // a live run while reporting the dead holder's id.
-        let deleted = pipeline_run_claim::Entity::delete_many()
-            .filter(pipeline_run_claim::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
-            .filter(pipeline_run_claim::Column::PipelineName.eq(pipeline_name.to_string()))
-            .filter(pipeline_run_claim::Column::ClaimId.eq(uuid_hex::to_hex(claim_id)))
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| {
-                DatabaseError::QueryError(format!("release pipeline_run_claim failed: {e}"))
-            })?;
-
-        if deleted.rows_affected > 0 {
-            tracing::warn!(
-                dataset_id = %dataset_id,
-                pipeline_name = %pipeline_name,
-                claim_id = %claim_id,
-                "released a pipeline-run claim on operator request; if its holder is still \
-                 alive, a concurrent run is now possible on this pair"
-            );
-        }
-        Ok(deleted.rows_affected > 0)
-    }
-
-    /// Read the claims first, then delete them all, so every dropped pair can
-    /// be named in the log. The read/delete pair is not atomic and does not
-    /// need to be: the caller has asserted it is the only process on this
-    /// database and has not started a run yet, so nothing can be writing
-    /// claims concurrently. The delete's own `rows_affected` — not the length
-    /// of the read — is what is returned, so a row that vanished between the
-    /// two is not counted as released.
-    async fn release_all_pipeline_run_claims(&self, reason: &str) -> Result<u64, DatabaseError> {
-        let rows = pipeline_run_claim::Entity::find()
-            .all(self.db.as_ref())
-            .await
-            .map_err(|e| {
-                DatabaseError::QueryError(format!("list pipeline_run_claims failed: {e}"))
-            })?;
-
-        if rows.is_empty() {
-            return Ok(0);
-        }
-
-        let now = Utc::now();
-        for row in &rows {
-            // One line per pair, at `warn`: a claim being dropped without its
-            // holder's consent is exactly the kind of thing an operator needs
-            // to find in the log after an unexplained concurrent run. The age
-            // is what tells them whether this was a crash leftover (hours or
-            // days) or something that should not have been swept at all.
-            tracing::warn!(
-                dataset_id = %row.dataset_id,
-                pipeline_name = %row.pipeline_name,
-                claim_id = %row.claim_id,
-                age_seconds = now.signed_duration_since(row.claimed_at).num_seconds(),
-                reason = %reason,
-                "releasing a pipeline-run claim left behind by a previous process; this is \
-                 only sound because the deployment asserts a single process per database"
-            );
-        }
-
-        let deleted = pipeline_run_claim::Entity::delete_many()
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| {
-                DatabaseError::QueryError(format!("release all pipeline_run_claims failed: {e}"))
-            })?;
-
-        Ok(deleted.rows_affected)
-    }
-
     async fn reset_orphan_run(
         &self,
         dataset_id: Uuid,
@@ -856,25 +553,35 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         run_row_id: Uuid,
         reason: &str,
     ) -> Result<bool, DatabaseError> {
-        // The same row `check_pipeline_run_qualification` reads, so what is
-        // retired here is exactly what would have refused the next run.
-        let Some(latest) = self
-            .get_pipeline_run_by_dataset(dataset_id, pipeline_name)
-            .await?
+        // The observed row, then the latest row of *its run* (Python's
+        // recovery re-reads `get_latest_pipeline_run(pipeline_run_id)`,
+        // `recovery.py:102`). Not the latest row of the `(dataset, pipeline)`
+        // pair: with no gate left, a newer run of the same pipeline on the
+        // same dataset may have run, and finished, since this one was
+        // abandoned, and keying on the pair would leave the abandoned run
+        // `STARTED` forever.
+        let Some(observed) = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::Id.eq(uuid_hex::to_hex(run_row_id)))
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("reset_orphan_run lookup failed: {e}")))?
+            .map(PipelineRun::from)
         else {
             return Ok(false);
         };
+        if observed.dataset_id != Some(dataset_id) || observed.pipeline_name != pipeline_name {
+            return Ok(false);
+        }
+        let Some(latest) = self.get_pipeline_run(observed.pipeline_run_id).await? else {
+            return Ok(false);
+        };
 
-        // Scoped to the row the caller observed. Without this, a real run
-        // started between an operator's report and their clear would be the
-        // latest row by the time we get here, and would be marked `Errored`
-        // while healthy and in flight.
-        //
-        // Compared on `id`, the row primary key, because `pipeline_run_id` does
-        // not identify a run: it is `uuid5(OID, "{pipeline_id}_{dataset_id}")`,
-        // so every run of the same pipeline on the same dataset dispatched by
-        // the HTTP server carries the same value. Comparing that would pass the
-        // guard for precisely the healthy newcomer it exists to spare.
+        // Scoped to the row the caller observed: a row written for the run
+        // since (its own terminal row or, where `pipeline_run_id` is the
+        // deterministic `uuid5(OID, "{pipeline_id}_{dataset_id}")` an HTTP
+        // dispatcher mints, a newer run sharing the id) leaves nothing for
+        // this call to close, and a healthy in-flight run must never be
+        // marked `Errored`.
         if latest.id != run_row_id {
             return Ok(false);
         }
@@ -886,10 +593,8 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             return Ok(false);
         }
 
-        // New-row-per-transition, matching `reset_orphans`: an `Errored`
-        // successor rather than a delete, so the audit trail still shows the
-        // run started and how it ended. `Errored` is also what qualification
-        // needs to see to return `Proceed`.
+        // New-row-per-transition: an `Errored` successor rather than a delete,
+        // so the audit trail still shows the run started and how it ended.
         let active = pipeline_run::ActiveModel {
             id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(Uuid::new_v4())),
             created_at: sea_orm::ActiveValue::Set(Utc::now()),
@@ -898,10 +603,9 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
             pipeline_name: sea_orm::ActiveValue::Set(latest.pipeline_name),
             pipeline_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex(latest.pipeline_id)),
             dataset_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(latest.dataset_id)),
-            // Operator-supplied, and `run_info` is a json column whose Postgres
-            // parser rejects the `\u0000` escape — the same reason
-            // `reset_orphans` sanitizes its own literal reason.
-            // Python's ERRORED shape, `{"error": …}`, as `reset_orphans` writes.
+            // Caller-supplied, and `run_info` is a json column whose Postgres
+            // parser rejects the `\u0000` escape, so the reason is sanitized.
+            // Python's ERRORED shape, `{"error": …}`.
             run_info: sea_orm::ActiveValue::Set(Some(sanitize_json(json!({"error": reason})))),
             user_id: sea_orm::ActiveValue::Set(uuid_hex::to_hex_opt(latest.user_id)),
         };

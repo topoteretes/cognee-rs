@@ -18,6 +18,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **The pipeline-cache gate, the reset API and the `AlreadyRunning` gate are
+  gone; runs are serialized by a per-dataset lock and a killed run is recovered
+  at startup (SDK-1039, Python `dc0b4ad6a`).** Python removed
+  `use_pipeline_cache`, `reset_pipeline_run_status` and
+  `reset_dataset_pipeline_run_status` with no shim and relies on its
+  per-dataset lock, its per-item incremental skip and
+  `modules/cognify/recovery.py`. Rust now does the same:
+  - Removed: `CognifyConfig::use_pipeline_cache` / `with_pipeline_cache`;
+    `cognee::api::{reset_pipeline_run_status, reset_dataset_pipeline_run_status}`
+    and their wrappers in the Python, TypeScript (`users.resetPipelineRunStatus`,
+    `users.resetDatasetPipelineRunStatus`), Java and C bindings
+    (`cg_sdk_reset_*`); `run_info_for_initiated`; the `qualification` module
+    (`Qualification`, `check_pipeline_run_qualification`);
+    `CognifyError::PipelineAlreadyRunning`; the exclusive-run claim
+    (`PipelineRunRepository::{try_claim_pipeline_run, release_pipeline_run_claim,
+    get_pipeline_run_claim, try_release_pipeline_run_claim,
+    release_all_pipeline_run_claims}`, `PipelineRunClaim`, `CLAIM_STALE_AFTER`
+    and the `pipeline_run_claims` table, dropped by a new migration);
+    `PipelineRunRepository::reset_orphans` and
+    `DefaultPipelineRunRegistry::new_with_orphan_reset`; the
+    `cognee-cli pipeline-unblock` command; and the **`single_process` setting**
+    (`COGNEE_SINGLE_PROCESS`, `Settings::single_process`,
+    `ConfigManager::{set,clear}_single_process`, `cognee_database::*single_process*`),
+    whose only job was to gate the unscoped startup sweep that the ownership
+    markers below replace.
+  - A second `cognify` of a dataset **waits** on the dataset's lock
+    (`cognee_core::DatasetLocks::global()`, shared with `add` and `delete`)
+    instead of failing with `PipelineAlreadyRunning`. Re-cognifying a complete
+    dataset still skips every item, and now writes its own `STARTED` /
+    `COMPLETED` pair, as Python's run does.
+  - A `cognify` or `add` run writes `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an
+    OS file lock on `<system_root>/pipeline_run_locks/<token>/owner.lock`
+    (`cognee_core::RunOwnership`; `Pipeline::recovery_lock`,
+    `PipelineRunInfo::recovery_lock`, `CognifyConfig::run_ownership_dir`,
+    `run_info_for_started(Option<Uuid>)`, `AddPipeline::with_run_ownership_dir`,
+    `Settings::run_ownership_dir`). `cognee_delete::recover_stale_pipeline_runs`
+    (replacing `sweep_orphaned_run_artifacts`) rolls back and closes an
+    abandoned run with `{"error": "AbandonedPipelineRunError: …"}`, only when it
+    can claim the marker, so it is safe with any number of processes; it is
+    keyed by the run, so a run abandoned before a newer run completed on the
+    dataset is still closed, and a run whose dataset is gone is left alone, as
+    in Python. Its age floor is the new key
+    `cognify.stale_run_recovery_min_age_seconds`
+    (`COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, default `3600`, as in Python).
+    The bindings run it once per database per process, at the first operation.
+    `PipelineRunRepository::list_orphan_runs` became `list_unterminated_runs`.
+  - `DATASET_PROCESSING_INITIATED` rows written by older versions are still read
+    (Python keeps the enum value too) and gate nothing.
+  - Closed-side callers (HTTP server) must call `recover_stale_pipeline_runs`,
+    drop `new_with_orphan_reset` and `COGNEE_SINGLE_PROCESS`, and pass
+    `DatasetLocks::global()` to their `add` / `delete` wiring.
+
 - **`update()` keeps the data id, and legacy data ids resolve (SDK-1039).**
   As in Python (`update.py`, `resolve_data_id`): the id passed to `update()` is
   resolved in the dataset (the exact id, else the `legacy_id` a row got when

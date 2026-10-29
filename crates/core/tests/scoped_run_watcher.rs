@@ -67,6 +67,7 @@ fn fake_run(run_id: Uuid, status: CoreStatus) -> PipelineRunInfo {
         status,
         started_at: chrono::Utc::now(),
         completed_at: None,
+        recovery_lock: None,
     }
 }
 
@@ -106,6 +107,36 @@ async fn completed_trail_is_started_then_completed_with_empty_run_info() {
         trail(&repo, ds).await,
         vec![
             (DbStatus::Started, serde_json::json!({})),
+            (DbStatus::Completed, serde_json::json!({})),
+        ]
+    );
+}
+
+/// Python's `log_pipeline_run_start(recovery_token=…)`: the STARTED row records
+/// the run's ownership token, and only that row does.
+#[tokio::test]
+async fn started_row_carries_the_recovery_lock_when_the_run_has_one() {
+    let (repo, db) = make_repo().await;
+    let run_id = Uuid::new_v4();
+    let ds = Uuid::new_v4();
+    create_dataset(&db, ds).await;
+    let (watcher, _rx) = make_watcher(run_id, Arc::clone(&repo));
+    let token = Uuid::new_v4();
+
+    let mut run = fake_run(run_id, CoreStatus::Started);
+    run.dataset_id = Some(ds);
+    run.recovery_lock = Some(token);
+    watcher.on_pipeline_run_started(&run).await;
+    run.status = CoreStatus::Completed;
+    watcher.on_pipeline_run_completed(&run, 1).await;
+
+    assert_eq!(
+        trail(&repo, ds).await,
+        vec![
+            (
+                DbStatus::Started,
+                serde_json::json!({ "recovery_lock": token.to_string() })
+            ),
             (DbStatus::Completed, serde_json::json!({})),
         ]
     );
