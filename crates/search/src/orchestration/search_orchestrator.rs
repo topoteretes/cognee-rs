@@ -60,33 +60,6 @@ fn emit_search_completed(request: &SearchRequest) {
 #[inline]
 fn emit_search_completed(_request: &SearchRequest) {}
 
-/// Apply the graph-context character limit with the Python-parity precedence:
-/// explicit `max_chars` parameter → (config value, if added) → unlimited.
-///
-/// Currently only the explicit-parameter level is implemented.
-/// TODO(parity): read `max_session_context_chars` from `CacheConfig` when a
-/// config accessor is available in this crate.
-fn apply_context_char_limit(gc: &str, max_chars: Option<usize>) -> &str {
-    match max_chars {
-        Some(limit) => {
-            // `char_indices` gives us a byte boundary safe to split at.
-            if gc.len() <= limit {
-                gc
-            } else {
-                // Find the last char boundary at or before `limit` bytes.
-                let boundary = gc
-                    .char_indices()
-                    .take_while(|(byte_pos, _)| *byte_pos < limit)
-                    .last()
-                    .map(|(byte_pos, c)| byte_pos + c.len_utf8())
-                    .unwrap_or(0);
-                &gc[..boundary]
-            }
-        }
-        None => gc,
-    }
-}
-
 /// Extract node/edge IDs from retrieved context items for the session cache.
 ///
 /// Two orthogonal item shapes are folded in:
@@ -1422,8 +1395,8 @@ impl SearchOrchestrator {
             .await;
     }
 
-    /// The session layer a completion carries: the conversation history,
-    /// prefixed by the graph-knowledge snapshot when one exists. Read-only.
+    /// The session layer a completion carries: the conversation history.
+    /// Read-only.
     async fn load_session_context(&self, request: &SearchRequest) -> SessionContext {
         let user_id_str = request.user_id.map(|id| id.to_string());
         if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
@@ -1432,30 +1405,10 @@ impl SearchOrchestrator {
                 .await
                 .unwrap_or_default();
 
-            // Prepend graph knowledge snapshot (from improve() sync) if available.
-            // Matches Python `session_manager.py:435-450`:
-            //   "Background knowledge from the knowledge graph:\n" + gc + "\n\n" + history
-            let graph_context = sm
-                .get_graph_context(Some(session_id), user_id_str.as_deref())
-                .await
-                .ok()
-                .flatten();
-            let formatted_history = if let Some(gc) =
-                graph_context.as_deref().filter(|s| !s.is_empty())
-            {
-                let gc = apply_context_char_limit(gc, None);
-                format!(
-                    "Background knowledge from the knowledge graph:\n{gc}\n\n{formatted_history}"
-                )
-            } else {
-                formatted_history
-            };
-
             SessionContext {
                 session_id: Some(session_id.clone()),
                 history,
                 formatted_history,
-                graph_context,
             }
         } else {
             SessionContext {

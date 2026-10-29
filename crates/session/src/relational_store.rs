@@ -11,8 +11,7 @@ use crate::session_store::{SessionQAUpdate, SessionStore};
 use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 
 /// Session store on the relational database (`session_qa_entries`,
-/// `session_graph_context`, `session_trace_steps`, `session_context_entries`),
-/// through any
+/// `session_trace_steps`, `session_context_entries`), through any
 /// [`SessionQaDb`] — the built-in SeaORM connection (SQLite, Postgres) or
 /// another relational backend.
 ///
@@ -201,29 +200,6 @@ impl SessionStore for RelationalSessionStore {
         let patch = update_to_patch(updates)?;
         self.db
             .update_session_qa_entry(session_id, user_id, qa_id, patch)
-            .await
-            .map_err(store_err)
-    }
-
-    async fn get_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        self.db
-            .get_session_graph_context(session_id, user_id)
-            .await
-            .map_err(store_err)
-    }
-
-    async fn set_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), SessionError> {
-        self.db
-            .set_session_graph_context(session_id, user_id, context)
             .await
             .map_err(store_err)
     }

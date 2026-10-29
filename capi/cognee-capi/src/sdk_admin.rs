@@ -1,6 +1,5 @@
 //! Phase 6 — admin / session / pipeline-run / user / notebook ops:
 //! `cg_sdk_get_session`, `cg_sdk_add_feedback`, `cg_sdk_delete_feedback`,
-//! `cg_sdk_get_graph_context`, `cg_sdk_set_graph_context`,
 //! `cg_sdk_reset_pipeline_run_status`, `cg_sdk_reset_dataset_pipeline_run_status`,
 //! `cg_sdk_get_or_create_default_user`,
 //! `cg_sdk_list_notebooks`, `cg_sdk_create_notebook`,
@@ -14,8 +13,6 @@
 //! - `SessionQAEntry`, `User`, `Notebook` derive `Serialize` → direct serde.
 //! - `bool` results → `serde_json::Value::Bool(b)` → `"true"`/`"false"` (D9).
 //! - Void results → `serde_json::Value::Null` → `"null"` (D9).
-//! - `get_graph_context`: `Option<String>` → `"\"<ctx>\""` (D9 quoted string)
-//!   or `"null"` (D9 null).
 
 use std::ffi::c_char;
 use std::sync::Arc;
@@ -178,84 +175,6 @@ pub unsafe extern "C" fn cg_sdk_delete_feedback(
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
         sessions::run_delete_feedback(&state, &session_str, &qa_str).await
-    });
-}
-
-/// Get the graph context stored in a session.
-///
-/// `session_id` is the session identifier.
-/// (No `opts_json` — mirrors neon which also has no opts for this op.)
-///
-/// On success `result_json` is a quoted JSON string `"\"<ctx>\""` (D9) when a
-/// context is present, or `"null"` (D9) when absent.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` and `session_id` must be valid non-null null-terminated UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_get_graph_context(
-    sdk: *const CgSdk,
-    session_id: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let session_str = match parse_c_str_or_fire(session_id, "session_id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        sessions::run_get_graph_context(&state, &session_str).await
-    });
-}
-
-/// Set the graph context stored in a session.
-///
-/// `session_id` is the session identifier.  `context` is the context string.
-/// (No `opts_json` — mirrors neon.)
-///
-/// Returns `"null"` (D9) on success.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk`, `session_id`, `context` must be valid non-null null-terminated UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_set_graph_context(
-    sdk: *const CgSdk,
-    session_id: *const c_char,
-    context: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let session_str = match parse_c_str_or_fire(session_id, "session_id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-    let context_str = match parse_c_str_or_fire(context, "context", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        sessions::run_set_graph_context(&state, &session_str, &context_str).await
     });
 }
 

@@ -217,8 +217,6 @@ export interface CogneeSessionObject {
     opts?: object
   ): Promise<boolean>;
   deleteFeedback(sessionId: string, qaId: string, opts?: object): Promise<boolean>;
-  getGraphContext(sessionId: string, opts?: object): Promise<string | null>;
-  setGraphContext(sessionId: string, context: string, opts?: object): Promise<void>;
 }
 
 /**
@@ -435,9 +433,6 @@ export class Cognee {
                           native.cogneeAddFeedback(h, sessionId, qaId, text, score, opts),
       deleteFeedback:   (sessionId, qaId, opts) =>
                           native.cogneeDeleteFeedback(h, sessionId, qaId, opts),
-      getGraphContext:  (sessionId, opts) => native.cogneeGetGraphContext(h, sessionId, opts),
-      setGraphContext:  (sessionId, context, opts) =>
-                          native.cogneeSetGraphContext(h, sessionId, context, opts),
     };
 
     // ── notebooks sub-object ─────────────────────────────────────────────────

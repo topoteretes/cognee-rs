@@ -101,11 +101,6 @@ name = "memify_persist_sessions"
 path = "tests/memify_persist_sessions.rs"
 required-features = ["testing"]
 
-[[test]]
-name = "memify_sync_graph_session"
-path = "tests/memify_sync_graph_session.rs"
-required-features = ["testing"]
-
 [dev-dependencies]
 cognee-storage    = { path = "../storage", features = ["testing"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }

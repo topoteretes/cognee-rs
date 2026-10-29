@@ -12,8 +12,8 @@ use crate::types::{SessionQAEntry, SessionTraceStep};
 ///
 /// It mirrors Python's session manager without a cache engine
 /// (`SessionManager.is_available == False`): every read finds an empty
-/// session, updates and deletes find nothing, the graph-context snapshot and
-/// session-context rows are dropped, and [`SessionStore::is_available`] is `false`. The two writes
+/// session, updates and deletes find nothing, session-context rows are
+/// dropped, and [`SessionStore::is_available`] is `false`. The two writes
 /// that must hand back an id, a Q&A entry and a trace step, fail with
 /// [`SessionError::Disabled`]. Callers handle that as Python does:
 ///
@@ -93,23 +93,6 @@ impl SessionStore for DisabledSessionStore {
         Ok(false)
     }
 
-    async fn get_graph_context(
-        &self,
-        _session_id: &str,
-        _user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        Ok(None)
-    }
-
-    async fn set_graph_context(
-        &self,
-        _session_id: &str,
-        _user_id: Option<&str>,
-        _context: &str,
-    ) -> Result<(), SessionError> {
-        Ok(())
-    }
-
     async fn save_trace_step(
         &self,
         _user_id: &str,
@@ -187,8 +170,6 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.latest_qa_id("s", None).await.unwrap(), None);
-        store.set_graph_context("s", None, "ctx").await.unwrap();
-        assert_eq!(store.get_graph_context("s", None).await.unwrap(), None);
         assert!(!store.delete_session("s", None).await.unwrap());
         assert!(store.read_trace_steps("u", "s").await.unwrap().is_empty());
         let mut row = SessionContextRow::new();

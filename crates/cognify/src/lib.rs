@@ -83,11 +83,11 @@ pub use memify::{
     CuratorBatchOutput, DistillError, DistillSessionsResult, DistillationResult,
     DistillationStatus, FeedbackApplyResult, FeedbackError, MemifyConfig, MemifyError,
     MemifyResult, MemifyTask, NODE_EMBED_BATCH_SIZE, PersistSessionsError, PersistSessionsResult,
-    ProposedLesson, REASON_BACKEND_UNSUPPORTED, RejectionReason, SyncError, SyncResult,
-    TruthBuildStatus, TruthSubspaceResult, WrittenLesson, apply_feedback_weights_pipeline,
+    ProposedLesson, REASON_BACKEND_UNSUPPORTED, RejectionReason, TruthBuildStatus,
+    TruthSubspaceResult, WrittenLesson, apply_feedback_weights_pipeline,
     build_memify_index_only_pipeline, build_truth_subspace, distill_session,
     distill_sessions_in_knowledge_graph, memify as run_memify, persist_sessions_in_knowledge_graph,
-    render_lesson_document, sync_graph_to_session,
+    render_lesson_document,
 };
 
 /// Re-export of the truth-subspace default slot capacity so callers (e.g.

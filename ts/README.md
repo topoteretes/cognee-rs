@@ -77,7 +77,7 @@ Fully-annotated runnable examples are available in the [`examples/`](examples/) 
 | [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example:add-cognify-search` | Lower-level add → cognify → search pipeline |
 | [`memify-recall.ts`](examples/memify-recall.ts) | `npm run example:memify` | Triplet embeddings (memify) + session recall |
 | [`datasets.ts`](examples/datasets.ts) | `npm run example:datasets` | Dataset listing, status, deletion |
-| [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history, feedback, graph-context snapshots |
+| [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history and feedback |
 | [`config.ts`](examples/config.ts) | `npm run example:config` | Programmatic config (LLM / embedding / DBs) |
 | [`visualize.ts`](examples/visualize.ts) | `npm run example:visualize` | Render knowledge graph to HTML |
 | [`pipeline-engine.ts`](examples/pipeline-engine.ts) | `npm run example:pipeline` | Low-level pipeline API (no credentials needed) |
@@ -227,7 +227,7 @@ Session-first routing: checks session QA history before falling back to graph se
 ```ts
 const result = await c.recall("What did we discuss?", {
   sessionId: "session-uuid",
-  scope: "auto",   // "graph" | "session" | "trace" | "graph_context" | "all"
+  scope: "auto",   // "graph" | "session" | "trace" | "all" ("graph_context" = deprecated "graph")
 });
 ```
 
@@ -297,9 +297,6 @@ const entries = await c.sessions.get("session-uuid", { lastN: 10 });
 
 await c.sessions.addFeedback("session-uuid", "qa-uuid", "Great answer!", 5);
 await c.sessions.deleteFeedback("session-uuid", "qa-uuid");
-
-const ctx = await c.sessions.getGraphContext("session-uuid");
-await c.sessions.setGraphContext("session-uuid", "new context");
 ```
 
 ## Notebooks

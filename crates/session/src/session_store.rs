@@ -115,21 +115,6 @@ pub trait SessionStore: Send + Sync {
         Ok(entries.into_iter().next().map(|e| e.id.to_string()))
     }
 
-    /// Retrieve the graph knowledge snapshot for a session, or `None`.
-    async fn get_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError>;
-
-    /// Store (or overwrite) the graph knowledge snapshot for a session.
-    async fn set_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), SessionError>;
-
     /// Append one agent-trace step to the session's trace list.
     ///
     /// Returns the persisted `trace_id` (caller-provided — `SessionManager`

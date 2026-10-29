@@ -61,8 +61,8 @@ impl FsSessionStore {
         }
     }
 
-    /// Expire a session's files (Q&A entries, trace steps, graph context,
-    /// session-context rows)
+    /// Expire a session's files (Q&A entries, trace steps, session-context
+    /// rows)
     /// this many seconds after their last write, as Python's `FSCacheAdapter`
     /// does with `session_ttl_seconds` (its `diskcache` expiry, refreshed on
     /// every write). An expired file is deleted when it is next read. `0`
@@ -175,7 +175,10 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
     }
 }
 
-fn graph_context_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf {
+/// The graph-knowledge snapshot file of the removed graph-to-session sync.
+/// Only `delete_session` still touches it, to clean up files written before
+/// the removal (Python keeps the same one-release cleanup).
+fn legacy_graph_context_file(base: &Path, user_id: Option<&str>, session_id: &str) -> PathBuf {
     let uid = user_id.unwrap_or("default");
     base.join(uid)
         .join(format!("_graph_context_{session_id}.json"))
@@ -321,8 +324,8 @@ impl SessionStore for FsSessionStore {
         let path = session_file(&self.base_dir, user_id, session_id);
         let existed = remove_if_exists(&path).await?;
 
-        // Also remove the graph context file for this session (best-effort).
-        let gc_path = graph_context_file(&self.base_dir, user_id, session_id);
+        // Also remove a legacy graph-context snapshot (best-effort).
+        let gc_path = legacy_graph_context_file(&self.base_dir, user_id, session_id);
         let _ = fs::remove_file(&gc_path).await; // ignore NotFound
 
         // And its session-context rows, which count toward "existed" as in
@@ -395,46 +398,6 @@ impl SessionStore for FsSessionStore {
         apply_update_to_fs_entry(entry, &updates);
         save_entries(&path, &entries).await?;
         Ok(true)
-    }
-
-    async fn get_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        let path = graph_context_file(&self.base_dir, user_id, session_id);
-        self.expire(&path).await?;
-        match fs::read_to_string(&path).await {
-            Ok(contents) if !contents.is_empty() => {
-                // Stored as a JSON string
-                let ctx: String = serde_json::from_str(&contents)
-                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
-                Ok(Some(ctx))
-            }
-            Ok(_) => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(SessionError::StoreError(format!("fs read error: {e}"))),
-        }
-    }
-
-    async fn set_graph_context(
-        &self,
-        session_id: &str,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), SessionError> {
-        let path = graph_context_file(&self.base_dir, user_id, session_id);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| SessionError::StoreError(format!("fs mkdir error: {e}")))?;
-        }
-        let json = serde_json::to_string_pretty(context)
-            .map_err(|e| SessionError::StoreError(format!("json error: {e}")))?;
-        fs::write(&path, json)
-            .await
-            .map_err(|e| SessionError::StoreError(format!("fs write error: {e}")))?;
-        Ok(())
     }
 
     async fn save_trace_step(
@@ -533,10 +496,6 @@ mod tests {
             .create_qa_entry("s", Some("u"), "q", "a", None)
             .await
             .unwrap();
-        store
-            .set_graph_context("s", Some("u"), "ctx")
-            .await
-            .unwrap();
         assert_eq!(
             store
                 .get_all_qa_entries("s", Some("u"))
@@ -547,9 +506,7 @@ mod tests {
         );
 
         let qa = session_file(dir.path(), Some("u"), "s");
-        let gc = graph_context_file(dir.path(), Some("u"), "s");
         age_file(&qa, std::time::Duration::from_secs(120));
-        age_file(&gc, std::time::Duration::from_secs(120));
 
         let untimed = FsSessionStore::new(dir.path());
         assert_eq!(
@@ -570,7 +527,6 @@ mod tests {
                 .is_empty()
         );
         assert!(!qa.exists(), "the expired file is deleted");
-        assert_eq!(store.get_graph_context("s", Some("u")).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -699,44 +655,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graph_context_round_trip() {
-        let dir = tempfile::tempdir().expect("tempdir creation must succeed");
-        let store = FsSessionStore::new(dir.path());
-
-        // Initially no context
-        let ctx = store
-            .get_graph_context("sess1", None)
-            .await
-            .expect("get should succeed");
-        assert!(ctx.is_none());
-
-        // Set context
-        store
-            .set_graph_context("sess1", None, "Some graph knowledge")
-            .await
-            .expect("set should succeed");
-
-        // Read it back
-        let ctx = store
-            .get_graph_context("sess1", None)
-            .await
-            .expect("get should succeed");
-        assert_eq!(ctx.as_deref(), Some("Some graph knowledge"));
-
-        // Overwrite
-        store
-            .set_graph_context("sess1", None, "Updated graph knowledge")
-            .await
-            .expect("set should succeed");
-
-        let ctx = store
-            .get_graph_context("sess1", None)
-            .await
-            .expect("get should succeed");
-        assert_eq!(ctx.as_deref(), Some("Updated graph knowledge"));
-    }
-
-    #[tokio::test]
     async fn update_qa_entry_with_graph_element_ids() {
         let dir = tempfile::tempdir().expect("tempdir creation must succeed");
         let store = FsSessionStore::new(dir.path());
@@ -839,8 +757,10 @@ mod tests {
         assert_eq!(mm.get("preference_turn_counted"), Some(&true));
     }
 
+    /// A graph-context snapshot left by the removed graph-to-session sync is
+    /// deleted with its session.
     #[tokio::test]
-    async fn delete_session_also_removes_graph_context() {
+    async fn delete_session_also_removes_a_legacy_graph_context_file() {
         let dir = tempfile::tempdir().expect("tempdir creation must succeed");
         let store = FsSessionStore::new(dir.path());
 
@@ -848,22 +768,14 @@ mod tests {
             .create_qa_entry("sess1", None, "q1?", "a1", None)
             .await
             .expect("create should succeed");
-
-        store
-            .set_graph_context("sess1", None, "some context")
-            .await
-            .expect("set should succeed");
+        let legacy = legacy_graph_context_file(dir.path(), None, "sess1");
+        std::fs::write(&legacy, "\"some context\"").expect("write legacy file");
 
         let deleted = store
             .delete_session("sess1", None)
             .await
             .expect("delete should succeed");
         assert!(deleted);
-
-        let ctx = store
-            .get_graph_context("sess1", None)
-            .await
-            .expect("get should succeed");
-        assert!(ctx.is_none());
+        assert!(!legacy.exists(), "the legacy snapshot is removed");
     }
 }

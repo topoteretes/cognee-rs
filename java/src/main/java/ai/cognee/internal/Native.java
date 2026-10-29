@@ -106,10 +106,6 @@ public final class Native {
             String optsJson, CompletableFuture<String> future);
     public static native void deleteFeedback(long handle, String sessionId, String qaId,
             CompletableFuture<String> future);
-    public static native void getGraphContext(long handle, String sessionId,
-            CompletableFuture<String> future);
-    public static native void setGraphContext(long handle, String sessionId, String context,
-            CompletableFuture<String> future);
     // users / admin
     public static native void getOrCreateDefaultUser(long handle, CompletableFuture<String> future);
     public static native void resetPipelineRunStatus(long handle, String datasetId,

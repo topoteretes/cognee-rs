@@ -155,13 +155,11 @@ impl PyCognee {
 
     /// The session management surface for this handle.
     ///
-    /// Use this to read and write QA sessions, feedback, and graph context:
+    /// Use this to read QA sessions and to add or remove feedback:
     ///
     /// .. code-block:: python
     ///
     ///     entries = await cognee.sessions.get("session-id")
-    ///     await cognee.sessions.set_graph_context("session-id", "ctx")
-    ///     ctx = await cognee.sessions.get_graph_context("session-id")
     #[getter]
     fn sessions(&self, py: Python<'_>) -> Py<PyCogneeSessions> {
         self.sessions.clone_ref(py)

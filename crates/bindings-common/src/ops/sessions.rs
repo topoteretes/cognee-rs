@@ -1,5 +1,5 @@
 //! Shared async session operations: `get_session`, `add_feedback`,
-//! `delete_feedback`, `get_graph_context`, `set_graph_context`.
+//! `delete_feedback`.
 //!
 //! These functions contain the pure-Rust async logic shared between every
 //! language binding surface (C API, Neon JS, Python). Each function takes a
@@ -117,54 +117,4 @@ pub async fn run_delete_feedback(
     .map_err(|e| SdkError::Runtime(format!("delete_feedback failed: {e}")))?;
 
     Ok(serde_json::Value::Bool(ok))
-}
-
-/// Retrieve the graph context snapshot for a session.
-///
-/// Returns `serde_json::Value::String(ctx)` when a context is set,
-/// or `serde_json::Value::Null` when absent.
-pub async fn run_get_graph_context(
-    state: &HandleState,
-    session_id: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    let ctx = cognee::session::get_graph_context(
-        svc.session_manager.as_ref(),
-        session_id,
-        Some(&owner_str),
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("get_graph_context failed: {e}")))?;
-
-    match ctx {
-        Some(s) => Ok(serde_json::Value::String(s)),
-        None => Ok(serde_json::Value::Null),
-    }
-}
-
-/// Store a graph context snapshot for a session.
-///
-/// Returns `serde_json::Value::Null` (void op).
-pub async fn run_set_graph_context(
-    state: &HandleState,
-    session_id: &str,
-    context: &str,
-) -> Result<serde_json::Value, SdkError> {
-    let svc = state.services().await?;
-    let owner_id = state.owner_id().await?;
-    let owner_str = owner_id.to_string();
-
-    cognee::session::set_graph_context(
-        svc.session_manager.as_ref(),
-        session_id,
-        Some(&owner_str),
-        context,
-    )
-    .await
-    .map_err(|e| SdkError::Runtime(format!("set_graph_context failed: {e}")))?;
-
-    Ok(serde_json::Value::Null)
 }

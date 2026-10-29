@@ -368,29 +368,6 @@ impl SessionManager {
         self.store.latest_qa_id(resolved_id, user_id).await
     }
 
-    /// Retrieve graph knowledge snapshot for a session.
-    pub async fn get_graph_context(
-        &self,
-        session_id: Option<&str>,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        let resolved_id = self.resolve_session_id(session_id);
-        self.store.get_graph_context(resolved_id, user_id).await
-    }
-
-    /// Store graph knowledge snapshot for a session.
-    pub async fn set_graph_context(
-        &self,
-        session_id: Option<&str>,
-        user_id: Option<&str>,
-        context: &str,
-    ) -> Result<(), SessionError> {
-        let resolved_id = self.resolve_session_id(session_id);
-        self.store
-            .set_graph_context(resolved_id, user_id, context)
-            .await
-    }
-
     /// Append one agent-trace step to the session and return the generated
     /// `trace_id` (UUID4).
     ///

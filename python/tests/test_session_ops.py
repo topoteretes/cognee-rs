@@ -75,36 +75,16 @@ async def test_get_session_with_opts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# cognee.sessions.get_graph_context() / set_graph_context()
+# The graph-context snapshot ops are gone (graph-to-session sync removed).
 # ---------------------------------------------------------------------------
 
 @SKIP_IF_NO_BASE
 @pytest.mark.asyncio
-async def test_get_graph_context_none(tmp_path):
-    """get_graph_context() returns None for a new/nonexistent session."""
+async def test_graph_context_ops_are_removed(tmp_path):
+    """sessions no longer exposes get_graph_context / set_graph_context."""
     c = await _make_cognee(tmp_path)
-    result = await c.sessions.get_graph_context("nonexistent-session")
-    assert result is None
-
-
-@SKIP_IF_NO_BASE
-@pytest.mark.asyncio
-async def test_set_and_get_graph_context(tmp_path):
-    """set_graph_context() then get_graph_context() returns the stored value."""
-    c = await _make_cognee(tmp_path)
-    session_id = "test-session-ctx"
-    await c.sessions.set_graph_context(session_id, "some context string")
-    result = await c.sessions.get_graph_context(session_id)
-    assert result == "some context string"
-
-
-@SKIP_IF_NO_BASE
-@pytest.mark.asyncio
-async def test_set_graph_context_returns_none(tmp_path):
-    """set_graph_context() returns None (void op)."""
-    c = await _make_cognee(tmp_path)
-    result = await c.sessions.set_graph_context("session-void", "ctx")
-    assert result is None
+    assert not hasattr(c.sessions, "get_graph_context")
+    assert not hasattr(c.sessions, "set_graph_context")
 
 
 # ---------------------------------------------------------------------------

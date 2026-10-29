@@ -1863,8 +1863,8 @@ or binding, none of which ship the `fs` or `redis` store. To insist on a store a
 fail when it is missing, set `session.store` (`COGNEE_SESSION_STORE`) instead.
 Both unset, the store is `relational`.
 
-`session.ttl_seconds` expires a session's entries, trace steps and graph-context
-snapshot that long after its last write, as Python does. The `redis` store sets a
+`session.ttl_seconds` expires a session's entries, trace steps and session-context
+rows that long after its last write, as Python does. The `redis` store sets a
 key expiry; the `fs` store deletes an expired file when it is next read. The
 `relational` store does not expire sessions: Python's SQL cache keeps an expiry
 per row, which the Rust session tables have no column for.

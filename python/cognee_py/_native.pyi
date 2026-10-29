@@ -485,7 +485,6 @@ class CogneeSessions:
     Accessible as ``cognee.sessions`` on every :class:`Cognee` instance::
 
         entries = await cognee.sessions.get("session-id")
-        await cognee.sessions.set_graph_context("session-id", "ctx")
     """
 
     async def get(
@@ -518,20 +517,6 @@ class CogneeSessions:
         """Remove feedback from a QA entry.
 
         Returns ``True`` if feedback was removed, ``False`` if not found.
-        """
-        ...
-
-    async def get_graph_context(self, session_id: str) -> Optional[str]:
-        """Retrieve the stored graph context for *session_id*.
-
-        Returns ``None`` when no context has been stored, or a ``str``.
-        """
-        ...
-
-    async def set_graph_context(self, session_id: str, context: str) -> None:
-        """Store a graph context snapshot for *session_id*.
-
-        Returns ``None``.
         """
         ...
 

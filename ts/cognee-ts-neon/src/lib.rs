@@ -114,8 +114,6 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeGetSession", sdk_admin::cognee_get_session)?;
     cx.export_function("cogneeAddFeedback", sdk_admin::cognee_add_feedback)?;
     cx.export_function("cogneeDeleteFeedback", sdk_admin::cognee_delete_feedback)?;
-    cx.export_function("cogneeGetGraphContext", sdk_admin::cognee_get_graph_context)?;
-    cx.export_function("cogneeSetGraphContext", sdk_admin::cognee_set_graph_context)?;
 
     // Visualization ops (Phase 6): render HTML string / write to file.
     // Always registered; throws FEATURE_NOT_BUILT when the feature is absent.

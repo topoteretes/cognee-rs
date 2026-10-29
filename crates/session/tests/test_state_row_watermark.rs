@@ -93,21 +93,6 @@ impl SessionStore for FakeStore {
     ) -> Result<bool, SessionError> {
         Ok(false)
     }
-    async fn get_graph_context(
-        &self,
-        _: &str,
-        _: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        Ok(None)
-    }
-    async fn set_graph_context(
-        &self,
-        _: &str,
-        _: Option<&str>,
-        _: &str,
-    ) -> Result<(), SessionError> {
-        Ok(())
-    }
 
     async fn create_session_context_entry(
         &self,

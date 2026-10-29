@@ -25,7 +25,6 @@ pub mod feedback_weights;
 pub mod index_triplets;
 pub mod persist_sessions;
 pub mod pipeline;
-pub mod sync_graph_session;
 
 pub use build_truth_subspace::{
     NODE_EMBED_BATCH_SIZE, REASON_BACKEND_UNSUPPORTED, TruthBuildStatus, TruthSubspaceResult,
@@ -48,6 +47,3 @@ pub use persist_sessions::{
     persist_sessions_in_knowledge_graph,
 };
 pub use pipeline::{MemifyResult, build_memify_index_only_pipeline, memify};
-pub use sync_graph_session::{
-    BATCH_SIZE, DEFAULT_MAX_LINES, SyncError, SyncResult, checkpoint_key, sync_graph_to_session,
-};

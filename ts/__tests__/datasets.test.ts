@@ -458,23 +458,6 @@ describe("Phase-5 DatasetManager, forget, prune, sessions, notebooks (Tier-A)", 
       );
       expect(typeof ok).toBe("boolean");
     });
-
-    it("getGraphContext returns null for an unknown session", async () => {
-      const ctx = await native.cogneeGetGraphContext(
-        handle,
-        "no-such-session"
-      );
-      expect(ctx).toBeNull();
-    });
-
-    it("setGraphContext + getGraphContext round-trip", async () => {
-      const sessionId = `test-gc-${Date.now()}`;
-      const payload = "test graph context payload";
-
-      await native.cogneeSetGraphContext(handle, sessionId, payload);
-      const retrieved = await native.cogneeGetGraphContext(handle, sessionId);
-      expect(retrieved).toBe(payload);
-    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────

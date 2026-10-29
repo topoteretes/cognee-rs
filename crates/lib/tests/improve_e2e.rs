@@ -634,13 +634,6 @@ async fn improve_builds_the_global_context_index_when_opted_in() {
             "notes.md\nEntity: Alice",
         ]
     );
-    // The edge-line session stub is gone.
-    let stored = h
-        .session_manager
-        .get_graph_context(Some("_global_context_index"), Some(&owner.to_string()))
-        .await
-        .unwrap();
-    assert_eq!(stored, None);
 }
 
 /// A background run (dispatched by its host) runs the same stages, the

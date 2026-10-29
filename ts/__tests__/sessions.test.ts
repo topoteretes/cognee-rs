@@ -1,6 +1,5 @@
 /**
- * Session ops — getSession / addFeedback / deleteFeedback /
- *               getGraphContext / setGraphContext.
+ * Session ops — getSession / addFeedback / deleteFeedback.
  *
  * All tests are Tier-A: no LLM / no network calls.
  * Config follows the same pattern as other test files:
@@ -127,56 +126,13 @@ describe("session ops (Tier-A — no LLM)", () => {
     });
   });
 
-  // ── getGraphContext / setGraphContext ─────────────────────────────────────
+  // ── the graph-context snapshot ops are gone ──────────────────────────────
 
   describe("graph context", () => {
-    it("getGraphContext returns null for an unknown session", async () => {
-      const ctx = await native.cogneeGetGraphContext(handle, "no-such-session-ctx");
-      expect(ctx).toBeNull();
-    });
-
-    it("setGraphContext + getGraphContext round-trip preserves the payload", async () => {
-      const sessionId = `gc-rt-${Date.now()}`;
-      const payload = JSON.stringify({ nodes: ["A", "B"], edges: [["A", "B"]] });
-
-      await native.cogneeSetGraphContext(handle, sessionId, payload);
-      const retrieved = await native.cogneeGetGraphContext(handle, sessionId);
-      expect(retrieved).toBe(payload);
-    });
-
-    it("setGraphContext overwrites a previous value", async () => {
-      const sessionId = `gc-overwrite-${Date.now()}`;
-      await native.cogneeSetGraphContext(handle, sessionId, "first");
-      await native.cogneeSetGraphContext(handle, sessionId, "second");
-      const retrieved = await native.cogneeGetGraphContext(handle, sessionId);
-      expect(retrieved).toBe("second");
-    });
-
-    it("setGraphContext with an empty string stores an empty string", async () => {
-      const sessionId = `gc-empty-${Date.now()}`;
-      await native.cogneeSetGraphContext(handle, sessionId, "");
-      const retrieved = await native.cogneeGetGraphContext(handle, sessionId);
-      // Either null or empty string is acceptable for an empty payload.
-      expect(retrieved === null || retrieved === "").toBe(true);
-    });
-  });
-
-  // ── two handles share no session state ───────────────────────────────────
-
-  describe("session isolation", () => {
-    it("two handles do not share session state", async () => {
-      const h2 = makeTempHandle("sess_isolated@example.com");
-      await native.cogneeWarm(h2.handle);
-      try {
-        const sessionId = `iso-${Date.now()}`;
-        await native.cogneeSetGraphContext(handle, sessionId, "handle1-value");
-
-        // A fresh handle with its own DB must not see the other handle's data.
-        const ctx = await native.cogneeGetGraphContext(h2.handle, sessionId);
-        expect(ctx).toBeNull();
-      } finally {
-        cleanup(h2.tmpDir);
-      }
+    it("the removed getGraphContext / setGraphContext natives are not exported", () => {
+      const exported = native as unknown as Record<string, unknown>;
+      expect(exported.cogneeGetGraphContext).toBeUndefined();
+      expect(exported.cogneeSetGraphContext).toBeUndefined();
     });
   });
 });

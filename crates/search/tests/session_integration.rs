@@ -6,8 +6,8 @@
 //! Integration tests for session→search wiring (Part B of task 20).
 //!
 //! These tests verify:
-//! 1. `search_prepends_graph_context` — stored graph snapshot is prepended to
-//!    the session history with the exact Python prefix.
+//! 1. `session_history_has_no_graph_knowledge_prefix` — the session history
+//!    reaches the retriever without the removed graph-knowledge prefix.
 //! 2. `save_qa_populates_used_graph_element_ids` — QA entries saved after a
 //!    graph-retrieval search carry non-empty `used_graph_element_ids`.
 //! 3. `conversational_feedback_persists_to_prior_entry` — when
@@ -176,30 +176,20 @@ fn graph_request_with_feedback_detection(query: &str, session_id: Option<&str>) 
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: search_prepends_graph_context
+// Test 1: session_history_has_no_graph_knowledge_prefix
 //
-// Store a graph context snapshot via `set_graph_context`, run a session search,
-// assert the SessionContext passed to the retriever has `formatted_history`
-// starting with the exact Python prefix
-// "Background knowledge from the knowledge graph:\n".
+// The graph-to-session sync and its "Background knowledge from the knowledge
+// graph" prefix are gone (Python `3401da38a`): the retriever gets the plain
+// conversation history.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn search_prepends_graph_context() {
+async fn session_history_has_no_graph_knowledge_prefix() {
     let dir = tempfile::tempdir().unwrap();
     let session_store = Arc::new(FsSessionStore::new(dir.path().join("sessions")));
     let session_manager = Arc::new(SessionManager::new(session_store.clone()));
 
     let session_id = "gc-session-1";
-    let snapshot = "Rust is a systems programming language.";
-
-    // Store the graph snapshot via the session manager.
-    session_manager
-        .set_graph_context(Some(session_id), None, snapshot)
-        .await
-        .expect("set_graph_context must succeed");
-
-    // Seed one QA exchange so there is existing formatted_history.
     session_store
         .create_qa_entry(session_id, None, "prior question", "prior answer", None)
         .await
@@ -223,27 +213,13 @@ async fn search_prepends_graph_context() {
     let sessions = captured.lock().unwrap(); // lock poison is unrecoverable
     assert_eq!(sessions.len(), 1, "retriever should be called once");
     let fh = &sessions[0].formatted_history;
-
-    // The Python prefix must be the very first thing in formatted_history.
-    assert!(
-        fh.starts_with("Background knowledge from the knowledge graph:\n"),
-        "formatted_history must start with the Python graph-context prefix; got: {fh:?}"
-    );
-    // The snapshot text must appear right after the prefix.
-    assert!(
-        fh.contains(snapshot),
-        "formatted_history must contain the graph snapshot; got: {fh:?}"
-    );
-    // Prior conversation history must also appear.
     assert!(
         fh.contains("prior question"),
         "formatted_history must contain prior history; got: {fh:?}"
     );
-    // The graph_context field on SessionContext must be populated.
-    assert_eq!(
-        sessions[0].graph_context.as_deref(),
-        Some(snapshot),
-        "SessionContext.graph_context must hold the raw snapshot"
+    assert!(
+        !fh.contains("Background knowledge from the knowledge graph"),
+        "no graph-knowledge prefix; got: {fh:?}"
     );
 }
 

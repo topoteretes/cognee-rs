@@ -591,20 +591,5 @@ mod tests {
                 .update_qa_entry(session_id, user_id, qa_id, updates)
                 .await
         }
-        async fn get_graph_context(
-            &self,
-            session_id: &str,
-            user_id: Option<&str>,
-        ) -> Result<Option<String>, cognee_session::SessionError> {
-            self.0.get_graph_context(session_id, user_id).await
-        }
-        async fn set_graph_context(
-            &self,
-            session_id: &str,
-            user_id: Option<&str>,
-            context: &str,
-        ) -> Result<(), cognee_session::SessionError> {
-            self.0.set_graph_context(session_id, user_id, context).await
-        }
     }
 }

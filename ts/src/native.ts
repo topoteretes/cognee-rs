@@ -279,17 +279,6 @@ export interface NativeBindings {
     qaId: string,
     opts?: object
   ): Promise<boolean>;
-  cogneeGetGraphContext(
-    handle: NativeBox,
-    sessionId: string,
-    opts?: object
-  ): Promise<string | null>;
-  cogneeSetGraphContext(
-    handle: NativeBox,
-    sessionId: string,
-    context: string,
-    opts?: object
-  ): Promise<void>;
 
   // Visualization ops (Phase 6).
   //
