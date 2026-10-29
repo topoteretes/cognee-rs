@@ -224,7 +224,7 @@ def test_temporal_cognify_produces_temporal_edges(both_temporal_cognified):
     event_nodes = query_nodes_by_type(db, "Event")
     events_without_edge = []
     for node in event_nodes:
-        node_id = node["id"]
+        node_id = node["graph_id"]
         if node_id not in source_ids_with_temporal_edge:
             events_without_edge.append(node.get("label", node_id))
 

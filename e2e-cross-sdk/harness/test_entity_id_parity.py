@@ -10,6 +10,9 @@ Entity-node id sets shared **nothing** with Python's deterministic ids. This
 test asserts the id sets overlap — the one graph-level gate that a
 random-vs-deterministic id scheme cannot pass.
 
+Rust's relational ``nodes.id`` is a provenance (ledger) id, not the graph id;
+the graph id is ``nodes.slug``, exposed by the helpers as ``graph_id``.
+
 LLM extraction is non-deterministic, so the two SDKs won't extract identical
 entity sets; we require a non-empty intersection (impossible under the old
 random scheme) and warn if the overlap ratio is low.
@@ -22,7 +25,6 @@ import pytest
 from helpers import (
     open_db,
     query_nodes_by_type,
-    _normalize_uuid,
     python_graph,
     rust_db_path,
 )
@@ -30,11 +32,16 @@ from conftest import requires_openai
 
 
 def _entity_ids(conn) -> set[str]:
-    """Normalized-hex id set of all Entity-class nodes in a relational store."""
+    """Normalized-hex graph id set of all Entity-class nodes in a relational store.
+
+    Uses ``graph_id`` (``nodes.slug``), not ``id``: in the relational ledger
+    ``nodes.id`` is a per-(dataset, data item) provenance id, and only the slug
+    is the id the node has in the graph.
+    """
     return {
-        _normalize_uuid(n["id"])
+        n["graph_id"]
         for n in query_nodes_by_type(conn, "Entity")
-        if n.get("id") is not None
+        if n.get("graph_id") is not None
     }
 
 
@@ -45,7 +52,9 @@ def test_entity_node_ids_match_across_sdks(both_cognified):
     # Python on Ladybug keeps its nodes in the graph only (see
     # helpers.python_graph), so they are read from there.
     py_ids = {
-        n["id"] for n in python_graph(py_ws)[0] if n.get("type") == "Entity" and n.get("id")
+        n["graph_id"]
+        for n in python_graph(py_ws)[0]
+        if n.get("type") == "Entity" and n.get("graph_id")
     }
     rust_ids = _entity_ids(open_db(rust_db_path(rust_ws)))
 

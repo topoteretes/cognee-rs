@@ -517,11 +517,26 @@ def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
 query_dataset_data = query_dataset_membership
 
 
+def _with_graph_id(row: dict) -> dict:
+    """Expose the graph node id of a relational ``nodes`` row as ``graph_id``.
+
+    The relational ``nodes`` table is a provenance ledger: one row per
+    (dataset, data item, graph node), so ``nodes.id`` is a ledger id (Rust:
+    ``provenance_node_id(tenant, user, dataset, data_id, node_id)``) and never
+    equals the id the node has in the graph. The graph id, the one edges refer
+    to and the one Python's graph engine returns, is ``nodes.slug``. Compare
+    SDKs and join edges on ``graph_id``, never on ``id``.
+    """
+    row["graph_id"] = _normalize_uuid(row.get("slug") or row.get("id"))
+    return row
+
+
 def query_nodes(conn: sqlite3.Connection) -> list[dict]:
     # Rust uses "node_type", Python uses "type". Use * and sort in Python.
     rows = query_rows(conn, "SELECT * FROM nodes")
     # Normalize: expose "type" key regardless of actual column name
     for r in rows:
+        _with_graph_id(r)
         if "node_type" in r and "type" not in r:
             r["type"] = r["node_type"]
         elif "type" in r and "node_type" not in r:
@@ -544,7 +559,7 @@ def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
     ).fetchall()
     result = []
     for r in rows:
-        d = dict(r)
+        d = _with_graph_id(dict(r))
         # Normalise: always expose both "type" and "node_type" keys
         if "node_type" in d and "type" not in d:
             d["type"] = d["node_type"]
@@ -571,8 +586,9 @@ def python_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
     give for a relational store, so a test compares the two SDKs with one code
     path:
 
-    * a node is ``{"id", "type", "node_type", "label", **properties}``, with
-      ``id`` normalised as ``query_rows`` does;
+    * a node is ``{"id", "graph_id", "type", "node_type", "label",
+      **properties}``, with ``id`` normalised as ``query_rows`` does and
+      ``graph_id`` equal to ``id`` (see ``_with_graph_id``);
     * an edge is ``{"source_node_id", "destination_node_id",
       "relationship_name", **properties}``.
 
@@ -611,6 +627,8 @@ def python_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
     nodes = []
     for n in graph["nodes"]:
         n["id"] = _normalize_uuid(n["id"])
+        # A graph engine returns graph ids, so the ledger caveat does not apply.
+        n["graph_id"] = n["id"]
         n.setdefault("type", None)
         n["node_type"] = n["type"]
         n.setdefault("label", n.get("name"))
