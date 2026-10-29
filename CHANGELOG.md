@@ -34,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted, but as Python does it is a deprecated alias of `graph`, and `all`
   expands to `graph`, `session`, `trace`. Two migrations drop the tables:
   `graph_sync_checkpoints` (main database) and `session_graph_context` (session
-  database). The `improve` flag `build_global_context_index` is accepted but the
+  database); as Python does for one release, deleting a session also deletes a
+  leftover snapshot in the `fs` and `redis` stores. The `improve` flag `build_global_context_index` is accepted but the
   stage, whose only output was that snapshot, now logs a warning and does
   nothing; Python's bucket/root-summary pipeline is still not ported.
 

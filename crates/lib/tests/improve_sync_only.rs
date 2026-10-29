@@ -6,7 +6,7 @@
 //! Tests verifying that `improve()` is sync-only (no `run_in_background`).
 //!
 //! (a) Signature has no `run_in_background`.
-//! (b) When sessions are supplied, all four stages run (or gracefully skip
+//! (b) When sessions are supplied, every session stage runs (or gracefully skips
 //!     when backends are missing).
 //! (c) When sessions are not supplied, no stage runs.
 
