@@ -868,6 +868,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`cognee-cognify`: the graph-extraction request is Python's (SDK-1039).**
+  Default cognify sent a different request from Python's, and Rust wrote
+  Timestamp nodes irregularly (0 in four of five captured runs, where the
+  model's own answer held none). The system prompt is now Python's
+  `generate_graph_prompt.txt` from `1d3ed15` byte for byte (it includes
+  `71d702212`, and the Rust-only "Node Descriptions" paragraph is gone), and the
+  model-facing `KnowledgeGraph` schema carries Python's text: the field
+  descriptions are removed, except `Edge.description`, and the struct
+  descriptions and titles are Python's. The structured-output replay cassettes
+  were re-recorded because their hash includes the prompt and the schema. The
+  prompt no longer reminds the model that `Node.description` is required (issue
+  #66); `Node.description` stays required in the schema, and a non-strict
+  provider that omits it goes through the adapter's corrective retry. Rust's default structured-output mode is still a forced tool
+  call; Python's `strict` `json_schema` request is the opt-in
+  `LLM_STRUCTURED_OUTPUT_MODE=json_schema`.
 - **`cognee-cognify`: temporal LLM failures are no longer silent.** Both temporal
   passes caught their own errors and returned `Ok`:
   `TemporalEventExtractor::extract_events` warned and returned an empty `Vec`,

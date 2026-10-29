@@ -2,7 +2,7 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "32f5c2f182c0abd46c09fd3ecd804085848fc4d2aab4935a807638baab38cfdd": {
+    "e6a77a7e8c2087c4b9920a50b5d4750fd282b62213078d34a24a5c4416c6fa15": {
       "method": "structured_output",
       "user_input_preview": "Alice works at TechCorp in San Francisco as a software engineer.",
       "schema_name": "KnowledgeGraph",
@@ -11,20 +11,20 @@
           {
             "id": "Alice",
             "name": "Alice",
-            "type": "PERSON",
-            "description": "Alice is a person who works as a software engineer."
+            "type": "Person",
+            "description": "software engineer"
           },
           {
             "id": "TechCorp",
             "name": "TechCorp",
-            "type": "ORGANIZATION",
-            "description": "TechCorp is an organization where Alice works."
+            "type": "Organization",
+            "description": "company"
           },
           {
             "id": "San Francisco",
             "name": "San Francisco",
-            "type": "LOCATION",
-            "description": "San Francisco is a location where TechCorp is based."
+            "type": "Place",
+            "description": "city in California"
           }
         ],
         "edges": [
@@ -32,19 +32,13 @@
             "source_node_id": "Alice",
             "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Alice works at TechCorp."
+            "description": "Alice works at TechCorp"
           },
           {
             "source_node_id": "TechCorp",
             "target_node_id": "San Francisco",
             "relationship_name": "located_in",
-            "description": "TechCorp is located in San Francisco."
-          },
-          {
-            "source_node_id": "Alice",
-            "target_node_id": "Software engineer",
-            "relationship_name": "has_profession",
-            "description": "Alice has the profession of software engineer."
+            "description": "TechCorp is located in San Francisco"
           }
         ]
       }
