@@ -179,7 +179,7 @@ one `sdk_*.rs` shim file):
 |---|---|
 | top-level | `warm`, `add`, `cognify`, `addAndCognify`, `search`, `recall`, `remember`, `improve`, `forget`, `update`, `prune*` |
 | `cognee.datasets()` | `list`, `listData`, `has`, `status`, `empty`, `deleteData`, `deleteAll` |
-| `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback`, `getGraphContext`, `setGraphContext` |
+| `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback` |
 | `cognee.users()` | `getOrCreateDefault` |
 | `cognee.config()` | `set`, `setStr`, bulk setters ×4, `get` |
 | static | `setupLogging`, `initOtlp`, `initTelemetry`, `version` |

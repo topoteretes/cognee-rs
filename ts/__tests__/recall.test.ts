@@ -65,7 +65,6 @@ const ALL_RECALL_SCOPES: RecallScopeString[] = [
   "graph",
   "session",
   "trace",
-  "graph_context",
 ];
 
 // ─── Tier-A ──────────────────────────────────────────────────────────────────

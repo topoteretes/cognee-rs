@@ -45,21 +45,6 @@ fn assert_relational_span(spans: &[CapturedSpan], expected: &str) {
 //     own span (it wraps trait methods whose spans are emitted by the
 //     concrete impl).
 
-// ─── ops/checkpoint.rs ───────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn checkpoint_load_checkpoint_emits_span() {
-    let capture = SpanCapture::install();
-    let db = make_db().await;
-
-    let _ = ops::checkpoint::load_checkpoint(&db, "test-key").await;
-
-    assert_relational_span(
-        &capture.spans(),
-        "cognee.db.relational.checkpoint.load_checkpoint",
-    );
-}
-
 // ─── ops/data.rs ─────────────────────────────────────────────────────────────
 
 #[tokio::test]
