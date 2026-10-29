@@ -54,6 +54,8 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
 
+        // Run-ownership markers for startup recovery, as every Python run holds.
+        let run_ownership_dir = cm.settings().run_ownership_dir();
         let pipeline = AddPipeline::new(
             storage,
             Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
@@ -63,6 +65,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_vector_db(vector_db)
         .with_database(database)
         .with_pipeline_run_repo(pipeline_run_repo)
+        .with_run_ownership_dir(run_ownership_dir)
         // Python runs its image and audio loaders at `add`.
         .with_loader_registry(cm.add_loader_registry().await);
 

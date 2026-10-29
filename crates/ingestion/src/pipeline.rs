@@ -2034,6 +2034,8 @@ pub struct AddPipeline {
     dataset_locks: Option<Arc<DatasetLocks>>,
     // ─── Add-time loaders (SDK-1039) ──────────────────────────────────────
     loaders: Arc<LoaderRegistry>,
+    // ─── Run-ownership markers (SDK-1039 P22) ─────────────────────────────
+    run_ownership_dir: Option<std::path::PathBuf>,
 }
 
 impl AddPipeline {
@@ -2059,6 +2061,7 @@ impl AddPipeline {
             pipeline_run_repo: None,
             dataset_locks: None,
             loaders: Arc::new(LoaderRegistry::default_registry()),
+            run_ownership_dir: None,
         }
     }
 
@@ -2082,6 +2085,7 @@ impl AddPipeline {
             // `with_dataset_locks` swaps in a host's own.
             dataset_locks: Some(DatasetLocks::global()),
             loaders: Arc::new(LoaderRegistry::default_registry()),
+            run_ownership_dir: None,
         }
     }
 
@@ -2118,6 +2122,17 @@ impl AddPipeline {
     /// must hold it in this registry, so the `add` rides on its hold.
     pub fn dataset_locks(&self) -> Option<&Arc<DatasetLocks>> {
         self.dataset_locks.as_ref()
+    }
+
+    /// Hold a run-ownership marker under `dir` for every `add` run and record
+    /// it in the run's `STARTED` row as `{"recovery_lock": …}`, as Python's
+    /// `run_tasks` does for every pipeline (`run_tasks.py:96`,
+    /// `log_pipeline_run_start.py:27`). Startup recovery can then prove an
+    /// `add` run abandoned and close it (`add` has no rollback, as in Python's
+    /// `ROLLBACK_HANDLERS`). Unset, the row is `{}` and never recovered.
+    pub fn with_run_ownership_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.run_ownership_dir = Some(dir.into());
+        self
     }
 
     /// Extract text at `add` with `loaders` instead of
@@ -2255,7 +2270,7 @@ impl AddPipeline {
         };
 
         // ── Build the typed pipeline ─────────────────────────────────────
-        let pipeline = build_add_pipeline_internal(
+        let mut pipeline = build_add_pipeline_internal(
             Arc::clone(&self.storage),
             Arc::clone(&self.database),
             self.hash_algorithm,
@@ -2309,9 +2324,22 @@ impl AddPipeline {
             .clone()
             .unwrap_or_else(cognee_database::NoopPipelineRunRepository::arc);
         let watcher = DbPipelineWatcher::new(pipeline_run_repo);
-        let outputs = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        // The run's ownership marker (Python `pipeline_run_ownership()`),
+        // taken right before the run so no early return can strand it.
+        let mut ownership = self
+            .run_ownership_dir
+            .as_deref()
+            .map(cognee_core::RunOwnership::acquire);
+        pipeline.recovery_lock = ownership
+            .as_ref()
+            .and_then(cognee_core::RunOwnership::token);
+        let executed = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher).await;
+        // The executor wrote the run's terminal row either way: nothing is
+        // left to recover, so the marker goes (Python `ownership.closed`).
+        if let Some(ownership) = ownership.as_mut() {
+            ownership.mark_closed();
+        }
+        let outputs = executed.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
         extract_data_outputs(outputs)
     }

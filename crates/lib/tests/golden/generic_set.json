@@ -2941,6 +2941,70 @@
     "err": "TypeMismatch",
     "key": "cognify.rollback_scope"
   },
+  "cognify.stale_run_recovery_min_age_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 0": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 0
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 1": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 1
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 5000000000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 5000000000
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 70000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 70000
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
   "cognify.token_counter <- \"\"": {
     "ok": {}
   },

@@ -899,8 +899,12 @@ Postgres graph).
 
 ### Serialization and recovery of pipeline runs
 
-Rust follows Python (`dc0b4ad6a`, `modules/cognify/recovery.py`); there are no
-settings to turn on.
+Rust follows Python (`dc0b4ad6a`, `modules/cognify/recovery.py`); there is
+nothing to turn on.
+
+| Env var | Key | Purpose | Default |
+|---|---|---|---|
+| `COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS` | `cognify.stale_run_recovery_min_age_seconds` | startup recovery's age floor: a `STARTED` run younger than this is treated as live (Python's variable of the same name) | `3600` |
 
 - **No run-history gate.** A `cognify` is never refused or short-circuited
   because of the dataset's `pipeline_runs` rows: not by a `COMPLETED` row (the
@@ -915,27 +919,29 @@ settings to turn on.
   so a second `cognify` of a dataset **waits** for the first and then proceeds.
   Different datasets run in parallel. Like Python's `get_dataset_lock`, the lock
   is per process: two processes on one database are not serialized by it.
-- **A killed run is recovered at startup.** A run records
+- **A killed run is recovered at startup.** A `cognify` or `add` run records
   `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an OS file lock
   on `<system_root>/pipeline_run_locks/<token>/owner.lock`. The OS drops the lock
   when the process dies, however it dies. At startup — on the first operation
   per relational database per process for the bindings, via
-  `cognee_delete::recover_stale_pipeline_runs` for any other caller — each
-  `STARTED` row that is older than an hour (Python's
-  `STALE_RUN_RECOVERY_MIN_AGE_SECONDS` default), whose dataset no run of this
-  process holds the lock of, and whose marker can be claimed without blocking,
-  is **rolled back** (its graph and vector artifacts, scoped to that run in its
-  dataset) and then **closed** with an `ERRORED` row whose `run_info` is
+  `cognee_delete::recover_stale_pipeline_runs` for any other caller — each run
+  whose newest row is still `STARTED` (even when a newer run of the same
+  pipeline has completed on the dataset since), that is older than
+  `cognify.stale_run_recovery_min_age_seconds`, whose dataset no run of this
+  process holds the lock of, whose marker can be claimed without blocking, and
+  whose dataset still exists, is **rolled back** (a `cognify` run's graph and
+  vector artifacts, scoped to that run in its dataset; other pipelines have
+  nothing to roll back, as in Python's `ROLLBACK_HANDLERS`) and then **closed**
+  with an `ERRORED` row whose `run_info` is
   `{"error": "AbandonedPipelineRunError: …"}`. A row without a marker, or whose
   marker is locked by a live process, cannot be proven abandoned and is left
   alone, so recovery is safe with any number of processes on the database. A
-  rollback that fails leaves the run `STARTED` for the next recovery to retry.
-  A finished run removes its marker.
+  rollback that fails, or a run whose dataset is gone, stays `STARTED`. A
+  finished run removes its marker.
 
-Differences from Python: the age floor is a constant here (Python reads
-`COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS`), and there is no periodic re-check
-inside the library — a long-running server calls
-`recover_stale_pipeline_runs` itself on an interval.
+Differences from Python: there is no periodic re-check inside the library (a
+long-running server calls `recover_stale_pipeline_runs` itself on an
+interval), and recovery sends no `Pipeline Run Errored` telemetry event.
 
 ## Chunking & tokenizer
 

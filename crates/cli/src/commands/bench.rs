@@ -705,12 +705,15 @@ async fn phase_add(
         Arc::new(RayonThreadPool::with_default_threads().map_err(|e| format!("thread pool: {e}"))?);
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
 
+    // Run-ownership markers for startup recovery, as every Python run holds.
+    let run_ownership_dir = cm.settings().run_ownership_dir();
     let pipeline = AddPipeline::new(storage, Arc::clone(&database) as Arc<dyn IngestDb>)
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
         .with_database(Arc::clone(&database))
         .with_pipeline_run_repo(pipeline_run_repo)
+        .with_run_ownership_dir(run_ownership_dir)
         .with_loader_registry(cm.add_loader_registry().await);
 
     let inputs: Vec<DataInput> = memories

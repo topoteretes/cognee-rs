@@ -814,6 +814,13 @@ config_section! {
         pub chunks_per_batch: u32 = 2000 => {
             env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
         },
+        /// Startup recovery's age floor in seconds (Python's
+        /// `STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, `cognify/recovery.py:34`): a
+        /// `STARTED` run younger than this is treated as live and never
+        /// recovered. Eligibility only; the run's ownership marker is the proof.
+        pub stale_run_recovery_min_age_seconds: u64 = 3600 => {
+            env: ["COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS"], alias: [], secret: false,
+        },
         /// Python's `data_per_batch` cognify parameter; 0 uses the default, 20.
         /// Accepted for parity; no Rust stage reads it since the temporal
         /// cognify pipeline was removed (SDK-1039).
