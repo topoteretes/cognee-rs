@@ -275,6 +275,70 @@ def test_add_image_stored_files_match(tmp_path):
     )
 
 
+# ── Loader routing by content (SDK-1039 P20) ─────────────────────────────────
+
+
+def test_add_png_named_jpg_routes_by_content(tmp_path):
+    """PNG bytes named ``.jpg`` are an image in both SDKs, recorded as PNG.
+
+    Python ``LoaderEngine.get_loader`` sniffs the bytes, so ``image_loader``
+    claims the file through the sniffed ``png`` / ``image/png``, and the row
+    stores those sniffed values rather than the name's. Rust now does the same.
+    """
+    py_ws, rust_ws, py_row, rust_row = _run_both_sdks(
+        tmp_path, "image.jpg", _PNG_BYTES, "image_routing"
+    )
+    for field in (
+        "loader_engine",
+        "original_extension",
+        "original_mime_type",
+        "extension",
+        "mime_type",
+    ):
+        assert py_row.get(field) == rust_row.get(field), (
+            f"{field} mismatch:\n"
+            f"  Python: {py_row.get(field)!r}\n"
+            f"  Rust:   {rust_row.get(field)!r}"
+        )
+    assert rust_row["loader_engine"] == "image_loader"
+    assert rust_row["original_extension"] == "png"
+    assert rust_row["original_mime_type"] == "image/png"
+    _assert_stored_files_match_python_contract(
+        py_ws, rust_ws, py_row, rust_row, _PNG_BYTES
+    )
+
+
+def test_add_png_without_extension_fails_in_both(tmp_path):
+    """A PNG with no extension is routed to the image loader and fails there.
+
+    Premise corrected with Python evidence (SDK-1039 P20). ``get_loader``
+    does pick ``image_loader`` for it (sniffed ``png`` / ``image/png``), but
+    the vision call takes the MIME type from the file NAME
+    (``native_adapter.py:633-638``: ``mimetypes.guess_type(input)``, else
+    ``ValueError: Could not determine MIME type for image file ... Is the
+    extension correct?``), so Python 1d3ed15 fails the add. Rust matches.
+    """
+    py_ws = tmp_path / "python"
+    rust_ws = tmp_path / "rust"
+    py_ws.mkdir()
+    rust_ws.mkdir()
+    py_file = py_ws / "image"
+    rust_file = rust_ws / "image"
+    py_file.write_bytes(_PNG_BYTES)
+    rust_file.write_bytes(_PNG_BYTES)
+
+    py_result = run_python_cli(py_ws, ["add", str(py_file), "-d", "image_noext"], check=False)
+    write_rust_config(rust_ws)
+    rust_result = run_rust_cli(rust_ws, ["add", str(rust_file), "-d", "image_noext"], check=False)
+
+    py_out = f"{py_result.stdout}\n{py_result.stderr}"
+    rust_out = f"{rust_result.stdout}\n{rust_result.stderr}"
+    assert py_result.returncode != 0, f"Python accepted an extensionless image:\n{py_out}"
+    assert "Could not determine MIME type" in py_out, py_out
+    assert rust_result.returncode != 0, f"Rust accepted an extensionless image:\n{rust_out}"
+    assert "Could not determine MIME type" in rust_out, rust_out
+
+
 # ── Audio parity tests ────────────────────────────────────────────────────────
 
 

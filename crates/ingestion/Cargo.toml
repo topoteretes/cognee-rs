@@ -30,6 +30,7 @@ sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 mime_guess.workspace = true
+infer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
