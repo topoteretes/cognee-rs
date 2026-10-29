@@ -27,8 +27,8 @@ pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
 pub use improve::{
     IMPROVE_STAGES, ImproveParams, ImproveResult, ImproveStatus, REASON_BACKEND_UNSUPPORTED,
     REASON_IMPROVE_IN_PROGRESS, REASON_NO_SESSION_IDS, REASON_NOT_IMPLEMENTED,
-    REASON_OPT_IN_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, StageResult, StageStatus,
-    TRUTH_SUBSPACE_STAGE, improve,
+    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
+    StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{

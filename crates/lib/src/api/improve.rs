@@ -99,6 +99,11 @@ pub const REASON_NO_SESSION_IDS: &str = "no_session_ids";
 /// Skip reason of an opt-in stage the caller did not opt into (Python
 /// `REASON_OPT_IN_DISABLED`, `cognee/modules/improve/stages.py`).
 pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
+/// Skip reason of `update_user_preferences` while personalization is off
+/// (Python `REASON_PERSONALIZATION_DISABLED`, `cognee/modules/improve/stages.py`).
+/// Rust has no personalization (Python's `PERSONALIZATION_ENABLED`, default
+/// off, `cognee/base_config.py`), so the stage always reports it.
+pub const REASON_PERSONALIZATION_DISABLED: &str = "personalization_disabled";
 pub use cognee_cognify::REASON_BACKEND_UNSUPPORTED;
 
 /// Status of one improve stage — Python's `StageStatus`
@@ -1106,8 +1111,11 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
     // Python does until the run-level gates stop them: `no_session_ids` for a
     // session-fed stage run without sessions, `opt_in_disabled` for an opt-in
     // stage the caller did not request (Rust has no `review_conflicts` opt-in,
-    // so it never gets past that gate). A stage that would run reports
-    // `not_implemented`.
+    // so it never gets past that gate). `update_user_preferences` gates on
+    // Python's `PERSONALIZATION_ENABLED` (default off), which Rust does not
+    // have, so it reports `personalization_disabled` as Python's default
+    // config does (`stages.py` `UpdateUserPreferencesStage.gate`). A stage that
+    // would run reports `not_implemented`.
     //
     // Python's `global_context_index_pipeline` builds bucket and root
     // summaries with an LLM pass. The stand-in Rust had stored a flat edge
@@ -1122,29 +1130,28 @@ pub async fn improve(params: ImproveParams<'_>) -> Result<ImproveResult, ApiErro
             "improve: global_context_index is not implemented; skipping"
         );
     }
-    let unported_skip = |needs_sessions: bool, opted_in: bool| -> &'static str {
-        if needs_sessions && !has_sessions {
-            REASON_NO_SESSION_IDS
-        } else if !opted_in {
-            REASON_OPT_IN_DISABLED
-        } else {
-            REASON_NOT_IMPLEMENTED
-        }
-    };
-    for (name, needs_sessions, opted_in) in [
-        (EXTRACT_AGENT_CONTEXT_STAGE, true, true),
-        (UPDATE_USER_PREFERENCES_STAGE, true, true),
-        (REVIEW_CONFLICTS_STAGE, false, false),
+    // (stage, needs_sessions, the stage's own gate reason, if it is closed)
+    let unported: [(&'static str, bool, Option<&'static str>); 4] = [
+        (EXTRACT_AGENT_CONTEXT_STAGE, true, None),
+        (
+            UPDATE_USER_PREFERENCES_STAGE,
+            true,
+            Some(REASON_PERSONALIZATION_DISABLED),
+        ),
+        (REVIEW_CONFLICTS_STAGE, false, Some(REASON_OPT_IN_DISABLED)),
         (
             GLOBAL_CONTEXT_INDEX_STAGE,
             false,
-            build_global_context_index,
+            (!build_global_context_index).then_some(REASON_OPT_IN_DISABLED),
         ),
-    ] {
-        stage_slots.insert(
-            name,
-            StageResult::skipped(name, unported_skip(needs_sessions, opted_in)),
-        );
+    ];
+    for (name, needs_sessions, gate) in unported {
+        let reason = if needs_sessions && !has_sessions {
+            REASON_NO_SESSION_IDS
+        } else {
+            gate.unwrap_or(REASON_NOT_IMPLEMENTED)
+        };
+        stage_slots.insert(name, StageResult::skipped(name, reason));
     }
 
     // Registry order. A stage nothing filled was gated off: Python's

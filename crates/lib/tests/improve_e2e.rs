@@ -18,8 +18,8 @@ use cognee::api::improve::{
     DISTILL_SESSIONS_STAGE, FEEDBACK_WEIGHTS_STAGE, GLOBAL_CONTEXT_INDEX_STAGE, IMPROVE_STAGES,
     ImproveParams, PERSIST_AGENT_TRACES_STAGE, PERSIST_SESSION_QA_STAGE,
     REASON_BACKEND_UNSUPPORTED, REASON_NO_SESSION_IDS, REASON_NOT_IMPLEMENTED,
-    REASON_OPT_IN_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, StageResult, StageStatus,
-    TRUTH_SUBSPACE_STAGE, improve,
+    REASON_OPT_IN_DISABLED, REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE,
+    StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
@@ -303,6 +303,36 @@ async fn improve_distill_sessions_publishes_nothing_when_no_qa() {
         StageStatus::Skipped
     );
     assert_eq!(r.session_ids, vec!["empty_session".to_string()]);
+
+    // With sessions, every stage is reported in Python's order, and the
+    // stages Rust does not port report what Python's gates give with default
+    // config: `extract_agent_context` would run (`not_implemented`),
+    // `update_user_preferences` is off without PERSONALIZATION_ENABLED,
+    // and the opt-in stages were not opted into.
+    let names: Vec<&str> = r.stages.iter().map(|s| s.stage.as_str()).collect();
+    assert_eq!(names, IMPROVE_STAGES);
+    for (name, reason) in [
+        ("extract_agent_context", REASON_NOT_IMPLEMENTED),
+        ("update_user_preferences", REASON_PERSONALIZATION_DISABLED),
+        (TRUTH_SUBSPACE_STAGE, REASON_OPT_IN_DISABLED),
+        ("review_conflicts", REASON_OPT_IN_DISABLED),
+        (GLOBAL_CONTEXT_INDEX_STAGE, REASON_OPT_IN_DISABLED),
+    ] {
+        let stage = r.stage(name).expect("stage reported");
+        assert_eq!(
+            (stage.status, stage.reason.as_deref()),
+            (StageStatus::Skipped, Some(reason)),
+            "{stage:?}"
+        );
+    }
+    for name in [FEEDBACK_WEIGHTS_STAGE, PERSIST_SESSION_QA_STAGE] {
+        assert_ne!(
+            r.stage(name).expect("stage reported").status,
+            StageStatus::Skipped,
+            "{name} runs with sessions: {}",
+            r.stage_summary()
+        );
+    }
 }
 
 /// Stage 2d (`build_truth_subspace`) is opt-in. With sessions present, the flag

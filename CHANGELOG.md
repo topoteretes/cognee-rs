@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `persist_agent_traces`, `extract_agent_context`, `distill_sessions`,
     `update_user_preferences`, `build_truth_subspace`, `review_conflicts`,
     `global_context_index`), with Python's gate reasons (`no_session_ids`,
-    `opt_in_disabled`, `backend_unsupported`). A stage Rust does not port
+    `opt_in_disabled`, `backend_unsupported`; `update_user_preferences` reports
+    `personalization_disabled`, as Python does with its default
+    `PERSONALIZATION_ENABLED=false`). A stage Rust does not port
     reports `skipped` with the Rust-only reason `not_implemented`. `stages_run`
     and the counters `feedback_entries_processed`, `feedback_entries_applied`,
     `sessions_persisted`, `sessions_distilled` and `lessons_published` are gone;
