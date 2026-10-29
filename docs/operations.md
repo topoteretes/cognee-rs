@@ -34,9 +34,13 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   debounced by `improve.debounce_entries` / `improve.debounce_seconds` (state
   kept in the session as an internal `auto_improve_debounce` row). The CLI
   waits for it before exiting and a binding's `close()` before closing the
-  handle (`cognee::wait_for_background_tasks`).
+  handle (`cognee::wait_for_background_tasks`; bindings-common
+  `ops::lifecycle::wait_for_background_tasks`). A detached task that panics is
+  logged at `error`.
 - **Permanent graph memory** — omit `--session-id` and the input is persisted as
-  permanent, graph-backed memory.
+  permanent, graph-backed memory. Its self-improvement pass (memify) follows
+  the same gate: off when `improve.auto_enabled` is off or an `improve.*`
+  setting is invalid, as Python's `self_improvement and auto_improve_enabled()`.
 
 `remember ≈ add + cognify + improve`. rustdoc: `api::remember`.
 

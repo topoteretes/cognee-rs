@@ -1474,7 +1474,7 @@ with a warning.
 
 | Env var | Key | Default | Effect |
 |---|---|---|---|
-| `IMPROVE_AUTO_ENABLED` | `improve.auto_enabled` | `true` | Run `improve()` after a session `remember()` (detached). `false` is the kill switch; an explicit `self_improvement` does not override it. |
+| `IMPROVE_AUTO_ENABLED` | `improve.auto_enabled` | `true` | Run `improve()` after a session `remember()` (detached), and the self-improvement pass of a permanent `remember()`. `false` is the kill switch on both paths; an explicit `self_improvement` does not override it. |
 | `IMPROVE_DEBOUNCE_ENTRIES` | `improve.debounce_entries` | `1` | Auto-improve fires only once this many new session entries accumulated since the last one; `0` turns the entry trigger off. With `debounce_seconds` set, the default `1` steps aside (set `>= 2` to combine both). |
 | `IMPROVE_DEBOUNCE_SECONDS` | `improve.debounce_seconds` | `0` | ... or once this many seconds passed; `0` turns the time trigger off. Checked only on the next `remember()`: there is no timer. |
 | `IMPROVE_STAGES_DISABLED` | `improve.stages_disabled` | _(empty)_ | Comma-separated stage names skipped with `disabled_by_config`. |

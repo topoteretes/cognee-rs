@@ -39,6 +39,9 @@ pub use recall::{
     RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,
     normalize_scope, recall,
 };
-pub use remember::{RememberItemInfo, RememberResult, RememberStatus, remember, remember_entry};
+pub use remember::{
+    RememberItemInfo, RememberResult, RememberStatus, SessionAutoImprove,
+    launch_session_auto_improve, remember, remember_entry,
+};
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

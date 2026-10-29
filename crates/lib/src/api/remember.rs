@@ -180,6 +180,18 @@ impl fmt::Display for RememberResult {
     }
 }
 
+/// The improve settings an automatic improve runs with, or `None` when it
+/// does not run: Python's `self_improvement and auto_improve_enabled()`, on
+/// both remember paths. `improve.auto_enabled = false` is the kill switch an
+/// explicit `self_improvement = true` does not override; invalid settings
+/// (`None`) skip the improve, never the ingestion.
+fn auto_improve_config(
+    self_improvement: bool,
+    improve_config: Option<ImproveConfig>,
+) -> Option<ImproveConfig> {
+    improve_config.filter(|config| self_improvement && config.auto_enabled)
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -189,7 +201,10 @@ impl fmt::Display for RememberResult {
 /// **Permanent Memory Mode** (no `session_id`):
 /// 1. `add()` to ingest data.
 /// 2. `cognify()` to extract knowledge graph.
-/// 3. If `self_improvement=true`, `memify()` to enrich with triplet embeddings.
+/// 3. If `self_improvement=true` and `improve_config.auto_enabled`, `memify()`
+///    to enrich with triplet embeddings. `IMPROVE_AUTO_ENABLED=false` is the
+///    kill switch on both paths, as in Python (`remember.py`:
+///    `self_improvement and auto_improve_enabled()`).
 ///
 /// **Session Memory Mode** (with `session_id`):
 /// 1. Convert data inputs to text.
@@ -294,6 +309,10 @@ pub async fn remember(
     }
 
     // -- Permanent Memory Mode --
+    // The same kill switch as the session path: an explicit
+    // `self_improvement = true` does not override `auto_enabled = false`, and
+    // invalid improve settings skip the self-improvement, never the ingestion.
+    let self_improvement = auto_improve_config(self_improvement, improve_config).is_some();
     remember_permanent_blocking(
         data,
         dataset_name,
@@ -568,19 +587,6 @@ async fn remember_session(
         )
     })?;
 
-    // `improve.auto_enabled = false` is the kill switch of the automatic
-    // improve; an explicit `self_improvement = true` does not override it.
-    // Invalid improve settings (`None`) skip it too: an improve-only knob
-    // must never block ingestion.
-    let auto_improve = if self_improvement {
-        improve_config.filter(|config| config.auto_enabled)
-    } else {
-        None
-    };
-    if self_improvement && auto_improve.is_none() {
-        debug!("remember: automatic improve disabled or unavailable");
-    }
-
     // Convert data inputs to text representation.
     let texts: Vec<String> = data
         .iter()
@@ -613,77 +619,29 @@ async fn remember_session(
         Err(e) => return Err(e.into()),
     }
 
-    // Debounce: bridge only after enough new entries or enough time since the
-    // last automatic improve of this session. The default thresholds fire
-    // every time and read nothing.
-    let mut improve_launched = false;
-    if let Some(config) = auto_improve
-        && session_improve_due(
-            session_manager.as_deref(),
-            &config,
-            &user_id_str,
-            session_id,
-        )
-        .await
-    {
-        let dataset_name = dataset_name.to_string();
-        let session_id = session_id.to_string();
-        // Detached, as Python's `asyncio.create_task(_session_improve())`: the
-        // session write already succeeded, so a failed bridge is only logged.
-        crate::background_tasks::spawn_background_task(async move {
-            let result = improve(ImproveParams {
-                dataset_name,
-                dataset_id: None,
-                session_ids: Some(vec![session_id.clone()]),
-                node_name: None,
-                owner_id,
-                tenant_id,
-                feedback_alpha: None,
-                config,
-                personalization_enabled,
-                llm,
-                storage,
-                graph_db,
-                vector_db,
-                embedding_engine,
-                ontology_resolver,
-                db,
-                session_store,
-                session_manager,
-                add_pipeline: Some(add_pipeline.as_ref()),
-                checkpoint_store,
-                cognify_config: &cognify_config,
-                extraction_tasks: None,
-                enrichment_tasks: None,
-                data: None,
-                build_global_context_index: false,
-                build_truth_subspace: false,
-                run_in_background: false,
-            })
-            .await;
-            match result {
-                Ok(result) if result.status() == super::improve::ImproveStatus::Errored => {
-                    warn!(
-                        session_id,
-                        stages = %result.stage_summary(),
-                        "remember: session improve reported errors (non-fatal)"
-                    );
-                }
-                Ok(result) => info!(
-                    session_id,
-                    status = result.status().as_str(),
-                    stages = %result.stage_summary(),
-                    "remember: session bridged to permanent graph"
-                ),
-                // A fatal-stage abort (`ApiError::ImproveAborted`) included.
-                Err(e) => warn!(
-                    session_id,
-                    "remember: session improve failed (non-fatal): {e}"
-                ),
-            }
-        });
-        improve_launched = true;
-    }
+    let improve_launched = launch_session_auto_improve(SessionAutoImprove {
+        dataset_name: dataset_name.to_string(),
+        dataset_id: None,
+        session_id: session_id.to_string(),
+        owner_id,
+        tenant_id,
+        self_improvement,
+        improve_config,
+        personalization_enabled,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        ontology_resolver,
+        db,
+        session_store,
+        session_manager,
+        checkpoint_store,
+        add_pipeline,
+        cognify_config,
+    })
+    .await;
 
     let elapsed = start.elapsed().as_secs_f64();
 
@@ -709,6 +667,157 @@ async fn remember_session(
 // ---------------------------------------------------------------------------
 // Typed-entry dispatch (`remember_entry`) — LIB-01 / Decision 2 / Decision 5
 // ---------------------------------------------------------------------------
+
+/// The inputs of a session `remember()`'s automatic improve
+/// ([`launch_session_auto_improve`]): the run's identity, its gate and the
+/// handles the detached improve owns.
+pub struct SessionAutoImprove {
+    /// Dataset the session is bridged into.
+    pub dataset_name: String,
+    /// The dataset's id when the host already resolved it; `None` resolves
+    /// `dataset_name` among the owner's datasets.
+    pub dataset_id: Option<Uuid>,
+    /// The session to bridge.
+    pub session_id: String,
+    /// Owner of the session and the dataset.
+    pub owner_id: Uuid,
+    /// Tenant of the dataset.
+    pub tenant_id: Option<Uuid>,
+    /// The caller's `self_improvement` flag.
+    pub self_improvement: bool,
+    /// The validated improve settings; `None` (invalid settings) skips.
+    pub improve_config: Option<ImproveConfig>,
+    /// Handed to the improve.
+    pub personalization_enabled: bool,
+    /// LLM handle.
+    pub llm: Arc<dyn Llm>,
+    /// File storage handle.
+    pub storage: Arc<dyn StorageTrait>,
+    /// Graph database handle.
+    pub graph_db: Arc<dyn GraphDBTrait>,
+    /// Vector database handle.
+    pub vector_db: Arc<dyn VectorDB>,
+    /// Embedding engine handle.
+    pub embedding_engine: Arc<dyn EmbeddingEngine>,
+    /// Ontology resolver handle.
+    pub ontology_resolver: Arc<dyn OntologyResolver>,
+    /// Metadata DB connection.
+    pub db: Option<Arc<dyn RelationalDb>>,
+    /// Session backing store.
+    pub session_store: Option<Arc<dyn SessionStore>>,
+    /// Session manager (also the debounce state).
+    pub session_manager: Option<Arc<SessionManager>>,
+    /// Checkpoint store (stage watermarks).
+    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    /// Add pipeline of the cognify-backed stages (and its dataset locks).
+    pub add_pipeline: Arc<AddPipeline>,
+    /// Cognify configuration of the cognify-backed stages.
+    pub cognify_config: Arc<CognifyConfig>,
+}
+
+/// The automatic improve of a session `remember()` — Python's session
+/// branch after `_add_to_session`: gate (`self_improvement` and
+/// `improve.auto_enabled`), debounce, then `improve(session_ids=[session])`
+/// as a **detached** task in the process-wide background registry
+/// ([`crate::wait_for_background_tasks`] drains it). Its failures are logged,
+/// never returned. `true` when the improve was launched.
+///
+/// [`remember`] calls this after storing the entry; a host that stores the
+/// session entry itself (the HTTP server) calls it the same way.
+pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
+    let SessionAutoImprove {
+        dataset_name,
+        dataset_id,
+        session_id,
+        owner_id,
+        tenant_id,
+        self_improvement,
+        improve_config,
+        personalization_enabled,
+        llm,
+        storage,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        ontology_resolver,
+        db,
+        session_store,
+        session_manager,
+        checkpoint_store,
+        add_pipeline,
+        cognify_config,
+    } = request;
+
+    let Some(config) = auto_improve_config(self_improvement, improve_config) else {
+        if self_improvement {
+            debug!("remember: automatic improve disabled or unavailable");
+        }
+        return false;
+    };
+    // Debounce: bridge only after enough new entries or enough time since the
+    // last automatic improve of this session. The default thresholds fire
+    // every time and read nothing.
+    let user_id = owner_id.to_string();
+    if !session_improve_due(session_manager.as_deref(), &config, &user_id, &session_id).await {
+        return false;
+    }
+
+    // Detached, as Python's `asyncio.create_task(_session_improve())`: the
+    // session write already succeeded, so a failed bridge is only logged.
+    crate::background_tasks::spawn_background_task(async move {
+        let result = improve(ImproveParams {
+            dataset_name,
+            dataset_id,
+            session_ids: Some(vec![session_id.clone()]),
+            node_name: None,
+            owner_id,
+            tenant_id,
+            feedback_alpha: None,
+            config,
+            personalization_enabled,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            ontology_resolver,
+            db,
+            session_store,
+            session_manager,
+            add_pipeline: Some(add_pipeline.as_ref()),
+            checkpoint_store,
+            cognify_config: &cognify_config,
+            extraction_tasks: None,
+            enrichment_tasks: None,
+            data: None,
+            build_global_context_index: false,
+            build_truth_subspace: false,
+            run_in_background: false,
+        })
+        .await;
+        match result {
+            Ok(result) if result.status() == super::improve::ImproveStatus::Errored => {
+                warn!(
+                    session_id,
+                    stages = %result.stage_summary(),
+                    "remember: session improve reported errors (non-fatal)"
+                );
+            }
+            Ok(result) => info!(
+                session_id,
+                status = result.status().as_str(),
+                stages = %result.stage_summary(),
+                "remember: session bridged to permanent graph"
+            ),
+            // A fatal-stage abort (`ApiError::ImproveAborted`) included.
+            Err(e) => warn!(
+                session_id,
+                "remember: session improve failed (non-fatal): {e}"
+            ),
+        }
+    });
+    true
+}
 
 /// Dispatch a typed [`MemoryEntry`] to the appropriate `SessionManager`
 /// method.
@@ -966,6 +1075,25 @@ pub async fn remember_entry(
 )]
 mod tests {
     use super::*;
+
+    // Python `remember.py`: `auto_improve = self_improvement and
+    // auto_improve_enabled()`, the one gate of both paths.
+    #[test]
+    fn auto_improve_needs_self_improvement_and_auto_enabled() {
+        let enabled = ImproveConfig::default();
+        assert!(enabled.auto_enabled, "Python's default");
+        let disabled = ImproveConfig {
+            auto_enabled: false,
+            ..ImproveConfig::default()
+        };
+        assert_eq!(
+            auto_improve_config(true, Some(enabled.clone())),
+            Some(enabled.clone())
+        );
+        assert_eq!(auto_improve_config(false, Some(enabled)), None);
+        assert_eq!(auto_improve_config(true, Some(disabled)), None);
+        assert_eq!(auto_improve_config(true, None), None);
+    }
 
     #[test]
     fn remember_status_serde_roundtrip_errored() {
