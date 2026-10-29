@@ -38,7 +38,6 @@ import type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -220,40 +219,6 @@ export interface CogneeSessionObject {
 }
 
 /**
- * Notebooks sub-object type.
- *
- * Mirrors Python's `cognee.notebooks` sub-object (see `python/src/sdk_admin.rs`).
- * All operations forward to the corresponding `native.cognee*Notebook` functions.
- */
-export interface CogneeNotebookObject {
-  /**
-   * Return all notebooks owned by this handle's user.
-   */
-  list(): Promise<CogneeNotebook[]>;
-  /**
-   * Create a new notebook.
-   *
-   * @param name      Display name for the notebook.
-   * @param cells     Initial cells array (default empty).
-   * @param deletable Whether the notebook can be deleted (default `true`).
-   */
-  create(name: string, cells?: unknown, deletable?: boolean): Promise<CogneeNotebook>;
-  /**
-   * Apply a partial update to an existing notebook.
-   *
-   * Returns the updated notebook, or `null` if no notebook with the given `id`
-   * exists for this owner.
-   */
-  update(id: string, patch: { name?: string; cells?: unknown }): Promise<CogneeNotebook | null>;
-  /**
-   * Delete a notebook by ID.
-   *
-   * Returns `true` if a row was removed, `false` if not found.
-   */
-  delete(id: string): Promise<boolean>;
-}
-
-/**
  * Users sub-object type.
  *
  * Exposes user- and pipeline-run-management operations that Python surfaces on
@@ -317,9 +282,6 @@ export class Cognee {
 
   /** Session management operations. */
   readonly sessions: CogneeSessionObject;
-
-  /** Notebook management operations. */
-  readonly notebooks: CogneeNotebookObject;
 
   /** User and pipeline-run management operations. */
   readonly users: CogneeUserObject;
@@ -436,14 +398,6 @@ export class Cognee {
       getGraphContext:  (sessionId, opts) => native.cogneeGetGraphContext(h, sessionId, opts),
       setGraphContext:  (sessionId, context, opts) =>
                           native.cogneeSetGraphContext(h, sessionId, context, opts),
-    };
-
-    // ── notebooks sub-object ─────────────────────────────────────────────────
-    this.notebooks = {
-      list:   ()                  => native.cogneeListNotebooks(h),
-      create: (name, cells, del)  => native.cogneeCreateNotebook(h, name, cells, del),
-      update: (id, patch)         => native.cogneeUpdateNotebook(h, id, patch),
-      delete: (id)                => native.cogneeDeleteNotebook(h, id),
     };
 
     // ── users sub-object ─────────────────────────────────────────────────────

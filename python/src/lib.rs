@@ -53,7 +53,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<config::PyCogneeConfig>()?;
     m.add_class::<sdk_datasets::PyCogneeDatasets>()?;
     m.add_class::<sdk_sessions::PyCogneeSessions>()?;
-    m.add_class::<sdk_admin::PyCogneeNotebooks>()?;
     m.add_class::<pipeline::PyPipeline>()?;
     m.add_class::<pipeline::PyPipelineRunHandle>()?;
     m.add_class::<task_context::PyTaskContext>()?;

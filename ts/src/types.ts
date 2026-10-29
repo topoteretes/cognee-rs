@@ -689,21 +689,6 @@ export interface CogneeUser {
 }
 
 /**
- * A notebook row. Mirrors `cognee_database::Notebook` (Serialize, snake_case fields).
- *
- * `cells` is a JSON array of notebook cells; its inner shape is opaque and
- * defined by the application layer.
- */
-export interface CogneeNotebook {
-  id: string;
-  owner_id: string;
-  name: string;
-  cells: unknown[];
-  deletable: boolean;
-  created_at: string;
-}
-
-/**
  * Graph element IDs used to produce a Q&A answer.
  * Mirrors `cognee_session::UsedGraphElementIds` (Serialize, snake_case fields).
  */

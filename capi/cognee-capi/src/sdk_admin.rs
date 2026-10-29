@@ -1,17 +1,15 @@
-//! Phase 6 — admin / session / pipeline-run / user / notebook ops:
+//! Phase 6 — admin / session / pipeline-run / user ops:
 //! `cg_sdk_get_session`, `cg_sdk_add_feedback`, `cg_sdk_delete_feedback`,
 //! `cg_sdk_get_graph_context`, `cg_sdk_set_graph_context`,
 //! `cg_sdk_reset_pipeline_run_status`, `cg_sdk_reset_dataset_pipeline_run_status`,
-//! `cg_sdk_get_or_create_default_user`,
-//! `cg_sdk_list_notebooks`, `cg_sdk_create_notebook`,
-//! `cg_sdk_update_notebook`, `cg_sdk_delete_notebook`.
+//! `cg_sdk_get_or_create_default_user`.
 //!
 //! All follow the Phase-4 canonical pattern:
 //!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → `state.services().await?`
 //!   → call cognee API → serialize result → callback.
 //!
 //! ## Serde notes
-//! - `SessionQAEntry`, `User`, `Notebook` derive `Serialize` → direct serde.
+//! - `SessionQAEntry`, `User` derive `Serialize` → direct serde.
 //! - `bool` results → `serde_json::Value::Bool(b)` → `"true"`/`"false"` (D9).
 //! - Void results → `serde_json::Value::Null` → `"null"` (D9).
 //! - `get_graph_context`: `Option<String>` → `"\"<ctx>\""` (D9 quoted string)
@@ -358,168 +356,5 @@ pub unsafe extern "C" fn cg_sdk_get_or_create_default_user(
     let ud = SendUserData(user_data);
     spawn_sdk_op(callback, ud, async move {
         admin::run_get_or_create_default_user(&state).await
-    });
-}
-
-/// List all notebooks for the current owner.
-///
-/// On success `result_json` is a JSON array of `Notebook` objects.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` must be a valid `CgSdk*` or NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_list_notebooks(
-    sdk: *const CgSdk,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        admin::run_list_notebooks(&state).await
-    });
-}
-
-/// Create a new notebook.
-///
-/// `name` is the notebook name (null-terminated UTF-8).
-/// `cells_json` may be `NULL` (interpreted as `[]`) or a JSON array of cells.
-/// `deletable` is non-zero for true, zero for false.
-///
-/// On success `result_json` is a `Notebook` JSON object.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` and `name` must be valid non-null null-terminated UTF-8 strings.
-/// `cells_json` may be NULL.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_create_notebook(
-    sdk: *const CgSdk,
-    name: *const c_char,
-    cells_json: *const c_char,
-    deletable: std::ffi::c_int,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let name_str = match parse_c_str_or_fire(name, "name", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    // cells_json NULL → empty array.
-    let cells_str: Option<String> = if cells_json.is_null() {
-        None
-    } else {
-        match parse_c_str_or_fire(cells_json, "cells_json", callback, ud_raw) {
-            Some(s) => Some(s),
-            None => return,
-        }
-    };
-
-    let is_deletable = deletable != 0;
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        let cells_val: serde_json::Value = match cells_str {
-            Some(ref s) => serde_json::from_str(s)
-                .map_err(|e| SdkError::Validation(format!("cells_json parse error: {e}")))?,
-            None => serde_json::Value::Array(vec![]),
-        };
-        admin::run_create_notebook(&state, name_str, cells_val, is_deletable).await
-    });
-}
-
-/// Update a notebook's name and/or cells.
-///
-/// `id` is a UUID string (C string).
-/// `patch_json` is a JSON object with optional `"name"` (string) and/or
-/// `"cells"` (JSON array) fields.
-///
-/// On success `result_json` is a `Notebook` JSON object, or `"null"` (D9) if
-/// the notebook was not found.
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk`, `id`, `patch_json` must be valid non-null null-terminated UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_update_notebook(
-    sdk: *const CgSdk,
-    id: *const c_char,
-    patch_json: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let id_str = match parse_c_str_or_fire(id, "id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-    let patch_str = match parse_c_str_or_fire(patch_json, "patch_json", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        let patch_val: serde_json::Value = serde_json::from_str(&patch_str)
-            .map_err(|e| SdkError::Validation(format!("patch_json parse error: {e}")))?;
-        admin::run_update_notebook(&state, &id_str, patch_val).await
-    });
-}
-
-/// Delete a notebook by UUID.
-///
-/// `id` is a UUID string (C string).
-///
-/// On success `result_json` is `"true"` if the notebook was deleted, `"false"`
-/// if it was not found (D9 strict JSON bool).
-///
-/// Async (D4, R1): callback fires on a tokio worker thread.
-///
-/// # Safety
-/// `sdk` and `id` must be valid non-null null-terminated UTF-8 strings.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn cg_sdk_delete_notebook(
-    sdk: *const CgSdk,
-    id: *const c_char,
-    callback: CgSdkResultCallback,
-    user_data: *mut std::ffi::c_void,
-) {
-    if sdk.is_null() {
-        crate::error::set_last_error("null pointer: sdk");
-        return;
-    }
-    let state = Arc::clone(unsafe { &(*sdk).state });
-    let ud_raw = user_data as usize;
-
-    let id_str = match parse_c_str_or_fire(id, "id", callback, ud_raw) {
-        Some(s) => s,
-        None => return,
-    };
-
-    let ud = SendUserData(user_data);
-    spawn_sdk_op(callback, ud, async move {
-        admin::run_delete_notebook(&state, &id_str).await
     });
 }

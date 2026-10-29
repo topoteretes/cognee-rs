@@ -68,9 +68,8 @@ from cognee_py._native import (
     CogneeConfig,
     # SDK datasets sub-object
     CogneeDatasets,
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     CogneeSessions,
-    CogneeNotebooks,
     # SDK-tier exceptions (CogneeError hierarchy)
     CogneeError,
     CogneeComponentError,
@@ -186,9 +185,8 @@ __all__ = [
     "CogneeConfig",
     # SDK datasets sub-object
     "CogneeDatasets",
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     "CogneeSessions",
-    "CogneeNotebooks",
     # SDK-tier exceptions
     "CogneeError",
     "CogneeComponentError",
