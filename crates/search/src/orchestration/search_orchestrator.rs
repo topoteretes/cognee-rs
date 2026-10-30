@@ -1,3 +1,4 @@
+use super::concurrent_session::{self, SessionSearchMode};
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
 use crate::orchestration::{SearchTypeRegistry, prepare_search_result};
@@ -165,6 +166,7 @@ pub struct SearchOrchestrator {
     /// Whether a session search detects feedback when the request leaves
     /// `auto_feedback_detection` unset.
     auto_feedback_default: bool,
+    session_search_mode: SessionSearchMode,
     /// Stamped on every search's params while personalization is enabled.
     personalization: crate::user_preferences::PreferenceConfig,
     /// `feedback_influence` of a request that leaves it unset.
@@ -214,7 +216,8 @@ impl SearchOrchestrator {
             session_manager: None,
             llm: None,
             enable_access_tracking: false,
-            auto_feedback_default: false,
+            auto_feedback_default: true,
+            session_search_mode: SessionSearchMode::Concurrent,
             personalization: crate::user_preferences::PreferenceConfig::default(),
             default_feedback_influence: 0.0,
             default_system_prompt_path: None,
@@ -354,6 +357,11 @@ impl SearchOrchestrator {
         self
     }
 
+    pub fn with_session_search_mode(mut self, mode: SessionSearchMode) -> Self {
+        self.session_search_mode = mode;
+        self
+    }
+
     /// Personalize searches for the requesting user (the
     /// `personalization_*` / `preference_*` settings): with `enabled`, their
     /// `prefers` weights re-rank graph and RAG retrieval and their preference
@@ -432,7 +440,8 @@ impl SearchOrchestrator {
     ) -> Result<Vec<SearchResponse>, SearchError> {
         let mut responses = Vec::with_capacity(requests.len());
         for request in requests {
-            responses.push(self.search(request).await?);
+            let results = self.search_datasets_impl(request, true).await?;
+            responses.push(merge_dataset_results(request, results));
         }
         Ok(responses)
     }
@@ -634,7 +643,7 @@ impl SearchOrchestrator {
         &self,
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
-        let results = self.search_datasets(request).await?;
+        let results = self.search_datasets_impl(request, false).await?;
         Ok(merge_dataset_results(request, results))
     }
 
@@ -661,6 +670,14 @@ impl SearchOrchestrator {
     pub async fn search_datasets(
         &self,
         request: &SearchRequest,
+    ) -> Result<Vec<DatasetSearchResult>, crate::types::SearchError> {
+        self.search_datasets_impl(request, false).await
+    }
+
+    async fn search_datasets_impl(
+        &self,
+        request: &SearchRequest,
+        is_batch: bool,
     ) -> Result<Vec<DatasetSearchResult>, crate::types::SearchError> {
         // Python's `cognee.search()` rejects these up front, for every search
         // type, before any retriever runs — and before `search()` emits its
@@ -831,6 +848,37 @@ impl SearchOrchestrator {
         // included).
         let names_no_dataset = request.dataset_ids.as_ref().is_none_or(Vec::is_empty)
             && request.datasets.as_ref().is_none_or(Vec::is_empty);
+
+        // The concurrent runner is intentionally narrow, matching Python's
+        // exact-type allowlist. Per-dataset fan-out remains sequential until
+        // it can share one immutable turn snapshot across every dataset lane.
+        if self.session_search_mode == SessionSearchMode::Concurrent
+            && !self.per_dataset_storage
+            && self.session_manager.is_some()
+            && self.llm.is_some()
+            && concurrent_session::eligible(request, search_type, is_batch)
+        {
+            let _turn_guard = concurrent_session::lock(request).await;
+            let (response, log) = self
+                .run_concurrent_session_turn(request, &retriever, search_type, auto_feedback)
+                .await?;
+            if log {
+                self.log_search_history(request, &response).await;
+            }
+            emit_search_completed(request);
+            let dataset_id = match request.dataset_ids.as_deref() {
+                Some([only]) => Some(*only),
+                _ => None,
+            };
+            let (dataset_name, dataset_tenant_id) = self.dataset_label(dataset_id).await;
+            return Ok(vec![DatasetSearchResult {
+                dataset_id,
+                dataset_name,
+                dataset_tenant_id,
+                response,
+                error: None,
+            }]);
+        }
 
         // Python prepares exactly one turn before a generative completion. Raw
         // retrieval modes and previews deliberately skip this LLM call.
@@ -1357,6 +1405,109 @@ impl SearchOrchestrator {
         }
 
         Ok((response, true))
+    }
+
+    /// Run analysis and the answer lane from the same pre-turn snapshot.
+    /// Analysis writes are deliberately invisible to this answer and become
+    /// guidance for the next serialized turn.
+    async fn run_concurrent_session_turn(
+        &self,
+        request: &SearchRequest,
+        retriever: &crate::retrievers::SearchRetrieverRef,
+        search_type: SearchType,
+        auto_feedback: bool,
+    ) -> Result<(SearchResponse, bool), SearchError> {
+        let mut params = SearchParams::from(request);
+        params.personalization = Some(self.personalization).filter(|config| config.enabled);
+        if params.feedback_influence.is_none() && self.default_feedback_influence > 0.0 {
+            params.feedback_influence = Some(self.default_feedback_influence);
+        }
+
+        // Snapshot once before either lane can mutate session state.
+        let session = self.load_session_context(request).await;
+        let manager = self
+            .session_manager
+            .as_ref()
+            .expect("eligible turn has a manager");
+        let llm = self.llm.as_ref().expect("eligible turn has an LLM");
+        let session_id = request
+            .session_id
+            .as_deref()
+            .expect("eligible turn has a session");
+        let user_id = request.user_id.map(|id| id.to_string());
+
+        let analysis_lane = async {
+            if auto_feedback {
+                super::session_turn::prepare_session_turn(
+                    manager,
+                    llm.as_ref(),
+                    session_id,
+                    user_id.as_deref(),
+                    &request.query_text,
+                )
+                .await
+            } else {
+                super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+            }
+        };
+        let answer_lane = async {
+            let context = retriever.get_context(&request.query_text, &params).await?;
+            if self.enable_access_tracking {
+                self.track_access(&context).await;
+            }
+            let output = retriever
+                .get_completion(
+                    &request.query_text,
+                    Some(context.clone()),
+                    &session,
+                    &params,
+                )
+                .await?;
+            Ok::<_, SearchError>((context, output))
+        };
+        let (preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
+        let (context, generated) = answer_result?;
+
+        if !preparation.should_answer {
+            let answer = preparation
+                .response_to_user
+                .unwrap_or_else(|| "Got it.".into());
+            let mut raw = request.clone();
+            raw.summarize_context = Some(false);
+            self.save_session_turn(&raw, search_type, &answer, None)
+                .await;
+            return Ok((
+                prepare_search_result(
+                    search_type,
+                    SearchOutput::Text(answer),
+                    None,
+                    request.dataset_ids.clone(),
+                    false,
+                    request.use_combined_context(),
+                    request.verbose(),
+                ),
+                false,
+            ));
+        }
+
+        // A completion retriever may deliberately return no text on an empty
+        // context. As in Python, do not manufacture or persist a QA turn.
+        if let SearchOutput::Text(answer) = &generated {
+            self.save_session_turn(request, search_type, answer, Some(&context))
+                .await;
+        }
+        Ok((
+            prepare_search_result(
+                search_type,
+                generated,
+                Some(context),
+                request.dataset_ids.clone(),
+                false,
+                request.use_combined_context(),
+                request.verbose(),
+            ),
+            true,
+        ))
     }
 
     /// Auto-feedback detection for a session search (Python
