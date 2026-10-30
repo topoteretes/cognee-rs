@@ -29,14 +29,96 @@ use crate::types::SearchItem;
 /// those summaries are entity-and-relation digests that repeat `## Relevant
 /// entities`, and a small model copies them into its answer verbatim.
 pub(crate) fn format_passages(chunks: &[SearchItem]) -> String {
-    let texts: Vec<String> = chunks
-        .iter()
-        .filter_map(|chunk| payload(chunk).get("text").and_then(display_value))
-        .collect();
+    let texts: Vec<String> = chunks.iter().filter_map(format_passage).collect();
     if texts.is_empty() {
         return String::new();
     }
     format!("## Relevant passages\n{}", texts.join("\n---\n"))
+}
+
+/// Render only projected object-valued metadata. Raw JSON strings are the
+/// producer's private stored representation and must never enter the prompt.
+fn format_passage(chunk: &SearchItem) -> Option<String> {
+    let payload = payload(chunk);
+    let text = payload.get("text").and_then(display_value)?;
+    let metadata = payload
+        .get("external_metadata")
+        .and_then(Value::as_object)
+        .filter(|metadata| !metadata.is_empty());
+    let Some(metadata) = metadata else {
+        return Some(text);
+    };
+    let lines = metadata
+        .iter()
+        .map(|(key, value)| format!("{key}: {}", python_display_value(value)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!("{lines}\n{text}"))
+}
+
+/// Match Python's `str(value)` used by `_metadata_lines` for JSON-compatible
+/// metadata. Top-level strings are unquoted; nested strings use Python repr,
+/// and booleans/null use `True`/`False`/`None` rather than JSON spelling.
+fn python_display_value(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.clone(),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(python_repr_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(object) => format!(
+            "{{{}}}",
+            object
+                .iter()
+                .map(|(key, value)| format!(
+                    "{}: {}",
+                    python_repr_string(key),
+                    python_repr_value(value)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn python_repr_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => python_repr_string(text),
+        other => python_display_value(other),
+    }
+}
+
+fn python_repr_string(text: &str) -> String {
+    // `repr` normally uses single quotes, but switches to double quotes when
+    // that avoids escaping an apostrophe.
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut escaped = String::new();
+    for character in text.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character == quote => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            character => escaped.push(character),
+        }
+    }
+    format!("{quote}{escaped}{quote}")
 }
 
 /// Render the ranked chunks as a "Relevant passages" section that fits
@@ -93,7 +175,7 @@ pub(crate) fn format_passages_within_budget(
 
     // Pass 1: whole passages, best-ranked first.
     for chunk in chunks {
-        let Some(text) = payload(chunk).get("text").and_then(display_value) else {
+        let Some(text) = format_passage(chunk) else {
             continue;
         };
         let cost = text.len() + if rendered.is_empty() { 0 } else { JOINER.len() };
@@ -331,6 +413,83 @@ mod tests {
         assert_eq!(
             format_passages(&chunks),
             "## Relevant passages\nraw one\n---\nraw two"
+        );
+    }
+
+    #[test]
+    fn format_passages_renders_projected_metadata_above_text() {
+        let chunks = vec![SearchItem {
+            id: None,
+            score: None,
+            payload: json!({
+                "kind": "chunk",
+                "id": "c1",
+                "text": "First passage",
+                "external_metadata": {"created_at": "2024-01-15", "rank": 7}
+            }),
+        }];
+        assert_eq!(
+            format_passages(&chunks),
+            "## Relevant passages\ncreated_at: 2024-01-15\nrank: 7\nFirst passage"
+        );
+        assert_eq!(
+            format_passages_within_budget(&chunks, usize::MAX, &HashMap::new()).0,
+            "## Relevant passages\ncreated_at: 2024-01-15\nrank: 7\nFirst passage"
+        );
+    }
+
+    #[test]
+    fn format_passages_uses_python_value_spelling_for_projected_metadata() {
+        let chunks = vec![SearchItem {
+            id: None,
+            score: None,
+            payload: json!({
+                "text": "passage",
+                "external_metadata": {
+                    "active": true,
+                    "labels": ["one", false, null],
+                    "nested": {"owner": "Ada", "rank": 2}
+                }
+            }),
+        }];
+        assert_eq!(
+            format_passages(&chunks),
+            "## Relevant passages\nactive: True\nlabels: ['one', False, None]\nnested: {'owner': 'Ada', 'rank': 2}\npassage"
+        );
+    }
+
+    #[test]
+    fn projected_metadata_counts_toward_the_passage_budget() {
+        let chunks = vec![SearchItem {
+            id: None,
+            score: None,
+            payload: json!({
+                "id": "c1",
+                "text": "fits without metadata",
+                "external_metadata": {"long": "but metadata consumes budget"}
+            }),
+        }];
+        let text_only_budget = "## Relevant passages\nfits without metadata".len();
+        assert_eq!(
+            format_passages_within_budget(&chunks, text_only_budget, &HashMap::new()),
+            (String::new(), vec!["c1".to_string()])
+        );
+    }
+
+    #[test]
+    fn nested_string_repr_chooses_python_quote_style() {
+        assert_eq!(python_repr_string("Ada's team"), r#""Ada's team""#);
+        assert_eq!(python_repr_string("say \"hi\""), r#"'say "hi"'"#);
+        assert_eq!(python_repr_string("both ' and \""), r#"'both \' and "'"#);
+    }
+
+    #[test]
+    fn format_passages_never_renders_unprojected_metadata_text() {
+        let mut chunk = chunk_item("c1", "First passage");
+        chunk.payload["external_metadata"] = json!(r#"{"created_at":"secret"}"#);
+        assert_eq!(
+            format_passages(&[chunk]),
+            "## Relevant passages\nFirst passage"
         );
     }
 

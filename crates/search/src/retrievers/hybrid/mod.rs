@@ -17,6 +17,7 @@ mod candidates;
 mod chunks;
 mod context;
 mod entities;
+mod external_metadata;
 mod facts;
 mod overflow;
 mod pairs;
@@ -30,6 +31,7 @@ pub(crate) use chunks::{
 };
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
+pub(crate) use external_metadata::project_external_metadata;
 pub(crate) use facts::{edge_rank_by_id, format_facts};
 pub(crate) use results::{payload_matches_node_filter, result_id};
 
@@ -243,6 +245,8 @@ pub(crate) struct HybridLanes {
     pub text_summaries_top_k: Option<usize>,
     pub use_importance_weight: bool,
     pub use_truth_weight: bool,
+    pub include_external_metadata: bool,
+    pub external_metadata_keys: Vec<String>,
     pub node_name: Option<Vec<String>>,
     pub node_name_filter_operator: String,
     pub fusion: ChunkLaneFusion,
@@ -336,6 +340,8 @@ impl HybridRetriever {
                 .use_importance_weight
                 .unwrap_or(self.use_importance_weight),
             use_truth_weight: params.use_truth_weight.unwrap_or(self.use_truth_weight),
+            include_external_metadata: params.include_external_metadata.unwrap_or(false),
+            external_metadata_keys: params.external_metadata_keys.clone().unwrap_or_default(),
             node_name: params.node_name.clone().or_else(|| self.node_name.clone()),
             node_name_filter_operator: params
                 .node_name_filter_operator
@@ -411,9 +417,14 @@ impl HybridRetriever {
         )?;
 
         let HybridChunksResult {
-            chunks,
+            mut chunks,
             chunk_summaries,
         } = chunk_result;
+        project_external_metadata(
+            &mut chunks,
+            lanes.include_external_metadata,
+            &lanes.external_metadata_keys,
+        );
         Ok(HybridCandidates {
             chunks,
             chunk_summaries,
@@ -1378,7 +1389,11 @@ mod retriever_tests {
             "text",
             &[VectorPoint::new(chunk_id, vec![1.0, 0.0])
                 .with_metadata("id", json!(chunk_id.to_string()))
-                .with_metadata("text", json!(CHUNK_TEXT))],
+                .with_metadata("text", json!(CHUNK_TEXT))
+                .with_metadata(
+                    "external_metadata",
+                    json!(r#"{"created_at":"2024-01-15","source_id":"private"}"#),
+                )],
         )
         .await
         .unwrap();
@@ -1681,6 +1696,7 @@ mod retriever_tests {
 
         let chunk = &context[0];
         assert_eq!(chunk.payload["text"], json!(CHUNK_TEXT));
+        assert!(chunk.payload.get("external_metadata").is_none());
 
         let entity = &context[1];
         assert_eq!(entity.payload["name"], json!(ENTITY_NAME));
@@ -1688,6 +1704,39 @@ mod retriever_tests {
 
         let fact = &context[2];
         assert_eq!(fact.payload["text"], json!(FACT_TEXT));
+    }
+
+    #[tokio::test]
+    async fn external_metadata_projection_reaches_only_context_and_completion_context() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let llm = Arc::new(CapturingLlm::default());
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            include_external_metadata: Some(true),
+            external_metadata_keys: Some(vec!["created_at".into(), "missing".into()]),
+            ..Default::default()
+        };
+
+        let context = retriever.get_context("query", &params).await.unwrap();
+        let chunk = context
+            .iter()
+            .find(|item| item.payload.get("kind").and_then(Value::as_str) == Some("chunk"))
+            .unwrap();
+        assert_eq!(
+            chunk.payload["external_metadata"],
+            json!({"created_at": "2024-01-15"})
+        );
+        assert!(!chunk.payload.to_string().contains("source_id"));
+
+        retriever
+            .get_completion("query", Some(context), &SessionContext::default(), &params)
+            .await
+            .unwrap();
+        let messages = llm.last_messages.lock().unwrap();
+        let user = &messages[1].content;
+        assert!(user.contains("created_at: 2024-01-15\n"));
+        assert!(!user.contains("source_id"));
+        assert!(!user.contains("private"));
     }
 
     /// Entity and fact items carry their **own** dataset membership, read

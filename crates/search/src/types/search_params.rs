@@ -120,6 +120,15 @@ pub struct SearchParams {
     /// prelude names. Default when `None`: `3`.
     pub global_context_index_top_k: Option<usize>,
 
+    /// (HybridCompletion, Temporal) Surface selected document metadata on
+    /// retrieved passages and in completion context. Default when `None`:
+    /// `false`; raw stored metadata is never returned while disabled.
+    pub include_external_metadata: Option<bool>,
+
+    /// (HybridCompletion, Temporal) Allowlist of external-metadata keys to
+    /// expose when `include_external_metadata` is enabled.
+    pub external_metadata_keys: Option<Vec<String>>,
+
     /// (Temporal) How many chunks and entities the hybrid fetch behind a
     /// TEMPORAL search gathers before the time-window rerank cuts them to
     /// `top_k` (Python's `candidate_top_k`). Default when `None`: `top_k * 4`.
@@ -256,6 +265,24 @@ impl From<&SearchRequest> for SearchParams {
                 .and_then(|c| c.get("global_context_index_top_k"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize),
+            include_external_metadata: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("include_external_metadata"))
+                .and_then(|v| v.as_bool()),
+            external_metadata_keys: req
+                .retriever_specific_config
+                .as_ref()
+                .and_then(|c| c.get("external_metadata_keys"))
+                .and_then(|v| v.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str())
+                        .filter(|key| !key.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                }),
             candidate_top_k: req
                 .retriever_specific_config
                 .as_ref()
@@ -334,6 +361,8 @@ mod tests {
                 "use_truth_weight": true,
                 "include_global_context_index": true,
                 "global_context_index_top_k": 4,
+                "include_external_metadata": true,
+                "external_metadata_keys": ["created_at", "source_id", null, 7, ""],
                 "candidate_top_k": 12
             }
         }"#;
@@ -350,6 +379,11 @@ mod tests {
         assert_eq!(params.use_truth_weight, Some(true));
         assert_eq!(params.include_global_context_index, Some(true));
         assert_eq!(params.global_context_index_top_k, Some(4));
+        assert_eq!(params.include_external_metadata, Some(true));
+        assert_eq!(
+            params.external_metadata_keys,
+            Some(vec!["created_at".to_string(), "source_id".to_string()])
+        );
         assert_eq!(params.candidate_top_k, Some(12));
     }
 
@@ -388,5 +422,7 @@ mod tests {
         assert_eq!(params.use_truth_weight, None);
         assert_eq!(params.include_global_context_index, None);
         assert_eq!(params.global_context_index_top_k, None);
+        assert_eq!(params.include_external_metadata, None);
+        assert_eq!(params.external_metadata_keys, None);
     }
 }
