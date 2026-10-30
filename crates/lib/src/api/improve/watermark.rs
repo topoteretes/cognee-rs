@@ -176,6 +176,12 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn an_improve_write_row_is_a_change_record() {
+        let names = cognee_database::pipelines::CHANGE_RECORD_PIPELINE_NAMES;
+        assert!(names.contains(&IMPROVE_WRITE_PIPELINE_NAME));
+    }
+
     const STAGE: StageKind = StageKind::GlobalContextIndex;
 
     struct Fixture {

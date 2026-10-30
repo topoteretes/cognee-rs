@@ -1,3 +1,4 @@
+use crate::graph_warmup::{CacheKey, GraphWarmup, WarmupProbe};
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
 use crate::orchestration::{SearchTypeRegistry, prepare_search_result};
@@ -182,6 +183,8 @@ pub struct SearchOrchestrator {
     /// What this deployment can run, for recall's routing. See
     /// [`Self::with_routing_constraints`].
     routing_constraints: RoutingConstraints,
+    /// Recall's graph-readiness probe. `None`: recall never short-circuits.
+    graph_warmup: Option<Arc<GraphWarmup>>,
 }
 
 /// One dataset's answer under per-dataset storage, or the single answer of a
@@ -221,6 +224,7 @@ impl SearchOrchestrator {
             log_search_history: true,
             per_dataset_storage: false,
             routing_constraints: RoutingConstraints::default(),
+            graph_warmup: None,
         }
     }
 
@@ -401,6 +405,18 @@ impl SearchOrchestrator {
         self.routing_constraints
     }
 
+    /// Give recall a graph-readiness probe, so a recall whose graph is not
+    /// built yet can short-circuit (see [`Self::assess_memory_readiness`]).
+    pub fn with_graph_warmup(mut self, warmup: Arc<GraphWarmup>) -> Self {
+        self.graph_warmup = Some(warmup);
+        self
+    }
+
+    /// Recall's graph-readiness probe, when one is wired.
+    pub fn graph_warmup(&self) -> Option<&GraphWarmup> {
+        self.graph_warmup.as_deref()
+    }
+
     pub async fn get_history(
         &self,
         user_id: Option<uuid::Uuid>,
@@ -551,6 +567,67 @@ impl SearchOrchestrator {
             ));
         }
         Ok(())
+    }
+
+    /// How ready the knowledge graph of `dataset_ids` (`None`: every dataset
+    /// the caller can read) is, for recall's warm-up short-circuit. Only the
+    /// datasets the caller can read are probed. A warm verdict is cached.
+    ///
+    /// Fails open: with no probe wired, or when probing fails, the graph is
+    /// warm, so a broken probe never blocks a search.
+    pub async fn assess_memory_readiness(
+        &self,
+        requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
+        dataset_ids: Option<&[uuid::Uuid]>,
+    ) -> WarmupProbe {
+        let Some(warmup) = self.graph_warmup.as_deref() else {
+            return WarmupProbe::warm();
+        };
+        let key = CacheKey::new(requester, tenant, dataset_ids);
+        if let Some(probe) = warmup.cached(&key) {
+            return probe;
+        }
+        match self
+            .probe_readiness(warmup, requester, tenant, dataset_ids)
+            .await
+        {
+            Ok(probe) => {
+                warmup.remember(key, &probe);
+                probe
+            }
+            Err(error) => {
+                tracing::warn!(%error, "graph warm-up probe failed; treating memory as warm");
+                WarmupProbe::warm()
+            }
+        }
+    }
+
+    async fn probe_readiness(
+        &self,
+        warmup: &GraphWarmup,
+        requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
+        dataset_ids: Option<&[uuid::Uuid]>,
+    ) -> Result<WarmupProbe, SearchError> {
+        // Nothing says which datasets the caller reads, so nothing can be
+        // found cold.
+        if self.acl_db.is_none() && self.dataset_resolver.is_none() {
+            return Ok(WarmupProbe::warm());
+        }
+        let readable = self.readable_dataset_ids(requester, tenant).await?;
+        let targets: Vec<uuid::Uuid> = match dataset_ids {
+            None => readable.into_iter().collect(),
+            Some(ids) => ids
+                .iter()
+                .copied()
+                .filter(|id| readable.contains(id))
+                .collect(),
+        };
+        warmup
+            .probe(&targets)
+            .await
+            .map_err(|e| SearchError::DatabaseError(e.to_string()))
     }
 
     /// Update `last_accessed` on the `Data` records a retrieval returned
