@@ -44,7 +44,7 @@ pub struct RecallOptions {
     /// Retriever-specific per-request overrides forwarded unchanged to the
     /// selected graph retriever. HTTP and binding adapters should expose a
     /// typed, allowlisted surface rather than accepting arbitrary JSON.
-    pub retriever_specific_config: Option<serde_json::Value>,
+    pub retriever_specific_config: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Tenant the requester belongs to. Forwarded to
     /// [`SearchRequest::tenant_id`], which scopes dataset names, explicit ids
     /// and the readable set to the caller's tenant by strict equality, as
@@ -1096,10 +1096,10 @@ mod tests {
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
         let options = RecallOptions {
-            retriever_specific_config: Some(serde_json::json!({
-                "include_global_context_index": true,
-                "global_context_index_top_k": 2
-            })),
+            retriever_specific_config: Some(std::collections::HashMap::from([
+                ("include_global_context_index".into(), true.into()),
+                ("global_context_index_top_k".into(), 2.into()),
+            ])),
             ..Default::default()
         };
 
