@@ -291,6 +291,17 @@ pub async fn prepare_session_turn_from_snapshot(
         .await;
     }
     let should_answer = should_answer_turn(&analysis, previous_qa_id.is_some());
+    tracing::debug!(
+        session_id,
+        has_previous = previous_qa_id.is_some(),
+        should_answer,
+        query_rewritten = analysis.query_to_answer.is_some(),
+        previous_answer_rated = analysis.previous_answer_rating.is_some(),
+        served_context_ratings = analysis.served_context_ratings.len(),
+        candidate_context_updates = analysis.candidate_context_updates.len(),
+        accepted_context_updates = accepted.len(),
+        "session turn analysis applied"
+    );
     SessionTurnPreparation {
         should_answer,
         response_to_user: if should_answer {
@@ -316,6 +327,181 @@ pub async fn prepare_session_turn_from_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use cognee_llm::{GenerationOptions, GenerationResponse, LlmError, LlmResult};
+    use cognee_session::FsSessionStore;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct GoldenTurn {
+        name: String,
+        has_previous: bool,
+        raw_query: String,
+        analysis: SessionTurnAnalysis,
+        should_answer: bool,
+        effective_query: String,
+    }
+
+    fn golden_turns() -> Vec<GoldenTurn> {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/python_session_turn_parity.json"
+        ))
+        .expect("Python-derived session-turn fixture must stay valid")
+    }
+
+    struct FixtureLlm(Value);
+
+    #[async_trait]
+    impl Llm for FixtureLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            Err(LlmError::ConfigError("not used".into()))
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            Ok(self.0.clone())
+        }
+
+        fn model(&self) -> &str {
+            "python-session-turn-fixture"
+        }
+    }
+
+    struct FailingLlm;
+
+    #[async_trait]
+    impl Llm for FailingLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            Err(LlmError::ConfigError("fixture failure".into()))
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            Err(LlmError::ConfigError("fixture failure".into()))
+        }
+
+        fn model(&self) -> &str {
+            "failing-session-turn-fixture"
+        }
+    }
+
+    #[test]
+    fn python_derived_routing_and_query_golden() {
+        for turn in golden_turns() {
+            assert_eq!(
+                should_answer_turn(&turn.analysis, turn.has_previous),
+                turn.should_answer,
+                "routing mismatch for {}",
+                turn.name
+            );
+            let effective = turn
+                .analysis
+                .query_to_answer
+                .as_deref()
+                .unwrap_or(&turn.raw_query);
+            assert_eq!(
+                effective, turn.effective_query,
+                "query mismatch for {}",
+                turn.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn first_turn_candidate_is_persisted_but_never_suppresses_answer() {
+        let turn = golden_turns().remove(0);
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
+
+        let prepared = prepare_session_turn(&manager, &llm, "first", None, &turn.raw_query).await;
+
+        assert!(prepared.should_answer);
+        assert_eq!(prepared.effective_query, turn.raw_query);
+        assert_eq!(prepared.accepted_context_ids.len(), 1);
+        let rows = manager
+            .get_session_context_entries(Some("first"), None)
+            .await
+            .unwrap();
+        assert!(rows.iter().any(|row| {
+            row.get("kind").and_then(Value::as_str) == Some("context")
+                && row.get("content").and_then(Value::as_str)
+                    == Some("Answer in terse bullet points.")
+        }));
+    }
+
+    #[tokio::test]
+    async fn feedback_follow_up_rates_previous_and_rewrites_effective_query() {
+        let turn = golden_turns().remove(2);
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(Some("follow-up"), None, "previous", "answer", None, None)
+            .await
+            .unwrap();
+        let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
+
+        let prepared =
+            prepare_session_turn(&manager, &llm, "follow-up", None, &turn.raw_query).await;
+
+        assert!(prepared.should_answer);
+        assert_eq!(prepared.effective_query, turn.effective_query);
+        let entries = manager.get_session(Some("follow-up"), None).await.unwrap();
+        assert_eq!(entries[0].feedback_score, Some(5));
+        assert_eq!(
+            entries[0].feedback_text.as_deref(),
+            Some(turn.raw_query.as_str())
+        );
+        assert_eq!(
+            entries[0]
+                .memify_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("feedback_weights_applied")),
+            Some(&false),
+            "the existing improve stage must see the newly rated row"
+        );
+    }
+
+    #[tokio::test]
+    async fn analysis_failure_is_fail_open_and_preserves_raw_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(Some("failure"), None, "previous", "answer", None, None)
+            .await
+            .unwrap();
+
+        let prepared =
+            prepare_session_turn(&manager, &FailingLlm, "failure", None, "raw query").await;
+
+        assert!(prepared.should_answer);
+        assert_eq!(prepared.effective_query, "raw query");
+        assert!(prepared.accepted_context_ids.is_empty());
+        let entries = manager.get_session(Some("failure"), None).await.unwrap();
+        assert!(entries[0].feedback_score.is_none());
+    }
     #[test]
     fn python_golden_routing() {
         assert!(should_answer_turn(&SessionTurnAnalysis::default(), true));
