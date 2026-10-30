@@ -1,14 +1,20 @@
+mod concurrent_session;
 mod hybrid_fallback;
 mod prepare_search_result;
 mod search_execution_builder;
 mod search_history;
 mod search_orchestrator;
 mod search_type_tools;
+mod session_turn;
 
 pub const CONTEXT_LABEL_COMBINED: &str = "combined";
 pub const CONTEXT_LABEL_DEFAULT: &str = "default";
 
+pub use concurrent_session::SessionSearchMode;
 pub use prepare_search_result::prepare_search_result;
 pub use search_execution_builder::{SearchBuilder, SearchTuning};
 pub use search_orchestrator::{DatasetSearchResult, SearchOrchestrator, merge_dataset_results};
 pub use search_type_tools::SearchTypeRegistry;
+pub use session_turn::{
+    CandidateContextUpdate, ServedContextRating, SessionTurnAnalysis, SessionTurnPreparation,
+};

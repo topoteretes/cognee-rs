@@ -35,6 +35,9 @@ pub struct SessionQAEntry {
     /// Graph node/edge IDs that were used to produce the answer.
     #[serde(default)]
     pub used_graph_element_ids: Option<UsedGraphElementIds>,
+    /// Session-context entry IDs that were served to produce this answer.
+    #[serde(default)]
+    pub used_session_context_ids: Option<Vec<String>>,
     /// Metadata tracking for the memify pipeline (e.g. `{"feedback_weights_applied": true}`).
     #[serde(default)]
     pub memify_metadata: Option<HashMap<String, bool>>,

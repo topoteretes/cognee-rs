@@ -40,6 +40,7 @@ fn model_to_row(m: entity::Model) -> SessionQaRow {
         feedback_text: m.feedback_text,
         feedback_score: m.feedback_score,
         used_graph_element_ids: m.used_graph_element_ids,
+        used_session_context_ids: m.used_session_context_ids,
         memify_metadata: m.memify_metadata,
     }
 }
@@ -64,6 +65,7 @@ pub async fn create_qa_entry(
         feedback_text: Set(None),
         feedback_score: Set(None),
         used_graph_element_ids: Set(None),
+        used_session_context_ids: Set(None),
         memify_metadata: Set(None),
     };
     model.insert(db).await.map_err(map_db_err)?;
@@ -216,6 +218,9 @@ pub async fn update_qa_entry(
     }
     if let Some(ref ids) = updates.used_graph_element_ids {
         active.used_graph_element_ids = Set(ids.clone());
+    }
+    if let Some(ref ids) = updates.used_session_context_ids {
+        active.used_session_context_ids = Set(ids.clone());
     }
     if let Some(ref mm) = updates.memify_metadata {
         active.memify_metadata = Set(mm

@@ -31,6 +31,7 @@ pub struct SessionQaRow {
     pub feedback_score: Option<i32>,
     /// JSON-encoded used graph element ids.
     pub used_graph_element_ids: Option<String>,
+    pub used_session_context_ids: Option<String>,
     /// JSON-encoded memify metadata map.
     pub memify_metadata: Option<String>,
 }
@@ -46,6 +47,7 @@ pub struct SessionQaPatch {
     pub feedback_score: Option<Option<i32>>,
     /// JSON-encoded used graph element ids.
     pub used_graph_element_ids: Option<Option<String>>,
+    pub used_session_context_ids: Option<Option<String>>,
     /// JSON-encoded memify metadata map.
     pub memify_metadata: Option<Option<String>>,
 }

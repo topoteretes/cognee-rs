@@ -201,6 +201,9 @@ pub struct Settings {
     /// Detect feedback in session searches by default (`AUTO_FEEDBACK`); only
     /// while `session.caching` is on, as in Python.
     pub auto_feedback: bool,
+    /// Session completion execution order (`concurrent` by default, or
+    /// `sequential` for analysis-before-answer behavior).
+    pub session_search_mode: cognee_search::SessionSearchMode,
 
     // -- Feedback & personalization ----------------------------------------------
     // Python's `BaseConfig` knobs (`cognee/base_config.py`). Each is range-checked
@@ -577,6 +580,7 @@ impl Settings {
             access_tracking: self.enable_last_accessed,
             // Python's `is_auto_feedback_enabled`: `caching and auto_feedback`.
             auto_feedback: self.auto_feedback_enabled(),
+            session_search_mode: self.session_search_mode,
             // The built-in prompt's file name selects the retrievers' own
             // defaults: the Rust SDK compiles its prompts in.
             personalization: self.preference_config(),
@@ -1135,7 +1139,8 @@ impl Default for Settings {
             default_system_prompt_path: DEFAULT_SYSTEM_PROMPT_PATH.to_string(),
 
             // Session / cache
-            auto_feedback: false,
+            auto_feedback: true,
+            session_search_mode: cognee_search::SessionSearchMode::Concurrent,
             default_feedback_influence: 0.0,
             preference_alpha: 0.3,
             preference_beta: 0.02,
@@ -2864,6 +2869,29 @@ mod tests {
     }
 
     #[test]
+    fn session_search_mode_defaults_concurrent_and_accepts_sequential() {
+        let manager = ConfigManager::new(Settings::default());
+        let settings = manager.read();
+        assert_eq!(
+            settings.search_tuning().session_search_mode,
+            cognee_search::SessionSearchMode::Concurrent
+        );
+        drop(settings);
+        manager
+            .set("session_search_mode", serde_json::json!("sequential"))
+            .unwrap();
+        assert_eq!(
+            manager.read().search_tuning().session_search_mode,
+            cognee_search::SessionSearchMode::Sequential
+        );
+        assert!(
+            manager
+                .set("session_search_mode", serde_json::json!("fast"))
+                .is_err()
+        );
+    }
+
+    #[test]
     #[serial_test::serial]
     fn overlay_llm_max_completion_tokens_primary() {
         // Primary env var takes precedence over the legacy alias.
@@ -4473,7 +4501,11 @@ mod tests {
         assert_eq!(redis.port, 6379);
         assert_eq!(session.ttl_seconds, 604800);
         assert!(session.caching);
-        assert!(!s.auto_feedback);
+        assert!(s.auto_feedback);
+        assert_eq!(
+            s.session_search_mode,
+            cognee_search::SessionSearchMode::Concurrent
+        );
         assert!(!s.enable_access_control);
         assert_eq!(s.log_level, "");
         assert!(!s.llm().rate_limit_enabled);
