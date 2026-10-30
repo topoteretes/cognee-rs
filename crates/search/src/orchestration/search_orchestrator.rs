@@ -1078,7 +1078,7 @@ impl SearchOrchestrator {
             let query = request.query_text.clone();
             fanout_analysis = Some(tokio::spawn(async move {
                 if auto_feedback {
-                    super::session_turn::prepare_session_turn_from_snapshot(
+                    super::session_turn::prepare_concurrent_session_turn_from_snapshot(
                         &manager,
                         llm.as_ref(),
                         &session_id,
@@ -1086,6 +1086,7 @@ impl SearchOrchestrator {
                         &query,
                         &entries,
                         &rows,
+                        std::time::Duration::from_secs(30),
                     )
                     .await
                 } else {
@@ -1566,7 +1567,7 @@ impl SearchOrchestrator {
 
         let analysis_lane = async {
             if auto_feedback {
-                super::session_turn::prepare_session_turn_from_snapshot(
+                super::session_turn::prepare_concurrent_session_turn_from_snapshot(
                     manager,
                     llm.as_ref(),
                     session_id,
@@ -1574,6 +1575,7 @@ impl SearchOrchestrator {
                     &request.query_text,
                     &entries,
                     &rows,
+                    std::time::Duration::from_secs(30),
                 )
                 .await
             } else {
