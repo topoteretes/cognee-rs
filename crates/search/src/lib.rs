@@ -27,7 +27,7 @@ pub use cognee_session::SeaOrmSessionStore;
 pub use cognee_session::{RelationalSessionStore, SessionContext, SessionManager, SessionStore};
 pub use orchestration::{
     DatasetSearchResult, SearchBuilder, SearchOrchestrator, SearchTuning, SearchTypeRegistry,
-    merge_dataset_results,
+    SessionSearchMode, merge_dataset_results,
 };
 pub use query_router::{
     ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, constrain, default_route,

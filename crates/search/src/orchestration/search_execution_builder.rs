@@ -8,7 +8,7 @@ use cognee_llm::Llm;
 use cognee_session::SessionManager;
 use cognee_vector::VectorDB;
 
-use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry};
+use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry, SessionSearchMode};
 use crate::query_router::RoutingConstraints;
 use crate::retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
@@ -39,8 +39,10 @@ pub struct SearchTuning {
     pub access_tracking: bool,
     /// Detect feedback in session searches when the request leaves
     /// `auto_feedback_detection` unset (Python's `AUTO_FEEDBACK`). Default
-    /// `false`.
+    /// `true`.
     pub auto_feedback: bool,
+    /// Whether eligible session turns overlap analysis and answering.
+    pub session_search_mode: SessionSearchMode,
     /// System prompt file used when a request names neither a system prompt
     /// nor a prompt path; `None` (the default) leaves each retriever's own
     /// default prompt.
@@ -61,7 +63,8 @@ impl Default for SearchTuning {
             triplet_neighbor_cap: None,
             hybrid: HybridBudget::default(),
             access_tracking: false,
-            auto_feedback: false,
+            auto_feedback: true,
+            session_search_mode: SessionSearchMode::Concurrent,
             default_system_prompt_path: None,
             personalization: PreferenceConfig::default(),
             default_feedback_influence: 0.0,
@@ -466,6 +469,7 @@ impl SearchBuilder {
             .with_database(self.database)
             .with_llm(llm)
             .with_auto_feedback_default(self.tuning.auto_feedback)
+            .with_session_search_mode(self.tuning.session_search_mode)
             .with_personalization(self.tuning.personalization)
             .with_default_feedback_influence(self.tuning.default_feedback_influence)
             .with_default_system_prompt_path(self.tuning.default_system_prompt_path)
@@ -951,11 +955,10 @@ mod tests {
         );
     }
 
-    /// `access_tracking` and `auto_feedback` reach the orchestrator, and
-    /// are off unless set.
+    /// `access_tracking` and `auto_feedback` reach the orchestrator.
     #[test]
     fn orchestrator_knobs_reach_the_orchestrator() {
-        assert_eq!(builder().build().tuning_flags(), (false, false));
+        assert_eq!(builder().build().tuning_flags(), (false, true));
         let tuned = builder()
             .with_tuning(super::SearchTuning {
                 access_tracking: true,

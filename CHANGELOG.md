@@ -620,6 +620,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Concurrent session-turn execution parity (SDK-1045).** Eligible built-in
+  RAG, graph, and hybrid completions now overlap turn analysis with retrieval
+  and answering, serialize turns per user/session identity, and retain
+  independent-session parallelism. `session_search_mode` defaults to
+  `concurrent` and accepts `sequential`; automatic feedback now defaults on,
+  matching Python `dev`. Batch, preview, feeling-lucky, community, and
+  sessionless calls retain the sequential path.
+
 - **Sequential session-turn preparation parity (SDK-1045).** Generative
   session searches analyze feedback and corrections before retrieval, rewrite
   the effective query while preserving the raw user message in history, and
