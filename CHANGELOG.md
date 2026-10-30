@@ -620,6 +620,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sequential session-turn preparation parity (SDK-1045).** Generative
+  session searches analyze feedback and corrections before retrieval, rewrite
+  the effective query while preserving the raw user message in history, and
+  acknowledge feedback-only turns without running retrieval. Session QA rows
+  now round-trip Python's `used_session_context_ids`, including a relational
+  schema migration, so only guidance proven to have been served can be rated.
+
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
   `response_format: {"type": "json_schema", "json_schema": {"strict": true,

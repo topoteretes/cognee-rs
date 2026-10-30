@@ -26,6 +26,7 @@ pub struct SessionQAUpdate {
     pub feedback_text: Option<Option<String>>,
     pub feedback_score: Option<Option<i32>>,
     pub used_graph_element_ids: Option<Option<UsedGraphElementIds>>,
+    pub used_session_context_ids: Option<Option<Vec<String>>>,
     pub memify_metadata: Option<Option<HashMap<String, bool>>>,
 }
 

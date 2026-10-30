@@ -481,6 +481,7 @@ mod tests {
                 node_ids: vec!["n1".into()],
                 edge_ids: vec![],
             }),
+            used_session_context_ids: None,
             memify_metadata: None,
         };
         assert!(is_eligible(&entry));
@@ -504,6 +505,7 @@ mod tests {
                 node_ids: vec!["n1".into()],
                 edge_ids: vec![],
             }),
+            used_session_context_ids: None,
             memify_metadata: Some(meta),
         };
         assert!(!is_eligible(&entry));
@@ -522,6 +524,7 @@ mod tests {
             feedback_text: None,
             feedback_score: Some(4),
             used_graph_element_ids: None,
+            used_session_context_ids: None,
             memify_metadata: None,
         };
         assert!(!is_eligible(&entry));
@@ -543,6 +546,7 @@ mod tests {
                 node_ids: vec!["n1".into()],
                 edge_ids: vec![],
             }),
+            used_session_context_ids: None,
             memify_metadata: None,
         };
         assert!(!is_eligible(&entry));
