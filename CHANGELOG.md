@@ -628,6 +628,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching Python `dev`. Batch, preview, feeling-lucky, community, and
   sessionless calls retain the sequential path.
 
+- **Cross-SDK session-turn parity fixtures (SDK-1045).** Deterministic fixtures
+  derived from Python `dev` (`610119f2`) now lock raw/effective-query routing, first-turn
+  preference capture, feedback-only and feedback-plus-follow-up behavior, and
+  the hand-off of rated QA rows to the existing improve stage. Session-turn
+  tracing reports routing and persistence counts without recording query or
+  preference text.
+
 - **Sequential session-turn preparation parity (SDK-1045).** Generative
   session searches analyze feedback and corrections before retrieval, rewrite
   the effective query while preserving the raw user message in history, and
