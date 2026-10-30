@@ -371,13 +371,23 @@ pub async fn load_for_search(
     graph_db: &dyn GraphDBTrait,
     params: &crate::types::SearchParams,
 ) -> ActivePreferences {
+    // Do not populate the request cache for an un-personalized pass. Besides
+    // avoiding needless state, this preserves the established pattern of
+    // deriving a personalized params value from a plain one with struct
+    // update syntax in callers and tests.
     let Some(config) = params.personalization.as_ref() else {
         return ActivePreferences::default();
     };
-    let dataset_id = params
-        .dataset_id
-        .or_else(cognee_models::dataset_scope::current_dataset);
-    load_active_preferences(graph_db, config, params.user_id, dataset_id).await
+    params
+        .preference_cache
+        .get_or_init(|| async {
+            let dataset_id = params
+                .dataset_id
+                .or_else(cognee_models::dataset_scope::current_dataset);
+            load_active_preferences(graph_db, config, params.user_id, dataset_id).await
+        })
+        .await
+        .clone()
 }
 
 /// Put the preference guidance block after the question and context, as
@@ -615,6 +625,41 @@ mod tests {
             format!("{PREFERENCE_RENDER_HEADER}\nPrefer tables\nBe brief")
         );
         assert_eq!(ActivePreferences::default().rendered_text(), "");
+    }
+
+    #[tokio::test]
+    async fn search_params_share_one_preference_snapshot() {
+        let graph = MockGraphDB::new();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        upsert_preference_node(
+            &graph,
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+
+        let params = crate::types::SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            personalization: Some(enabled()),
+            ..Default::default()
+        };
+        let cloned_for_prompt = params.clone();
+        let ranking_snapshot = load_for_search(&graph, &params).await;
+        graph
+            .delete_node(&preference_node_id(&user.to_string(), &dataset.to_string()).to_string())
+            .await
+            .unwrap();
+        let prompt_snapshot = load_for_search(&graph, &cloned_for_prompt).await;
+
+        assert_eq!(ranking_snapshot, prompt_snapshot);
+        assert_eq!(prompt_snapshot.text, "Prefer tables");
+        assert!(params.preference_cache.get().is_some());
     }
 
     #[test]

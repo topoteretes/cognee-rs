@@ -26,8 +26,8 @@ mod results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
 pub(crate) use chunks::{
-    HybridChunksResult, chunk_collections, has_dlt_rows, retrieve_hybrid_chunks, search_collection,
-    search_collections,
+    HybridChunksResult, chunk_collections, has_dlt_rows, retrieve_hybrid_chunks_personalized,
+    search_collection, search_collections,
 };
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
@@ -61,6 +61,7 @@ use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
+use crate::user_preferences::{ActivePreferences, append_preference_guidance, load_for_search};
 use crate::utils::{
     DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, EMPTY_GRAPH_MESSAGE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
     HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
@@ -363,6 +364,8 @@ impl HybridRetriever {
         query: &str,
         lanes: &HybridLanes,
         dataset_id: Option<Uuid>,
+        preferences: &ActivePreferences,
+        personal_influence: f64,
     ) -> Result<HybridCandidates, SearchError> {
         let node_name = lanes.node_name.as_deref();
         let node_name_filter_operator = lanes.node_name_filter_operator.as_str();
@@ -390,7 +393,7 @@ impl HybridRetriever {
         let include_dlt_rows = has_dlt_rows(self.vector_db.as_ref()).await?;
 
         let (chunk_result, (entities, fact_candidates)) = tokio::try_join!(
-            retrieve_hybrid_chunks(
+            retrieve_hybrid_chunks_personalized(
                 &self.vector_db,
                 lanes.chunks_top_k,
                 lanes.text_summaries_top_k,
@@ -404,6 +407,8 @@ impl HybridRetriever {
                 q_coords.as_deref(),
                 truth_state_by_id.as_ref(),
                 current_truth_epoch,
+                (!preferences.weights.is_empty()).then_some(&preferences.weights),
+                personal_influence,
             ),
             self.retrieve_entities_and_facts(
                 &query_vector,
@@ -821,11 +826,10 @@ impl HybridRetriever {
         );
         debug!("LLM user prompt:\n{user_prompt}");
 
-        Ok(Some(build_messages_with_history(
-            system_prompt,
-            user_prompt,
-            session,
-        )))
+        let mut messages = build_messages_with_history(system_prompt, user_prompt, session);
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        append_preference_guidance(&mut messages, &preferences.rendered_text());
+        Ok(Some(messages))
     }
 
     /// Build Python's `## Global context` hybrid section. Dataset filtering
@@ -1145,8 +1149,19 @@ impl SearchRetriever for HybridRetriever {
         // Python's `_retrieve_one`: fetch uncut, then cut to the lane limits
         // straight away. The lanes already return at most their limits, so the
         // cut only decides the facts (against the entities shown).
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        let personal_influence = params
+            .personalization
+            .as_ref()
+            .map_or(0.0, |config| config.influence);
         let candidates = self
-            .fetch_candidates(query, &lanes, params.dataset_id)
+            .fetch_candidates(
+                query,
+                &lanes,
+                params.dataset_id,
+                &preferences,
+                personal_influence,
+            )
             .await?;
         Ok(candidates
             .finalize(lanes.chunks_top_k, lanes.entities_top_k, None)
@@ -1882,6 +1897,70 @@ mod retriever_tests {
         let sent = llm.last_messages.lock().unwrap().clone();
         assert_eq!(sent[0].content, preview[0].content);
         assert_eq!(sent[1].content, preview[1].content);
+    }
+
+    #[tokio::test]
+    async fn preference_guidance_is_appended_once_and_last_in_preview_and_completion() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        crate::user_preferences::upsert_preference_node(
+            graph_db.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer terse tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let llm = Arc::new(CapturingLlm {
+            response_text: "hybrid answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            dataset_ids: Some(vec![dataset]),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let context = retriever
+            .get_context("what happened?", &params)
+            .await
+            .unwrap();
+        let preview = retriever
+            .completion_messages(
+                "what happened?",
+                &context,
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let preview_user = preview.last().unwrap().content.as_str();
+        assert_eq!(preview_user.matches("## What this user prefers").count(), 1);
+        assert!(preview_user.ends_with("Prefer terse tables"));
+
+        retriever
+            .get_completion(
+                "what happened?",
+                Some(context),
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap();
+        let sent = llm.last_messages.lock().unwrap().clone();
+        assert_eq!(
+            sent.last().unwrap().content,
+            preview.last().unwrap().content
+        );
     }
 
     #[tokio::test]

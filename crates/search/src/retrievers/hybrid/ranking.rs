@@ -1,11 +1,9 @@
-//! Chunk-lane fusion + importance-weight scoring.
+//! Chunk-lane fusion + importance, truth, and personal-weight scoring.
 //!
 //! Port of `cognee/modules/retrieval/hybrid/ranking.py`, including the
 //! truth-subspace boost (`use_truth_weight` / `q_coords` / `truth_state_by_id`
-//! / `current_truth_epoch`, see [`rank_chunk_summary_pairs`]). Python's
-//! per-user `personal_weights` / `personal_influence` factor is not applied
-//! here yet: the store and its read exist ([`crate::user_preferences`], used
-//! by the graph and RAG retrievers), the hybrid lanes are SDK-1045.
+//! / `current_truth_epoch`, see [`rank_chunk_summary_pairs`]), and Python's
+//! per-user `personal_weights` / `personal_influence` score-space factor.
 //!
 //! # Divergence: the default fusion is no longer rank-only RRF
 //!
@@ -52,6 +50,7 @@ use cognee_truth_subspace::align::truth_factor;
 
 use crate::retrievers::hybrid::pairs::ChunkSummaryPair;
 use crate::retrievers::hybrid::results::{payload, result_id};
+use crate::user_preferences::personal_factor;
 
 /// RRF constant `k` derived from the requested chunk count.
 ///
@@ -244,9 +243,10 @@ fn normalized(score: f64, (low, high): (f64, f64)) -> f64 {
 /// longer Python's rank-only RRF. For each pair carrying a `chunk`, collect the
 /// present ranks from `(vector_rank, summary_rank)` (skip if none), compute the
 /// fusion score, multiply by `importance_factor` when `use_importance_weight`,
-/// then multiply by `truth_factor` when the truth-weight gate holds, and sort
-/// by `(-final, -fusion, min_rank, chunk_id)` (float legs via `f64::total_cmp`,
-/// per the locked total-ordering decision).
+/// then multiply by `truth_factor` when the truth-weight gate holds, then by
+/// `personal_factor` for a matching preference, and sort by
+/// `(-final, -fusion, min_rank, chunk_id)` (float legs via `f64::total_cmp`, per
+/// the locked total-ordering decision).
 ///
 /// [`ChunkLaneFusion::RelativeScore`] needs a similarity on every ranked pair;
 /// where the vector adapter reported none, the call falls back to
@@ -263,6 +263,7 @@ fn normalized(score: f64, (low, high): (f64, f64)) -> f64 {
 /// the unboosted value, so default-off (`use_truth_weight == false`) ranking is
 /// byte-identical to a call with no truth context.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn rank_chunk_summary_pairs(
     pairs: Vec<ChunkSummaryPair>,
     limit: usize,
@@ -272,6 +273,33 @@ pub(crate) fn rank_chunk_summary_pairs(
     q_coords: Option<&[f64]>,
     truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
     current_truth_epoch: Option<i64>,
+) -> Vec<ChunkSummaryPair> {
+    rank_chunk_summary_pairs_personalized(
+        pairs,
+        limit,
+        fusion,
+        use_importance_weight,
+        use_truth_weight,
+        q_coords,
+        truth_state_by_id,
+        current_truth_epoch,
+        None,
+        0.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rank_chunk_summary_pairs_personalized(
+    pairs: Vec<ChunkSummaryPair>,
+    limit: usize,
+    fusion: ChunkLaneFusion,
+    use_importance_weight: bool,
+    use_truth_weight: bool,
+    q_coords: Option<&[f64]>,
+    truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
+    current_truth_epoch: Option<i64>,
+    personal_weights: Option<&HashMap<String, f64>>,
+    personal_influence: f64,
 ) -> Vec<ChunkSummaryPair> {
     if limit == 0 {
         return vec![];
@@ -355,6 +383,14 @@ pub(crate) fn rank_chunk_summary_pairs(
             && truth_state.truth_epoch == current_epoch
         {
             final_score *= truth_factor(&truth_state.truth_alignment, coords);
+        }
+
+        // Python applies personalization last, beside importance and truth in
+        // score space. Missing ids and an empty map are exact no-ops; this is
+        // also what lets DltRow ids participate without collection-specific
+        // handling.
+        if let Some(weight) = personal_weights.and_then(|weights| weights.get(&chunk_id)) {
+            final_score *= personal_factor(*weight, personal_influence, false);
         }
 
         ranked.push((final_score, fusion_score, min_rank, chunk_id, pair));
@@ -1710,5 +1746,95 @@ mod tests {
             ],
             "under RRF the same product lifts the same chunk from last to first"
         );
+    }
+
+    #[test]
+    fn personal_weights_reorder_pairs_and_preserve_tie_breaks_when_absent() {
+        let pairs = || {
+            vec![
+                pair("a", Some(0), None, None),
+                pair("b", Some(1), None, None),
+            ]
+        };
+        let baseline = ids(&rank_chunk_summary_pairs_personalized(
+            pairs(),
+            2,
+            ChunkLaneFusion::ReciprocalRank,
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            0.3,
+        ));
+        assert_eq!(baseline, vec![Some("a".into()), Some("b".into())]);
+
+        let weights = HashMap::from([("a".to_string(), 0.05), ("b".to_string(), 0.95)]);
+        assert_eq!(
+            ids(&rank_chunk_summary_pairs_personalized(
+                pairs(),
+                2,
+                ChunkLaneFusion::ReciprocalRank,
+                false,
+                false,
+                None,
+                None,
+                None,
+                Some(&weights),
+                0.3,
+            )),
+            vec![Some("b".into()), Some("a".into())]
+        );
+
+        let unrelated = HashMap::from([("internal-preference-node".to_string(), 1.0)]);
+        assert_eq!(
+            ids(&rank_chunk_summary_pairs_personalized(
+                pairs(),
+                2,
+                ChunkLaneFusion::ReciprocalRank,
+                false,
+                false,
+                None,
+                None,
+                None,
+                Some(&unrelated),
+                0.3,
+            )),
+            baseline,
+            "an unmatched/internal preference id must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn personal_factor_composes_after_importance_and_truth() {
+        let q_coords = [1.0, 0.0];
+        let epoch = 8;
+        let states = HashMap::from([(
+            "dlt-row".to_string(),
+            NodeTruthState {
+                truth_alignment: q_coords.to_vec(),
+                truth_epoch: epoch,
+            },
+        )]);
+        let weights = HashMap::from([("plain".to_string(), 0.0), ("dlt-row".to_string(), 1.0)]);
+        let pairs = vec![
+            pair("plain", Some(0), None, Some(0.5)),
+            pair("dlt-row", Some(2), None, Some(1.0)),
+        ];
+
+        let ranked = rank_chunk_summary_pairs_personalized(
+            pairs,
+            2,
+            ChunkLaneFusion::ReciprocalRank,
+            true,
+            true,
+            Some(&q_coords),
+            Some(&states),
+            Some(epoch),
+            Some(&weights),
+            0.3,
+        );
+        assert_eq!(ids(&ranked)[0], Some("dlt-row".to_string()));
     }
 }
