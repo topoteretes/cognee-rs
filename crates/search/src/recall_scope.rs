@@ -41,6 +41,10 @@ pub struct RecallOptions {
     pub feedback_influence: Option<f32>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Retriever-specific per-request overrides forwarded unchanged to the
+    /// selected graph retriever. HTTP and binding adapters should expose a
+    /// typed, allowlisted surface rather than accepting arbitrary JSON.
+    pub retriever_specific_config: Option<serde_json::Value>,
     /// Tenant the requester belongs to. Forwarded to
     /// [`SearchRequest::tenant_id`], which scopes dataset names, explicit ids
     /// and the readable set to the caller's tenant by strict equality, as
@@ -543,7 +547,7 @@ pub async fn run_graph(
         tenant_id: options.and_then(|o| o.tenant_id),
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
-        retriever_specific_config: None,
+        retriever_specific_config: options.and_then(|o| o.retriever_specific_config.clone()),
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
