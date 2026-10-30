@@ -434,6 +434,36 @@ static KEYS: &[KeySpec] = &[
     // `cache_backend`, `session_ttl_seconds` and `enable_caching` are aliases
     // of the `session` section's `store`, `ttl_seconds` and `caching`.
     row!(auto_feedback: bool, env ["AUTO_FEEDBACK"]),
+    KeySpec {
+        key: "session_search_mode",
+        key_aliases: &[],
+        env: &["SESSION_SEARCH_MODE"],
+        secret: false,
+        persisted: true,
+        overlay: |s, env| {
+            if let Some(value) = first_set(env, &["SESSION_SEARCH_MODE"]) {
+                match value.to_ascii_lowercase().as_str() {
+                    "sequential" => {
+                        s.session_search_mode = cognee_search::SessionSearchMode::Sequential
+                    }
+                    "concurrent" => {
+                        s.session_search_mode = cognee_search::SessionSearchMode::Concurrent
+                    }
+                    _ => tracing::warn!(%value, "ignoring invalid SESSION_SEARCH_MODE"),
+                }
+            }
+        },
+        set: |s, key, value| {
+            s.session_search_mode = match as_string(key, &value)?.to_ascii_lowercase().as_str() {
+                "sequential" => cognee_search::SessionSearchMode::Sequential,
+                "concurrent" => cognee_search::SessionSearchMode::Concurrent,
+                _ => return Err(mismatch(key, "expected sequential or concurrent")),
+            };
+            Ok(())
+        },
+        get: |s| serde_json::to_value(s.session_search_mode).unwrap_or(Value::Null),
+        reset: |s, d| s.session_search_mode = d.session_search_mode,
+    },
     // -- Feedback & personalization (Python's `BaseConfig`) -------------------
     ranged_f64!(
         default_feedback_influence,
