@@ -3,7 +3,7 @@
 //!
 //! The index is built by `improve(build_global_context_index=true)`: a root
 //! summary of the dataset plus bucket summaries embedded in
-//! `GlobalContextSummary_text`. Graph completion prepends it when
+//! `GlobalContextSummary_text`. Graph and hybrid completion prepend it when
 //! `include_global_context_index` is set.
 
 use std::borrow::Cow;
