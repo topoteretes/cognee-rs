@@ -66,6 +66,10 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
   extraction; Rust uses its own structured-output path in [`cognee-llm`](../../crates/llm/).
 - **Entity disambiguation / canonicalization** — Python documents entity disambiguation,
   post-extraction canonicalization, and entity-description consolidation (guides/POCs). Not ported.
+- **Hybrid external-metadata producer/backfill** — the query-time consumer is ported: normal and
+  DLT passage hits remove raw metadata by default and can expose only caller-allowlisted keys.
+  SDK-1057 still owns copying document metadata into vector payloads. Existing datasets require
+  re-cognification after that producer lands; SDK-1045 provides no migration or backfill.
 
 ## improve() — deferred stages (partial implementations)
 
@@ -120,8 +124,7 @@ Partial stages:
   change check to the dataset under backend access control, every dataset's pipeline runs count.
   A host's `improve_pipeline` rows never count: an improve counts through the `improve` row it
   records after a stage that may have written, so an index-only improve is not a change (Python
-  counts every non-noop improve). The hybrid retriever's global-context channel is not wired yet
-  (SDK-1045); graph completion's is.
+  counts every non-noop improve). Both graph and hybrid completion can consume the index.
 
 - **`persist_agent_traces`** — trace steps whose `session_feedback` field is non-empty are
   collected and run through the standard `add → cognify` path (tagged to the
