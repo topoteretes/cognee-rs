@@ -143,9 +143,7 @@ pub(crate) fn format_passages_within_budget(
 ///
 /// Port of `format_hybrid_context` (`context.py:8-30`). Pushes each non-empty
 /// section in the order global → passages → entities → facts and joins them
-/// with `"\n\n"`. The `global_context` slot is always `None` until the hybrid
-/// channel is wired (SDK-1045), but the parameter is kept so the signature is
-/// stable when it lands.
+/// with `"\n\n"`.
 pub(crate) fn format_hybrid_context(
     global_context: Option<&str>,
     passages: &str,

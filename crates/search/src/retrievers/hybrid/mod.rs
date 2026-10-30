@@ -86,7 +86,7 @@ fn lane_top_k(lane_knob: Option<usize>, top_k: Option<usize>, default: usize) ->
 }
 /// Default max edges expanded per entity (`HybridRetriever.__init__`).
 const DEFAULT_MAX_EDGES_PER_ENTITY: usize = 10;
-/// Default global-context-index top-k (inert in Phase 1).
+/// Default number of global-context bucket summaries to prepend.
 const DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 3;
 /// Default node-name filter operator.
 const DEFAULT_NODE_NAME_FILTER_OPERATOR: &str = "OR";
@@ -206,10 +206,8 @@ impl Default for HybridBudget {
 /// set and exactly one dataset is in scope, the chunk lane is re-ranked by
 /// truth-subspace alignment; it fails open to baseline ranking on any error and
 /// stays default-off. **Global-context (`include_global_context_index` /
-/// `global_context_index_top_k`):** still accepted on the wire but inert — no
-/// global-context section is produced yet. The index and its shared loader
-/// ([`crate::utils::build_global_context_prelude`]) exist; wiring this
-/// channel is SDK-1045.
+/// `global_context_index_top_k`):** prepends the persisted global-context
+/// index when requested, without charging it to the hybrid lane budget.
 pub struct HybridRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -223,12 +221,7 @@ pub struct HybridRetriever {
     use_importance_weight: bool,
     // Live as of Phase 2 (P2-07); default-off, fails open to baseline ranking.
     use_truth_weight: bool,
-    // Accepted on the wire but inert (locked deferral).
     include_global_context_index: bool,
-    #[allow(
-        dead_code,
-        reason = "global-context-index knob is accepted on the wire but inert in Phase 1"
-    )]
     global_context_index_top_k: usize,
     node_name: Option<Vec<String>>,
     node_name_filter_operator: String,
@@ -316,15 +309,6 @@ impl HybridRetriever {
     /// Three-layer resolution for the top-k family: request knob -> capped
     /// `top_k` -> constructor default (see [`lane_top_k`]).
     fn resolve_lanes(&self, params: &SearchParams) -> HybridLanes {
-        if params
-            .include_global_context_index
-            .unwrap_or(self.include_global_context_index)
-        {
-            debug!(
-                "HYBRID_COMPLETION: include_global_context_index is set but not wired yet \
-                 (SDK-1045); no global-context section will be produced"
-            );
-        }
         HybridLanes {
             chunks_top_k: lane_top_k(params.chunks_top_k, params.top_k, self.chunks_top_k),
             entities_top_k: lane_top_k(params.entities_top_k, params.top_k, self.entities_top_k),
@@ -741,13 +725,19 @@ impl HybridRetriever {
         };
         let overhead = overhead_system + overhead_template + session.formatted_history.len();
 
+        // Python loads this while formatting the retrieved objects rather
+        // than treating it as a candidate lane. Keep that boundary: the
+        // optional prelude is context, but does not spend the hybrid
+        // passages/entities/facts budget.
+        let global_context = self.global_context_section(query, params).await?;
+
         let mut overflow_summaries =
             overflow::known(&chunks, self.budget.overflow_summary_file.as_deref());
         let (mut context_text, budgeted, unsummarized) =
             self.assemble_context(&chunks, &entities, &facts, overhead, &overflow_summaries);
 
-        // Nothing to answer from: no prompt (see `get_completion`).
-        if context_text.is_empty() {
+        // A global prelude alone is context, matching Python's formatter.
+        if context_text.is_empty() && global_context.is_empty() {
             return Ok(None);
         }
 
@@ -787,7 +777,12 @@ impl HybridRetriever {
                 }
             }
         }
-        let context_text = context_text;
+        let context_text = format_hybrid_context(
+            (!global_context.is_empty()).then_some(global_context.as_str()),
+            &context_text,
+            "",
+            "",
+        );
 
         // A context that had to be budgeted is a context long enough to lose
         // the question in, and a model with a window that small is the one
@@ -820,6 +815,39 @@ impl HybridRetriever {
             user_prompt,
             session,
         )))
+    }
+
+    /// Build Python's `## Global context` hybrid section. Dataset filtering
+    /// is applied to both the root and vector-summary reads by the shared
+    /// loader; a missing vector collection is an empty channel.
+    async fn global_context_section(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<String, SearchError> {
+        if !params
+            .include_global_context_index
+            .unwrap_or(self.include_global_context_index)
+            || query.is_empty()
+        {
+            return Ok(String::new());
+        }
+        let prelude = crate::utils::build_global_context_prelude(
+            query,
+            params
+                .global_context_index_top_k
+                .unwrap_or(self.global_context_index_top_k),
+            params.dataset_ids.as_deref(),
+            self.graph_db.as_ref(),
+            self.vector_db.as_ref(),
+            self.embedding_engine.as_ref(),
+        )
+        .await?;
+        Ok(if prelude.is_empty() {
+            String::new()
+        } else {
+            format!("## Global context\n{prelude}")
+        })
     }
 
     fn assemble_context(
@@ -1226,7 +1254,7 @@ mod retriever_tests {
     use cognee_embedding::engine::EmbeddingEngine;
     use cognee_graph::{GraphDBTrait, MockGraphDB};
     use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmResult, Message, TokenUsage};
-    use cognee_models::EdgeType;
+    use cognee_models::{EdgeType, GlobalContextSummary};
     use cognee_vector::{MockVectorDB, VectorDB, VectorPoint};
     use serde_json::{Value, json};
     use uuid::Uuid;
@@ -1439,6 +1467,177 @@ mod retriever_tests {
             None,
             None,
         )
+    }
+
+    async fn global_context_dbs(
+        dataset_id: Uuid,
+        other_dataset_id: Uuid,
+    ) -> (Arc<dyn VectorDB>, Arc<dyn GraphDBTrait>) {
+        let vector = MockVectorDB::new();
+        vector
+            .create_collection(GlobalContextSummary::TYPE, "text", 2)
+            .await
+            .unwrap();
+        vector
+            .index_points(
+                GlobalContextSummary::TYPE,
+                "text",
+                &[
+                    VectorPoint::new(Uuid::new_v4(), vec![1.0, 0.0])
+                        .with_metadata("text", json!("their nearest area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(other_dataset_id.to_string())),
+                    VectorPoint::new(Uuid::new_v4(), vec![0.9, 0.1])
+                        .with_metadata("text", json!("our first area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string())),
+                    VectorPoint::new(Uuid::new_v4(), vec![0.8, 0.2])
+                        .with_metadata("text", json!("our second area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string())),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let graph = MockGraphDB::new();
+        for (scope, text) in [(other_dataset_id, "their world"), (dataset_id, "our world")] {
+            let root =
+                GlobalContextSummary::new(Uuid::new_v4(), text, scope.to_string(), 1, true, None);
+            graph
+                .add_node_raw(serde_json::to_value(root).unwrap())
+                .await
+                .unwrap();
+        }
+        (Arc::new(vector), Arc::new(graph))
+    }
+
+    #[tokio::test]
+    async fn global_context_is_default_off_and_request_can_enable_and_size_it() {
+        let mine = Uuid::new_v4();
+        let (vector, graph) = global_context_dbs(mine, Uuid::new_v4()).await;
+        let retriever = retriever(vector, graph, Arc::new(CapturingLlm::default()));
+        let context = SearchContext::new();
+        assert!(
+            retriever
+                .completion_messages(
+                    "question",
+                    &context,
+                    &SessionContext::default(),
+                    &SearchParams::default(),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let params = SearchParams {
+            include_global_context_index: Some(true),
+            global_context_index_top_k: Some(2),
+            dataset_id: Some(mine),
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages("question", &context, &SessionContext::default(), &params)
+            .await
+            .unwrap()
+            .expect("global context alone is completion context");
+        let user = &messages.last().unwrap().content;
+        assert!(user.contains("## Global context\nWorld summary:\nour world"));
+        assert!(user.contains("Relevant areas:\nour first area\n\nour second area"));
+        assert!(!user.contains("their world"));
+        assert!(!user.contains("their nearest area"));
+    }
+
+    #[tokio::test]
+    async fn constructor_global_context_knobs_are_overridden_per_request() {
+        let mine = Uuid::new_v4();
+        let (vector, graph) = global_context_dbs(mine, Uuid::new_v4()).await;
+        let mut retriever = retriever(vector, graph, Arc::new(CapturingLlm::default()));
+        retriever.include_global_context_index = true;
+        retriever.global_context_index_top_k = 1;
+        let scope = SearchParams {
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages(
+                "question",
+                &SearchContext::new(),
+                &SessionContext::default(),
+                &scope,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(messages[1].content.contains("our first area"));
+        assert!(!messages[1].content.contains("our second area"));
+
+        let disabled = SearchParams {
+            include_global_context_index: Some(false),
+            ..scope
+        };
+        assert!(
+            retriever
+                .completion_messages(
+                    "question",
+                    &SearchContext::new(),
+                    &SessionContext::default(),
+                    &disabled,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_summary_index_fails_open_to_root_without_spending_lane_budget() {
+        let mine = Uuid::new_v4();
+        let graph = MockGraphDB::new();
+        let root = GlobalContextSummary::new(
+            Uuid::new_v4(),
+            "x".repeat(10_000),
+            mine.to_string(),
+            1,
+            true,
+            None,
+        );
+        graph
+            .add_node_raw(serde_json::to_value(root).unwrap())
+            .await
+            .unwrap();
+        let mut retriever = retriever(
+            Arc::new(MockVectorDB::new()),
+            Arc::new(graph),
+            Arc::new(CapturingLlm {
+                max_context: Some(1_024),
+                ..Default::default()
+            }),
+        );
+        retriever.budget.max_context_tokens = Some(1_024);
+        let context = vec![SearchItem {
+            id: Some(Uuid::new_v4()),
+            score: Some(1.0),
+            payload: json!({"kind": "chunk", "text": "kept passage"}),
+        }];
+        let params = SearchParams {
+            include_global_context_index: Some(true),
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages("question", &context, &SessionContext::default(), &params)
+            .await
+            .unwrap()
+            .unwrap();
+        let user = &messages[1].content;
+        assert!(user.contains("## Global context\nWorld summary:"));
+        assert!(user.contains("## Relevant passages\nkept passage"));
+        assert!(
+            user.find("## Global context").unwrap() < user.find("## Relevant passages").unwrap()
+        );
     }
 
     fn kinds(context: &SearchContext) -> Vec<String> {
