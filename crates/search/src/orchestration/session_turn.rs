@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 const SYSTEM_PROMPT: &str = include_str!("../utils/prompts/session_turn_analysis_system.txt");
@@ -324,6 +325,36 @@ pub async fn prepare_session_turn_from_snapshot(
     }
 }
 
+/// Bound the analysis lane of a concurrent turn so an already-completed
+/// answer cannot be held indefinitely by a stuck model call. Python applies
+/// the same 30-second bound in `session_concurrent_turn.analyze_turn`.
+pub async fn prepare_concurrent_session_turn_from_snapshot(
+    manager: &Arc<SessionManager>,
+    llm: &dyn Llm,
+    session_id: &str,
+    user_id: Option<&str>,
+    query: &str,
+    entries: &[SessionQAEntry],
+    rows: &[SessionContextRow],
+    timeout: Duration,
+) -> SessionTurnPreparation {
+    match tokio::time::timeout(
+        timeout,
+        prepare_session_turn_from_snapshot(manager, llm, session_id, user_id, query, entries, rows),
+    )
+    .await
+    {
+        Ok(preparation) => preparation,
+        Err(_) => {
+            tracing::warn!(
+                session_id,
+                "concurrent session turn analysis timed out; failing open"
+            );
+            SessionTurnPreparation::pass_through(query)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +429,32 @@ mod tests {
 
         fn model(&self) -> &str {
             "failing-session-turn-fixture"
+        }
+    }
+
+    struct HangingLlm;
+
+    #[async_trait]
+    impl Llm for HangingLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            std::future::pending().await
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _schema: &Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<Value> {
+            std::future::pending().await
+        }
+
+        fn model(&self) -> &str {
+            "hanging-session-turn-fixture"
         }
     }
 
@@ -480,6 +537,24 @@ mod tests {
             Some(&false),
             "the existing improve stage must see the newly rated row"
         );
+        let rows = manager
+            .get_session_context_entries(Some("follow-up"), None)
+            .await
+            .unwrap();
+        assert!(
+            rows.iter().any(|row| {
+                row.get("kind").and_then(Value::as_str) == Some("feedback")
+                    && row.get("referenced_qa_rating").and_then(Value::as_i64) == Some(5)
+                    && row
+                        .get("referenced_qa_ids")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            ids.iter()
+                                .any(|id| id.as_str() == Some(&entries[0].id.to_string()))
+                        })
+            }),
+            "update_user_preferences must be able to infer the rating from the feedback row"
+        );
     }
 
     #[tokio::test]
@@ -501,6 +576,38 @@ mod tests {
         assert!(prepared.accepted_context_ids.is_empty());
         let entries = manager.get_session(Some("failure"), None).await.unwrap();
         assert!(entries[0].feedback_score.is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_analysis_timeout_is_fail_open_and_preserves_raw_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+
+        let prepared = prepare_concurrent_session_turn_from_snapshot(
+            &manager,
+            &HangingLlm,
+            "timeout",
+            None,
+            "raw query",
+            &[],
+            &[],
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert!(prepared.should_answer);
+        assert_eq!(prepared.effective_query, "raw query");
+        assert!(prepared.analysis.is_none());
+        assert!(
+            manager
+                .get_session_context_entries(Some("timeout"), None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a timed-out analysis must not persist partial evidence"
+        );
     }
     #[test]
     fn python_golden_routing() {
