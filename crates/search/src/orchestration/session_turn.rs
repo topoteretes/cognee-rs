@@ -3,8 +3,8 @@
 use chrono::Utc;
 use cognee_llm::{Llm, Message, generate_json_schema};
 use cognee_session::{
-    CONTEXT_PROFILE_QA, CandidateContextUpdate as StoredCandidateContextUpdate, SessionManager,
-    apply_candidate_updates_for_user,
+    CONTEXT_PROFILE_QA, CandidateContextUpdate as StoredCandidateContextUpdate, SessionContextRow,
+    SessionManager, SessionQAEntry, apply_candidate_updates_for_user,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -149,6 +149,29 @@ pub async fn prepare_session_turn(
             return SessionTurnPreparation::pass_through(query);
         }
     };
+    let rows = manager
+        .get_session_context_entries(Some(session_id), user_id)
+        .await
+        .unwrap_or_default();
+    prepare_session_turn_from_snapshot(manager, llm, session_id, user_id, query, &entries, &rows)
+        .await
+}
+
+/// Analyze and apply a turn from an immutable cache snapshot.  The concurrent
+/// runner uses this entry point so its answer and analysis lanes cannot observe
+/// different session reads.
+pub async fn prepare_session_turn_from_snapshot(
+    manager: &Arc<SessionManager>,
+    llm: &dyn Llm,
+    session_id: &str,
+    user_id: Option<&str>,
+    query: &str,
+    entries: &[SessionQAEntry],
+    rows: &[SessionContextRow],
+) -> SessionTurnPreparation {
+    if query.trim().is_empty() {
+        return SessionTurnPreparation::pass_through(query);
+    }
     let previous = entries.last();
     let previous_qa_id = previous.map(|e| e.id.to_string());
     // Only context actually stamped on the previous answer may be rated. This
@@ -156,10 +179,6 @@ pub async fn prepare_session_turn(
     // matches Python's cross-turn lineage contract.
     let served_ids = previous
         .and_then(|entry| entry.used_session_context_ids.clone())
-        .unwrap_or_default();
-    let rows = manager
-        .get_session_context_entries(Some(session_id), user_id)
-        .await
         .unwrap_or_default();
     let served = rows
         .iter()

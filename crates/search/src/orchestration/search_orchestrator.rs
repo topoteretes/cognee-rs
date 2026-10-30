@@ -1423,8 +1423,6 @@ impl SearchOrchestrator {
             params.feedback_influence = Some(self.default_feedback_influence);
         }
 
-        // Snapshot once before either lane can mutate session state.
-        let session = self.load_session_context(request).await;
         let manager = self
             .session_manager
             .as_ref()
@@ -1436,14 +1434,40 @@ impl SearchOrchestrator {
             .expect("eligible turn has a session");
         let user_id = request.user_id.map(|id| id.to_string());
 
+        // Snapshot every cache value before either lane starts.  In
+        // particular, analysis must not perform a second `get_session` after
+        // the answer lane has begun (Python's `load_turn_context` invariant).
+        let (entries, rows) = tokio::join!(
+            manager.get_session(Some(session_id), user_id.as_deref()),
+            manager.get_session_context_entries(Some(session_id), user_id.as_deref())
+        );
+        let entries = entries.unwrap_or_default();
+        let rows = rows.unwrap_or_default();
+        let history = entries
+            .iter()
+            .flat_map(|entry| {
+                [
+                    Message::user(&entry.question),
+                    Message::assistant(&entry.answer),
+                ]
+            })
+            .collect();
+        let session = SessionContext {
+            session_id: Some(session_id.to_owned()),
+            history,
+            formatted_history: SessionManager::format_entries(&entries),
+        };
+
         let analysis_lane = async {
             if auto_feedback {
-                super::session_turn::prepare_session_turn(
+                super::session_turn::prepare_session_turn_from_snapshot(
                     manager,
                     llm.as_ref(),
                     session_id,
                     user_id.as_deref(),
                     &request.query_text,
+                    &entries,
+                    &rows,
                 )
                 .await
             } else {
@@ -2093,6 +2117,66 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].question, "No, use X.");
         assert_eq!(entries[0].feedback_score, Some(2));
+    }
+
+    #[tokio::test]
+    async fn concurrent_feedback_discards_the_answer_lane_without_leaking_context() {
+        let user = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(
+                Some("s"),
+                Some(&user.to_string()),
+                "old question",
+                "old answer",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let retriever = Arc::new(SessionCompletionRetriever {
+            query_seen: std::sync::Mutex::new(None),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(TurnAnalysisLlm(json!({
+                "response_to_user": "Thanks for the correction.",
+                "query_to_answer": null,
+                "served_context_ratings": [],
+                "candidate_context_updates": [],
+                "previous_answer_rating": 2
+            }))))
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("No, use X.");
+        request.user_id = Some(user);
+
+        let result = orchestrator.search(&request).await.unwrap();
+
+        // Retrieval/completion did run concurrently, but none of its payload
+        // may escape when analysis routes the turn to an acknowledgement.
+        assert_eq!(
+            retriever.query_seen.lock().unwrap().as_deref(),
+            Some("No, use X.")
+        );
+        assert!(matches!(
+            result.result,
+            SearchOutput::Text(ref text) if text == "Thanks for the correction."
+        ));
+        assert!(result.context.is_none());
+        let entries = manager
+            .get_session(Some("s"), Some(&user.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 2, "the turn is persisted exactly once");
+        assert_eq!(entries[0].feedback_score, Some(2));
+        assert_eq!(entries[1].answer, "Thanks for the correction.");
+        assert!(entries[1].used_graph_element_ids.is_none());
     }
 
     #[async_trait]
