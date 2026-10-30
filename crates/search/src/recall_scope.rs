@@ -41,6 +41,10 @@ pub struct RecallOptions {
     pub feedback_influence: Option<f32>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Retriever-specific per-request overrides forwarded unchanged to the
+    /// selected graph retriever. HTTP and binding adapters should expose a
+    /// typed, allowlisted surface rather than accepting arbitrary JSON.
+    pub retriever_specific_config: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Tenant the requester belongs to. Forwarded to
     /// [`SearchRequest::tenant_id`], which scopes dataset names, explicit ids
     /// and the readable set to the caller's tenant by strict equality, as
@@ -543,7 +547,7 @@ pub async fn run_graph(
         tenant_id: options.and_then(|o| o.tenant_id),
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
-        retriever_specific_config: None,
+        retriever_specific_config: options.and_then(|o| o.retriever_specific_config.clone()),
         response_schema: None,
         custom_search_type: None,
         auto_feedback_detection: None,
@@ -1082,6 +1086,47 @@ mod tests {
             Some([dataset_id].as_slice()),
             "the explicit dataset id must reach the retriever"
         );
+    }
+
+    #[tokio::test]
+    async fn run_graph_forwards_retriever_specific_config() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+        let options = RecallOptions {
+            retriever_specific_config: Some(std::collections::HashMap::from([
+                ("include_global_context_index".into(), true.into()),
+                ("global_context_index_top_k".into(), 2.into()),
+            ])),
+            ..Default::default()
+        };
+
+        run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            Some(&options),
+        )
+        .await
+        .expect("retriever config must be accepted");
+
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(seen.include_global_context_index, Some(true));
+        assert_eq!(seen.global_context_index_top_k, Some(2));
     }
 
     /// Ids are authorized against the caller: another user's dataset id is
