@@ -1088,6 +1088,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn run_graph_forwards_retriever_specific_config() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+        let options = RecallOptions {
+            retriever_specific_config: Some(serde_json::json!({
+                "include_global_context_index": true,
+                "global_context_index_top_k": 2
+            })),
+            ..Default::default()
+        };
+
+        run_graph(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            Some(&options),
+        )
+        .await
+        .expect("retriever config must be accepted");
+
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(seen.include_global_context_index, Some(true));
+        assert_eq!(seen.global_context_index_top_k, Some(2));
+    }
+
     /// Ids are authorized against the caller: another user's dataset id is
     /// refused with `PermissionDenied` (Python `PermissionDeniedError`),
     /// never silently searched.
