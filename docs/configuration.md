@@ -1396,6 +1396,8 @@ explicit per-lane knob is never capped). The effective defaults are:
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
 | `include_external_metadata` | `include_external_metadata` | `false` | `include_external_metadata=False` |
 | `external_metadata_keys` | `external_metadata_keys` | `[]` | `external_metadata_keys=None` |
+| `include_global_context_index` | `include_global_context_index` | `false` | `include_global_context_index=False` |
+| `global_context_index_top_k` | `global_context_index_top_k` | `3` | `global_context_index_top_k=3` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
 | `candidate_top_k` | `candidate_top_k` | `top_k * 4` (TEMPORAL only) | `candidate_top_k` (defaults to `top_k * 4`) |
@@ -1453,13 +1455,12 @@ previous epoch live and reports the `build_truth_subspace` stage as `errored`;
 a graph backend without truth-state support (`GraphDBTrait::supports_truth_state`)
 reports it as `skipped` / `backend_unsupported`.
 
-**Reserved (inert).** These keys are parsed and stored but have no effect yet —
-passing `true` must behave identically to the default:
-
-- `include_global_context_index` (default `false`) and
-  `global_context_index_top_k` (default `3`) — inert for `HYBRID_COMPLETION`
-  until SDK-1045. `GRAPH_COMPLETION` reads them: it prepends the global
-  context index `improve(build_global_context_index=true)` built.
+**Global context.** `include_global_context_index` (default `false`) makes
+`HYBRID_COMPLETION` prepend the same dataset-scoped root and nearest bucket
+summaries as `GRAPH_COMPLETION`; `global_context_index_top_k` (default `3`)
+limits the bucket summaries. The index must first be built by
+`improve(build_global_context_index=true)`. Missing or legacy index data
+degrades to the ordinary hybrid context rather than failing the search.
 
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
