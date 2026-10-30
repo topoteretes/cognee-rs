@@ -505,8 +505,8 @@ async fn conversational_feedback_persists_to_prior_entry() {
         );
     }
 
-    // Read all entries — should still be just the original one (no new QA entry
-    // for a pure-feedback turn, matching Python semantics).
+    // Latest Python stores the acknowledgement as this turn's QA row while
+    // attaching its rating to the prior answer.
     let entries = session_store
         .get_all_qa_entries(session_id, None)
         .await
@@ -520,6 +520,7 @@ async fn conversational_feedback_persists_to_prior_entry() {
 
     assert!(prior.feedback_text.is_none());
     assert!(prior.feedback_score.is_none());
+    assert_eq!(entries.len(), 2);
     let context = session_manager
         .get_session_context_entries(Some(session_id), None)
         .await
