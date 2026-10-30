@@ -556,6 +556,18 @@ impl Settings {
         }
     }
 
+    /// Recall's warm-up settings (the `recall` section). A cache TTL that is
+    /// negative or not a number caches nothing.
+    pub fn recall_warmup_config(&self) -> cognee_search::graph_warmup::WarmupConfig {
+        let recall = self.section::<cognee_components::RecallSettings>();
+        cognee_search::graph_warmup::WarmupConfig {
+            shortcircuit: recall.warmup_shortcircuit.get(),
+            threshold: recall.warmup_threshold,
+            cache_ttl: std::time::Duration::try_from_secs_f64(recall.warmup_cache_ttl)
+                .unwrap_or_default(),
+        }
+    }
+
     /// The retriever tuning a `SearchBuilder` is built with (the `search` and
     /// `search.hybrid` sections).
     pub fn search_tuning(&self) -> cognee_search::SearchTuning {
@@ -2861,6 +2873,23 @@ mod tests {
         assert!(cm.read().search_tuning().auto_feedback);
         cm.set("session.caching", serde_json::json!(false)).unwrap();
         assert!(!cm.read().search_tuning().auto_feedback);
+    }
+
+    /// The `recall` section's defaults are the warm-up defaults, and a cache
+    /// TTL that is not a duration caches nothing instead of panicking.
+    #[test]
+    fn recall_warmup_config_reads_the_recall_section() {
+        let cm = ConfigManager::new(Settings::default());
+        assert_eq!(
+            cm.read().recall_warmup_config(),
+            cognee_search::graph_warmup::WarmupConfig::default()
+        );
+        cm.set("recall.warmup_cache_ttl", serde_json::json!(-1))
+            .unwrap();
+        assert_eq!(
+            cm.read().recall_warmup_config().cache_ttl,
+            std::time::Duration::ZERO
+        );
     }
 
     #[test]
