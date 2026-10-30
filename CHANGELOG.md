@@ -634,6 +634,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the hand-off of rated QA rows to the existing improve stage. Session-turn
   tracing reports routing and persistence counts without recording query or
   preference text.
+  Concurrent analysis is bounded at Python's 30-second timeout and fails open
+  to the raw query if the model does not return.
 
 - **Sequential session-turn preparation parity (SDK-1045).** Generative
   session searches analyze feedback and corrections before retrieval, rewrite
