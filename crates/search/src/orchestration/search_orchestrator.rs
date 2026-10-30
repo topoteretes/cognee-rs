@@ -749,7 +749,7 @@ impl SearchOrchestrator {
         //     too); the request then counts as naming no dataset at all.
         //   - explicit `dataset_ids` always wins over `datasets`
         let resolved_request_owned;
-        let request: &SearchRequest = match (&request.datasets, &request.dataset_ids) {
+        let mut request: &SearchRequest = match (&request.datasets, &request.dataset_ids) {
             (Some(names), maybe_ids)
                 if !names.is_empty()
                     && maybe_ids.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
@@ -832,6 +832,71 @@ impl SearchOrchestrator {
         let names_no_dataset = request.dataset_ids.as_ref().is_none_or(Vec::is_empty)
             && request.datasets.as_ref().is_none_or(Vec::is_empty);
 
+        // Python prepares exactly one turn before a generative completion. Raw
+        // retrieval modes and previews deliberately skip this LLM call.
+        let raw_request = request.clone();
+        let prepared_request;
+        let mut turn_prepared = false;
+        if !request.only_context()
+            && request.session_id.as_ref().is_some_and(|id| !id.is_empty())
+            && matches!(
+                search_type,
+                SearchType::RagCompletion
+                    | SearchType::TripletCompletion
+                    | SearchType::GraphCompletion
+                    | SearchType::GraphCompletionDecomposition
+                    | SearchType::GraphSummaryCompletion
+                    | SearchType::GraphCompletionCot
+                    | SearchType::GraphCompletionContextExtension
+                    | SearchType::HybridCompletion
+                    | SearchType::Temporal
+            )
+            && auto_feedback
+            && let (Some(manager), Some(llm), Some(session_id)) =
+                (&self.session_manager, &self.llm, &request.session_id)
+        {
+            let user_id = request.user_id.map(|id| id.to_string());
+            let preparation = super::session_turn::prepare_session_turn(
+                manager,
+                llm.as_ref(),
+                session_id,
+                user_id.as_deref(),
+                &request.query_text,
+            )
+            .await;
+            turn_prepared = true;
+            if !preparation.should_answer {
+                let answer = preparation
+                    .response_to_user
+                    .unwrap_or_else(|| "Got it.".to_string());
+                let mut acknowledgement_request = raw_request.clone();
+                acknowledgement_request.summarize_context = Some(false);
+                self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+                    .await;
+                let response = prepare_search_result(
+                    search_type,
+                    SearchOutput::Text(answer),
+                    None,
+                    request.dataset_ids.clone(),
+                    false,
+                    request.use_combined_context(),
+                    request.verbose(),
+                );
+                emit_search_completed(&raw_request);
+                return Ok(vec![DatasetSearchResult {
+                    dataset_id: None,
+                    dataset_name: None,
+                    dataset_tenant_id: None,
+                    response,
+                    error: None,
+                }]);
+            }
+            let mut clone = request.clone();
+            clone.query_text = preparation.effective_query;
+            prepared_request = clone;
+            request = &prepared_request;
+        }
+
         // A retriever whose results are not dataset data (feedback analysis)
         // reads no store, so it is never fanned out.
         if !self.per_dataset_storage || scoping == DatasetScoping::NotDatasetData {
@@ -842,10 +907,18 @@ impl SearchOrchestrator {
             // Nothing is filtered by dataset membership — that could not be made
             // tight (cognee-rs #290) and is what per-dataset storage replaces.
             let (response, log) = self
-                .run_search(request, &retriever, search_type, auto_feedback, false, true)
+                .run_search(
+                    request,
+                    &retriever,
+                    search_type,
+                    auto_feedback && !turn_prepared,
+                    false,
+                    true,
+                    turn_prepared.then_some(raw_request.query_text.as_str()),
+                )
                 .await?;
             if log {
-                self.log_search_history(request, &response).await;
+                self.log_search_history(&raw_request, &response).await;
             }
             emit_search_completed(request);
             let dataset_id = match request.dataset_ids.as_deref() {
@@ -917,7 +990,7 @@ impl SearchOrchestrator {
         // The session side effects run once for the whole search, not once per
         // dataset: a message that is only feedback is acknowledged here.
         if let Some(acknowledgement) = self
-            .handle_auto_feedback(request, search_type, auto_feedback)
+            .handle_auto_feedback(request, search_type, auto_feedback && !turn_prepared)
             .await
         {
             emit_search_completed(request);
@@ -952,9 +1025,10 @@ impl SearchOrchestrator {
                             &dataset_request,
                             &retriever,
                             search_type,
-                            auto_feedback,
+                            auto_feedback && !turn_prepared,
                             true,
                             false,
+                            None,
                         ),
                     )
                     .await;
@@ -1048,7 +1122,7 @@ impl SearchOrchestrator {
             _ if request.only_context() => {}
             SearchOutput::Text(answer) => {
                 self.save_session_turn(
-                    request,
+                    &raw_request,
                     search_type,
                     answer,
                     merged_context(&merged).as_deref(),
@@ -1057,7 +1131,7 @@ impl SearchOrchestrator {
             }
             SearchOutput::Texts(answers) if !answers.is_empty() => {
                 self.save_session_turn(
-                    request,
+                    &raw_request,
                     search_type,
                     &answers.join("\n\n"),
                     merged_context(&merged).as_deref(),
@@ -1067,7 +1141,7 @@ impl SearchOrchestrator {
             _ => {}
         }
         if log {
-            self.log_search_history(request, &merged).await;
+            self.log_search_history(&raw_request, &merged).await;
         }
         emit_search_completed(request);
         Ok(results)
@@ -1106,6 +1180,7 @@ impl SearchOrchestrator {
         auto_feedback: bool,
         keep_context: bool,
         session_turn: bool,
+        raw_session_query: Option<&str>,
     ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
         let mut params = SearchParams::from(request);
         params.personalization = Some(self.personalization).filter(|config| config.enabled);
@@ -1255,8 +1330,15 @@ impl SearchOrchestrator {
             .await?;
 
         if session_turn && let SearchOutput::Text(ref answer) = output {
-            self.save_session_turn(request, search_type, answer, context.as_deref())
-                .await;
+            if let Some(raw_query) = raw_session_query {
+                let mut raw_request = request.clone();
+                raw_request.query_text = raw_query.to_string();
+                self.save_session_turn(&raw_request, search_type, answer, context.as_deref())
+                    .await;
+            } else {
+                self.save_session_turn(request, search_type, answer, context.as_deref())
+                    .await;
+            }
         }
 
         let mut response = prepare_search_result(
