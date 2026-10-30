@@ -685,6 +685,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multi_collection_merge_preserves_channel_order_for_score_ties() {
+        let db = MockVectorDB::new();
+        for data_type in [DOCUMENT_CHUNK_TYPE, DLT_ROW_TYPE] {
+            db.create_collection(data_type, TEXT_FIELD, 2)
+                .await
+                .unwrap();
+        }
+        let document = Uuid::new_v4();
+        let row = Uuid::new_v4();
+        index_chunk(&db, document, "document", None, vec![1.0, 0.0]).await;
+        db.index_points(
+            DLT_ROW_TYPE,
+            TEXT_FIELD,
+            &[VectorPoint::new(row, vec![1.0, 0.0])
+                .with_metadata("id", json!(row.to_string()))
+                .with_metadata("text", json!("row"))],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_collections(
+            &dyn_vector(db),
+            chunk_collections(true),
+            Some(DLT_ROW_COLLECTION),
+            &[1.0, 0.0],
+            2,
+            None,
+            "OR",
+        )
+        .await
+        .unwrap();
+
+        // Python's merge is a stable score sort. The ordinary chunk channel
+        // is first in `chunk_collections`, so it wins an exact cross-channel
+        // tie; this also pins Rust's higher-similarity/lower-distance mapping.
+        assert_eq!(
+            hits.iter().filter_map(result_id).collect::<Vec<_>>(),
+            [document.to_string(), row.to_string()]
+        );
+    }
+
+    #[tokio::test]
     async fn node_name_filter_drops_non_matching_vector_hits() {
         let db = MockVectorDB::new();
         db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
