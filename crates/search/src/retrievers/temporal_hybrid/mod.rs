@@ -474,7 +474,7 @@ impl TemporalHybridRetriever {
         if attached.is_empty() {
             return Ok((candidates, HashSet::new()));
         }
-        let chunks = retrieve_in_collections(
+        let mut chunks = retrieve_in_collections(
             self.hybrid.vector_db(),
             chunk_collections(include_dlt_rows),
             include_dlt_rows.then_some((DLT_ROW_TYPE, "text")),
@@ -483,6 +483,13 @@ impl TemporalHybridRetriever {
             &lanes.node_name_filter_operator,
         )
         .await?;
+        // Window expansion bypasses `HybridRetriever::fetch_candidates`, so
+        // apply the same trust boundary to attached normal and DLT rows.
+        super::hybrid::project_external_metadata(
+            &mut chunks,
+            lanes.include_external_metadata,
+            &lanes.external_metadata_keys,
+        );
         let added = chunks.iter().filter_map(result_id).collect();
         Ok((candidates.extend(chunks), added))
     }

@@ -723,13 +723,23 @@ mod tests {
     #[test]
     fn build_search_request_carries_retriever_specific_config() {
         let opts = json!({
-            "retrieverSpecificConfig": { "text_summaries_top_k": 3, "not_a_real_knob": "x" }
+            "retrieverSpecificConfig": {
+                "text_summaries_top_k": 3,
+                "include_external_metadata": true,
+                "external_metadata_keys": ["created_at"],
+                "not_a_real_knob": "x"
+            }
         });
         let req = build_search_request("q", &opts, Uuid::new_v4()).unwrap();
         let config = req
             .retriever_specific_config
             .expect("retrieverSpecificConfig must reach the request");
         assert_eq!(config.get("text_summaries_top_k"), Some(&json!(3)));
+        assert_eq!(config.get("include_external_metadata"), Some(&json!(true)));
+        assert_eq!(
+            config.get("external_metadata_keys"),
+            Some(&json!(["created_at"]))
+        );
         assert_eq!(config.get("not_a_real_knob"), Some(&json!("x")));
     }
 
