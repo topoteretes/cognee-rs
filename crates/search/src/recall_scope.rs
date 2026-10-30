@@ -39,6 +39,9 @@ pub struct RecallOptions {
     pub wide_search_top_k: Option<usize>,
     pub triplet_distance_penalty: Option<f32>,
     pub feedback_influence: Option<f32>,
+    /// Per-call override of the deployment's automatic feedback setting.
+    /// `None` delegates to `SearchTuning::auto_feedback_detection`.
+    pub auto_feedback_detection: Option<bool>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
     /// Retriever-specific per-request overrides forwarded unchanged to the
@@ -550,7 +553,7 @@ pub async fn run_graph(
         retriever_specific_config: options.and_then(|o| o.retriever_specific_config.clone()),
         response_schema: None,
         custom_search_type: None,
-        auto_feedback_detection: None,
+        auto_feedback_detection: options.and_then(|o| o.auto_feedback_detection),
         node_name_filter_operator: options.and_then(|o| o.node_name_filter_operator.clone()),
         neighborhood_depth: options.and_then(|o| o.neighborhood_depth),
         neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
