@@ -24,7 +24,10 @@ mod ranking;
 mod results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
-pub(crate) use chunks::{HybridChunksResult, retrieve_hybrid_chunks, search_collection};
+pub(crate) use chunks::{
+    HybridChunksResult, chunk_collections, has_dlt_rows, retrieve_hybrid_chunks, search_collection,
+    search_collections,
+};
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
 pub(crate) use facts::{edge_rank_by_id, format_facts};
@@ -137,8 +140,23 @@ fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
 
 const ENTITY_DATA_TYPE: &str = "Entity";
 const ENTITY_FIELD: &str = "name";
+const ENTITY_COLLECTION: (&str, &str) = (ENTITY_DATA_TYPE, ENTITY_FIELD);
+const ENTITY_COLLECTIONS_WITH_DLT: &[(&str, &str)] = &[
+    ENTITY_COLLECTION,
+    ("DltColumn", "properties"),
+    ("SchemaTable", "name"),
+    ("SchemaRelationship", "name"),
+];
 const EDGE_TYPE_DATA_TYPE: &str = "EdgeType";
 const EDGE_TYPE_FIELD: &str = "relationship_name";
+
+fn entity_collections(include_dlt_rows: bool) -> &'static [(&'static str, &'static str)] {
+    if include_dlt_rows {
+        ENTITY_COLLECTIONS_WITH_DLT
+    } else {
+        &[ENTITY_COLLECTION]
+    }
+}
 
 /// The HYBRID_COMPLETION context budget and overflow handling (the
 /// `search.hybrid` settings).
@@ -377,6 +395,10 @@ impl HybridRetriever {
             )
             .await;
 
+        // One producer-contract check controls both DLT lanes. Absence is a
+        // no-op, so pre-SDK-1057 datasets keep their byte-for-byte baseline.
+        let include_dlt_rows = has_dlt_rows(self.vector_db.as_ref()).await?;
+
         let (chunk_result, (entities, fact_candidates)) = tokio::try_join!(
             retrieve_hybrid_chunks(
                 &self.vector_db,
@@ -387,6 +409,7 @@ impl HybridRetriever {
                 lanes.fusion,
                 lanes.use_importance_weight,
                 &query_vector,
+                include_dlt_rows,
                 lanes.use_truth_weight,
                 q_coords.as_deref(),
                 truth_state_by_id.as_ref(),
@@ -399,6 +422,7 @@ impl HybridRetriever {
                 lanes.max_edges_per_entity,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             ),
         )?;
 
@@ -446,14 +470,15 @@ impl HybridRetriever {
         max_edges_per_entity: usize,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<(Vec<EntityResult>, FactCandidates), SearchError> {
         let max_ranked_bullets = entities_top_k.saturating_mul(max_edges_per_entity);
         let edge_limit = max_ranked_bullets.saturating_add(facts_top_k);
 
-        let entity_future = search_collection(
+        let entity_future = search_collections(
             &self.vector_db,
-            ENTITY_DATA_TYPE,
-            ENTITY_FIELD,
+            entity_collections(include_dlt_rows),
+            None,
             query_vector,
             entities_top_k,
             node_name,
@@ -1219,6 +1244,20 @@ mod retriever_tests {
     const ENTITY_NAME: &str = "Alice";
     const BULLET_TEXT: &str = "Alice works at Acme.";
     const FACT_TEXT: &str = "Acme acquired Initech.";
+
+    #[test]
+    fn dlt_contract_enables_all_structured_entity_collections() {
+        assert_eq!(super::entity_collections(false), &[("Entity", "name")]);
+        assert_eq!(
+            super::entity_collections(true),
+            &[
+                ("Entity", "name"),
+                ("DltColumn", "properties"),
+                ("SchemaTable", "name"),
+                ("SchemaRelationship", "name"),
+            ]
+        );
+    }
 
     struct AlignedEmbedding;
 

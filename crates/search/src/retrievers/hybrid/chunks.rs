@@ -27,8 +27,12 @@ use crate::retrievers::hybrid::results::{display_value, payload_matches_node_fil
 use crate::types::{SearchError, SearchItem};
 
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
+pub(crate) const DLT_ROW_TYPE: &str = "DltRow";
 const TEXT_SUMMARY_TYPE: &str = "TextSummary";
 const TEXT_FIELD: &str = "text";
+
+const DOCUMENT_CHUNK_COLLECTION: (&str, &str) = (DOCUMENT_CHUNK_TYPE, TEXT_FIELD);
+const DLT_ROW_COLLECTION: (&str, &str) = (DLT_ROW_TYPE, TEXT_FIELD);
 
 /// Result of a hybrid chunk retrieval: the ranked chunks and their paired
 /// summaries keyed by chunk id.
@@ -42,6 +46,25 @@ pub(crate) async fn has_chunk_collection(vector_db: &dyn VectorDB) -> VectorDBRe
     vector_db
         .has_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD)
         .await
+}
+
+/// Whether SDK-1057's DLT row producer has populated this dataset.
+///
+/// This is deliberately the single capability check shared by the chunk and
+/// entity lanes. The row collection is the producer contract's marker; the
+/// other DLT collections are optional channels and retain their ordinary
+/// missing-collection fail-open behaviour.
+pub(crate) async fn has_dlt_rows(vector_db: &dyn VectorDB) -> VectorDBResult<bool> {
+    vector_db.has_collection(DLT_ROW_TYPE, TEXT_FIELD).await
+}
+
+/// The chunk collections enabled for one hybrid fetch.
+pub(crate) fn chunk_collections(include_dlt_rows: bool) -> &'static [(&'static str, &'static str)] {
+    if include_dlt_rows {
+        &[DOCUMENT_CHUNK_COLLECTION, DLT_ROW_COLLECTION]
+    } else {
+        &[DOCUMENT_CHUNK_COLLECTION]
+    }
 }
 
 /// Candidate limit for the `TextSummary_text` lane.
@@ -114,6 +137,67 @@ pub(crate) async fn search_collection(
         node_name_filter_operator,
     )
     .await
+}
+
+/// Search several collections in the same embedding space and merge them by
+/// score, preserving each collection's rank for ties and emitting each node at
+/// most once. `known_existing` avoids repeating the shared `DltRow_text`
+/// capability check.
+pub(crate) async fn search_collections(
+    vector_db: &Arc<dyn VectorDB>,
+    collections: &[(&str, &str)],
+    known_existing: Option<(&str, &str)>,
+    query_vector: &[f32],
+    limit: usize,
+    node_name: Option<&[String]>,
+    node_name_filter_operator: &str,
+) -> Result<Vec<SearchItem>, SearchError> {
+    let mut hits = Vec::new();
+    for &(data_type, field) in collections {
+        let mut channel = if known_existing == Some((data_type, field)) {
+            search_node_filtered(
+                vector_db.as_ref(),
+                data_type,
+                field,
+                query_vector,
+                limit,
+                node_name,
+                node_name_filter_operator,
+            )
+            .await?
+        } else {
+            search_collection(
+                vector_db,
+                data_type,
+                field,
+                query_vector,
+                limit,
+                node_name,
+                node_name_filter_operator,
+            )
+            .await?
+        };
+        hits.append(&mut channel);
+    }
+
+    // Rust vector adapters expose cosine similarity (higher is better), while
+    // Python's vector result carries distance (lower is better). Both implement
+    // the same global merge across collection-local top-k lists.
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .unwrap_or(f32::NEG_INFINITY)
+            .total_cmp(&left.score.unwrap_or(f32::NEG_INFINITY))
+    });
+    let mut seen = HashSet::new();
+    hits.retain(|hit| {
+        let Some(id) = result_id(hit) else {
+            return true;
+        };
+        seen.insert(id)
+    });
+    hits.truncate(limit);
+    Ok(hits)
 }
 
 /// Fetch `DocumentChunk_text` rows by id for summary-only pairs, dropping any
@@ -267,6 +351,7 @@ pub(crate) async fn retrieve_hybrid_chunks(
     fusion: ChunkLaneFusion,
     use_importance_weight: bool,
     query_vector: &[f32],
+    include_dlt_rows: bool,
     use_truth_weight: bool,
     q_coords: Option<&[f64]>,
     truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
@@ -275,10 +360,10 @@ pub(crate) async fn retrieve_hybrid_chunks(
     let candidate_limit = chunks_top_k.saturating_mul(2);
     let summary_limit = summary_candidate_limit(chunks_top_k, text_summaries_top_k);
 
-    let vector_future = search_collection(
+    let vector_future = search_collections(
         vector_db,
-        DOCUMENT_CHUNK_TYPE,
-        TEXT_FIELD,
+        chunk_collections(include_dlt_rows),
+        include_dlt_rows.then_some(DLT_ROW_COLLECTION),
         query_vector,
         candidate_limit,
         node_name,
@@ -437,6 +522,7 @@ mod tests {
             false,
             &[1.0, 0.0],
             false,
+            false,
             None,
             None,
             None,
@@ -469,6 +555,7 @@ mod tests {
             false,
             &[1.0, 0.0],
             false,
+            false,
             None,
             None,
             None,
@@ -478,6 +565,165 @@ mod tests {
 
         assert_eq!(result.chunks.len(), 1);
         assert!(result.chunk_summaries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dlt_rows_join_chunk_lane_only_when_contract_marker_exists() {
+        let db = MockVectorDB::new();
+        db.create_collection(DOCUMENT_CHUNK_TYPE, TEXT_FIELD, 2)
+            .await
+            .unwrap();
+        db.create_collection(DLT_ROW_TYPE, TEXT_FIELD, 2)
+            .await
+            .unwrap();
+        let document_id = Uuid::new_v4();
+        let row_id = Uuid::new_v4();
+        index_chunk(
+            &db,
+            document_id,
+            "ordinary document",
+            Some(vec!["sales"]),
+            vec![0.8, 0.2],
+        )
+        .await;
+        let row = VectorPoint::new(row_id, vec![1.0, 0.0])
+            .with_metadata("id", json!(row_id.to_string()))
+            .with_metadata("text", json!("orders:42 status=paid"))
+            .with_metadata("belongs_to_set", json!(["sales"]));
+        db.index_points(DLT_ROW_TYPE, TEXT_FIELD, &[row])
+            .await
+            .unwrap();
+        let vector_db = dyn_vector(db);
+
+        assert!(has_dlt_rows(vector_db.as_ref()).await.unwrap());
+        let baseline = retrieve_hybrid_chunks(
+            &vector_db,
+            2,
+            Some(0),
+            None,
+            "OR",
+            ChunkLaneFusion::default(),
+            false,
+            &[1.0, 0.0],
+            false,
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(baseline.chunks.len(), 1);
+        assert_eq!(
+            result_id(&baseline.chunks[0]),
+            Some(document_id.to_string())
+        );
+
+        let with_dlt = retrieve_hybrid_chunks(
+            &vector_db,
+            2,
+            Some(0),
+            Some(&["sales".to_string()]),
+            "OR",
+            ChunkLaneFusion::default(),
+            false,
+            &[1.0, 0.0],
+            true,
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let ids: Vec<String> = with_dlt.chunks.iter().filter_map(result_id).collect();
+        assert_eq!(ids, [row_id.to_string(), document_id.to_string()]);
+        assert!(with_dlt.chunk_summaries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multi_collection_merge_deduplicates_by_node_and_keeps_best_rank() {
+        let db = MockVectorDB::new();
+        for data_type in [DOCUMENT_CHUNK_TYPE, DLT_ROW_TYPE] {
+            db.create_collection(data_type, TEXT_FIELD, 2)
+                .await
+                .unwrap();
+        }
+        let duplicate = Uuid::new_v4();
+        let row_only = Uuid::new_v4();
+        index_chunk(&db, duplicate, "document copy", None, vec![0.5, 0.5]).await;
+        for (id, text, vector) in [
+            (duplicate, "row copy", vec![1.0, 0.0]),
+            (row_only, "row only", vec![0.9, 0.1]),
+        ] {
+            db.index_points(
+                DLT_ROW_TYPE,
+                TEXT_FIELD,
+                &[VectorPoint::new(id, vector)
+                    .with_metadata("id", json!(id.to_string()))
+                    .with_metadata("text", json!(text))],
+            )
+            .await
+            .unwrap();
+        }
+
+        let hits = search_collections(
+            &dyn_vector(db),
+            chunk_collections(true),
+            Some(DLT_ROW_COLLECTION),
+            &[1.0, 0.0],
+            3,
+            None,
+            "OR",
+        )
+        .await
+        .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(result_id(&hits[0]), Some(duplicate.to_string()));
+        assert_eq!(hits[0].payload["text"], json!("row copy"));
+        assert_eq!(result_id(&hits[1]), Some(row_only.to_string()));
+    }
+
+    #[tokio::test]
+    async fn multi_collection_merge_preserves_channel_order_for_score_ties() {
+        let db = MockVectorDB::new();
+        for data_type in [DOCUMENT_CHUNK_TYPE, DLT_ROW_TYPE] {
+            db.create_collection(data_type, TEXT_FIELD, 2)
+                .await
+                .unwrap();
+        }
+        let document = Uuid::new_v4();
+        let row = Uuid::new_v4();
+        index_chunk(&db, document, "document", None, vec![1.0, 0.0]).await;
+        db.index_points(
+            DLT_ROW_TYPE,
+            TEXT_FIELD,
+            &[VectorPoint::new(row, vec![1.0, 0.0])
+                .with_metadata("id", json!(row.to_string()))
+                .with_metadata("text", json!("row"))],
+        )
+        .await
+        .unwrap();
+
+        let hits = search_collections(
+            &dyn_vector(db),
+            chunk_collections(true),
+            Some(DLT_ROW_COLLECTION),
+            &[1.0, 0.0],
+            2,
+            None,
+            "OR",
+        )
+        .await
+        .unwrap();
+
+        // Python's merge is a stable score sort. The ordinary chunk channel
+        // is first in `chunk_collections`, so it wins an exact cross-channel
+        // tie; this also pins Rust's higher-similarity/lower-distance mapping.
+        assert_eq!(
+            hits.iter().filter_map(result_id).collect::<Vec<_>>(),
+            [document.to_string(), row.to_string()]
+        );
     }
 
     #[tokio::test]
@@ -504,6 +750,7 @@ mod tests {
             ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
+            false,
             false,
             None,
             None,
@@ -564,6 +811,7 @@ mod tests {
             ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
+            false,
             false,
             None,
             None,
@@ -643,6 +891,7 @@ mod tests {
             false,
             &[1.0, 0.0],
             false,
+            false,
             None,
             None,
             None,
@@ -720,6 +969,7 @@ mod tests {
             false,
             &[1.0, 0.0],
             false,
+            false,
             None,
             None,
             None,
@@ -782,6 +1032,7 @@ mod tests {
             ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
+            false,
             false,
             None,
             None,
@@ -846,6 +1097,7 @@ mod tests {
             false,
             &[1.0, 0.0],
             false,
+            false,
             None,
             None,
             None,
@@ -908,6 +1160,7 @@ mod tests {
             ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
+            false,
             false,
             None,
             None,
@@ -985,6 +1238,7 @@ mod tests {
             ChunkLaneFusion::default(),
             false,
             &[1.0, 0.0],
+            false,
             false,
             None,
             None,
