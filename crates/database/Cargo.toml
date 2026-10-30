@@ -112,6 +112,11 @@ name = "session_schema"
 path = "tests/session_schema.rs"
 required-features = ["sqlite"]
 
+[[test]]
+name = "graph_build_evidence"
+path = "tests/graph_build_evidence.rs"
+required-features = ["sqlite"]
+
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 serial_test.workspace = true

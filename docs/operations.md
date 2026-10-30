@@ -58,7 +58,10 @@ explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION`, `RAG_COMPLETION` or
 `TRIPLET_COMPLETION` return
 their context instead of an answer (`only_context`). No rule routes to
 `CYPHER` or `NATURAL_LANGUAGE`; requested explicitly with
-`ALLOW_CYPHER_QUERY=false`, they are refused. It is session-aware (reads
+`ALLOW_CYPHER_QUERY=false`, they are refused. When no graph was ever built for
+the datasets, or the last build failed, a graph-only recall returns a `system`
+note saying so instead of searching
+([configuration](configuration.md#recall--warm-up-short-circuit)). It is session-aware (reads
 session history when given a `--session-id`) and graph-backed. Results are
 returned to the caller (printed to stdout by the CLI).
 

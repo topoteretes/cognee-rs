@@ -135,6 +135,9 @@
     "personalization_influence",
     "preference_alpha",
     "preference_beta",
+    "recall.warmup_cache_ttl",
+    "recall.warmup_shortcircuit",
+    "recall.warmup_threshold",
     "relational.host",
     "relational.migration_url",
     "relational.name",
@@ -319,6 +322,9 @@
     "improve.distill_max_batches_per_run",
     "search.allow_cypher_query",
     "search.triplet_neighbor_cap",
+    "recall.warmup_shortcircuit",
+    "recall.warmup_threshold",
+    "recall.warmup_cache_ttl",
     "search.hybrid.max_context_tokens",
     "search.hybrid.summarize_overflow",
     "search.hybrid.summarize_batch",
@@ -12141,6 +12147,161 @@
   "set raise_incremental_loading_errors <- {\"a\":1}": {
     "err": true
   },
+  "set recall.warmup_cache_ttl <- \"\"": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- \"1\"": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- \"s\"": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- \"true\"": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- -1": {
+    "ok": {
+      "recall.warmup_cache_ttl": -1.0
+    }
+  },
+  "set recall.warmup_cache_ttl <- 0": {
+    "ok": {
+      "recall.warmup_cache_ttl": 0.0
+    }
+  },
+  "set recall.warmup_cache_ttl <- 1": {
+    "ok": {
+      "recall.warmup_cache_ttl": 1.0
+    }
+  },
+  "set recall.warmup_cache_ttl <- 1.5": {
+    "ok": {
+      "recall.warmup_cache_ttl": 1.5
+    }
+  },
+  "set recall.warmup_cache_ttl <- 5000000000": {
+    "ok": {
+      "recall.warmup_cache_ttl": 5000000000.0
+    }
+  },
+  "set recall.warmup_cache_ttl <- 70000": {
+    "ok": {
+      "recall.warmup_cache_ttl": 70000.0
+    }
+  },
+  "set recall.warmup_cache_ttl <- [1]": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- false": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- null": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- true": {
+    "err": true
+  },
+  "set recall.warmup_cache_ttl <- {\"a\":1}": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- \"\"": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- \"1\"": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- \"s\"": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- \"true\"": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- -1": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- 0": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- 1": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- 1.5": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- 5000000000": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- 70000": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- [1]": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- false": {
+    "ok": {
+      "recall.warmup_shortcircuit": false
+    }
+  },
+  "set recall.warmup_shortcircuit <- null": {
+    "err": true
+  },
+  "set recall.warmup_shortcircuit <- true": {
+    "ok": {}
+  },
+  "set recall.warmup_shortcircuit <- {\"a\":1}": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- \"\"": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- \"1\"": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- \"s\"": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- \"true\"": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- -1": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- 0": {
+    "ok": {
+      "recall.warmup_threshold": 0
+    }
+  },
+  "set recall.warmup_threshold <- 1": {
+    "ok": {}
+  },
+  "set recall.warmup_threshold <- 1.5": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- 5000000000": {
+    "ok": {
+      "recall.warmup_threshold": 5000000000
+    }
+  },
+  "set recall.warmup_threshold <- 70000": {
+    "ok": {
+      "recall.warmup_threshold": 70000
+    }
+  },
+  "set recall.warmup_threshold <- [1]": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- false": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- null": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- true": {
+    "err": true
+  },
+  "set recall.warmup_threshold <- {\"a\":1}": {
+    "err": true
+  },
   "set relational.host <- \"\"": {
     "ok": {
       "relational.host": ""
@@ -16721,6 +16882,27 @@
     }
   },
   "unset raise_incremental_loading_errors": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset recall.warmup_cache_ttl": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset recall.warmup_shortcircuit": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset recall.warmup_threshold": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

@@ -905,6 +905,26 @@ config_section! {
 }
 
 config_section! {
+    /// Recall's warm-up short-circuit. An engine section.
+    pub struct RecallSettings in "recall" {
+        /// Return a "warming up" or "build failed" note instead of searching a
+        /// graph that is not built.
+        pub warmup_shortcircuit: StrictBool = StrictBool(true) => {
+            env: ["RECALL_WARMUP_SHORTCIRCUIT"], alias: [], secret: false,
+        },
+        /// The datapoint count a graph needs to be warm. The probe reports a
+        /// fixed large count for any built graph, so only an empty one is cold.
+        pub warmup_threshold: u64 = 1 => {
+            env: ["RECALL_WARMUP_THRESHOLD"], alias: [], secret: false,
+        },
+        /// Seconds a warm verdict is cached. Cold verdicts never are.
+        pub warmup_cache_ttl: f64 = 60.0 => {
+            env: ["RECALL_WARMUP_CACHE_TTL"], alias: [], secret: false,
+        },
+    }
+}
+
+config_section! {
     /// The HYBRID_COMPLETION retriever's context budget. An engine section.
     pub struct HybridSearchSettings in "search.hybrid" {
         /// Context budget in tokens; unset uses the LLM's context length, 0

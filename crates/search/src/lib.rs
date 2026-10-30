@@ -2,6 +2,8 @@
 
 /// Graph retrieval strategies and helpers.
 pub mod graph_retrieval;
+/// Graph-readiness probe for recall's warm-up short-circuit.
+pub mod graph_warmup;
 /// Observability hooks for search pipeline tracing.
 pub mod observability;
 /// Search orchestration and pipeline assembly.

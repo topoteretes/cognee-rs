@@ -7895,6 +7895,100 @@
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"a\\\":1}\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "RAISE_INCREMENTAL_LOADING_ERRORS=\"{\\\"ssl\\\":true}\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"  \"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"-1\"": {
+    "recall.warmup_cache_ttl": -1.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"0\"": {
+    "recall.warmup_cache_ttl": 0.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"1\"": {
+    "recall.warmup_cache_ttl": 1.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"1.5\"": {
+    "recall.warmup_cache_ttl": 1.5
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"42\"": {
+    "recall.warmup_cache_ttl": 42.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"5000000000\"": {
+    "recall.warmup_cache_ttl": 5000000000.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"70000\"": {
+    "recall.warmup_cache_ttl": 70000.0
+  },
+  "RECALL_WARMUP_CACHE_TTL=\"TRUE\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"[1]\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"abc\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"false\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"no\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"on\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"require\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"true\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"v\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"yes\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"{\\\"a\\\":1}\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "RECALL_WARMUP_CACHE_TTL=\"{\\\"ssl\\\":true}\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"  \"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"-1\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"0\"": {
+    "recall.warmup_shortcircuit": false
+  },
+  "RECALL_WARMUP_SHORTCIRCUIT=\"1\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"1.5\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"42\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"5000000000\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"70000\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"TRUE\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"[1]\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"abc\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"false\"": {
+    "recall.warmup_shortcircuit": false
+  },
+  "RECALL_WARMUP_SHORTCIRCUIT=\"no\"": {
+    "recall.warmup_shortcircuit": false
+  },
+  "RECALL_WARMUP_SHORTCIRCUIT=\"on\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"require\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"true\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"v\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"yes\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"{\\\"a\\\":1}\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "RECALL_WARMUP_SHORTCIRCUIT=\"{\\\"ssl\\\":true}\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"  \"": {},
+  "RECALL_WARMUP_THRESHOLD=\"\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"-1\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"0\"": {
+    "recall.warmup_threshold": 0
+  },
+  "RECALL_WARMUP_THRESHOLD=\"1\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"1.5\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"42\"": {
+    "recall.warmup_threshold": 42
+  },
+  "RECALL_WARMUP_THRESHOLD=\"5000000000\"": {
+    "recall.warmup_threshold": 5000000000
+  },
+  "RECALL_WARMUP_THRESHOLD=\"70000\"": {
+    "recall.warmup_threshold": 70000
+  },
+  "RECALL_WARMUP_THRESHOLD=\"TRUE\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"[1]\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"abc\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"false\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"no\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"on\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"require\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"true\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"v\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"yes\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"{\\\"a\\\":1}\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "RECALL_WARMUP_THRESHOLD=\"{\\\"ssl\\\":true}\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"  \"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"-1\"": {},
