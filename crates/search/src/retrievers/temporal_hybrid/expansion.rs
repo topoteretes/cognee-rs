@@ -28,12 +28,6 @@ use crate::retrievers::context_items::search_results_to_context;
 use crate::retrievers::hybrid::{payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
 
-/// The collections whose rows count as chunks: `(data_type, field)`.
-///
-/// Python's `chunk_collections` adds `DltRow_text` when DLT rows are indexed;
-/// Rust has no DLT ingestion, so document chunks are the only chunk rows.
-pub(crate) const CHUNK_COLLECTIONS: &[(&str, &str)] = &[("DocumentChunk", "text")];
-
 /// Ids of the nodes with an edge into one of `timestamps`, in timestamp order.
 ///
 /// `edges` is `get_neighborhood(timestamp ids, depth = 1)`'s edge half; only
@@ -229,5 +223,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn temporal_expansion_reads_dlt_rows_and_preserves_scope() {
+        let db = MockVectorDB::new();
+        db.create_collection("DocumentChunk", "text", 2)
+            .await
+            .unwrap();
+        db.create_collection("DltRow", "text", 2).await.unwrap();
+        let row = Uuid::new_v4();
+        index(&db, "DltRow", row, "orders:42", &["sales"]).await;
+        let db: Arc<dyn VectorDB> = Arc::new(db);
+        let ids = vec![row.to_string()];
+
+        let found = retrieve_in_collections(
+            &db,
+            crate::retrievers::hybrid::chunk_collections(true),
+            &ids,
+            Some(&["sales".to_string()]),
+            "OR",
+        )
+        .await
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(result_id(&found[0]), Some(row.to_string()));
+
+        let excluded = retrieve_in_collections(
+            &db,
+            crate::retrievers::hybrid::chunk_collections(true),
+            &ids,
+            Some(&["other".to_string()]),
+            "OR",
+        )
+        .await
+        .unwrap();
+        assert!(excluded.is_empty());
     }
 }

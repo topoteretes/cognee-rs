@@ -48,13 +48,14 @@ use cognee_llm::{GenerationOptions, Llm, Message};
 use cognee_session::SessionContext;
 use cognee_vector::VectorDB;
 
-use self::expansion::{CHUNK_COLLECTIONS, attached_node_ids, retrieve_in_collections};
+use self::expansion::{attached_node_ids, retrieve_in_collections};
 use self::matching::{
     ExtractedWindow, extract_query_interval, tightest_first, tightness_rank, to_epoch_ms,
     window_span_ms,
 };
 use crate::retrievers::hybrid::{
-    HybridBudget, HybridCandidates, HybridLanes, HybridRetriever, HybridView, result_id,
+    HybridBudget, HybridCandidates, HybridLanes, HybridRetriever, HybridView, chunk_collections,
+    has_dlt_rows, result_id,
 };
 use crate::retrievers::{DatasetScoping, SearchRetriever};
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
@@ -467,7 +468,7 @@ impl TemporalHybridRetriever {
         }
         let chunks = retrieve_in_collections(
             self.hybrid.vector_db(),
-            CHUNK_COLLECTIONS,
+            chunk_collections(has_dlt_rows(self.hybrid.vector_db().as_ref()).await?),
             &attached,
             lanes.node_name.as_deref(),
             &lanes.node_name_filter_operator,
