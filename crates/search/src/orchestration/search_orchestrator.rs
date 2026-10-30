@@ -1768,14 +1768,181 @@ mod tests {
     use cognee_database::ops as db_ops;
     use cognee_database::{AclDb, IngestDb};
     use cognee_database::{SearchHistoryDb, SearchHistoryEntryType, connect, initialize};
-    use cognee_llm::Message;
+    use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message};
     use cognee_models::Dataset;
-    use cognee_session::SessionContext;
+    use cognee_session::{FsSessionStore, SessionContext, SessionManager};
     use serde_json::json;
     use std::sync::Arc;
     use uuid::Uuid;
 
     struct FakeChunksRetriever;
+
+    struct SessionCompletionRetriever {
+        query_seen: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for SessionCompletionRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::RagCompletion
+        }
+
+        async fn get_context(
+            &self,
+            query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            *self.query_seen.lock().unwrap() = Some(query.to_string());
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("generated answer".into()))
+        }
+    }
+
+    struct TurnAnalysisLlm(serde_json::Value);
+
+    #[async_trait]
+    impl Llm for TurnAnalysisLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            Err(LlmError::ConfigError("not used".into()))
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            Ok(self.0.clone())
+        }
+
+        fn model(&self) -> &str {
+            "turn-analysis-test"
+        }
+    }
+
+    async fn session_orchestrator(
+        analysis: serde_json::Value,
+    ) -> (
+        super::SearchOrchestrator,
+        Arc<SessionCompletionRetriever>,
+        Arc<SessionManager>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(Some("s"), None, "old question", "old answer", None, None)
+            .await
+            .unwrap();
+        let retriever = Arc::new(SessionCompletionRetriever {
+            query_seen: std::sync::Mutex::new(None),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(TurnAnalysisLlm(analysis)))
+            .with_auto_feedback_default(true);
+        (orchestrator, retriever, manager, dir)
+    }
+
+    fn session_request(query: &str) -> SearchRequest {
+        SearchRequest {
+            query_text: query.into(),
+            search_type: SearchType::RagCompletion,
+            top_k: None,
+            datasets: None,
+            dataset_ids: None,
+            system_prompt: None,
+            system_prompt_path: None,
+            only_context: Some(false),
+            use_combined_context: Some(true),
+            session_id: Some("s".into()),
+            node_type: None,
+            node_name: None,
+            node_name_filter_operator: None,
+            wide_search_top_k: None,
+            triplet_distance_penalty: None,
+            user_id: None,
+            tenant_id: None,
+            verbose: None,
+            feedback_influence: None,
+            retriever_specific_config: None,
+            response_schema: None,
+            custom_search_type: None,
+            auto_feedback_detection: Some(true),
+            neighborhood_depth: None,
+            neighborhood_seed_top_k: None,
+            summarize_context: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn session_turn_rewrites_retrieval_but_persists_raw_query() {
+        let (orchestrator, retriever, manager, _dir) = session_orchestrator(json!({
+            "response_to_user": null,
+            "query_to_answer": "effective query",
+            "served_context_ratings": [],
+            "candidate_context_updates": [],
+            "previous_answer_rating": null
+        }))
+        .await;
+
+        orchestrator
+            .search(&session_request("raw follow-up"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            retriever.query_seen.lock().unwrap().as_deref(),
+            Some("effective query")
+        );
+        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        assert_eq!(entries.last().unwrap().question, "raw follow-up");
+        assert_eq!(entries.last().unwrap().answer, "generated answer");
+    }
+
+    #[tokio::test]
+    async fn feedback_only_turn_acknowledges_without_retrieval_and_is_saved_once() {
+        let (orchestrator, retriever, manager, _dir) = session_orchestrator(json!({
+            "response_to_user": "Thanks for the correction.",
+            "query_to_answer": null,
+            "served_context_ratings": [],
+            "candidate_context_updates": [{"section":"lessons_learned","content":"Use X.","confidence":0.9}],
+            "previous_answer_rating": 2
+        }))
+        .await;
+
+        let result = orchestrator
+            .search(&session_request("No, use X."))
+            .await
+            .unwrap();
+
+        assert!(retriever.query_seen.lock().unwrap().is_none());
+        assert!(matches!(
+            &result.result,
+            SearchOutput::Text(text) if text == "Thanks for the correction."
+        ));
+        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].question, "No, use X.");
+        assert_eq!(entries[0].feedback_score, Some(2));
+    }
 
     #[async_trait]
     impl SearchRetriever for FakeChunksRetriever {

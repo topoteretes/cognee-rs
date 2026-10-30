@@ -277,6 +277,7 @@ mod tests {
             feedback_text: None,
             feedback_score: None,
             used_graph_element_ids: None,
+            used_session_context_ids: None,
             memify_metadata: None,
         }
     }

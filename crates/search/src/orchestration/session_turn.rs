@@ -2,7 +2,10 @@
 
 use chrono::Utc;
 use cognee_llm::{Llm, Message, generate_json_schema};
-use cognee_session::{CONTEXT_ENTRY_KIND, SessionContextEntry, SessionManager};
+use cognee_session::{
+    CONTEXT_PROFILE_QA, CandidateContextUpdate as StoredCandidateContextUpdate, SessionManager,
+    apply_candidate_updates_for_user,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -148,10 +151,12 @@ pub async fn prepare_session_turn(
     };
     let previous = entries.last();
     let previous_qa_id = previous.map(|e| e.id.to_string());
-    // Rust's persisted QA model does not yet expose Python's
-    // `used_session_context_ids`; B1 still rates any ids returned by the
-    // analysis defensively, while B2 can add served-id stamping atomically.
-    let served_ids: Vec<String> = Vec::new();
+    // Only context actually stamped on the previous answer may be rated. This
+    // prevents an LLM from incrementing arbitrary session-context rows and
+    // matches Python's cross-turn lineage contract.
+    let served_ids = previous
+        .and_then(|entry| entry.used_session_context_ids.clone())
+        .unwrap_or_default();
     let rows = manager
         .get_session_context_entries(Some(session_id), user_id)
         .await
@@ -191,7 +196,7 @@ pub async fn prepare_session_turn(
         || !analysis.served_context_ratings.is_empty()
         || analysis.previous_answer_rating.is_some();
     let mut accepted = vec![];
-    if previous_qa_id.is_some() && has_evidence {
+    if has_evidence {
         let feedback_id = Uuid::new_v4().to_string();
         let mut feedback = Map::new();
         for (key, value) in [
@@ -199,7 +204,10 @@ pub async fn prepare_session_turn(
             ("kind", json!("feedback")),
             ("created_at", json!(Utc::now().to_rfc3339())),
             ("raw_text", json!(query)),
-            ("referenced_qa_ids", json!([previous_qa_id])),
+            (
+                "referenced_qa_ids",
+                json!(previous_qa_id.iter().cloned().collect::<Vec<_>>()),
+            ),
             (
                 "referenced_qa_rating",
                 json!(analysis.previous_answer_rating),
@@ -217,6 +225,11 @@ pub async fn prepare_session_turn(
             .await;
 
         for rating in &analysis.served_context_ratings {
+            // The model may only rate context proven to have been served to
+            // the previous answer. Ignore invented or stale IDs.
+            if !served_ids.iter().any(|id| id == &rating.entry_id) {
+                continue;
+            }
             let Some(row) = rows
                 .iter()
                 .find(|r| r.get("id").and_then(Value::as_str) == Some(&rating.entry_id))
@@ -237,37 +250,26 @@ pub async fn prepare_session_turn(
                 .update_session_context_entry(Some(session_id), user_id, &rating.entry_id, merge)
                 .await;
         }
-        for candidate in &analysis.candidate_context_updates {
-            if candidate.confidence < 0.75 || candidate.content.trim().is_empty() {
-                continue;
-            }
-            let entry = SessionContextEntry {
-                id: Uuid::new_v4().to_string(),
-                section: candidate.section.clone(),
-                context_profile: "qa".into(),
-                content: candidate.content.clone(),
-                normalized_content: String::new(),
-                confidence: candidate.confidence,
-                created_at: Utc::now().to_rfc3339(),
-                source_feedback_ids: vec![feedback_id.clone()],
-                source_trace_ids: vec![],
-                helpful_count: 0,
-                harmful_count: 0,
-                priority: 0,
-                last_served_at: None,
-                embedding: None,
-                kind: CONTEXT_ENTRY_KIND.into(),
-            };
-            if let Ok(entry) = entry.validated()
-                && let Ok(row) = entry.to_row()
-                && manager
-                    .create_session_context_entry(Some(session_id), user_id, row)
-                    .await
-                    .is_ok()
-            {
-                accepted.push(entry.id);
-            }
-        }
+        let candidates = analysis
+            .candidate_context_updates
+            .iter()
+            .map(|candidate| {
+                StoredCandidateContextUpdate::new(
+                    CONTEXT_PROFILE_QA,
+                    &candidate.section,
+                    &candidate.content,
+                    candidate.confidence,
+                )
+            })
+            .collect::<Vec<_>>();
+        accepted = apply_candidate_updates_for_user(
+            manager,
+            session_id,
+            user_id,
+            &feedback_id,
+            &candidates,
+        )
+        .await;
     }
     let should_answer = should_answer_turn(&analysis, previous_qa_id.is_some());
     SessionTurnPreparation {
