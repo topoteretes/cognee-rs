@@ -193,7 +193,16 @@ pub async fn recall(
                 graph_search_type = Some(used_type);
                 graph_auto_routed = was_auto;
                 graph_response = Some(response);
-                items
+                // A graph that is not built answers with a note only when it
+                // is the one source; next to others it contributes nothing.
+                if sources.as_slice() == [RecallScope::Graph] {
+                    items
+                } else {
+                    items
+                        .into_iter()
+                        .filter(|item| item.source != RecallSource::System)
+                        .collect()
+                }
             }
         };
 

@@ -603,6 +603,27 @@ impl SearchOrchestrator {
         }
     }
 
+    /// [`Self::assess_memory_readiness`] for the datasets a search with
+    /// `request` would cover. Its datasets are checked and resolved as the
+    /// search does, so a denied id or unknown names fail here, before
+    /// probing. Without a caller there is nothing to scope by, and the graph
+    /// is warm.
+    pub async fn assess_recall_readiness(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<WarmupProbe, SearchError> {
+        let Some(requester) = request.user_id else {
+            return Ok(WarmupProbe::warm());
+        };
+        let targets = match self.authorize_and_resolve_datasets(request).await? {
+            Some(resolved) => Some(resolved),
+            None => request.dataset_ids.clone().filter(|ids| !ids.is_empty()),
+        };
+        Ok(self
+            .assess_memory_readiness(requester, request.tenant_id, targets.as_deref())
+            .await)
+    }
+
     async fn probe_readiness(
         &self,
         warmup: &GraphWarmup,
@@ -628,6 +649,143 @@ impl SearchOrchestrator {
             .probe(&targets)
             .await
             .map_err(|e| SearchError::DatabaseError(e.to_string()))
+    }
+
+    /// Check the request's explicit `dataset_ids` against what the caller may
+    /// read, and resolve its dataset names, as a search does before it runs.
+    /// `Some(ids)`: the names resolved to `ids`, which the search then runs
+    /// over.
+    async fn authorize_and_resolve_datasets(
+        &self,
+        request: &SearchRequest,
+    ) -> Result<Option<Vec<uuid::Uuid>>, SearchError> {
+        // Authorize caller-supplied dataset UUIDs. Python runs every explicit
+        // id through `get_authorized_existing_datasets(dataset_ids, "read",
+        // user)` → `get_specific_user_permission_datasets`, which lists the
+        // caller's whole readable set via `get_all_user_permission_datasets`
+        // (direct + tenant + role grants) and raises one
+        // `PermissionDeniedError` when any requested id is not in it —
+        // whether it belongs to someone else or does not exist
+        // (`get_specific_user_permission_datasets.py:30-38`). The readable
+        // set comes from `readable_dataset_ids`: the ACL when one is wired,
+        // else the ownership fallback. Without either there is nothing to
+        // check against and the ids pass through, which keeps in-process
+        // embedders that never wired one working as before.
+        // `Some(vec![])` names no dataset, like `None` (Python passes
+        // `dataset_ids or None` down). What "no dataset named" means depends on
+        // the mode — every dataset the caller may read with an ACL wired,
+        // unscoped without one — and is settled after name resolution below.
+        if let Some(ids) = request.dataset_ids.as_ref().filter(|ids| !ids.is_empty())
+            && (self.acl_db.is_some() || self.dataset_resolver.is_some())
+        {
+            let requester = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput(
+                    "dataset_ids filter requires SearchRequest.user_id to authorize the caller"
+                        .to_string(),
+                )
+            })?;
+            self.authorize_dataset_ids(requester, request.tenant_id, ids)
+                .await?;
+        }
+
+        // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
+        //   - names resolve among the owner's datasets, then strict tenant
+        //     equality `dataset.tenant_id == request.tenant_id` (`None` ⇔ a
+        //     tenant-less row only) — Python `get_dataset_ids` lists the
+        //     owner's datasets, filters names, then tenant
+        //     (`cognee/modules/data/methods/get_dataset_ids.py:29-34@37f788bd2`).
+        //     Owner-scoping alone let a name resolve to a row belonging to
+        //     another tenant. Owner-scoping
+        //     itself is deliberate and matches Python, whose docstring reads
+        //     "If a user wants to write to a dataset he is not the owner of it
+        //     must be provided through UUID" — do not widen it to shared
+        //     datasets.
+        //   - per-batch error: if ZERO names resolve → `DatasetNotFound`
+        //     (Python `cognee/api/v1/search/search.py:356-362@37f788bd2`);
+        //     partial misses are dropped and the search proceeds with the
+        //     resolved subset, logging a warning. That matched Python at
+        //     c0d18c8 (`get_dataset_ids` dropped them silently); Python
+        //     37f788bd2 resolves names with `strict=True` and raises for any
+        //     unresolved name (`get_dataset_ids.py:35-43`) — a divergence not
+        //     changed here.
+        //   - `datasets=Some(empty_vec)` is treated like `None`: no name
+        //     resolution (Python's `if datasets:` short-circuits empty lists
+        //     too); the request then counts as naming no dataset at all.
+        //   - explicit `dataset_ids` always wins over `datasets`
+        match (&request.datasets, &request.dataset_ids) {
+            (Some(names), maybe_ids)
+                if !names.is_empty()
+                    && maybe_ids.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+            {
+                let resolver = self.dataset_resolver.as_ref().ok_or_else(|| {
+                    SearchError::InvalidInput(
+                        "dataset name filter requested but no dataset resolver is wired \
+                         into the SearchOrchestrator (call SearchBuilder::with_dataset_resolver)"
+                            .to_string(),
+                    )
+                })?;
+                let owner_id = request.user_id.ok_or_else(|| {
+                    SearchError::InvalidInput(
+                        "dataset name filter requires SearchRequest.user_id to identify the owner"
+                            .to_string(),
+                    )
+                })?;
+
+                // One tenant-strict point lookup per name: owner, name and
+                // `dataset.tenant_id == request.tenant_id` with `None` ⇔ NULL —
+                // Python's `get_dataset_ids` rule
+                // (`get_dataset_ids.py:30-34@37f788bd2`). Not
+                // the former tenant-loose name lookup (removed, SDK-936): it applied no
+                // tenant predicate for `None`, and of two same-named rows it may return
+                // the tenanted one the strict readable set excludes.
+                let mut resolved = Vec::with_capacity(names.len());
+                let mut missing = Vec::new();
+                for name in names {
+                    match resolver
+                        .get_dataset_by_name_in_tenant(name, owner_id, request.tenant_id)
+                        .await?
+                    {
+                        Some(ds) => resolved.push(ds.id),
+                        None => missing.push(name.clone()),
+                    }
+                }
+
+                if resolved.is_empty() {
+                    // All requested names were unknown — Python raises
+                    // DatasetNotFoundError("No datasets found.") here.
+                    return Err(SearchError::DatasetNotFound(missing.join(", ")));
+                }
+                if !missing.is_empty() {
+                    tracing::warn!(
+                        missing = ?missing,
+                        "some requested dataset names did not resolve; proceeding with the resolved subset"
+                    );
+                }
+
+                // Authorize the resolved ids exactly as an explicitly-supplied
+                // batch, because Python does: `get_authorized_existing_datasets`
+                // pipes `get_dataset_ids(datasets, user)` straight into
+                // `get_specific_user_permission_datasets`. That closes the
+                // bypass a name-only path had — a name resolved on ownership
+                // alone and reached the retriever without a `read` grant.
+                //
+                // Only when an `AclDb` is wired. Without one the check cannot
+                // reject anything: `readable_dataset_ids` falls back to
+                // `list_datasets_by_owner` filtered by strict tenant equality,
+                // and the name resolution above applied the same owner and
+                // strict tenant predicate (point lookups), so every resolved
+                // id is in the set by construction. Running it anyway would add a full
+                // owner-wide dataset listing to every name-scoped search for
+                // a result that is provably `Ok(())`.
+                if self.acl_db.is_some() {
+                    self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
+                        .await?;
+                }
+
+                Ok(Some(resolved))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Update `last_accessed` on the `Data` records a retrieval returned
@@ -772,136 +930,15 @@ impl SearchOrchestrator {
         };
         let scoping = retriever.dataset_scoping();
 
-        // Authorize caller-supplied dataset UUIDs. Python runs every explicit
-        // id through `get_authorized_existing_datasets(dataset_ids, "read",
-        // user)` → `get_specific_user_permission_datasets`, which lists the
-        // caller's whole readable set via `get_all_user_permission_datasets`
-        // (direct + tenant + role grants) and raises one
-        // `PermissionDeniedError` when any requested id is not in it —
-        // whether it belongs to someone else or does not exist
-        // (`get_specific_user_permission_datasets.py:30-38`). The readable
-        // set comes from `readable_dataset_ids`: the ACL when one is wired,
-        // else the ownership fallback. Without either there is nothing to
-        // check against and the ids pass through, which keeps in-process
-        // embedders that never wired one working as before.
-        // `Some(vec![])` names no dataset, like `None` (Python passes
-        // `dataset_ids or None` down). What "no dataset named" means depends on
-        // the mode — every dataset the caller may read with an ACL wired,
-        // unscoped without one — and is settled after name resolution below.
-        if let Some(ids) = request.dataset_ids.as_ref().filter(|ids| !ids.is_empty())
-            && (self.acl_db.is_some() || self.dataset_resolver.is_some())
-        {
-            let requester = request.user_id.ok_or_else(|| {
-                SearchError::InvalidInput(
-                    "dataset_ids filter requires SearchRequest.user_id to authorize the caller"
-                        .to_string(),
-                )
-            })?;
-            self.authorize_dataset_ids(requester, request.tenant_id, ids)
-                .await?;
-        }
-
-        // Resolve dataset names → UUIDs. Mirrors Python `cognee.search()`:
-        //   - names resolve among the owner's datasets, then strict tenant
-        //     equality `dataset.tenant_id == request.tenant_id` (`None` ⇔ a
-        //     tenant-less row only) — Python `get_dataset_ids` lists the
-        //     owner's datasets, filters names, then tenant
-        //     (`cognee/modules/data/methods/get_dataset_ids.py:29-34@37f788bd2`).
-        //     Owner-scoping alone let a name resolve to a row belonging to
-        //     another tenant. Owner-scoping
-        //     itself is deliberate and matches Python, whose docstring reads
-        //     "If a user wants to write to a dataset he is not the owner of it
-        //     must be provided through UUID" — do not widen it to shared
-        //     datasets.
-        //   - per-batch error: if ZERO names resolve → `DatasetNotFound`
-        //     (Python `cognee/api/v1/search/search.py:356-362@37f788bd2`);
-        //     partial misses are dropped and the search proceeds with the
-        //     resolved subset, logging a warning. That matched Python at
-        //     c0d18c8 (`get_dataset_ids` dropped them silently); Python
-        //     37f788bd2 resolves names with `strict=True` and raises for any
-        //     unresolved name (`get_dataset_ids.py:35-43`) — a divergence not
-        //     changed here.
-        //   - `datasets=Some(empty_vec)` is treated like `None`: no name
-        //     resolution (Python's `if datasets:` short-circuits empty lists
-        //     too); the request then counts as naming no dataset at all.
-        //   - explicit `dataset_ids` always wins over `datasets`
         let resolved_request_owned;
-        let request: &SearchRequest = match (&request.datasets, &request.dataset_ids) {
-            (Some(names), maybe_ids)
-                if !names.is_empty()
-                    && maybe_ids.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
-            {
-                let resolver = self.dataset_resolver.as_ref().ok_or_else(|| {
-                    SearchError::InvalidInput(
-                        "dataset name filter requested but no dataset resolver is wired \
-                         into the SearchOrchestrator (call SearchBuilder::with_dataset_resolver)"
-                            .to_string(),
-                    )
-                })?;
-                let owner_id = request.user_id.ok_or_else(|| {
-                    SearchError::InvalidInput(
-                        "dataset name filter requires SearchRequest.user_id to identify the owner"
-                            .to_string(),
-                    )
-                })?;
-
-                // One tenant-strict point lookup per name: owner, name and
-                // `dataset.tenant_id == request.tenant_id` with `None` ⇔ NULL —
-                // Python's `get_dataset_ids` rule
-                // (`get_dataset_ids.py:30-34@37f788bd2`). Not
-                // the former tenant-loose name lookup (removed, SDK-936): it applied no
-                // tenant predicate for `None`, and of two same-named rows it may return
-                // the tenanted one the strict readable set excludes.
-                let mut resolved = Vec::with_capacity(names.len());
-                let mut missing = Vec::new();
-                for name in names {
-                    match resolver
-                        .get_dataset_by_name_in_tenant(name, owner_id, request.tenant_id)
-                        .await?
-                    {
-                        Some(ds) => resolved.push(ds.id),
-                        None => missing.push(name.clone()),
-                    }
-                }
-
-                if resolved.is_empty() {
-                    // All requested names were unknown — Python raises
-                    // DatasetNotFoundError("No datasets found.") here.
-                    return Err(SearchError::DatasetNotFound(missing.join(", ")));
-                }
-                if !missing.is_empty() {
-                    tracing::warn!(
-                        missing = ?missing,
-                        "some requested dataset names did not resolve; proceeding with the resolved subset"
-                    );
-                }
-
-                // Authorize the resolved ids exactly as an explicitly-supplied
-                // batch, because Python does: `get_authorized_existing_datasets`
-                // pipes `get_dataset_ids(datasets, user)` straight into
-                // `get_specific_user_permission_datasets`. That closes the
-                // bypass a name-only path had — a name resolved on ownership
-                // alone and reached the retriever without a `read` grant.
-                //
-                // Only when an `AclDb` is wired. Without one the check cannot
-                // reject anything: `readable_dataset_ids` falls back to
-                // `list_datasets_by_owner` filtered by strict tenant equality,
-                // and the name resolution above applied the same owner and
-                // strict tenant predicate (point lookups), so every resolved
-                // id is in the set by construction. Running it anyway would add a full
-                // owner-wide dataset listing to every name-scoped search for
-                // a result that is provably `Ok(())`.
-                if self.acl_db.is_some() {
-                    self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
-                        .await?;
-                }
-
+        let request: &SearchRequest = match self.authorize_and_resolve_datasets(request).await? {
+            Some(resolved) => {
                 let mut clone = request.clone();
                 clone.dataset_ids = Some(resolved);
                 resolved_request_owned = clone;
                 &resolved_request_owned
             }
-            _ => request,
+            None => request,
         };
 
         // A request that names no dataset (no ids and no names, empty lists

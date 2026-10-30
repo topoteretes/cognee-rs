@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::graph_warmup::{ReadinessState, WarmupProbe};
 use crate::observability::{COGNEE_RECALL_ROUTE_RULE, COGNEE_SEARCH_TYPE};
 use crate::types::SearchError;
 use crate::{
@@ -59,6 +60,8 @@ pub enum RecallSource {
     Session,
     Graph,
     Trace,
+    /// A note from recall itself, such as the memory still warming up.
+    System,
 }
 
 impl RecallSource {
@@ -68,6 +71,7 @@ impl RecallSource {
             RecallSource::Session => "session",
             RecallSource::Graph => "graph",
             RecallSource::Trace => "trace",
+            RecallSource::System => "system",
         }
     }
 }
@@ -511,15 +515,7 @@ pub async fn run_graph(
     // resolves a missing user to the default user first.
     if search_orchestrator.scopes_unfiltered_search() && owner_id.is_none() && !has_dataset_filter {
         debug!("recall: per-dataset storage and an unknown caller; no graph results");
-        let response = crate::orchestration::prepare_search_result(
-            search_type,
-            crate::SearchOutput::Items(Vec::new()),
-            None,
-            Some(Vec::new()),
-            false,
-            false,
-            false,
-        );
+        let response = empty_graph_response(search_type);
         return Ok((Vec::new(), search_type, auto_routed, response));
     }
 
@@ -552,6 +548,26 @@ pub async fn run_graph(
         neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
         summarize_context: None,
     };
+
+    // A graph that is not built gets a note instead of a search. A caller
+    // asking for context expects context, not a note.
+    if let Some(warmup) = search_orchestrator.graph_warmup()
+        && warmup.config().shortcircuit
+        && !caller_only_context.unwrap_or(false)
+    {
+        let probe = search_orchestrator
+            .assess_recall_readiness(&request)
+            .await?;
+        if !probe.is_warm() {
+            info!(
+                state = probe.state.as_str(),
+                "recall: the graph is not built; skipping the search"
+            );
+            let marker = warmup_marker(&probe, warmup.config().threshold);
+            let response = empty_graph_response(search_type);
+            return Ok((vec![marker], search_type, auto_routed, response));
+        }
+    }
 
     // The router picked something other than the fallback, so the fallback is
     // still untried and may replace this result.
@@ -639,6 +655,51 @@ fn switch_to(
 ) {
     request.search_type = decision.search_type;
     request.only_context = search_only_context(caller_only_context, decision);
+}
+
+/// The note recall returns instead of searching a graph that is not built:
+/// the last build's failure, or that memory is still warming up.
+fn warmup_marker(probe: &WarmupProbe, threshold: u64) -> RecallItem {
+    let (status, text) = if probe.state == ReadinessState::BuildFailed {
+        let failure = probe.error_message.as_deref().unwrap_or("unknown error");
+        let text = format!(
+            "Memory build failed: the last ingestion for the requested datasets ended in an \
+             error ({failure}). Fix the cause and re-run remember() or cognify()."
+        );
+        ("build_failed", text)
+    } else {
+        let text = "Memory is still warming up: no knowledge graph data exists yet for the \
+                    requested datasets."
+            .to_string();
+        ("memory_warming_up", text)
+    };
+    let content = serde_json::json!({
+        "status": status,
+        "text": text,
+        "datapoint_count": probe.datapoint_count,
+        "threshold": threshold,
+        "error_class": null,
+        "error_message": probe.error_message,
+    });
+    RecallItem {
+        source: RecallSource::System,
+        content,
+        score: 1.0,
+    }
+}
+
+/// The response of a graph search that did not run: no items, over no
+/// dataset.
+fn empty_graph_response(search_type: SearchType) -> SearchResponse {
+    crate::orchestration::prepare_search_result(
+        search_type,
+        crate::SearchOutput::Items(Vec::new()),
+        None,
+        Some(Vec::new()),
+        false,
+        false,
+        false,
+    )
 }
 
 /// Tokenize text into lowercase words of length >= 2.

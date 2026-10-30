@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cognee::api::recall;
 use cognee::database::IngestDb;
+use cognee::search::graph_warmup::GraphWarmup;
 use cognee::search::{SearchBuilder, SearchType, SessionManager};
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
@@ -74,6 +75,10 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?
             .is_some();
+        let graph_warmup = Arc::new(GraphWarmup::new(
+            Arc::clone(&database).pipeline_runs(),
+            cm.settings().recall_warmup_config(),
+        ));
         let orchestrator =
             SearchBuilder::new(vector_db, embedding_engine, graph_db, llm, database.clone())
                 .with_tuning(search_tuning)
@@ -81,6 +86,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                 .with_dataset_resolver(database as Arc<dyn IngestDb>)
                 .with_search_history_logging(log_search_history)
                 .with_per_dataset_storage(per_dataset_storage)
+                .with_graph_warmup(graph_warmup)
                 .build();
 
         let datasets = if args.datasets.is_empty() {
