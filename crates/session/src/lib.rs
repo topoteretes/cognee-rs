@@ -44,6 +44,7 @@ pub use agent_context_extraction::{
 };
 pub use context_builder::{
     CandidateContextUpdate, MIN_CANDIDATE_CONFIDENCE, apply_candidate_updates,
+    apply_candidate_updates_for_user,
 };
 pub use context_entry::{
     AGENT_CONTEXT_SECTIONS, CONTEXT_ENTRY_KIND, CONTEXT_PROFILE_AGENT, CONTEXT_PROFILE_QA,

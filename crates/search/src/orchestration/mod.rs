@@ -13,4 +13,6 @@ pub use prepare_search_result::prepare_search_result;
 pub use search_execution_builder::{SearchBuilder, SearchTuning};
 pub use search_orchestrator::{DatasetSearchResult, SearchOrchestrator, merge_dataset_results};
 pub use search_type_tools::SearchTypeRegistry;
-pub use session_turn::{SessionTurnAnalysis, SessionTurnPreparation};
+pub use session_turn::{
+    CandidateContextUpdate, ServedContextRating, SessionTurnAnalysis, SessionTurnPreparation,
+};

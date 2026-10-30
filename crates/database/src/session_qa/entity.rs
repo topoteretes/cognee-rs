@@ -22,6 +22,7 @@ pub struct Model {
     /// JSON-serialised `UsedGraphElementIds`.
     #[sea_orm(column_type = "Text", nullable)]
     pub used_graph_element_ids: Option<String>,
+    pub used_session_context_ids: Option<String>,
     /// JSON-serialised `HashMap<String, bool>`.
     #[sea_orm(column_type = "Text", nullable)]
     pub memify_metadata: Option<String>,
