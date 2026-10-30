@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 use crate::types::SearchRequest;
@@ -149,6 +151,13 @@ pub struct SearchParams {
     /// `personalization_enabled` is on; `None` searches un-personalized.
     #[serde(skip)]
     pub personalization: Option<crate::user_preferences::PreferenceConfig>,
+
+    /// Request-local preference lookup. Clones of `SearchParams` share the
+    /// cell, so ranking and prompt construction (including only-context and
+    /// query batches) observe one graph read and the same preference snapshot.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub preference_cache: Arc<OnceCell<crate::user_preferences::ActivePreferences>>,
 }
 
 impl SearchParams {
@@ -298,6 +307,7 @@ impl From<&SearchRequest> for SearchParams {
             user_id: req.user_id,
             // The orchestrator stamps it from its tuning.
             personalization: None,
+            preference_cache: Arc::new(OnceCell::new()),
         }
     }
 }
