@@ -620,6 +620,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Concurrent session-turn execution parity (SDK-1045).** Eligible built-in
+  RAG, graph, and hybrid completions now overlap turn analysis with retrieval
+  and answering, serialize turns per user/session identity, and retain
+  independent-session parallelism. `session_search_mode` defaults to
+  `concurrent` and accepts `sequential`; automatic feedback now defaults on,
+  matching Python `dev`. Batch, preview, feeling-lucky, community, and
+  sessionless calls retain the sequential path.
+
+- **Cross-SDK session-turn parity fixtures (SDK-1045).** Deterministic fixtures
+  derived from Python `dev` (`610119f2`) now lock raw/effective-query routing, first-turn
+  preference capture, feedback-only and feedback-plus-follow-up behavior, and
+  the hand-off of rated QA rows to the existing improve stage. Session-turn
+  tracing reports routing and persistence counts without recording query or
+  preference text.
+  Concurrent analysis is bounded at Python's 30-second timeout and fails open
+  to the raw query if the model does not return.
+
+- **Sequential session-turn preparation parity (SDK-1045).** Generative
+  session searches analyze feedback and corrections before retrieval, rewrite
+  the effective query while preserving the raw user message in history, and
+  acknowledge feedback-only turns without running retrieval. Session QA rows
+  now round-trip Python's `used_session_context_ids`, including a relational
+  schema migration, so only guidance proven to have been served can be rated.
+
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
   `response_format: {"type": "json_schema", "json_schema": {"strict": true,

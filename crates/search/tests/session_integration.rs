@@ -449,15 +449,14 @@ async fn conversational_feedback_persists_to_prior_entry() {
         .await
         .unwrap();
 
-    // The MockLlm queue: first response is for feedback detection
-    // (feedback_detected=true, score=5, not a follow-up question → pure feedback
-    // so the search returns early without hitting the retriever).
+    // Latest Python dev uses the unified session-turn analysis schema. A
+    // response with no query_to_answer but a response/rating is pure feedback.
     let feedback_json = serde_json::to_string(&serde_json::json!({
-        "feedback_detected": true,
-        "feedback_text": "Great answer!",
-        "feedback_score": 5.0,
         "response_to_user": "Thank you for the feedback!",
-        "contains_followup_question": false
+        "query_to_answer": null,
+        "served_context_ratings": [],
+        "candidate_context_updates": [],
+        "previous_answer_rating": 5
     }))
     .unwrap();
 
@@ -503,8 +502,8 @@ async fn conversational_feedback_persists_to_prior_entry() {
         );
     }
 
-    // Read all entries — should still be just the original one (no new QA entry
-    // for a pure-feedback turn, matching Python semantics).
+    // Latest Python stores the acknowledgement as this turn's QA row while
+    // attaching its rating to the prior answer.
     let entries = session_store
         .get_all_qa_entries(session_id, None)
         .await
@@ -518,7 +517,7 @@ async fn conversational_feedback_persists_to_prior_entry() {
 
     assert_eq!(
         prior.feedback_text.as_deref(),
-        Some("Great answer!"),
+        Some("That was a great answer!"),
         "feedback_text must be persisted to the prior entry"
     );
     assert_eq!(
@@ -526,6 +525,7 @@ async fn conversational_feedback_persists_to_prior_entry() {
         Some(5),
         "feedback_score must be persisted to the prior entry"
     );
+    assert_eq!(entries.len(), 2);
 
     // feedback_weights_applied must be false (reset by add_feedback).
     let memify = prior
