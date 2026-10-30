@@ -2870,7 +2870,7 @@ mod tests {
 
     #[test]
     fn session_search_mode_defaults_concurrent_and_accepts_sequential() {
-        let manager = ConfigManager::new();
+        let manager = ConfigManager::new(Settings::default());
         let settings = manager.read();
         assert_eq!(
             settings.search_tuning().session_search_mode,
