@@ -22,7 +22,7 @@ use crate::retrievers::hybrid::pairs::{
     ChunkSummaryPair, attach_source_chunks, chunk_summary_pairs, source_chunk_ids_to_load,
     summary_id_for_chunk, summary_text_by_chunk_id,
 };
-use crate::retrievers::hybrid::ranking::{ChunkLaneFusion, rank_chunk_summary_pairs};
+use crate::retrievers::hybrid::ranking::{ChunkLaneFusion, rank_chunk_summary_pairs_personalized};
 use crate::retrievers::hybrid::results::{display_value, payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
 
@@ -342,6 +342,7 @@ async fn load_summary_text_for_ranked_pairs(
 /// ranks, backfills summary text on the **ranked** pairs, and returns the top
 /// chunks plus their summaries.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) async fn retrieve_hybrid_chunks(
     vector_db: &Arc<dyn VectorDB>,
     chunks_top_k: usize,
@@ -356,6 +357,44 @@ pub(crate) async fn retrieve_hybrid_chunks(
     q_coords: Option<&[f64]>,
     truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
     current_truth_epoch: Option<i64>,
+) -> Result<HybridChunksResult, SearchError> {
+    retrieve_hybrid_chunks_personalized(
+        vector_db,
+        chunks_top_k,
+        text_summaries_top_k,
+        node_name,
+        node_name_filter_operator,
+        fusion,
+        use_importance_weight,
+        query_vector,
+        include_dlt_rows,
+        use_truth_weight,
+        q_coords,
+        truth_state_by_id,
+        current_truth_epoch,
+        None,
+        0.0,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn retrieve_hybrid_chunks_personalized(
+    vector_db: &Arc<dyn VectorDB>,
+    chunks_top_k: usize,
+    text_summaries_top_k: Option<usize>,
+    node_name: Option<&[String]>,
+    node_name_filter_operator: &str,
+    fusion: ChunkLaneFusion,
+    use_importance_weight: bool,
+    query_vector: &[f32],
+    include_dlt_rows: bool,
+    use_truth_weight: bool,
+    q_coords: Option<&[f64]>,
+    truth_state_by_id: Option<&HashMap<String, NodeTruthState>>,
+    current_truth_epoch: Option<i64>,
+    personal_weights: Option<&HashMap<String, f64>>,
+    personal_influence: f64,
 ) -> Result<HybridChunksResult, SearchError> {
     let candidate_limit = chunks_top_k.saturating_mul(2);
     let summary_limit = summary_candidate_limit(chunks_top_k, text_summaries_top_k);
@@ -402,7 +441,7 @@ pub(crate) async fn retrieve_hybrid_chunks(
         attach_source_chunks(&mut pairs, &source_chunks);
     }
 
-    let mut ranked_pairs = rank_chunk_summary_pairs(
+    let mut ranked_pairs = rank_chunk_summary_pairs_personalized(
         pairs,
         chunks_top_k,
         fusion,
@@ -411,6 +450,8 @@ pub(crate) async fn retrieve_hybrid_chunks(
         q_coords,
         truth_state_by_id,
         current_truth_epoch,
+        personal_weights,
+        personal_influence,
     );
     if summary_limit > 0 {
         load_summary_text_for_ranked_pairs(

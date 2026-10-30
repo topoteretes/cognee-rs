@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::types::SearchRequest;
@@ -149,6 +151,13 @@ pub struct SearchParams {
     /// `personalization_enabled` is on; `None` searches un-personalized.
     #[serde(skip)]
     pub personalization: Option<crate::user_preferences::PreferenceConfig>,
+
+    /// Request-local preference lookups, keyed by `(user, dataset)`. Clones of
+    /// `SearchParams` share a snapshot within one scope, while dataset fan-out
+    /// cannot leak one dataset's preferences into another.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub preference_cache: crate::user_preferences::PreferenceCache,
 }
 
 impl SearchParams {
@@ -298,6 +307,7 @@ impl From<&SearchRequest> for SearchParams {
             user_id: req.user_id,
             // The orchestrator stamps it from its tuning.
             personalization: None,
+            preference_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 }

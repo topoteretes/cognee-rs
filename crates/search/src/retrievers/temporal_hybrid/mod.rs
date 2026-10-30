@@ -310,9 +310,19 @@ impl TemporalHybridRetriever {
         }
 
         let lanes = self.lanes(params, limits);
+        let preferences = crate::user_preferences::load_for_search(graph.as_ref(), params).await;
+        let personal_influence = params
+            .personalization
+            .as_ref()
+            .map_or(0.0, |config| config.influence);
         let (candidates, window) = tokio::try_join!(
-            self.hybrid
-                .fetch_candidates(query, &lanes, params.dataset_id),
+            self.hybrid.fetch_candidates(
+                query,
+                &lanes,
+                params.dataset_id,
+                &preferences,
+                personal_influence,
+            ),
             extract_query_interval(self.llm.as_ref(), query, self.generation_options.clone()),
         )?;
         self.rerank(candidates, window, limits, &lanes).await

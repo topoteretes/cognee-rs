@@ -19,7 +19,12 @@ use cognee_graph::{EdgeData, GraphDBTrait, NodeData};
 use cognee_models::{DataPoint, UserPreference};
 use cognee_utils::id_generation::generate_node_id;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
+
+/// One request's memoized preference snapshots, isolated by user and dataset.
+pub type PreferenceCache = Arc<Mutex<HashMap<(Uuid, Uuid), Arc<OnceCell<ActivePreferences>>>>>;
 
 /// Relationship of the weighted edges from a preference node to content nodes.
 pub const PREFERS_RELATIONSHIP: &str = "prefers";
@@ -371,13 +376,35 @@ pub async fn load_for_search(
     graph_db: &dyn GraphDBTrait,
     params: &crate::types::SearchParams,
 ) -> ActivePreferences {
+    // Do not populate the request cache for an un-personalized pass. Besides
+    // avoiding needless state, this preserves the established pattern of
+    // deriving a personalized params value from a plain one with struct
+    // update syntax in callers and tests.
     let Some(config) = params.personalization.as_ref() else {
         return ActivePreferences::default();
     };
-    let dataset_id = params
+    let Some(user_id) = params.user_id else {
+        return ActivePreferences::default();
+    };
+    let Some(dataset_id) = params
         .dataset_id
-        .or_else(cognee_models::dataset_scope::current_dataset);
-    load_active_preferences(graph_db, config, params.user_id, dataset_id).await
+        .or_else(cognee_models::dataset_scope::current_dataset)
+    else {
+        return ActivePreferences::default();
+    };
+    let cell = {
+        let mut cache = params.preference_cache.lock().await;
+        Arc::clone(
+            cache
+                .entry((user_id, dataset_id))
+                .or_insert_with(|| Arc::new(OnceCell::new())),
+        )
+    };
+    cell.get_or_init(|| async {
+        load_active_preferences(graph_db, config, Some(user_id), Some(dataset_id)).await
+    })
+    .await
+    .clone()
 }
 
 /// Put the preference guidance block after the question and context, as
@@ -615,6 +642,73 @@ mod tests {
             format!("{PREFERENCE_RENDER_HEADER}\nPrefer tables\nBe brief")
         );
         assert_eq!(ActivePreferences::default().rendered_text(), "");
+    }
+
+    #[tokio::test]
+    async fn search_params_share_one_preference_snapshot() {
+        let graph = MockGraphDB::new();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        upsert_preference_node(
+            &graph,
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+
+        let params = crate::types::SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            personalization: Some(enabled()),
+            ..Default::default()
+        };
+        let cloned_for_prompt = params.clone();
+        let ranking_snapshot = load_for_search(&graph, &params).await;
+        graph
+            .delete_node(&preference_node_id(&user.to_string(), &dataset.to_string()).to_string())
+            .await
+            .unwrap();
+        let prompt_snapshot = load_for_search(&graph, &cloned_for_prompt).await;
+
+        assert_eq!(ranking_snapshot, prompt_snapshot);
+        assert_eq!(prompt_snapshot.text, "Prefer tables");
+        assert_eq!(params.preference_cache.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cloned_params_do_not_leak_a_snapshot_across_dataset_scopes() {
+        let graph = MockGraphDB::new();
+        let user = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        for (dataset, text) in [(first, "Prefer tables"), (second, "Prefer prose")] {
+            upsert_preference_node(&graph, &user.to_string(), &dataset.to_string(), text, 1, "")
+                .await
+                .unwrap();
+        }
+
+        let first_params = crate::types::SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(first),
+            personalization: Some(enabled()),
+            ..Default::default()
+        };
+        let mut second_params = first_params.clone();
+        second_params.dataset_id = Some(second);
+
+        assert_eq!(
+            load_for_search(&graph, &first_params).await.text,
+            "Prefer tables"
+        );
+        assert_eq!(
+            load_for_search(&graph, &second_params).await.text,
+            "Prefer prose"
+        );
+        assert_eq!(first_params.preference_cache.lock().await.len(), 2);
     }
 
     #[test]

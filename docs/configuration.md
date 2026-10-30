@@ -1511,8 +1511,8 @@ binding / `cognee-cli config set`), and is ignored with a warning from env.
 | `DEFAULT_FEEDBACK_INFLUENCE` | `default_feedback_influence` | `0.0` | Blend weight of the learned feedback signal in graph search, in [0, 1]: the `feedback_influence` of a search request that sets none. |
 | `PREFERENCE_ALPHA` | `preference_alpha` | `0.3` | How far one rating pulls a personal `prefers` weight, in (0, 1]. Read by improve's `update_user_preferences`. |
 | `PREFERENCE_BETA` | `preference_beta` | `0.02` | Per-turn decay of an untouched `prefers` weight, in [0, 1); applied on read, by the preference update and by the retrievers. |
-| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization: gates improve's `update_user_preferences` stage and the retrievers' preference read (graph and RAG completion). Off, nothing is written or read. |
-| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most a personal `prefers` weight may move a ranking score, in [0, 1] (graph triplet ranking, RAG chunk ranking). |
+| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization: gates improve's `update_user_preferences` stage and the retrievers' preference read (graph, RAG, and hybrid completion). Off, nothing is written or read. |
+| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most a personal `prefers` weight may move a ranking score, in [0, 1] (graph triplet ranking and RAG/hybrid chunk ranking). |
 
 ## Ontology
 
