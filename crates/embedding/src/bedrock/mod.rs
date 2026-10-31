@@ -457,13 +457,26 @@ fn bedrock_api_base(config: &EmbeddingConfig) -> Option<&str> {
 }
 
 /// Whether `endpoint`'s host is OpenAI's.
+///
+/// Parsed structurally rather than by prefix-matching: `HTTPS://`, userinfo
+/// (`user@`) and a trailing root dot (`api.openai.com.`) must not slip past
+/// the guard. An endpoint that fails to parse retried with `https://`
+/// preserves the old scheme-less behaviour (`api.openai.com/v1`).
 fn is_openai_host(endpoint: &str) -> bool {
-    let authority = endpoint
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let host = authority.split(['/', ':', '?']).next().unwrap_or(authority);
-    host.eq_ignore_ascii_case("api.openai.com")
+    let endpoint = endpoint.trim();
+    // A hostless "parse success" (e.g. `api.openai.com:443/v1` parses
+    // `api.openai.com` as the *scheme*) counts as a parse failure so the
+    // scheme-less retry still runs.
+    let host = reqwest::Url::parse(endpoint)
+        .ok()
+        .filter(|u| u.host_str().is_some())
+        .or_else(|| reqwest::Url::parse(&format!("https://{endpoint}")).ok());
+    host.and_then(|u| u.host_str().map(str::to_owned))
+        .is_some_and(|h| {
+            h.strip_suffix('.')
+                .unwrap_or(&h)
+                .eq_ignore_ascii_case("api.openai.com")
+        })
 }
 
 // ─── Error mapping ────────────────────────────────────────────────────────────
@@ -693,9 +706,18 @@ mod tests {
     fn is_openai_host_only_matches_the_openai_host() {
         assert!(is_openai_host("https://api.openai.com/v1"));
         assert!(is_openai_host("https://API.OpenAI.com"));
+        // Spellings the prefix-matching guard used to let through.
+        assert!(is_openai_host("HTTPS://api.openai.com/v1"));
+        assert!(is_openai_host("https://user@api.openai.com/v1"));
+        assert!(is_openai_host("https://api.openai.com./v1"));
+        assert!(is_openai_host("api.openai.com/v1"));
+        assert!(is_openai_host("api.openai.com:443/v1"));
+        assert!(is_openai_host("https://api.openai.com:443/v1"));
         assert!(!is_openai_host(
             "https://bedrock-runtime.us-east-1.amazonaws.com"
         ));
+        assert!(!is_openai_host("https://api.openai.com.evil.example"));
+        assert!(!is_openai_host("evil.example:443/v1"));
         assert!(!is_openai_host("http://127.0.0.1:1234"));
     }
 

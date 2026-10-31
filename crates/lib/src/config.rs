@@ -699,23 +699,36 @@ impl Settings {
     /// case-insensitive, the same normalisation the component registry uses
     /// to pick the relational factory), builds
     /// `postgres://username:password@host:port/name` from the individual
-    /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars).
+    /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars)
+    /// with each component percent-encoded — reserved characters can no
+    /// longer break the URL shape (e.g. a `#` in the name would otherwise
+    /// turn a following `?sslmode=` into fragment text and silently drop the
+    /// TLS requirement).
+    ///
+    /// When a field cannot be encoded into a URL the method logs the reason
+    /// (never the password) and returns an empty string: the postgres
+    /// factory is selected by `relational.provider`, not by the URL, so the
+    /// empty URL fails at connect instead of silently falling back to any
+    /// other backend.
+    ///
     /// Otherwise returns `relational_db_url` verbatim.
     pub fn resolved_relational_db_url(&self) -> String {
         let relational = self.relational();
         let provider = relational.provider.trim().to_ascii_lowercase();
         if matches!(provider.as_str(), "postgres" | "postgresql") {
-            with_sslmode(
-                format!(
-                    "postgres://{}:{}@{}:{}/{}",
-                    relational.username,
-                    relational.password,
-                    relational.host,
-                    relational.port,
-                    relational.name
-                ),
-                &self.db_sslmode,
-            )
+            match build_postgres_url(
+                &relational.host,
+                relational.port,
+                &relational.name,
+                &relational.username,
+                &relational.password,
+            ) {
+                Ok(url) => with_sslmode(url, &self.db_sslmode),
+                Err(reason) => {
+                    tracing::warn!("cannot build relational postgres URL: {reason}");
+                    String::new()
+                }
+            }
         } else {
             relational.url.clone()
         }
@@ -4833,6 +4846,96 @@ mod tests {
                 "provider {provider:?}"
             );
         }
+    }
+
+    #[test]
+    fn relational_postgres_url_percent_encodes_reserved_characters() {
+        // A `#` in the database name used to start a fragment, turning a
+        // following `?sslmode=` into fragment text and silently dropping the
+        // TLS requirement. With structured URL building it must stay a real
+        // query parameter, and the name round-trips percent-encoded.
+        let s = Settings {
+            sections: [
+                (
+                    "relational.provider".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.host".to_string(),
+                    serde_json::json!("db.internal".to_string()),
+                ),
+                ("relational.port".to_string(), serde_json::json!(5432)),
+                (
+                    "relational.name".to_string(),
+                    serde_json::json!("db#x?y/z".to_string()),
+                ),
+                (
+                    "relational.username".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.password".to_string(),
+                    serde_json::json!("pw".to_string()),
+                ),
+            ]
+            .into(),
+            db_sslmode: "require".to_string(),
+            ..Settings::default()
+        };
+        let parsed =
+            url::Url::parse(&s.resolved_relational_db_url()).expect("built URL must parse");
+        assert!(
+            parsed
+                .query_pairs()
+                .any(|(k, v)| k == "sslmode" && v == "require")
+        );
+        let decoded_path = url::form_urlencoded::parse(parsed.path().as_bytes())
+            .next()
+            .map(|(k, _)| k.into_owned());
+        assert_eq!(decoded_path.as_deref(), Some("/db#x?y/z"));
+    }
+
+    #[test]
+    fn relational_postgres_url_percent_encodes_password() {
+        // Reserved characters in the password must round-trip through the
+        // built URL instead of reshaping it: a raw `@` or `#` would otherwise
+        // split authority or start a fragment.
+        let password = "p@:/#?%w";
+        let s = Settings {
+            sections: [
+                (
+                    "relational.provider".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.host".to_string(),
+                    serde_json::json!("db.internal".to_string()),
+                ),
+                ("relational.port".to_string(), serde_json::json!(5432)),
+                (
+                    "relational.name".to_string(),
+                    serde_json::json!("cognee".to_string()),
+                ),
+                (
+                    "relational.username".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.password".to_string(),
+                    serde_json::json!(password.to_string()),
+                ),
+            ]
+            .into(),
+            ..Settings::default()
+        };
+        let parsed =
+            url::Url::parse(&s.resolved_relational_db_url()).expect("built URL must parse");
+        let decoded = parsed.password().and_then(|raw| {
+            url::form_urlencoded::parse(raw.as_bytes())
+                .next()
+                .map(|(k, _)| k.into_owned())
+        });
+        assert_eq!(decoded.as_deref(), Some(password));
     }
 
     #[test]
