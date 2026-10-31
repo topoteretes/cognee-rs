@@ -4,7 +4,7 @@
 //! The orphan these tests describe is what a SIGKILL between cognify's graph
 //! write and its vector write leaves behind — a graph edge whose
 //! `EdgeType_relationship_name` point was never written, which no retry
-//! re-emits because `retrieve_existing_edges` routes the edge into the
+//! re-emits because `partition_existing_edges` routes the edge into the
 //! claim-only bucket. See `cognee_cognify::edge_reindex` for the full chain.
 //!
 //! Four properties are load-bearing enough to pin by exact count and exact id:

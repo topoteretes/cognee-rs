@@ -6,7 +6,7 @@
 //! Ownership of an edge a later run produced but did not have to write.
 //!
 //! Extraction filters out edges the graph already holds — that is what
-//! `retrieve_existing_edges` is for. The filter used to drop the edge
+//! `partition_existing_edges` is for. The filter used to drop the edge
 //! completely, so the second file that produced it got no ownership row and
 //! the first file's row was the only claim on it. Deleting the first file then
 //! found the edge *exclusively* owned, and took its Triplet / EdgeType vectors

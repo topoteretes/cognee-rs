@@ -123,9 +123,9 @@ pub enum RollbackScope {
     /// died before the vector stage leaves those edges with no `Triplet_text`
     /// and no `EdgeType_relationship_name` point. The retry does not repair
     /// them: the completion marker is unset, so the item is processed again,
-    /// but [`crate::graph_integration::retrieve_existing_edges`] finds the
-    /// orphaned edges and `expansion.rs` skips every edge already in the
-    /// graph, so no row and no vector is ever written for them again. Setting
+    /// but [`crate::graph_integration::partition_existing_edges`] finds the
+    /// orphaned edges and keeps every edge already in the graph out of the
+    /// write, so no row and no vector is ever written for them again. Setting
     /// `incremental_loading = false` does not help either — that dedup filter
     /// is not the incremental one. [`Self::WholeRun`] and
     /// [`Self::FailedItems`] both converge on a retry, because both remove the

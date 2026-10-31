@@ -1195,8 +1195,8 @@ configuration surface because what it leaves behind is permanent. A run that
 wrote graph edges and then died before the vector stage leaves those edges in
 the graph with no `Triplet_text` and no `EdgeType_relationship_name` point. The
 retry does not repair them: the completion marker is unset, so the item is
-processed again, but `retrieve_existing_edges` finds the orphaned edges and
-expansion skips every edge already in the graph — so no row and no vector is
+processed again, but `partition_existing_edges` finds the orphaned edges and
+keeps every edge already in the graph out of the write — so no row and no vector is
 ever written for them again. Setting `incremental_loading = false` does not
 help; that dedup filter is not the incremental one. `WholeRun` and
 `FailedItems` both converge on a retry, because both remove the half-written
