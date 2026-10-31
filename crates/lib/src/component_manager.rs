@@ -778,6 +778,65 @@ impl ComponentManager {
     }
 }
 
+/// Attach a [`ComponentManager`]'s configured [`Transcriber`] as one more step
+/// of a builder chain.
+pub trait WithTranscriber: Sized {
+    /// `self` with the configured transcriber attached, so `add` runs the audio
+    /// loader.
+    ///
+    /// A provider without transcription leaves `self` unchanged, so audio
+    /// inputs fail with `UnsupportedDocumentType`, as without the
+    /// `audio-loader` feature. A transcriber that cannot be built (no API key,
+    /// say) is replaced by one that fails with the build error: a text `add`
+    /// needs no LLM, stays quiet and must not fail over one, while an audio
+    /// input says what is missing.
+    fn with_configured_transcriber(
+        self,
+        cm: &ComponentManager,
+    ) -> impl Future<Output = Self> + Send;
+}
+
+impl WithTranscriber for cognee_ingestion::AddPipeline {
+    #[cfg_attr(not(feature = "audio-loader"), allow(unused_variables))]
+    async fn with_configured_transcriber(self, cm: &ComponentManager) -> Self {
+        #[cfg(feature = "audio-loader")]
+        match cm.transcriber().await {
+            Ok(Some(transcriber)) => return self.with_transcriber(transcriber),
+            Ok(None) => {}
+            Err(error) => {
+                return self.with_transcriber(Arc::new(UnavailableTranscriber(error.to_string())));
+            }
+        }
+        self
+    }
+}
+
+/// Stands in for a transcriber that could not be built, so that only an audio
+/// input fails, with the reason.
+#[cfg(feature = "audio-loader")]
+struct UnavailableTranscriber(String);
+
+#[cfg(feature = "audio-loader")]
+#[async_trait]
+impl Transcriber for UnavailableTranscriber {
+    async fn transcribe_audio(
+        &self,
+        _audio: &[u8],
+        _format: &str,
+        _language_hint: Option<&str>,
+        _prompt_hint: Option<&str>,
+    ) -> cognee_llm::LlmResult<cognee_llm::TranscriptionOutput> {
+        Err(cognee_llm::LlmError::ConfigError(format!(
+            "audio needs a transcriber, which could not be built: {}",
+            self.0
+        )))
+    }
+
+    fn transcription_model(&self) -> &str {
+        ""
+    }
+}
+
 // Versioned accessor helper macro — avoids repeating the double-checked
 // locking pattern for each component.
 macro_rules! versioned_accessor {
@@ -1370,6 +1429,36 @@ mod tests {
         let second = cm.transcriber().await.expect("second call").unwrap();
         // Both calls return an Arc pointing to the same allocation.
         assert!(Arc::ptr_eq(&first, &second), "transcriber should be cached");
+    }
+
+    #[cfg(feature = "audio-loader")]
+    #[tokio::test]
+    async fn a_transcriber_that_cannot_be_built_fails_audio_with_the_reason() {
+        let settings = Settings {
+            sections: [(
+                "llm.provider".to_string(),
+                serde_json::json!("openai".to_string()),
+            )]
+            .into(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let reason = cm
+            .transcriber()
+            .await
+            .err()
+            .expect("no key, no transcriber");
+
+        let error = UnavailableTranscriber(reason.to_string())
+            .transcribe_audio(b"audio", "mp3", None, None)
+            .await
+            .expect_err("only an audio input fails");
+        let message = error.to_string();
+        assert!(message.contains("audio needs a transcriber"), "{message}");
+        assert!(
+            message.contains("llm_api_key must be configured"),
+            "{message}"
+        );
     }
 
     // -- resolved graph/vector Postgres URL / PgGraph provider dispatch -------

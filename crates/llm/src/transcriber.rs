@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use crate::error::{LlmError, LlmResult};
 
 /// Audio formats accepted by the OpenAI Whisper API.
-const SUPPORTED_AUDIO_FORMATS: &[&str] = &["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"];
+const SUPPORTED_AUDIO_FORMATS: &[&str] = &[
+    "flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm",
+];
 
 /// Validate that `format` is a supported audio format.
 ///
@@ -70,7 +72,9 @@ mod tests {
 
     #[test]
     fn test_valid_formats() {
-        for fmt in &["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"] {
+        for fmt in &[
+            "flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm",
+        ] {
             assert!(
                 validate_audio_format(fmt).is_ok(),
                 "Expected {fmt} to be valid"
@@ -80,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_invalid_formats() {
-        for fmt in &["mid", "aiff", "amr", "ogg", "flac", "aac", "wma"] {
+        for fmt in &["mid", "aiff", "amr", "aac", "wma"] {
             let result = validate_audio_format(fmt);
             assert!(result.is_err(), "Expected {fmt} to be invalid");
             assert!(

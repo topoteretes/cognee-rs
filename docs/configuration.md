@@ -403,7 +403,12 @@ endpoint.
 `LLM_ENDPOINT` always overrides the default when set. Audio transcription
 (Whisper) is wired only for `openai` and `custom`/`openai_compatible` (which may
 expose `/audio/transcriptions`); `ollama`/`mistral`/`gemini`/`bedrock` get
-graceful no-audio.
+graceful no-audio. With a transcriber, `add` transcribes an audio file at ingest
+and stores the transcript as its text; with a provider that has no transcription,
+adding audio fails with `Unsupported document type at ingest: audio`, and when the
+transcriber cannot be built (no `llm_api_key`, say) with an error naming why. Adding
+audio that was transcribed before reuses the stored transcript, with or without a
+transcriber.
 
 `anthropic` uses a **native Messages-API adapter** (not the OpenAI-compatible
 factory): it authenticates with `x-api-key`, hoists the system prompt into the

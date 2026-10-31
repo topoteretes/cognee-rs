@@ -172,7 +172,7 @@ pub use api::{DatasetDb, DatasetError, DatasetManager};
 pub use background_tasks::{
     BackgroundTasks, pending_background_tasks, spawn_background_task, wait_for_background_tasks,
 };
-pub use component_manager::{ComponentManager, GraphExtractorChoice};
+pub use component_manager::{ComponentManager, GraphExtractorChoice, WithTranscriber};
 pub use config::{ConfigError, ConfigManager, Settings};
 pub use context::PipelineContext;
 pub use error::ComponentError;

@@ -4,7 +4,7 @@ use cognee::add::AddPipeline;
 use cognee::core::RayonThreadPool;
 use cognee::database::PipelineRunRepository;
 use cognee::models::DataInput;
-use cognee::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext, WithTranscriber};
 use tracing::info;
 use uuid::Uuid;
 
@@ -62,7 +62,9 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
         .with_database(database)
-        .with_pipeline_run_repo(pipeline_run_repo);
+        .with_pipeline_run_repo(pipeline_run_repo)
+        .with_configured_transcriber(&cm)
+        .await;
 
         let inputs = args
             .data

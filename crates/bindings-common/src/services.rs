@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use cognee::ComponentManager;
 use cognee::PipelineContext;
+use cognee::WithTranscriber;
 use cognee::add::AddPipeline;
 use cognee::api::get_or_create_default_user;
 use cognee::cognify::CognifyConfig;
@@ -343,7 +344,9 @@ impl CogneeServices {
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
             .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo)),
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            .with_configured_transcriber(cm)
+            .await,
         );
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase

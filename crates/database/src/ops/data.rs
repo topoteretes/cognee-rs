@@ -143,6 +143,58 @@ pub async fn update_data_node_set(
     Ok(updated_at)
 }
 
+/// Point an existing Data record at a newly stored extracted-text file: set
+/// `raw_data_location`, `raw_content_hash`, `extension`, `mime_type` and
+/// `loader_engine`, and stamp `updated_at`, leaving every other column as it is.
+///
+/// The ingest pipeline uses it on a re-add whose stored text is gone, after
+/// extracting and storing it again. Like [`update_data_node_set`] it returns the
+/// `updated_at` written, and [`DatabaseError::NotFound`] when no row has `data_id`.
+#[instrument(
+    name = "cognee.db.relational.data.update_data_stored_text",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn update_data_stored_text(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    raw_data_location: &str,
+    raw_content_hash: &str,
+    extension: &str,
+    mime_type: &str,
+    loader_engine: &str,
+) -> Result<DateTime<Utc>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let updated_at = Utc::now().trunc_subsecs(6);
+    let result = data::Entity::update_many()
+        .col_expr(
+            data::Column::RawDataLocation,
+            Expr::value(raw_data_location.to_owned()),
+        )
+        .col_expr(
+            data::Column::RawContentHash,
+            Expr::value(Some(raw_content_hash.to_owned())),
+        )
+        .col_expr(data::Column::Extension, Expr::value(extension.to_owned()))
+        .col_expr(data::Column::MimeType, Expr::value(mime_type.to_owned()))
+        .col_expr(
+            data::Column::LoaderEngine,
+            Expr::value(Some(loader_engine.to_owned())),
+        )
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
+    Ok(updated_at)
+}
+
 #[instrument(
     name = "cognee.db.relational.data.count_data_dataset_links",
     level = "info",

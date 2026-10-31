@@ -9,7 +9,8 @@
 //! column for cross-SDK parity.
 //!
 //! **Format validation (D4):** only the formats accepted by the OpenAI Whisper
-//! API are supported: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, `webm`.
+//! API are supported: `flac`, `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `ogg`, `wav`,
+//! `webm`.
 //! Any other format produces [`LoaderError::UnsupportedFormat`] immediately,
 //! before attempting the API call.
 
@@ -155,31 +156,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_returns_unsupported_format_for_flac() {
-        let mock = Arc::new(MockTranscriber::empty());
-        let loader = AudioLoader::new(mock);
-        let doc = make_audio_doc("audio.flac", "flac");
+    async fn extract_transcribes_flac_and_ogg() {
+        for extension in ["flac", "ogg"] {
+            let mock = Arc::new(MockTranscriber::new(
+                "mock-whisper",
+                vec![TranscriptionOutput {
+                    text: format!("Hello from {extension}"),
+                    language: None,
+                    duration: None,
+                }],
+            ));
+            let loader = AudioLoader::new(mock);
+            let doc = make_audio_doc(&format!("audio.{extension}"), extension);
 
-        let result = loader.extract(b"fake-flac-bytes", &doc).await;
-        assert!(result.is_err(), "flac should be rejected");
-        assert!(
-            matches!(result.unwrap_err(), LoaderError::UnsupportedFormat(_)),
-            "error should be UnsupportedFormat for flac"
-        );
-    }
-
-    #[tokio::test]
-    async fn extract_returns_unsupported_format_for_ogg() {
-        let mock = Arc::new(MockTranscriber::empty());
-        let loader = AudioLoader::new(mock);
-        let doc = make_audio_doc("audio.ogg", "ogg");
-
-        let result = loader.extract(b"fake-ogg-bytes", &doc).await;
-        assert!(result.is_err(), "ogg should be rejected");
-        assert!(
-            matches!(result.unwrap_err(), LoaderError::UnsupportedFormat(_)),
-            "error should be UnsupportedFormat for ogg"
-        );
+            match loader.extract(b"fake-audio-bytes", &doc).await {
+                Ok(LoaderOutput::Text(text)) => assert_eq!(text, format!("Hello from {extension}")),
+                other => panic!("expected the {extension} transcript, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]

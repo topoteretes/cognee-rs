@@ -9,14 +9,17 @@
 //! pipeline's earlier read, rolling back a `token_count`, `last_accessed` or
 //! `pipeline_status` written in between.
 //!
+//! `update_data_stored_text`, the re-add repair of a row whose stored text is
+//! gone, must likewise write only its own columns.
+//!
 //! Runs on in-memory SQLite, so it needs no external database.
 #![cfg(feature = "sqlite")]
 
 use chrono::{TimeZone, Utc};
 use cognee_database::ops::data::{
     DATA_ITEM_PROCESSING_COMPLETED, create_data, get_data, mark_cognify_pipeline_status_complete,
-    pipeline_status_dataset_key, update_data_node_set, update_data_token_count,
-    update_last_accessed,
+    pipeline_status_dataset_key, update_data_node_set, update_data_stored_text,
+    update_data_token_count, update_last_accessed,
 };
 use cognee_database::{DatabaseError, connect, initialize};
 use cognee_models::Data;
@@ -100,6 +103,71 @@ async fn update_data_node_set_on_a_missing_row_is_not_found() {
     initialize(&db).await.expect("initialize");
 
     let err = update_data_node_set(&db, Uuid::new_v4(), Some("[\"a\"]"), None)
+        .await
+        .expect_err("no row");
+    assert!(matches!(err, DatabaseError::NotFound(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn update_data_stored_text_touches_only_its_columns() {
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+    let id = seed_data(&db).await;
+    let dataset_id = Uuid::new_v4();
+    update_data_token_count(&db, id, 42).await.unwrap();
+    let accessed = Utc.with_ymd_and_hms(2025, 1, 2, 3, 4, 5).unwrap();
+    update_last_accessed(&db, &[id], accessed).await.unwrap();
+    mark_cognify_pipeline_status_complete(&db, id, dataset_id)
+        .await
+        .unwrap();
+    update_data_node_set(&db, id, Some(r#"["alpha"]"#), None)
+        .await
+        .unwrap();
+    let before = get_data(&db, id).await.unwrap().unwrap();
+
+    let written = update_data_stored_text(
+        &db,
+        id,
+        "file:///tmp/new/text_x.txt",
+        "new-hash",
+        "txt",
+        "text/plain",
+        "audio_loader",
+    )
+    .await
+    .expect("repair");
+
+    let row = get_data(&db, id).await.unwrap().expect("row exists");
+    assert_eq!(row.raw_data_location, "file:///tmp/new/text_x.txt");
+    assert_eq!(row.raw_content_hash.as_deref(), Some("new-hash"));
+    assert_eq!(row.extension, "txt");
+    assert_eq!(row.mime_type, "text/plain");
+    assert_eq!(row.loader_engine.as_deref(), Some("audio_loader"));
+    assert_eq!(row.updated_at, Some(written));
+    assert_eq!(row.token_count, 42, "token_count survives the repair");
+    assert_eq!(row.last_accessed, Some(accessed), "last_accessed survives");
+    assert_eq!(
+        row.node_set.as_deref(),
+        Some(r#"["alpha"]"#),
+        "node_set survives"
+    );
+    assert_eq!(
+        row.pipeline_status, before.pipeline_status,
+        "the cognify marker survives"
+    );
+    assert_eq!(
+        row.content_hash, before.content_hash,
+        "content_hash is unchanged"
+    );
+    assert_eq!(row.original_data_location, before.original_data_location);
+}
+
+#[tokio::test]
+async fn update_data_stored_text_on_a_missing_row_is_not_found() {
+    let db = connect("sqlite::memory:").await.expect("connect");
+    initialize(&db).await.expect("initialize");
+
+    let err = update_data_stored_text(&db, Uuid::new_v4(), "x", "h", "txt", "text/plain", "e")
         .await
         .expect_err("no row");
     assert!(matches!(err, DatabaseError::NotFound(_)), "got {err:?}");

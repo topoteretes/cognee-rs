@@ -4,7 +4,7 @@ use cognee::add::AddPipeline;
 use cognee::cognify::cognify;
 use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
-use cognee::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext, WithTranscriber};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -108,7 +108,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_graph_db(graph_db_for_add)
             .with_vector_db(vector_db_for_add)
             .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            .with_configured_transcriber(&cm)
+            .await;
 
         let inputs = args
             .data

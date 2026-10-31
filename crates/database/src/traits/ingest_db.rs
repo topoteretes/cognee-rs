@@ -81,6 +81,25 @@ pub trait IngestDb: Send + Sync {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError>;
 
+    /// Point an existing Data record at a newly stored extracted-text file:
+    /// set `raw_data_location`, `raw_content_hash`, `extension`, `mime_type`
+    /// and `loader_engine` (and stamp `updated_at`), leaving every other
+    /// column as it is.
+    ///
+    /// The ingest pipeline uses it on a re-add whose stored text is gone, after
+    /// extracting and storing it again, so the row stops pointing at a missing
+    /// file. A missing row is [`DatabaseError::NotFound`]. Returns the
+    /// `updated_at` written, like [`Self::update_data_node_set`].
+    async fn update_data_stored_text(
+        &self,
+        data_id: Uuid,
+        raw_data_location: &str,
+        raw_content_hash: &str,
+        extension: &str,
+        mime_type: &str,
+        loader_engine: &str,
+    ) -> Result<DateTime<Utc>, DatabaseError>;
+
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -149,6 +168,27 @@ impl IngestDb for DatabaseConnection {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError> {
         data::update_data_node_set(self, data_id, node_set, external_metadata).await
+    }
+
+    async fn update_data_stored_text(
+        &self,
+        data_id: Uuid,
+        raw_data_location: &str,
+        raw_content_hash: &str,
+        extension: &str,
+        mime_type: &str,
+        loader_engine: &str,
+    ) -> Result<DateTime<Utc>, DatabaseError> {
+        data::update_data_stored_text(
+            self,
+            data_id,
+            raw_data_location,
+            raw_content_hash,
+            extension,
+            mime_type,
+            loader_engine,
+        )
+        .await
     }
 
     async fn attach_data_to_dataset(

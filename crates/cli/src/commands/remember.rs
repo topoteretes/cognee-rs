@@ -7,7 +7,7 @@ use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee::search::SessionManager;
 use cognee::session::SessionStore;
-use cognee::{ComponentManager, PipelineContext};
+use cognee::{ComponentManager, PipelineContext, WithTranscriber};
 use tracing::info;
 use uuid::Uuid;
 
@@ -106,7 +106,9 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             .with_thread_pool(thread_pool)
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database)),
+            .with_database(Arc::clone(&database))
+            .with_configured_transcriber(&cm)
+            .await,
         );
 
         // Session backing store/manager are only required by session-mode

@@ -36,8 +36,6 @@ use cognee_core::{
 use cognee_database::PipelineRunRepository;
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
-#[cfg(feature = "audio-loader")]
-use cognee_ingestion::loaders::audio::AudioLoader;
 #[cfg(feature = "image-loader")]
 use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
@@ -7549,10 +7547,7 @@ fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRe
     registry.register("image", Arc::new(ImageLoader::new(Arc::clone(llm))));
     #[cfg(feature = "audio-loader")]
     if let Some(ref transcriber_handle) = config.transcriber {
-        registry.register(
-            "audio",
-            Arc::new(AudioLoader::new(Arc::clone(&transcriber_handle.0))),
-        );
+        return registry.with_audio(Arc::clone(&transcriber_handle.0));
     }
     registry
 }

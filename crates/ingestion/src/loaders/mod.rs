@@ -156,6 +156,14 @@ impl LoaderRegistry {
 
         registry
     }
+
+    /// This registry with the audio loader registered, transcribing with
+    /// `transcriber`. Shared by `add` and cognify so both build it the same way.
+    #[cfg(feature = "audio-loader")]
+    pub fn with_audio(mut self, transcriber: Arc<dyn cognee_llm::Transcriber>) -> Self {
+        self.register("audio", Arc::new(audio::AudioLoader::new(transcriber)));
+        self
+    }
 }
 
 impl Default for LoaderRegistry {

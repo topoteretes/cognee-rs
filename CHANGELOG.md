@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`IngestDb::update_data_stored_text` and `ProcessedInput::replaces_stored_text`.**
+  A re-add of audio whose stored transcript is gone transcribes it again and
+  points the existing data row at the new file, so the trait gains
+  `update_data_stored_text` (it sets `raw_data_location`, `raw_content_hash`,
+  `extension`, `mime_type` and `loader_engine`, and nothing else) and
+  `ProcessedInput` gains the flag that asks for it. Implementors of `IngestDb`
+  and code that builds a `ProcessedInput` by hand must add them.
+
 - **`cognee-search`: recall routing honours what the deployment can run.** As
   Python's router does on `dev` (SDK-751, cognee `5ae7523fb`; v1.6.5 still
   answers keyless recall with `CHUNKS`), `RoutingConstraints { llm_available,
@@ -620,6 +628,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Audio ingestion through `add`.** Loaders run at add time, but `add` had no
+  transcriber, so an audio file failed with `Unsupported document type at
+  ingest: audio` and never reached cognify. `AddPipeline::with_transcriber`
+  (`audio-loader` feature) registers the audio loader at add, and the
+  `WithTranscriber` trait's `with_configured_transcriber(&cm)` attaches the
+  configured provider's transcriber as one more builder step; the CLI (`add`,
+  `add-and-cognify`, `remember`, `improve`, `bench`) and the bindings services
+  use it. The transcript is stored as the item's text, as in Python. Only
+  providers with a Whisper-style route (`openai`, `custom` /
+  `openai_compatible`) transcribe; with any other provider `add` keeps the old
+  error for audio. When the transcriber cannot be built (no API key, say), text
+  adds are unaffected and quiet, and an audio input fails with an error naming
+  why. Re-adding audio whose data row already holds its transcript reuses it,
+  even without a transcriber, so sequential re-adds transcribe the file once;
+  two concurrent adds of the same new file can still both transcribe it. When
+  the stored transcript is gone, a re-add transcribes it again and points the
+  row at the new file.
+  `LoaderRegistry::with_audio` registers the audio loader for both add and
+  cognify.
+
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
   `response_format: {"type": "json_schema", "json_schema": {"strict": true,
@@ -760,6 +788,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **`cognee-llm`: `flac` and `ogg` audio are transcribed.** The Whisper format
+  whitelist left out two formats the OpenAI transcription API and Python's
+  audio loader accept, so both failed with `Unsupported audio format`.
 
 - **`cognee-cognify`: temporal LLM failures are no longer silent.** Both temporal
   passes caught their own errors and returned `Ok`:

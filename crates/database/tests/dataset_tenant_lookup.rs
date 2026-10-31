@@ -63,6 +63,26 @@ impl IngestDb for DefaultsOnly<'_> {
     ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
         IngestDb::update_data_node_set(self.0, data_id, node_set, external_metadata).await
     }
+    async fn update_data_stored_text(
+        &self,
+        data_id: Uuid,
+        raw_data_location: &str,
+        raw_content_hash: &str,
+        extension: &str,
+        mime_type: &str,
+        loader_engine: &str,
+    ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
+        IngestDb::update_data_stored_text(
+            self.0,
+            data_id,
+            raw_data_location,
+            raw_content_hash,
+            extension,
+            mime_type,
+            loader_engine,
+        )
+        .await
+    }
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,

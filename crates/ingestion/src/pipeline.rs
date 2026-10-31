@@ -23,6 +23,8 @@ use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
+#[cfg(feature = "audio-loader")]
+use cognee_llm::Transcriber;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -106,7 +108,14 @@ pub struct ProcessedInput {
     pub node_set: Option<Vec<String>>,
     /// Importance weight for ranking (0.0 to 1.0).
     pub importance_weight: Option<f64>,
+    /// The data row already exists but its stored text was gone, so it was
+    /// extracted and stored again: [`persist_data`] points the row at it.
+    pub replaces_stored_text: bool,
 }
+
+/// Doc types whose loader calls a model at add time. Running it again costs a
+/// paid request and can change the text, so a re-add reuses what is stored.
+const REUSES_STORED_TEXT: &[&str] = &["audio"];
 
 // ---------------------------------------------------------------------------
 // Task 1 implementation: DataInput → ProcessedInput
@@ -116,13 +125,42 @@ pub struct ProcessedInput {
 /// content hash, and extract all metadata needed to create a [`Data`] record.
 ///
 /// This is the first step of the ingest pipeline (Task 1).
-#[instrument(name = "ingestion.process_input", skip(input, storage))]
 pub async fn process_input(
     input: &DataInput,
     storage: &dyn StorageTrait,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_with_registry(
+        input,
+        storage,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        &LoaderRegistry::default_registry(),
+        None,
+    )
+    .await
+}
+
+/// [`process_input`] with the loaders of `registry` instead of
+/// [`LoaderRegistry::default_registry`].
+///
+/// With `database`, audio whose data row already holds its transcript is not
+/// transcribed again (see [`stored_text`]).
+#[instrument(
+    name = "ingestion.process_input",
+    skip(input, storage, registry, database)
+)]
+async fn process_input_with_registry(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    registry: &LoaderRegistry,
+    database: Option<&dyn IngestDb>,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -183,6 +221,9 @@ pub async fn process_input(
     let mut stored_extension = stored_extension;
     let mut stored_mime_type = stored_mime_type;
     let mut loader_engine = loader_engine;
+    // Set when a re-add reuses the stored text, whose row already has its URI.
+    let mut reused_data_uri = None;
+    let mut replaces_stored_text = false;
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
     // the already-extracted text; for everything else it is the raw original
@@ -234,7 +275,6 @@ pub async fn process_input(
         // Non-URL path: run the document loader at ADD time and store the
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
-        let registry = LoaderRegistry::default_registry();
         let doc_type = cognee_models::doc_type_for_extension(&original_extension)
             .unwrap_or("text")
             .to_string();
@@ -251,8 +291,9 @@ pub async fn process_input(
         // *text* loader but the bytes are not valid UTF-8 text, store the RAW
         // bytes verbatim instead of running text extraction. This only affects
         // the generic-text fallback path: files routed to a real loader by
-        // their extension (text/csv/html/pdf — actually-text content; or
-        // image/audio — `UnsupportedDocumentType`) are unchanged.
+        // their extension (text/csv/html/pdf, which are actually-text content;
+        // audio when a transcriber is attached; otherwise image/audio, which
+        // fail with `UnsupportedDocumentType`) are unchanged.
         let is_text_doc_type = doc_type == "text";
         if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
             let stored_name = format!("text_{content_hash}.bin");
@@ -261,46 +302,68 @@ pub async fn process_input(
             // (content-only) `content_hash` of those same bytes.
             (location, content_hash.clone())
         } else {
-            let loader = registry.get(&doc_type).ok_or_else(|| {
-                Box::new(IngestionError::UnsupportedDocumentType {
-                    document_type: doc_type.clone(),
-                }) as Box<dyn std::error::Error>
-            })?;
-
-            // Minimal Document descriptor for the loader (only metadata fields
-            // the loaders read; the bytes are passed separately).
-            let descriptor = build_loader_descriptor(
-                data_id,
-                &extract_name(input, &content_hash),
-                &original_extension,
-                &original_mime_type,
-            );
-
-            let extracted_text = match loader.extract(&collected, &descriptor).await? {
-                LoaderOutput::Text(t) => t,
-                LoaderOutput::Rows(rows) => rows.join("\n\n"),
-                LoaderOutput::SingleChunk { text, .. } => text,
+            // Checked before a loader is needed: audio transcribed before is
+            // reused even when no transcriber is attached now.
+            let stored = if REUSES_STORED_TEXT.contains(&doc_type.as_str()) {
+                stored_text(database, storage, data_id, &loader_engine).await?
+            } else {
+                StoredText::Absent
             };
-            let extracted_bytes = extracted_text.into_bytes();
+            if let StoredText::Reusable {
+                uri,
+                raw_content_hash,
+                extension,
+                mime_type,
+            } = stored
+            {
+                stored_extension = extension;
+                stored_mime_type = mime_type;
+                reused_data_uri = Some(uri.clone());
+                (uri, raw_content_hash)
+            } else {
+                replaces_stored_text = matches!(stored, StoredText::Lost);
+                let loader = registry.get(&doc_type).ok_or_else(|| {
+                    Box::new(IngestionError::UnsupportedDocumentType {
+                        document_type: doc_type.clone(),
+                    }) as Box<dyn std::error::Error>
+                })?;
 
-            let stored_name = format!("text_{content_hash}.txt");
-            let location = storage.store(&extracted_bytes, &stored_name).await?;
+                // Minimal Document descriptor for the loader (only metadata fields
+                // the loaders read; the bytes are passed separately).
+                let descriptor = build_loader_descriptor(
+                    data_id,
+                    &extract_name(input, &content_hash),
+                    &original_extension,
+                    &original_mime_type,
+                );
 
-            // Stored-file metadata now describes the extracted text.
-            stored_extension = "txt".to_string();
-            stored_mime_type = "text/plain".to_string();
-            loader_engine = loader.engine_name().to_string();
+                let extracted_text = match loader.extract(&collected, &descriptor).await? {
+                    LoaderOutput::Text(t) => t,
+                    LoaderOutput::Rows(rows) => rows.join("\n\n"),
+                    LoaderOutput::SingleChunk { text, .. } => text,
+                };
+                let extracted_bytes = extracted_text.into_bytes();
 
-            let raw_content_hash = crate::content_hasher::ContentHasher::hash_content(
-                &extracted_bytes,
-                hash_algorithm,
-            );
-            (location, raw_content_hash)
+                let stored_name = format!("text_{content_hash}.txt");
+                let location = storage.store(&extracted_bytes, &stored_name).await?;
+
+                // Stored-file metadata now describes the extracted text.
+                stored_extension = "txt".to_string();
+                stored_mime_type = "text/plain".to_string();
+                loader_engine = loader.engine_name().to_string();
+
+                let raw_content_hash = crate::content_hasher::ContentHasher::hash_content(
+                    &extracted_bytes,
+                    hash_algorithm,
+                );
+                (location, raw_content_hash)
+            }
         }
     };
 
     // Compute derived fields that previously lived in add()
-    let raw_data_uri = storage_location_to_uri(storage.base_path(), &storage_location);
+    let raw_data_uri = reused_data_uri
+        .unwrap_or_else(|| storage_location_to_uri(storage.base_path(), &storage_location));
     let name = extract_name(input, &content_hash);
     let original_location = if let Some(uri) = raw_source_uri.clone() {
         uri
@@ -334,6 +397,57 @@ pub async fn process_input(
         external_metadata,
         node_set: None,
         importance_weight: None,
+        replaces_stored_text,
+    })
+}
+
+/// What a re-add finds of the data row's stored text.
+enum StoredText {
+    /// No data row yet, or no database to look in.
+    Absent,
+    /// The row's text, written by the same loader and still in storage.
+    Reusable {
+        uri: String,
+        raw_content_hash: String,
+        extension: String,
+        mime_type: String,
+    },
+    /// The row exists, but its text is gone from storage or was not written by
+    /// this loader: it is extracted again and the row pointed at the new file.
+    Lost,
+}
+
+/// The stored text of the data row `data_id`, as `loader_engine` wrote it.
+///
+/// Re-adding content keeps its row as it is (see
+/// [`persist_data_with_acl_and_locks`]), so transcribing again would only cost
+/// another paid request, whose text can differ, and leave a second stored file
+/// no row points at. Re-adds in one `add` and in sequence see the row; two
+/// concurrent adds of the same new file can both transcribe it, since the
+/// per-`data_id` lock is taken in persist.
+async fn stored_text(
+    database: Option<&dyn IngestDb>,
+    storage: &dyn StorageTrait,
+    data_id: Uuid,
+    loader_engine: &str,
+) -> Result<StoredText, Box<dyn std::error::Error>> {
+    let Some(database) = database else {
+        return Ok(StoredText::Absent);
+    };
+    let Some(row) = database.get_data(data_id).await? else {
+        return Ok(StoredText::Absent);
+    };
+    let (Some(engine), Some(raw_content_hash)) = (row.loader_engine, row.raw_content_hash) else {
+        return Ok(StoredText::Lost);
+    };
+    if engine != loader_engine || !storage.exists(&row.raw_data_location).await? {
+        return Ok(StoredText::Lost);
+    }
+    Ok(StoredText::Reusable {
+        uri: row.raw_data_location,
+        raw_content_hash,
+        extension: row.extension,
+        mime_type: row.mime_type,
     })
 }
 
@@ -615,6 +729,29 @@ pub async fn persist_data_with_acl_and_locks(
         // pinned row; Rust adds the replacement first, then deletes the old
         // item — or, when the replacement is this same content-addressed row,
         // drops only its memory and completion marker).
+        if processed.replaces_stored_text {
+            // The row's stored text was gone and has been extracted again. Point
+            // the row at the new file so it stops referring to a missing one. The
+            // cognify marker stays, as above: the graph keeps what it was built
+            // from, and `update()` re-cognifies.
+            let updated_at = database
+                .update_data_stored_text(
+                    data_id,
+                    &processed.raw_data_uri,
+                    &processed.raw_content_hash,
+                    &processed.stored_extension,
+                    &processed.stored_mime_type,
+                    &processed.loader_engine,
+                )
+                .await?;
+            info!(data_id = %data_id, "stored text replaced on re-add");
+            existing_data.raw_data_location = processed.raw_data_uri.clone();
+            existing_data.raw_content_hash = Some(processed.raw_content_hash.clone());
+            existing_data.extension = processed.stored_extension.clone();
+            existing_data.mime_type = processed.stored_mime_type.clone();
+            existing_data.loader_engine = Some(processed.loader_engine.clone());
+            existing_data.updated_at = Some(updated_at);
+        }
         if let Some(names) = node_set {
             let external_metadata = with_node_set_in_external_metadata(
                 existing_data.external_metadata.as_deref(),
@@ -1227,14 +1364,44 @@ pub fn make_process_input_task(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_with_registry(
+        storage,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        Arc::new(LoaderRegistry::default_registry()),
+        None,
+    )
+}
+
+/// [`make_process_input_task`] with the loaders of `registry`, and with
+/// `database` to reuse the stored text of content added before.
+fn make_process_input_task_with_registry(
+    storage: Arc<dyn StorageTrait>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    registry: Arc<LoaderRegistry>,
+    database: Option<Arc<dyn IngestDb>>,
+) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
+        let registry = Arc::clone(&registry);
+        let database = database.clone();
         Box::pin(async move {
-            process_input(&input, &*storage, hash_algorithm, owner_id, tenant_id)
-                .await
-                .map(Box::new)
-                .map_err(preserve_ingestion_error)
+            process_input_with_registry(
+                &input,
+                &*storage,
+                hash_algorithm,
+                owner_id,
+                tenant_id,
+                &registry,
+                database.as_deref(),
+            )
+            .await
+            .map(Box::new)
+            .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -1379,6 +1546,7 @@ pub fn build_add_pipeline_with_acl(
         tenant_id,
         acl_db,
         AddParamsInjection::default(),
+        Arc::new(LoaderRegistry::default_registry()),
     )
 }
 
@@ -1399,6 +1567,7 @@ fn build_add_pipeline_internal(
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
     add_params: AddParamsInjection,
+    registry: Arc<LoaderRegistry>,
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
     // the pipeline input (`DataInput`), which has no UUID until
@@ -1408,7 +1577,14 @@ fn build_add_pipeline_internal(
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
-        make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
+        make_process_input_task_with_registry(
+            Arc::clone(&storage),
+            hash_algorithm,
+            owner_id,
+            tenant_id,
+            registry,
+            Some(Arc::clone(&database)),
+        ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
         database,
@@ -1460,6 +1636,9 @@ pub struct AddPipeline {
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     // ─── Concurrency (SDK-636) ────────────────────────────────────────────
     dataset_locks: Option<Arc<DatasetLocks>>,
+    // ─── Media loaders at ADD time ────────────────────────────────────────
+    #[cfg(feature = "audio-loader")]
+    transcriber: Option<Arc<dyn Transcriber>>,
 }
 
 impl AddPipeline {
@@ -1473,18 +1652,7 @@ impl AddPipeline {
     /// [`with_database`](Self::with_database). A missing handle surfaces as
     /// `IngestionError::MissingBackend` at `add()` time.
     pub fn new(storage: Arc<dyn StorageTrait>, database: Arc<dyn IngestDb>) -> Self {
-        Self {
-            storage,
-            database,
-            hash_algorithm: HashAlgorithm::default(),
-            acl_db: None,
-            thread_pool: None,
-            graph_db: None,
-            vector_db: None,
-            db_connection: None,
-            pipeline_run_repo: None,
-            dataset_locks: None,
-        }
+        Self::new_with_algorithm(storage, database, HashAlgorithm::default())
     }
 
     /// Create with an explicit hash algorithm.
@@ -1506,6 +1674,8 @@ impl AddPipeline {
             // Python's add takes the process's one dataset lock registry;
             // `with_dataset_locks` swaps in a host's own.
             dataset_locks: Some(DatasetLocks::global()),
+            #[cfg(feature = "audio-loader")]
+            transcriber: None,
         }
     }
 
@@ -1580,6 +1750,28 @@ impl AddPipeline {
     pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
         self.pipeline_run_repo = Some(repo);
         self
+    }
+
+    /// Run the audio loader at ADD time, transcribing with `transcriber`.
+    ///
+    /// Without it an audio input fails with
+    /// [`IngestionError::UnsupportedDocumentType`], as no audio loader is
+    /// registered (Python transcribes at add time too, `ingest_data.py:103`).
+    #[cfg(feature = "audio-loader")]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// The loaders `add` runs: the default registry, plus the audio loader
+    /// when a transcriber is attached.
+    fn loader_registry(&self) -> LoaderRegistry {
+        let registry = LoaderRegistry::default_registry();
+        #[cfg(feature = "audio-loader")]
+        if let Some(transcriber) = &self.transcriber {
+            return registry.with_audio(Arc::clone(transcriber));
+        }
+        registry
     }
 
     #[instrument(
@@ -1665,6 +1857,7 @@ impl AddPipeline {
             tenant_id,
             self.acl_db.clone(),
             add_params_inj,
+            Arc::new(self.loader_registry()),
         );
 
         // ── Build the TaskContext ────────────────────────────────────────
@@ -3538,6 +3731,26 @@ mod tests {
                 in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             }
             written
+        }
+        async fn update_data_stored_text(
+            &self,
+            data_id: Uuid,
+            raw_data_location: &str,
+            raw_content_hash: &str,
+            extension: &str,
+            mime_type: &str,
+            loader_engine: &str,
+        ) -> Result<chrono::DateTime<chrono::Utc>, cognee_database::DatabaseError> {
+            IngestDb::update_data_stored_text(
+                &*self.inner,
+                data_id,
+                raw_data_location,
+                raw_content_hash,
+                extension,
+                mime_type,
+                loader_engine,
+            )
+            .await
         }
         async fn attach_data_to_dataset(
             &self,
