@@ -383,6 +383,9 @@ pub async fn load_for_search(
     let Some(config) = params.personalization.as_ref() else {
         return ActivePreferences::default();
     };
+    if !config.enabled {
+        return ActivePreferences::default();
+    }
     let Some(user_id) = params.user_id else {
         return ActivePreferences::default();
     };

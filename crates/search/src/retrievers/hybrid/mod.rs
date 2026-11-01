@@ -376,7 +376,7 @@ impl HybridRetriever {
             preferences,
             personal_influence,
         )
-            .await
+        .await
     }
 
     pub(crate) async fn fetch_candidates_with_dlt(
@@ -771,7 +771,17 @@ impl HybridRetriever {
                         .len(),
                 ),
         };
-        let overhead = overhead_system + overhead_template + session.formatted_history.len();
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        let preference_guidance = preferences.rendered_text();
+        let guidance_overhead = if preference_guidance.is_empty() {
+            0
+        } else {
+            2 + preference_guidance.len()
+        };
+        let overhead = overhead_system
+            + overhead_template
+            + session.formatted_history.len()
+            + guidance_overhead;
 
         // Python loads this while formatting the retrieved objects rather
         // than treating it as a candidate lane. Keep that boundary: the
@@ -859,8 +869,7 @@ impl HybridRetriever {
         debug!("LLM user prompt:\n{user_prompt}");
 
         let mut messages = build_messages_with_history(system_prompt, user_prompt, session);
-        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
-        append_preference_guidance(&mut messages, &preferences.rendered_text());
+        append_preference_guidance(&mut messages, &preference_guidance);
         Ok(Some(messages))
     }
 
