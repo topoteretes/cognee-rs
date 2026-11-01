@@ -120,6 +120,10 @@ pub(crate) async fn search_collection(
         return Ok(vec![]);
     }
 
+    if limit == 0 {
+        return Ok(vec![]);
+    }
+
     if !vector_db.has_collection(data_type, field).await? {
         tracing::debug!("{data_type}_{field} collection not found; using empty channel");
         return Ok(vec![]);
@@ -183,12 +187,12 @@ pub(crate) async fn search_collections(
     // Rust vector adapters expose cosine similarity (higher is better), while
     // Python's vector result carries distance (lower is better). Both implement
     // the same global merge across collection-local top-k lists.
-    hits.sort_by(|left, right| {
-        right
-            .score
+    let sortable_score = |score: Option<f32>| {
+        score
+            .filter(|value| value.is_finite())
             .unwrap_or(f32::NEG_INFINITY)
-            .total_cmp(&left.score.unwrap_or(f32::NEG_INFINITY))
-    });
+    };
+    hits.sort_by(|left, right| sortable_score(right.score).total_cmp(&sortable_score(left.score)));
     let mut seen = HashSet::new();
     hits.retain(|hit| {
         let Some(id) = result_id(hit) else {

@@ -54,8 +54,8 @@ use self::matching::{
     window_span_ms,
 };
 use crate::retrievers::hybrid::{
-    HybridBudget, HybridCandidates, HybridLanes, HybridRetriever, HybridView, chunk_collections,
-    has_dlt_rows, result_id,
+    DLT_ROW_TYPE, HybridBudget, HybridCandidates, HybridLanes, HybridRetriever, HybridView,
+    chunk_collections, has_dlt_rows, result_id,
 };
 use crate::retrievers::{DatasetScoping, SearchRetriever};
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
@@ -310,12 +310,18 @@ impl TemporalHybridRetriever {
         }
 
         let lanes = self.lanes(params, limits);
+        let include_dlt_rows = has_dlt_rows(self.hybrid.vector_db().as_ref()).await?;
         let (candidates, window) = tokio::try_join!(
-            self.hybrid
-                .fetch_candidates(query, &lanes, params.dataset_id),
+            self.hybrid.fetch_candidates_with_dlt(
+                query,
+                &lanes,
+                params.dataset_id,
+                include_dlt_rows
+            ),
             extract_query_interval(self.llm.as_ref(), query, self.generation_options.clone()),
         )?;
-        self.rerank(candidates, window, limits, &lanes).await
+        self.rerank(candidates, window, limits, &lanes, include_dlt_rows)
+            .await
     }
 
     /// Everything after the concurrent fetch: widen the candidates from the
@@ -327,6 +333,7 @@ impl TemporalHybridRetriever {
         window: ExtractedWindow,
         limits: Limits,
         lanes: &HybridLanes,
+        include_dlt_rows: bool,
     ) -> Result<TemporalRetrieval, SearchError> {
         let graph = self.hybrid.graph_db();
         let baseline = Self::finalize(&candidates, limits, lanes);
@@ -354,7 +361,7 @@ impl TemporalHybridRetriever {
             candidates
         } else {
             let (widened, added) = self
-                .expand_from_window(&in_window, candidates, limits, lanes)
+                .expand_from_window(&in_window, candidates, limits, lanes, include_dlt_rows)
                 .await?;
             diagnostics.expansion = added;
             widened
@@ -451,6 +458,7 @@ impl TemporalHybridRetriever {
         candidates: HybridCandidates,
         limits: Limits,
         lanes: &HybridLanes,
+        include_dlt_rows: bool,
     ) -> Result<(HybridCandidates, HashSet<String>), SearchError> {
         let known: HashSet<String> = candidates.chunks.iter().filter_map(result_id).collect();
         // Tightest timestamps first: a bare year that also overlaps the window
@@ -468,7 +476,8 @@ impl TemporalHybridRetriever {
         }
         let chunks = retrieve_in_collections(
             self.hybrid.vector_db(),
-            chunk_collections(has_dlt_rows(self.hybrid.vector_db().as_ref()).await?),
+            chunk_collections(include_dlt_rows),
+            include_dlt_rows.then_some((DLT_ROW_TYPE, "text")),
             &attached,
             lanes.node_name.as_deref(),
             &lanes.node_name_filter_operator,

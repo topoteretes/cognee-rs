@@ -68,6 +68,7 @@ pub(crate) fn attached_node_ids(timestamps: &[WindowTimestamp], edges: &[EdgeDat
 pub(crate) async fn retrieve_in_collections(
     vector_db: &Arc<dyn VectorDB>,
     collections: &[(&str, &str)],
+    known_existing: Option<(&str, &str)>,
     node_ids: &[String],
     node_name: Option<&[String]>,
     node_name_filter_operator: &str,
@@ -82,7 +83,10 @@ pub(crate) async fn retrieve_in_collections(
         .collect();
     let mut by_id: HashMap<String, SearchItem> = HashMap::new();
     for (data_type, field) in collections {
-        if uuids.is_empty() || !vector_db.has_collection(data_type, field).await? {
+        if uuids.is_empty()
+            || (known_existing != Some((*data_type, *field))
+                && !vector_db.has_collection(data_type, field).await?)
+        {
             continue;
         }
         let hits = search_results_to_context(vector_db.retrieve(data_type, field, &uuids).await?)?;
@@ -180,6 +184,7 @@ mod tests {
         let hits = retrieve_in_collections(
             &db,
             &[("A", "text"), ("B", "text"), ("C", "text")],
+            None,
             &ids,
             None,
             "OR",
@@ -208,6 +213,7 @@ mod tests {
         let scoped = retrieve_in_collections(
             &db,
             &[("A", "text"), ("B", "text")],
+            None,
             &ids,
             Some(&["other".to_string()]),
             "OR",
@@ -218,7 +224,7 @@ mod tests {
         assert_eq!(result_id(&scoped[0]), Some(z.to_string()));
 
         assert!(
-            retrieve_in_collections(&db, &[("A", "text")], &[], None, "OR")
+            retrieve_in_collections(&db, &[("A", "text")], None, &[], None, "OR")
                 .await
                 .unwrap()
                 .is_empty()
@@ -240,6 +246,7 @@ mod tests {
         let found = retrieve_in_collections(
             &db,
             crate::retrievers::hybrid::chunk_collections(true),
+            Some((crate::retrievers::hybrid::DLT_ROW_TYPE, "text")),
             &ids,
             Some(&["sales".to_string()]),
             "OR",
@@ -252,6 +259,7 @@ mod tests {
         let excluded = retrieve_in_collections(
             &db,
             crate::retrievers::hybrid::chunk_collections(true),
+            Some((crate::retrievers::hybrid::DLT_ROW_TYPE, "text")),
             &ids,
             Some(&["other".to_string()]),
             "OR",
