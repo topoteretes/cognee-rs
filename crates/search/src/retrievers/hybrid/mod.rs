@@ -713,6 +713,14 @@ impl HybridRetriever {
                 _ => {}
             }
         }
+        // A caller may reuse context fetched under broader metadata settings.
+        // Treat prompt construction as the final trust boundary and apply the
+        // current request's projection to the cloned passages again.
+        project_external_metadata(
+            &mut chunks,
+            params.include_external_metadata.unwrap_or(false),
+            params.external_metadata_keys.as_deref().unwrap_or(&[]),
+        );
 
         let configured_system_prompt = params
             .system_prompt
@@ -1761,7 +1769,12 @@ mod retriever_tests {
         assert!(!chunk.payload.to_string().contains("source_id"));
 
         retriever
-            .get_completion("query", Some(context), &SessionContext::default(), &params)
+            .get_completion(
+                "query",
+                Some(context.clone()),
+                &SessionContext::default(),
+                &params,
+            )
             .await
             .unwrap();
         let messages = llm.last_messages.lock().unwrap();
@@ -1769,6 +1782,19 @@ mod retriever_tests {
         assert!(user.contains("created_at: 2024-01-15\n"));
         assert!(!user.contains("source_id"));
         assert!(!user.contains("private"));
+        drop(messages);
+
+        retriever
+            .get_completion(
+                "query",
+                Some(context),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+        let messages = llm.last_messages.lock().unwrap();
+        assert!(!messages[1].content.contains("created_at"));
     }
 
     /// Entity and fact items carry their **own** dataset membership, read
