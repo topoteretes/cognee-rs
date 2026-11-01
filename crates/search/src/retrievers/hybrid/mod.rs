@@ -1124,6 +1124,12 @@ impl SearchRetriever for HybridRetriever {
         super::DatasetScoping::Membership
     }
 
+    fn previews_empty_context(&self, params: &SearchParams) -> bool {
+        params
+            .include_global_context_index
+            .unwrap_or(self.include_global_context_index)
+    }
+
     #[cfg(test)]
     fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
         crate::retrievers::AppliedTuning {
