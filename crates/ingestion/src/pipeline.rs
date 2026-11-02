@@ -2335,8 +2335,12 @@ impl AddPipeline {
             .and_then(cognee_core::RunOwnership::token);
         let executed = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher).await;
         // The executor wrote the run's terminal row either way: nothing is
-        // left to recover, so the marker goes (Python `ownership.closed`).
-        if let Some(ownership) = ownership.as_mut() {
+        // left to recover, so the marker goes (Python `ownership.closed`) —
+        // unless that write failed, which leaves the run `STARTED` for
+        // startup recovery to retire.
+        if let Some(ownership) = ownership.as_mut()
+            && !watcher.terminal_write_failed()
+        {
             ownership.mark_closed();
         }
         let outputs = executed.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;

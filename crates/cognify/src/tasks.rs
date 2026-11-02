@@ -3826,8 +3826,14 @@ async fn cognify_in_scope(
                 .await
                 .map_err(unwrap_execution_error);
             // Whichever way it ended, the executor wrote the run's terminal row
-            // (or never started one), so there is nothing left to recover.
-            if let Some(ownership) = ownership.as_mut() {
+            // (or never started one), so there is nothing left to recover. When
+            // that write failed the run is still `STARTED`: the marker stays so
+            // startup recovery can retire it (Python closes it only after
+            // `log_pipeline_run_complete` / `_error` returned,
+            // `run_tasks.py:342,403`).
+            if let Some(ownership) = ownership.as_mut()
+                && !watcher.terminal_write_failed()
+            {
                 ownership.mark_closed();
             }
             if let Some(bulk) = bulk
@@ -3907,7 +3913,8 @@ async fn cognify_in_scope(
 /// The rows are what the executor's watcher writes for a run: the `STARTED`
 /// row carries the run's `recovery_lock` when `ownership_dir` is set, as
 /// every Python run does (`run_tasks.py:96`), and `COMPLETED` is `{}`; the
-/// marker is removed once the pair is written. Best-effort like the
+/// marker is removed once the pair is written (kept when the
+/// `COMPLETED` write failed, so recovery can retire the run). Best-effort like the
 /// watcher's own writes.
 async fn record_run_without_work(
     repo: &Arc<dyn PipelineRunRepository>,
@@ -3948,7 +3955,9 @@ async fn record_run_without_work(
     run.status = CoreStatus::Completed;
     run.completed_at = Some(chrono::Utc::now());
     watcher.on_pipeline_run_completed(&run, 0).await;
-    if let Some(ownership) = ownership.as_mut() {
+    if let Some(ownership) = ownership.as_mut()
+        && !watcher.terminal_write_failed()
+    {
         ownership.mark_closed();
     }
     run.run_id

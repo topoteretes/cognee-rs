@@ -17,6 +17,7 @@
 //! [`super::ScopedRunWatcher`].
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -39,12 +40,30 @@ use super::{run_info_for_completed, run_info_for_errored, run_info_for_started};
 /// the inner writes are cheap no-ops.
 pub struct DbPipelineWatcher {
     repo: Arc<dyn PipelineRunRepository>,
+    /// Set when a `COMPLETED` / `ERRORED` write failed. See
+    /// [`Self::terminal_write_failed`].
+    terminal_write_failed: AtomicBool,
 }
 
 impl DbPipelineWatcher {
     /// Create a watcher that persists through `repo`.
     pub fn new(repo: Arc<dyn PipelineRunRepository>) -> Self {
-        Self { repo }
+        Self {
+            repo,
+            terminal_write_failed: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether a terminal (`COMPLETED` / `ERRORED`) row write failed.
+    ///
+    /// The write is best-effort, but its outcome decides the run's ownership
+    /// marker: Python marks the marker closed only after
+    /// `log_pipeline_run_complete` / `log_pipeline_run_error` returned
+    /// (`run_tasks.py:342,403`). After a failed write the run is still
+    /// `STARTED` in the database, so the marker must stay for startup recovery
+    /// to find and retire the run; closing it would leave the run unrecoverable.
+    pub fn terminal_write_failed(&self) -> bool {
+        self.terminal_write_failed.load(Ordering::SeqCst)
     }
 
     /// Mirrors `ScopedRunWatcher::core_to_db_status` — no cross-crate
@@ -119,6 +138,7 @@ impl PipelineWatcher for DbPipelineWatcher {
             })
             .await
         {
+            self.terminal_write_failed.store(true, Ordering::SeqCst);
             tracing::warn!(
                 run_id = %run.run_id,
                 "DbPipelineWatcher: DB write for Completed failed (non-fatal): {e}"
@@ -142,6 +162,7 @@ impl PipelineWatcher for DbPipelineWatcher {
             })
             .await
         {
+            self.terminal_write_failed.store(true, Ordering::SeqCst);
             tracing::warn!(
                 run_id = %run.run_id,
                 "DbPipelineWatcher: DB write for Errored failed (non-fatal): {e}"

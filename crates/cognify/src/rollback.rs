@@ -79,6 +79,13 @@ impl RunIdCapturingWatcher {
         self.captured.lock().unwrap()
     }
 
+    /// Whether the run's `COMPLETED` / `ERRORED` row failed to write: the run
+    /// is then still `STARTED`, and its ownership marker must be left for
+    /// startup recovery ([`DbPipelineWatcher::terminal_write_failed`]).
+    pub(crate) fn terminal_write_failed(&self) -> bool {
+        self.inner.terminal_write_failed()
+    }
+
     /// The run id, once the executor has emitted its first lifecycle event.
     /// `None` when the run never started — a pipeline that failed to build.
     pub(crate) fn run_id(&self) -> Option<Uuid> {
