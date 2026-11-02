@@ -319,6 +319,42 @@ async fn impl_already_scoped_rows_are_left_alone(db: &DatabaseConnection) {
     assert!(!table_exists(db, "dataset_data").await);
 }
 
+/// The backfill's temporary `dataset_data(data_id)` index (Python's
+/// `ix_backfill_dataset_data_data_id`) is created idempotently, so one left by
+/// an earlier attempt does not fail the migration, and it never outlives the
+/// dropped table.
+async fn impl_backfill_index_is_temporary_and_idempotent(db: &DatabaseConnection) {
+    Migrator::up(db, Some(before_scoping())).await.unwrap();
+    exec(
+        db,
+        "CREATE INDEX ix_backfill_dataset_data_data_id ON dataset_data (data_id)",
+    )
+    .await;
+
+    Migrator::up(db, None).await.unwrap();
+
+    assert!(!table_exists(db, "dataset_data").await);
+    let sql = match db.get_database_backend() {
+        sea_orm::DatabaseBackend::Postgres => {
+            "SELECT COUNT(*) AS cnt FROM pg_indexes \
+             WHERE indexname = 'ix_backfill_dataset_data_data_id'"
+        }
+        _ => {
+            "SELECT COUNT(*) AS cnt FROM sqlite_master \
+             WHERE type='index' AND name = 'ix_backfill_dataset_data_data_id'"
+        }
+    };
+    assert_eq!(rows(db, sql).await[0].try_get::<i64>("", "cnt").unwrap(), 0);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn backfill_index_is_temporary_and_idempotent_sqlite() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = connect(&sqlite_url(&dir)).await.unwrap();
+    impl_backfill_index_is_temporary_and_idempotent(&db).await;
+}
+
 #[cfg(feature = "sqlite")]
 fn sqlite_url(dir: &tempfile::TempDir) -> String {
     format!(
@@ -376,6 +412,15 @@ async fn backfill_stamps_sole_rows_and_forks_shared_rows_pg() {
 async fn already_scoped_rows_are_left_alone_pg() {
     with_pg_scratch(|db| async move {
         impl_already_scoped_rows_are_left_alone(&db).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn backfill_index_is_temporary_and_idempotent_pg() {
+    with_pg_scratch(|db| async move {
+        impl_backfill_index_is_temporary_and_idempotent(&db).await;
     })
     .await;
 }

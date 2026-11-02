@@ -22,7 +22,9 @@
 //!      The graph and vector stores still carry the original id in their
 //!      document nodes until the item is re-cognified;
 //!    - **no membership:** an unreachable orphan, left untouched.
-//! 3. Drops `dataset_data`. Membership is now exactly `data.dataset_id`.
+//! 3. Drops `dataset_data`, and with it the backfill's temporary
+//!    `dataset_data(data_id)` index (the legacy key cannot serve probes by
+//!    `data_id`). Membership is now exactly `data.dataset_id`.
 //!
 //! The backfill and the drop run in one transaction, so a crash rolls back
 //! cleanly and the migration simply reruns. On PostgreSQL sea-orm already
@@ -56,6 +58,9 @@ const LEDGER_TABLES: [&str; 2] = ["nodes", "edges"];
 const IX_DATASET_ID: &str = "ix_data_dataset_id";
 const IX_LEGACY_ID: &str = "ix_data_legacy_id";
 const IX_CONTENT_LOOKUP: &str = "data_dataset_content_lookup";
+/// Temporary `dataset_data(data_id)` index for the backfill; dropped with the
+/// table (Python's `ix_backfill_dataset_data_data_id`).
+const IX_BACKFILL_DATA_ID: &str = "ix_backfill_dataset_data_data_id";
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
@@ -91,6 +96,14 @@ impl MigrationTrait for Migration {
         }
 
         let txn = manager.get_connection().begin().await?;
+        // The legacy primary key is (dataset_id, data_id), which cannot serve
+        // the backfill's probes BY data_id. Python builds a temporary index
+        // for the migration's lifetime (d6e8f0a2b4c6 `_backfill`); it goes
+        // away with the table below.
+        txn.execute_unprepared(&format!(
+            "CREATE INDEX IF NOT EXISTS {IX_BACKFILL_DATA_ID} ON {DATASET_DATA} (data_id)"
+        ))
+        .await?;
         backfill(&txn).await?;
         txn.execute_unprepared(&format!("DROP TABLE {DATASET_DATA}"))
             .await?;
