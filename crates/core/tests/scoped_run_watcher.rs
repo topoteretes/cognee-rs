@@ -101,7 +101,10 @@ async fn completed_trail_is_started_then_completed_with_empty_run_info() {
     run.dataset_id = Some(ds);
     watcher.on_pipeline_run_started(&run).await;
     run.status = CoreStatus::Completed;
-    watcher.on_pipeline_run_completed(&run, 1).await;
+    watcher
+        .on_pipeline_run_completed(&run, 1)
+        .await
+        .expect("completed write");
 
     assert_eq!(
         trail(&repo, ds).await,
@@ -128,7 +131,10 @@ async fn started_row_carries_the_recovery_lock_when_the_run_has_one() {
     run.recovery_lock = Some(token);
     watcher.on_pipeline_run_started(&run).await;
     run.status = CoreStatus::Completed;
-    watcher.on_pipeline_run_completed(&run, 1).await;
+    watcher
+        .on_pipeline_run_completed(&run, 1)
+        .await
+        .expect("completed write");
 
     assert_eq!(
         trail(&repo, ds).await,
@@ -188,7 +194,10 @@ async fn events_flow_in_order_started_completed() {
 
     // Now complete.
     let run = fake_run(run_id, CoreStatus::Completed);
-    watcher.on_pipeline_run_completed(&run, 1).await;
+    watcher
+        .on_pipeline_run_completed(&run, 1)
+        .await
+        .expect("completed write");
 
     let event = rx.try_recv().expect("should have Completed event");
     assert!(
@@ -218,7 +227,10 @@ async fn started_and_completed_write_db_rows() {
     run.user_id = Some(triggered_by);
 
     watcher.on_pipeline_run_started(&run).await;
-    watcher.on_pipeline_run_completed(&run, 1).await;
+    watcher
+        .on_pipeline_run_completed(&run, 1)
+        .await
+        .expect("completed write");
 
     // Both rows record who triggered the run (`pipeline_runs.user_id`).
     let rows = repo.list_recent(Some(ds), 10).await.expect("list_recent");

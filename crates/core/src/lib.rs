@@ -38,7 +38,8 @@ pub use exec_status::{ExecStatusManager, NoopExecStatusManager};
 pub use pipeline::{
     DataIdFn, ExecutionError, NoopWatcher, Pipeline, PipelineBuilder, PipelineRunHandle,
     PipelineRunInfo, PipelineRunResult, PipelineRunStatus, PipelineStatus, PipelineWatcher,
-    RetryDelay, RetryPolicy, TaskStatus, execute, execute_blocking, execute_in_background,
+    RetryDelay, RetryPolicy, TaskStatus, WatcherError, execute, execute_blocking,
+    execute_in_background,
 };
 pub use progress::ProgressToken;
 pub use provenance::{

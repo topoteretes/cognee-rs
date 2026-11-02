@@ -673,10 +673,32 @@ pub trait PipelineWatcher: Send + Sync {
     /// the `STARTED` row here.
     async fn on_pipeline_run_started(&self, _run: &PipelineRunInfo) {}
 
-    /// Called after all tasks complete successfully.
-    async fn on_pipeline_run_completed(&self, _run: &PipelineRunInfo, _output_count: usize) {}
+    /// Called after all tasks complete successfully; persisting watchers write
+    /// the terminal `COMPLETED` row here.
+    ///
+    /// The write is part of the run, as in Python, where
+    /// `log_pipeline_run_complete` sits inside `run_tasks`' `try`
+    /// (`run_tasks.py`): if it raises, the run goes to the `except` branch,
+    /// rolls back, writes `ERRORED` and yields `PipelineRunErrored`. So a
+    /// watcher whose terminal write failed returns `Err`, and
+    /// [`execute`] then treats the run as failed: it reports
+    /// [`ExecutionError::RunRecordFailed`], calls
+    /// [`on_pipeline_run_errored`](PipelineWatcher::on_pipeline_run_errored)
+    /// with the error text, and the caller rolls the run back like any other
+    /// failed run. A watcher with nothing to persist keeps the default `Ok`.
+    async fn on_pipeline_run_completed(
+        &self,
+        _run: &PipelineRunInfo,
+        _output_count: usize,
+    ) -> Result<(), WatcherError> {
+        Ok(())
+    }
 
-    /// Called when the pipeline run fails.
+    /// Called when the pipeline run fails. Best-effort: the run has already
+    /// failed, so a write error is the watcher's to log (Python's
+    /// `log_pipeline_run_error` raising would only replace the error being
+    /// reported; Rust keeps the original and leaves the row `STARTED` for
+    /// startup recovery).
     async fn on_pipeline_run_errored(&self, _run: &PipelineRunInfo, _error: &str) {}
 
     /// Called when a task begins execution.
@@ -705,6 +727,12 @@ pub trait PipelineWatcher: Send + Sync {
     async fn on_payload_field(&self, _run_id: Uuid, _key: &str, _value: serde_json::Value) {}
 }
 
+/// A watcher could not record the run's terminal `COMPLETED` state; see
+/// [`PipelineWatcher::on_pipeline_run_completed`].
+#[derive(Debug, Clone, Error)]
+#[error("{0}")]
+pub struct WatcherError(pub String);
+
 pub struct NoopWatcher;
 
 #[async_trait]
@@ -730,6 +758,14 @@ pub enum ExecutionError {
 
     #[error("invalid pipeline configuration: {reason}")]
     InvalidConfig { reason: String },
+
+    /// Every task succeeded but the run's terminal `COMPLETED` row could not be
+    /// written. Python treats this as a failed run
+    /// (`log_pipeline_run_complete` raising lands in `run_tasks`' `except`
+    /// branch: rollback, `ERRORED`, `PipelineRunErrored`), so the executor
+    /// does too.
+    #[error("the run's COMPLETED record could not be written: {reason}")]
+    RunRecordFailed { reason: String },
 }
 /// Emit a `Pipeline Run *` analytics event.
 ///
@@ -968,10 +1004,26 @@ async fn execute_unscoped(
         execute_items_par(inputs, pipeline, &ctx, &env).await
     };
 
-    match &result {
+    // The terminal COMPLETED write is part of the run: a failed write turns
+    // the run into a failed one (Python `run_tasks.py`, the `except` branch
+    // around `log_pipeline_run_complete`), recorded below as any other failure.
+    let result = match result {
         Ok(outputs) => {
             run_info.status = PipelineRunStatus::Completed;
             run_info.completed_at = Some(chrono::Utc::now());
+            match watcher
+                .on_pipeline_run_completed(&run_info, outputs.len())
+                .await
+            {
+                Ok(()) => Ok(outputs),
+                Err(e) => Err(ExecutionError::RunRecordFailed { reason: e.0 }),
+            }
+        }
+        err => err,
+    };
+
+    match &result {
+        Ok(outputs) => {
             watcher
                 .on_pipeline(
                     pipeline_id,
@@ -979,9 +1031,6 @@ async fn execute_unscoped(
                         output_count: outputs.len(),
                     },
                 )
-                .await;
-            watcher
-                .on_pipeline_run_completed(&run_info, outputs.len())
                 .await;
 
             // ── Analytics: Pipeline Run Completed ───────────────────────

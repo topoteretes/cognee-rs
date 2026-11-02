@@ -115,10 +115,14 @@ impl PipelineWatcher for RunIdCapturingWatcher {
         self.inner.on_pipeline_run_started(run).await;
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, output_count: usize) {
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        output_count: usize,
+    ) -> Result<(), cognee_core::WatcherError> {
         self.inner
             .on_pipeline_run_completed(run, output_count)
-            .await;
+            .await
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {

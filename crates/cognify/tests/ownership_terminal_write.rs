@@ -6,9 +6,15 @@
 //! A run's ownership marker is closed only once its terminal `pipeline_runs`
 //! row is written. Python sets `ownership.closed` after
 //! `log_pipeline_run_complete` / `_error` returned (`run_tasks.py:342,403`).
-//! The Rust writes are best-effort, so a failed `COMPLETED` write must leave the
-//! marker behind: the run is still `STARTED` in the database, and startup
-//! recovery can only retire it while the marker exists.
+//! A failed terminal write leaves the run `STARTED` in the database, and
+//! startup recovery can only retire it while the marker exists.
+//!
+//! A failed `COMPLETED` write is itself a failed run, as in Python
+//! (`run_tasks.py`: `log_pipeline_run_complete` sits inside the `try`; its
+//! failure goes to the `except` branch, which rolls back, writes `ERRORED` and
+//! yields `PipelineRunErrored`): `cognify` returns an error, rolls the run
+//! back and writes `ERRORED`; only when that write fails too does the run stay
+//! `STARTED` with its marker.
 //!
 //! Offline: mock stores, in-memory SQLite.
 
@@ -33,11 +39,20 @@ use cognee_vector::VectorDB;
 use serde_json::json;
 use uuid::Uuid;
 
-/// Delegates to a real repository, except that every non-`STARTED` row write
-/// fails: the database stays at `STARTED`.
+/// Which terminal row writes the repository rejects.
+#[derive(Clone, Copy, PartialEq)]
+enum Fail {
+    Nothing,
+    /// Only `COMPLETED`: the run's `ERRORED` row can still be written.
+    Completed,
+    /// Every non-`STARTED` row: the database stays at `STARTED`.
+    Terminal,
+}
+
+/// Delegates to a real repository, failing the writes `fail` names.
 struct FailingTerminalRepo {
     inner: Arc<dyn PipelineRunRepository>,
-    fail_terminal: bool,
+    fail: Fail,
 }
 
 #[async_trait]
@@ -51,7 +66,12 @@ impl PipelineRunRepository for FailingTerminalRepo {
         status: PipelineRunStatus,
         run_info: Option<serde_json::Value>,
     ) -> Result<Uuid, DbError> {
-        if self.fail_terminal && status != PipelineRunStatus::Started {
+        let rejected = match self.fail {
+            Fail::Nothing => false,
+            Fail::Completed => status == PipelineRunStatus::Completed,
+            Fail::Terminal => status != PipelineRunStatus::Started,
+        };
+        if rejected {
             return Err(DbError::QueryError("synthetic terminal failure".into()));
         }
         self.inner
@@ -120,9 +140,18 @@ impl PipelineRunRepository for FailingTerminalRepo {
     }
 }
 
-/// Run one cognify with `ownership_dir` as the marker root; the terminal row
-/// write fails when `fail_terminal`.
-async fn run_cognify(ownership_dir: &Path, fail_terminal: bool) {
+/// What a run left behind.
+struct Outcome {
+    result: Result<cognee_cognify::CognifyResult, cognee_cognify::CognifyError>,
+    /// The statuses of the dataset's persisted rows, oldest first.
+    statuses: Vec<PipelineRunStatus>,
+    /// Graph nodes still in the store after the run.
+    graph_nodes: usize,
+}
+
+/// Run one cognify with `ownership_dir` as the marker root, the repository
+/// failing the writes `fail` names.
+async fn run_cognify(ownership_dir: &Path, fail: Fail) -> Outcome {
     let owner_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
@@ -137,6 +166,7 @@ async fn run_cognify(ownership_dir: &Path, fail_terminal: bool) {
     );
     let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
     let graph_db: Arc<dyn cognee_graph::GraphDBTrait> = Arc::new(MockGraphDB::new());
+    let graph_probe = Arc::clone(&graph_db);
     let vector_db: Arc<dyn VectorDB> = Arc::new(MockVectorDB::new());
     let embedding: Arc<dyn cognee_embedding::EmbeddingEngine> =
         Arc::new(MockEmbeddingEngine::new(8));
@@ -169,15 +199,16 @@ async fn run_cognify(ownership_dir: &Path, fail_terminal: bool) {
         .expect("seed dataset");
         Arc::new(conn)
     };
+    let real_repo: Arc<dyn PipelineRunRepository> =
+        Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&db)));
     let repo: Arc<dyn PipelineRunRepository> = Arc::new(FailingTerminalRepo {
-        inner: Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&db))),
-        fail_terminal,
+        inner: Arc::clone(&real_repo),
+        fail,
     });
     let thread_pool: Arc<dyn cognee_core::CpuPool> =
         Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("pool"));
 
-    // The run itself succeeds either way: the terminal write is best-effort.
-    cognify(
+    let result = cognify(
         vec![item],
         dataset_id,
         Some(owner_id),
@@ -194,8 +225,18 @@ async fn run_cognify(ownership_dir: &Path, fail_terminal: bool) {
         Arc::new(NoOpOntologyResolver::new()),
         &CognifyConfig::default().with_run_ownership_dir(ownership_dir),
     )
-    .await
-    .expect("cognify succeeds");
+    .await;
+    let mut rows = real_repo
+        .list_recent(Some(dataset_id), 50)
+        .await
+        .expect("list pipeline runs");
+    rows.reverse();
+    let (nodes, _edges) = graph_probe.get_graph_data().await.expect("read the graph");
+    Outcome {
+        result,
+        statuses: rows.into_iter().map(|r| r.status).collect(),
+        graph_nodes: nodes.len(),
+    }
 }
 
 fn marker_count(dir: &Path) -> usize {
@@ -206,7 +247,13 @@ fn marker_count(dir: &Path) -> usize {
 #[tokio::test]
 async fn the_marker_is_removed_after_the_terminal_row_is_written() {
     let dir = tempfile::tempdir().unwrap();
-    run_cognify(dir.path(), false).await;
+    let out = run_cognify(dir.path(), Fail::Nothing).await;
+    out.result.as_ref().expect("cognify succeeds");
+    assert_eq!(
+        out.statuses,
+        vec![PipelineRunStatus::Started, PipelineRunStatus::Completed]
+    );
+    assert!(out.graph_nodes > 0, "a completed run keeps its graph");
     assert_eq!(
         marker_count(dir.path()),
         0,
@@ -214,12 +261,43 @@ async fn the_marker_is_removed_after_the_terminal_row_is_written() {
     );
 }
 
-/// A failed `COMPLETED` write leaves the run `STARTED` in the database; its
-/// marker stays so startup recovery can prove the run abandoned and retire it.
+/// Python: a failed `COMPLETED` write is a run failure. The run errors, rolls
+/// back its writes and records `ERRORED`; that row is terminal, so the marker
+/// goes.
 #[tokio::test]
-async fn the_marker_stays_when_the_terminal_row_write_failed() {
+async fn a_failed_completed_write_fails_the_run_and_writes_errored() {
     let dir = tempfile::tempdir().unwrap();
-    run_cognify(dir.path(), true).await;
+    let out = run_cognify(dir.path(), Fail::Completed).await;
+    let err = out
+        .result
+        .expect_err("a run whose COMPLETED row was not written has failed");
+    assert!(
+        err.to_string().contains("COMPLETED record"),
+        "the error names the failed record write: {err}"
+    );
+    assert_eq!(
+        out.statuses,
+        vec![PipelineRunStatus::Started, PipelineRunStatus::Errored],
+        "STARTED, then ERRORED in place of the COMPLETED that could not be written"
+    );
+    assert_eq!(out.graph_nodes, 0, "the failed run was rolled back");
+    assert_eq!(
+        marker_count(dir.path()),
+        0,
+        "the ERRORED row is the run's terminal state, so the marker is closed"
+    );
+}
+
+/// When the `ERRORED` write fails too the run stays `STARTED` (Python's
+/// `log_pipeline_run_error` raises, `ownership.closed` is never set): the
+/// error is still returned, and the marker stays so startup recovery can
+/// retire the run.
+#[tokio::test]
+async fn the_marker_stays_when_no_terminal_row_could_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_cognify(dir.path(), Fail::Terminal).await;
+    out.result.expect_err("the run failed");
+    assert_eq!(out.statuses, vec![PipelineRunStatus::Started]);
     assert_eq!(
         marker_count(dir.path()),
         1,

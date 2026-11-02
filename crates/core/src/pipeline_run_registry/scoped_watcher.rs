@@ -8,6 +8,7 @@ use cognee_database::{PipelineRunRepository, PipelineRunStatus as DbStatus};
 
 use crate::pipeline::{
     PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineStatus, PipelineWatcher, TaskStatus,
+    WatcherError,
 };
 
 use super::types::{RunEvent, RunEventKind, RunPhase};
@@ -134,8 +135,14 @@ impl PipelineWatcher for ScopedRunWatcher {
         });
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, _output_count: usize) {
-        // 1. Write durable row — non-fatal on failure.
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        _output_count: usize,
+    ) -> Result<(), WatcherError> {
+        // 1. Write durable row. A failed write fails the run (Python: the
+        //    COMPLETED write sits inside `run_tasks`' `try`); no `Completed`
+        //    event is published for it, the executor's ERRORED follows.
         //    Python parity: `log_pipeline_run_complete` writes `{}`.
         let run_info = Some(super::run_info_for_completed());
         let db_result = self
@@ -154,8 +161,9 @@ impl PipelineWatcher for ScopedRunWatcher {
         if let Err(e) = db_result {
             tracing::warn!(
                 run_id = %self.run_id,
-                "ScopedRunWatcher: DB write for Completed failed (non-fatal): {e}"
+                "ScopedRunWatcher: DB write for Completed failed: {e}"
             );
+            return Err(WatcherError(e.to_string()));
         }
 
         // 2. Publish live event.
@@ -166,6 +174,7 @@ impl PipelineWatcher for ScopedRunWatcher {
             payload: serde_json::Value::Null,
             at: Utc::now(),
         });
+        Ok(())
     }
 
     async fn on_payload_field(&self, run_id: Uuid, key: &str, value: serde_json::Value) {

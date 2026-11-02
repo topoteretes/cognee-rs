@@ -164,6 +164,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `ConfigManager::{set,clear}_single_process`, `cognee_database::*single_process*`),
     whose only job was to gate the unscoped startup sweep that the ownership
     markers below replace.
+  - **A failed terminal `COMPLETED` write fails the run (Python `run_tasks.py`,
+    where `log_pipeline_run_complete` sits inside the `try`).**
+    `PipelineWatcher::on_pipeline_run_completed` now returns
+    `Result<(), WatcherError>`; on `Err`, `execute` reports the new
+    `ExecutionError::RunRecordFailed`, writes the `ERRORED` row and the caller
+    rolls the run back like any failed one. The run stays `STARTED` (marker kept
+    for startup recovery) only if the `ERRORED` write fails too. Custom
+    watchers return `Ok(())`.
   - A second `cognify` of a dataset **waits** on the dataset's lock
     (`cognee_core::DatasetLocks::global()`, shared with `add` and `delete`)
     instead of failing with `PipelineAlreadyRunning`. Re-cognifying a complete

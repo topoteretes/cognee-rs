@@ -3716,7 +3716,7 @@ async fn cognify_in_scope(
                         dataset_id,
                         effective_config.run_ownership_dir.as_deref(),
                     )
-                    .await,
+                    .await?,
                 );
                 return Ok(result);
             }
@@ -3913,9 +3913,11 @@ async fn cognify_in_scope(
 /// The rows are what the executor's watcher writes for a run: the `STARTED`
 /// row carries the run's `recovery_lock` when `ownership_dir` is set, as
 /// every Python run does (`run_tasks.py:96`), and `COMPLETED` is `{}`; the
-/// marker is removed once the pair is written (kept when the
-/// `COMPLETED` write failed, so recovery can retire the run). Best-effort like the
-/// watcher's own writes.
+/// marker is removed once the pair is written. A failed `COMPLETED` write is a
+/// failed run, as in the executor and in Python (`run_tasks.py`): the run is
+/// closed with an `ERRORED` row and the error is returned (the marker stays
+/// only if that write failed too, for startup recovery to retire the run). Nothing was
+/// done in this run, so there is nothing to roll back.
 async fn record_run_without_work(
     repo: &Arc<dyn PipelineRunRepository>,
     pipeline_name: &str,
@@ -3923,7 +3925,7 @@ async fn record_run_without_work(
     tenant_id: Option<Uuid>,
     dataset_id: Uuid,
     ownership_dir: Option<&std::path::Path>,
-) -> Uuid {
+) -> Result<Uuid, CognifyError> {
     use cognee_core::pipeline::{
         PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineWatcher,
     };
@@ -3954,13 +3956,23 @@ async fn record_run_without_work(
     watcher.on_pipeline_run_started(&run).await;
     run.status = CoreStatus::Completed;
     run.completed_at = Some(chrono::Utc::now());
-    watcher.on_pipeline_run_completed(&run, 0).await;
+    let completed = watcher.on_pipeline_run_completed(&run, 0).await;
+    let outcome = match completed {
+        Ok(()) => Ok(run.run_id),
+        Err(e) => {
+            run.status = CoreStatus::Errored;
+            watcher.on_pipeline_run_errored(&run, &e.0).await;
+            Err(CognifyError::Execute(format!(
+                "the run's COMPLETED record could not be written: {e}"
+            )))
+        }
+    };
     if let Some(ownership) = ownership.as_mut()
         && !watcher.terminal_write_failed()
     {
         ownership.mark_closed();
     }
-    run.run_id
+    outcome
 }
 
 /// Recover the typed [`CognifyError`] a failing task returned.
