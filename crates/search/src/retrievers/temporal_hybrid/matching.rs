@@ -31,9 +31,9 @@ pub(crate) const QUERY_INTERVAL_PROMPT: &str =
     include_str!("../../utils/prompts/query_interval.txt");
 
 /// The window the LLM extracts from a question. Port of Python's
-/// `QueryInterval` (`cognee/tasks/temporal_graph/models.py`): each side is a
-/// set of UTC calendar fields (`year` required, the rest defaulting to the
-/// start of their unit), or `null` when that side is open.
+/// `QueryInterval` (`cognee/modules/retrieval/temporal_hybrid/models.py:20-22`):
+/// each side is a set of UTC calendar fields (`year` required, the rest
+/// defaulting to the start of their unit), or `null` when that side is open.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct QueryInterval {
     #[serde(default)]
