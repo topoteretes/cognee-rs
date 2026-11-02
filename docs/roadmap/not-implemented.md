@@ -106,10 +106,10 @@ Partial stages:
   so the node's preference text stays empty unless Python wrote those entries into a shared
   session store; only the `prefers` edge weights (from explicit ratings) take effect.
 - **Personalized retrieval** — graph completions (triplet ranking) and RAG completion (chunk
-  re-ranking, preference text as guidance) read the preferences. Not yet: the hybrid search's
-  chunk-lane factor and guidance (SDK-1045), and the session guidance block's `Preferences`
-  section. Rust appends the preference text on session searches too, since it has no session
-  guidance block; Python serves it there through that block. RAG scores are similarities in
+  re-ranking, preference text as guidance) read the preferences, including hybrid chunk ranking
+  and hybrid completion/preview guidance (SDK-1045). Not yet: the session guidance block's
+  `Preferences` section. Rust appends the preference text on session searches too, since it has
+  no session guidance block; Python serves it there through that block. RAG scores are similarities in
   Rust; the re-rank takes each back to Python's distance space (`1 - score`) and scales that,
   so the order matches Python's. A RAG completion's turn records its chunks' ids, so ratings
   can weight chunks.
