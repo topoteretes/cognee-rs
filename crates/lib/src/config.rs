@@ -3258,7 +3258,7 @@ mod tests {
 
     /// The defaults keep the historical pipeline: Python's batch sizes, the
     /// built-in prompts (their Python file names select them), no schema,
-    /// no access tracking and no automatic feedback detection.
+    /// no access tracking, with Python-parity automatic feedback detection.
     #[test]
     fn formerly_inert_settings_default_to_the_builtin_behaviour() {
         let s = Settings::default();
@@ -3269,7 +3269,7 @@ mod tests {
         assert!(cognify.summary_schema.is_none());
         let tuning = s.search_tuning();
         assert!(!tuning.access_tracking);
-        assert!(!tuning.auto_feedback);
+        assert!(tuning.auto_feedback);
         assert!(tuning.default_system_prompt_path.is_none());
 
         // `0` keeps the default batch sizes; an unreadable prompt file keeps
