@@ -2225,7 +2225,7 @@ without `LLM_API_KEY` (and so without a working LLM) reports none.
 ## HTTP server
 
 The server binary is not part of this repository. It reads its own env surface
-(host/port, auth, body limits, pipeline registry, notebooks, health probes),
+(host/port, auth, body limits, pipeline registry, health probes),
 which is documented with the server rather than here; see
 [tools/http-server.md](tools/http-server.md). Note that the `HYBRID_COMPLETION`
 tuning knobs are **not** part of the HTTP wire surface — see
