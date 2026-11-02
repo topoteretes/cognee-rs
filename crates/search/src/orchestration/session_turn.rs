@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn feedback_follow_up_rates_previous_and_rewrites_effective_query() {
+    async fn feedback_follow_up_records_evidence_and_rewrites_effective_query() {
         let turn = golden_turns().remove(2);
         let dir = tempfile::tempdir().unwrap();
         let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
@@ -674,19 +674,8 @@ mod tests {
         assert!(prepared.should_answer);
         assert_eq!(prepared.effective_query, turn.effective_query);
         let entries = manager.get_session(Some("follow-up"), None).await.unwrap();
-        assert_eq!(entries[0].feedback_score, Some(5));
-        assert_eq!(
-            entries[0].feedback_text.as_deref(),
-            Some(turn.raw_query.as_str())
-        );
-        assert_eq!(
-            entries[0]
-                .memify_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("feedback_weights_applied")),
-            Some(&false),
-            "the existing improve stage must see the newly rated row"
-        );
+        assert_eq!(entries[0].feedback_score, None);
+        assert_eq!(entries[0].feedback_text, None);
         let rows = manager
             .get_session_context_entries(Some("follow-up"), None)
             .await
@@ -736,10 +725,8 @@ mod tests {
         ))));
 
         let prepared = prepare_concurrent_session_turn_from_snapshot(
-            &manager,
             &HangingLlm,
             "timeout",
-            None,
             "raw query",
             &[],
             &[],
