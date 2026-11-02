@@ -506,6 +506,11 @@ pub async fn prepare_concurrent_session_turn_from_snapshot(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "session-turn fixtures should fail loudly when setup or assertions cannot be read"
+)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
