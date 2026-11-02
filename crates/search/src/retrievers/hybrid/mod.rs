@@ -545,6 +545,7 @@ impl HybridRetriever {
     /// loading fine but the graph batch call erroring) discards the
     /// already-computed `q_coords` and returns `(None, None, None)`, mirroring
     /// Python's one `try/except` around the whole computation.
+    #[allow(clippy::too_many_arguments)]
     async fn build_truth_context(
         &self,
         use_truth_weight: bool,
