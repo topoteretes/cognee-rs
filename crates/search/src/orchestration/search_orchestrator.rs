@@ -1030,6 +1030,19 @@ impl SearchOrchestrator {
             None
         };
         if preflight_datasets.as_ref().is_some_and(Vec::is_empty) {
+            // Python still records an unfiltered search when ACL resolution
+            // leaves the caller with no readable datasets.  Keep this before
+            // session preparation, but preserve the normal history pair.
+            let response = prepare_search_result(
+                search_type,
+                SearchOutput::Items(Vec::new()),
+                None,
+                Some(Vec::new()),
+                request.only_context(),
+                request.use_combined_context(),
+                request.verbose(),
+            );
+            self.log_search_history(request, &response).await;
             emit_search_completed(request);
             return Ok(Vec::new());
         }
