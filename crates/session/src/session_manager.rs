@@ -29,6 +29,10 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Maximum Q&A pairs included in completion history.
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
+    }
     pub fn new(store: Arc<dyn SessionStore>) -> Self {
         Self {
             store,

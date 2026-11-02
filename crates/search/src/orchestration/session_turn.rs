@@ -308,6 +308,163 @@ pub async fn prepare_session_turn_from_snapshot(
     }
 }
 
+/// Analyze a concurrent turn without writing. The caller commits this only
+/// after the answer lane has completed successfully.
+pub async fn analyze_session_turn_from_snapshot(
+    llm: &dyn Llm,
+    query: &str,
+    entries: &[SessionQAEntry],
+    rows: &[SessionContextRow],
+) -> SessionTurnPreparation {
+    if query.trim().is_empty() {
+        return SessionTurnPreparation::pass_through(query);
+    }
+    let previous = entries.last();
+    let previous_qa_id = previous.map(|entry| entry.id.to_string());
+    let served_ids = previous
+        .and_then(|entry| entry.used_session_context_ids.clone())
+        .unwrap_or_default();
+    let served = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            served_ids.iter().any(|candidate| candidate == id).then(|| {
+                (
+                    id.to_string(),
+                    row.get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let analysis = analyze(
+        llm,
+        query,
+        previous.map(|entry| (entry.question.as_str(), entry.answer.as_str())),
+        &served,
+    )
+    .await;
+    let should_answer = should_answer_turn(&analysis, previous.is_some());
+    SessionTurnPreparation {
+        should_answer,
+        response_to_user: if should_answer {
+            analysis.response_to_user.clone()
+        } else {
+            Some(
+                analysis
+                    .response_to_user
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_ACK.into()),
+            )
+        },
+        effective_query: analysis
+            .query_to_answer
+            .clone()
+            .unwrap_or_else(|| query.to_string()),
+        analysis: Some(analysis),
+        accepted_context_ids: Vec::new(),
+        previous_qa_id,
+    }
+}
+
+/// Persist evidence from a previously analyzed concurrent turn.
+pub async fn commit_session_turn_analysis(
+    manager: &Arc<SessionManager>,
+    session_id: &str,
+    user_id: Option<&str>,
+    query: &str,
+    preparation: &mut SessionTurnPreparation,
+    entries: &[SessionQAEntry],
+    rows: &[SessionContextRow],
+) {
+    let Some(analysis) = preparation.analysis.as_ref() else {
+        return;
+    };
+    let served_ids = entries
+        .last()
+        .and_then(|entry| entry.used_session_context_ids.clone())
+        .unwrap_or_default();
+    let has_evidence = !analysis.candidate_context_updates.is_empty()
+        || !analysis.served_context_ratings.is_empty()
+        || analysis.previous_answer_rating.is_some();
+    if !has_evidence {
+        return;
+    }
+    let feedback_id = Uuid::new_v4().to_string();
+    let mut feedback = Map::new();
+    for (key, value) in [
+        ("id", json!(feedback_id)),
+        ("kind", json!("feedback")),
+        ("created_at", json!(Utc::now().to_rfc3339())),
+        ("raw_text", json!(query)),
+        (
+            "referenced_qa_ids",
+            json!(
+                preparation
+                    .previous_qa_id
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "referenced_qa_rating",
+            json!(analysis.previous_answer_rating),
+        ),
+        ("influencing_context_ids", json!(served_ids)),
+        (
+            "candidate_context_entries",
+            json!(analysis.candidate_context_updates),
+        ),
+    ] {
+        feedback.insert(key.into(), value);
+    }
+    let _ = manager
+        .create_session_context_entry(Some(session_id), user_id, feedback)
+        .await;
+    for rating in &analysis.served_context_ratings {
+        if !served_ids.iter().any(|id| id == &rating.entry_id) {
+            continue;
+        }
+        let Some(row) = rows
+            .iter()
+            .find(|row| row.get("id").and_then(Value::as_str) == Some(&rating.entry_id))
+        else {
+            continue;
+        };
+        let field = match rating.rating.trim().to_ascii_lowercase().as_str() {
+            "helpful" => "helpful_count",
+            "harmful" => "harmful_count",
+            _ => continue,
+        };
+        let mut merge = Map::new();
+        merge.insert(
+            field.into(),
+            json!(row.get(field).and_then(Value::as_u64).unwrap_or(0) + 1),
+        );
+        let _ = manager
+            .update_session_context_entry(Some(session_id), user_id, &rating.entry_id, merge)
+            .await;
+    }
+    let candidates = analysis
+        .candidate_context_updates
+        .iter()
+        .map(|candidate| {
+            StoredCandidateContextUpdate::new(
+                CONTEXT_PROFILE_QA,
+                &candidate.section,
+                &candidate.content,
+                candidate.confidence,
+            )
+        })
+        .collect::<Vec<_>>();
+    preparation.accepted_context_ids =
+        apply_candidate_updates_for_user(manager, session_id, user_id, &feedback_id, &candidates)
+            .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

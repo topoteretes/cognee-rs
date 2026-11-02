@@ -5,6 +5,33 @@ use std::{
 };
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+/// A spawned analysis task that cannot outlive its owning request future.
+pub(crate) struct AbortOnDrop<T>(Option<tokio::task::JoinHandle<T>>);
+
+impl<T> AbortOnDrop<T> {
+    pub(crate) fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(Some(handle))
+    }
+
+    pub(crate) fn abort(mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+
+    pub(crate) async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        self.0.take().expect("analysis handle present").await
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
 /// Execution order for a session-aware completion turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
