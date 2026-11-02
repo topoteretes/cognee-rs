@@ -481,10 +481,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outright, as in Python: graphs built only by temporal cognify now get plain
   hybrid answers. The window prompt is Python's `QUERY_INTERVAL_PROMPT`, which
   reads no clock. An LLM or transport failure during window extraction now
-  fails the search, as in Python, instead of silently falling back; a window
-  with out-of-range calendar fields (month 13, year 0) still falls back to plain
-  hybrid with reason `invalid_interval`, where Python's `QueryInterval`
-  validation raises and fails the search. Other behaviour that follows
+  fails the search, as in Python, instead of silently falling back; so does a
+  window with out-of-range calendar fields (month 13, year 0), which Python's
+  `QueryTime` validation rejects. A date that does not exist (`2021-02-29`)
+  falls back with reason `invalid_interval`, as in Python. Other behaviour that follows
   Python: an empty graph returns an empty context (not `NotFound`), batches are
   rejected, and `search.triplet_neighbor_cap` no longer applies to TEMPORAL
   (`search.hybrid` does).
