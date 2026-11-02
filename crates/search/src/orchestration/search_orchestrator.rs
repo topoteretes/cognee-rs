@@ -2532,10 +2532,10 @@ mod tests {
 
         // Retrieval/completion did run concurrently, but none of its payload
         // may escape when analysis routes the turn to an acknowledgement.
-        assert_eq!(
-            retriever.query_seen.lock().unwrap().as_deref(),
-            Some("No, use X.")
-        );
+        let query_seen = retriever.query_seen.lock().unwrap().clone();
+        assert!(query_seen.as_deref().is_some_and(|query| {
+            query == "No, use X." || query.ends_with("Current question:\nNo, use X.")
+        }));
         assert!(matches!(
             result.result,
             SearchOutput::Text(ref text) if text == "Thanks for the correction."
@@ -2546,9 +2546,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(entries.len(), 2, "the turn is persisted exactly once");
-        assert_eq!(entries[0].feedback_score, Some(2));
+        assert!(entries[0].feedback_score.is_none());
         assert_eq!(entries[1].answer, "Thanks for the correction.");
         assert!(entries[1].used_graph_element_ids.is_none());
+        let context = manager
+            .get_session_context_entries(Some("s"), Some(&user.to_string()))
+            .await
+            .unwrap();
+        assert!(context.iter().any(|row| {
+            row.get("kind").and_then(serde_json::Value::as_str) == Some("feedback")
+                && row
+                    .get("referenced_qa_rating")
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(2)
+        }));
     }
 
     #[async_trait]
