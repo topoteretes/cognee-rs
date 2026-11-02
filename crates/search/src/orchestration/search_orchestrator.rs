@@ -689,10 +689,7 @@ impl SearchOrchestrator {
             .unwrap_or(self.auto_feedback_default);
 
         let retriever = self.resolve_retriever(request).await?;
-        let search_type = match request.custom_search_type {
-            Some(_) => request.search_type,
-            None => retriever.search_type(),
-        };
+        let search_type = retriever.search_type();
         let scoping = retriever.dataset_scoping();
 
         // Authorize caller-supplied dataset UUIDs. Python runs every explicit
@@ -832,6 +829,35 @@ impl SearchOrchestrator {
         let names_no_dataset = request.dataset_ids.as_ref().is_none_or(Vec::is_empty)
             && request.datasets.as_ref().is_none_or(Vec::is_empty);
 
+        // Resolve the no-filter per-dataset scope before session preparation:
+        // analysis must never read history before identity/authorization is
+        // validated, and a caller with no readable datasets has no turn to run.
+        let preflight_datasets = if self.per_dataset_storage
+            && scoping != DatasetScoping::NotDatasetData
+            && names_no_dataset
+        {
+            let requester = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput(
+                    "a search under per-dataset storage that names no dataset requires \
+                     SearchRequest.user_id to find the datasets the caller may read"
+                        .to_string(),
+                )
+            })?;
+            let mut readable: Vec<_> = self
+                .readable_dataset_ids(requester, request.tenant_id)
+                .await?
+                .into_iter()
+                .collect();
+            readable.sort_unstable();
+            Some(readable)
+        } else {
+            None
+        };
+        if preflight_datasets.as_ref().is_some_and(Vec::is_empty) {
+            emit_search_completed(request);
+            return Ok(Vec::new());
+        }
+
         // Python prepares exactly one turn before a generative completion. Raw
         // retrieval modes and previews deliberately skip this LLM call.
         let raw_request = request.clone();
@@ -865,7 +891,7 @@ impl SearchOrchestrator {
             )
             .await;
             turn_prepared = true;
-            if !preparation.should_answer {
+            if !preparation.should_answer && request.response_schema.is_none() {
                 let answer = preparation
                     .response_to_user
                     .unwrap_or_else(|| "Got it.".to_string());
@@ -892,7 +918,14 @@ impl SearchOrchestrator {
                 }]);
             }
             let mut clone = request.clone();
-            clone.query_text = preparation.effective_query;
+            clone.query_text = if preparation.effective_query == raw_request.query_text {
+                preparation.effective_query
+            } else {
+                format!(
+                    "{}\n\nCurrent user message and instructions:\n{}",
+                    preparation.effective_query, raw_request.query_text
+                )
+            };
             prepared_request = clone;
             request = &prepared_request;
         }
@@ -942,7 +975,9 @@ impl SearchOrchestrator {
         // `get_all_user_permission_datasets(user, "read")`
         // (`get_authorized_existing_datasets.py:41-43`), then searches each one
         // in its own database context (`search.py:429-453`).
-        let datasets: Vec<uuid::Uuid> = if names_no_dataset {
+        let datasets: Vec<uuid::Uuid> = if let Some(readable) = preflight_datasets {
+            readable
+        } else if names_no_dataset {
             let requester = request.user_id.ok_or_else(|| {
                 SearchError::InvalidInput(
                     "a search under per-dataset storage that names no dataset requires \
@@ -1910,7 +1945,7 @@ mod tests {
 
         assert_eq!(
             retriever.query_seen.lock().unwrap().as_deref(),
-            Some("effective query")
+            Some("effective query\n\nCurrent user message and instructions:\nraw follow-up")
         );
         let entries = manager.get_session(Some("s"), None).await.unwrap();
         assert_eq!(entries.last().unwrap().question, "raw follow-up");

@@ -142,7 +142,10 @@ pub async fn prepare_session_turn(
     if query.trim().is_empty() {
         return SessionTurnPreparation::pass_through(query);
     }
-    let entries = match manager.get_session(Some(session_id), user_id).await {
+    let entries = match manager
+        .get_latest_session_entries(Some(session_id), user_id, 1)
+        .await
+    {
         Ok(v) => v,
         Err(error) => {
             tracing::warn!(%error, "session turn preparation failed open");
@@ -157,10 +160,14 @@ pub async fn prepare_session_turn(
     let served_ids = previous
         .and_then(|entry| entry.used_session_context_ids.clone())
         .unwrap_or_default();
-    let rows = manager
-        .get_session_context_entries(Some(session_id), user_id)
-        .await
-        .unwrap_or_default();
+    let rows = if served_ids.is_empty() {
+        Vec::new()
+    } else {
+        manager
+            .get_session_context_entries(Some(session_id), user_id)
+            .await
+            .unwrap_or_default()
+    };
     let served = rows
         .iter()
         .filter_map(|row| {
@@ -183,14 +190,6 @@ pub async fn prepare_session_turn(
         &served,
     )
     .await;
-
-    if let (Some(qa_id), Some(rating)) = (&previous_qa_id, analysis.previous_answer_rating)
-        && let Err(error) = manager
-            .add_feedback(Some(session_id), user_id, qa_id, Some(query), Some(rating))
-            .await
-    {
-        tracing::warn!(%error, "session rating persistence failed open");
-    }
 
     let has_evidence = !analysis.candidate_context_updates.is_empty()
         || !analysis.served_context_ratings.is_empty()
