@@ -2091,39 +2091,19 @@ mod tests {
         let entries = manager.get_session(Some("s"), None).await.unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].question, "No, use X.");
-        assert_eq!(entries[0].feedback_score, Some(2));
-    }
-
-    #[tokio::test]
-    async fn inferred_previous_answer_rating_does_not_replace_explicit_feedback() {
-        let (orchestrator, _retriever, manager, _dir) = session_orchestrator(json!({
-            "response_to_user": "Thanks.",
-            "query_to_answer": null,
-            "served_context_ratings": [],
-            "candidate_context_updates": [],
-            "previous_answer_rating": 2
-        }))
-        .await;
-        let prior = manager.get_session(Some("s"), None).await.unwrap();
-        manager
-            .add_feedback(
-                Some("s"),
-                None,
-                &prior[0].id.to_string(),
-                Some("explicit"),
-                Some(5),
-            )
+        assert!(entries[0].feedback_text.is_none());
+        assert!(entries[0].feedback_score.is_none());
+        let context = manager
+            .get_session_context_entries(Some("s"), None)
             .await
             .unwrap();
-
-        orchestrator
-            .search(&session_request("Actually, use X."))
-            .await
-            .unwrap();
-
-        let entries = manager.get_session(Some("s"), None).await.unwrap();
-        assert_eq!(entries[0].feedback_text.as_deref(), Some("explicit"));
-        assert_eq!(entries[0].feedback_score, Some(5));
+        assert!(context.iter().any(|row| {
+            row.get("kind").and_then(serde_json::Value::as_str) == Some("feedback")
+                && row
+                    .get("referenced_qa_rating")
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(2)
+        }));
     }
 
     #[async_trait]

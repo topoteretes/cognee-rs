@@ -223,27 +223,6 @@ pub async fn prepare_session_turn(
             .create_session_context_entry(Some(session_id), user_id, feedback)
             .await;
 
-        // Mirror Python's inferred rating on the prior answer, but never
-        // replace feedback that was already recorded explicitly.
-        if let (Some(rating), Some(previous), Some(previous_id)) = (
-            analysis.previous_answer_rating,
-            previous,
-            previous_qa_id.as_deref(),
-        ) && previous.feedback_text.is_none()
-            && previous.feedback_score.is_none()
-            && let Err(error) = manager
-                .add_feedback(
-                    Some(session_id),
-                    user_id,
-                    previous_id,
-                    Some(query),
-                    Some(rating),
-                )
-                .await
-        {
-            tracing::warn!(%error, "failed to persist inferred previous-answer feedback");
-        }
-
         for rating in &analysis.served_context_ratings {
             // The model may only rate context proven to have been served to
             // the previous answer. Ignore invented or stale IDs.
