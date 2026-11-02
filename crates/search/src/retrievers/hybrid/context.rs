@@ -111,9 +111,21 @@ fn python_repr_string(text: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
+            '\u{08}' => escaped.push_str("\\x08"),
+            '\u{0c}' => escaped.push_str("\\x0c"),
             character if character == quote => {
                 escaped.push('\\');
                 escaped.push(character);
+            }
+            character if character.is_control() => {
+                let code = character as u32;
+                if code <= 0xff {
+                    escaped.push_str(&format!("\\x{code:02x}"));
+                } else if code <= 0xffff {
+                    escaped.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    escaped.push_str(&format!("\\U{code:08x}"));
+                }
             }
             character => escaped.push(character),
         }
@@ -481,6 +493,10 @@ mod tests {
         assert_eq!(python_repr_string("Ada's team"), r#""Ada's team""#);
         assert_eq!(python_repr_string("say \"hi\""), r#"'say "hi"'"#);
         assert_eq!(python_repr_string("both ' and \""), r#"'both \' and "'"#);
+        assert_eq!(
+            python_repr_string("a\0b\u{08}\u{0c}\u{7f}"),
+            r#"'a\x00b\x08\x0c\x7f'"#
+        );
     }
 
     #[test]
