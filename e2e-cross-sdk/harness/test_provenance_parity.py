@@ -235,11 +235,10 @@ def test_text_summary_source_task_is_extract_graph_and_summarize(both_cognified)
         assert summaries, f"{backend}: cognify produced no TextSummary nodes"
         tasks = {_attr(n, "source_task") for n in summaries}
         tasks.discard(None)
-        if not tasks:
-            pytest.skip(
-                f"{backend}: TextSummary nodes carry no source_task "
-                "(adapter does not surface provenance)"
-            )
+        assert tasks, (
+            f"{backend}: TextSummary nodes carry no source_task; the stamp "
+            "is required in both SDKs"
+        )
         assert tasks == {"extract_graph_and_summarize"}, (
             f"{backend}: TextSummary source_task must be "
             f"extract_graph_and_summarize, got {sorted(tasks)}"
