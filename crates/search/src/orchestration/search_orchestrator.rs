@@ -1042,7 +1042,13 @@ impl SearchOrchestrator {
             && self.llm.is_some()
             && concurrent_session::eligible(request, search_type, is_batch)
         {
-            let _turn_guard = concurrent_session::lock(request).await;
+            let user_id = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a user".into())
+            })?;
+            let session_id = request.session_id.as_deref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a session".into())
+            })?;
+            let _turn_guard = concurrent_session::lock(user_id, session_id).await;
             let (response, log) = self
                 .run_concurrent_session_turn(request, &retriever, search_type, auto_feedback)
                 .await?;
@@ -1246,10 +1252,19 @@ impl SearchOrchestrator {
         }
 
         if fanout_concurrent {
-            fanout_turn_guard = Some(concurrent_session::lock(request).await);
-            let manager = Arc::clone(self.session_manager.as_ref().unwrap());
-            let llm = Arc::clone(self.llm.as_ref().unwrap());
-            let session_id = request.session_id.clone().unwrap();
+            let manager = Arc::clone(self.session_manager.as_ref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a manager".into())
+            })?);
+            let llm = Arc::clone(self.llm.as_ref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires an LLM".into())
+            })?);
+            let session_id = request.session_id.clone().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a session".into())
+            })?;
+            let user = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a user".into())
+            })?;
+            fanout_turn_guard = Some(concurrent_session::lock(user, &session_id).await);
             let user_id = request.user_id.map(|id| id.to_string());
             let (entries, rows) = tokio::join!(
                 manager.get_session(Some(&session_id), user_id.as_deref()),
@@ -1438,10 +1453,17 @@ impl SearchOrchestrator {
 
         let merged = merge_dataset_results(request, results.clone());
         if let Some(handle) = fanout_analysis {
-            let mut preparation = handle.join().await.unwrap_or_else(|error| {
-                tracing::warn!(%error, "concurrent fan-out analysis task failed open");
-                super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
-            });
+            let mut preparation = match handle.join().await {
+                Some(Ok(preparation)) => preparation,
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "concurrent fan-out analysis task failed open");
+                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+                }
+                None => {
+                    tracing::warn!("concurrent fan-out analysis handle was unavailable");
+                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+                }
+            };
             if let Some((manager, session_id, user_id, entries, rows)) = fanout_commit_snapshot {
                 super::session_turn::commit_session_turn_analysis(
                     &manager,
@@ -1751,15 +1773,15 @@ impl SearchOrchestrator {
             params.feedback_influence = Some(self.default_feedback_influence);
         }
 
-        let manager = self
-            .session_manager
-            .as_ref()
-            .expect("eligible turn has a manager");
-        let llm = self.llm.as_ref().expect("eligible turn has an LLM");
-        let session_id = request
-            .session_id
-            .as_deref()
-            .expect("eligible turn has a session");
+        let manager = self.session_manager.as_ref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires a manager".into())
+        })?;
+        let llm = self.llm.as_ref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires an LLM".into())
+        })?;
+        let session_id = request.session_id.as_deref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires a session".into())
+        })?;
         let user_id = request.user_id.map(|id| id.to_string());
 
         // Snapshot every cache value before either lane starts.  In

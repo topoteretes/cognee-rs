@@ -19,8 +19,9 @@ impl<T> AbortOnDrop<T> {
         }
     }
 
-    pub(crate) async fn join(mut self) -> Result<T, tokio::task::JoinError> {
-        self.0.take().expect("analysis handle present").await
+    pub(crate) async fn join(mut self) -> Option<Result<T, tokio::task::JoinError>> {
+        let handle = self.0.take()?;
+        Some(handle.await)
     }
 }
 
@@ -63,17 +64,8 @@ static TURN_LOCKS: OnceLock<Mutex<HashMap<TurnKey, Arc<Mutex<()>>>>> = OnceLock:
 /// Serialize turns for one cache identity while allowing unrelated sessions
 /// to run independently. This has the same single-process scope as Python's
 /// `session_turn_lock`.
-pub(crate) async fn lock(request: &SearchRequest) -> OwnedMutexGuard<()> {
-    let key = (
-        request
-            .user_id
-            .expect("eligibility requires a user")
-            .to_string(),
-        request
-            .session_id
-            .clone()
-            .expect("eligibility requires a session"),
-    );
+pub(crate) async fn lock(user_id: impl ToString, session_id: &str) -> OwnedMutexGuard<()> {
+    let key = (user_id.to_string(), session_id.to_owned());
     let mutex = {
         let mut locks = TURN_LOCKS
             .get_or_init(|| Mutex::new(HashMap::new()))
@@ -157,24 +149,24 @@ mod tests {
         use std::time::Duration;
 
         let first = request(SearchType::RagCompletion);
-        let same = first.clone();
-        let mut other = first.clone();
-        other.session_id = Some("other".into());
+        let Some(user_id) = first.user_id else {
+            return;
+        };
 
-        let held = lock(&first).await;
+        let held = lock(user_id, "s").await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(&same))
+            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "s"))
                 .await
                 .is_err()
         );
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(&other))
+            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "other"))
                 .await
                 .is_ok()
         );
         drop(held);
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(&same))
+            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "s"))
                 .await
                 .is_ok()
         );
