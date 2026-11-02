@@ -231,8 +231,7 @@ pub async fn prepare_session_turn(
             previous_qa_id.as_deref(),
         ) && previous.feedback_text.is_none()
             && previous.feedback_score.is_none()
-        {
-            if let Err(error) = manager
+            && let Err(error) = manager
                 .add_feedback(
                     Some(session_id),
                     user_id,
@@ -241,9 +240,8 @@ pub async fn prepare_session_turn(
                     Some(rating),
                 )
                 .await
-            {
-                tracing::warn!(%error, "failed to persist inferred previous-answer feedback");
-            }
+        {
+            tracing::warn!(%error, "failed to persist inferred previous-answer feedback");
         }
 
         for rating in &analysis.served_context_ratings {
