@@ -1,3 +1,4 @@
+use super::concurrent_session::{self, SessionSearchMode};
 use crate::graph_warmup::{CacheKey, GraphWarmup, WarmupProbe};
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
@@ -16,6 +17,50 @@ use cognee_session::{SessionContext, SessionManager, UsedGraphElementIds};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+fn conversational_query(session: &SessionContext, query: &str) -> Option<String> {
+    (!session.formatted_history.trim().is_empty()).then(|| {
+        format!(
+            "Recent conversation:\n{}\n\nCurrent question:\n{}",
+            session.formatted_history, query
+        )
+    })
+}
+
+async fn retrieve_session_context(
+    retriever: &crate::retrievers::SearchRetrieverRef,
+    query: &str,
+    session: &SessionContext,
+    params: &SearchParams,
+) -> Result<SearchContext, SearchError> {
+    let Some(conversational) = conversational_query(session, query) else {
+        return retriever.get_context(query, params).await;
+    };
+    let (raw, contextual) = tokio::join!(
+        retriever.get_context(query, params),
+        retriever.get_context(&conversational, params)
+    );
+    let mut merged = match (raw, contextual) {
+        (Ok(mut raw), Ok(contextual)) => {
+            raw.extend(contextual);
+            raw
+        }
+        (Ok(raw), Err(error)) | (Err(error), Ok(raw)) => {
+            tracing::warn!(%error, "one session retrieval lane failed open");
+            raw
+        }
+        (Err(error), Err(_)) => return Err(error),
+    };
+    let mut seen = std::collections::HashSet::new();
+    merged.retain(|item| {
+        let key = item
+            .id
+            .map(|id| format!("id:{id}"))
+            .unwrap_or_else(|| format!("payload:{}", item.payload));
+        seen.insert(key)
+    });
+    Ok(merged)
+}
 
 /// Fire-and-forget product analytics event for the start of a search.
 ///
@@ -166,6 +211,7 @@ pub struct SearchOrchestrator {
     /// Whether a session search detects feedback when the request leaves
     /// `auto_feedback_detection` unset.
     auto_feedback_default: bool,
+    session_search_mode: SessionSearchMode,
     /// Stamped on every search's params while personalization is enabled.
     personalization: crate::user_preferences::PreferenceConfig,
     /// `feedback_influence` of a request that leaves it unset.
@@ -217,7 +263,8 @@ impl SearchOrchestrator {
             session_manager: None,
             llm: None,
             enable_access_tracking: false,
-            auto_feedback_default: false,
+            auto_feedback_default: true,
+            session_search_mode: SessionSearchMode::Concurrent,
             personalization: crate::user_preferences::PreferenceConfig::default(),
             default_feedback_influence: 0.0,
             default_system_prompt_path: None,
@@ -358,6 +405,11 @@ impl SearchOrchestrator {
         self
     }
 
+    pub fn with_session_search_mode(mut self, mode: SessionSearchMode) -> Self {
+        self.session_search_mode = mode;
+        self
+    }
+
     /// Personalize searches for the requesting user (the
     /// `personalization_*` / `preference_*` settings): with `enabled`, their
     /// `prefers` weights re-rank graph and RAG retrieval and their preference
@@ -448,7 +500,8 @@ impl SearchOrchestrator {
     ) -> Result<Vec<SearchResponse>, SearchError> {
         let mut responses = Vec::with_capacity(requests.len());
         for request in requests {
-            responses.push(self.search(request).await?);
+            let results = self.search_datasets_impl(request, true).await?;
+            responses.push(merge_dataset_results(request, results));
         }
         Ok(responses)
     }
@@ -869,7 +922,7 @@ impl SearchOrchestrator {
         &self,
         request: &SearchRequest,
     ) -> Result<SearchResponse, crate::types::SearchError> {
-        let results = self.search_datasets(request).await?;
+        let results = self.search_datasets_impl(request, false).await?;
         Ok(merge_dataset_results(request, results))
     }
 
@@ -896,6 +949,14 @@ impl SearchOrchestrator {
     pub async fn search_datasets(
         &self,
         request: &SearchRequest,
+    ) -> Result<Vec<DatasetSearchResult>, crate::types::SearchError> {
+        self.search_datasets_impl(request, false).await
+    }
+
+    async fn search_datasets_impl(
+        &self,
+        request: &SearchRequest,
+        is_batch: bool,
     ) -> Result<Vec<DatasetSearchResult>, crate::types::SearchError> {
         // Python's `cognee.search()` rejects these up front, for every search
         // type, before any retriever runs — and before `search()` emits its
@@ -973,12 +1034,64 @@ impl SearchOrchestrator {
             return Ok(Vec::new());
         }
 
+        // The concurrent runner is intentionally narrow, matching Python's
+        // exact-type allowlist.
+        if self.session_search_mode == SessionSearchMode::Concurrent
+            && !self.per_dataset_storage
+            && self.session_manager.is_some()
+            && self.llm.is_some()
+            && concurrent_session::eligible(request, search_type, is_batch)
+        {
+            let user_id = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a user".into())
+            })?;
+            let session_id = request.session_id.as_deref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a session".into())
+            })?;
+            let _turn_guard = concurrent_session::lock(user_id, session_id).await;
+            let (response, log) = self
+                .run_concurrent_session_turn(request, &retriever, search_type, auto_feedback)
+                .await?;
+            if log {
+                self.log_search_history(request, &response).await;
+            }
+            emit_search_completed(request);
+            let dataset_id = match request.dataset_ids.as_deref() {
+                Some([only]) => Some(*only),
+                _ => None,
+            };
+            let (dataset_name, dataset_tenant_id) = self.dataset_label(dataset_id).await;
+            return Ok(vec![DatasetSearchResult {
+                dataset_id,
+                dataset_name,
+                dataset_tenant_id,
+                response,
+                error: None,
+            }]);
+        }
+
+        // A per-dataset search owns one logical session turn around the whole
+        // fan-out.  Snapshot once, start analysis now, and pass the same
+        // completion history into every isolated dataset lane.  Persistence
+        // remains below, after the ordered results have been merged.
+        let fanout_concurrent = self.session_search_mode == SessionSearchMode::Concurrent
+            && self.per_dataset_storage
+            && scoping != DatasetScoping::NotDatasetData
+            && self.session_manager.is_some()
+            && self.llm.is_some()
+            && concurrent_session::eligible(request, search_type, is_batch);
+        let mut fanout_turn_guard = None;
+        let mut fanout_analysis = None;
+        let mut fanout_session = None;
+        let mut fanout_commit_snapshot = None;
+
         // Python prepares exactly one turn before a generative completion. Raw
         // retrieval modes and previews deliberately skip this LLM call.
         let raw_request = request.clone();
         let prepared_request;
         let mut turn_prepared = false;
-        if !request.only_context()
+        if !fanout_concurrent
+            && !request.only_context()
             && request.session_id.as_ref().is_some_and(|id| !id.is_empty())
             && matches!(
                 search_type,
@@ -1063,6 +1176,7 @@ impl SearchOrchestrator {
                     false,
                     true,
                     turn_prepared.then_some(raw_request.query_text.as_str()),
+                    None,
                 )
                 .await?;
             if log {
@@ -1137,11 +1251,73 @@ impl SearchOrchestrator {
             return Ok(Vec::new());
         }
 
+        if fanout_concurrent {
+            let manager = Arc::clone(self.session_manager.as_ref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a manager".into())
+            })?);
+            let llm = Arc::clone(self.llm.as_ref().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires an LLM".into())
+            })?);
+            let session_id = request.session_id.clone().ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a session".into())
+            })?;
+            let user = request.user_id.ok_or_else(|| {
+                SearchError::InvalidInput("concurrent session search requires a user".into())
+            })?;
+            fanout_turn_guard = Some(concurrent_session::lock(user, &session_id).await);
+            let user_id = request.user_id.map(|id| id.to_string());
+            let (entries, rows) = tokio::join!(
+                manager.get_session(Some(&session_id), user_id.as_deref()),
+                manager.get_session_context_entries(Some(&session_id), user_id.as_deref())
+            );
+            let entries = entries.unwrap_or_default();
+            let rows = rows.unwrap_or_default();
+            let history_start = entries.len().saturating_sub(manager.history_limit());
+            let history_entries = &entries[history_start..];
+            fanout_session = Some(SessionContext {
+                session_id: Some(session_id.clone()),
+                history: history_entries
+                    .iter()
+                    .flat_map(|entry| {
+                        [
+                            Message::user(&entry.question),
+                            Message::assistant(&entry.answer),
+                        ]
+                    })
+                    .collect(),
+                formatted_history: SessionManager::format_entries(history_entries),
+            });
+            fanout_commit_snapshot = Some((
+                Arc::clone(&manager),
+                session_id.clone(),
+                user_id.clone(),
+                entries.clone(),
+                rows.clone(),
+            ));
+            let query = request.query_text.clone();
+            fanout_analysis = Some(concurrent_session::AbortOnDrop::new(tokio::spawn(
+                async move {
+                    if auto_feedback {
+                        super::session_turn::analyze_session_turn_from_snapshot(
+                            llm.as_ref(),
+                            &query,
+                            &entries,
+                            &rows,
+                        )
+                        .await
+                    } else {
+                        super::session_turn::SessionTurnPreparation::pass_through(&query)
+                    }
+                },
+            )));
+        }
+
         // The session side effects run once for the whole search, not once per
         // dataset: a message that is only feedback is acknowledged here.
-        if let Some(acknowledgement) = self
-            .handle_auto_feedback(request, search_type, auto_feedback && !turn_prepared)
-            .await
+        if !fanout_concurrent
+            && let Some(acknowledgement) = self
+                .handle_auto_feedback(request, search_type, auto_feedback && !turn_prepared)
+                .await
         {
             emit_search_completed(request);
             return Ok(vec![DatasetSearchResult {
@@ -1168,6 +1344,7 @@ impl SearchOrchestrator {
                 dataset_request.dataset_ids = Some(vec![dataset_id]);
                 dataset_request.datasets = None;
                 let retriever = Arc::clone(&retriever);
+                let session_snapshot = fanout_session.clone();
                 async move {
                     let outcome = with_dataset(
                         dataset_id,
@@ -1179,6 +1356,7 @@ impl SearchOrchestrator {
                             true,
                             false,
                             None,
+                            session_snapshot.as_ref(),
                         ),
                     )
                     .await;
@@ -1235,10 +1413,18 @@ impl SearchOrchestrator {
                         error: Some(reason),
                     });
                 }
-                Err(other) => return Err(other),
+                Err(other) => {
+                    if let Some(handle) = fanout_analysis.take() {
+                        handle.abort();
+                    }
+                    return Err(other);
+                }
             }
         }
         if no_data.len() == results.len() {
+            if let Some(handle) = fanout_analysis.take() {
+                handle.abort();
+            }
             // One dataset searched: its own reason, as a shared-store search
             // reports it; the caller named (or was scoped to) that dataset.
             if let [only] = results.as_slice()
@@ -1266,6 +1452,56 @@ impl SearchOrchestrator {
         }
 
         let merged = merge_dataset_results(request, results.clone());
+        if let Some(handle) = fanout_analysis {
+            let mut preparation = match handle.join().await {
+                Some(Ok(preparation)) => preparation,
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "concurrent fan-out analysis task failed open");
+                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+                }
+                None => {
+                    tracing::warn!("concurrent fan-out analysis handle was unavailable");
+                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+                }
+            };
+            if let Some((manager, session_id, user_id, entries, rows)) = fanout_commit_snapshot {
+                super::session_turn::commit_session_turn_analysis(
+                    &manager,
+                    &session_id,
+                    user_id.as_deref(),
+                    &request.query_text,
+                    &mut preparation,
+                    &entries,
+                    &rows,
+                )
+                .await;
+            }
+            if !preparation.should_answer {
+                let answer = preparation
+                    .response_to_user
+                    .unwrap_or_else(|| "Got it.".to_string());
+                let mut acknowledgement_request = raw_request.clone();
+                acknowledgement_request.summarize_context = Some(false);
+                self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+                    .await;
+                drop(fanout_turn_guard);
+                return Ok(vec![DatasetSearchResult {
+                    dataset_id: None,
+                    dataset_name: None,
+                    dataset_tenant_id: None,
+                    response: prepare_search_result(
+                        search_type,
+                        SearchOutput::Text(answer),
+                        None,
+                        request.dataset_ids.clone(),
+                        false,
+                        request.use_combined_context(),
+                        request.verbose(),
+                    ),
+                    error: None,
+                }]);
+            }
+        }
         // An `only_context` result is a preview (a prompt or the context), not
         // an answer: nothing is written, as in the single-store run.
         match &merged.result {
@@ -1294,6 +1530,7 @@ impl SearchOrchestrator {
             self.log_search_history(&raw_request, &merged).await;
         }
         emit_search_completed(request);
+        drop(fanout_turn_guard);
         Ok(results)
     }
 
@@ -1332,6 +1569,7 @@ impl SearchOrchestrator {
         keep_context: bool,
         session_turn: bool,
         raw_session_query: Option<&str>,
+        session_snapshot: Option<&SessionContext>,
     ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
         let mut params = SearchParams::from(request);
         params.personalization = Some(self.personalization).filter(|config| config.enabled);
@@ -1341,7 +1579,13 @@ impl SearchOrchestrator {
         let include_context =
             request.only_context() || request.use_combined_context() || keep_context;
         let context = if include_context {
-            let ctx = retriever.get_context(&request.query_text, &params).await?;
+            let ctx = match session_snapshot {
+                Some(session) => {
+                    retrieve_session_context(retriever, &request.query_text, session, &params)
+                        .await?
+                }
+                None => retriever.get_context(&request.query_text, &params).await?,
+            };
 
             if self.enable_access_tracking {
                 self.track_access(&ctx).await;
@@ -1415,7 +1659,10 @@ impl SearchOrchestrator {
             return Ok((response, true));
         }
 
-        let session_context = self.load_session_context(request).await;
+        let session_context = match session_snapshot {
+            Some(snapshot) => snapshot.clone(),
+            None => self.load_session_context(request).await,
+        };
 
         // Session side effects run once per search: here over the shared
         // store, around the fan-out under per-dataset storage.
@@ -1508,6 +1755,143 @@ impl SearchOrchestrator {
         }
 
         Ok((response, true))
+    }
+
+    /// Run analysis and the answer lane from the same pre-turn snapshot.
+    /// Analysis writes are deliberately invisible to this answer and become
+    /// guidance for the next serialized turn.
+    async fn run_concurrent_session_turn(
+        &self,
+        request: &SearchRequest,
+        retriever: &crate::retrievers::SearchRetrieverRef,
+        search_type: SearchType,
+        auto_feedback: bool,
+    ) -> Result<(SearchResponse, bool), SearchError> {
+        let mut params = SearchParams::from(request);
+        params.personalization = Some(self.personalization).filter(|config| config.enabled);
+        if params.feedback_influence.is_none() && self.default_feedback_influence > 0.0 {
+            params.feedback_influence = Some(self.default_feedback_influence);
+        }
+
+        let manager = self.session_manager.as_ref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires a manager".into())
+        })?;
+        let llm = self.llm.as_ref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires an LLM".into())
+        })?;
+        let session_id = request.session_id.as_deref().ok_or_else(|| {
+            SearchError::InvalidInput("concurrent session search requires a session".into())
+        })?;
+        let user_id = request.user_id.map(|id| id.to_string());
+
+        // Snapshot every cache value before either lane starts.  In
+        // particular, analysis must not perform a second `get_session` after
+        // the answer lane has begun (Python's `load_turn_context` invariant).
+        let (entries, rows) = tokio::join!(
+            manager.get_session(Some(session_id), user_id.as_deref()),
+            manager.get_session_context_entries(Some(session_id), user_id.as_deref())
+        );
+        let entries = entries.unwrap_or_default();
+        let rows = rows.unwrap_or_default();
+        let history_start = entries.len().saturating_sub(manager.history_limit());
+        let history_entries = &entries[history_start..];
+        let history = history_entries
+            .iter()
+            .flat_map(|entry| {
+                [
+                    Message::user(&entry.question),
+                    Message::assistant(&entry.answer),
+                ]
+            })
+            .collect();
+        let session = SessionContext {
+            session_id: Some(session_id.to_owned()),
+            history,
+            formatted_history: SessionManager::format_entries(history_entries),
+        };
+
+        let analysis_lane = async {
+            if auto_feedback {
+                super::session_turn::analyze_session_turn_from_snapshot(
+                    llm.as_ref(),
+                    &request.query_text,
+                    &entries,
+                    &rows,
+                )
+                .await
+            } else {
+                super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
+            }
+        };
+        let answer_lane = async {
+            let context =
+                retrieve_session_context(retriever, &request.query_text, &session, &params).await?;
+            if self.enable_access_tracking {
+                self.track_access(&context).await;
+            }
+            let output = retriever
+                .get_completion(
+                    &request.query_text,
+                    Some(context.clone()),
+                    &session,
+                    &params,
+                )
+                .await?;
+            Ok::<_, SearchError>((context, output))
+        };
+        let (mut preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
+        let (context, generated) = answer_result?;
+        super::session_turn::commit_session_turn_analysis(
+            manager,
+            session_id,
+            user_id.as_deref(),
+            &request.query_text,
+            &mut preparation,
+            &entries,
+            &rows,
+        )
+        .await;
+
+        if !preparation.should_answer {
+            let answer = preparation
+                .response_to_user
+                .unwrap_or_else(|| "Got it.".into());
+            let mut raw = request.clone();
+            raw.summarize_context = Some(false);
+            self.save_session_turn(&raw, search_type, &answer, None)
+                .await;
+            return Ok((
+                prepare_search_result(
+                    search_type,
+                    SearchOutput::Text(answer),
+                    None,
+                    request.dataset_ids.clone(),
+                    false,
+                    request.use_combined_context(),
+                    request.verbose(),
+                ),
+                false,
+            ));
+        }
+
+        // A completion retriever may deliberately return no text on an empty
+        // context. As in Python, do not manufacture or persist a QA turn.
+        if let SearchOutput::Text(answer) = &generated {
+            self.save_session_turn(request, search_type, answer, Some(&context))
+                .await;
+        }
+        Ok((
+            prepare_search_result(
+                search_type,
+                generated,
+                Some(context),
+                request.dataset_ids.clone(),
+                false,
+                request.use_combined_context(),
+                request.verbose(),
+            ),
+            true,
+        ))
     }
 
     /// Auto-feedback detection for a session search (Python
@@ -2107,6 +2491,77 @@ mod tests {
         }));
     }
 
+    #[tokio::test]
+    async fn concurrent_feedback_discards_the_answer_lane_without_leaking_context() {
+        let user = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(
+                Some("s"),
+                Some(&user.to_string()),
+                "old question",
+                "old answer",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let retriever = Arc::new(SessionCompletionRetriever {
+            query_seen: std::sync::Mutex::new(None),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(TurnAnalysisLlm(json!({
+                "response_to_user": "Thanks for the correction.",
+                "query_to_answer": null,
+                "served_context_ratings": [],
+                "candidate_context_updates": [],
+                "previous_answer_rating": 2
+            }))))
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("No, use X.");
+        request.user_id = Some(user);
+
+        let result = orchestrator.search(&request).await.unwrap();
+
+        // Retrieval/completion did run concurrently, but none of its payload
+        // may escape when analysis routes the turn to an acknowledgement.
+        let query_seen = retriever.query_seen.lock().unwrap().clone();
+        assert!(query_seen.as_deref().is_some_and(|query| {
+            query == "No, use X." || query.ends_with("Current question:\nNo, use X.")
+        }));
+        assert!(matches!(
+            result.result,
+            SearchOutput::Text(ref text) if text == "Thanks for the correction."
+        ));
+        assert!(result.context.is_none());
+        let entries = manager
+            .get_session(Some("s"), Some(&user.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 2, "the turn is persisted exactly once");
+        assert!(entries[0].feedback_score.is_none());
+        assert_eq!(entries[1].answer, "Thanks for the correction.");
+        assert!(entries[1].used_graph_element_ids.is_none());
+        let context = manager
+            .get_session_context_entries(Some("s"), Some(&user.to_string()))
+            .await
+            .unwrap();
+        assert!(context.iter().any(|row| {
+            row.get("kind").and_then(serde_json::Value::as_str) == Some("feedback")
+                && row
+                    .get("referenced_qa_rating")
+                    .and_then(serde_json::Value::as_i64)
+                    == Some(2)
+        }));
+    }
+
     #[async_trait]
     impl SearchRetriever for FakeChunksRetriever {
         fn search_type(&self) -> SearchType {
@@ -2500,6 +2955,166 @@ mod tests {
             format!("text of {b}")
         );
         assert_eq!(merged.datasets, Some(vec![a, b]));
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_wraps_the_ordered_dataset_fanout_once() {
+        struct AnalysisProbe {
+            started: Arc<std::sync::atomic::AtomicBool>,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Llm for AnalysisProbe {
+            async fn generate(
+                &self,
+                _messages: Vec<Message>,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<GenerationResponse> {
+                Err(LlmError::ConfigError("not used".into()))
+            }
+
+            async fn create_structured_output_with_messages_raw(
+                &self,
+                _messages: Vec<Message>,
+                _schema: &serde_json::Value,
+                _options: Option<GenerationOptions>,
+            ) -> LlmResult<serde_json::Value> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.started
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                Ok(json!({
+                    "response_to_user": null,
+                    "query_to_answer": null,
+                    "served_context_ratings": [],
+                    "candidate_context_updates": [],
+                    "previous_answer_rating": null
+                }))
+            }
+
+            fn model(&self) -> &str {
+                "analysis-probe"
+            }
+        }
+
+        struct FanoutProbe {
+            analysis_started: Arc<std::sync::atomic::AtomicBool>,
+            completions: Arc<std::sync::atomic::AtomicUsize>,
+            scopes: Arc<std::sync::Mutex<Vec<Uuid>>>,
+        }
+
+        #[async_trait]
+        impl SearchRetriever for FanoutProbe {
+            fn search_type(&self) -> SearchType {
+                SearchType::RagCompletion
+            }
+
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
+                let dataset = cognee_models::dataset_scope::current_dataset().unwrap();
+                self.scopes.lock().unwrap().push(dataset);
+                Ok(vec![crate::types::SearchItem {
+                    id: None,
+                    score: Some(1.0),
+                    payload: json!({"dataset_id": dataset, "text": dataset.to_string()}),
+                }])
+            }
+
+            async fn get_completion(
+                &self,
+                _query: &str,
+                _context: Option<SearchContext>,
+                _session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<SearchOutput, SearchError> {
+                tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                    while !self
+                        .analysis_started
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("analysis and answer lanes must overlap");
+                self.completions
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(SearchOutput::Text(format!(
+                    "answer from {}",
+                    cognee_models::dataset_scope::current_dataset().unwrap()
+                )))
+            }
+        }
+
+        let (a, b, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let analysis_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scopes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(FanoutProbe {
+            analysis_started: Arc::clone(&started),
+            completions: Arc::clone(&completions),
+            scopes: Arc::clone(&scopes),
+        }));
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        manager
+            .save_qa(
+                Some("fanout"),
+                Some(&user.to_string()),
+                "prior",
+                "prior answer",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_per_dataset_storage(true)
+            .with_session_manager(Arc::clone(&manager))
+            .with_llm(Arc::new(AnalysisProbe {
+                started,
+                calls: Arc::clone(&analysis_calls),
+            }))
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = echo_request(SearchType::RagCompletion, &[a, b]);
+        request.user_id = Some(user);
+        request.session_id = Some("fanout".into());
+        request.use_combined_context = Some(true);
+
+        let results = orchestrator.search_datasets(&request).await.unwrap();
+
+        assert_eq!(
+            results.iter().map(|r| r.dataset_id).collect::<Vec<_>>(),
+            vec![Some(a), Some(b)]
+        );
+        assert_eq!(analysis_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let mut seen = scopes.lock().unwrap().clone();
+        seen.sort_unstable();
+        // Each dataset runs the raw and conversational retrieval lanes in the
+        // same dataset scope before their results are merged.
+        let mut expected = vec![a, a, b, b];
+        expected.sort_unstable();
+        assert_eq!(seen, expected, "each retrieval stayed in its dataset scope");
+        let entries = manager
+            .get_session(Some("fanout"), Some(&user.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 2, "the fan-out persists one logical turn");
+        assert_eq!(entries[1].question, "hello");
+        assert_eq!(
+            entries[1].answer,
+            format!("answer from {a}\n\nanswer from {b}")
+        );
     }
 
     /// Completions merge into one answer per dataset.
