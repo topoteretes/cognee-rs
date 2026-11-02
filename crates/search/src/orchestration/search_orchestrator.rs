@@ -1298,11 +1298,13 @@ impl SearchOrchestrator {
             fanout_analysis = Some(concurrent_session::AbortOnDrop::new(tokio::spawn(
                 async move {
                     if auto_feedback {
-                        super::session_turn::analyze_session_turn_from_snapshot(
+                        super::session_turn::prepare_concurrent_session_turn_from_snapshot(
                             llm.as_ref(),
+                            &session_id,
                             &query,
                             &entries,
                             &rows,
+                            std::time::Duration::from_secs(30),
                         )
                         .await
                     } else {
@@ -1812,11 +1814,13 @@ impl SearchOrchestrator {
 
         let analysis_lane = async {
             if auto_feedback {
-                super::session_turn::analyze_session_turn_from_snapshot(
+                super::session_turn::prepare_concurrent_session_turn_from_snapshot(
                     llm.as_ref(),
+                    session_id,
                     &request.query_text,
                     &entries,
                     &rows,
+                    std::time::Duration::from_secs(30),
                 )
                 .await
             } else {
