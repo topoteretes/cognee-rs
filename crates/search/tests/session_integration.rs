@@ -795,6 +795,9 @@ impl TurnHarness {
             .with_session_manager(manager.clone())
             .with_llm(llm.clone())
             .with_auto_feedback_default(true)
+            // Makes the orchestrator fetch the context itself, so the
+            // retriever's `get_context` query is observable.
+            .with_access_tracking()
             .with_session_search_mode(mode)
             .with_per_dataset_storage(per_dataset);
         Self {
@@ -1031,7 +1034,8 @@ async fn batch_search_skips_session_turn_preparation() {
 
     assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 0); // lock poison is unrecoverable
     // The legacy feedback detection still answers the pure-feedback message,
-    // and its acknowledgement now reaches the search history.
+    // and its acknowledgement now reaches the search history. P2 removes the
+    // legacy path; this assertion goes with it.
     assert!(matches!(&responses[0].result, SearchOutput::Text(t) if t == "Legacy thanks."));
     assert_eq!(
         harness.history.rows(),
@@ -1061,4 +1065,75 @@ async fn empty_readable_scope_records_an_empty_result_text() {
         harness.history.rows(),
         vec![("anything".to_string(), String::new())]
     );
+}
+
+#[tokio::test]
+async fn sequential_turn_retrieves_and_answers_with_the_effective_query_alone() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("final answer"),
+        answering_analysis(),
+    )
+    .await;
+
+    harness
+        .orchestrator
+        .search(&harness.request("Be terse. What now?"))
+        .await
+        .unwrap();
+
+    let queries = |recorded: &Mutex<Vec<String>>| recorded.lock().unwrap().clone(); // lock poison is unrecoverable
+    assert_eq!(
+        queries(&harness.retriever.context_queries),
+        vec!["effective question".to_string()]
+    );
+    assert_eq!(
+        queries(&harness.retriever.completion_queries),
+        vec!["effective question".to_string()]
+    );
+    let session = harness
+        .manager
+        .get_session(Some(SESSION), Some(&harness.user.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        session.last().map(|e| e.question.as_str()),
+        Some("Be terse. What now?"),
+        "storage keeps the raw message"
+    );
+    assert_eq!(
+        harness.history.rows(),
+        vec![(
+            "Be terse. What now?".to_string(),
+            "final answer".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn an_empty_completion_text_is_still_an_answer_and_commits() {
+    for per_dataset in [false, true] {
+        let harness = TurnHarness::new(
+            cognee_search::SessionSearchMode::Concurrent,
+            per_dataset,
+            answer(""),
+            answering_analysis(),
+        )
+        .await;
+        let mut request = harness.request("Be terse. What now?");
+        if per_dataset {
+            request.dataset_ids = Some(vec![Uuid::new_v4()]);
+        }
+
+        harness.orchestrator.search(&request).await.unwrap();
+
+        // Python skips the commit only when no completion was generated, so a
+        // generated "" is saved and committed together.
+        assert_eq!(harness.qa_count().await, 2, "per_dataset={per_dataset}");
+        assert!(
+            harness.context_row_count().await > 0,
+            "per_dataset={per_dataset}"
+        );
+    }
 }

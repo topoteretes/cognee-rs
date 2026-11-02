@@ -9,6 +9,7 @@ use cognee_session::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -173,83 +174,32 @@ pub async fn prepare_session_turn_from_snapshot(
     entries: &[SessionQAEntry],
     rows: &[SessionContextRow],
 ) -> SessionTurnPreparation {
-    if query.trim().is_empty() {
-        return SessionTurnPreparation::pass_through(query);
-    }
-    let previous = entries.last();
-    let previous_qa_id = previous.map(|e| e.id.to_string());
-    // Only context actually stamped on the previous answer may be rated. This
-    // prevents an LLM from incrementing arbitrary session-context rows and
-    // matches Python's cross-turn lineage contract.
-    let served_ids = previous
-        .and_then(|entry| entry.used_session_context_ids.clone())
-        .unwrap_or_default();
-    let served = rows
-        .iter()
-        .filter_map(|row| {
-            let id = row.get("id")?.as_str()?;
-            served_ids.iter().any(|candidate| candidate == id).then(|| {
-                (
-                    id.into(),
-                    row.get("content")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .into(),
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    let analysis = analyze(
-        llm,
-        query,
-        previous.map(|e| (e.question.as_str(), e.answer.as_str())),
-        &served,
-    )
-    .await;
-
-    let accepted = apply_turn_analysis(
+    let mut preparation = analyze_session_turn_from_snapshot(llm, query, entries, rows).await;
+    commit_session_turn_analysis(
         manager,
         session_id,
         user_id,
         query,
-        &analysis,
-        previous_qa_id.as_deref(),
-        &served_ids,
+        &mut preparation,
+        entries,
         rows,
     )
     .await;
-    let should_answer = should_answer_turn(&analysis, previous_qa_id.is_some());
-    tracing::debug!(
-        session_id,
-        has_previous = previous_qa_id.is_some(),
-        should_answer,
-        query_rewritten = analysis.query_to_answer.is_some(),
-        previous_answer_rated = analysis.previous_answer_rating.is_some(),
-        served_context_ratings = analysis.served_context_ratings.len(),
-        candidate_context_updates = analysis.candidate_context_updates.len(),
-        accepted_context_updates = accepted.len(),
-        "session turn analysis applied"
-    );
-    SessionTurnPreparation {
-        should_answer,
-        response_to_user: if should_answer {
-            analysis.response_to_user.clone()
-        } else {
-            Some(
-                analysis
-                    .response_to_user
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_ACK.into()),
-            )
-        },
-        effective_query: analysis
-            .query_to_answer
-            .clone()
-            .unwrap_or_else(|| query.into()),
-        analysis: Some(analysis),
-        accepted_context_ids: accepted,
-        previous_qa_id,
+    if let Some(analysis) = preparation.analysis.as_ref() {
+        tracing::debug!(
+            session_id,
+            has_previous = preparation.previous_qa_id.is_some(),
+            should_answer = preparation.should_answer,
+            query_rewritten = analysis.query_to_answer.is_some(),
+            previous_answer_rated =
+                analysis.previous_answer_rating.is_some() && preparation.previous_qa_id.is_some(),
+            served_context_ratings = analysis.served_context_ratings.len(),
+            candidate_context_updates = analysis.candidate_context_updates.len(),
+            accepted_context_updates = preparation.accepted_context_ids.len(),
+            "session turn analysis applied"
+        );
     }
+    preparation
 }
 
 /// Analyze a concurrent turn without writing. The caller commits this only
@@ -407,9 +357,12 @@ async fn apply_turn_analysis(
         apply_candidate_updates_for_user(manager, session_id, user_id, &feedback_id, &candidates)
             .await;
 
+    // Counters accumulate locally, as Python's `apply_served_context_ratings`
+    // does, so repeated ratings of one entry in a turn all count.
+    let mut counts: HashMap<&str, (u64, u64)> = HashMap::new();
     for rating in &analysis.served_context_ratings {
-        // The model may only rate context proven to have been served to the
-        // previous answer. Ignore invented or stale IDs.
+        // Hardening beyond Python: the model may only rate context proven to
+        // have been served to the previous answer. Ignore invented or stale IDs.
         if !served_ids.iter().any(|id| id == &rating.entry_id) {
             continue;
         }
@@ -419,16 +372,24 @@ async fn apply_turn_analysis(
         else {
             continue;
         };
-        let field = match rating.rating.trim().to_ascii_lowercase().as_str() {
-            "helpful" => "helpful_count",
-            "harmful" => "harmful_count",
+        let helpful = match rating.rating.trim().to_ascii_lowercase().as_str() {
+            "helpful" => true,
+            "harmful" => false,
             _ => continue,
         };
+        let count = |field: &str| row.get(field).and_then(Value::as_u64).unwrap_or(0);
+        let entry = counts
+            .entry(rating.entry_id.as_str())
+            .or_insert_with(|| (count("helpful_count"), count("harmful_count")));
+        let field = if helpful {
+            entry.0 += 1;
+            ("helpful_count", entry.0)
+        } else {
+            entry.1 += 1;
+            ("harmful_count", entry.1)
+        };
         let mut merge = Map::new();
-        merge.insert(
-            field.into(),
-            json!(row.get(field).and_then(Value::as_u64).unwrap_or(0) + 1),
-        );
+        merge.insert(field.0.into(), json!(field.1));
         let _ = manager
             .update_session_context_entry(Some(session_id), user_id, &rating.entry_id, merge)
             .await;

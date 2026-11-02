@@ -1162,7 +1162,7 @@ impl SearchOrchestrator {
             // result names the dataset only when exactly one was searched.
             // Nothing is filtered by dataset membership — that could not be made
             // tight (cognee-rs #290) and is what per-dataset storage replaces.
-            let (response, log) = self
+            let response = self
                 .run_search(
                     request,
                     &retriever,
@@ -1174,9 +1174,7 @@ impl SearchOrchestrator {
                     None,
                 )
                 .await?;
-            if log {
-                self.log_search_history(&raw_request, &response).await;
-            }
+            self.log_search_history(&raw_request, &response).await;
             emit_search_completed(request);
             let dataset_id = match request.dataset_ids.as_deref() {
                 Some([only]) => Some(*only),
@@ -1361,11 +1359,9 @@ impl SearchOrchestrator {
 
         let mut results = Vec::with_capacity(outcomes.len());
         let mut no_data = Vec::new();
-        let mut log = false;
         for (dataset_id, (dataset_name, dataset_tenant_id), outcome) in outcomes {
             match outcome {
-                Ok((mut response, dataset_log)) => {
-                    log |= dataset_log;
+                Ok(mut response) => {
                     key_context_by_dataset(&mut response, dataset_id);
                     response.datasets = Some(vec![dataset_id]);
                     results.push(DatasetSearchResult {
@@ -1518,9 +1514,7 @@ impl SearchOrchestrator {
             }
             _ => {}
         }
-        if log {
-            self.log_search_history(&raw_request, &merged).await;
-        }
+        self.log_search_history(&raw_request, &merged).await;
         emit_search_completed(request);
         drop(fanout_turn_guard);
         Ok(results)
@@ -1541,8 +1535,7 @@ impl SearchOrchestrator {
     }
 
     /// One retriever run over whatever store the current scope reaches — the
-    /// shared store, or one dataset's own under per-dataset storage. Returns
-    /// the response and whether it is to be recorded in the search history.
+    /// shared store, or one dataset's own under per-dataset storage.
     ///
     /// `keep_context`: fetch the context and keep it on the response, as a
     /// dataset-scoped search always returned its per-dataset context.
@@ -1561,7 +1554,7 @@ impl SearchOrchestrator {
         session_turn: bool,
         raw_session_query: Option<&str>,
         session_snapshot: Option<&SessionContext>,
-    ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
+    ) -> Result<SearchResponse, crate::types::SearchError> {
         let mut params = SearchParams::from(request);
         params.personalization = Some(self.personalization).filter(|config| config.enabled);
         if params.feedback_influence.is_none() && self.default_feedback_influence > 0.0 {
@@ -1647,7 +1640,7 @@ impl SearchOrchestrator {
             response.user_prompt = user_prompt;
             response.system_prompt = system_prompt;
 
-            return Ok((response, true));
+            return Ok(response);
         }
 
         let session_context = match session_snapshot {
@@ -1662,7 +1655,7 @@ impl SearchOrchestrator {
                 .handle_auto_feedback(request, search_type, auto_feedback)
                 .await
         {
-            return Ok((acknowledgement, true));
+            return Ok(acknowledgement);
         }
 
         // When the orchestrator did not fetch the context above
@@ -1745,7 +1738,7 @@ impl SearchOrchestrator {
             response.context = context.map(|items| HashMap::from([(String::new(), items)]));
         }
 
-        Ok((response, true))
+        Ok(response)
     }
 
     /// Run analysis and the answer lane from the same pre-turn snapshot.
@@ -2080,26 +2073,25 @@ impl SearchOrchestrator {
     /// Record a search that had no readable dataset to run in: Python stores
     /// an empty result text for it.
     async fn log_empty_scope_history(&self, request: &SearchRequest) {
-        let Some(database) = self.database.as_ref().filter(|_| self.log_search_history) else {
-            return;
-        };
-        let query_type = history_query_type(request.search_type);
         let row = HistoryRow {
             dataset_id: None,
             value: String::new(),
         };
-        if let Err(error) = log_history_row(database.as_ref(), request, &query_type, &row).await {
-            tracing::warn!(%error, "failed to record search history");
-        }
+        self.write_history_row(request, row).await;
     }
 
     /// Record the search in history as one query and result row.
     async fn log_search_history(&self, request: &SearchRequest, response: &SearchResponse) {
+        self.write_history_row(request, history_row(request, response))
+            .await;
+    }
+
+    /// Write one history row when history logging is on.
+    async fn write_history_row(&self, request: &SearchRequest, row: HistoryRow) {
         let Some(database) = self.database.as_ref().filter(|_| self.log_search_history) else {
             return;
         };
         let query_type = history_query_type(request.search_type);
-        let row = history_row(request, response);
         if let Err(error) = log_history_row(database.as_ref(), request, &query_type, &row).await {
             tracing::warn!(%error, "failed to record search history");
         }
@@ -2107,13 +2099,11 @@ impl SearchOrchestrator {
 }
 
 /// Whether a completion run produced an answer worth recording as a session
-/// turn (Python: a non-empty completion list).
+/// turn. Only the empty `Texts` list (the `skip_completion_on_empty_context`
+/// sentinel) means "no answer", as Python's `generated_answer is None`; an
+/// empty completion text is still an answer.
 fn produced_answer(output: &SearchOutput) -> bool {
-    match output {
-        SearchOutput::Text(answer) => !answer.is_empty(),
-        SearchOutput::Texts(answers) => !answers.is_empty(),
-        _ => true,
-    }
+    !matches!(output, SearchOutput::Texts(answers) if answers.is_empty())
 }
 
 /// How many datasets a per-dataset search runs at once.

@@ -147,6 +147,10 @@ Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
 - **One logical session turn per multi-dataset search.** Python runs one session turn per
   dataset leg of a fan-out; Rust prepares, answers and commits one turn across the whole
   fan-out, so the session holds one QA row and one analysis commit per search.
+- **Served-context ratings are gated on the previous answer's lineage.** Python's
+  `apply_served_context_ratings` rates any session-context entry of kind `context`; Rust only
+  rates entries stamped on the previous answer (`used_session_context_ids`), so a model cannot
+  increment arbitrary rows. Counters accumulate per turn as in Python.
 - **TEMPORAL honours `include_global_context_index`.** Python's TEMPORAL retriever factory does
   not pass the flag through; Rust forwards it, as it does for the other hybrid searches.
 - **Temporal window expansion re-projects external metadata.** Rust runs the expanded window's
