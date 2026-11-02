@@ -275,7 +275,7 @@ impl Harness {
         window: ExtractedWindow,
     ) -> TemporalRetrieval {
         self.retriever
-            .rerank(candidates, window, self.limits(), &self.lanes())
+            .rerank(candidates, window, self.limits(), &self.lanes(), false)
             .await
             .unwrap()
     }
@@ -796,6 +796,7 @@ async fn the_expansion_respects_the_node_set_filter() {
             window(utc(1950, 1, 1), utc(1951, 1, 1)),
             h.limits(),
             &lanes,
+            false,
         )
         .await
         .unwrap();

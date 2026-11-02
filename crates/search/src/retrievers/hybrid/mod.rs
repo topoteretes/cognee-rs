@@ -24,7 +24,10 @@ mod ranking;
 mod results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
-pub(crate) use chunks::{HybridChunksResult, retrieve_hybrid_chunks, search_collection};
+pub(crate) use chunks::{
+    DLT_ROW_TYPE, HybridChunksResult, chunk_collections, has_dlt_rows, retrieve_hybrid_chunks,
+    search_collection, search_collections,
+};
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
 pub(crate) use facts::{edge_rank_by_id, format_facts};
@@ -137,8 +140,23 @@ fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
 
 const ENTITY_DATA_TYPE: &str = "Entity";
 const ENTITY_FIELD: &str = "name";
+const ENTITY_COLLECTION: (&str, &str) = (ENTITY_DATA_TYPE, ENTITY_FIELD);
+const ENTITY_COLLECTIONS_WITH_DLT: &[(&str, &str)] = &[
+    ENTITY_COLLECTION,
+    ("DltColumn", "properties"),
+    ("SchemaTable", "name"),
+    ("SchemaRelationship", "name"),
+];
 const EDGE_TYPE_DATA_TYPE: &str = "EdgeType";
 const EDGE_TYPE_FIELD: &str = "relationship_name";
+
+fn entity_collections(include_dlt_rows: bool) -> &'static [(&'static str, &'static str)] {
+    if include_dlt_rows {
+        ENTITY_COLLECTIONS_WITH_DLT
+    } else {
+        &[ENTITY_COLLECTION]
+    }
+}
 
 /// The HYBRID_COMPLETION context budget and overflow handling (the
 /// `search.hybrid` settings).
@@ -356,6 +374,18 @@ impl HybridRetriever {
         lanes: &HybridLanes,
         dataset_id: Option<Uuid>,
     ) -> Result<HybridCandidates, SearchError> {
+        let include_dlt_rows = has_dlt_rows(self.vector_db.as_ref()).await?;
+        self.fetch_candidates_with_dlt(query, lanes, dataset_id, include_dlt_rows)
+            .await
+    }
+
+    pub(crate) async fn fetch_candidates_with_dlt(
+        &self,
+        query: &str,
+        lanes: &HybridLanes,
+        dataset_id: Option<Uuid>,
+        include_dlt_rows: bool,
+    ) -> Result<HybridCandidates, SearchError> {
         let node_name = lanes.node_name.as_deref();
         let node_name_filter_operator = lanes.node_name_filter_operator.as_str();
 
@@ -374,6 +404,7 @@ impl HybridRetriever {
                 dataset_id,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await;
 
@@ -387,6 +418,7 @@ impl HybridRetriever {
                 lanes.fusion,
                 lanes.use_importance_weight,
                 &query_vector,
+                include_dlt_rows,
                 lanes.use_truth_weight,
                 q_coords.as_deref(),
                 truth_state_by_id.as_ref(),
@@ -399,6 +431,7 @@ impl HybridRetriever {
                 lanes.max_edges_per_entity,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             ),
         )?;
 
@@ -446,14 +479,15 @@ impl HybridRetriever {
         max_edges_per_entity: usize,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<(Vec<EntityResult>, FactCandidates), SearchError> {
         let max_ranked_bullets = entities_top_k.saturating_mul(max_edges_per_entity);
         let edge_limit = max_ranked_bullets.saturating_add(facts_top_k);
 
-        let entity_future = search_collection(
+        let entity_future = search_collections(
             &self.vector_db,
-            ENTITY_DATA_TYPE,
-            ENTITY_FIELD,
+            entity_collections(include_dlt_rows),
+            None,
             query_vector,
             entities_top_k,
             node_name,
@@ -511,6 +545,7 @@ impl HybridRetriever {
     /// loading fine but the graph batch call erroring) discards the
     /// already-computed `q_coords` and returns `(None, None, None)`, mirroring
     /// Python's one `try/except` around the whole computation.
+    #[allow(clippy::too_many_arguments)]
     async fn build_truth_context(
         &self,
         use_truth_weight: bool,
@@ -519,6 +554,7 @@ impl HybridRetriever {
         dataset_id: Option<Uuid>,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> (
         Option<Vec<f64>>,
         Option<HashMap<String, NodeTruthState>>,
@@ -538,6 +574,7 @@ impl HybridRetriever {
                 dataset_id,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await
         {
@@ -566,6 +603,7 @@ impl HybridRetriever {
         dataset_id: Uuid,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<Option<(Vec<f64>, HashMap<String, NodeTruthState>, i64)>, SearchError> {
         let centroids =
             load_centroids(self.vector_db.as_ref(), &dataset_id.to_string(), DEFAULT_K).await?;
@@ -597,6 +635,7 @@ impl HybridRetriever {
                 query_vector,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await?;
         if candidate_ids.is_empty() {
@@ -625,15 +664,16 @@ impl HybridRetriever {
         query_vector: &[f32],
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<Vec<String>, SearchError> {
         let candidate_limit = chunks_top_k.saturating_mul(2);
         if candidate_limit == 0 {
             return Ok(vec![]);
         }
-        let hits = search_collection(
+        let hits = search_collections(
             &self.vector_db,
-            "DocumentChunk",
-            "text",
+            chunk_collections(include_dlt_rows),
+            include_dlt_rows.then_some((chunks::DLT_ROW_TYPE, "text")),
             query_vector,
             candidate_limit,
             node_name,
@@ -1174,11 +1214,19 @@ impl SearchRetriever for HybridRetriever {
         if self.graph_db.is_empty().await.unwrap_or(true) {
             return None;
         }
-        match chunks::has_chunk_collection(self.vector_db.as_ref()).await {
-            Ok(false) => Some("DocumentChunk_text collection missing".to_string()),
-            Ok(true) => None,
-            Err(error) => {
+        let chunks = chunks::has_chunk_collection(self.vector_db.as_ref()).await;
+        let dlt = chunks::has_dlt_rows(self.vector_db.as_ref()).await;
+        match (chunks, dlt) {
+            (Ok(false), Ok(false)) => {
+                Some("DocumentChunk_text and DltRow_text collections missing".to_string())
+            }
+            (Ok(true), _) | (_, Ok(true)) => None,
+            (Err(error), _) => {
                 debug!(%error, "hybrid chunk collection check failed; running hybrid");
+                None
+            }
+            (_, Err(error)) => {
+                debug!(%error, "hybrid DLT collection check failed; running hybrid");
                 None
             }
         }
@@ -1219,6 +1267,20 @@ mod retriever_tests {
     const ENTITY_NAME: &str = "Alice";
     const BULLET_TEXT: &str = "Alice works at Acme.";
     const FACT_TEXT: &str = "Acme acquired Initech.";
+
+    #[test]
+    fn dlt_contract_enables_all_structured_entity_collections() {
+        assert_eq!(super::entity_collections(false), &[("Entity", "name")]);
+        assert_eq!(
+            super::entity_collections(true),
+            &[
+                ("Entity", "name"),
+                ("DltColumn", "properties"),
+                ("SchemaTable", "name"),
+                ("SchemaRelationship", "name"),
+            ]
+        );
+    }
 
     struct AlignedEmbedding;
 
@@ -2482,6 +2544,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
 
@@ -2515,6 +2578,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2535,7 +2599,15 @@ mod truth_context_tests {
 
         let retriever = truth_retriever(vector_db, graph_db, true);
         let result = retriever
-            .build_truth_context(true, super::DEFAULT_TOP_K, &QUERY_VECTOR, None, None, "OR")
+            .build_truth_context(
+                true,
+                super::DEFAULT_TOP_K,
+                &QUERY_VECTOR,
+                None,
+                None,
+                "OR",
+                false,
+            )
             .await;
         assert_eq!(result, (None, None, None));
     }
@@ -2556,6 +2628,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2579,6 +2652,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2614,6 +2688,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2638,6 +2713,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
 
@@ -2666,7 +2742,7 @@ mod truth_context_tests {
 
         // Resolved chunks_top_k = 1 -> window = 2 -> at most 2 candidate ids.
         let narrow = retriever
-            .candidate_chunk_ids(1, &QUERY_VECTOR, None, "OR")
+            .candidate_chunk_ids(1, &QUERY_VECTOR, None, "OR", false)
             .await
             .unwrap();
         assert_eq!(
@@ -2677,7 +2753,7 @@ mod truth_context_tests {
 
         // A wide resolved value surfaces every seeded chunk (window 30 >= 5).
         let wide = retriever
-            .candidate_chunk_ids(super::DEFAULT_TOP_K, &QUERY_VECTOR, None, "OR")
+            .candidate_chunk_ids(super::DEFAULT_TOP_K, &QUERY_VECTOR, None, "OR", false)
             .await
             .unwrap();
         assert_eq!(

@@ -28,12 +28,6 @@ use crate::retrievers::context_items::search_results_to_context;
 use crate::retrievers::hybrid::{payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
 
-/// The collections whose rows count as chunks: `(data_type, field)`.
-///
-/// Python's `chunk_collections` adds `DltRow_text` when DLT rows are indexed;
-/// Rust has no DLT ingestion, so document chunks are the only chunk rows.
-pub(crate) const CHUNK_COLLECTIONS: &[(&str, &str)] = &[("DocumentChunk", "text")];
-
 /// Ids of the nodes with an edge into one of `timestamps`, in timestamp order.
 ///
 /// `edges` is `get_neighborhood(timestamp ids, depth = 1)`'s edge half; only
@@ -74,6 +68,7 @@ pub(crate) fn attached_node_ids(timestamps: &[WindowTimestamp], edges: &[EdgeDat
 pub(crate) async fn retrieve_in_collections(
     vector_db: &Arc<dyn VectorDB>,
     collections: &[(&str, &str)],
+    known_existing: Option<(&str, &str)>,
     node_ids: &[String],
     node_name: Option<&[String]>,
     node_name_filter_operator: &str,
@@ -88,7 +83,10 @@ pub(crate) async fn retrieve_in_collections(
         .collect();
     let mut by_id: HashMap<String, SearchItem> = HashMap::new();
     for (data_type, field) in collections {
-        if uuids.is_empty() || !vector_db.has_collection(data_type, field).await? {
+        if uuids.is_empty()
+            || (known_existing != Some((*data_type, *field))
+                && !vector_db.has_collection(data_type, field).await?)
+        {
             continue;
         }
         let hits = search_results_to_context(vector_db.retrieve(data_type, field, &uuids).await?)?;
@@ -186,6 +184,7 @@ mod tests {
         let hits = retrieve_in_collections(
             &db,
             &[("A", "text"), ("B", "text"), ("C", "text")],
+            None,
             &ids,
             None,
             "OR",
@@ -214,6 +213,7 @@ mod tests {
         let scoped = retrieve_in_collections(
             &db,
             &[("A", "text"), ("B", "text")],
+            None,
             &ids,
             Some(&["other".to_string()]),
             "OR",
@@ -224,10 +224,48 @@ mod tests {
         assert_eq!(result_id(&scoped[0]), Some(z.to_string()));
 
         assert!(
-            retrieve_in_collections(&db, &[("A", "text")], &[], None, "OR")
+            retrieve_in_collections(&db, &[("A", "text")], None, &[], None, "OR")
                 .await
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn temporal_expansion_reads_dlt_rows_and_preserves_scope() {
+        let db = MockVectorDB::new();
+        db.create_collection("DocumentChunk", "text", 2)
+            .await
+            .unwrap();
+        db.create_collection("DltRow", "text", 2).await.unwrap();
+        let row = Uuid::new_v4();
+        index(&db, "DltRow", row, "orders:42", &["sales"]).await;
+        let db: Arc<dyn VectorDB> = Arc::new(db);
+        let ids = vec![row.to_string()];
+
+        let found = retrieve_in_collections(
+            &db,
+            crate::retrievers::hybrid::chunk_collections(true),
+            Some((crate::retrievers::hybrid::DLT_ROW_TYPE, "text")),
+            &ids,
+            Some(&["sales".to_string()]),
+            "OR",
+        )
+        .await
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(result_id(&found[0]), Some(row.to_string()));
+
+        let excluded = retrieve_in_collections(
+            &db,
+            crate::retrievers::hybrid::chunk_collections(true),
+            Some((crate::retrievers::hybrid::DLT_ROW_TYPE, "text")),
+            &ids,
+            Some(&["other".to_string()]),
+            "OR",
+        )
+        .await
+        .unwrap();
+        assert!(excluded.is_empty());
     }
 }
