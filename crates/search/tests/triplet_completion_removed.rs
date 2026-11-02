@@ -197,3 +197,60 @@ async fn graph_search_succeeds_on_a_legacy_triplet_text_collection() {
     assert_eq!(actual[0].relationship_name, "works_at");
     assert!((actual[0].score - expected[0].score).abs() < 1e-6);
 }
+
+/// The legacy collection is actually *queried*, not merely tolerated: here it
+/// is the only collection holding a hit (no `Entity`, `DocumentChunk`, ... at
+/// all), so the graph search finds its seed node through `Triplet_text` alone.
+/// Dropping `("Triplet", "text")` from the searched collections leaves no
+/// candidate nodes and this test fails with an empty result. Python includes
+/// `Triplet_text` in the same enumeration (graph_completion_retriever.py:88-99).
+#[tokio::test]
+async fn graph_search_reads_the_legacy_triplet_text_collection() {
+    let a = Uuid::from_u128(0x0A);
+    let b = Uuid::from_u128(0x0B);
+
+    let vector_db = MockVectorDB::new();
+    vector_db
+        .create_collection("Triplet", "text", 2)
+        .await
+        .unwrap();
+    vector_db
+        .index_points(
+            "Triplet",
+            "text",
+            &[VectorPoint {
+                id: a,
+                vector: vec![1.0, 0.0],
+                metadata: HashMap::from([("text".to_string(), json!("Alice-›works_at-›Acme"))]),
+            }],
+        )
+        .await
+        .unwrap();
+    let graph = MockGraphDB::new();
+    for (id, name) in [(a, "Alice"), (b, "Acme")] {
+        graph
+            .add_node_raw(json!({ "id": id.to_string(), "name": name }))
+            .await
+            .unwrap();
+    }
+    graph
+        .add_edge(&a.to_string(), &b.to_string(), "works_at", None)
+        .await
+        .unwrap();
+
+    let ranked = brute_force_triplet_search(
+        "Who works at Acme?",
+        &vector_db,
+        &FixedEmbedding,
+        &graph,
+        &GraphRetrievalConfig::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ranked.len(),
+        1,
+        "the legacy Triplet_text hit must seed the graph search: {ranked:?}"
+    );
+    assert_eq!(ranked[0].relationship_name, "works_at");
+}
