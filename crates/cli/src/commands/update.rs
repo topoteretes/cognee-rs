@@ -5,7 +5,6 @@ use cognee::api::update;
 use cognee::core::RayonThreadPool;
 use cognee::database::IngestDb;
 use cognee::models::DataInput;
-use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
 use uuid::Uuid;
@@ -100,7 +99,13 @@ pub fn run(args: UpdateArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         .map_err(|e| CliError::Runtime(format!("Failed to resolve dataset: {e}")))?
         .ok_or_else(|| CliError::Validation(format!("Dataset '{dataset_name}' was not found")))?;
 
-        let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
+        // `--ontology-file` overrides `ontology.file_path`; neither means none.
+        let ontology_resolver = cm
+            .ontology_resolver(args.ontology_file.as_deref())
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!("Ontology initialization failed: {error}"))
+            })?;
         let result = update(
             data_id,
             new_data,

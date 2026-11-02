@@ -817,6 +817,11 @@ pub struct UpdateArgs {
     #[arg(long = "extractor")]
     pub extractor: Option<String>,
 
+    /// Ontology file for the re-cognify run; overrides `ontology.file_path`
+    /// (as `cognify --ontology-file`).
+    #[arg(long = "ontology-file")]
+    pub ontology_file: Option<String>,
+
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
 }
