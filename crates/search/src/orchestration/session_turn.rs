@@ -595,6 +595,135 @@ mod tests {
         }
     }
 
+    /// Seed one active guidance row and return its id and section.
+    async fn seed_context_row(manager: &SessionManager, session: &str) -> (String, String) {
+        let section = cognee_session::QA_CONTEXT_SECTIONS[0].to_string();
+        let entry = cognee_session::SessionContextEntry {
+            id: Uuid::new_v4().to_string(),
+            section: section.clone(),
+            context_profile: CONTEXT_PROFILE_QA.to_string(),
+            content: "Prefer terse answers.".into(),
+            normalized_content: cognee_session::normalize_content("Prefer terse answers."),
+            confidence: 0.9,
+            created_at: Utc::now().to_rfc3339(),
+            source_feedback_ids: Vec::new(),
+            source_trace_ids: Vec::new(),
+            helpful_count: 0,
+            harmful_count: 0,
+            priority: 0,
+            last_served_at: None,
+            embedding: None,
+            kind: cognee_session::CONTEXT_ENTRY_KIND.to_string(),
+        };
+        manager
+            .create_session_context_entry(Some(session), None, entry.to_row().unwrap())
+            .await
+            .unwrap();
+        (entry.id, section)
+    }
+
+    #[tokio::test]
+    async fn repeated_served_context_ratings_accumulate_within_a_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let (id, _) = seed_context_row(&manager, "ratings").await;
+        let rows = manager
+            .get_session_context_entries(Some("ratings"), None)
+            .await
+            .unwrap();
+        let rate = |rating: &str| ServedContextRating {
+            entry_id: id.clone(),
+            rating: rating.into(),
+        };
+        let analysis = SessionTurnAnalysis {
+            served_context_ratings: vec![rate("helpful"), rate("helpful"), rate("harmful")],
+            ..Default::default()
+        };
+
+        apply_turn_analysis(
+            &manager,
+            "ratings",
+            None,
+            "q",
+            &analysis,
+            None,
+            std::slice::from_ref(&id),
+            &rows,
+        )
+        .await;
+
+        let rows = manager
+            .get_session_context_entries(Some("ratings"), None)
+            .await
+            .unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .unwrap();
+        assert_eq!(row.get("helpful_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(row.get("harmful_count").and_then(Value::as_u64), Some(1));
+    }
+
+    #[tokio::test]
+    async fn candidate_update_and_rating_on_one_entry_both_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let (id, section) = seed_context_row(&manager, "both").await;
+        let rows = manager
+            .get_session_context_entries(Some("both"), None)
+            .await
+            .unwrap();
+        let analysis = SessionTurnAnalysis {
+            served_context_ratings: vec![ServedContextRating {
+                entry_id: id.clone(),
+                rating: "helpful".into(),
+            }],
+            candidate_context_updates: vec![CandidateContextUpdate {
+                section,
+                content: "prefer  TERSE answers.".into(),
+                confidence: 0.95,
+            }],
+            ..Default::default()
+        };
+
+        let accepted = apply_turn_analysis(
+            &manager,
+            "both",
+            None,
+            "q",
+            &analysis,
+            None,
+            std::slice::from_ref(&id),
+            &rows,
+        )
+        .await;
+
+        assert_eq!(
+            accepted,
+            vec![id.clone()],
+            "duplicate candidate reuses the row"
+        );
+        let rows = manager
+            .get_session_context_entries(Some("both"), None)
+            .await
+            .unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .unwrap();
+        assert_eq!(row.get("helpful_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            row.get("source_feedback_ids")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
     #[tokio::test]
     async fn first_turn_candidate_is_persisted_but_never_suppresses_answer() {
         let turn = golden_turns().remove(0);

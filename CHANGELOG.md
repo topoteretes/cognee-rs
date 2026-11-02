@@ -1243,7 +1243,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fan-out one announces completion; a declined turn acknowledges even when a
   `response_schema` is set; a previous-answer rating is stored only when a
   previous turn exists, and candidate guidance is applied before served-context
-  ratings; sequential retrieval and the answer use the rewritten query alone
+  ratings, and repeated ratings of one entry within a turn all count towards
+  its `helpful_count` / `harmful_count`; sequential retrieval and the answer use the rewritten query alone
   (the raw message is still what is stored and logged); batch searches skip
   turn preparation; a search with no readable dataset logs an empty result text.
   Documented intentional divergences: one logical turn across a multi-dataset
