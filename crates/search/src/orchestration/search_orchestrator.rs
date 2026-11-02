@@ -928,7 +928,8 @@ impl SearchOrchestrator {
         let scoping = retriever.dataset_scoping();
 
         let resolved_request_owned;
-        let request: &SearchRequest = match self.authorize_and_resolve_datasets(request).await? {
+        let mut request: &SearchRequest = match self.authorize_and_resolve_datasets(request).await?
+        {
             Some(resolved) => {
                 let mut clone = request.clone();
                 clone.dataset_ids = Some(resolved);
