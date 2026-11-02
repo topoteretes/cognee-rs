@@ -501,7 +501,8 @@ pub async fn persist_data_with_acl_and_locks(
     // `ProcessedInput` with a node set to a `persist_data*` function gets the
     // same two writes, and so does the re-add path below. Python stores
     // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
-    // else None`), so an empty list is treated as no node set.
+    // else None`), so an empty list writes no node set; on a re-add it still
+    // clears the stored one (see the re-add path).
     //
     // Checked before the dataset is resolved: a rejected name must not leave
     // behind an empty dataset (with its owner grants) that nothing attached
@@ -684,7 +685,16 @@ pub async fn persist_data_with_acl_and_locks(
         // pinned row; Rust adds the replacement first, then deletes the old
         // item — or, when the replacement dedups onto this same row,
         // drops only its memory and completion marker).
-        let node_set_column_to_write = match node_set_column.as_deref() {
+        // PATCH rule for the node set (Python `requested_node_set`,
+        // `ingest_data.py:551-555`): absent keeps the stored set, an explicit
+        // empty list clears it, a list replaces it.
+        let clears_node_set = processed
+            .node_set
+            .as_ref()
+            .is_some_and(|names| names.is_empty());
+        let requested_node_set: Option<&[String]> =
+            if clears_node_set { Some(&[]) } else { node_set };
+        let node_set_column_to_write = match requested_node_set {
             Some(_) => node_set_column.clone(),
             None => existing_data.node_set.clone(),
         };
@@ -693,7 +703,7 @@ pub async fn persist_data_with_acl_and_locks(
             existing_data.node_set.as_deref(),
             processed.item_external_metadata.as_deref(),
             processed.source_uri.as_deref(),
-            node_set,
+            requested_node_set,
         )
         .map_err(|e| format!("Failed to merge external_metadata on re-add: {e}"))?;
         let refresh = DataRowRefresh {
@@ -3505,6 +3515,51 @@ mod tests {
         assert!(uri.as_str().unwrap().ends_with("b.txt"), "got {uri}");
         assert!(second[0].original_data_location.ends_with("b.txt"));
         assert_eq!(second[0].name, "b");
+    }
+
+    /// A re-add with an explicit empty node set clears the stored one, as
+    /// Python's update branch does (`requested_node_set` is `[]`, then
+    /// `merge_existing_row_metadata` drops the key, `ingest_data.py:551-564,
+    /// 573`); a re-add without a node set keeps it.
+    #[tokio::test]
+    async fn re_add_with_an_empty_node_set_clears_the_stored_one() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let add = |node_set: Option<Vec<String>>| {
+            let pipeline = &pipeline;
+            async move {
+                let params = AddParams {
+                    node_set,
+                    ..AddParams::default()
+                };
+                pipeline
+                    .add_with_params(
+                        vec![DataInput::Text("Tagged content".into())],
+                        "clear_set_ds",
+                        owner_id,
+                        None,
+                        &params,
+                    )
+                    .await
+                    .expect("add")
+            }
+        };
+        let first = add(Some(vec!["tag".into()])).await;
+        assert!(first[0].node_set.is_some());
+
+        let kept = add(None).await;
+        assert_eq!(kept[0].node_set, first[0].node_set, "absent keeps the set");
+
+        let cleared = add(Some(vec![])).await;
+        assert_eq!(cleared[0].id, first[0].id);
+        assert_eq!(cleared[0].node_set, None);
+        assert!(metadata_json(&cleared[0]).get("node_set").is_none());
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_set, None);
+        assert!(metadata_json(&stored).get("node_set").is_none());
     }
 
     /// Python: `node_set=json.dumps(effective_node_set) if effective_node_set
