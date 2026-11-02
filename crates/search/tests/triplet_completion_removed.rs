@@ -16,7 +16,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee_embedding::EmbeddingResult;
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_vector::{BruteForceVectorDB, VectorDB, VectorPoint};
+use cognee_graph::{GraphDBTrait, MockGraphDB};
+use cognee_search::graph_retrieval::{GraphRetrievalConfig, brute_force_triplet_search};
+use cognee_vector::{BruteForceVectorDB, MockVectorDB, VectorDB, VectorPoint};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -114,4 +116,84 @@ async fn search_ignores_a_legacy_triplet_text_collection() {
         }
         other => panic!("expected items, got {other:?}"),
     }
+}
+
+/// The graph search is the one reader of `Triplet_text` (it is in
+/// `SEARCH_COLLECTIONS`, as in Python's `brute_force_triplet_search`), so this
+/// is the search that must keep working on a database that still holds the
+/// legacy collection: it succeeds and ranks the same edges as without it.
+#[tokio::test]
+async fn graph_search_succeeds_on_a_legacy_triplet_text_collection() {
+    let a = Uuid::from_u128(0x0A);
+    let b = Uuid::from_u128(0x0B);
+
+    async fn seed(with_legacy: bool, a: Uuid, b: Uuid) -> (MockVectorDB, MockGraphDB) {
+        let vector_db = MockVectorDB::new();
+        vector_db
+            .create_collection("Entity", "name", 2)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                "Entity",
+                "name",
+                &[VectorPoint {
+                    id: a,
+                    vector: vec![1.0, 0.0],
+                    metadata: HashMap::from([("id".to_string(), json!(a.to_string()))]),
+                }],
+            )
+            .await
+            .unwrap();
+        if with_legacy {
+            vector_db
+                .create_collection("Triplet", "text", 2)
+                .await
+                .unwrap();
+            vector_db
+                .index_points("Triplet", "text", &[point("Alice-›works_at-›Acme")])
+                .await
+                .unwrap();
+            assert!(vector_db.has_collection("Triplet", "text").await.unwrap());
+        }
+        let graph = MockGraphDB::new();
+        for (id, name) in [(a, "Alice"), (b, "Acme")] {
+            graph
+                .add_node_raw(json!({ "id": id.to_string(), "name": name }))
+                .await
+                .unwrap();
+        }
+        graph
+            .add_edge(&a.to_string(), &b.to_string(), "works_at", None)
+            .await
+            .unwrap();
+        (vector_db, graph)
+    }
+
+    let config = GraphRetrievalConfig::default();
+    let (plain_vectors, plain_graph) = seed(false, a, b).await;
+    let expected = brute_force_triplet_search(
+        "Who works at Acme?",
+        &plain_vectors,
+        &FixedEmbedding,
+        &plain_graph,
+        &config,
+    )
+    .await
+    .unwrap();
+    let (legacy_vectors, legacy_graph) = seed(true, a, b).await;
+    let actual = brute_force_triplet_search(
+        "Who works at Acme?",
+        &legacy_vectors,
+        &FixedEmbedding,
+        &legacy_graph,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(expected.len(), 1, "{expected:?}");
+    assert_eq!(actual.len(), expected.len(), "{actual:?}");
+    assert_eq!(actual[0].relationship_name, "works_at");
+    assert!((actual[0].score - expected[0].score).abs() < 1e-6);
 }
