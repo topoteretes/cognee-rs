@@ -8,6 +8,7 @@ use cognee_llm::Llm;
 use cognee_session::SessionManager;
 use cognee_vector::VectorDB;
 
+use crate::graph_warmup::GraphWarmup;
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry};
 use crate::query_router::RoutingConstraints;
 use crate::retrievers::{
@@ -89,6 +90,7 @@ pub struct SearchBuilder {
     session_manager: Option<Arc<SessionManager>>,
     log_search_history: bool,
     per_dataset_storage: bool,
+    graph_warmup: Option<Arc<GraphWarmup>>,
 }
 
 impl SearchBuilder {
@@ -114,6 +116,7 @@ impl SearchBuilder {
             session_manager: None,
             log_search_history: true,
             per_dataset_storage: false,
+            graph_warmup: None,
         }
     }
 
@@ -158,6 +161,12 @@ impl SearchBuilder {
     /// engines (`ComponentManager::dataset_storage` is `Some`).
     pub fn with_per_dataset_storage(mut self, enabled: bool) -> Self {
         self.per_dataset_storage = enabled;
+        self
+    }
+
+    /// See [`SearchOrchestrator::with_graph_warmup`].
+    pub fn with_graph_warmup(mut self, warmup: Arc<GraphWarmup>) -> Self {
+        self.graph_warmup = Some(warmup);
         self
     }
 
@@ -483,6 +492,9 @@ impl SearchBuilder {
         }
         if let Some(session_manager) = self.session_manager {
             orchestrator = orchestrator.with_session_manager(session_manager);
+        }
+        if let Some(warmup) = self.graph_warmup {
+            orchestrator = orchestrator.with_graph_warmup(warmup);
         }
         orchestrator
     }
@@ -964,6 +976,16 @@ mod tests {
             })
             .build();
         assert_eq!(tuned.tuning_flags(), (true, true));
+    }
+
+    /// A graph-readiness probe given to the builder reaches the orchestrator.
+    #[test]
+    fn the_graph_warmup_reaches_the_orchestrator() {
+        assert!(builder().build().graph_warmup().is_none());
+        let pipeline_runs = Arc::new(cognee_database::pipelines::NoopPipelineRunRepository::new());
+        let warmup = crate::graph_warmup::GraphWarmup::new(pipeline_runs, Default::default());
+        let orchestrator = builder().with_graph_warmup(Arc::new(warmup)).build();
+        assert!(orchestrator.graph_warmup().is_some());
     }
 
     /// The orchestrator's routing constraints come from the builder's LLM

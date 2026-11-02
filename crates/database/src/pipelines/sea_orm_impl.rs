@@ -19,8 +19,8 @@ use crate::types::{DatabaseError, PipelineRun, PipelineRunStatus};
 use crate::uuid_hex;
 
 use super::repository::{
-    PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository, PipelineRunRow,
-    PipelineRunWithAttributionRow,
+    GraphBuildEvidence, PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository,
+    PipelineRunRow, PipelineRunWithAttributionRow,
 };
 
 /// Bound parameters [`PipelineRunRepository::list_runs`] puts into **one**
@@ -251,6 +251,61 @@ impl SeaOrmPipelineRunRepository {
         }
         Ok(rows)
     }
+
+    /// Whether a row on `datasets` — with `status`, when given — has a
+    /// `pipeline_name` outside `excluded`.
+    async fn run_exists(
+        &self,
+        datasets: &[String],
+        status: Option<PipelineRunStatus>,
+        excluded: &[&str],
+    ) -> Result<bool, DatabaseError> {
+        let mut query = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::DatasetId.is_in(datasets.iter().cloned()));
+        if let Some(status) = status {
+            query = query.filter(pipeline_run::Column::Status.eq(domain_status_to_entity(status)));
+        }
+        if !excluded.is_empty() {
+            query = query
+                .filter(pipeline_run::Column::PipelineName.is_not_in(excluded.iter().copied()));
+        }
+        let row = query
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("pipeline run lookup failed: {e}")))?;
+        Ok(row.is_some())
+    }
+
+    /// The `run_info` of the latest errored row on `datasets` whose
+    /// `pipeline_name` is outside `excluded`; `None` when there is none.
+    async fn latest_errored_run_info(
+        &self,
+        datasets: &[String],
+        excluded: &[&str],
+    ) -> Result<Option<Option<serde_json::Value>>, DatabaseError> {
+        let mut query = pipeline_run::Entity::find()
+            .filter(pipeline_run::Column::DatasetId.is_in(datasets.iter().cloned()))
+            .filter(
+                pipeline_run::Column::Status
+                    .eq(domain_status_to_entity(PipelineRunStatus::Errored)),
+            );
+        if !excluded.is_empty() {
+            query = query
+                .filter(pipeline_run::Column::PipelineName.is_not_in(excluded.iter().copied()));
+        }
+        let row = query
+            .order_by_desc(pipeline_run::Column::CreatedAt)
+            .order_by_desc(pipeline_run::Column::Id)
+            .one(self.db.as_ref())
+            .await
+            .map_err(|e| DatabaseError::QueryError(format!("errored run lookup failed: {e}")))?;
+        Ok(row.map(|row| row.run_info))
+    }
+}
+
+/// The `error` an errored run recorded in its `run_info` (`{"error": "..."}`).
+fn run_info_error(run_info: Option<&serde_json::Value>) -> Option<String> {
+    run_info?.get("error")?.as_str().map(str::to_string)
 }
 
 #[async_trait]
@@ -665,6 +720,34 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         }
         query.count(self.db.as_ref()).await.map_err(|e| {
             DatabaseError::QueryError(format!("count_runs_created_after query failed: {e}"))
+        })
+    }
+
+    async fn graph_build_evidence(
+        &self,
+        dataset_ids: &[Uuid],
+        staging_pipeline_names: &[&str],
+        ignored_pipeline_names: &[&str],
+    ) -> Result<GraphBuildEvidence, DatabaseError> {
+        if dataset_ids.is_empty() {
+            return Ok(GraphBuildEvidence::default());
+        }
+        let datasets: Vec<String> = dataset_ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+        let non_graph: Vec<&str> = [staging_pipeline_names, ignored_pipeline_names].concat();
+        let graph_built = self
+            .run_exists(&datasets, Some(PipelineRunStatus::Completed), &non_graph)
+            .await?;
+        let latest_build_error = self
+            .latest_errored_run_info(&datasets, &non_graph)
+            .await?
+            .map(|run_info| run_info_error(run_info.as_ref()));
+        let any_run = self
+            .run_exists(&datasets, None, ignored_pipeline_names)
+            .await?;
+        Ok(GraphBuildEvidence {
+            graph_built,
+            latest_build_error,
+            any_run,
         })
     }
 

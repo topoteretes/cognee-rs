@@ -18,6 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`cognee-search`: recall notes a graph that is not built instead of
+  searching it.** As Python's recall does, a graph-only recall first reads
+  `pipeline_runs` for the datasets the caller can read. When no graph was ever
+  built it returns one `system` item with `status: "memory_warming_up"`; when
+  the last build failed, `status: "build_failed"` with the error. Previously it
+  searched and returned nothing. Next to other sources a cold graph
+  contributes nothing, and a caller asking for `only_context` always searches.
+  The `recall` section configures it (`RECALL_WARMUP_SHORTCIRCUIT`,
+  `RECALL_WARMUP_THRESHOLD`, `RECALL_WARMUP_CACHE_TTL`). Python's `partial`
+  state (chunks searchable before extraction ends) is not ported: Rust has no
+  indexing pipeline.
+
+  **Migration.** `RecallSource` has a `System` variant, so an exhaustive
+  `match` on it needs an arm. An orchestrator is probed only when given a
+  `GraphWarmup` (`SearchBuilder::with_graph_warmup`); without one, recall
+  searches as before.
+
 - **`cognee-search`: recall routing honours what the deployment can run.** As
   Python's router does on `dev` (SDK-751, cognee `5ae7523fb`; v1.6.5 still
   answers keyless recall with `CHUNKS`), `RoutingConstraints { llm_available,

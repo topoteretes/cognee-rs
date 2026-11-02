@@ -14370,6 +14370,194 @@
     "err": "TypeMismatch",
     "key": "raise_incremental_loading_errors"
   },
+  "recall.warmup_cache_ttl <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- -1": {
+    "ok": {
+      "recall.warmup_cache_ttl": -1.0
+    }
+  },
+  "recall.warmup_cache_ttl <- 0": {
+    "ok": {
+      "recall.warmup_cache_ttl": 0.0
+    }
+  },
+  "recall.warmup_cache_ttl <- 1": {
+    "ok": {
+      "recall.warmup_cache_ttl": 1.0
+    }
+  },
+  "recall.warmup_cache_ttl <- 1.5": {
+    "ok": {
+      "recall.warmup_cache_ttl": 1.5
+    }
+  },
+  "recall.warmup_cache_ttl <- 5000000000": {
+    "ok": {
+      "recall.warmup_cache_ttl": 5000000000.0
+    }
+  },
+  "recall.warmup_cache_ttl <- 70000": {
+    "ok": {
+      "recall.warmup_cache_ttl": 70000.0
+    }
+  },
+  "recall.warmup_cache_ttl <- [1]": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- false": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- null": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- true": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_cache_ttl <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_cache_ttl"
+  },
+  "recall.warmup_shortcircuit <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- -1": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- 0": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- 1": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- 70000": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- [1]": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- false": {
+    "ok": {
+      "recall.warmup_shortcircuit": false
+    }
+  },
+  "recall.warmup_shortcircuit <- null": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_shortcircuit <- true": {
+    "ok": {}
+  },
+  "recall.warmup_shortcircuit <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_shortcircuit"
+  },
+  "recall.warmup_threshold <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- -1": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- 0": {
+    "ok": {
+      "recall.warmup_threshold": 0
+    }
+  },
+  "recall.warmup_threshold <- 1": {
+    "ok": {}
+  },
+  "recall.warmup_threshold <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- 5000000000": {
+    "ok": {
+      "recall.warmup_threshold": 5000000000
+    }
+  },
+  "recall.warmup_threshold <- 70000": {
+    "ok": {
+      "recall.warmup_threshold": 70000
+    }
+  },
+  "recall.warmup_threshold <- [1]": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- false": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- null": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- true": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
+  "recall.warmup_threshold <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "recall.warmup_threshold"
+  },
   "relational.host <- \"\"": {
     "ok": {
       "relational.host": ""

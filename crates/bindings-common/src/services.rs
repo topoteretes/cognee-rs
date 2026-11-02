@@ -25,6 +25,7 @@ use cognee::embedding::EmbeddingEngine;
 use cognee::graph::GraphDBTrait;
 use cognee::llm::Llm;
 use cognee::ontology::OntologyResolver;
+use cognee::search::graph_warmup::GraphWarmup;
 use cognee::search::{SearchBuilder, SearchOrchestrator, SessionManager, SessionStore};
 use cognee::storage::StorageTrait;
 use cognee::vector::VectorDB;
@@ -397,6 +398,10 @@ impl CogneeServices {
             .with_dataset_resolver(Arc::clone(&database) as Arc<dyn IngestDb>)
             .with_search_history_logging(cm.settings().log_search_history)
             .with_per_dataset_storage(per_dataset_storage)
+            .with_graph_warmup(Arc::new(GraphWarmup::new(
+                Arc::clone(&pipeline_run_repo),
+                cm.settings().recall_warmup_config(),
+            )))
             .build(),
         );
 

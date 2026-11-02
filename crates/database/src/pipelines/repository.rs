@@ -92,6 +92,19 @@ pub struct PipelineRunListQuery {
     pub offset: u64,
 }
 
+/// What `pipeline_runs` records about the knowledge graph of a set of
+/// datasets, for [`PipelineRunRepository::graph_build_evidence`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphBuildEvidence {
+    /// A run that writes the graph completed.
+    pub graph_built: bool,
+    /// The latest run that writes the graph errored: `Some` with its
+    /// `run_info.error`, when it has one.
+    pub latest_build_error: Option<Option<String>>,
+    /// Any run was recorded.
+    pub any_run: bool,
+}
+
 /// Persistence abstraction for pipeline run status rows.
 ///
 /// Each status transition writes a **new row** rather than updating in place,
@@ -344,6 +357,28 @@ pub trait PipelineRunRepository: Send + Sync {
         let _ = (since, dataset_id, exclude_pipeline_names);
         Err(DatabaseError::QueryError(
             "count_runs_created_after is not supported by this repository".to_string(),
+        ))
+    }
+
+    /// What the runs on `dataset_ids` say about their knowledge graph. Runs
+    /// named in `staging_pipeline_names` stage data and never count as
+    /// writing the graph; runs named in `ignored_pipeline_names` do not
+    /// count at all.
+    ///
+    /// Backs recall's graph-readiness probe (Python `get_graph_build_status`,
+    /// `cognee/modules/recall/methods/graph_warmup.py`).
+    ///
+    /// The default implementation fails, so a repository that cannot answer
+    /// is never read as "no graph".
+    async fn graph_build_evidence(
+        &self,
+        dataset_ids: &[Uuid],
+        staging_pipeline_names: &[&str],
+        ignored_pipeline_names: &[&str],
+    ) -> Result<GraphBuildEvidence, DbError> {
+        let _ = (dataset_ids, staging_pipeline_names, ignored_pipeline_names);
+        Err(DatabaseError::QueryError(
+            "graph_build_evidence is not supported by this repository".to_string(),
         ))
     }
 

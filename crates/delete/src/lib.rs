@@ -324,11 +324,8 @@ impl std::ops::AddAssign for DeletePreview {
 /// operation), on every dataset it touched.
 pub const FORGET_PIPELINE_NAME: &str = "forget";
 
-/// Rows that record a change rather than a pipeline run: a delete's
-/// [`FORGET_PIPELINE_NAME`] and the `improve` row an improve run that wrote
-/// to the graph leaves (`cognee::api::improve`). The Initiated resets of a
-/// dataset delete skip them.
-pub const CHANGE_RECORD_PIPELINE_NAMES: [&str; 2] = [FORGET_PIPELINE_NAME, "improve"];
+/// The Initiated resets of a dataset delete skip these rows.
+pub use cognee_database::pipelines::CHANGE_RECORD_PIPELINE_NAMES;
 
 struct ResolvedDeleteTargets {
     datasets_to_delete: Vec<Dataset>,
@@ -2746,6 +2743,11 @@ mod tests {
     use cognee_graph::MockGraphDB;
     use cognee_models::{Data, Dataset};
     use cognee_storage::MockStorage;
+
+    #[test]
+    fn a_forget_row_is_a_change_record() {
+        assert!(CHANGE_RECORD_PIPELINE_NAMES.contains(&FORGET_PIPELINE_NAME));
+    }
     use cognee_vector::MockVectorDB;
 
     // ------------------------------------------------------------------

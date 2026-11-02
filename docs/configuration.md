@@ -1461,6 +1461,20 @@ which are not part of this repository.
 When on, each search records one query row and one result row. They carry the
 searched dataset's `dataset_id` when exactly one dataset was searched.
 
+## Recall — warm-up short-circuit
+
+Before searching the graph, recall checks `pipeline_runs` for the datasets the
+caller can read. When no graph was ever built, or the last build failed, a
+graph-only recall returns one `system` note saying so instead of searching.
+The check reads no graph or vector store, and treats the graph as built when
+it cannot tell.
+
+| Env var | Key | Default | Effect |
+|---|---|---|---|
+| `RECALL_WARMUP_SHORTCIRCUIT` | `recall.warmup_shortcircuit` | `true` | `false` turns the check off; recall always searches. |
+| `RECALL_WARMUP_THRESHOLD` | `recall.warmup_threshold` | `1` | The datapoint count a graph needs to count as built. A built graph always passes, so in practice only an empty one does not. |
+| `RECALL_WARMUP_CACHE_TTL` | `recall.warmup_cache_ttl` | `60` | Seconds a "built" verdict is cached. A "not built" verdict is never cached, so the first recall after a build searches it. |
+
 ## Improve (self-improvement loop)
 
 The `improve` engine section is Python's `ImproveConfig` (`IMPROVE_*`).
