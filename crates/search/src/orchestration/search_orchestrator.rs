@@ -1207,6 +1207,7 @@ impl SearchOrchestrator {
     /// `session_turn`: run the session side effects (auto-feedback detection,
     /// saving the turn). Off for one dataset's run of a fan-out, which runs
     /// them once around all the runs instead.
+    #[allow(clippy::too_many_arguments)]
     async fn run_search(
         &self,
         request: &SearchRequest,
