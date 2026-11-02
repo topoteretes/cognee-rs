@@ -959,10 +959,19 @@ impl DeleteService {
                 DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
             })?;
 
-            // Stored files are content-addressed, so the rows of the same
-            // content in other datasets share this one: remove it only when
-            // this row is its last reference (Python
+            // The row goes first, so the reference count below sees the
+            // deletion: two concurrent deletes of rows sharing one stored
+            // file cannot each count the other and both keep it (Python
+            // `delete_data_entity` commits before
             // `remove_data_file_if_unreferenced`).
+            self.database.delete_data(*data_id).await.map_err(|error| {
+                DeleteError::Runtime(format!("Failed to delete data {data_id}: {error}"))
+            })?;
+            deleted_data += 1;
+
+            // Stored files are content-addressed, so the rows of the same
+            // content in other datasets share this one: remove it only once
+            // no row references it any more.
             let data = match data {
                 Some(data) => {
                     let references = self
@@ -974,7 +983,7 @@ impl DeleteService {
                                 "Failed to count references to the file of data {data_id}: {error}"
                             ))
                         })?;
-                    (references <= 1).then_some(data)
+                    (references == 0).then_some(data)
                 }
                 None => None,
             };
@@ -1003,11 +1012,6 @@ impl DeleteService {
                     }
                 }
             }
-
-            self.database.delete_data(*data_id).await.map_err(|error| {
-                DeleteError::Runtime(format!("Failed to delete data {data_id}: {error}"))
-            })?;
-            deleted_data += 1;
         }
 
         info!(
