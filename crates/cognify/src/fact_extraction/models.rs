@@ -162,7 +162,12 @@ pub struct Node {
     #[schemars(title = "Id")]
     pub id: String,
 
-    // Display name of the entity
+    // Display name of the entity. Python's `Node` declares `name: str = ""`
+    // and its `__init__` replaces a missing or empty name with the id
+    // (`cognee/shared/data_models.py:53,58-59`); `deserialize_nodes_checked` does
+    // the same on the raw values, so the field stays required in the schema
+    // (strict decoding requires every property, as Python's strict request
+    // does) and the request is unchanged.
     #[schemars(title = "Name")]
     pub name: String,
 
@@ -350,11 +355,34 @@ where
     // Checked on the raw values, before typed deserialization, for the same
     // reason `edges` is: a node whose `id` is fine but whose `type` is missing
     // would otherwise fail with the less useful of its two problems.
-    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
-    for entry in &raw {
+    let mut raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    for entry in &mut raw {
         check_raw_identifiers("nodes", entry).map_err(D::Error::custom)?;
+        default_node_name_to_id(entry);
     }
     serde_json::from_value(serde_json::Value::Array(raw)).map_err(D::Error::custom)
+}
+
+/// Python's `Node.__init__` (`cognee/shared/data_models.py:58-59`):
+/// `if not data.get("name"): data["name"] = data.get("id", "")`. A missing,
+/// `null` or empty `name` becomes the node's id; an entry that is not an
+/// object is left for typed deserialization to reject.
+fn default_node_name_to_id(entry: &mut serde_json::Value) {
+    let Some(object) = entry.as_object_mut() else {
+        return;
+    };
+    let unnamed = match object.get("name") {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(name)) => name.is_empty(),
+        Some(_) => false,
+    };
+    if unnamed {
+        let id = object
+            .get("id")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::String(String::new()));
+        object.insert("name".to_string(), id);
+    }
 }
 
 /// Deserialize `edges`, dropping individual entries that are not edges at all.
@@ -546,6 +574,25 @@ mod tests {
 
         let deserialized: Node = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.node_type, "PERSON");
+    }
+
+    /// Python's `Node.__init__` names an unnamed node after its id
+    /// (`cognee/shared/data_models.py:58-59`): a missing, `null` or empty
+    /// `name` becomes the id, a given name is kept.
+    #[test]
+    fn an_unnamed_node_is_named_after_its_id_as_in_python() {
+        let graph: KnowledgeGraph = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                {"id": "alice", "type": "Person", "description": "d"},
+                {"id": "bob", "name": null, "type": "Person", "description": "d"},
+                {"id": "carol", "name": "", "type": "Person", "description": "d"},
+                {"id": "dave", "name": "Dave D.", "type": "Person", "description": "d"}
+            ],
+            "edges": []
+        }))
+        .expect("nameless nodes deserialize as in Python");
+        let names: Vec<&str> = graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["alice", "bob", "carol", "Dave D."]);
     }
 
     #[test]
@@ -1305,10 +1352,11 @@ mod tests {
             ["description"],
             "only Edge.description may be described"
         );
-        // `required`: Python lists the fields without a default. Rust also
-        // requires `Node.name` and `KnowledgeGraph.nodes/edges` (a deliberate
-        // typed-deserialization choice, see the notes on the fields; strict mode
-        // requires every property anyway). Everything else must agree.
+        // `required`: Python lists the fields without a default. Rust's schema
+        // also lists `Node.name` and `KnowledgeGraph.nodes/edges` (strict mode,
+        // Python's default request, requires every property anyway). The data
+        // side follows Python: a missing `name` defaults to the id in
+        // `deserialize_nodes_checked`. Everything else must agree.
         let req = |v: &serde_json::Value| -> Vec<String> {
             let mut r: Vec<String> = v["required"]
                 .as_array()

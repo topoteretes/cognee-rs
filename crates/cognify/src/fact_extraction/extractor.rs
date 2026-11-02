@@ -682,13 +682,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_generic_knowledge_graph() {
-        // Verify that extract::<KnowledgeGraph> works (without post-processing)
+        // Verify that extract::<KnowledgeGraph> works without extract_facts'
+        // post-processing. The empty name still becomes the id: like Python's
+        // `Node.__init__`, deserializing a `KnowledgeGraph` names an unnamed
+        // node after its id.
         let llm = Arc::new(MockLlmEmptyName);
         let extractor = FactExtractor::new(llm);
 
         let graph: KnowledgeGraph = extractor.extract("Test text", None).await.unwrap();
-        // No post-processing: empty name stays empty (unlike extract_facts)
-        assert_eq!(graph.nodes[0].name, "");
+        assert_eq!(graph.nodes[0].name, graph.nodes[0].id);
     }
 
     #[tokio::test]
