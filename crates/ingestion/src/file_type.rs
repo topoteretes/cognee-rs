@@ -569,4 +569,33 @@ mod tests {
             Some("unstructured")
         );
     }
+
+    /// Preferred loaders are tried in the caller's order, not sorted:
+    /// `LoaderEngine.py:103-114` walks the `preferred_loaders` dict in
+    /// insertion order. Both loaders accept this `.docx`, so the order of the
+    /// names alone decides the route.
+    #[test]
+    fn preferred_loaders_are_tried_in_the_callers_order() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let doc = guess_file_type(b"x", "docx");
+        // "unstructured_loader" sorts after "text_loader"; each order wins.
+        assert_eq!(
+            route_loader_preferring(
+                "docx",
+                &doc,
+                &names(&["unstructured_loader", "text_loader"]),
+                |_| true
+            ),
+            Some("unstructured")
+        );
+        assert_eq!(
+            route_loader_preferring(
+                "docx",
+                &doc,
+                &names(&["text_loader", "unstructured_loader"]),
+                |_| true
+            ),
+            Some("text")
+        );
+    }
 }

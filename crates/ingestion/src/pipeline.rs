@@ -8,7 +8,6 @@
 //! - [`build_add_pipeline`] — build a composable cognee-core [`Pipeline`]
 //! - [`AddPipeline`] — convenience wrapper with a simple `add()` API
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, instrument};
@@ -60,11 +59,12 @@ pub struct AddParams {
     /// Loaders to try before the default priority order, as Python's
     /// `preferred_loaders`. The KEYS are Python loader names (`text_loader`,
     /// `pypdf_loader`, `image_loader`, `audio_loader`, `csv_loader`,
-    /// `code_loader`, `unstructured_loader`), tried in name order; Python's
-    /// per-loader config (the value) is not used. The first one that is
+    /// `code_loader`, `unstructured_loader`), tried in the order given (Python's
+    /// dict order, `LoaderEngine.py:103-114`); Python's per-loader config (the
+    /// value) is not used. The first one that is
     /// registered and accepts the file's type reads it; a name that is not
     /// registered is skipped, as Python's "Preferred Loader not registered".
-    pub preferred_loaders: Option<HashMap<String, String>>,
+    pub preferred_loaders: Option<Vec<(String, String)>>,
 
     /// Importance weight (0.0 to 1.0) for relevance scoring.
     pub importance_weight: Option<f64>,
@@ -1626,14 +1626,12 @@ struct AddParamsInjection {
     preferred_loaders: Arc<Vec<String>>,
 }
 
-/// The keys of `preferred_loaders` in name order: Python's dict order is the
-/// caller's, which a `HashMap` does not keep, so a fixed order stands in.
-fn sorted_loader_names(preferred: Option<&HashMap<String, String>>) -> Vec<String> {
-    let mut names: Vec<String> = preferred
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default();
-    names.sort();
-    names
+/// The keys of `preferred_loaders` in the caller's order, which is Python's
+/// dict order (`LoaderEngine.py:103-114`).
+fn loader_names(preferred: Option<&[(String, String)]>) -> Vec<String> {
+    preferred
+        .map(|pairs| pairs.iter().map(|(name, _)| name.clone()).collect())
+        .unwrap_or_default()
 }
 
 /// Build a persist task whose closure also patches the [`ProcessedInput`]
@@ -2022,7 +2020,7 @@ impl AddPipeline {
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
             dataset_locks: self.dataset_locks.clone(),
-            preferred_loaders: Arc::new(sorted_loader_names(params.preferred_loaders.as_ref())),
+            preferred_loaders: Arc::new(loader_names(params.preferred_loaders.as_deref())),
         };
 
         // ── Build the typed pipeline ─────────────────────────────────────
@@ -2183,6 +2181,20 @@ pub enum IngestionError {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loader_names_keep_the_callers_order() {
+        let pairs = vec![
+            ("unstructured_loader".to_string(), String::new()),
+            ("text_loader".to_string(), String::new()),
+            ("csv_loader".to_string(), String::new()),
+        ];
+        assert_eq!(
+            loader_names(Some(&pairs)),
+            ["unstructured_loader", "text_loader", "csv_loader"]
+        );
+        assert!(loader_names(None).is_empty());
+    }
     use cognee_database::{connect, initialize, ops};
     use cognee_graph::MockGraphDB;
     #[cfg(feature = "html-loader")]

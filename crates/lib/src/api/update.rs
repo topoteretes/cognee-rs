@@ -6,7 +6,6 @@
 //!
 //! Equivalent to Python's `cognee.api.v1.update.update()`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
@@ -113,7 +112,7 @@ pub async fn update(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     node_set: Option<Vec<String>>,
-    preferred_loaders: Option<HashMap<String, String>>,
+    preferred_loaders: Option<Vec<(String, String)>>,
     incremental_loading: bool,
     acl_db: Option<&dyn AclDb>,
     delete_service: &DeleteService,
