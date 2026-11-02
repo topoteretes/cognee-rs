@@ -12,7 +12,7 @@
 use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize};
 use cognee_graph::MockGraphDB;
-use cognee_ingestion::AddPipeline;
+use cognee_ingestion::{AddParams, AddPipeline};
 use cognee_models::{Data, DataInput};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_vector::MockVectorDB;
@@ -118,13 +118,79 @@ async fn a_binary_no_loader_claims_fails() {
     assert!(err.contains("No loader found"), "unexpected error: {err}");
 }
 
-/// A PNG without an image loader fails, whatever its name.
+/// A PNG without an image loader fails, whatever its name. By content it
+/// routes to the image loader: a name that says "image" finds none registered;
+/// one that does not fails at the vision call's MIME lookup (as Python).
 #[tokio::test]
 async fn a_png_without_an_image_loader_fails_by_content() {
-    for name in ["image", "image.jpg"] {
-        let err = add_one(name, PNG_BYTES).await.unwrap_err();
-        assert!(err.contains("image"), "{name}: unexpected error: {err}");
-    }
+    let err = add_one("image.jpg", PNG_BYTES).await.unwrap_err();
+    assert!(
+        err.contains("Unsupported document type at ingest: image"),
+        "image.jpg: unexpected error: {err}"
+    );
+    let err = add_one("image", PNG_BYTES).await.unwrap_err();
+    assert!(
+        err.contains(
+            "Could not determine MIME type for image file: image. Is the extension correct?"
+        ),
+        "image: unexpected error: {err}"
+    );
+}
+
+/// `AddParams::preferred_loaders` names Python loaders, tried before the
+/// default priority order (`LoaderEngine.py:103-114`); a name that is not
+/// registered, or whose loader does not accept the file, is skipped.
+/// `unstructured_loader` does not accept a `.txt` file and `not_a_loader`
+/// is not a loader, so the file reads with `text_loader`.
+#[tokio::test]
+async fn a_preferred_loader_that_does_not_accept_the_file_is_skipped() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _storage) = make_pipeline(&dir).await;
+    let rows = pipeline
+        .add_with_params(
+            vec![file_input(&dir, "a.txt", b"hello")],
+            "routing",
+            Uuid::new_v4(),
+            None,
+            &AddParams {
+                preferred_loaders: Some(
+                    ["unstructured_loader", "not_a_loader"]
+                        .iter()
+                        .map(|n| (n.to_string(), String::new()))
+                        .collect(),
+                ),
+                ..AddParams::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows[0].loader_engine.as_deref(), Some("text_loader"));
+}
+
+/// A preferred loader that accepts the file reads it.
+#[cfg(feature = "csv-loader")]
+#[tokio::test]
+async fn a_preferred_loader_that_accepts_the_file_is_used() {
+    let dir = TempDir::new().expect("tempdir");
+    let (pipeline, _storage) = make_pipeline(&dir).await;
+    let rows = pipeline
+        .add_with_params(
+            vec![file_input(&dir, "a.csv", b"a,b\n1,2\n")],
+            "routing",
+            Uuid::new_v4(),
+            None,
+            &AddParams {
+                preferred_loaders: Some(
+                    [("csv_loader".to_string(), String::new())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..AddParams::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows[0].loader_engine.as_deref(), Some("csv_loader"));
 }
 
 /// A `.csv` is not sniffed.

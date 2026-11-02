@@ -248,7 +248,46 @@ fn can_handle(doc_type: &str, ext: &str, mime: &str) -> bool {
 /// A local `.html`/`.htm` file whose bytes sniff as plain text goes to the
 /// `html` loader, which extracts its text. Python's text loader would store
 /// the markup instead; that is the documented difference of D14.
+#[cfg(test)]
 pub(crate) fn route_loader(path_ext: &str, sniffed: &FileType) -> Option<&'static str> {
+    route_loader_preferring(path_ext, sniffed, &[], |_| true)
+}
+
+/// Python loader names (`loader_name`) a caller can prefer, with the document
+/// type Rust reads them with and the Python loader whose `can_handle` they
+/// share. `code_loader` has no Rust loader of its own, so it reads as `text`.
+const PREFERRABLE: [(&str, &str, &str); 7] = [
+    ("code_loader", "text", "code"),
+    ("text_loader", "text", "text"),
+    ("pypdf_loader", "pdf", "pdf"),
+    ("image_loader", "image", "image"),
+    ("audio_loader", "audio", "audio"),
+    ("csv_loader", "csv", "csv"),
+    ("unstructured_loader", "unstructured", "unstructured"),
+];
+
+/// [`route_loader`] with the caller's `preferred` loader names tried first, as
+/// `LoaderEngine.get_loader` does with `preferred_loaders`
+/// (`LoaderEngine.py:103-114`): the first preferred loader that is registered
+/// (`is_registered`, by document type) and whose `can_handle` accepts the file
+/// wins, before the default priority order. A name that is not registered, or
+/// is not one of Rust's loaders, is skipped.
+pub(crate) fn route_loader_preferring(
+    path_ext: &str,
+    sniffed: &FileType,
+    preferred: &[String],
+    is_registered: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    for name in preferred {
+        if let Some((_, doc_type, python_loader)) =
+            PREFERRABLE.iter().find(|(python, _, _)| python == name)
+            && is_registered(doc_type)
+            && (can_handle(python_loader, path_ext, &sniffed.mime)
+                || can_handle(python_loader, &sniffed.extension, &sniffed.mime))
+        {
+            return Some(doc_type);
+        }
+    }
     if matches!(path_ext.to_lowercase().as_str(), "html" | "htm") && sniffed.mime == "text/plain" {
         return Some("html");
     }
@@ -491,5 +530,43 @@ mod tests {
     #[test]
     fn html_bytes_that_are_binary_do_not_take_the_html_route() {
         assert_eq!(route(PNG, "html"), Some("image"));
+    }
+
+    #[test]
+    fn preferred_loaders_are_tried_first_and_must_accept_and_be_registered() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let t = guess_file_type(PNG, "");
+        // Accepts, registered: taken.
+        assert_eq!(
+            route_loader_preferring("", &t, &names(&["image_loader"]), |_| true),
+            Some("image")
+        );
+        // Python's `code_loader` reads as the text document type.
+        let py = guess_file_type(b"print(1)", "py");
+        assert_eq!(
+            route_loader_preferring("py", &py, &names(&["code_loader"]), |_| true),
+            Some("text")
+        );
+        // A preferred loader that does not accept the file is skipped, as is
+        // an unknown name and an unregistered loader; the default order wins.
+        let txt = guess_file_type(b"hi", "txt");
+        assert_eq!(
+            route_loader_preferring(
+                "txt",
+                &txt,
+                &names(&["image_loader", "nope", "csv_loader", "text_loader"]),
+                |doc_type| doc_type != "text"
+            ),
+            Some("text")
+        );
+        // The preference changes the route: bytes that sniff as text but are
+        // named `.docx` go to `text` by default (its sniffed-extension check
+        // comes first), and to `unstructured` when that loader is preferred.
+        let doc = guess_file_type(b"x", "docx");
+        assert_eq!(route_loader("docx", &doc), Some("text"));
+        assert_eq!(
+            route_loader_preferring("docx", &doc, &names(&["unstructured_loader"]), |_| true),
+            Some("unstructured")
+        );
     }
 }

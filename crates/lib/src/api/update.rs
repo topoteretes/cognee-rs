@@ -83,7 +83,7 @@ pub struct UpdateResult {
 ///   the delete and the add target `dataset_id`.
 /// * `owner_id` / `tenant_id` - Ownership context.
 /// * `node_set` - Optional graph node identifiers for access-control grouping.
-/// * `preferred_loaders` - Optional MIME-type-to-loader-name overrides.
+/// * `preferred_loaders` - Optional loaders to try first; the keys are Python loader names (see `AddParams::preferred_loaders`).
 /// * `incremental_loading` - When `true`, skip re-adding content already present.
 /// * `acl_db` - Optional ACL backend; when provided, a `write` permission check
 ///   is performed before any mutation.

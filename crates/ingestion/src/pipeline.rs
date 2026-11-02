@@ -57,7 +57,13 @@ pub struct AddParams {
     /// Target an existing dataset by UUID instead of name.
     pub dataset_id: Option<Uuid>,
 
-    /// Maps MIME types or file extensions to preferred loader names.
+    /// Loaders to try before the default priority order, as Python's
+    /// `preferred_loaders`. The KEYS are Python loader names (`text_loader`,
+    /// `pypdf_loader`, `image_loader`, `audio_loader`, `csv_loader`,
+    /// `code_loader`, `unstructured_loader`), tried in name order; Python's
+    /// per-loader config (the value) is not used. The first one that is
+    /// registered and accepts the file's type reads it; a name that is not
+    /// registered is skipped, as Python's "Preferred Loader not registered".
     pub preferred_loaders: Option<HashMap<String, String>>,
 
     /// Importance weight (0.0 to 1.0) for relevance scoring.
@@ -157,7 +163,6 @@ pub async fn process_input(
 /// (`file_type.rs`): a file no loader claims fails with
 /// [`IngestionError::NoLoaderForFile`], and one whose document type has no
 /// loader in `loaders` fails with [`IngestionError::UnsupportedDocumentType`].
-#[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
 pub async fn process_input_with_loaders(
     input: &DataInput,
     storage: &dyn StorageTrait,
@@ -165,6 +170,30 @@ pub async fn process_input_with_loaders(
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_preferring(
+        input,
+        storage,
+        loaders,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        &[],
+    )
+    .await
+}
+
+/// Like [`process_input_with_loaders`], trying the Python loader names in
+/// `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+#[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
+pub async fn process_input_preferring(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    loaders: &LoaderRegistry,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    preferred_loaders: &[String],
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -302,13 +331,18 @@ pub async fn process_input_with_loaders(
             "text".to_string()
         } else {
             let sniffed = crate::file_type::guess_file_type(&collected, &original_extension);
-            let doc_type = crate::file_type::route_loader(&original_extension, &sniffed)
-                .ok_or_else(|| {
-                    Box::new(IngestionError::NoLoaderForFile {
-                        extension: sniffed.extension.clone(),
-                        mime_type: sniffed.mime.clone(),
-                    }) as Box<dyn std::error::Error>
-                })?;
+            let doc_type = crate::file_type::route_loader_preferring(
+                &original_extension,
+                &sniffed,
+                preferred_loaders,
+                |doc_type| registry.get(doc_type).is_some(),
+            )
+            .ok_or_else(|| {
+                Box::new(IngestionError::NoLoaderForFile {
+                    extension: sniffed.extension.clone(),
+                    mime_type: sniffed.mime.clone(),
+                }) as Box<dyn std::error::Error>
+            })?;
             // Python's vision call takes the MIME type from the NAME
             // (`mimetypes.guess_type`, `native_adapter.py:633-638`), so an
             // image whose name does not say "image" is routed to the image
@@ -1495,18 +1529,40 @@ pub fn make_process_input_task_with_loaders(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_preferring(
+        storage,
+        loaders,
+        Arc::new(Vec::new()),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+}
+
+/// [`make_process_input_task_with_loaders`] that tries the Python loader names
+/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+fn make_process_input_task_preferring(
+    storage: Arc<dyn StorageTrait>,
+    loaders: Arc<LoaderRegistry>,
+    preferred_loaders: Arc<Vec<String>>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let loaders = Arc::clone(&loaders);
+        let preferred_loaders = Arc::clone(&preferred_loaders);
         Box::pin(async move {
-            process_input_with_loaders(
+            process_input_preferring(
                 &input,
                 &*storage,
                 &loaders,
                 hash_algorithm,
                 owner_id,
                 tenant_id,
+                &preferred_loaders,
             )
             .await
             .map(Box::new)
@@ -1566,6 +1622,18 @@ struct AddParamsInjection {
     /// by embedders that serve concurrent requests — see
     /// [`AddPipeline::with_dataset_locks`].
     dataset_locks: Option<Arc<DatasetLocks>>,
+    /// Python loader names to try first (`AddParams::preferred_loaders` keys).
+    preferred_loaders: Arc<Vec<String>>,
+}
+
+/// The keys of `preferred_loaders` in name order: Python's dict order is the
+/// caller's, which a `HashMap` does not keep, so a fixed order stands in.
+fn sorted_loader_names(preferred: Option<&HashMap<String, String>>) -> Vec<String> {
+    let mut names: Vec<String> = preferred
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    names.sort();
+    names
 }
 
 /// Build a persist task whose closure also patches the [`ProcessedInput`]
@@ -1685,9 +1753,10 @@ fn build_add_pipeline_internal(
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
-        make_process_input_task_with_loaders(
+        make_process_input_task_preferring(
             Arc::clone(&storage),
             loaders,
+            Arc::clone(&add_params.preferred_loaders),
             hash_algorithm,
             owner_id,
             tenant_id,
@@ -1953,6 +2022,7 @@ impl AddPipeline {
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
             dataset_locks: self.dataset_locks.clone(),
+            preferred_loaders: Arc::new(sorted_loader_names(params.preferred_loaders.as_ref())),
         };
 
         // ── Build the typed pipeline ─────────────────────────────────────

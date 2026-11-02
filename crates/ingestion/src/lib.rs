@@ -32,8 +32,8 @@ pub use pipeline::{
     build_add_pipeline_with_acl, make_persist_data_task, make_persist_data_task_with_acl,
     make_process_input_task, make_process_input_task_with_loaders, persist_data,
     persist_data_with_acl, persist_data_with_acl_and_locks, process_input,
-    process_input_with_loaders, validate_add_inputs, validate_item_node_set,
-    validate_node_set_names,
+    process_input_preferring, process_input_with_loaders, validate_add_inputs,
+    validate_item_node_set, validate_node_set_names,
 };
 // `UrlMetadata`/`ResolvedUrlInput` are plain data types and stay always-on so
 // `pipeline.rs` signatures compile without the feature; `resolve_url_input`

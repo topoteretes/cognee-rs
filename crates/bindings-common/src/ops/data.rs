@@ -213,7 +213,7 @@ pub async fn update(
         .and_then(|v| v.as_object())
         .map(|obj| {
             obj.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned()))
                 .collect()
         });
     let incremental_loading = opts
