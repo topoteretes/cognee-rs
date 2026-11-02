@@ -449,15 +449,17 @@ async fn conversational_feedback_persists_to_prior_entry() {
         .await
         .unwrap();
 
-    // The MockLlm queue: first response is for feedback detection
-    // (feedback_detected=true, score=5, not a follow-up question → pure feedback
-    // so the search returns early without hitting the retriever).
+    // Session-turn analysis identifies a rating-only feedback turn.
     let feedback_json = serde_json::to_string(&serde_json::json!({
-        "feedback_detected": true,
-        "feedback_text": "Great answer!",
-        "feedback_score": 5.0,
         "response_to_user": "Thank you for the feedback!",
-        "contains_followup_question": false
+        "query_to_answer": null,
+        "served_context_ratings": [],
+        "candidate_context_updates": [{
+            "section": "preferences",
+            "content": "Values concise answers",
+            "confidence": 0.9
+        }],
+        "previous_answer_rating": 5
     }))
     .unwrap();
 
@@ -510,33 +512,27 @@ async fn conversational_feedback_persists_to_prior_entry() {
         .await
         .expect("reading session entries must succeed");
 
-    // The original entry must now carry the feedback.
+    // Inferred feedback must not overwrite explicit QA feedback fields.
     let prior = entries
         .iter()
         .find(|e| e.question == "first question")
         .expect("original QA entry must still exist");
 
-    assert_eq!(
-        prior.feedback_text.as_deref(),
-        Some("Great answer!"),
-        "feedback_text must be persisted to the prior entry"
-    );
-    assert_eq!(
-        prior.feedback_score,
-        Some(5),
-        "feedback_score must be persisted to the prior entry"
-    );
-
-    // feedback_weights_applied must be false (reset by add_feedback).
-    let memify = prior
-        .memify_metadata
-        .as_ref()
-        .expect("memify_metadata must be set after add_feedback");
-    assert_eq!(
-        memify.get("feedback_weights_applied"),
-        Some(&false),
-        "feedback_weights_applied must be false after feedback is stored"
-    );
+    assert!(prior.feedback_text.is_none());
+    assert!(prior.feedback_score.is_none());
+    let context = session_manager
+        .get_session_context_entries(Some(session_id), None)
+        .await
+        .unwrap();
+    assert!(context.iter().any(|row| {
+        row.get("kind").and_then(serde_json::Value::as_str) == Some("feedback")
+            && row
+                .get("referenced_qa_rating")
+                .and_then(serde_json::Value::as_i64)
+                == Some(5)
+            && row.get("raw_text").and_then(serde_json::Value::as_str)
+                == Some("That was a great answer!")
+    }));
 }
 
 // ---------------------------------------------------------------------------

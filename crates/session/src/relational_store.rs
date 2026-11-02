@@ -208,8 +208,11 @@ impl SessionStore for RelationalSessionStore {
         updates: SessionQAUpdate,
     ) -> Result<bool, SessionError> {
         let patch = update_to_patch(updates)?;
+        let normalized_qa_id = uuid::Uuid::parse_str(qa_id)
+            .map(|id| id.simple().to_string())
+            .unwrap_or_else(|_| qa_id.to_string());
         self.db
-            .update_session_qa_entry(session_id, user_id, qa_id, patch)
+            .update_session_qa_entry(session_id, user_id, &normalized_qa_id, patch)
             .await
             .map_err(store_err)
     }
