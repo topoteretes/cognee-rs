@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee_cognify::{CognifyConfig, cognify};
-use cognee_database::ops::datasets::create_dataset;
+use cognee_database::ops::data::create_data;
+use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
 use cognee_database::pipelines::repository::PipelineRunRow;
 use cognee_database::{
     DatabaseConnection, DatabaseError as DbError, PipelineRun, PipelineRunRepository,
@@ -52,7 +53,9 @@ enum Fail {
 /// Delegates to a real repository, failing the writes `fail` names.
 struct FailingTerminalRepo {
     inner: Arc<dyn PipelineRunRepository>,
-    fail: Fail,
+    /// Switchable between runs; a std mutex is fine, it is never held across
+    /// an await.
+    fail: std::sync::Mutex<Fail>,
 }
 
 #[async_trait]
@@ -66,7 +69,9 @@ impl PipelineRunRepository for FailingTerminalRepo {
         status: PipelineRunStatus,
         run_info: Option<serde_json::Value>,
     ) -> Result<Uuid, DbError> {
-        let rejected = match self.fail {
+        // lock poison is unrecoverable
+        let fail = *self.fail.lock().unwrap();
+        let rejected = match fail {
             Fail::Nothing => false,
             Fail::Completed => status == PipelineRunStatus::Completed,
             Fail::Terminal => status != PipelineRunStatus::Started,
@@ -152,6 +157,13 @@ struct Outcome {
 /// Run one cognify with `ownership_dir` as the marker root, the repository
 /// failing the writes `fail` names.
 async fn run_cognify(ownership_dir: &Path, fail: Fail) -> Outcome {
+    run_cognify_runs(ownership_dir, &[fail]).await
+}
+
+/// Run cognify once per entry of `runs` over the same dataset and item, the
+/// repository failing the writes that entry names. The outcome's `result` is
+/// the last run's; its `statuses` are every row of the dataset.
+async fn run_cognify_runs(ownership_dir: &Path, runs: &[Fail]) -> Outcome {
     let owner_id = Uuid::new_v4();
     let dataset_id = Uuid::new_v4();
     let llm: Arc<dyn cognee_llm::Llm> = Arc::new(
@@ -197,35 +209,53 @@ async fn run_cognify(ownership_dir: &Path, fail: Fail) -> Outcome {
         )
         .await
         .expect("seed dataset");
+        // Persisted and attached, so its completion marker is stored and a
+        // second run over it finds nothing to do.
+        create_data(&conn, item.clone())
+            .await
+            .expect("persist the Data row");
+        attach_data_to_dataset(&conn, dataset_id, data_id)
+            .await
+            .expect("attach to the dataset");
         Arc::new(conn)
     };
     let real_repo: Arc<dyn PipelineRunRepository> =
         Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&db)));
-    let repo: Arc<dyn PipelineRunRepository> = Arc::new(FailingTerminalRepo {
+    let failing = Arc::new(FailingTerminalRepo {
         inner: Arc::clone(&real_repo),
-        fail,
+        fail: std::sync::Mutex::new(Fail::Nothing),
     });
+    let repo: Arc<dyn PipelineRunRepository> = Arc::clone(&failing) as _;
     let thread_pool: Arc<dyn cognee_core::CpuPool> =
         Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("pool"));
 
-    let result = cognify(
-        vec![item],
-        dataset_id,
-        Some(owner_id),
-        None,
-        None,
-        llm,
-        storage,
-        graph_db,
-        vector_db,
-        embedding,
-        db,
-        repo,
-        thread_pool,
-        Arc::new(NoOpOntologyResolver::new()),
-        &CognifyConfig::default().with_run_ownership_dir(ownership_dir),
-    )
-    .await;
+    let config = CognifyConfig::default().with_run_ownership_dir(ownership_dir);
+    let mut result = None;
+    for fail in runs {
+        // lock poison is unrecoverable
+        *failing.fail.lock().unwrap() = *fail;
+        result = Some(
+            cognify(
+                vec![item.clone()],
+                dataset_id,
+                Some(owner_id),
+                None,
+                None,
+                Arc::clone(&llm),
+                Arc::clone(&storage),
+                Arc::clone(&graph_db),
+                Arc::clone(&vector_db),
+                Arc::clone(&embedding),
+                Arc::clone(&db) as _,
+                Arc::clone(&repo),
+                Arc::clone(&thread_pool),
+                Arc::new(NoOpOntologyResolver::new()),
+                &config,
+            )
+            .await,
+        );
+    }
+    let result = result.expect("at least one run");
     let mut rows = real_repo
         .list_recent(Some(dataset_id), 50)
         .await
@@ -302,5 +332,39 @@ async fn the_marker_stays_when_no_terminal_row_could_be_written() {
         marker_count(dir.path()),
         1,
         "the marker of a run whose terminal row was not written must survive"
+    );
+}
+
+/// The run that found every item already cognified writes its own
+/// `STARTED` / `COMPLETED` pair outside the executor. Its failed `COMPLETED`
+/// write fails it the same way (Python runs it through `run_tasks` like any
+/// other run, `run_tasks.py:331,356,390`): an error and an `ERRORED` row. The
+/// earlier run's graph stays, as Python's rollback handler skips items the run
+/// found already completed (`cognify/rollback.py`, `_extract_data_ids`).
+#[tokio::test]
+async fn a_failed_completed_write_fails_the_run_that_had_no_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_cognify_runs(dir.path(), &[Fail::Nothing, Fail::Completed]).await;
+    let err = out
+        .result
+        .expect_err("a run whose COMPLETED row was not written has failed");
+    assert!(
+        err.to_string().contains("COMPLETED record"),
+        "the error names the failed record write: {err}"
+    );
+    assert_eq!(
+        out.statuses,
+        vec![
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Completed,
+            PipelineRunStatus::Started,
+            PipelineRunStatus::Errored,
+        ],
+    );
+    assert!(out.graph_nodes > 0, "the first run's graph is kept");
+    assert_eq!(
+        marker_count(dir.path()),
+        0,
+        "both runs reached a terminal row"
     );
 }
