@@ -1394,6 +1394,8 @@ explicit per-lane knob is never capped). The effective defaults are:
 | `chunk_lane_fusion` | `chunk_lane_fusion` | `"relative_score"` | **diverges** — Python is rank-only RRF (`"reciprocal_rank"`) |
 | `summary_lane_weight` | `summary_lane_weight` | `0.75` | no Python equivalent |
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
+| `include_external_metadata` | `include_external_metadata` | `false` | `include_external_metadata=False` |
+| `external_metadata_keys` | `external_metadata_keys` | `[]` | `external_metadata_keys=None` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
 | `candidate_top_k` | `candidate_top_k` | `top_k * 4` (TEMPORAL only) | `candidate_top_k` (defaults to `top_k * 4`) |
@@ -1407,6 +1409,16 @@ its chunk and entity lanes are sized by `candidate_top_k` and its fact lane by
 time-window rerank then cuts the candidates back to `top_k`. A `top_k` of `0`
 or a `candidate_top_k` below `top_k` is rejected with `InvalidInput`, as in
 Python.
+
+**External metadata.** Metadata is opt-in and allowlist-only. When
+`include_external_metadata` is false (the default), the raw stored value is
+removed from returned passage objects and completion context. When true, only
+non-null keys named by `external_metadata_keys` are returned and rendered as
+`key: value` lines above a passage. Missing, malformed, and non-object values
+produce `external_metadata: null` and do not fail search. This PR is a consumer
+only: SDK-1057 owns copying metadata to normal chunk and DLT vector payloads.
+Existing datasets need re-cognification after that producer lands; there is no
+backfill or migration in SDK-1045.
 
 **Chunk-lane fusion.** `chunk_lane_fusion` chooses how the `DocumentChunk_text`
 lane and the `TextSummary_text` lane are combined:

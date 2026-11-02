@@ -285,7 +285,11 @@ impl Harness {
         let uuid = Uuid::parse_str(&id(name)).unwrap();
         let mut point = VectorPoint::new(uuid, vec![0.0, 1.0])
             .with_metadata("id", json!(id(name)))
-            .with_metadata("text", json!(format!("text of {name}")));
+            .with_metadata("text", json!(format!("text of {name}")))
+            .with_metadata(
+                "external_metadata",
+                json!(r#"{"allowed":"visible","secret":"hidden"}"#),
+            );
         if !sets.is_empty() {
             point = point.with_metadata("belongs_to_set", json!(sets));
         }
@@ -744,6 +748,12 @@ async fn the_window_adds_the_chunks_it_points_at_but_not_entities() {
         kind_ids(&result.context, "chunk"),
         names(&["c1", "r2", "r1", "r3"])
     );
+    assert!(result.context.iter().all(|item| {
+        !item
+            .payload
+            .as_object()
+            .is_some_and(|payload| payload.contains_key("external_metadata"))
+    }));
     assert_eq!(
         kind_ids(&result.diagnostics.baseline, "chunk"),
         names(&["c1", "c2", "c3"])
