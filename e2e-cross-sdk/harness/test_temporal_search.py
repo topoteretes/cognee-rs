@@ -94,7 +94,7 @@ def both_cognified(tmp_path):
     # Timestamp node in about a third of the captured runs, where the same prompt
     # and schema under ``json_schema`` (Python's request) did far better. So the
     # Rust side is pinned to Python's request shape here, to compare like with
-    # like. Changing Rust's default mode is a separate decision (SDK-630).
+    # like. Changing Rust's default mode is a separate decision (SDK-1377).
     write_rust_config(rust_ws, extra={"llm_structured_output_mode": "json_schema"})
 
     result = run_rust_cli(
