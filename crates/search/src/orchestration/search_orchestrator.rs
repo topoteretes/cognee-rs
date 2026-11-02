@@ -18,6 +18,50 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn conversational_query(session: &SessionContext, query: &str) -> Option<String> {
+    (!session.formatted_history.trim().is_empty()).then(|| {
+        format!(
+            "Recent conversation:\n{}\n\nCurrent question:\n{}",
+            session.formatted_history, query
+        )
+    })
+}
+
+async fn retrieve_session_context(
+    retriever: &crate::retrievers::SearchRetrieverRef,
+    query: &str,
+    session: &SessionContext,
+    params: &SearchParams,
+) -> Result<SearchContext, SearchError> {
+    let Some(conversational) = conversational_query(session, query) else {
+        return retriever.get_context(query, params).await;
+    };
+    let (raw, contextual) = tokio::join!(
+        retriever.get_context(query, params),
+        retriever.get_context(&conversational, params)
+    );
+    let mut merged = match (raw, contextual) {
+        (Ok(mut raw), Ok(contextual)) => {
+            raw.extend(contextual);
+            raw
+        }
+        (Ok(raw), Err(error)) | (Err(error), Ok(raw)) => {
+            tracing::warn!(%error, "one session retrieval lane failed open");
+            raw
+        }
+        (Err(error), Err(_)) => return Err(error),
+    };
+    let mut seen = std::collections::HashSet::new();
+    merged.retain(|item| {
+        let key = item
+            .id
+            .map(|id| format!("id:{id}"))
+            .unwrap_or_else(|| format!("payload:{}", item.payload));
+        seen.insert(key)
+    });
+    Ok(merged)
+}
+
 /// Fire-and-forget product analytics event for the start of a search.
 ///
 /// Mirrors Python `send_telemetry("cognee.search EXECUTION STARTED", ...)`
@@ -1033,6 +1077,7 @@ impl SearchOrchestrator {
         let mut fanout_turn_guard = None;
         let mut fanout_analysis = None;
         let mut fanout_session = None;
+        let mut fanout_commit_snapshot = None;
 
         // Python prepares exactly one turn before a generative completion. Raw
         // retrieval modes and previews deliberately skip this LLM call.
@@ -1212,9 +1257,11 @@ impl SearchOrchestrator {
             );
             let entries = entries.unwrap_or_default();
             let rows = rows.unwrap_or_default();
+            let history_start = entries.len().saturating_sub(manager.history_limit());
+            let history_entries = &entries[history_start..];
             fanout_session = Some(SessionContext {
                 session_id: Some(session_id.clone()),
-                history: entries
+                history: history_entries
                     .iter()
                     .flat_map(|entry| {
                         [
@@ -1223,25 +1270,31 @@ impl SearchOrchestrator {
                         ]
                     })
                     .collect(),
-                formatted_history: SessionManager::format_entries(&entries),
+                formatted_history: SessionManager::format_entries(history_entries),
             });
+            fanout_commit_snapshot = Some((
+                Arc::clone(&manager),
+                session_id.clone(),
+                user_id.clone(),
+                entries.clone(),
+                rows.clone(),
+            ));
             let query = request.query_text.clone();
-            fanout_analysis = Some(tokio::spawn(async move {
-                if auto_feedback {
-                    super::session_turn::prepare_session_turn_from_snapshot(
-                        &manager,
-                        llm.as_ref(),
-                        &session_id,
-                        user_id.as_deref(),
-                        &query,
-                        &entries,
-                        &rows,
-                    )
-                    .await
-                } else {
-                    super::session_turn::SessionTurnPreparation::pass_through(&query)
-                }
-            }));
+            fanout_analysis = Some(concurrent_session::AbortOnDrop::new(tokio::spawn(
+                async move {
+                    if auto_feedback {
+                        super::session_turn::analyze_session_turn_from_snapshot(
+                            llm.as_ref(),
+                            &query,
+                            &entries,
+                            &rows,
+                        )
+                        .await
+                    } else {
+                        super::session_turn::SessionTurnPreparation::pass_through(&query)
+                    }
+                },
+            )));
         }
 
         // The session side effects run once for the whole search, not once per
@@ -1385,10 +1438,22 @@ impl SearchOrchestrator {
 
         let merged = merge_dataset_results(request, results.clone());
         if let Some(handle) = fanout_analysis {
-            let preparation = handle.await.unwrap_or_else(|error| {
+            let mut preparation = handle.join().await.unwrap_or_else(|error| {
                 tracing::warn!(%error, "concurrent fan-out analysis task failed open");
                 super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
             });
+            if let Some((manager, session_id, user_id, entries, rows)) = fanout_commit_snapshot {
+                super::session_turn::commit_session_turn_analysis(
+                    &manager,
+                    &session_id,
+                    user_id.as_deref(),
+                    &request.query_text,
+                    &mut preparation,
+                    &entries,
+                    &rows,
+                )
+                .await;
+            }
             if !preparation.should_answer {
                 let answer = preparation
                     .response_to_user
@@ -1492,7 +1557,13 @@ impl SearchOrchestrator {
         let include_context =
             request.only_context() || request.use_combined_context() || keep_context;
         let context = if include_context {
-            let ctx = retriever.get_context(&request.query_text, &params).await?;
+            let ctx = match session_snapshot {
+                Some(session) => {
+                    retrieve_session_context(retriever, &request.query_text, session, &params)
+                        .await?
+                }
+                None => retriever.get_context(&request.query_text, &params).await?,
+            };
 
             if self.enable_access_tracking {
                 self.track_access(&ctx).await;
@@ -1700,7 +1771,9 @@ impl SearchOrchestrator {
         );
         let entries = entries.unwrap_or_default();
         let rows = rows.unwrap_or_default();
-        let history = entries
+        let history_start = entries.len().saturating_sub(manager.history_limit());
+        let history_entries = &entries[history_start..];
+        let history = history_entries
             .iter()
             .flat_map(|entry| {
                 [
@@ -1712,16 +1785,13 @@ impl SearchOrchestrator {
         let session = SessionContext {
             session_id: Some(session_id.to_owned()),
             history,
-            formatted_history: SessionManager::format_entries(&entries),
+            formatted_history: SessionManager::format_entries(history_entries),
         };
 
         let analysis_lane = async {
             if auto_feedback {
-                super::session_turn::prepare_session_turn_from_snapshot(
-                    manager,
+                super::session_turn::analyze_session_turn_from_snapshot(
                     llm.as_ref(),
-                    session_id,
-                    user_id.as_deref(),
                     &request.query_text,
                     &entries,
                     &rows,
@@ -1732,7 +1802,8 @@ impl SearchOrchestrator {
             }
         };
         let answer_lane = async {
-            let context = retriever.get_context(&request.query_text, &params).await?;
+            let context =
+                retrieve_session_context(retriever, &request.query_text, &session, &params).await?;
             if self.enable_access_tracking {
                 self.track_access(&context).await;
             }
@@ -1746,8 +1817,18 @@ impl SearchOrchestrator {
                 .await?;
             Ok::<_, SearchError>((context, output))
         };
-        let (preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
+        let (mut preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
         let (context, generated) = answer_result?;
+        super::session_turn::commit_session_turn_analysis(
+            manager,
+            session_id,
+            user_id.as_deref(),
+            &request.query_text,
+            &mut preparation,
+            &entries,
+            &rows,
+        )
+        .await;
 
         if !preparation.should_answer {
             let answer = preparation
@@ -2986,9 +3067,11 @@ mod tests {
         assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
         let mut seen = scopes.lock().unwrap().clone();
         seen.sort_unstable();
-        let mut expected = vec![a, b];
+        // Each dataset runs the raw and conversational retrieval lanes in the
+        // same dataset scope before their results are merged.
+        let mut expected = vec![a, a, b, b];
         expected.sort_unstable();
-        assert_eq!(seen, expected, "each answer stayed in its dataset scope");
+        assert_eq!(seen, expected, "each retrieval stayed in its dataset scope");
         let entries = manager
             .get_session(Some("fanout"), Some(&user.to_string()))
             .await
