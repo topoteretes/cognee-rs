@@ -120,10 +120,6 @@ pub(crate) async fn search_collection(
         return Ok(vec![]);
     }
 
-    if limit == 0 {
-        return Ok(vec![]);
-    }
-
     if !vector_db.has_collection(data_type, field).await? {
         tracing::debug!("{data_type}_{field} collection not found; using empty channel");
         return Ok(vec![]);
@@ -156,6 +152,10 @@ pub(crate) async fn search_collections(
     node_name: Option<&[String]>,
     node_name_filter_operator: &str,
 ) -> Result<Vec<SearchItem>, SearchError> {
+    if limit == 0 {
+        return Ok(vec![]);
+    }
+
     let mut hits = Vec::new();
     for &(data_type, field) in collections {
         let mut channel = if known_existing == Some((data_type, field)) {
@@ -318,7 +318,9 @@ async fn load_summary_text_for_ranked_pairs(
         }
 
         let Some(summary) = summaries_by_id.get(&summary_id) else {
-            tracing::warn!(%chunk_id, "DocumentChunk_text row has no paired TextSummary_text row");
+            // Summaries are optional enrichment. This is the normal path for
+            // DLT rows and for document chunks whose producer emitted no
+            // TextSummary row, matching Python's silent skip.
             continue;
         };
 
