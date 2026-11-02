@@ -34,7 +34,7 @@ use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 impl DeleteScope {
@@ -949,38 +949,53 @@ impl DeleteService {
             deleted_data += 1;
 
             // Stored files are content-addressed, so the rows of the same
-            // content in other datasets share this one: remove it only once
-            // no row references it any more.
-            let data = match data {
-                Some(data) => {
-                    let references = self
-                        .database
-                        .count_data_location_references(&data.raw_data_location)
-                        .await
-                        .map_err(|error| {
-                            DeleteError::Runtime(format!(
-                                "Failed to count references to the file of data {data_id}: {error}"
-                            ))
-                        })?;
-                    (references == 0).then_some(data)
+            // content in other datasets share them: remove each location
+            // only once no row references it any more. Python removes
+            // `raw_data_location` and then `original_data_location`, each
+            // separately (`SqlAlchemyAdapter.delete_data_entity`); since
+            // add runs the loader, the two differ for an image, audio or
+            // HTML input.
+            let Some(data) = data else { continue };
+            let mut locations = vec![(data.raw_data_location.clone(), false)];
+            if data.original_data_location != data.raw_data_location {
+                locations.push((data.original_data_location.clone(), true));
+            }
+            for (location, is_original) in locations {
+                // A location outside the storage root is the user's own
+                // file or an external URL and is never touched (Python
+                // `remove_data_file_if_unreferenced`).
+                if is_original && !self.is_storage_managed(&location) {
+                    continue;
                 }
-                None => None,
-            };
-
-            if let Some(data) = data {
-                match self.storage.delete(&data.raw_data_location).await {
+                let references = self
+                    .database
+                    .count_data_location_references(&location)
+                    .await
+                    .map_err(|error| {
+                        DeleteError::Runtime(format!(
+                            "Failed to count references to the file of data {data_id}: {error}"
+                        ))
+                    })?;
+                if references > 0 {
+                    continue;
+                }
+                match self.storage.delete(&location).await {
                     Ok(()) => {
                         deleted_storage += 1;
+                    }
+                    Err(StorageError::NotFound(_)) if is_original => {
+                        // Python skips an original that is not there.
+                        debug!(data_id = %data.id, %location, "original file already missing");
                     }
                     Err(StorageError::NotFound(_)) => {
                         warn!(
                             data_id = %data.id,
-                            location = %data.raw_data_location,
+                            location = %location,
                             "storage file already missing"
                         );
                         warnings.push(format!(
                             "Storage file already missing for data {} at '{}'",
-                            data.id, data.raw_data_location
+                            data.id, location
                         ));
                     }
                     Err(error) => {
@@ -1133,6 +1148,36 @@ impl DeleteService {
             pruned_sessions,
             warnings,
         })
+    }
+
+    /// Whether `location` lives under this service's storage root, so the
+    /// delete path may remove it. Mirrors the data-root test of Python's
+    /// `remove_data_file_if_unreferenced`: a user's own local file, an
+    /// external URL (`s3://`, `http://`) or an inline marker (`text://`) is
+    /// never removed.
+    fn is_storage_managed(&self, location: &str) -> bool {
+        let path_str = location.strip_prefix("file://").unwrap_or(location);
+        if path_str.contains("://") {
+            return false;
+        }
+        let base = self.storage.base_path();
+        if base.is_empty() {
+            // A backend without a filesystem root (mock, S3-backed) keys
+            // its files by bare location.
+            return true;
+        }
+        let path = std::path::Path::new(path_str);
+        if !path.is_absolute() {
+            // A plain relative storage key.
+            return true;
+        }
+        let base = std::path::Path::new(base);
+        let base = if base.is_absolute() {
+            base.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(base)
+        };
+        path.starts_with(base)
     }
 
     async fn execute_memory_only(
@@ -2978,6 +3023,135 @@ mod tests {
             !storage.exists(&location).await.unwrap(),
             "the file is removed with its last reference"
         );
+    }
+
+    /// Seed one row per dataset whose raw location is the derived text and
+    /// whose original is the uploaded image/audio, as `add` stores them.
+    /// `shared_original` makes both rows point at one original.
+    async fn seed_derived_rows(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner: Uuid,
+        names: &[&str],
+        shared_original: bool,
+    ) -> (Vec<Uuid>, Vec<String>, Vec<String>) {
+        let mut ids = vec![];
+        let mut raws = vec![];
+        let mut originals = vec![];
+        let shared = storage.store(b"image bytes", "image.png").await.unwrap();
+        for (i, name) in names.iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            let ds_id = ds.id;
+            ops::datasets::create_dataset(db, ds).await.unwrap();
+            let raw = storage
+                .store(format!("description {i}").as_bytes(), "text_x.txt")
+                .await
+                .unwrap();
+            let original = if shared_original {
+                shared.clone()
+            } else {
+                storage.store(b"image bytes", "image.png").await.unwrap()
+            };
+            let id = Uuid::new_v4();
+            let data = Data::builder(
+                id,
+                "image.png",
+                raw.clone(),
+                original.clone(),
+                "txt",
+                "text/plain",
+                format!("hash{i}"),
+                owner,
+            )
+            .dataset_id(ds_id)
+            .build();
+            ops::data::create_data(db, data).await.unwrap();
+            ids.push(id);
+            raws.push(raw);
+            originals.push(original);
+        }
+        (ids, raws, originals)
+    }
+
+    async fn delete_dataset_named(svc: &DeleteService, owner: Uuid, name: &str) -> DeleteResult {
+        svc.execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: name.to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("delete dataset")
+    }
+
+    /// An image/audio add stores the derived text as `raw_data_location` and
+    /// the upload as `original_data_location`; delete removes both files
+    /// (Python `delete_data_entity`, `SqlAlchemyAdapter.py:437-450`).
+    #[tokio::test]
+    async fn delete_removes_derived_text_and_original_upload() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, raws, originals) = seed_derived_rows(&db, &storage, owner, &["ds"], false).await;
+
+        let result = delete_dataset_named(&svc, owner, "ds").await;
+
+        assert_eq!(result.deleted_storage_files, 2);
+        assert!(!storage.exists(&raws[0]).await.unwrap());
+        assert!(!storage.exists(&originals[0]).await.unwrap());
+    }
+
+    /// A second row sharing the original keeps it until its own delete.
+    #[tokio::test]
+    async fn delete_keeps_original_another_row_references() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, raws, originals) =
+            seed_derived_rows(&db, &storage, owner, &["ds1", "ds2"], true).await;
+
+        delete_dataset_named(&svc, owner, "ds1").await;
+        assert!(!storage.exists(&raws[0]).await.unwrap());
+        assert!(
+            storage.exists(&originals[0]).await.unwrap(),
+            "the original stays while ds2's row references it"
+        );
+        assert!(storage.exists(&raws[1]).await.unwrap());
+
+        delete_dataset_named(&svc, owner, "ds2").await;
+        assert!(!storage.exists(&originals[0]).await.unwrap());
+    }
+
+    /// An original outside the storage root (the user's own file, a URL) is
+    /// never removed.
+    #[tokio::test]
+    async fn delete_never_touches_original_outside_storage() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let ds = Dataset::new("ds".to_string(), owner, None, Uuid::new_v4());
+        let ds_id = ds.id;
+        ops::datasets::create_dataset(&db, ds).await.unwrap();
+        let raw = storage.store(b"text", "t.txt").await.unwrap();
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "a",
+            raw.clone(),
+            "https://example.com/a.png",
+            "txt",
+            "text/plain",
+            "h",
+            owner,
+        )
+        .dataset_id(ds_id)
+        .build();
+        ops::data::create_data(&db, data).await.unwrap();
+
+        let result = delete_dataset_named(&svc, owner, "ds").await;
+
+        assert_eq!(result.deleted_storage_files, 1);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(!storage.exists(&raw).await.unwrap());
     }
 
     #[tokio::test]
