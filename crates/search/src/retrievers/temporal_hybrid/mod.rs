@@ -494,6 +494,10 @@ impl SearchRetriever for TemporalHybridRetriever {
         SearchType::Temporal
     }
 
+    fn previews_empty_context(&self, params: &SearchParams) -> bool {
+        self.hybrid.previews_empty_context(params)
+    }
+
     /// The items are plain hybrid's, carrying their own dataset membership.
     fn dataset_scoping(&self) -> DatasetScoping {
         DatasetScoping::Membership

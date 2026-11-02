@@ -3,7 +3,7 @@
 //!
 //! The index is built by `improve(build_global_context_index=true)`: a root
 //! summary of the dataset plus bucket summaries embedded in
-//! `GlobalContextSummary_text`. Graph completion prepends it when
+//! `GlobalContextSummary_text`. Graph and hybrid completion prepend it when
 //! `include_global_context_index` is set.
 
 use std::borrow::Cow;
@@ -21,6 +21,8 @@ use crate::types::SearchError;
 /// Default number of bucket summaries a prelude names
 /// (`global_context_index_top_k`).
 pub const DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 3;
+/// Maximum accepted from SDK callers before querying a backend.
+pub const MAX_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 10_000;
 
 /// Python's `_is_root`: a bool, the string `"true"`, or truthiness.
 fn is_root(value: Option<&Value>) -> bool {
@@ -116,6 +118,11 @@ pub async fn search_top_global_context_summaries(
     if top_k == 0 {
         return Ok(Vec::new());
     }
+    if top_k > MAX_GLOBAL_CONTEXT_INDEX_TOP_K {
+        return Err(SearchError::InvalidInput(format!(
+            "global_context_index_top_k must be at most {MAX_GLOBAL_CONTEXT_INDEX_TOP_K}"
+        )));
+    }
     let vector_error = |e: cognee_vector::VectorDBError| SearchError::VectorError(e.to_string());
     if !vector_db
         .has_collection(GlobalContextSummary::TYPE, "text")
@@ -126,10 +133,13 @@ pub async fn search_top_global_context_summaries(
     }
     // +1 in case the root is among the results; a scoped search reads wide
     // enough to find its datasets' summaries among everyone's.
+    let fetch_limit = top_k.checked_add(1).ok_or_else(|| {
+        SearchError::InvalidInput("global_context_index_top_k is too large".to_string())
+    })?;
     let limit = if dataset_ids.is_some() {
-        SCOPED_SUMMARY_FETCH.max(top_k + 1)
+        SCOPED_SUMMARY_FETCH.max(fetch_limit)
     } else {
-        top_k + 1
+        fetch_limit
     };
     let results = vector_db
         .search_similar(GlobalContextSummary::TYPE, "text", query_vector, limit)
