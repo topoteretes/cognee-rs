@@ -11,6 +11,8 @@ from helpers import (
     COUNT_TOLERANCE,
     open_db,
     query_data,
+    distinct_graph_edges,
+    distinct_graph_nodes,
     query_nodes,
     query_edges,
     python_db_path,
@@ -59,7 +61,7 @@ def test_cognify_node_count_within_tolerance(both_cognified):
     py_ws, rust_ws = both_cognified
 
     py_count = len(python_graph(py_ws)[0])
-    rust_count = len(query_nodes(open_db(rust_db_path(rust_ws))))
+    rust_count = len(distinct_graph_nodes(query_nodes(open_db(rust_db_path(rust_ws)))))
 
     avg = (py_count + rust_count) / 2
     diff = abs(py_count - rust_count)
@@ -80,7 +82,7 @@ def test_cognify_edge_count_within_tolerance(both_cognified):
     py_ws, rust_ws = both_cognified
 
     py_count = len(python_graph(py_ws)[1])
-    rust_count = len(query_edges(open_db(rust_db_path(rust_ws))))
+    rust_count = len(distinct_graph_edges(query_edges(open_db(rust_db_path(rust_ws)))))
 
     avg = (py_count + rust_count) / 2
     diff = abs(py_count - rust_count)

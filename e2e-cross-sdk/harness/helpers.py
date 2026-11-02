@@ -569,6 +569,36 @@ def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
     return result
 
 
+def distinct_graph_nodes(nodes: list[dict]) -> list[dict]:
+    """One node per distinct ``graph_id``.
+
+    Rust's relational ``nodes`` table is a per-(dataset, data item) ledger, so
+    a node shared by several items has several rows; Python's graph engine
+    returns each node once. Count and compare graph nodes through this.
+    """
+    seen: dict[str, dict] = {}
+    for n in nodes:
+        seen.setdefault(n.get("graph_id") or n.get("id"), n)
+    return list(seen.values())
+
+
+def distinct_graph_edges(edges: list[dict]) -> list[dict]:
+    """One edge per distinct (source, destination, relationship) triple.
+
+    Same reason as :func:`distinct_graph_nodes`: Rust's ``edges`` table is a
+    ledger with one row per owning data item.
+    """
+    seen: dict[tuple, dict] = {}
+    for e in edges:
+        key = (
+            _normalize_uuid(e.get("source_node_id")),
+            _normalize_uuid(e.get("destination_node_id")),
+            e.get("relationship_name"),
+        )
+        seen.setdefault(key, e)
+    return list(seen.values())
+
+
 def query_edges(conn: sqlite3.Connection) -> list[dict]:
     rows = query_rows(conn, "SELECT * FROM edges")
     rows.sort(key=lambda r: r.get("relationship_name", ""))
