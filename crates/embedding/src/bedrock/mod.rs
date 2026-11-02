@@ -213,10 +213,10 @@ impl BedrockEmbeddingEngine {
             region,
             transport,
             dimensions: config.dimensions,
-            batch_size: config.batch_size,
+            batch_size: config.effective_batch_size(),
             max_concurrent_requests: crate::config::concurrent_batches(
                 config.max_concurrent_data_points,
-                config.batch_size,
+                config.effective_batch_size(),
             ),
             max_sequence_length: config.max_completion_tokens,
             retry_budget: DEFAULT_RETRY_BUDGET,

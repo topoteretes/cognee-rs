@@ -9,6 +9,19 @@ use crate::ollama::OllamaEmbeddingEngine;
 use crate::openai_compatible::OpenAICompatibleEmbeddingEngine;
 use crate::provider::EmbeddingProvider;
 
+/// Python's `embedding_batch_size` default, also the value a falsy (0) setting
+/// is normalised to (`embeddings/config.py:163-167`).
+pub const DEFAULT_BATCH_SIZE: usize = 32;
+
+/// Python's `if not self.embedding_batch_size: self.embedding_batch_size = 32`.
+pub fn normalize_batch_size(batch_size: usize) -> usize {
+    if batch_size == 0 {
+        DEFAULT_BATCH_SIZE
+    } else {
+        batch_size
+    }
+}
+
 /// Python's `embedding_max_concurrent_data_points` default.
 pub const DEFAULT_MAX_CONCURRENT_DATA_POINTS: usize = 150;
 
@@ -494,6 +507,11 @@ impl Default for EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
+    /// `batch_size` as the engines use it: a 0 becomes 32, as in Python.
+    pub fn effective_batch_size(&self) -> usize {
+        normalize_batch_size(self.batch_size)
+    }
+
     /// Load configuration from environment variables.
     ///
     /// Reads the same env var names as the Python SDK so that a shared `.env` file
@@ -674,7 +692,7 @@ impl EmbeddingConfig {
         if let Ok(val) = std::env::var("EMBEDDING_BATCH_SIZE")
             && let Ok(n) = val.trim().parse::<usize>()
         {
-            config.batch_size = n;
+            config.batch_size = normalize_batch_size(n);
         }
 
         #[cfg(feature = "onnx")]
@@ -744,7 +762,7 @@ impl EmbeddingConfig {
             // engine reports `embedding_batch_size`, so callers that cut by
             // `batch_size()` (cognify's `embed_in_batches`) batch as configured.
             EmbeddingProvider::Mock => Ok(Arc::new(
-                MockEmbeddingEngine::with_batch_size(self.dimensions, self.batch_size.max(1))
+                MockEmbeddingEngine::with_batch_size(self.dimensions, self.effective_batch_size())
                     .with_mode(self.mock_mode),
             )),
         }
@@ -764,6 +782,22 @@ impl EmbeddingConfig {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    /// Python's `if not embedding_batch_size: = 32`: 0 means the default.
+    #[tokio::test]
+    async fn zero_batch_size_is_normalised_to_32() {
+        assert_eq!(normalize_batch_size(0), 32);
+        assert_eq!(normalize_batch_size(7), 7);
+        let config = EmbeddingConfig {
+            provider: EmbeddingProvider::Mock,
+            batch_size: 0,
+            ..EmbeddingConfig::default()
+        };
+        assert_eq!(config.effective_batch_size(), 32);
+        let engine = config.create_engine().await.unwrap();
+        assert_eq!(engine.batch_size(), 32);
+        assert_eq!(engine.max_concurrent_batches(), 4);
+    }
 
     /// SDK-1039 P7: the mock engine reports the configured
     /// `embedding.batch_size`, so cognify batches by it under `MOCK_EMBEDDING`.

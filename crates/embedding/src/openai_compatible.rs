@@ -108,10 +108,10 @@ impl OpenAICompatibleEmbeddingEngine {
             base_url,
             model: config.model.clone(),
             dimensions: config.dimensions,
-            batch_size: config.batch_size,
+            batch_size: config.effective_batch_size(),
             max_concurrent_batches: crate::config::concurrent_batches(
                 config.max_concurrent_data_points,
-                config.batch_size,
+                config.effective_batch_size(),
             ),
             max_sequence_length: config.max_completion_tokens,
         })
