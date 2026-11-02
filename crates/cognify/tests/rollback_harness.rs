@@ -267,6 +267,18 @@ impl Harness {
         runs[0].status.clone()
     }
 
+    /// The `run_info` of every `COMPLETED` row this dataset has.
+    pub async fn completed_run_infos(&self) -> Vec<Option<serde_json::Value>> {
+        self.repo
+            .list_recent(Some(self.dataset_id), 100)
+            .await
+            .expect("list pipeline runs")
+            .into_iter()
+            .filter(|r| r.status == PipelineRunStatus::Completed)
+            .map(|r| r.run_info)
+            .collect()
+    }
+
     /// Whether `data_id` carries this dataset's cognify completion marker.
     pub async fn is_marked(&self, data_id: Uuid) -> bool {
         get_cognify_completed_data_ids(&self.db, self.dataset_id, &[data_id])

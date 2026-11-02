@@ -1715,10 +1715,9 @@ fn edge_reindex_rejects_a_cursor_that_skips_everything() {
 // ---------------------------------------------------------------------------
 // SDK-501 follow-on — the cognify failure summary an operator can act on
 //
-// `cognify()` already records, durably, exactly which documents failed: the
-// `FailureReport` on the `Ok` result, and the same numbers persisted under
-// `pipeline_runs.run_info.cognify_failures`. Until this summary existed the CLI
-// read neither, so a tolerantly-completed run over a large corpus reported only
+// `cognify()` already records exactly which documents failed: the
+// `FailureReport` on the `Ok` result. Until this summary existed the CLI
+// did not read it, so a tolerantly-completed run over a large corpus reported only
 // "Cognify completed." and the operator had no way to learn what was missing.
 //
 // These cases drive `format_failure_summary` directly rather than a live run:

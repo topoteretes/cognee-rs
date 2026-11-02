@@ -26,7 +26,6 @@ use uuid::Uuid;
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::pipeline::CognifyResult;
-use crate::rollback;
 use crate::tasks::cognify;
 
 /// Pipeline name used for cognify pipeline run records (matches Python
@@ -107,9 +106,9 @@ pub trait DatasetResolver: Send + Sync {
 /// rows, and appending one here would put a fabricated id at the head of the
 /// dataset's trail — exactly what carrying the real id exists to avoid.
 ///
-/// `run_info` follows Python's `COMPLETED` shape: `{}` for a clean run (no
-/// data items since COG-6089), plus the Rust-only failure summary when files
-/// are still outstanding.
+/// `run_info` is Python's `COMPLETED` shape, `{}` (no data items since
+/// COG-6089, `a88402500`), whatever the run's failure report says: the report
+/// is in the returned `CognifyResult`, not in the row.
 async fn record_dataset_run(
     database: &dyn RelationalDb,
     user_id: Uuid,
@@ -120,11 +119,7 @@ async fn record_dataset_run(
         return Ok(());
     }
     let pipeline_run_id = result.pipeline_run_id.unwrap_or_else(Uuid::new_v4);
-    let run_info = if result.failures.is_empty() {
-        Some(cognee_core::pipeline_run_registry::run_info_for_completed())
-    } else {
-        Some(rollback::run_info_with_failures(&result.failures))
-    };
+    let run_info = Some(cognee_core::pipeline_run_registry::run_info_for_completed());
     let run = PipelineRun {
         id: Uuid::new_v4(),
         created_at: Utc::now(),

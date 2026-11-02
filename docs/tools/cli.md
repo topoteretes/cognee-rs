@@ -88,8 +88,8 @@ A `cognify` run that the configured failure policy let *complete* despite
 per-document failures prints one extra `WARN` line per dataset, naming the
 counts and the first ten failed data ids (`… (first 10 of N)` beyond that), and
 saying whether a re-run would pick the outstanding documents up. A clean run
-prints nothing extra. The same numbers — with the untruncated id list — are
-persisted under `pipeline_runs.run_info.cognify_failures`.
+prints nothing extra. The run's `COMPLETED` row stays Python's `{}`; the failure
+report is the returned result, not a `run_info` key.
 Which failures are tolerated at all is the two-axis policy in
 [configuration.md](../configuration.md); the default errors the run instead.
 

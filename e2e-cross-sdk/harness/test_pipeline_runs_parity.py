@@ -22,9 +22,7 @@ after an ``add`` + ``cognify`` run:
        ``run_tasks.py:96`` / ``run_ownership.py``, Rust
        ``cognee_core::RunOwnership``); ``progress`` is Python-only, Rust has no
        in-row progress ticks;
-     - COMPLETED → ``{}`` (``log_pipeline_run_complete.py``). Rust may add its
-       documented ``cognify_failures`` key on a run that completed with files
-       outstanding;
+     - COMPLETED → ``{}`` (``log_pipeline_run_complete.py``), on both sides;
      - ERRORED → ``{"error": …}`` (``log_pipeline_run_error.py``).
 
 The shape checks assert key sets, not values.
@@ -157,7 +155,7 @@ def _statuses_for_run(rows: list[dict], pipeline_run_id: str) -> list[str]:
 # `recovery_lock` is on both sides since the ownership-marker port (the premise
 # "Rust has no recovery lock" held only until then).
 STARTED_KEYS = {"Python": {"recovery_lock", "progress"}, "Rust": {"recovery_lock"}}
-COMPLETED_KEYS = {"Python": set(), "Rust": {"cognify_failures"}}
+COMPLETED_KEYS = {"Python": set(), "Rust": set()}
 ERRORED_KEYS = {"Python": {"error"}, "Rust": {"error"}}
 
 
@@ -221,7 +219,7 @@ def test_run_info_shape_parity(both_cognified):
     """``run_info`` follows Python's post-COG-6089 contract on both sides.
 
     No ``data`` key anywhere; STARTED ⊆ ``{recovery_lock, progress}``
-    (Rust: ``{recovery_lock}``); COMPLETED is ``{}`` (Rust may add ``cognify_failures``);
+    (Rust: ``{recovery_lock}``); COMPLETED is ``{}`` on both;
     ERRORED is ``{"error": …}``.
     """
     py_ws, rust_ws = both_cognified

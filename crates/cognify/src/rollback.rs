@@ -22,20 +22,13 @@ use cognee_delete::{RunSweeper, SweepScope};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Data;
 use cognee_vector::VectorDB;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::failure::{FailureReport, RollbackScope};
-
-/// The `run_info` key a tolerantly-completed run's failure summary rides
-/// under.
-///
-/// A Rust-only, additive key: Python's `COMPLETED` row is `{}` (no `data`
-/// since COG-6089), so a reader that only knows Python's shape ignores it.
-pub const RUN_INFO_FAILURES_KEY: &str = "cognify_failures";
 
 // ---------------------------------------------------------------------------
 // Run-id capture
@@ -240,49 +233,6 @@ fn outstanding_items(report: &FailureReport) -> Vec<Uuid> {
 }
 
 // ---------------------------------------------------------------------------
-// The run record
-// ---------------------------------------------------------------------------
-
-/// `{"cognify_failures": {…}}` for a run that completed with files still
-/// outstanding.
-///
-/// No `data` key: Python stopped storing the run's data items in `run_info`
-/// (`a88402500`, COG-6089), and the failure lists below already name every
-/// item that matters to the next run.
-pub(crate) fn run_info_with_failures(report: &FailureReport) -> Value {
-    let mut failures = Map::with_capacity(4);
-    failures.insert(
-        "failed_data_ids".into(),
-        Value::Array(
-            report
-                .failed_items()
-                .iter()
-                .map(|id| Value::String(id.to_string()))
-                .collect(),
-        ),
-    );
-    failures.insert(
-        "unreached_data_ids".into(),
-        Value::Array(
-            report
-                .unreached_items()
-                .iter()
-                .map(|id| Value::String(id.to_string()))
-                .collect(),
-        ),
-    );
-    failures.insert("failure_count".into(), Value::from(report.total()));
-    failures.insert(
-        "chunk_failure_ratio".into(),
-        Value::from(report.chunk_failure_ratio()),
-    );
-
-    let mut info = Map::with_capacity(1);
-    info.insert(RUN_INFO_FAILURES_KEY.into(), Value::Object(failures));
-    Value::Object(info)
-}
-
-// ---------------------------------------------------------------------------
 // The two exit paths
 // ---------------------------------------------------------------------------
 
@@ -442,8 +392,7 @@ pub(crate) async fn on_run_failed(
     }
 }
 
-/// Sweep the failed items, mark the survivors, and attach the failure list to
-/// the run record.
+/// Sweep the failed items and mark the survivors complete.
 ///
 /// Never returns an error: the run completed.
 pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureReport) {
@@ -474,15 +423,6 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
         .copied()
         .collect();
     ctx.mark_complete(&survivors).await;
-
-    // Only when there is something to attach. A clean run's `pipeline_runs`
-    // trail stays byte-identical to what it was before this change, which is
-    // what keeps the cross-SDK shape parity suite honest rather than merely
-    // passing.
-    if !outstanding.is_empty() {
-        ctx.append_run_row(PipelineRunStatus::Completed, run_info_with_failures(report))
-            .await;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,25 +585,6 @@ mod tests {
             decide_sweep(RollbackScope::Nothing, &RunEnding::Failed),
             SweepDecision::Nothing,
             "…except the escape hatch, which is the point of the escape hatch"
-        );
-    }
-
-    #[test]
-    fn run_info_carries_the_failure_summary() {
-        let failed = Uuid::new_v4();
-        let unreached = Uuid::new_v4();
-        let report = report_with(&[failed], &[unreached]);
-        let info = run_info_with_failures(&report);
-        assert_eq!(
-            info.as_object().unwrap().keys().collect::<Vec<_>>(),
-            vec![RUN_INFO_FAILURES_KEY],
-            "no `data` key since COG-6089; the failure summary is the only key"
-        );
-        let failures = info.get(RUN_INFO_FAILURES_KEY).unwrap();
-        assert_eq!(failures.get("failure_count").unwrap(), 1);
-        assert_eq!(
-            failures.get("failed_data_ids").unwrap().as_array().unwrap(),
-            &[Value::String(failed.to_string())]
         );
     }
 

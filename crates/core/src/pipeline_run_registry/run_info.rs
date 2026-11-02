@@ -14,9 +14,9 @@
 //! The `STARTED` row carries `{"recovery_lock": "<token>"}` when the run holds
 //! an ownership marker ([`crate::RunOwnership`]), as in Python, and `{}`
 //! otherwise. Rust has no in-row progress ticks (task progress is published
-//! through the progress token and the payload-field table instead). Rust-only
-//! additions are additive keys such as cognify's `cognify_failures` on a
-//! tolerantly completed run.
+//! through the progress token and the payload-field table instead). A
+//! tolerantly completed cognify run's failures are in its returned
+//! `FailureReport`, not in the row: `COMPLETED` is `{}` as in Python.
 //!
 //! Python writes no `INITIATED` row at all since `dc0b4ad6a`; neither does any
 //! Rust pipeline run. Old rows that carry that status are still read.

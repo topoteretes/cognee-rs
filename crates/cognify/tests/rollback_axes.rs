@@ -151,6 +151,11 @@ async fn a_tolerant_run_sweeps_only_the_failed_file_and_marks_the_rest() {
         "the failed file stays unmarked, so the next run redoes exactly it"
     );
     assert_eq!(harness.latest_status().await, PipelineRunStatus::Completed);
+    // Python's `log_pipeline_run_complete` writes `{}` whatever the run
+    // tolerated; the failures are in the returned report, not in the row.
+    let infos = harness.completed_run_infos().await;
+    assert_eq!(infos.len(), 1, "exactly one COMPLETED row: {infos:?}");
+    assert_eq!(infos[0], Some(serde_json::json!({})));
 }
 
 /// A `FailedItems` run at the **default** 5 % threshold escalates: one bad file

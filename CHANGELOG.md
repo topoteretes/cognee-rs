@@ -334,8 +334,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes `DATASET_PROCESSING_STARTED`, then `…_COMPLETED` or `…_ERRORED`; the
   `DATASET_PROCESSING_INITIATED` row is gone, as in Python `dc0b4ad6a`. `run_info`
   no longer carries the run's data items (Python `a88402500`, COG-6089):
-  STARTED and COMPLETED are `{}`, ERRORED is `{"error": …}` (cognify's
-  tolerantly completed runs still add the Rust-only `cognify_failures` key). The
+  STARTED and COMPLETED are `{}`, ERRORED is `{"error": …}` (a tolerantly completed cognify run no longer adds a
+  Rust-only `cognify_failures` key; its failures are in the returned report). The
   orphan sweep's ERRORED row is `{"error": <reason>}` instead of
   `{"reason": …}`. Migration `m20261029_000001_drop_run_info_data` strips the
   `data` key from stored rows, as Python's alembic `b7e4c2a9d6f1` does. Deleting
