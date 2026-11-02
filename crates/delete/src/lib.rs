@@ -34,7 +34,7 @@ use cognee_storage::{StorageError, StorageTrait};
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 impl DeleteScope {
@@ -983,10 +983,8 @@ impl DeleteService {
                     Ok(()) => {
                         deleted_storage += 1;
                     }
-                    Err(StorageError::NotFound(_)) if is_original => {
-                        // Python skips an original that is not there.
-                        debug!(data_id = %data.id, %location, "original file already missing");
-                    }
+                    // Python logs a warning for either location
+                    // (`remove_data_file_if_unreferenced`).
                     Err(StorageError::NotFound(_)) => {
                         warn!(
                             data_id = %data.id,
@@ -3152,6 +3150,65 @@ mod tests {
         assert_eq!(result.deleted_storage_files, 1);
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
         assert!(!storage.exists(&raw).await.unwrap());
+    }
+
+    /// On a filesystem backend the stored locations are absolute `file://`
+    /// URIs: an original under the storage root is removed with the derived
+    /// text, one outside it (the user's own file) is kept.
+    #[tokio::test]
+    async fn delete_on_local_storage_removes_managed_original_only() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let storage = Arc::new(cognee_storage::LocalStorage::new(root.path().to_path_buf()));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        let owner = Uuid::new_v4();
+        let uri = |key: &str| format!("file://{}", root.path().join(key).display());
+        let user_file = outside.path().join("photo.png");
+        std::fs::write(&user_file, b"user bytes").unwrap();
+
+        let mut files = vec![];
+        for (i, name) in ["managed", "user"].iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            let ds_id = ds.id;
+            ops::datasets::create_dataset(&db, ds).await.unwrap();
+            let raw = uri(&storage.store(b"description", "text_x.txt").await.unwrap());
+            let original = if i == 0 {
+                uri(&storage.store(b"image bytes", "image.png").await.unwrap())
+            } else {
+                format!("file://{}", user_file.display())
+            };
+            let data = Data::builder(
+                Uuid::new_v4(),
+                "image.png",
+                raw.clone(),
+                original.clone(),
+                "txt",
+                "text/plain",
+                format!("hash{i}"),
+                owner,
+            )
+            .dataset_id(ds_id)
+            .build();
+            ops::data::create_data(&db, data).await.unwrap();
+            files.push((raw, original));
+        }
+
+        let result = delete_dataset_named(&svc, owner, "managed").await;
+        assert_eq!(result.deleted_storage_files, 2);
+        assert!(!storage.exists(&files[0].0).await.unwrap());
+        assert!(!storage.exists(&files[0].1).await.unwrap());
+
+        let result = delete_dataset_named(&svc, owner, "user").await;
+        assert_eq!(result.deleted_storage_files, 1);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(!storage.exists(&files[1].0).await.unwrap());
+        assert!(user_file.exists(), "the user's own file is never removed");
     }
 
     #[tokio::test]
