@@ -1777,12 +1777,13 @@ mod retriever_tests {
             )
             .await
             .unwrap();
-        let messages = llm.last_messages.lock().unwrap();
-        let user = &messages[1].content;
+        let user = {
+            let messages = llm.last_messages.lock().unwrap();
+            messages[1].content.clone()
+        };
         assert!(user.contains("created_at: 2024-01-15\n"));
         assert!(!user.contains("source_id"));
         assert!(!user.contains("private"));
-        drop(messages);
 
         retriever
             .get_completion(
