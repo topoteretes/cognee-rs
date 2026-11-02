@@ -549,26 +549,6 @@ pub async fn run_graph(
         summarize_context: None,
     };
 
-    // A graph that is not built gets a note instead of a search. A caller
-    // asking for context expects context, not a note.
-    if let Some(warmup) = search_orchestrator.graph_warmup()
-        && warmup.config().shortcircuit
-        && !caller_only_context.unwrap_or(false)
-    {
-        let probe = search_orchestrator
-            .assess_recall_readiness(&request)
-            .await?;
-        if !probe.is_warm() {
-            info!(
-                state = probe.state.as_str(),
-                "recall: the graph is not built; skipping the search"
-            );
-            let marker = warmup_marker(&probe, warmup.config().threshold);
-            let response = empty_graph_response(search_type);
-            return Ok((vec![marker], search_type, auto_routed, response));
-        }
-    }
-
     // The router picked something other than the fallback, so the fallback is
     // still untried and may replace this result.
     let routed_guess = routed_rule.is_some() && search_type != ROUTER_FALLBACK_TYPE;
@@ -686,6 +666,51 @@ fn warmup_marker(probe: &WarmupProbe, threshold: u64) -> RecallItem {
         content,
         score: 1.0,
     }
+}
+
+/// Recall's warm-up guard: the note to return instead of searching a graph
+/// that is not built, or `None` to search it. It probes all of a recall's
+/// datasets at once, so a caller that searches them one by one asks before
+/// the first. The datasets are checked and resolved as the search would, so
+/// one the caller cannot read fails here.
+///
+/// `None` without a probe, with the short-circuit off, for a caller asking
+/// for `only_context` (who expects context, not a note), or when `user_id`
+/// is not a UUID, which the search reports.
+pub async fn warmup_note(
+    search_orchestrator: &SearchOrchestrator,
+    datasets: Option<&[String]>,
+    dataset_ids: Option<&[Uuid]>,
+    user_id: Option<&str>,
+    options: Option<&RecallOptions>,
+) -> Result<Option<RecallItem>, SearchError> {
+    let Some(warmup) = search_orchestrator.graph_warmup() else {
+        return Ok(None);
+    };
+    if !warmup.config().shortcircuit || options.and_then(|o| o.only_context).unwrap_or(false) {
+        return Ok(None);
+    }
+    let Some(requester) = user_id.and_then(|id| Uuid::parse_str(id).ok()) else {
+        return Ok(None);
+    };
+    let request = SearchRequest {
+        datasets: datasets.map(<[String]>::to_vec),
+        dataset_ids: dataset_ids.map(<[Uuid]>::to_vec),
+        user_id: Some(requester),
+        tenant_id: options.and_then(|o| o.tenant_id),
+        ..SearchRequest::default()
+    };
+    let probe = search_orchestrator
+        .assess_recall_readiness(&request)
+        .await?;
+    if probe.is_warm() {
+        return Ok(None);
+    }
+    info!(
+        state = probe.state.as_str(),
+        "recall: the graph is not built; skipping the search"
+    );
+    Ok(Some(warmup_marker(&probe, warmup.config().threshold)))
 }
 
 /// The response of a graph search that did not run: no items, over no

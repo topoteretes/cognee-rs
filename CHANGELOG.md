@@ -33,7 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Migration.** `RecallSource` has a `System` variant, so an exhaustive
   `match` on it needs an arm. An orchestrator is probed only when given a
   `GraphWarmup` (`SearchBuilder::with_graph_warmup`); without one, recall
-  searches as before.
+  searches as before. The guard is `recall_scope::warmup_note`, which
+  `recall()` calls before the graph search; `run_graph` itself never notes. A
+  caller that runs its own per-dataset searches calls `warmup_note` once, with
+  all the recall's datasets, before the first. `SearchRequest` implements
+  `Default`.
 
 - **`cognee-search`: recall routing honours what the deployment can run.** As
   Python's router does on `dev` (SDK-751, cognee `5ae7523fb`; v1.6.5 still

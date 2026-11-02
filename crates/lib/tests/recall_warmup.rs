@@ -232,3 +232,40 @@ async fn a_dataset_the_caller_cannot_read_is_refused_not_noted() {
     let error = result.expect_err("a dataset the caller cannot read should be refused");
     assert!(error.to_string().contains("permission"), "{error}");
 }
+
+#[tokio::test]
+async fn one_built_graph_among_the_datasets_is_enough_to_search() {
+    let fixture = Fixture::new().await;
+    fixture
+        .log_cognify(PipelineRunStatus::Completed, None)
+        .await;
+    let unbuilt = Uuid::new_v4();
+    let dataset = Dataset::new("notes".to_string(), fixture.owner, None, unbuilt);
+    ops::datasets::create_dataset(&fixture.db, dataset)
+        .await
+        .expect("create_dataset");
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+
+    let note = cognee_search::recall_scope::warmup_note(
+        &orchestrator,
+        None,
+        Some(&[unbuilt, fixture.dataset_id]),
+        Some(&fixture.owner.to_string()),
+        None,
+    )
+    .await
+    .expect("warmup_note");
+    assert!(note.is_none(), "{note:?}");
+
+    let alone = cognee_search::recall_scope::warmup_note(
+        &orchestrator,
+        None,
+        Some(&[unbuilt]),
+        Some(&fixture.owner.to_string()),
+        None,
+    )
+    .await
+    .expect("warmup_note");
+    let status = alone.expect("an unbuilt dataset alone gets a note").content["status"].clone();
+    assert_eq!(status, "memory_warming_up");
+}

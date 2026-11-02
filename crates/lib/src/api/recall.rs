@@ -20,7 +20,7 @@ use cognee_search::observability::{
     COGNEE_RECALL_SCOPE, COGNEE_RECALL_SOURCE, COGNEE_RESULT_COUNT, COGNEE_SEARCH_QUERY,
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
-use cognee_search::recall_scope::{run_graph, search_session, search_trace};
+use cognee_search::recall_scope::{run_graph, search_session, search_trace, warmup_note};
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
@@ -175,33 +175,44 @@ pub async fn recall(
                     .map_err(|e| ApiError::Search(e.to_string()))?
             }
             RecallScope::Graph => {
-                let (items, used_type, was_auto, response) = run_graph(
-                    query_text,
-                    query_type,
-                    datasets.clone(),
-                    dataset_ids.clone(),
-                    top_k,
-                    auto_route,
-                    session_id,
-                    user_id,
+                let note = warmup_note(
                     search_orchestrator,
-                    &span,
+                    datasets.as_deref(),
+                    dataset_ids.as_deref(),
+                    user_id,
                     options.as_ref(),
                 )
                 .await
                 .map_err(|e| ApiError::Search(e.to_string()))?;
-                graph_search_type = Some(used_type);
-                graph_auto_routed = was_auto;
-                graph_response = Some(response);
-                // A graph that is not built answers with a note only when it
-                // is the one source; next to others it contributes nothing.
-                if sources.as_slice() == [RecallScope::Graph] {
-                    items
+                // A graph that is not built is not searched: it answers with a
+                // note when it is the one source, and with nothing next to
+                // others.
+                if let Some(note) = note {
+                    if sources.as_slice() == [RecallScope::Graph] {
+                        vec![note]
+                    } else {
+                        Vec::new()
+                    }
                 } else {
+                    let (items, used_type, was_auto, response) = run_graph(
+                        query_text,
+                        query_type,
+                        datasets.clone(),
+                        dataset_ids.clone(),
+                        top_k,
+                        auto_route,
+                        session_id,
+                        user_id,
+                        search_orchestrator,
+                        &span,
+                        options.as_ref(),
+                    )
+                    .await
+                    .map_err(|e| ApiError::Search(e.to_string()))?;
+                    graph_search_type = Some(used_type);
+                    graph_auto_routed = was_auto;
+                    graph_response = Some(response);
                     items
-                        .into_iter()
-                        .filter(|item| item.source != RecallSource::System)
-                        .collect()
                 }
             }
         };
