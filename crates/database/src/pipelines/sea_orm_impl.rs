@@ -461,7 +461,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         let mut rows: Vec<_> = merged.into_values().collect();
         // The statement's own order: `created_at DESC, id DESC`. Hex ids sort
         // like the `Uuid`s they encode (fixed width, lowercase).
-        rows.sort_by(|a, b| (b.created_at, b.id).cmp(&(a.created_at, a.id)));
+        rows.sort_by_key(|row| std::cmp::Reverse((row.created_at, row.id)));
         let offset = usize::try_from(query.offset).unwrap_or(usize::MAX);
         let limit = usize::try_from(query.limit).unwrap_or(usize::MAX);
         Ok(rows.into_iter().skip(offset).take(limit).collect())
