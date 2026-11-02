@@ -852,7 +852,10 @@ impl HybridRetriever {
             params
                 .global_context_index_top_k
                 .unwrap_or(self.global_context_index_top_k),
-            params.dataset_ids.as_deref(),
+            params
+                .dataset_ids
+                .as_deref()
+                .filter(|dataset_ids| !dataset_ids.is_empty()),
             self.graph_db.as_ref(),
             self.vector_db.as_ref(),
             self.embedding_engine.as_ref(),
