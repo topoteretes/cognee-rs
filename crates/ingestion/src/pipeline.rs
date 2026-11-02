@@ -21,6 +21,7 @@ use cognee_core::pipeline::DataIdFn;
 use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
+use cognee_database::ops::data::DataRowRefresh;
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
@@ -103,6 +104,12 @@ pub struct ProcessedInput {
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
+    /// The item's own `external_metadata` text, before the source URI is merged
+    /// in. A re-add of existing content patches the stored metadata from it
+    /// (Python `merge_existing_row_metadata`): absent keeps the stored value.
+    pub item_external_metadata: Option<String>,
+    /// Where the content came from (`_cognee.source_uri`), if anywhere.
+    pub source_uri: Option<String>,
     /// Node-set names for graph organisation — the add call's
     /// [`AddParams::node_set`]. [`persist_data`] writes them to the
     /// `Data.node_set` column and under `external_metadata["node_set"]`; an
@@ -350,7 +357,8 @@ pub async fn process_input_with_loaders(
         }
     };
     let source_uri = source_uri_from_input(input);
-    let external_metadata = merge_external_metadata(data_item_metadata, source_uri.as_deref())?;
+    let external_metadata =
+        merge_external_metadata(data_item_metadata.clone(), source_uri.as_deref())?;
 
     Ok(ProcessedInput {
         content_hash,
@@ -371,6 +379,8 @@ pub async fn process_input_with_loaders(
         owner_id,
         tenant_id,
         external_metadata,
+        item_external_metadata: data_item_metadata,
+        source_uri,
         node_set: None,
         importance_weight: None,
     })
@@ -638,19 +648,23 @@ pub async fn persist_data_with_acl_and_locks(
         .await?
     {
         let data_id = existing_data.id;
-        // Python's `ingest_data` update branch rewrites the existing row's
-        // `node_set` and `external_metadata` from the re-add's values. Only
-        // the node set is refreshed here (the rest of the row stays as
-        // stored), and only when the call supplies one: a re-add without a
-        // node set leaves the stored tags alone. The write is skipped when
-        // the row already carries this set, which is the common re-add
-        // (improve's session persist re-adds under one fixed set). "Carries"
-        // is decided on the parsed JSON, not the stored text: a row Python
-        // wrote spells the same set `["a", "b"]` (json.dumps spacing) and may
-        // order metadata keys differently, and must not be rewritten on every
-        // re-add.
+        // Python's `ingest_data` update branch rewrites the existing row from
+        // the re-add (`ingest_data.py` ~470-545): name, raw / original
+        // locations, extensions and mime types, loader engine, hashes, size,
+        // the label when the item carries one, and `external_metadata` and
+        // `node_set` through `merge_existing_row_metadata` (a PATCH: absent
+        // keeps the stored value, a value replaces it). `pipeline_status` is
+        // reset only when the content changed, which a dedup hit by content
+        // hash never is. A re-add without a node set leaves the stored tags
+        // alone. The write is skipped when the row already carries every one
+        // of these values, which is the common re-add (improve's session
+        // persist re-adds under one fixed set). "Carries" is decided on the
+        // parsed JSON for the two JSON columns, not the stored text: a row
+        // Python wrote spells the same set `["a", "b"]` (json.dumps spacing)
+        // and may order metadata keys differently, and must not be rewritten
+        // on every re-add.
         //
-        // The write is a targeted update of the two columns, not a full-row
+        // The write is a targeted update of these columns, not a full-row
         // write of the snapshot read above: a `token_count`, `last_accessed`
         // or `pipeline_status` a concurrent cognify or search wrote in between
         // has to survive.
@@ -670,37 +684,80 @@ pub async fn persist_data_with_acl_and_locks(
         // pinned row; Rust adds the replacement first, then deletes the old
         // item — or, when the replacement dedups onto this same row,
         // drops only its memory and completion marker).
-        if let Some(names) = node_set {
-            let external_metadata = with_node_set_in_external_metadata(
-                existing_data.external_metadata.as_deref(),
-                names,
-            )
-            .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?;
-            if !same_json(
+        let node_set_column_to_write = match node_set_column.as_deref() {
+            Some(_) => node_set_column.clone(),
+            None => existing_data.node_set.clone(),
+        };
+        let external_metadata = merge_existing_row_metadata(
+            existing_data.external_metadata.as_deref(),
+            existing_data.node_set.as_deref(),
+            processed.item_external_metadata.as_deref(),
+            processed.source_uri.as_deref(),
+            node_set,
+        )
+        .map_err(|e| format!("Failed to merge external_metadata on re-add: {e}"))?;
+        let refresh = DataRowRefresh {
+            name: processed.name.clone(),
+            raw_data_location: processed.raw_data_uri.clone(),
+            original_data_location: processed.original_location.clone(),
+            extension: processed.stored_extension.clone(),
+            mime_type: processed.stored_mime_type.clone(),
+            original_extension: Some(processed.original_extension.clone()),
+            original_mime_type: Some(processed.original_mime_type.clone()),
+            loader_engine: Some(processed.loader_engine.clone()),
+            raw_content_hash: Some(processed.raw_content_hash.clone()),
+            data_size: processed.data_size,
+            label: processed.label.clone(),
+            node_set: node_set_column_to_write,
+            external_metadata,
+        };
+        let unchanged = existing_data.name == refresh.name
+            && existing_data.raw_data_location == refresh.raw_data_location
+            && existing_data.original_data_location == refresh.original_data_location
+            && existing_data.extension == refresh.extension
+            && existing_data.mime_type == refresh.mime_type
+            && existing_data.original_extension == refresh.original_extension
+            && existing_data.original_mime_type == refresh.original_mime_type
+            && existing_data.loader_engine == refresh.loader_engine
+            && existing_data.raw_content_hash == refresh.raw_content_hash
+            && existing_data.data_size == refresh.data_size
+            && refresh
+                .label
+                .as_ref()
+                .is_none_or(|l| existing_data.label.as_ref() == Some(l))
+            && same_json(
                 existing_data.node_set.as_deref(),
-                node_set_column.as_deref(),
-            ) || !same_json(
+                refresh.node_set.as_deref(),
+            )
+            && same_json(
                 existing_data.external_metadata.as_deref(),
-                external_metadata.as_deref(),
-            ) {
-                // A row deleted since the read above fails the write with
-                // `DatabaseError::NotFound`, which propagates: the call does
-                // not report a row that no longer exists.
-                let updated_at = database
-                    .update_data_node_set(
-                        data_id,
-                        node_set_column.as_deref(),
-                        external_metadata.as_deref(),
-                    )
-                    .await?;
-                info!(data_id = %data_id, "node_set refreshed on re-add");
-                // Patch the snapshot with exactly what was written rather than
-                // reading the row back: the three columns are the only ones the
-                // refresh touches, and `updated_at` is the value stored.
-                existing_data.node_set = node_set_column;
-                existing_data.external_metadata = external_metadata;
-                existing_data.updated_at = Some(updated_at);
+                refresh.external_metadata.as_deref(),
+            );
+        if !unchanged {
+            // A row deleted since the read above fails the write with
+            // `DatabaseError::NotFound`, which propagates: the call does
+            // not report a row that no longer exists.
+            let updated_at = database.refresh_data_row(data_id, &refresh).await?;
+            info!(data_id = %data_id, "row refreshed on re-add");
+            // Patch the snapshot with exactly what was written rather than
+            // reading the row back: these are the only columns the refresh
+            // touches, and `updated_at` is the value stored.
+            existing_data.name = refresh.name;
+            existing_data.raw_data_location = refresh.raw_data_location;
+            existing_data.original_data_location = refresh.original_data_location;
+            existing_data.extension = refresh.extension;
+            existing_data.mime_type = refresh.mime_type;
+            existing_data.original_extension = refresh.original_extension;
+            existing_data.original_mime_type = refresh.original_mime_type;
+            existing_data.loader_engine = refresh.loader_engine;
+            existing_data.raw_content_hash = refresh.raw_content_hash;
+            existing_data.data_size = refresh.data_size;
+            if refresh.label.is_some() {
+                existing_data.label = refresh.label;
             }
+            existing_data.node_set = refresh.node_set;
+            existing_data.external_metadata = refresh.external_metadata;
+            existing_data.updated_at = Some(updated_at);
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
@@ -1237,6 +1294,52 @@ fn path_to_file_uri(path: &str) -> String {
         }
     }
     uri
+}
+
+/// The `external_metadata` a re-added existing row ends up with, as Python's
+/// `merge_existing_row_metadata` resolves it for unchanged content
+/// (`ingest_data.py:60-113`): a PATCH. An item without metadata keeps the
+/// stored object; an item with metadata replaces it. `_cognee.source_uri` is
+/// set from the new source when there is one. The node set (`None` keeps the
+/// stored column's names) is recorded under `node_set`, or the key is dropped
+/// when there is none. A stored value that is not a JSON object counts as
+/// empty.
+fn merge_existing_row_metadata(
+    stored_metadata: Option<&str>,
+    stored_node_set: Option<&str>,
+    item_metadata: Option<&str>,
+    source_uri: Option<&str>,
+    node_set: Option<&[String]>,
+) -> Result<Option<String>, serde_json::Error> {
+    let item = classify_item_metadata(item_metadata);
+    let mut metadata = if matches!(item, ItemMetadata::Absent) {
+        match stored_metadata.map(serde_json::from_str::<serde_json::Value>) {
+            Some(Ok(serde_json::Value::Object(object))) => object,
+            _ => serde_json::Map::new(),
+        }
+    } else {
+        item_metadata_map(item)
+    };
+    if let Some(source_uri) = source_uri {
+        let mut cognee = match metadata.get("_cognee") {
+            Some(serde_json::Value::Object(object)) => object.clone(),
+            _ => serde_json::Map::new(),
+        };
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+        metadata.insert("_cognee".to_string(), serde_json::Value::Object(cognee));
+    }
+    let resolved: Vec<String> = match node_set {
+        Some(names) => names.to_vec(),
+        None => stored_node_set
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .unwrap_or_default(),
+    };
+    if resolved.is_empty() {
+        metadata.remove("node_set");
+    } else {
+        metadata.insert("node_set".to_string(), serde_json::json!(resolved));
+    }
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map(Some)
 }
 
 /// The `external_metadata` a new `data` row gets, built as Python's
@@ -3306,6 +3409,104 @@ mod tests {
         assert_eq!(rows.len(), 1);
     }
 
+    /// A dedup hit rewrites the label and `external_metadata` like Python's
+    /// update branch (`merge_existing_row_metadata`): an item without metadata
+    /// keeps the stored object, an item with metadata replaces it, a label is
+    /// written only when the item carries one.
+    #[tokio::test]
+    async fn re_add_refreshes_label_and_external_metadata() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let item = |label: &str, meta: Option<&str>| {
+            vec![DataInput::DataItem {
+                data: Box::new(DataInput::Text("Refreshed content".into())),
+                label: label.into(),
+                external_metadata: meta.map(String::from),
+            }]
+        };
+        let first = pipeline
+            .add(
+                item("one", Some(r#"{"a":1}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(first[0].label.as_deref(), Some("one"));
+
+        let second = pipeline
+            .add(
+                item("two", Some(r#"{"b":2}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        assert_eq!(second[0].label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&second[0]), serde_json::json!({"b": 2}));
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&stored), serde_json::json!({"b": 2}));
+
+        // No item metadata: the stored object is kept.
+        let third = pipeline
+            .add(item("three", None), "refresh_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(third[0].label.as_deref(), Some("three"));
+        assert_eq!(metadata_json(&third[0]), serde_json::json!({"b": 2}));
+
+        // Plain text carries no label: the stored one stays.
+        let fourth = pipeline
+            .add(
+                vec![DataInput::Text("Refreshed content".into())],
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fourth[0].label.as_deref(), Some("three"));
+    }
+
+    /// The same content added from another file refreshes the source URI and
+    /// the original location, as Python's update branch does with
+    /// `source_uri` and `original_data_location`.
+    #[tokio::test]
+    async fn re_add_from_another_source_refreshes_source_uri() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "same bytes in two files").unwrap();
+            DataInput::FilePath(path.to_string_lossy().into_owned())
+        };
+        let (a, b) = (write("a.txt"), write("b.txt"));
+        let first = pipeline
+            .add(vec![a], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        let first_uri = metadata_json(&first[0])["_cognee"]["source_uri"].clone();
+        assert!(first_uri.as_str().unwrap().ends_with("a.txt"));
+
+        let second = pipeline
+            .add(vec![b], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        let uri = metadata_json(&second[0])["_cognee"]["source_uri"].clone();
+        assert!(uri.as_str().unwrap().ends_with("b.txt"), "got {uri}");
+        assert!(second[0].original_data_location.ends_with("b.txt"));
+        assert_eq!(second[0].name, "b");
+    }
+
     /// Python: `node_set=json.dumps(effective_node_set) if effective_node_set
     /// else None` — an empty list is stored as NULL, not `"[]"`, and no
     /// `node_set` key is written.
@@ -3726,6 +3927,13 @@ mod tests {
         )
         .node_set(python_column)
         .external_metadata(python_metadata)
+        // Python fills these on every row; a row without them would be
+        // refreshed on the re-add, which is not what is under test.
+        .original_extension(processed.original_extension.clone())
+        .original_mime_type(processed.original_mime_type.clone())
+        .loader_engine(processed.loader_engine.clone())
+        .raw_content_hash(processed.raw_content_hash.clone())
+        .data_size(processed.data_size)
         // Rows are dataset-scoped: the row Python wrote belongs to the
         // dataset the re-add targets, whose id is derived from its name.
         .dataset_id(generate_dataset_id("python_row_ds", owner_id, None))
@@ -3861,6 +4069,17 @@ mod tests {
         }
         async fn create_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
             IngestDb::create_data(&*self.inner, d).await
+        }
+        async fn refresh_data_row(
+            &self,
+            data_id: Uuid,
+            refresh: &cognee_database::ops::data::DataRowRefresh,
+        ) -> Result<chrono::DateTime<chrono::Utc>, cognee_database::DatabaseError> {
+            let written = IngestDb::refresh_data_row(&*self.inner, data_id, refresh).await;
+            if let AfterRead::CountOverlap { in_flight, .. } = &self.hook {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            written
         }
         async fn update_data_node_set(
             &self,
