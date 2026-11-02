@@ -153,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed; a row of another dataset is refused), and the document is cognified.
   `update()` takes exactly one replacement item, and the bindings'
   `incrementalLoading` option of `update` now defaults to `true`, as Python's
-  (the re-cognify skips the dataset's other, already-cognified items). The
+  (the re-cognify covers the whole dataset, as `cognify(datasets=[dataset_id])`
+  does in Python, and skips the other items already cognified). The
   metadata PATCH follows Python's `merge_existing_row_metadata`: an item with
   no metadata (a plain text, file or URL) keeps the stored keys and only
   refreshes `_cognee.source_uri`, an explicit `{}` clears them, an object
@@ -166,7 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved id. The `IngestDb` / `DeleteDb` traits gain `resolve_data_id`
   (`IngestDb` also `update_data`), and `ProcessedInput` gains `pinned_id`.
   New `cognee-cli update <data> --data-id <UUID> -d <dataset>` drives it
-  (Python has no CLI verb for it).
+  (Python has no CLI verb for it; `--ontology-file` as in `cognify`).
   The dataset-scoping migration now clears the cognify marker of the rows it
   forks, so the next cognify rebuilds them under their new ids (it cannot
   reach the graph and vector stores: the old memory is dropped by deleting or

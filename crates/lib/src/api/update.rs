@@ -58,7 +58,8 @@ pub struct UpdateResult {
 ///    ([`AddParams::pinned_id`]): the content-hash lookup is skipped and the
 ///    row is refreshed in place with the new content, name and metadata (its
 ///    cognify marker cleared if the content changed).
-/// 3. The document is cognified.
+/// 3. The dataset is cognified (Python's `cognify(datasets=[dataset_id])`):
+///    the replaced document and any other item not yet cognified.
 ///
 /// This is Python's order. A re-add that fails after step 1 leaves a document
 /// with no memory that the next cognify rebuilds from its stored content, not
@@ -74,7 +75,8 @@ pub struct UpdateResult {
 /// * `owner_id` / `tenant_id` - Ownership context.
 /// * `node_set` - Optional graph node identifiers for access-control grouping.
 /// * `preferred_loaders` - Optional loaders to try first; the keys are Python loader names (see `AddParams::preferred_loaders`).
-/// * `incremental_loading` - Applied to the cognify phase.
+/// * `incremental_loading` - Applied to the cognify phase (`false` re-cognifies
+///   every item of the dataset, as in Python).
 /// * `acl_db` - Optional ACL backend; when provided, a `write` permission check
 ///   is performed before any mutation.
 /// * `delete_service` - Pre-configured [`DeleteService`].
@@ -213,8 +215,18 @@ pub async fn update(
             cognify_config
         };
 
+        // Python cognifies the whole dataset (`update.py:340`,
+        // `cognify(datasets=[dataset_id])`), not just the replaced document:
+        // other items added but never cognified are processed too, and
+        // `incremental_loading` skips the ones already done.
+        let dataset_items = DeleteDb::get_dataset_data(database.as_ref(), dataset_id)
+            .await
+            .map_err(|e| {
+                ApiError::Cognify(format!("failed to list dataset {dataset_id} data: {e}"))
+            })?;
+
         let result = cognify(
-            data_items.clone(),
+            dataset_items,
             dataset_id,
             Some(owner_id),
             user_email,
@@ -865,6 +877,50 @@ mod tests {
         assert_ne!(row.content_hash, old.content_hash, "the content changed");
         assert_eq!(row.dataset_id, Some(fx.dataset_id));
         assert_eq!(row.owner_id, fx.owner);
+    }
+
+    /// Python cognifies the whole dataset after the pinned re-add
+    /// (`update.py:340`, `cognify(datasets=[dataset_id])`): a sibling item that
+    /// was added but never cognified is cognified by the update of another
+    /// document, not only the replaced one.
+    #[tokio::test]
+    async fn an_update_cognifies_the_whole_dataset() {
+        let fx = Fixture::new().await;
+        let target = fx.add("the target content").await;
+        let sibling = fx.add("a sibling that was never cognified").await;
+        let completed = |ids: Vec<Uuid>| {
+            let db = Arc::clone(&fx.db);
+            let dataset_id = fx.dataset_id;
+            async move {
+                cognee_database::ops::data::get_cognify_completed_data_ids(
+                    db.as_ref(),
+                    dataset_id,
+                    &ids,
+                )
+                .await
+                .unwrap()
+            }
+        };
+        assert!(
+            completed(vec![sibling.id]).await.is_empty(),
+            "precondition: the sibling is not cognified"
+        );
+
+        fx.update_with(
+            &fx.add_pipeline,
+            target.id,
+            vec![DataInput::Text("the replaced content".into())],
+            None,
+        )
+        .await
+        .expect("update succeeds");
+
+        let done = completed(vec![target.id, sibling.id]).await;
+        assert!(done.contains(&target.id), "the replaced item is cognified");
+        assert!(
+            done.contains(&sibling.id),
+            "the sibling is cognified too, as in Python"
+        );
     }
 
     /// A pre-fork id resolves to the row it forked into: the update acts on
