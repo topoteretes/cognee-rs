@@ -2094,6 +2094,38 @@ mod tests {
         assert_eq!(entries[0].feedback_score, Some(2));
     }
 
+    #[tokio::test]
+    async fn inferred_previous_answer_rating_does_not_replace_explicit_feedback() {
+        let (orchestrator, _retriever, manager, _dir) = session_orchestrator(json!({
+            "response_to_user": "Thanks.",
+            "query_to_answer": null,
+            "served_context_ratings": [],
+            "candidate_context_updates": [],
+            "previous_answer_rating": 2
+        }))
+        .await;
+        let prior = manager.get_session(Some("s"), None).await.unwrap();
+        manager
+            .add_feedback(
+                Some("s"),
+                None,
+                &prior[0].id.to_string(),
+                Some("explicit"),
+                Some(5),
+            )
+            .await
+            .unwrap();
+
+        orchestrator
+            .search(&session_request("Actually, use X."))
+            .await
+            .unwrap();
+
+        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        assert_eq!(entries[0].feedback_text.as_deref(), Some("explicit"));
+        assert_eq!(entries[0].feedback_score, Some(5));
+    }
+
     #[async_trait]
     impl SearchRetriever for FakeChunksRetriever {
         fn search_type(&self) -> SearchType {
