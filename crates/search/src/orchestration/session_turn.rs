@@ -207,85 +207,17 @@ pub async fn prepare_session_turn_from_snapshot(
     )
     .await;
 
-    let has_evidence = !analysis.candidate_context_updates.is_empty()
-        || !analysis.served_context_ratings.is_empty()
-        || analysis.previous_answer_rating.is_some();
-    let mut accepted = vec![];
-    if has_evidence {
-        let feedback_id = Uuid::new_v4().to_string();
-        let mut feedback = Map::new();
-        for (key, value) in [
-            ("id", json!(feedback_id)),
-            ("kind", json!("feedback")),
-            ("created_at", json!(Utc::now().to_rfc3339())),
-            ("raw_text", json!(query)),
-            (
-                "referenced_qa_ids",
-                json!(previous_qa_id.iter().cloned().collect::<Vec<_>>()),
-            ),
-            (
-                "referenced_qa_rating",
-                json!(analysis.previous_answer_rating),
-            ),
-            ("influencing_context_ids", json!(served_ids)),
-            (
-                "candidate_context_entries",
-                json!(analysis.candidate_context_updates),
-            ),
-        ] {
-            feedback.insert(key.into(), value);
-        }
-        let _ = manager
-            .create_session_context_entry(Some(session_id), user_id, feedback)
-            .await;
-
-        for rating in &analysis.served_context_ratings {
-            // The model may only rate context proven to have been served to
-            // the previous answer. Ignore invented or stale IDs.
-            if !served_ids.iter().any(|id| id == &rating.entry_id) {
-                continue;
-            }
-            let Some(row) = rows
-                .iter()
-                .find(|r| r.get("id").and_then(Value::as_str) == Some(&rating.entry_id))
-            else {
-                continue;
-            };
-            let field = match rating.rating.trim().to_ascii_lowercase().as_str() {
-                "helpful" => "helpful_count",
-                "harmful" => "harmful_count",
-                _ => continue,
-            };
-            let mut merge = Map::new();
-            merge.insert(
-                field.into(),
-                json!(row.get(field).and_then(Value::as_u64).unwrap_or(0) + 1),
-            );
-            let _ = manager
-                .update_session_context_entry(Some(session_id), user_id, &rating.entry_id, merge)
-                .await;
-        }
-        let candidates = analysis
-            .candidate_context_updates
-            .iter()
-            .map(|candidate| {
-                StoredCandidateContextUpdate::new(
-                    CONTEXT_PROFILE_QA,
-                    &candidate.section,
-                    &candidate.content,
-                    candidate.confidence,
-                )
-            })
-            .collect::<Vec<_>>();
-        accepted = apply_candidate_updates_for_user(
-            manager,
-            session_id,
-            user_id,
-            &feedback_id,
-            &candidates,
-        )
-        .await;
-    }
+    let accepted = apply_turn_analysis(
+        manager,
+        session_id,
+        user_id,
+        query,
+        &analysis,
+        previous_qa_id.as_deref(),
+        &served_ids,
+        rows,
+    )
+    .await;
     let should_answer = should_answer_turn(&analysis, previous_qa_id.is_some());
     tracing::debug!(
         session_id,
@@ -398,11 +330,42 @@ pub async fn commit_session_turn_analysis(
         .last()
         .and_then(|entry| entry.used_session_context_ids.clone())
         .unwrap_or_default();
-    let has_evidence = !analysis.candidate_context_updates.is_empty()
-        || !analysis.served_context_ratings.is_empty()
-        || analysis.previous_answer_rating.is_some();
-    if !has_evidence {
-        return;
+    preparation.accepted_context_ids = apply_turn_analysis(
+        manager,
+        session_id,
+        user_id,
+        query,
+        analysis,
+        preparation.previous_qa_id.as_deref(),
+        &served_ids,
+        rows,
+    )
+    .await;
+}
+
+/// Persist a turn's evidence (Python `apply_session_turn_analysis`): one
+/// feedback row, then the candidate guidance updates, then the helpful/harmful
+/// counters. A previous-answer rating is evidence only when a previous turn
+/// exists for it to refer to. Returns the touched guidance ids.
+#[allow(clippy::too_many_arguments)]
+async fn apply_turn_analysis(
+    manager: &Arc<SessionManager>,
+    session_id: &str,
+    user_id: Option<&str>,
+    query: &str,
+    analysis: &SessionTurnAnalysis,
+    previous_qa_id: Option<&str>,
+    served_ids: &[String],
+    rows: &[SessionContextRow],
+) -> Vec<String> {
+    let previous_answer_rating = analysis
+        .previous_answer_rating
+        .filter(|_| previous_qa_id.is_some());
+    if analysis.candidate_context_updates.is_empty()
+        && analysis.served_context_ratings.is_empty()
+        && previous_answer_rating.is_none()
+    {
+        return Vec::new();
     }
     let feedback_id = Uuid::new_v4().to_string();
     let mut feedback = Map::new();
@@ -413,18 +376,9 @@ pub async fn commit_session_turn_analysis(
         ("raw_text", json!(query)),
         (
             "referenced_qa_ids",
-            json!(
-                preparation
-                    .previous_qa_id
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-            ),
+            json!(previous_qa_id.into_iter().collect::<Vec<_>>()),
         ),
-        (
-            "referenced_qa_rating",
-            json!(analysis.previous_answer_rating),
-        ),
+        ("referenced_qa_rating", json!(previous_answer_rating)),
         ("influencing_context_ids", json!(served_ids)),
         (
             "candidate_context_entries",
@@ -436,7 +390,26 @@ pub async fn commit_session_turn_analysis(
     let _ = manager
         .create_session_context_entry(Some(session_id), user_id, feedback)
         .await;
+
+    let candidates = analysis
+        .candidate_context_updates
+        .iter()
+        .map(|candidate| {
+            StoredCandidateContextUpdate::new(
+                CONTEXT_PROFILE_QA,
+                &candidate.section,
+                &candidate.content,
+                candidate.confidence,
+            )
+        })
+        .collect::<Vec<_>>();
+    let accepted =
+        apply_candidate_updates_for_user(manager, session_id, user_id, &feedback_id, &candidates)
+            .await;
+
     for rating in &analysis.served_context_ratings {
+        // The model may only rate context proven to have been served to the
+        // previous answer. Ignore invented or stale IDs.
         if !served_ids.iter().any(|id| id == &rating.entry_id) {
             continue;
         }
@@ -460,21 +433,7 @@ pub async fn commit_session_turn_analysis(
             .update_session_context_entry(Some(session_id), user_id, &rating.entry_id, merge)
             .await;
     }
-    let candidates = analysis
-        .candidate_context_updates
-        .iter()
-        .map(|candidate| {
-            StoredCandidateContextUpdate::new(
-                CONTEXT_PROFILE_QA,
-                &candidate.section,
-                &candidate.content,
-                candidate.confidence,
-            )
-        })
-        .collect::<Vec<_>>();
-    preparation.accepted_context_ids =
-        apply_candidate_updates_for_user(manager, session_id, user_id, &feedback_id, &candidates)
-            .await;
+    accepted
 }
 
 /// Bound the analysis lane of a concurrent turn so an already-completed
@@ -526,6 +485,10 @@ mod tests {
         analysis: SessionTurnAnalysis,
         should_answer: bool,
         effective_query: String,
+        /// Expected `kind: feedback` rows after the turn is prepared, when the
+        /// case pins them. Only fields listed here are compared.
+        #[serde(default)]
+        expected_context_rows: Option<Vec<Value>>,
     }
 
     fn golden_turns() -> Vec<GoldenTurn> {
@@ -632,6 +595,42 @@ mod tests {
                 "query mismatch for {}",
                 turn.name
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn python_derived_first_turn_rating_evidence_golden() {
+        for turn in golden_turns() {
+            let Some(expected) = &turn.expected_context_rows else {
+                continue;
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+                dir.path(),
+            ))));
+            let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
+
+            let prepared =
+                prepare_session_turn(&manager, &llm, "golden", None, &turn.raw_query).await;
+
+            assert_eq!(prepared.should_answer, turn.should_answer, "{}", turn.name);
+            let rows = manager
+                .get_session_context_entries(Some("golden"), None)
+                .await
+                .unwrap();
+            let feedback: Vec<_> = rows
+                .iter()
+                .filter(|row| row.get("kind").and_then(Value::as_str) == Some("feedback"))
+                .collect();
+            assert_eq!(feedback.len(), expected.len(), "{}", turn.name);
+            for (row, want) in feedback.iter().zip(expected) {
+                for (key, value) in want.as_object().unwrap() {
+                    assert_eq!(row.get(key), Some(value), "{}: {key}", turn.name);
+                }
+            }
+            if expected.is_empty() {
+                assert!(rows.is_empty(), "{}: no rows expected", turn.name);
+            }
         }
     }
 

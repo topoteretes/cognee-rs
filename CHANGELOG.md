@@ -103,8 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `AgentLesson` parsing | exact lowercase section, numeric confidence | section trimmed and lowercased, `null` confidence is 0, clamped to [0, 1] |
 
   The stages `extract_agent_context` and `update_user_preferences` are ported.
-  The preference text is inert on Rust-only data until session-turn
-  preparation lands (SDK-1045).
+  The preference text was inert on Rust-only data until session-turn
+  preparation landed (SDK-1045; historical note, see the entries below).
 
 - **Improve waits on its dataset and sessions; one dataset lock registry;
   deletes and writing improves are changes (SDK-1044).**
@@ -1047,6 +1047,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acknowledge feedback-only turns without running retrieval. Session QA rows
   now round-trip Python's `used_session_context_ids`, including a relational
   schema migration, so only guidance proven to have been served can be rated.
+  Nothing writes that field yet (the session guidance block is not ported), so
+  until it is, no served-context rating is accepted.
 
 - **`add` takes images and audio, as Python does (SDK-1039).** The CLI, the
   bindings and `ComponentManager::add_loader_registry()` give the add pipeline
@@ -1232,6 +1234,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider that omits it goes through the adapter's corrective retry. Rust's default structured-output mode is still a forced tool
   call; Python's `strict` `json_schema` request is the opt-in
   `LLM_STRUCTURED_OUTPUT_MODE=json_schema`.
+
+- **Session-turn commit parity (SDK-1045).** `cognee-search` now matches
+  Python's turn semantics: a concurrent or fan-out turn that produced no
+  answer (empty context) commits nothing, acknowledges nothing and saves no QA
+  row; a declined (feedback-only) turn is recorded in the search history, in
+  every mode and also for fan-out and legacy feedback acknowledgements, and a
+  fan-out one announces completion; a declined turn acknowledges even when a
+  `response_schema` is set; a previous-answer rating is stored only when a
+  previous turn exists, and candidate guidance is applied before served-context
+  ratings; sequential retrieval and the answer use the rewritten query alone
+  (the raw message is still what is stored and logged); batch searches skip
+  turn preparation; a search with no readable dataset logs an empty result text.
+  Documented intentional divergences: one logical turn across a multi-dataset
+  fan-out, TEMPORAL honours `include_global_context_index`, and temporal window
+  expansion re-projects external metadata
+  (`docs/roadmap/not-implemented.md`).
+
 - **`cognee-cognify`: temporal LLM failures are no longer silent.** Both temporal
   passes caught their own errors and returned `Ok`:
   `TemporalEventExtractor::extract_events` warned and returned an empty `Vec`,

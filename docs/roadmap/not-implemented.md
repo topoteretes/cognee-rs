@@ -99,12 +99,13 @@ Partial stages:
   for backends without `delete_edge_triples` — and the node is always written in full (every
   adapter's node write is an upsert). The feedback rows that infer ratings
   (`referenced_qa_rating`) and the `preferences`-section entries that become the preference
-  text are written by Python's session-turn analysis (`prepare_session_turn`), which is not
-  ported (SDK-1045); in Rust an explicit `feedback_score` (`add_feedback`) is the rating source,
-  and stored entries of either kind are honoured. **The preference-text track is inert on
-  Rust-only data until SDK-1045 lands:** nothing in Rust writes a `preferences`-section entry,
-  so the node's preference text stays empty unless Python wrote those entries into a shared
-  session store; only the `prefers` edge weights (from explicit ratings) take effect.
+  text are written by the session-turn analysis (`prepare_session_turn`), which is ported
+  (SDK-1045): generative session searches write them, and an explicit `feedback_score`
+  (`add_feedback`) remains a rating source. Stored entries of either kind are honoured. What
+  is still missing is the rendered session guidance block (Python's
+  `build_active_context_block`, see the agent-context bullet above), so served guidance is not
+  stamped on QA rows yet (`used_session_context_ids` stays empty) and served-context ratings
+  have nothing to refer to.
 - **Personalized retrieval** — graph completions (triplet ranking) and RAG completion (chunk
   re-ranking, preference text as guidance) read the preferences, including hybrid chunk ranking
   and hybrid completion/preview guidance (SDK-1045). Not yet: the session guidance block's
@@ -138,6 +139,19 @@ Partial stages:
   `distill_watermark`, on the session-context store) but no stage reads or advances them yet, so
   every run persists and distills the sessions' full Q&A, and
   `distill_sessions` reports no `entries_uncurated` count.
+
+## Intentional divergences from Python (hybrid search and session turns)
+
+Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
+
+- **One logical session turn per multi-dataset search.** Python runs one session turn per
+  dataset leg of a fan-out; Rust prepares, answers and commits one turn across the whole
+  fan-out, so the session holds one QA row and one analysis commit per search.
+- **TEMPORAL honours `include_global_context_index`.** Python's TEMPORAL retriever factory does
+  not pass the flag through; Rust forwards it, as it does for the other hybrid searches.
+- **Temporal window expansion re-projects external metadata.** Rust runs the expanded window's
+  hits through the same metadata projection as every other hybrid result; Python returns the
+  raw metadata there.
 
 ## HTTP server
 
