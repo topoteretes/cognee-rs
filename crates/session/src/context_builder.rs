@@ -83,6 +83,18 @@ pub async fn apply_candidate_updates(
     source_id: &str,
     candidates: &[CandidateContextUpdate],
 ) -> Vec<String> {
+    apply_candidate_updates_for_user(manager, session_id, Some(user_id), source_id, candidates)
+        .await
+}
+
+/// Variant for SDK callers whose session key has no explicit user id.
+pub async fn apply_candidate_updates_for_user(
+    manager: &SessionManager,
+    session_id: &str,
+    user_id: Option<&str>,
+    source_id: &str,
+    candidates: &[CandidateContextUpdate],
+) -> Vec<String> {
     let mut touched = Vec::new();
     for candidate in candidates {
         match apply_single_candidate(manager, session_id, user_id, source_id, candidate).await {
@@ -99,7 +111,7 @@ pub async fn apply_candidate_updates(
 async fn apply_single_candidate(
     manager: &SessionManager,
     session_id: &str,
-    user_id: &str,
+    user_id: Option<&str>,
     source_id: &str,
     candidate: &CandidateContextUpdate,
 ) -> Result<Option<String>, SessionError> {
@@ -124,7 +136,7 @@ async fn apply_single_candidate(
     };
 
     let rows = manager
-        .get_session_context_entries(Some(session_id), Some(user_id))
+        .get_session_context_entries(Some(session_id), user_id)
         .await?;
     if let Some(duplicate) = rows
         .iter()
@@ -145,7 +157,7 @@ async fn apply_single_candidate(
             let mut merge = SessionContextRow::new();
             merge.insert(source_field.to_string(), Value::Array(source_ids));
             manager
-                .update_session_context_entry(Some(session_id), Some(user_id), &entry_id, merge)
+                .update_session_context_entry(Some(session_id), user_id, &entry_id, merge)
                 .await?;
         }
         return Ok(Some(entry_id));
@@ -175,7 +187,7 @@ async fn apply_single_candidate(
         kind: CONTEXT_ENTRY_KIND.to_string(),
     };
     manager
-        .create_session_context_entry(Some(session_id), Some(user_id), entry.to_row()?)
+        .create_session_context_entry(Some(session_id), user_id, entry.to_row()?)
         .await?;
     Ok(Some(entry.id))
 }

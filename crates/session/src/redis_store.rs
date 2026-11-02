@@ -31,6 +31,8 @@ struct RedisQAEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     used_graph_element_ids: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    used_session_context_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     memify_metadata: Option<serde_json::Value>,
 }
 
@@ -145,6 +147,7 @@ fn build_entry(qa_id: &str, question: &str, answer: &str, context: Option<&str>)
         feedback_text: None,
         feedback_score: None,
         used_graph_element_ids: None,
+        used_session_context_ids: None,
         memify_metadata: None,
     }
 }
@@ -176,6 +179,7 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
         feedback_text: e.feedback_text.clone(),
         feedback_score: e.feedback_score,
         used_graph_element_ids,
+        used_session_context_ids: e.used_session_context_ids.clone(),
         memify_metadata,
     }
 }
@@ -224,6 +228,9 @@ fn apply_update_to_redis_entry(entry: &mut RedisQAEntry, updates: &SessionQAUpda
         entry.used_graph_element_ids = ids
             .as_ref()
             .map(|v| serde_json::to_value(v).unwrap_or_default());
+    }
+    if let Some(ref ids) = updates.used_session_context_ids {
+        entry.used_session_context_ids = ids.clone().filter(|ids| !ids.is_empty());
     }
     if let Some(ref mm) = updates.memify_metadata {
         entry.memify_metadata = mm

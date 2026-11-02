@@ -39,6 +39,8 @@ struct FsQAEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     used_graph_element_ids: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    used_session_context_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     memify_metadata: Option<serde_json::Value>,
 }
 
@@ -140,6 +142,7 @@ fn build_entry(qa_id: &str, question: &str, answer: &str, context: Option<&str>)
         feedback_text: None,
         feedback_score: None,
         used_graph_element_ids: None,
+        used_session_context_ids: None,
         memify_metadata: None,
     }
 }
@@ -171,6 +174,7 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
         feedback_text: e.feedback_text.clone(),
         feedback_score: e.feedback_score,
         used_graph_element_ids,
+        used_session_context_ids: e.used_session_context_ids.clone(),
         memify_metadata,
     }
 }
@@ -251,6 +255,9 @@ fn apply_update_to_fs_entry(entry: &mut FsQAEntry, updates: &SessionQAUpdate) {
         entry.used_graph_element_ids = ids
             .as_ref()
             .map(|v| serde_json::to_value(v).unwrap_or_default());
+    }
+    if let Some(ref ids) = updates.used_session_context_ids {
+        entry.used_session_context_ids = ids.clone().filter(|ids| !ids.is_empty());
     }
     if let Some(ref mm) = updates.memify_metadata {
         entry.memify_metadata = mm
@@ -549,6 +556,7 @@ mod tests {
         assert!(entries[0].feedback_text.is_none());
         assert!(entries[0].feedback_score.is_none());
         assert!(entries[0].used_graph_element_ids.is_none());
+        assert!(entries[0].used_session_context_ids.is_none());
         assert!(entries[0].memify_metadata.is_none());
     }
 
@@ -693,6 +701,49 @@ mod tests {
             .expect("should have graph element ids");
         assert_eq!(graph_ids.node_ids, vec!["node-1", "node-2"]);
         assert_eq!(graph_ids.edge_ids, vec!["edge-1"]);
+    }
+
+    #[tokio::test]
+    async fn used_session_context_ids_round_trip_and_empty_normalizes_to_none() {
+        let dir = tempfile::tempdir().expect("tempdir creation must succeed");
+        let store = FsSessionStore::new(dir.path());
+        let qa_id = store
+            .create_qa_entry("sess1", None, "q1?", "a1", None)
+            .await
+            .expect("create should succeed");
+
+        store
+            .update_qa_entry(
+                "sess1",
+                None,
+                &qa_id,
+                SessionQAUpdate {
+                    used_session_context_ids: Some(Some(vec!["ctx-1".into(), "ctx-2".into()])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update should succeed");
+        let entries = store.get_all_qa_entries("sess1", None).await.unwrap();
+        assert_eq!(
+            entries[0].used_session_context_ids.as_deref(),
+            Some(["ctx-1".to_string(), "ctx-2".to_string()].as_slice())
+        );
+
+        store
+            .update_qa_entry(
+                "sess1",
+                None,
+                &qa_id,
+                SessionQAUpdate {
+                    used_session_context_ids: Some(Some(vec![])),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let entries = store.get_all_qa_entries("sess1", None).await.unwrap();
+        assert!(entries[0].used_session_context_ids.is_none());
     }
 
     #[tokio::test]
