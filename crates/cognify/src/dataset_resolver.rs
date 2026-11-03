@@ -26,12 +26,11 @@ use uuid::Uuid;
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::pipeline::CognifyResult;
-use crate::rollback;
 use crate::tasks::cognify;
 
 /// Pipeline name used for cognify pipeline run records (matches Python
-/// convention). Aliased to the single source of truth so the pipeline-cache
-/// lookups below cannot drift from what the executor actually persists.
+/// convention). Aliased to the single source of truth so the run rows written
+/// below cannot drift from what the executor actually persists.
 use crate::tasks::COGNIFY_PIPELINE_STAMP_NAME as COGNIFY_PIPELINE_NAME;
 
 // ---------------------------------------------------------------------------
@@ -93,25 +92,6 @@ pub trait DatasetResolver: Send + Sync {
 // Shared per-dataset helpers
 // ---------------------------------------------------------------------------
 
-/// Whether the pipeline cache may skip `dataset_id` entirely.
-///
-/// Reads the whole latest row rather than its status alone: a run that
-/// completed with files still outstanding is *not* a cache hit — the next run
-/// has exactly those files to redo — and reading the status and the `run_info`
-/// with two queries would let the two answers come from different rows.
-async fn dataset_is_cached(
-    database: &dyn RelationalDb,
-    dataset_id: Uuid,
-) -> Result<bool, CognifyError> {
-    let latest = database
-        .get_latest_pipeline_run(COGNIFY_PIPELINE_NAME, dataset_id)
-        .await?;
-    Ok(latest.is_some_and(|run| {
-        matches!(run.status, PipelineRunStatus::Completed)
-            && !rollback::run_info_has_outstanding_failures(run.run_info.as_ref())
-    }))
-}
-
 /// Append the dataset-level `COMPLETED` row this loop writes after a run.
 ///
 /// Carries the run's *real* `pipeline_run_id` whenever the run reported one.
@@ -121,15 +101,14 @@ async fn dataset_is_cached(
 /// run's failures. Both now match what the run actually did.
 ///
 /// One edge to that claim, stated rather than papered over: **a result flagged
-/// `already_completed` is not a run**, so nothing is appended. Either the
-/// pipeline cache short-circuited it or the completion markers covered every
-/// item; in both cases the run that did the work already has its own rows, and
-/// appending one here would put a fabricated id at the head of the dataset's
-/// trail — exactly what carrying the real id exists to avoid.
+/// `already_completed` is not a run**, so nothing is appended. The completion
+/// markers covered every item; the run that did the work already has its own
+/// rows, and appending one here would put a fabricated id at the head of the
+/// dataset's trail — exactly what carrying the real id exists to avoid.
 ///
-/// `run_info` follows Python's `COMPLETED` shape: `{}` for a clean run (no
-/// data items since COG-6089), plus the Rust-only failure summary when files
-/// are still outstanding.
+/// `run_info` is Python's `COMPLETED` shape, `{}` (no data items since
+/// COG-6089, `a88402500`), whatever the run's failure report says: the report
+/// is in the returned `CognifyResult`, not in the row.
 async fn record_dataset_run(
     database: &dyn RelationalDb,
     user_id: Uuid,
@@ -140,11 +119,7 @@ async fn record_dataset_run(
         return Ok(());
     }
     let pipeline_run_id = result.pipeline_run_id.unwrap_or_else(Uuid::new_v4);
-    let run_info = if result.failures.is_empty() {
-        Some(cognee_core::pipeline_run_registry::run_info_for_completed())
-    } else {
-        Some(rollback::run_info_with_failures(&result.failures))
-    };
+    let run_info = Some(cognee_core::pipeline_run_registry::run_info_for_completed());
     let run = PipelineRun {
         id: Uuid::new_v4(),
         created_at: Utc::now(),
@@ -203,16 +178,6 @@ pub async fn cognify_datasets(
     let mut results = Vec::new();
 
     for dataset in &datasets {
-        // --- Pipeline cache check ---
-        if config.use_pipeline_cache && dataset_is_cached(&*database, dataset.id).await? {
-            info!(
-                dataset_name = %dataset.name,
-                dataset_id = %dataset.id,
-                "Skipping already-processed dataset (pipeline cache hit)"
-            );
-            continue;
-        }
-
         let data_items = resolver.get_dataset_data(dataset.id).await?;
 
         if data_items.is_empty() {
@@ -323,15 +288,6 @@ pub async fn cognify_dataset_refs(
 
     let mut results = Vec::new();
     for dataset in &all_datasets {
-        if config.use_pipeline_cache && dataset_is_cached(&*database, dataset.id).await? {
-            info!(
-                dataset_name = %dataset.name,
-                dataset_id = %dataset.id,
-                "Skipping already-processed dataset (pipeline cache hit)"
-            );
-            continue;
-        }
-
         let data_items = resolver.get_dataset_data(dataset.id).await?;
         if data_items.is_empty() {
             info!(

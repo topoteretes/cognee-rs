@@ -304,6 +304,8 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 12 for `m20261029_000001_drop_run_info_data`: the `data` key is
 /// stripped from stored `pipeline_runs.run_info` (Python alembic
 /// `b7e4c2a9d6f1`, COG-6089).
+/// Bumped to 13 for `m20261030_000001_drop_pipeline_run_claims`: the Rust-only
+/// exclusive-run claim table goes with the claim (SDK-1039).
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -313,7 +315,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        12,
+        13,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(

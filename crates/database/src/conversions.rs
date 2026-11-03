@@ -319,8 +319,7 @@ impl From<&PipelineRun> for pipeline_run::ActiveModel {
             // builds the `ActiveModel` itself and sanitizes there. This impl is
             // reached only through `ops::pipeline_runs::create_pipeline_run`,
             // whose live payloads carry no free text: `dataset_resolver`'s
-            // completion row passes `rollback::run_info_with_failures`, which is
-            // uuid strings and counts, and every other caller passes `None`.
+            // completion row passes `{}`, and every other caller passes `None`.
             run_info: Set(r.run_info.clone().map(sanitize_json)),
             user_id: Set(uuid_hex::to_hex_opt(r.user_id)),
         }

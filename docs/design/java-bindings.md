@@ -181,7 +181,6 @@ one `sdk_*.rs` shim file):
 | `cognee.datasets()` | `list`, `listData`, `has`, `status`, `empty`, `deleteData`, `deleteAll` |
 | `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback`, `getGraphContext`, `setGraphContext` |
 | `cognee.users()` | `getOrCreateDefault` |
-| `cognee.admin()` | `resetPipelineRunStatus`, `resetDatasetPipelineRunStatus` |
 | `cognee.config()` | `set`, `setStr`, bulk setters ×4, `get` |
 | static | `setupLogging`, `initOtlp`, `initTelemetry`, `version` |
 

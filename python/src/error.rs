@@ -21,6 +21,7 @@ pub fn execution_error_to_pyerr(e: ExecutionError) -> PyErr {
         ExecutionError::Cancelled => CancelledError::new_err("pipeline was cancelled"),
         ExecutionError::NoTasks => NoTasksError::new_err("pipeline has no tasks"),
         ExecutionError::InvalidConfig { reason } => InvalidConfigError::new_err(reason),
+        e @ ExecutionError::RunRecordFailed { .. } => PipelineError::new_err(e.to_string()),
     }
 }
 

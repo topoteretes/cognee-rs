@@ -51,7 +51,11 @@ impl PipelineWatcher for JsWatcherImpl {
         });
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, output_count: usize) {
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        output_count: usize,
+    ) -> Result<(), cognee_core::WatcherError> {
         let run_id = run.run_id.to_string();
         let count = output_count;
         let js_obj = Arc::clone(&self.js_obj);
@@ -64,6 +68,7 @@ impl PipelineWatcher for JsWatcherImpl {
             }
             Ok(())
         });
+        Ok(())
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {

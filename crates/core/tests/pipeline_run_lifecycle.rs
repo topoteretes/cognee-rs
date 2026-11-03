@@ -224,3 +224,131 @@ async fn execute_with_no_tasks_writes_no_rows() {
         rows.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// (e) A failed COMPLETED write fails the run (Python `run_tasks.py`: the write
+//     sits inside the `try`, its failure goes to the `except` branch)
+// ---------------------------------------------------------------------------
+
+/// Delegates to a real repository but rejects every `COMPLETED` row write.
+struct RejectCompleted(Arc<dyn PipelineRunRepository>);
+
+#[async_trait::async_trait]
+impl PipelineRunRepository for RejectCompleted {
+    async fn log_pipeline_run(
+        &self,
+        pipeline_run_id: Uuid,
+        pipeline_id: Uuid,
+        pipeline_name: &str,
+        dataset_id: Option<Uuid>,
+        status: PipelineRunStatus,
+        run_info: Option<serde_json::Value>,
+    ) -> Result<Uuid, cognee_database::DatabaseError> {
+        if status == PipelineRunStatus::Completed {
+            return Err(cognee_database::DatabaseError::QueryError(
+                "synthetic COMPLETED failure".into(),
+            ));
+        }
+        self.0
+            .log_pipeline_run(
+                pipeline_run_id,
+                pipeline_id,
+                pipeline_name,
+                dataset_id,
+                status,
+                run_info,
+            )
+            .await
+    }
+    async fn latest_status(
+        &self,
+        dataset_ids: &[Uuid],
+        pipeline_name: &str,
+    ) -> Result<std::collections::HashMap<Uuid, PipelineRunStatus>, cognee_database::DatabaseError>
+    {
+        self.0.latest_status(dataset_ids, pipeline_name).await
+    }
+    async fn list_recent(
+        &self,
+        dataset_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<
+        Vec<cognee_database::pipelines::repository::PipelineRunRow>,
+        cognee_database::DatabaseError,
+    > {
+        self.0.list_recent(dataset_id, limit).await
+    }
+    async fn set_payload_field(
+        &self,
+        run_id: Uuid,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), cognee_database::DatabaseError> {
+        self.0.set_payload_field(run_id, key, value).await
+    }
+    async fn get_payload(
+        &self,
+        run_id: Uuid,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, cognee_database::DatabaseError> {
+        self.0.get_payload(run_id).await
+    }
+    async fn get_pipeline_run(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
+        self.0.get_pipeline_run(id).await
+    }
+    async fn get_pipeline_run_by_dataset(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<Option<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
+        self.0
+            .get_pipeline_run_by_dataset(dataset_id, pipeline_name)
+            .await
+    }
+    async fn get_pipeline_runs_by_dataset(
+        &self,
+        dataset_id: Uuid,
+    ) -> Result<Vec<cognee_database::PipelineRun>, cognee_database::DatabaseError> {
+        self.0.get_pipeline_runs_by_dataset(dataset_id).await
+    }
+}
+
+#[tokio::test]
+async fn a_failed_completed_write_fails_the_run_and_writes_errored() {
+    let db = make_db().await;
+    let real = make_repo(Arc::clone(&db));
+    let watcher = DbPipelineWatcher::new(Arc::new(RejectCompleted(Arc::clone(&real))));
+
+    let pass =
+        Task::sync_typed(|x: &i32, _ctx| -> Result<Box<i32>, TaskError> { Ok(Box::new(*x + 1)) });
+    let pipeline = Pipeline::new("lifecycle_completed_write_fails").with_task(pass);
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(7_i32)];
+    let ctx = stub_ctx(Arc::clone(&db)).await;
+
+    let err = execute(&pipeline, inputs, ctx, &watcher)
+        .await
+        .err()
+        .expect("every task succeeded but the COMPLETED row was not written: the run failed");
+    assert!(
+        matches!(err, ExecutionError::RunRecordFailed { .. }),
+        "{err:?}"
+    );
+
+    let rows = real.list_recent(None, 50).await.expect("list_recent");
+    assert_eq!(rows.len(), 2, "STARTED + ERRORED, no COMPLETED: {rows:?}");
+    assert_eq!(rows[0].status, PipelineRunStatus::Errored);
+    assert_eq!(rows[1].status, PipelineRunStatus::Started);
+    let info = rows[0].run_info.as_ref().expect("run_info populated");
+    assert!(
+        info["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("COMPLETED")),
+        "{info}"
+    );
+    assert!(
+        !watcher.terminal_write_failed(),
+        "the ERRORED row is terminal, so the run's marker may close"
+    );
+}

@@ -1398,8 +1398,7 @@ fn edge_reindex_rejects_a_zero_limit() {
         .stderr(predicate::str::contains("0").and(predicate::str::contains("not in")));
 }
 
-/// `run-sequence` refuses `vector-reindex`, the same way it refuses
-/// `pipeline-unblock`: an HNSW build over an existing collection runs for an
+/// `run-sequence` refuses `vector-reindex`: an HNSW build over an existing collection runs for an
 /// unbounded time and that time lands on the following step's measurement,
 /// which is the one thing a sequence file exists to produce.
 ///
@@ -1716,10 +1715,9 @@ fn edge_reindex_rejects_a_cursor_that_skips_everything() {
 // ---------------------------------------------------------------------------
 // SDK-501 follow-on — the cognify failure summary an operator can act on
 //
-// `cognify()` already records, durably, exactly which documents failed: the
-// `FailureReport` on the `Ok` result, and the same numbers persisted under
-// `pipeline_runs.run_info.cognify_failures`. Until this summary existed the CLI
-// read neither, so a tolerantly-completed run over a large corpus reported only
+// `cognify()` already records exactly which documents failed: the
+// `FailureReport` on the `Ok` result. Until this summary existed the CLI
+// did not read it, so a tolerantly-completed run over a large corpus reported only
 // "Cognify completed." and the operator had no way to learn what was missing.
 //
 // These cases drive `format_failure_summary` directly rather than a live run:

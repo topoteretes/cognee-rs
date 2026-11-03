@@ -12,7 +12,6 @@ pub mod edge;
 pub mod graph_metrics;
 pub mod node;
 pub mod pipeline_run;
-pub mod pipeline_run_claim;
 pub mod pipeline_run_payload_field;
 pub mod task_run;
 

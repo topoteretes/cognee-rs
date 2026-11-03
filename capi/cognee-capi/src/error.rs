@@ -147,6 +147,7 @@ pub fn execution_error_to_code(e: &cognee_core::ExecutionError) -> CgErrorCode {
         cognee_core::ExecutionError::Cancelled => CgErrorCode::Cancelled,
         cognee_core::ExecutionError::NoTasks => CgErrorCode::NoTasks,
         cognee_core::ExecutionError::InvalidConfig { .. } => CgErrorCode::InvalidConfig,
+        cognee_core::ExecutionError::RunRecordFailed { .. } => CgErrorCode::RuntimeError,
     }
 }
 

@@ -17,6 +17,7 @@
 //! [`super::ScopedRunWatcher`].
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -25,6 +26,7 @@ use cognee_database::{PipelineRunRepository, PipelineRunStatus as DbStatus};
 
 use crate::pipeline::{
     PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineStatus, PipelineWatcher, TaskStatus,
+    WatcherError,
 };
 
 use super::{run_info_for_completed, run_info_for_errored, run_info_for_started};
@@ -39,12 +41,33 @@ use super::{run_info_for_completed, run_info_for_errored, run_info_for_started};
 /// the inner writes are cheap no-ops.
 pub struct DbPipelineWatcher {
     repo: Arc<dyn PipelineRunRepository>,
+    /// Set when a `COMPLETED` / `ERRORED` write failed. See
+    /// [`Self::terminal_write_failed`].
+    terminal_write_failed: AtomicBool,
 }
 
 impl DbPipelineWatcher {
     /// Create a watcher that persists through `repo`.
     pub fn new(repo: Arc<dyn PipelineRunRepository>) -> Self {
-        Self { repo }
+        Self {
+            repo,
+            terminal_write_failed: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether the run's terminal row is missing: the last terminal
+    /// (`COMPLETED` / `ERRORED`) write failed. A failed `COMPLETED` write
+    /// followed by a successful `ERRORED` one (the executor's response to it)
+    /// leaves this `false`.
+    ///
+    /// The write is best-effort, but its outcome decides the run's ownership
+    /// marker: Python marks the marker closed only after
+    /// `log_pipeline_run_complete` / `log_pipeline_run_error` returned
+    /// (`run_tasks.py:342,403`). After a failed write the run is still
+    /// `STARTED` in the database, so the marker must stay for startup recovery
+    /// to find and retire the run; closing it would leave the run unrecoverable.
+    pub fn terminal_write_failed(&self) -> bool {
+        self.terminal_write_failed.load(Ordering::SeqCst)
     }
 
     /// Mirrors `ScopedRunWatcher::core_to_db_status` — no cross-crate
@@ -81,8 +104,8 @@ impl PipelineWatcher for DbPipelineWatcher {
 
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // Python parity: `log_pipeline_run_start` writes no data items
-        // (COG-6089); Rust has no recovery lock, so the row is `{}`.
-        let run_info = Some(run_info_for_started());
+        // (COG-6089); the row carries the run's recovery token when it has one.
+        let run_info = Some(run_info_for_started(run.recovery_lock));
         if let Err(e) = self
             .repo
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
@@ -103,8 +126,13 @@ impl PipelineWatcher for DbPipelineWatcher {
         }
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, _output_count: usize) {
-        // Python parity: `log_pipeline_run_complete` writes `{}`.
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        _output_count: usize,
+    ) -> Result<(), WatcherError> {
+        // Python parity: `log_pipeline_run_complete` writes `{}`, and a failed
+        // write fails the run (the executor then writes ERRORED).
         let run_info = Some(run_info_for_completed());
         if let Err(e) = self
             .repo
@@ -119,11 +147,14 @@ impl PipelineWatcher for DbPipelineWatcher {
             })
             .await
         {
+            self.terminal_write_failed.store(true, Ordering::SeqCst);
             tracing::warn!(
                 run_id = %run.run_id,
-                "DbPipelineWatcher: DB write for Completed failed (non-fatal): {e}"
+                "DbPipelineWatcher: DB write for Completed failed: {e}"
             );
+            return Err(WatcherError(e.to_string()));
         }
+        Ok(())
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {
@@ -142,10 +173,16 @@ impl PipelineWatcher for DbPipelineWatcher {
             })
             .await
         {
+            self.terminal_write_failed.store(true, Ordering::SeqCst);
             tracing::warn!(
                 run_id = %run.run_id,
                 "DbPipelineWatcher: DB write for Errored failed (non-fatal): {e}"
             );
+        } else {
+            // The ERRORED row superseded a failed COMPLETED write: the run is
+            // terminal in the database, so its marker may close (Python closes
+            // it after `log_pipeline_run_error` returned).
+            self.terminal_write_failed.store(false, Ordering::SeqCst);
         }
     }
 

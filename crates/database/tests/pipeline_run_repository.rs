@@ -180,106 +180,20 @@ async fn latest_status_batch_returns_per_dataset() {
 }
 
 // ---------------------------------------------------------------------------
-// (d) reset_orphans rewrites INITIATED/STARTED to ERRORED and counts them
+// list_unterminated_runs names exactly the runs still in flight
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn reset_orphans_rewrites_initiated_and_started() {
-    let db = make_db().await;
-    let ds = Uuid::new_v4();
-    create_dataset(&db, ds).await;
-    let repo = make_repo(Arc::clone(&db));
-
-    let pr1 = Uuid::new_v4();
-    let pr2 = Uuid::new_v4();
-    let pipeline_id = Uuid::new_v4();
-
-    // pr1: INITIATED (orphan)
-    repo.log_pipeline_run(
-        pr1,
-        pipeline_id,
-        "orphan_p",
-        Some(ds),
-        PipelineRunStatus::Initiated,
-        None,
-    )
-    .await
-    .expect("log pr1");
-
-    // pr2: STARTED (orphan)
-    repo.log_pipeline_run(
-        pr2,
-        pipeline_id,
-        "orphan_p",
-        Some(ds),
-        PipelineRunStatus::Started,
-        None,
-    )
-    .await
-    .expect("log pr2");
-
-    let count = repo
-        .reset_orphans("server_restart_orphan")
-        .await
-        .expect("reset_orphans");
-
-    assert_eq!(count, 2, "both orphans should be rewritten");
-
-    // After reset, latest status should be Errored for both.
-    let statuses = repo
-        .latest_status(&[ds], "orphan_p")
-        .await
-        .expect("latest_status after reset");
-
-    assert_eq!(statuses.get(&ds).cloned(), Some(PipelineRunStatus::Errored));
-}
-
-// ---------------------------------------------------------------------------
-// (e) reset_orphans does NOT rewrite a row with a COMPLETED successor
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn reset_orphans_does_not_rewrite_completed_successor() {
-    let db = make_db().await;
-    let ds = Uuid::new_v4();
-    create_dataset(&db, ds).await;
-    let repo = make_repo(Arc::clone(&db));
-
-    let pr = Uuid::new_v4();
-    let pipeline_id = Uuid::new_v4();
-
-    // Write INITIATED → COMPLETED (completed pipeline run, not an orphan).
-    for status in [PipelineRunStatus::Initiated, PipelineRunStatus::Completed] {
-        repo.log_pipeline_run(pr, pipeline_id, "done_p", Some(ds), status, None)
-            .await
-            .expect("log");
-    }
-
-    let count = repo
-        .reset_orphans("should_not_match")
-        .await
-        .expect("reset_orphans");
-
-    // The most recent row for this pipeline_run_id is COMPLETED, not an orphan.
-    assert_eq!(count, 0, "completed pipeline should not be rewritten");
-}
-
-// ---------------------------------------------------------------------------
-// list_orphan_runs must name exactly what reset_orphans retires
-// ---------------------------------------------------------------------------
-
-/// Startup recovery lists the orphans, rolls back each one's graph and vector
-/// artifacts, and only then calls [`PipelineRunRepository::reset_orphans`]. So
-/// the two selections have to be the same set. A row the list missed but the
-/// reset retired would have its dataset re-opened with a dead run's artifacts
-/// still in the graph — the exact state the rollback exists to remove.
+/// Startup recovery lists the runs still in flight (Python's
+/// `get_unterminated_pipeline_runs`), claims each one's ownership marker, rolls
+/// its artifacts back and closes it through
+/// [`PipelineRunRepository::reset_orphan_run`].
 ///
-/// The returned rows must also carry `pipeline_run_id` (the ownership-ledger
-/// key) and `dataset_id`, because a sweep scope is built from both. `id` — the
+/// The returned rows must carry `pipeline_run_id` (the ownership-ledger key)
+/// and `dataset_id`, because a sweep scope is built from both. `id` — the
 /// per-transition row key — is *not* what the ledger stores, and a sweep
 /// scoped on it would select nothing at all and report a clean rollback.
 #[tokio::test]
-async fn list_orphan_runs_names_exactly_what_reset_orphans_retires() {
+async fn list_unterminated_runs_names_the_runs_still_in_flight() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
@@ -291,6 +205,7 @@ async fn list_orphan_runs_names_exactly_what_reset_orphans_retires() {
     let completed = Uuid::new_v4();
     let errored = Uuid::new_v4();
 
+    // A row an older writer left at INITIATED is still a candidate.
     repo.log_pipeline_run(
         initiated,
         pipeline_id,
@@ -301,17 +216,19 @@ async fn list_orphan_runs_names_exactly_what_reset_orphans_retires() {
     )
     .await
     .expect("log initiated");
+    // Its own pipeline name: `reset_orphan_run` closes the latest row of a
+    // `(dataset, pipeline)` pair, and the finished runs below share "p".
     repo.log_pipeline_run(
         started,
         pipeline_id,
-        "p",
+        "p_started",
         Some(ds),
         PipelineRunStatus::Started,
         None,
     )
     .await
     .expect("log started");
-    // A run that finished and one that already failed: neither is an orphan,
+    // A run that finished and one that already failed: neither is in flight,
     // and sweeping either would delete a settled run's artifacts.
     for (run, last) in [
         (completed, PipelineRunStatus::Completed),
@@ -325,9 +242,9 @@ async fn list_orphan_runs_names_exactly_what_reset_orphans_retires() {
     }
 
     let mut listed: Vec<Uuid> = repo
-        .list_orphan_runs()
+        .list_unterminated_runs()
         .await
-        .expect("list_orphan_runs")
+        .expect("list_unterminated_runs")
         .into_iter()
         .inspect(|row| {
             assert_eq!(
@@ -347,22 +264,26 @@ async fn list_orphan_runs_names_exactly_what_reset_orphans_retires() {
         "only the two runs still in flight may be listed"
     );
 
-    // And the reset retires exactly that many — same selection, one helper.
-    assert_eq!(
-        repo.reset_orphans("agreement_check")
-            .await
-            .expect("reset_orphans"),
-        2
-    );
-
+    // Closing a run takes it off the list, or every restart would try to
+    // recover the same run again.
+    let row = repo
+        .get_pipeline_run(started)
+        .await
+        .expect("get")
+        .expect("present");
     assert!(
-        repo.list_orphan_runs()
+        repo.reset_orphan_run(ds, "p_started", row.id, "closed")
             .await
-            .expect("list after reset")
-            .is_empty(),
-        "retiring them must empty the list — otherwise every restart would \
-         roll back the same runs again"
+            .expect("close")
     );
+    let after: Vec<Uuid> = repo
+        .list_unterminated_runs()
+        .await
+        .expect("list after close")
+        .into_iter()
+        .map(|row| row.pipeline_run_id)
+        .collect();
+    assert_eq!(after, vec![initiated]);
 }
 
 // ---------------------------------------------------------------------------
@@ -926,528 +847,10 @@ async fn run_info_initiated_shape_is_empty_object() {
 }
 
 // ---------------------------------------------------------------------------
-// Reset-helper tests live in `crates/lib/tests/pipeline_runs_reset.rs`
-// because `reset_pipeline_run_status` / `reset_dataset_pipeline_run_status`
-// are part of the `cognee` public API and adding `cognee` as a
-// dev-dependency of `cognee-database` would create a build cycle.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Exclusive-run claims (`try_claim_pipeline_run` / `release_pipeline_run_claim`)
+// Scoped closing of an abandoned run (`reset_orphan_run`)
 //
-// These cover the atomicity the `pipeline_runs` status read cannot provide:
-// that read and the executor's later `Started` write are separate operations,
-// so two callers entering between them both see the pre-run state. The claim
-// insert is the contended operation instead.
-// ---------------------------------------------------------------------------
-
-/// A staleness window no real claim can exceed during a test.
-const NEVER_STALE: std::time::Duration = std::time::Duration::from_secs(3600);
-
-#[tokio::test]
-async fn claim_is_granted_once_and_blocks_the_second_caller() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let first = Uuid::new_v4();
-    let second = Uuid::new_v4();
-
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", first, NEVER_STALE)
-            .await
-            .expect("first claim"),
-        "the first caller must take the claim"
-    );
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", second, NEVER_STALE)
-            .await
-            .expect("second claim"),
-        "a second caller must be refused while the claim is held"
-    );
-
-    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", first)
-        .await
-        .expect("release");
-
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", second, NEVER_STALE)
-            .await
-            .expect("claim after release"),
-        "the claim must be available again once released"
-    );
-}
-
-#[tokio::test]
-async fn claims_are_scoped_per_pipeline_name() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("cognify claim")
-    );
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("memify claim"),
-        "cognify and memify on one dataset must not exclude each other"
-    );
-}
-
-#[tokio::test]
-async fn release_only_removes_the_holders_own_claim() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-
-    // A release from someone else must not free the holder's claim — otherwise
-    // a run reclaimed as stale could later drop its successor's claim.
-    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
-        .await
-        .expect("foreign release is a no-op, not an error");
-
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("claim attempt"),
-        "the holder's claim must survive a foreign release"
-    );
-}
-
-#[tokio::test]
-async fn a_stale_claim_is_reclaimed() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    // Stands in for a claim left behind by a killed process: nothing will ever
-    // release it, so without reclamation the dataset would wedge forever.
-    let abandoned = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", abandoned, NEVER_STALE)
-            .await
-            .expect("abandoned claim")
-    );
-
-    // A zero window makes any existing claim stale immediately.
-    assert!(
-        repo.try_claim_pipeline_run(
-            dataset_id,
-            "cognify_pipeline",
-            Uuid::new_v4(),
-            std::time::Duration::ZERO
-        )
-        .await
-        .expect("reclaim"),
-        "a claim older than the staleness window must be reclaimable"
-    );
-}
-
-#[tokio::test]
-async fn concurrent_claims_grant_exactly_one() {
-    let db = make_db().await;
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    // Eight tasks contend for the same pair at once. Whatever the interleaving,
-    // the composite primary key admits exactly one — this is the property the
-    // status read could not provide.
-    let mut handles = Vec::new();
-    for _ in 0..8 {
-        let repo = make_repo(Arc::clone(&db));
-        handles.push(tokio::spawn(async move {
-            repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-                .await
-                .expect("claim attempt")
-        }));
-    }
-
-    let mut granted = 0;
-    for h in handles {
-        if h.await.expect("task join") {
-            granted += 1;
-        }
-    }
-    assert_eq!(
-        granted, 1,
-        "exactly one concurrent caller may hold the claim"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Operator inspection and force-release (SDK-616)
-//
-// A killed process cannot release its claim, so the row outlives it and refuses
-// every later run on the pair until it ages out — a day later. These cover the
-// escape hatch: seeing what is held, and clearing it without the dead holder's
-// `claim_id`, which is exactly what an operator does not have.
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn get_claim_reports_none_when_the_pair_is_free() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    assert!(
-        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get_pipeline_run_claim")
-            .is_none(),
-        "an unclaimed pair must report no claim, so a refusal from elsewhere is not \
-         misattributed to the claim"
-    );
-}
-
-#[tokio::test]
-async fn get_claim_reports_the_holder_it_was_taken_with() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let holder = Uuid::new_v4();
-    let before = chrono::Utc::now();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-
-    let claim = repo
-        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get_pipeline_run_claim")
-        .expect("a claim is held");
-
-    // The id round-trips through the hex column, which is the part that would
-    // silently break: a mangled id still reads as "a claim is held", so only
-    // comparing it catches the encoding.
-    assert_eq!(claim.claim_id, holder);
-    assert!(
-        claim.claimed_at >= before - chrono::Duration::seconds(5),
-        "claimed_at must be the time of the claim, not a default"
-    );
-}
-
-/// Claims are per pipeline, so inspecting cognify must not report memify's.
-#[tokio::test]
-async fn get_claim_is_scoped_to_its_pipeline() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-
-    assert!(
-        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get_pipeline_run_claim")
-            .is_none(),
-        "a memify claim must not present as a cognify claim"
-    );
-}
-
-/// The point of the force-release: it clears a claim whose `claim_id` the
-/// caller does not know, which the ordinary release cannot do.
-#[tokio::test]
-async fn force_release_clears_a_claim_without_its_holder_id() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let dead_holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", dead_holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-
-    // A release scoped to the wrong id leaves it held — the situation an
-    // operator is stuck in, and the reason force-release exists.
-    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
-        .await
-        .expect("scoped release with a wrong id is a no-op, not an error");
-    assert!(
-        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get")
-            .is_some(),
-        "a scoped release must not drop a claim it does not own"
-    );
-
-    assert!(
-        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", dead_holder)
-            .await
-            .expect("release"),
-        "release reports that it removed a claim"
-    );
-    assert!(
-        repo.get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get")
-            .is_none()
-    );
-
-    // And the pair is usable again, which is the outcome the operator wanted.
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("re-claim after force release")
-    );
-}
-
-#[tokio::test]
-async fn force_release_reports_false_when_nothing_was_held() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    assert!(
-        !repo
-            .try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", Uuid::new_v4())
-            .await
-            .expect("release"),
-        "nothing held means nothing released — the CLI reports that differently, so the \
-         distinction has to survive the repository"
-    );
-}
-
-/// Force-release is unscoped by holder but must still be scoped by pair, or
-/// clearing a wedged cognify claim would silently abort a live memify.
-#[tokio::test]
-async fn force_release_does_not_touch_another_pipeline() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let memify_holder = Uuid::new_v4();
-    let cognify_holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", cognify_holder, NEVER_STALE)
-            .await
-            .expect("cognify claim")
-    );
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "memify_pipeline", memify_holder, NEVER_STALE)
-            .await
-            .expect("memify claim")
-    );
-
-    assert!(
-        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", cognify_holder)
-            .await
-            .expect("release")
-    );
-
-    let memify = repo
-        .get_pipeline_run_claim(dataset_id, "memify_pipeline")
-        .await
-        .expect("get")
-        .expect("the memify claim survives");
-    assert_eq!(memify.claim_id, memify_holder);
-}
-
-/// Two datasets, same pipeline: clearing one must not free the other.
-#[tokio::test]
-async fn force_release_does_not_touch_another_dataset() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let wedged = Uuid::new_v4();
-    let healthy = Uuid::new_v4();
-    create_dataset(&db, wedged).await;
-    create_dataset(&db, healthy).await;
-
-    let healthy_holder = Uuid::new_v4();
-    let wedged_holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(wedged, "cognify_pipeline", wedged_holder, NEVER_STALE)
-            .await
-            .expect("claim on the wedged dataset")
-    );
-    assert!(
-        repo.try_claim_pipeline_run(healthy, "cognify_pipeline", healthy_holder, NEVER_STALE)
-            .await
-            .expect("claim on the healthy dataset")
-    );
-
-    assert!(
-        repo.try_release_pipeline_run_claim(wedged, "cognify_pipeline", wedged_holder)
-            .await
-            .expect("release")
-    );
-
-    let survivor = repo
-        .get_pipeline_run_claim(healthy, "cognify_pipeline")
-        .await
-        .expect("get")
-        .expect("the other dataset's claim survives");
-    assert_eq!(survivor.claim_id, healthy_holder);
-}
-
-/// The TOCTOU the scoping exists for: the observed holder finishes and a new
-/// run takes the pair between the operator's read and their release. An
-/// unscoped delete would kill the newcomer while reporting the dead holder.
-#[tokio::test]
-async fn force_release_does_not_remove_a_claim_taken_over_since_the_read() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let observed = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", observed, NEVER_STALE)
-            .await
-            .expect("first claim")
-    );
-
-    // The holder finishes and a fresh run claims the pair.
-    repo.release_pipeline_run_claim(dataset_id, "cognify_pipeline", observed)
-        .await
-        .expect("holder releases");
-    let newcomer = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", newcomer, NEVER_STALE)
-            .await
-            .expect("newcomer claims")
-    );
-
-    // The operator now acts on what they read a moment ago.
-    assert!(
-        !repo
-            .try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", observed)
-            .await
-            .expect("release"),
-        "releasing a holder that is gone must remove nothing"
-    );
-
-    let still_held = repo
-        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get")
-        .expect("the newcomer still holds the pair");
-    assert_eq!(
-        still_held.claim_id, newcomer,
-        "the live run's claim must survive an operator releasing an older holder"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Startup sweep of every claim
-//
-// The holder-scoped releases above are the whole recovery story for a claim,
-// and a killed process has no holder left to do the releasing — so the pair
-// stays wedged until the day-long staleness window expires. The sweep is the
-// escape hatch for a deployment that can prove no peer process exists: at
-// startup, with one process per database, every claim in the table belongs to
-// a dead predecessor. These tests cover the repository half; enforcing the
-// single-process precondition is the caller's job.
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn release_all_clears_every_pair_and_reports_count() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-
-    // Two datasets, and two pipelines on one of them: the sweep is unscoped in
-    // both dimensions, unlike every other release in this file.
-    let wedged = Uuid::new_v4();
-    let other = Uuid::new_v4();
-    create_dataset(&db, wedged).await;
-    create_dataset(&db, other).await;
-
-    let pairs = [
-        (wedged, "cognify_pipeline"),
-        (wedged, "memify_pipeline"),
-        (other, "cognify_pipeline"),
-    ];
-    for (dataset_id, pipeline_name) in pairs {
-        assert!(
-            repo.try_claim_pipeline_run(dataset_id, pipeline_name, Uuid::new_v4(), NEVER_STALE)
-                .await
-                .expect("claim"),
-            "the {pipeline_name} claim on {dataset_id} must be granted first"
-        );
-    }
-
-    assert_eq!(
-        repo.release_all_pipeline_run_claims("test_startup_sweep")
-            .await
-            .expect("release_all_pipeline_run_claims"),
-        3,
-        "the count is what a caller logs, so it must be the number actually removed"
-    );
-
-    for (dataset_id, pipeline_name) in pairs {
-        assert!(
-            repo.get_pipeline_run_claim(dataset_id, pipeline_name)
-                .await
-                .expect("get_pipeline_run_claim")
-                .is_none(),
-            "{pipeline_name} on {dataset_id} must be free after the sweep"
-        );
-        // The point of the sweep: the pair is runnable again without waiting
-        // out the staleness window and without the dead holder's `claim_id`.
-        assert!(
-            repo.try_claim_pipeline_run(dataset_id, pipeline_name, Uuid::new_v4(), NEVER_STALE)
-                .await
-                .expect("re-claim after sweep"),
-            "{pipeline_name} on {dataset_id} must be claimable again"
-        );
-    }
-}
-
-#[tokio::test]
-async fn release_all_on_empty_table_is_zero() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-
-    // The overwhelmingly common startup: nothing was left behind. It must be
-    // silent — zero, not an error — because callers warn on a non-zero count,
-    // and a warning on every clean start would train operators to ignore the
-    // one that matters.
-    assert_eq!(
-        repo.release_all_pipeline_run_claims("test_startup_sweep")
-            .await
-            .expect("release_all on an empty table must not error"),
-        0
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Scoped orphan reset (SDK-616)
-//
-// The claim is the *second* gate. `check_pipeline_run_qualification` reads the
-// latest `pipeline_runs` row first and rejects a `Started` one, and that row
-// has no staleness window — the only sweep that retires it runs at HTTP-server
-// startup. A CLI-only deployment never reaches it, so a killed run wedges the
-// dataset permanently rather than for a day.
+// Startup recovery closes only the run whose row it observed: a newer run on
+// the same dataset must never be marked failed.
 // ---------------------------------------------------------------------------
 
 /// Returns the new row's primary key (`pipeline_runs.id`) — the value
@@ -1473,7 +876,7 @@ async fn log_status(
 }
 
 #[tokio::test]
-async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
+async fn reset_orphan_run_closes_a_started_row_with_an_errored_successor() {
     let db = make_db().await;
     let repo = make_repo(Arc::clone(&db));
     let dataset_id = Uuid::new_v4();
@@ -1495,9 +898,9 @@ async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
             .expect("reset_orphan_run")
     );
 
-    // What qualification reads must now be `Errored`, which is the state it
-    // treats as "proceed". Asserting the successor's status rather than an
-    // absence, because the reset writes a new row instead of deleting.
+    // The latest row must now be `Errored`. Asserting the successor's status
+    // rather than an absence, because the reset writes a new row instead of
+    // deleting.
     let latest = repo
         .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
         .await
@@ -1510,8 +913,7 @@ async fn reset_orphan_run_retires_a_started_row_so_the_pair_qualifies_again() {
     );
 }
 
-/// A completed run is not an orphan. Retiring it would rewrite history and, on
-/// a `use_pipeline_cache` caller, turn a cache hit into a re-run.
+/// A completed run is not an orphan. Retiring it would rewrite history.
 #[tokio::test]
 async fn reset_orphan_run_leaves_a_completed_run_alone() {
     let db = make_db().await;
@@ -1558,6 +960,87 @@ async fn reset_orphan_run_leaves_a_completed_run_alone() {
     assert_eq!(latest.status, PipelineRunStatus::Completed);
 }
 
+/// Keyed by the run, not by the `(dataset, pipeline)` pair: a run abandoned
+/// before a newer run of the same pipeline on the same dataset completed is
+/// still closed (Python `get_unterminated_pipeline_runs` partitions by
+/// `pipeline_run_id`, and `recovery.py:102` re-reads the run's own latest row).
+#[tokio::test]
+async fn reset_orphan_run_closes_an_abandoned_run_a_newer_run_has_overtaken() {
+    let db = make_db().await;
+    let repo = make_repo(Arc::clone(&db));
+    let dataset_id = Uuid::new_v4();
+    create_dataset(&db, dataset_id).await;
+
+    let abandoned_run = Uuid::new_v4();
+    let abandoned_row = log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        abandoned_run,
+        PipelineRunStatus::Started,
+    )
+    .await;
+    let newer_run = Uuid::new_v4();
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        newer_run,
+        PipelineRunStatus::Started,
+    )
+    .await;
+    log_status(
+        &repo,
+        dataset_id,
+        "cognify_pipeline",
+        newer_run,
+        PipelineRunStatus::Completed,
+    )
+    .await;
+
+    assert!(
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", abandoned_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
+        "the abandoned run is closed although a newer run completed since"
+    );
+    let abandoned = repo
+        .get_pipeline_run(abandoned_run)
+        .await
+        .expect("get run")
+        .expect("rows exist");
+    assert_eq!(abandoned.status, PipelineRunStatus::Errored);
+    let newer = repo
+        .get_pipeline_run(newer_run)
+        .await
+        .expect("get run")
+        .expect("rows exist");
+    assert_eq!(
+        newer.status,
+        PipelineRunStatus::Completed,
+        "the newer run is untouched"
+    );
+
+    // The observed row must belong to the named pair.
+    let other_dataset = Uuid::new_v4();
+    create_dataset(&db, other_dataset).await;
+    let other_row = log_status(
+        &repo,
+        other_dataset,
+        "cognify_pipeline",
+        Uuid::new_v4(),
+        PipelineRunStatus::Started,
+    )
+    .await;
+    assert!(
+        !repo
+            .reset_orphan_run(dataset_id, "cognify_pipeline", other_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
+        "a row of another dataset is not closed under this dataset's name"
+    );
+}
+
 #[tokio::test]
 async fn reset_orphan_run_reports_false_when_the_pair_has_no_runs() {
     let db = make_db().await;
@@ -1578,8 +1061,8 @@ async fn reset_orphan_run_reports_false_when_the_pair_has_no_runs() {
     );
 }
 
-/// Scoped by pair, like the claim release: unblocking cognify must not retire a
-/// memify run that is genuinely in flight.
+/// Scoped by pair: closing a cognify run must not retire another pipeline's
+/// run that is genuinely in flight.
 #[tokio::test]
 async fn reset_orphan_run_does_not_touch_another_pipeline() {
     let db = make_db().await;
@@ -1663,15 +1146,13 @@ async fn reset_orphan_run_does_not_touch_another_dataset() {
     assert_eq!(survivor.status, PipelineRunStatus::Started);
 }
 
-/// The TOCTOU the run-id scoping exists for, and the counterpart to
-/// `force_release_does_not_remove_a_claim_taken_over_since_the_read`.
+/// Closing an abandoned run never touches another run of the same pair.
 ///
-/// The command reports first and clears second, so a real run can start between
-/// the two invocations. Retiring by `(dataset, pipeline)` alone would write an
-/// `Errored` successor over that healthy in-flight run — marking it failed and
-/// re-opening the gate it had legitimately closed.
+/// A fresh run may start on the dataset after the abandoned one was listed
+/// (no gate refuses it any more). The close appends an `Errored` row to the
+/// *abandoned* run only; the newcomer's own latest row stays `Started`.
 #[tokio::test]
-async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
+async fn reset_orphan_run_leaves_a_run_started_since_the_read_running() {
     let db = make_db().await;
     let repo = make_repo(Arc::clone(&db));
     let dataset_id = Uuid::new_v4();
@@ -1687,7 +1168,6 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     )
     .await;
 
-    // The wedged run is cleaned up some other way, and a fresh one starts.
     let newcomer = Uuid::new_v4();
     log_status(
         &repo,
@@ -1699,31 +1179,36 @@ async fn reset_orphan_run_does_not_retire_a_run_started_since_the_read() {
     .await;
 
     assert!(
-        !repo
-            .reset_orphan_run(
-                dataset_id,
-                "cognify_pipeline",
-                observed_row,
-                "operator_unblock"
-            )
+        repo.reset_orphan_run(dataset_id, "cognify_pipeline", observed_row, "abandoned")
             .await
             .expect("reset_orphan_run"),
-        "retiring a run that is no longer the latest must do nothing"
+        "the observed run is still unterminated, so it is closed"
     );
 
-    let latest = repo
-        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
+    let newcomer_latest = repo
+        .get_pipeline_run(newcomer)
         .await
-        .expect("get latest")
+        .expect("get run")
         .expect("a row exists");
     assert_eq!(
-        latest.pipeline_run_id, newcomer,
-        "the live run must still be the latest"
-    );
-    assert_eq!(
-        latest.status,
+        newcomer_latest.status,
         PipelineRunStatus::Started,
-        "and must not have been marked failed"
+        "the live run must not have been marked failed"
+    );
+    let observed_latest = repo
+        .get_pipeline_run(observed)
+        .await
+        .expect("get run")
+        .expect("a row exists");
+    assert_eq!(observed_latest.status, PipelineRunStatus::Errored);
+
+    // Once closed, the observed row is no longer its run's latest: a second
+    // close does nothing.
+    assert!(
+        !repo
+            .reset_orphan_run(dataset_id, "cognify_pipeline", observed_row, "abandoned")
+            .await
+            .expect("reset_orphan_run"),
     );
 }
 
@@ -1812,326 +1297,5 @@ async fn reset_orphan_run_does_not_retire_a_newcomer_reusing_the_same_pipeline_r
         latest.status,
         PipelineRunStatus::Started,
         "and must not have been marked failed"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Composition of the two gates
-//
-// A cognify run is admitted only after clearing *both* of the independent
-// gates below, in this order:
-//
-//   1. `check_pipeline_run_qualification` — refuses while the latest
-//      `pipeline_runs` row for the pair is `Started`. No expiry.
-//   2. `try_claim_pipeline_run` — refuses while a `pipeline_run_claims` row is
-//      held. Expires after `CLAIM_STALE_AFTER` (24h).
-//
-// A killed process leaves *both* behind, so the two clears below
-// (`reset_orphan_run` and `try_release_pipeline_run_claim`) are each
-// deliberately confined to their own gate: an operator clearing one must not
-// silently move the other. The families above each cover one gate in
-// isolation; these cover the pair.
-//
-// All of these build rows in the **library/CLI id regime** — a fresh
-// `Uuid::new_v4()` per run, as the executor in `cognee_core::pipeline` mints —
-// rather than the HTTP server's reused UUIDv5. That is the regime the
-// operator-facing clears are reached from, and one database holds rows under
-// both.
-// ---------------------------------------------------------------------------
-
-/// Retiring an orphaned run must leave the claim exactly as it found it.
-///
-/// If it cleared the claim too, an operator unwedging a *stale* row would free
-/// a claim that may still be **live** — its holder a running process — and
-/// re-admit precisely the concurrent run the claim exists to prevent.
-#[tokio::test]
-async fn reset_orphan_run_leaves_the_claim_untouched() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-    let row_id = log_status(
-        &repo,
-        dataset_id,
-        "cognify_pipeline",
-        Uuid::new_v4(),
-        PipelineRunStatus::Started,
-    )
-    .await;
-
-    // The whole row as it stood before the reset, so the comparison below is
-    // "unchanged" rather than "still plausible".
-    let before = repo
-        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get_pipeline_run_claim")
-        .expect("the claim was just taken");
-    assert_eq!(before.claim_id, holder, "sanity: the claim is the holder's");
-
-    assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", row_id, "operator_unblock")
-            .await
-            .expect("reset_orphan_run"),
-        "the Started row is an orphan and must be retired"
-    );
-
-    // Comparing the whole row, not merely "a claim is present": a reset that
-    // dropped and re-took it would read as held while having changed hands, and
-    // one that refreshed `claimed_at` in place would silently restart the 24h
-    // staleness window that is the pair's only automatic recovery.
-    let claim = repo
-        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get_pipeline_run_claim")
-        .expect("the claim must survive the reset");
-    assert_eq!(
-        claim, before,
-        "the claim must still be the same holder's, with its clock untouched"
-    );
-
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("newcomer claim attempt"),
-        "and it must still refuse a newcomer — the reset opened gate 1 only"
-    );
-}
-
-/// Releasing a claim must leave the `pipeline_runs` history exactly as it found
-/// it.
-///
-/// If it also wrote an `Errored` successor, an operator clearing a claim would
-/// mark a healthy run failed — and would do so without passing the row-PK guard
-/// `reset_orphan_run` uses to spare exactly that run.
-#[tokio::test]
-async fn releasing_the_claim_leaves_the_orphaned_run_row_untouched() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-    let row_id = log_status(
-        &repo,
-        dataset_id,
-        "cognify_pipeline",
-        Uuid::new_v4(),
-        PipelineRunStatus::Started,
-    )
-    .await;
-
-    assert!(
-        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", holder)
-            .await
-            .expect("try_release_pipeline_run_claim"),
-        "the held claim must be released"
-    );
-
-    let latest = repo
-        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get latest")
-        .expect("a row exists");
-    assert_eq!(
-        latest.id, row_id,
-        "no successor row may have been written — the observed row is still the latest"
-    );
-    assert_eq!(
-        latest.status,
-        PipelineRunStatus::Started,
-        "gate 1 must still refuse: releasing the claim is not a run reset"
-    );
-}
-
-/// The round trip. A killed process sets both gates; clearing either one alone
-/// leaves the pair refused, and only both together re-admit a run.
-#[tokio::test]
-async fn both_gates_must_be_cleared_before_the_pair_admits_a_run() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    // What a killed process leaves behind: a held claim and a `Started` row.
-    let dead_holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", dead_holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-    let row_id = log_status(
-        &repo,
-        dataset_id,
-        "cognify_pipeline",
-        Uuid::new_v4(),
-        PipelineRunStatus::Started,
-    )
-    .await;
-
-    // Both gates shut.
-    assert_eq!(
-        repo.get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get latest")
-            .expect("a row exists")
-            .status,
-        PipelineRunStatus::Started,
-        "gate 1 is shut"
-    );
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("claim attempt"),
-        "gate 2 is shut"
-    );
-
-    // Clearing gate 2 alone: the claim goes, the `Started` row stays, and
-    // qualification still refuses the pair.
-    assert!(
-        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", dead_holder)
-            .await
-            .expect("release")
-    );
-    assert_eq!(
-        repo.get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get latest")
-            .expect("a row exists")
-            .status,
-        PipelineRunStatus::Started,
-        "clearing the claim alone must not open gate 1"
-    );
-
-    // Put the wedged state back so the other order can be walked.
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", dead_holder, NEVER_STALE)
-            .await
-            .expect("re-claim")
-    );
-
-    // Clearing gate 1 alone: the row is retired, but the claim still refuses.
-    assert!(
-        repo.reset_orphan_run(dataset_id, "cognify_pipeline", row_id, "operator_unblock")
-            .await
-            .expect("reset_orphan_run")
-    );
-    let retired = repo
-        .get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get latest")
-        .expect("a row exists");
-    assert_eq!(retired.status, PipelineRunStatus::Errored, "gate 1 is open");
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("claim attempt"),
-        "clearing the run row alone must not open gate 2"
-    );
-
-    // Both cleared: the pair admits a run, and exactly one.
-    assert!(
-        repo.try_release_pipeline_run_claim(dataset_id, "cognify_pipeline", dead_holder)
-            .await
-            .expect("release")
-    );
-    // On `id`, not only on the status: a release that appended its own
-    // `Errored` successor would leave the status reading `Errored` too, and
-    // "wrote no history" would then be asserting nothing.
-    assert_eq!(
-        repo.get_pipeline_run_by_dataset(dataset_id, "cognify_pipeline")
-            .await
-            .expect("get latest")
-            .expect("a row exists")
-            .id,
-        retired.id,
-        "the retired run stays the latest — the claim release wrote no history"
-    );
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("claim after both clears"),
-        "with both gates open the pair admits a run"
-    );
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("second claim attempt"),
-        "and exactly one — the newcomer now holds the pair"
-    );
-}
-
-/// The startup sweep must not drop a live claim.
-///
-/// `reset_orphans` runs once per HTTP-server start over *every* pair in the
-/// database. On a multi-instance deployment the rows it sweeps belong to other,
-/// running instances; if it cleared their claims, one instance restarting would
-/// re-admit a second concurrent cognify on a dataset another instance is
-/// already processing. Leaving claims alone is the documented decision in
-/// `crates/cognify/src/tasks.rs` — a claim a killed process left behind is
-/// recovered by ageing out after `CLAIM_STALE_AFTER`, or by an operator's
-/// explicit release; an unattended sweep is neither.
-#[tokio::test]
-async fn reset_orphans_does_not_drop_a_live_claim() {
-    let db = make_db().await;
-    let repo = make_repo(Arc::clone(&db));
-    let dataset_id = Uuid::new_v4();
-    create_dataset(&db, dataset_id).await;
-
-    let live_holder = Uuid::new_v4();
-    assert!(
-        repo.try_claim_pipeline_run(dataset_id, "cognify_pipeline", live_holder, NEVER_STALE)
-            .await
-            .expect("claim")
-    );
-    log_status(
-        &repo,
-        dataset_id,
-        "cognify_pipeline",
-        Uuid::new_v4(),
-        PipelineRunStatus::Started,
-    )
-    .await;
-
-    let reset = repo
-        .reset_orphans("server_restart_orphan")
-        .await
-        .expect("reset_orphans");
-    assert!(
-        reset >= 1,
-        "the sweep must have found the orphaned Started row, or this test proves nothing"
-    );
-
-    let claim = repo
-        .get_pipeline_run_claim(dataset_id, "cognify_pipeline")
-        .await
-        .expect("get_pipeline_run_claim")
-        .expect("the live claim must survive the sweep");
-    assert_eq!(
-        claim.claim_id, live_holder,
-        "and must still be held by the same instance"
-    );
-
-    assert!(
-        !repo
-            .try_claim_pipeline_run(dataset_id, "cognify_pipeline", Uuid::new_v4(), NEVER_STALE)
-            .await
-            .expect("newcomer claim attempt"),
-        "so a restarting instance cannot start a second cognify on the pair"
     );
 }

@@ -22,20 +22,13 @@ use cognee_delete::{RunSweeper, SweepScope};
 use cognee_graph::GraphDBTrait;
 use cognee_models::Data;
 use cognee_vector::VectorDB;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::failure::{FailureReport, RollbackScope};
-
-/// The `run_info` key a tolerantly-completed run's failure summary rides
-/// under.
-///
-/// A Rust-only, additive key: Python's `COMPLETED` row is `{}` (no `data`
-/// since COG-6089), so a reader that only knows Python's shape ignores it.
-pub const RUN_INFO_FAILURES_KEY: &str = "cognify_failures";
 
 // ---------------------------------------------------------------------------
 // Run-id capture
@@ -79,6 +72,13 @@ impl RunIdCapturingWatcher {
         self.captured.lock().unwrap()
     }
 
+    /// Whether the run's `COMPLETED` / `ERRORED` row failed to write: the run
+    /// is then still `STARTED`, and its ownership marker must be left for
+    /// startup recovery ([`DbPipelineWatcher::terminal_write_failed`]).
+    pub(crate) fn terminal_write_failed(&self) -> bool {
+        self.inner.terminal_write_failed()
+    }
+
     /// The run id, once the executor has emitted its first lifecycle event.
     /// `None` when the run never started — a pipeline that failed to build.
     pub(crate) fn run_id(&self) -> Option<Uuid> {
@@ -115,10 +115,14 @@ impl PipelineWatcher for RunIdCapturingWatcher {
         self.inner.on_pipeline_run_started(run).await;
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, output_count: usize) {
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        output_count: usize,
+    ) -> Result<(), cognee_core::WatcherError> {
         self.inner
             .on_pipeline_run_completed(run, output_count)
-            .await;
+            .await
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {
@@ -230,68 +234,6 @@ fn outstanding_items(report: &FailureReport) -> Vec<Uuid> {
         .union(report.unreached_items())
         .copied()
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// The run record
-// ---------------------------------------------------------------------------
-
-/// `{"cognify_failures": {…}}` for a run that completed with files still
-/// outstanding.
-///
-/// No `data` key: Python stopped storing the run's data items in `run_info`
-/// (`a88402500`, COG-6089), and the failure lists below already name every
-/// item that matters to the next run.
-pub(crate) fn run_info_with_failures(report: &FailureReport) -> Value {
-    let mut failures = Map::with_capacity(4);
-    failures.insert(
-        "failed_data_ids".into(),
-        Value::Array(
-            report
-                .failed_items()
-                .iter()
-                .map(|id| Value::String(id.to_string()))
-                .collect(),
-        ),
-    );
-    failures.insert(
-        "unreached_data_ids".into(),
-        Value::Array(
-            report
-                .unreached_items()
-                .iter()
-                .map(|id| Value::String(id.to_string()))
-                .collect(),
-        ),
-    );
-    failures.insert("failure_count".into(), Value::from(report.total()));
-    failures.insert(
-        "chunk_failure_ratio".into(),
-        Value::from(report.chunk_failure_ratio()),
-    );
-
-    let mut info = Map::with_capacity(1);
-    info.insert(RUN_INFO_FAILURES_KEY.into(), Value::Object(failures));
-    Value::Object(info)
-}
-
-/// Whether a prior run's `run_info` says files it was responsible for are
-/// still outstanding.
-///
-/// A completed run with outstanding files must never become a pipeline-cache
-/// hit — the whole reason [`RUN_INFO_FAILURES_KEY`] exists. A row written
-/// before this key existed, or by Python, carries no such key and is treated
-/// as clean, which is the pre-change behaviour.
-pub(crate) fn run_info_has_outstanding_failures(run_info: Option<&Value>) -> bool {
-    let Some(failures) = run_info.and_then(|info| info.get(RUN_INFO_FAILURES_KEY)) else {
-        return false;
-    };
-    ["failed_data_ids", "unreached_data_ids"].iter().any(|key| {
-        failures
-            .get(*key)
-            .and_then(Value::as_array)
-            .is_some_and(|ids| !ids.is_empty())
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -425,8 +367,7 @@ impl RunContext<'_> {
 /// the executor itself returned `Err` it has already written the `ERRORED`
 /// row. When the post-pipeline teardown failed instead, the watcher has
 /// already written `COMPLETED`, and without a further row a swept run would be
-/// left looking complete — and would then be a pipeline-cache hit for a
-/// dataset whose artifacts are gone.
+/// left looking complete although its artifacts are gone.
 pub(crate) async fn on_run_failed(
     ctx: &RunContext<'_>,
     error: &CognifyError,
@@ -455,8 +396,7 @@ pub(crate) async fn on_run_failed(
     }
 }
 
-/// Sweep the failed items, mark the survivors, and attach the failure list to
-/// the run record.
+/// Sweep the failed items and mark the survivors complete.
 ///
 /// Never returns an error: the run completed.
 pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureReport) {
@@ -487,15 +427,6 @@ pub(crate) async fn on_run_completed(ctx: &RunContext<'_>, report: &FailureRepor
         .copied()
         .collect();
     ctx.mark_complete(&survivors).await;
-
-    // Only when there is something to attach. A clean run's `pipeline_runs`
-    // trail stays byte-identical to what it was before this change, which is
-    // what keeps the cross-SDK shape parity suite honest rather than merely
-    // passing.
-    if !outstanding.is_empty() {
-        ctx.append_run_row(PipelineRunStatus::Completed, run_info_with_failures(report))
-            .await;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,43 +592,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_info_round_trips_through_the_cache_gate() {
-        let failed = Uuid::new_v4();
-        let unreached = Uuid::new_v4();
-        let report = report_with(&[failed], &[unreached]);
-        let info = run_info_with_failures(&report);
-        assert_eq!(
-            info.as_object().unwrap().keys().collect::<Vec<_>>(),
-            vec![RUN_INFO_FAILURES_KEY],
-            "no `data` key since COG-6089; the failure summary is the only key"
-        );
-        assert!(run_info_has_outstanding_failures(Some(&info)));
-
-        let failures = info.get(RUN_INFO_FAILURES_KEY).unwrap();
-        assert_eq!(failures.get("failure_count").unwrap(), 1);
-        assert_eq!(
-            failures.get("failed_data_ids").unwrap().as_array().unwrap(),
-            &[Value::String(failed.to_string())]
-        );
-    }
-
-    #[test]
-    fn a_clean_run_info_is_not_an_outstanding_one() {
-        assert!(!run_info_has_outstanding_failures(None));
-        assert!(!run_info_has_outstanding_failures(Some(
-            &serde_json::json!({
-                "data": ["a", "b"]
-            })
-        )));
-        assert!(
-            !run_info_has_outstanding_failures(Some(&run_info_with_failures(
-                &FailureReport::default()
-            ))),
-            "an empty report leaves both id lists empty, so nothing is outstanding"
-        );
-    }
-
     /// The report cap bounds the entry list but never the id sets, so the
     /// sweep selection stays complete. Pinned here because `decide_sweep`
     /// reads exactly those sets.
@@ -729,9 +623,8 @@ mod tests {
     ///
     /// The watcher writes `COMPLETED` as the executor returns, so an error
     /// raised after that — the post-pipeline DLT teardown — must append its own
-    /// `ERRORED` row. Without it a swept run would be left looking complete,
-    /// and would then be a pipeline-cache hit for a dataset whose artifacts are
-    /// gone.
+    /// `ERRORED` row. Without it a swept run would be left looking complete
+    /// although its artifacts are gone.
     #[tokio::test]
     async fn a_failure_after_the_executor_returned_appends_an_errored_row() {
         let (db, dataset_id, ctx_parts) = run_context_fixture().await;

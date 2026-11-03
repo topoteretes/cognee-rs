@@ -21,6 +21,7 @@ pub mod pipeline;
 pub mod progress;
 pub mod provenance;
 pub mod rate_limiter;
+pub mod run_ownership;
 pub mod runtime;
 pub mod sentinels;
 pub mod task;
@@ -37,7 +38,8 @@ pub use exec_status::{ExecStatusManager, NoopExecStatusManager};
 pub use pipeline::{
     DataIdFn, ExecutionError, NoopWatcher, Pipeline, PipelineBuilder, PipelineRunHandle,
     PipelineRunInfo, PipelineRunResult, PipelineRunStatus, PipelineStatus, PipelineWatcher,
-    RetryDelay, RetryPolicy, TaskStatus, execute, execute_blocking, execute_in_background,
+    RetryDelay, RetryPolicy, TaskStatus, WatcherError, execute, execute_blocking,
+    execute_in_background,
 };
 pub use progress::ProgressToken;
 pub use provenance::{
@@ -45,6 +47,7 @@ pub use provenance::{
     stamp_tree, stamp_tree_dyn,
 };
 pub use rate_limiter::{RateLimiter, SemaphoreLimiter, TokenBucketLimiter};
+pub use run_ownership::RunOwnership;
 pub use runtime::AsyncRuntime;
 pub use sentinels::{DroppedSentinel, PassthroughSentinel, is_dropped, is_passthrough};
 pub use task::{

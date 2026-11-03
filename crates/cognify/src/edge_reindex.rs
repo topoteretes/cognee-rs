@@ -22,8 +22,9 @@
 //! The rollback sweeper does not cover it either: `RunSweeper` is reached only
 //! from `rollback::on_run_failed`, whose production callers are both in-process
 //! error paths — a SIGKILL runs neither, so every `RollbackScope` collapses to
-//! the same end state. `reset_orphans` only rewrites `pipeline_runs` rows, and
-//! a library/CLI process never calls it. The ownership-ledger row written
+//! the same end state. Startup recovery (`recover_stale_pipeline_runs`) rolls
+//! back a killed run's ledger-attributed artifacts, but never the edge/vector
+//! gap this module repairs. The ownership-ledger row written
 //! before the graph write makes an orphan *findable*, not repaired.
 //!
 //! # Relationship to Python

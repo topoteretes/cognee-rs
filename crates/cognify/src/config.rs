@@ -325,19 +325,14 @@ pub struct CognifyConfig {
     /// Python parameter: incremental_loading (default: True)
     pub incremental_loading: bool,
 
-    /// Enable pipeline-level caching.
-    /// When true, skips datasets whose latest pipeline run status is `Completed`.
-    /// Requires a database connection to be provided.
+    /// Directory for run-ownership markers (`<system_root>/pipeline_run_locks`).
     ///
-    /// Deleting a dataset or forgetting its memory does **not** re-arm the
-    /// cache: no `INITIATED` reset row is written any more (Python
-    /// `dc0b4ad6a`, which removed this gate altogether). A caller that opts in
-    /// must call `cognee::reset_dataset_pipeline_run_status` after such a
-    /// delete, or the next cognify of that dataset is a cache hit. Deleting
-    /// individual data items does invalidate it (their `pipeline_runs` rows go).
-    ///
-    /// Python parameter: use_pipeline_cache (default: False; removed upstream)
-    pub use_pipeline_cache: bool,
+    /// A run records its marker in its `STARTED` row's `run_info` and holds an
+    /// OS lock on it, which is what lets startup recovery prove a `STARTED`
+    /// row abandoned (Python `run_ownership.py`). `None` (the default) runs
+    /// without a marker: such a run is never recovered automatically.
+    /// `Settings::cognify_config` fills it from the system root directory.
+    pub run_ownership_dir: Option<std::path::PathBuf>,
 
     /// Create WebPage/WebSite provenance nodes for URL-sourced documents.
     ///
@@ -602,7 +597,7 @@ impl Default for CognifyConfig {
 
             incremental_loading: true,
 
-            use_pipeline_cache: false,
+            run_ownership_dir: None,
 
             create_web_page_nodes: true,
             data_per_batch: 20,
@@ -725,9 +720,9 @@ impl CognifyConfig {
         self
     }
 
-    /// Enable or disable pipeline-level caching.
-    pub fn with_pipeline_cache(mut self, enable: bool) -> Self {
-        self.use_pipeline_cache = enable;
+    /// Set the run-ownership marker directory. See [`Self::run_ownership_dir`].
+    pub fn with_run_ownership_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.run_ownership_dir = Some(dir.into());
         self
     }
 
@@ -1158,8 +1153,8 @@ mod tests {
         // Incremental defaults
         assert!(config.incremental_loading);
 
-        // Pipeline cache defaults
-        assert!(!config.use_pipeline_cache);
+        // No ownership marker unless the settings name a directory
+        assert!(config.run_ownership_dir.is_none());
 
         // Advanced defaults
         assert_eq!(config.data_per_batch, 20);

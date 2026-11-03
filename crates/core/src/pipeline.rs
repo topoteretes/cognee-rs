@@ -234,6 +234,12 @@ pub struct Pipeline {
     /// batch for `*Batch` tasks (via `dispatch_batch`). Individual tasks may
     /// override it via [`TaskInfo::rate_limiter`]. `None` means no throttling.
     pub rate_limiter: Option<Arc<dyn RateLimiter>>,
+    /// The run-ownership token written into the `STARTED` row's `run_info` as
+    /// `{"recovery_lock": …}` (Python's `log_pipeline_run_start(recovery_token=…)`),
+    /// so startup recovery can prove the run abandoned. The caller holds the
+    /// matching [`crate::RunOwnership`] for the run's lifetime. `None` writes
+    /// `{}` and makes the run unrecoverable by recovery.
+    pub recovery_lock: Option<Uuid>,
 }
 
 impl Pipeline {
@@ -249,6 +255,7 @@ impl Pipeline {
             concurrency: 1,
             telemetry_settings: None,
             rate_limiter: None,
+            recovery_lock: None,
         }
     }
 
@@ -321,6 +328,13 @@ impl Pipeline {
     /// (reactive backoff).
     pub fn with_rate_limiter(mut self, rl: Arc<dyn RateLimiter>) -> Self {
         self.rate_limiter = Some(rl);
+        self
+    }
+
+    /// Record the run-ownership token in the `STARTED` row. See
+    /// [`Pipeline::recovery_lock`].
+    pub fn with_recovery_lock(mut self, token: Option<Uuid>) -> Self {
+        self.recovery_lock = token;
         self
     }
 
@@ -507,6 +521,7 @@ impl<I: Value, O: Value> PipelineBuilder<I, O> {
             concurrency: self.concurrency,
             telemetry_settings: None,
             rate_limiter: None,
+            recovery_lock: None,
         }
     }
 }
@@ -537,6 +552,8 @@ pub struct PipelineRunInfo {
     /// When the run reached a terminal state (`Completed` or `Errored`).
     /// `None` while the run is still in flight.
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Recovery token for the `STARTED` row; see [`Pipeline::recovery_lock`].
+    pub recovery_lock: Option<Uuid>,
 }
 
 impl PipelineRunInfo {
@@ -585,7 +602,7 @@ impl std::fmt::Display for PipelineRunStatus {
 /// `Uuid::nil()` → `"00000000-…"`. Those produce different hashes;
 /// callers pass `None` for absent user_id/dataset_id, so swapping in
 /// `ids::pipeline_id` would silently change stored pipeline IDs.
-fn deterministic_pipeline_id(
+pub fn deterministic_pipeline_id(
     name: Option<&str>,
     user_id: Option<Uuid>,
     dataset_id: Option<Uuid>,
@@ -656,10 +673,32 @@ pub trait PipelineWatcher: Send + Sync {
     /// the `STARTED` row here.
     async fn on_pipeline_run_started(&self, _run: &PipelineRunInfo) {}
 
-    /// Called after all tasks complete successfully.
-    async fn on_pipeline_run_completed(&self, _run: &PipelineRunInfo, _output_count: usize) {}
+    /// Called after all tasks complete successfully; persisting watchers write
+    /// the terminal `COMPLETED` row here.
+    ///
+    /// The write is part of the run, as in Python, where
+    /// `log_pipeline_run_complete` sits inside `run_tasks`' `try`
+    /// (`run_tasks.py`): if it raises, the run goes to the `except` branch,
+    /// rolls back, writes `ERRORED` and yields `PipelineRunErrored`. So a
+    /// watcher whose terminal write failed returns `Err`, and
+    /// [`execute`] then treats the run as failed: it reports
+    /// [`ExecutionError::RunRecordFailed`], calls
+    /// [`on_pipeline_run_errored`](PipelineWatcher::on_pipeline_run_errored)
+    /// with the error text, and the caller rolls the run back like any other
+    /// failed run. A watcher with nothing to persist keeps the default `Ok`.
+    async fn on_pipeline_run_completed(
+        &self,
+        _run: &PipelineRunInfo,
+        _output_count: usize,
+    ) -> Result<(), WatcherError> {
+        Ok(())
+    }
 
-    /// Called when the pipeline run fails.
+    /// Called when the pipeline run fails. Best-effort: the run has already
+    /// failed, so a write error is the watcher's to log (Python's
+    /// `log_pipeline_run_error` raising would only replace the error being
+    /// reported; Rust keeps the original and leaves the row `STARTED` for
+    /// startup recovery).
     async fn on_pipeline_run_errored(&self, _run: &PipelineRunInfo, _error: &str) {}
 
     /// Called when a task begins execution.
@@ -688,6 +727,12 @@ pub trait PipelineWatcher: Send + Sync {
     async fn on_payload_field(&self, _run_id: Uuid, _key: &str, _value: serde_json::Value) {}
 }
 
+/// A watcher could not record the run's terminal `COMPLETED` state; see
+/// [`PipelineWatcher::on_pipeline_run_completed`].
+#[derive(Debug, Clone, Error)]
+#[error("{0}")]
+pub struct WatcherError(pub String);
+
 pub struct NoopWatcher;
 
 #[async_trait]
@@ -713,6 +758,14 @@ pub enum ExecutionError {
 
     #[error("invalid pipeline configuration: {reason}")]
     InvalidConfig { reason: String },
+
+    /// Every task succeeded but the run's terminal `COMPLETED` row could not be
+    /// written. Python treats this as a failed run
+    /// (`log_pipeline_run_complete` raising lands in `run_tasks`' `except`
+    /// branch: rollback, `ERRORED`, `PipelineRunErrored`), so the executor
+    /// does too.
+    #[error("the run's COMPLETED record could not be written: {reason}")]
+    RunRecordFailed { reason: String },
 }
 /// Emit a `Pipeline Run *` analytics event.
 ///
@@ -889,6 +942,7 @@ async fn execute_unscoped(
         status: PipelineRunStatus::Started,
         started_at: chrono::Utc::now(),
         completed_at: None,
+        recovery_lock: pipeline.recovery_lock,
     };
 
     // Propagate `run_id` into the pipeline context so tasks can attribute
@@ -950,10 +1004,26 @@ async fn execute_unscoped(
         execute_items_par(inputs, pipeline, &ctx, &env).await
     };
 
-    match &result {
+    // The terminal COMPLETED write is part of the run: a failed write turns
+    // the run into a failed one (Python `run_tasks.py`, the `except` branch
+    // around `log_pipeline_run_complete`), recorded below as any other failure.
+    let result = match result {
         Ok(outputs) => {
             run_info.status = PipelineRunStatus::Completed;
             run_info.completed_at = Some(chrono::Utc::now());
+            match watcher
+                .on_pipeline_run_completed(&run_info, outputs.len())
+                .await
+            {
+                Ok(()) => Ok(outputs),
+                Err(e) => Err(ExecutionError::RunRecordFailed { reason: e.0 }),
+            }
+        }
+        err => err,
+    };
+
+    match &result {
+        Ok(outputs) => {
             watcher
                 .on_pipeline(
                     pipeline_id,
@@ -961,9 +1031,6 @@ async fn execute_unscoped(
                         output_count: outputs.len(),
                     },
                 )
-                .await;
-            watcher
-                .on_pipeline_run_completed(&run_info, outputs.len())
                 .await;
 
             // ── Analytics: Pipeline Run Completed ───────────────────────
@@ -2084,6 +2151,7 @@ mod tests {
             status: PipelineRunStatus::Started,
             started_at: chrono::Utc::now(),
             completed_at: None,
+            recovery_lock: None,
         };
         assert_eq!(info.elapsed_seconds(), None);
     }
@@ -2102,6 +2170,7 @@ mod tests {
             status: PipelineRunStatus::Completed,
             started_at,
             completed_at: Some(now),
+            recovery_lock: None,
         };
         let elapsed = info
             .elapsed_seconds()

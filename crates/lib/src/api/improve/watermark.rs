@@ -279,7 +279,8 @@ mod tests {
             ("cognify_pipeline", PipelineRunStatus::Errored, true),
             ("add_pipeline", PipelineRunStatus::Completed, true),
             ("memify_pipeline", PipelineRunStatus::Completed, true),
-            // An explicit pipeline-status reset writes an `INITIATED` row.
+            // A legacy `INITIATED` row (the pipeline-status reset API that
+            // wrote them is gone) still counts as a change.
             ("cognify_pipeline", PipelineRunStatus::Initiated, true),
         ];
         for (name, status, changed) in cases {
