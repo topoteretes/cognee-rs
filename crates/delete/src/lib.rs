@@ -1261,9 +1261,9 @@ impl DeleteService {
     /// Record the delete as a `forget` row on every dataset it touched — the
     /// change Python's `forget()` records as its operation row. A watermarked
     /// improve stage counts every non-read row written after its stamp, so a
-    /// delete must leave one: a data-item delete writes no other row, and a
-    /// dataset delete's Initiated resets are skipped when one is already
-    /// pending. `None` (scope `All`) records one dataset-less row.
+    /// delete must leave one: a delete writes no other `pipeline_runs` row (no
+    /// `INITIATED` reset, as in Python). `None` (scope `All`) records one
+    /// dataset-less row.
     ///
     /// Best effort: the delete already happened, and a missed row only costs
     /// a stale index until the next write, so a failure is logged.

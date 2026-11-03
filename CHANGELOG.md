@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `ImproveParams` | — | `+ dataset_locks`, `+ checkpoint_store` reads the stage watermarks (struct literals must set them) |
   | `DatasetLocks` | per-host registries only | `DatasetLocks::global()`, the process-wide registry: the default of `AddPipeline::new` and `DeleteService::new` (was none), and of `improve` |
   | `cognee_cognify::tasks::cognify`, `memify` | took no dataset lock | hold the dataset in `DatasetLocks::global()` for the run (re-entrant for a caller holding it there), as Python's `dataset_lock` |
-  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`; the Initiated resets skip them) when a pipeline-run repo is wired |
+  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`) when a pipeline-run repo is wired |
   | `improve()` | wrote no row of its own | records one `improve` row (`IMPROVE_WRITE_PIPELINE_NAME`) after its first stage that may have written to the graph |
 
   `global_context_index` is `already_completed` (`no_writes_since_last_improve`)
@@ -151,8 +151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dataset or forgetting its memory no longer appends `INITIATED` reset rows.
   API: `cognee_core::PipelineRunStatus::Initiated`,
   `PipelineWatcher::on_pipeline_run_initiated`, `PipelineRunInfo::data_ids`,
-  `RunSpec::data_ids`, `pipeline_run_registry::{data_info, run_info_for_running}`
-  and `DeleteService::with_pipeline_run_repo` are removed;
+  `RunSpec::data_ids` and `pipeline_run_registry::{data_info, run_info_for_running}`
+  are removed (`DeleteService::with_pipeline_run_repo` stays: it now wires only
+  the delete's `forget` change row);
   `run_info_for_errored` takes only the error, and `run_info_for_started` /
   `run_info_for_completed` are new. The stored-row enum keeps `Initiated` to
   read old rows, and the explicit `reset_pipeline_run_status` re-arm API (for

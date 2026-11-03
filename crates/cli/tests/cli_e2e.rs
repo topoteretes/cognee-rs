@@ -833,6 +833,59 @@ fn delete_all_preview_and_force_execution() {
         .success();
 }
 
+/// A CLI dataset delete records its `forget` change row in `pipeline_runs`
+/// (Python's forget operation row), which improve's stage watermarks count as
+/// a change; no `INITIATED` reset row is written.
+#[test]
+fn delete_records_a_forget_row() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "default_user_id",
+        "\"00000000-0000-0000-0000-000000000000\"",
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", "forget me", "--dataset-name", "forget_ds"])
+        .assert()
+        .success();
+    make_cmd_in(&config_home, workdir.path())
+        .args(["delete", "--dataset-name", "forget_ds", "--force"])
+        .assert()
+        .success();
+
+    let conn = Connection::open(&db_file_path).expect("open sqlite database");
+    let count = |sql: &str| -> i64 {
+        conn.query_row(sql, [], |row| row.get(0))
+            .expect("count pipeline_runs rows")
+    };
+    assert_eq!(
+        count("SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_name = 'forget'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM pipeline_runs WHERE status = 'DATASET_PROCESSING_INITIATED'"),
+        0
+    );
+}
+
 #[test]
 fn cognify_without_datasets_fails_with_explicit_message() {
     let config_home = TempDir::new().expect("temp dir should be created");

@@ -354,7 +354,10 @@ impl CogneeServices {
             Arc::clone(&database) as Arc<dyn DeleteDb>,
         )
         .with_graph_db(Arc::clone(&graph_db))
-        .with_vector_db(Arc::clone(&vector_db));
+        .with_vector_db(Arc::clone(&vector_db))
+        // Records the delete's `forget` change row (Python's forget operation
+        // row), which the improve stage watermarks count as a change.
+        .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
         // Per-dataset storage (`ENABLE_BACKEND_ACCESS_CONTROL`): deleting a
         // dataset drops its own databases.
         if let Some(dataset_storage) = cm

@@ -279,7 +279,7 @@ mod tests {
             ("cognify_pipeline", PipelineRunStatus::Errored, true),
             ("add_pipeline", PipelineRunStatus::Completed, true),
             ("memify_pipeline", PipelineRunStatus::Completed, true),
-            // A reset by a deletion writes an `INITIATED` row.
+            // An explicit pipeline-status reset writes an `INITIATED` row.
             ("cognify_pipeline", PipelineRunStatus::Initiated, true),
         ];
         for (name, status, changed) in cases {
