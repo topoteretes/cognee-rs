@@ -1419,7 +1419,12 @@ mod tests {
         assert!(obj.contains_key("dataset_name"));
         // cognify_result is #[serde(skip)]; the improve fields appear only when set
         assert!(!obj.contains_key("cognify_result"));
-        for absent in ["improve", "improve_error", "after_run_error", "improve_skipped"] {
+        for absent in [
+            "improve",
+            "improve_error",
+            "after_run_error",
+            "improve_skipped",
+        ] {
             assert!(!obj.contains_key(absent), "{absent}");
         }
     }
