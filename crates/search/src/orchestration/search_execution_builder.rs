@@ -1231,26 +1231,40 @@ mod tests {
             },
             &SearchTuning::default(),
         );
-        let opted_out = [
-            SearchType::Chunks,
-            SearchType::ChunksLexical,
-            SearchType::Summaries,
-            SearchType::Cypher,
-            SearchType::NaturalLanguage,
-            SearchType::GraphReport,
-            // Not Python `BaseRetriever`s: the feedback message itself, and
-            // the selector whose delegate is chosen inside the call.
-            SearchType::Feedback,
-            SearchType::FeelingLucky,
+        // Every search type, so a standard type missing from the map fails.
+        let expected = [
+            (SearchType::Summaries, false),
+            (SearchType::Chunks, false),
+            (SearchType::RagCompletion, true),
+            (SearchType::TripletCompletion, true),
+            (SearchType::GraphCompletion, true),
+            (SearchType::GraphCompletionDecomposition, true),
+            (SearchType::GraphSummaryCompletion, true),
+            (SearchType::Cypher, false),
+            (SearchType::NaturalLanguage, false),
+            (SearchType::GraphCompletionCot, true),
+            (SearchType::GraphCompletionContextExtension, true),
+            // The selector: its delegate decides, see `resolve_for_query`.
+            (SearchType::FeelingLucky, true),
+            // Not a Python `BaseRetriever`: the feedback message itself.
+            (SearchType::Feedback, false),
+            (SearchType::Temporal, true),
+            (SearchType::CodingRules, true),
+            (SearchType::ChunksLexical, false),
+            (SearchType::GraphReport, false),
+            (SearchType::HybridCompletion, true),
         ];
-        for (search_type, retriever) in &retrievers {
+        assert_eq!(expected.len(), retrievers.len());
+        for (search_type, prepares) in expected {
+            let retriever = retrievers
+                .get(&search_type)
+                .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
             assert_eq!(
                 retriever.supports_session_turn_preparation(),
-                !opted_out.contains(search_type),
+                prepares,
                 "{search_type:?}"
             );
         }
-        assert!(retrievers.contains_key(&SearchType::CodingRules));
     }
 
     /// `with_tuning` must reach every standard retriever that consumes a

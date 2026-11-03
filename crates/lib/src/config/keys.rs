@@ -451,28 +451,29 @@ static KEYS: &[KeySpec] = &[
         secret: false,
         persisted: true,
         overlay: |s, env| {
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
             if let Some(value) = first_set(env, &["SESSION_SEARCH_MODE"]) {
                 match session_search_mode(&value) {
-                    Some(mode) => {
-                        s.session_search_mode = mode;
-                        s.invalid_session_search_mode = None;
-                    }
+                    Some(mode) => s.session_search_mode = mode,
                     // Python validates the setting as a `Literal`, so an invalid
                     // value is an error; `check_supported` reports it.
-                    None => s.invalid_session_search_mode = Some(value),
+                    None => s.invalid_env.push(("session_search_mode", value)),
                 }
             }
         },
         set: |s, key, value| {
             s.session_search_mode = session_search_mode(&as_string(key, &value)?)
                 .ok_or_else(|| mismatch(key, "expected sequential or concurrent"))?;
-            s.invalid_session_search_mode = None;
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
             Ok(())
         },
         get: |s| serde_json::to_value(s.session_search_mode).unwrap_or(Value::Null),
         reset: |s, d| {
             s.session_search_mode = d.session_search_mode;
-            s.invalid_session_search_mode = None;
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
         },
     },
     // -- Feedback & personalization (Python's `BaseConfig`) -------------------
@@ -610,16 +611,16 @@ impl Settings {
 
     /// Fail if a setting holds a value cognee-rust rejects. Today that is an
     /// invalid `SESSION_SEARCH_MODE` from the environment (the overlay cannot
-    /// return an error). `enable_access_control = true`
+    /// return an error; see `Settings::invalid_env`). `enable_access_control = true`
     /// (`ENABLE_BACKEND_ACCESS_CONTROL`), the earlier unsupported value, turns
     /// on per-dataset storage now (`docs/design/per-dataset-storage.md`).
     /// [`ConfigManager::check_supported`](super::ConfigManager::check_supported)
     /// runs before every component build.
     pub fn check_supported(&self, _application_access_control: bool) -> Result<(), ConfigError> {
-        match &self.invalid_session_search_mode {
-            Some(value) => Err(mismatch(
-                "session_search_mode",
-                &format!("SESSION_SEARCH_MODE '{value}' must be sequential or concurrent"),
+        match self.invalid_env.first() {
+            Some((key, value)) => Err(mismatch(
+                key,
+                &format!("'{value}' is not a valid value (expected sequential or concurrent)"),
             )),
             None => Ok(()),
         }

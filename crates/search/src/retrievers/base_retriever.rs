@@ -72,6 +72,18 @@ pub trait SearchRetriever: Send + Sync {
         true
     }
 
+    /// The retriever that serves `query` when this one only selects among
+    /// others (`FEELING_LUCKY`). Python resolves the effective search type
+    /// before preparing a turn, so the orchestrator asks once up front, gates
+    /// turn preparation on the selected retriever and runs it directly.
+    /// `None` (the default) means this retriever serves the query itself.
+    async fn resolve_for_query(
+        &self,
+        _query: &str,
+    ) -> Result<Option<SearchRetrieverRef>, SearchError> {
+        Ok(None)
+    }
+
     /// The tuning knobs this retriever was built with (test-only
     /// introspection; see [`AppliedTuning`]).
     #[cfg(test)]

@@ -455,10 +455,18 @@ async fn conversational_feedback_persists_to_prior_entry() {
     let session_manager = Arc::new(SessionManager::new(session_store.clone()));
 
     let session_id = "feedback-session";
+    let user = Uuid::new_v4();
+    let user_id = user.to_string();
 
     // Manually create the first QA entry (the prior entry that feedback targets).
     session_store
-        .create_qa_entry(session_id, None, "first question", "first answer", None)
+        .create_qa_entry(
+            session_id,
+            Some(&user_id),
+            "first question",
+            "first answer",
+            None,
+        )
         .await
         .unwrap();
 
@@ -487,14 +495,15 @@ async fn conversational_feedback_persists_to_prior_entry() {
     let orchestrator = SearchOrchestrator::new(registry)
         .with_database(Arc::new(NoOpHistoryDb))
         .with_session_manager(session_manager.clone())
-        .with_llm(llm);
+        .with_llm(llm)
+        .with_session_search_mode(cognee_search::SessionSearchMode::Sequential);
 
     // Issue the feedback turn.
+    let mut request =
+        graph_request_with_feedback_detection("That was a great answer!", Some(session_id));
+    request.user_id = Some(user);
     let response = orchestrator
-        .search(&graph_request_with_feedback_detection(
-            "That was a great answer!",
-            Some(session_id),
-        ))
+        .search(&request)
         .await
         .expect("search must succeed");
 
@@ -521,7 +530,7 @@ async fn conversational_feedback_persists_to_prior_entry() {
     // Latest Python stores the acknowledgement as this turn's QA row while
     // attaching its rating to the prior answer.
     let entries = session_store
-        .get_all_qa_entries(session_id, None)
+        .get_all_qa_entries(session_id, Some(&user_id))
         .await
         .expect("reading session entries must succeed");
 
@@ -535,7 +544,7 @@ async fn conversational_feedback_persists_to_prior_entry() {
     assert!(prior.feedback_score.is_none());
     assert_eq!(entries.len(), 2);
     let context = session_manager
-        .get_session_context_entries(Some(session_id), None)
+        .get_session_context_entries(Some(session_id), Some(&user_id))
         .await
         .unwrap();
     assert!(context.iter().any(|row| {
@@ -1175,7 +1184,8 @@ async fn last_qa(harness: &TurnHarness) -> (String, Option<String>) {
 
 /// Python's `supports_session_turn_preparation = False` retrievers make no
 /// analysis call and write no feedback (Python's `detect_feedback` has no
-/// callers): the message is just searched and its turn saved.
+/// callers): the message is just searched, and no turn is recorded (Python
+/// records one only on its session-aware completion paths).
 #[tokio::test]
 async fn an_opted_out_retriever_makes_no_analysis_call_and_writes_no_feedback() {
     for mode in [
@@ -1204,6 +1214,11 @@ async fn an_opted_out_retriever_makes_no_analysis_call_and_writes_no_feedback() 
         assert!(matches!(&response.result, SearchOutput::Text(t) if t == "chunk text"));
         assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 0); // lock poison is unrecoverable
         assert_eq!(harness.context_row_count().await, 0, "no feedback written");
+        assert_eq!(
+            harness.qa_count().await,
+            1,
+            "only the seeded row: no turn saved"
+        );
         let entries = harness
             .manager
             .get_session(Some(SESSION), Some(&harness.user.to_string()))
@@ -1216,39 +1231,174 @@ async fn an_opted_out_retriever_makes_no_analysis_call_and_writes_no_feedback() 
     }
 }
 
-/// CodingRules and custom retrievers keep the trait default and prepare turns.
+/// CodingRules keeps the trait default and prepares turns.
 #[tokio::test]
-async fn coding_rules_and_custom_retrievers_prepare_turns() {
-    for search_type in [SearchType::CodingRules, SearchType::GraphCompletion] {
-        let harness = TurnHarness::of_kind(
-            cognee_search::SessionSearchMode::Sequential,
-            false,
-            answer("unused"),
-            declining_analysis(),
-            HarnessKind {
-                search_type,
-                prepares_turns: true,
-                disabled_store: false,
-            },
-        )
-        .await;
+async fn coding_rules_prepares_turns() {
+    let harness = TurnHarness::of_kind(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("unused"),
+        declining_analysis(),
+        HarnessKind {
+            search_type: SearchType::CodingRules,
+            prepares_turns: true,
+            disabled_store: false,
+        },
+    )
+    .await;
 
-        let response = harness
-            .orchestrator
-            .search(&harness.request("No, use X."))
-            .await
-            .unwrap();
+    let response = harness
+        .orchestrator
+        .search(&harness.request("No, use X."))
+        .await
+        .unwrap();
 
-        assert!(
-            matches!(&response.result, SearchOutput::Text(t) if t == "Noted, thanks."),
-            "{search_type:?}"
-        );
-        assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 1); // lock poison is unrecoverable
+    assert!(matches!(&response.result, SearchOutput::Text(t) if t == "Noted, thanks."));
+    assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 1); // lock poison is unrecoverable
+}
+
+/// A retriever that leaves `supports_session_turn_preparation` at its default.
+struct DefaultCapabilityRetriever {
+    completion_queries: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl SearchRetriever for DefaultCapabilityRetriever {
+    fn search_type(&self) -> SearchType {
+        SearchType::GraphCompletion
+    }
+
+    async fn get_context(
+        &self,
+        _query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        Ok(vec![])
+    }
+
+    async fn get_completion(
+        &self,
+        query: &str,
+        _context: Option<SearchContext>,
+        _session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<SearchOutput, SearchError> {
+        self.completion_queries
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push(query.into());
+        Ok(answer("custom answer"))
     }
 }
 
-/// Python stores a structured answer as `model_dump_json()` in both modes, and
-/// the context column is always empty.
+/// A session over a working store holding one prior QA turn, and the user.
+async fn seeded_session(dir: &tempfile::TempDir) -> (Arc<SessionManager>, Uuid) {
+    let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+        dir.path().join("sessions"),
+    ))));
+    let user = Uuid::new_v4();
+    manager
+        .save_qa(
+            Some(SESSION),
+            Some(&user.to_string()),
+            "old question",
+            "old answer",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    (manager, user)
+}
+
+/// A custom (community) retriever keeps the trait default and prepares turns.
+#[tokio::test]
+async fn a_custom_retriever_prepares_turns_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, user) = seeded_session(&dir).await;
+    let llm = Arc::new(RoutingLlm {
+        analysis: declining_analysis(),
+        analysis_calls: Mutex::new(0),
+    });
+    let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new())
+        .with_community_retriever(
+            "my_custom",
+            Arc::new(DefaultCapabilityRetriever {
+                completion_queries: Mutex::new(vec![]),
+            }),
+        )
+        .with_session_manager(manager)
+        .with_llm(llm.clone())
+        .with_auto_feedback_default(true);
+    let mut request = graph_request("No, use X.", Some(SESSION));
+    request.user_id = Some(user);
+    request.custom_search_type = Some("my_custom".into());
+
+    let response = orchestrator.search(&request).await.unwrap();
+
+    assert!(matches!(&response.result, SearchOutput::Text(t) if t == "Noted, thanks."));
+    assert_eq!(*llm.analysis_calls.lock().unwrap(), 1); // lock poison is unrecoverable
+}
+
+/// FEELING_LUCKY resolves to the selected retriever before the turn is
+/// prepared (Python's effective search type): a generative pick prepares the
+/// turn, a raw-retrieval one does not.
+#[tokio::test]
+async fn feeling_lucky_prepares_the_turn_by_its_selected_retriever() {
+    for (selected, prepares) in [
+        (SearchType::GraphCompletion, true),
+        (SearchType::Chunks, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, user) = seeded_session(&dir).await;
+        let llm = Arc::new(RoutingLlm {
+            analysis: answering_analysis(),
+            analysis_calls: Mutex::new(0),
+        });
+        let delegate = Arc::new(ScriptedRetriever {
+            search_type: selected,
+            prepares_turns: prepares,
+            answer: answer("picked answer"),
+            context_queries: Mutex::new(vec![]),
+            completion_queries: Mutex::new(vec![]),
+        });
+        // The selector's own LLM call fails here, so it falls back to `selected`.
+        let lucky = cognee_search::FeelingLuckyRetriever::new(
+            llm.clone(),
+            std::collections::HashMap::from([(selected, delegate.clone() as _)]),
+            Some(selected),
+            None,
+        );
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(lucky));
+        let orchestrator = SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(llm.clone())
+            .with_auto_feedback_default(true);
+        let mut request = graph_request("Be terse. What now?", Some(SESSION));
+        request.search_type = SearchType::FeelingLucky;
+        request.user_id = Some(user);
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(
+            *llm.analysis_calls.lock().unwrap(), // lock poison is unrecoverable
+            usize::from(prepares),
+            "{selected:?}"
+        );
+        let asked = delegate.completion_queries.lock().unwrap().clone(); // lock poison is unrecoverable
+        let expected = if prepares {
+            "effective question"
+        } else {
+            "Be terse. What now?"
+        };
+        assert_eq!(asked, vec![expected.to_string()], "{selected:?}");
+    }
+}
+
+/// A structured answer is stored as compact JSON in both modes (Python's
+/// concurrent `model_dump_json`; its sequential path stores `str(model)`, a
+/// deliberate divergence), and the context column is always empty.
 #[tokio::test]
 async fn a_structured_answer_is_persisted_as_compact_json() {
     for mode in [
@@ -1267,6 +1417,15 @@ async fn a_structured_answer_is_persisted_as_compact_json() {
 
         harness.orchestrator.search(&request).await.unwrap();
 
+        // The concurrent runner answers the raw message; the sequential turn
+        // answers the analysis' effective query, so this proves which ran.
+        let expected = if mode == cognee_search::SessionSearchMode::Concurrent {
+            "Be terse. What now?"
+        } else {
+            "effective question"
+        };
+        let asked = harness.retriever.completion_queries.lock().unwrap().clone(); // lock poison is unrecoverable
+        assert_eq!(asked, vec![expected.to_string()], "{mode:?}");
         assert_eq!(harness.qa_count().await, 2, "{mode:?} records the turn");
         let (stored, context) = last_qa(&harness).await;
         assert_eq!(stored, r#"{"city":"Paris","n":2}"#, "{mode:?}");
@@ -1320,8 +1479,12 @@ async fn concurrent_mode_needs_an_available_session_cache() {
         .await
         .unwrap();
 
-    // The sequential turn answers the effective query; the concurrent lane
-    // would have answered the raw message.
+    // Python makes no analysis call without an available session cache (even
+    // with an explicit `auto_feedback_detection`), so neither the sequential
+    // nor the concurrent runner analysed: the raw message is answered and no
+    // QA row exists.
+    assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 0); // lock poison is unrecoverable
     let completion_queries = harness.retriever.completion_queries.lock().unwrap().clone(); // lock poison is unrecoverable
-    assert_eq!(completion_queries, vec!["effective question".to_string()]);
+    assert_eq!(completion_queries, vec!["Be terse. What now?".to_string()]);
+    assert_eq!(harness.qa_count().await, 0);
 }

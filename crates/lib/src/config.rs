@@ -204,13 +204,13 @@ pub struct Settings {
     /// Session completion execution order (`concurrent` by default, or
     /// `sequential` for analysis-before-answer behavior).
     pub session_search_mode: cognee_search::SessionSearchMode,
-    /// The `SESSION_SEARCH_MODE` value from the environment that is neither
-    /// `sequential` nor `concurrent`. Python validates the setting as a
-    /// `Literal`, so an invalid value is an error:
-    /// [`Settings::check_supported`] reports it until the key is set or reset.
-    /// `#[serde(skip)]` keeps config snapshots stable.
+    /// Environment values a key rejects, as `(key, value)`: an overlay cannot
+    /// return an error, so [`Settings::check_supported`] reports the first
+    /// entry until the key is overlaid again, set or reset. Python validates
+    /// `SESSION_SEARCH_MODE` as a `Literal`, so an invalid value is an error
+    /// rather than a warning. `#[serde(skip)]` keeps config snapshots stable.
     #[serde(skip)]
-    pub invalid_session_search_mode: Option<String>,
+    pub(crate) invalid_env: Vec<(&'static str, String)>,
 
     // -- Feedback & personalization ----------------------------------------------
     // Python's `BaseConfig` knobs (`cognee/base_config.py`). Each is range-checked
@@ -1130,7 +1130,7 @@ impl Default for Settings {
             // Session / cache
             auto_feedback: true,
             session_search_mode: cognee_search::SessionSearchMode::Concurrent,
-            invalid_session_search_mode: None,
+            invalid_env: Vec::new(),
             default_feedback_influence: 0.0,
             preference_alpha: 0.3,
             preference_beta: 0.02,
@@ -2868,6 +2868,12 @@ mod tests {
 
         let mut settings = Settings::default();
         settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", " Sequential "));
+        ConfigManager::new(settings).check_supported().unwrap();
+
+        // A later overlay without the variable clears the stale rejection.
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "fast"));
+        settings.overlay_from(&MapEnv::new());
         ConfigManager::new(settings).check_supported().unwrap();
     }
 

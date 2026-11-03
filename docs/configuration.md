@@ -356,7 +356,7 @@ applied it). The OpenAI-compatible, Azure and Anthropic factories fold it into
 does, so a `temperature` in `LLM_ARGS` itself wins. It is sent on every call
 that does not pick a temperature itself: requests whose options carry none
 (graph extraction) and option-less calls, plain or structured (search
-completions, feedback detection), which otherwise send `0.0`. A temperature a
+completions, session-turn analysis), which otherwise send `0.0`. A temperature a
 call picks (summarization's `0.3`) wins, and reasoning models, which reject it,
 never receive one. Unset, these providers
 send a `temperature` from `LLM_ARGS` if it has one: on option-less calls too,

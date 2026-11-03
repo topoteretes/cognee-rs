@@ -169,7 +169,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(store.latest_qa_id("s", None).await.unwrap(), None);
         assert!(!store.delete_session("s", None).await.unwrap());
         assert!(store.read_trace_steps("u", "s").await.unwrap().is_empty());
         let mut row = SessionContextRow::new();

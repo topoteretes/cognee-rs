@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `CodingRules`, custom / community retrievers in a session search | no turn preparation | prepare turns |
   | Opted-out retriever in a session search | one legacy `detect_feedback` LLM call, feedback written to the prior QA row | no analysis call, no feedback written (Python's `detect_feedback` has no callers) |
   | `cognee_search::detect_feedback`, `FeedbackDetectionResult` | public | removed |
+  | `SessionStore::latest_qa_id`, `SessionManager::latest_qa_id` | public (only the legacy detector used them) | removed |
+  | `FEELING_LUCKY` in a session search | no turn preparation | the selected retriever is resolved first, as Python's effective search type, and decides whether the turn is prepared |
+  | A session search by a retriever that opted out of turn preparation (e.g. graph report, Cypher) | wrote a QA row when it answered with text | writes none: only the session-aware completion paths record a turn in Python |
+  | Turn preparation with no user or an unavailable session cache | one analysis call (e.g. with a request `auto_feedback_detection: true`) | no call, as Python's `is_session_available_for_completion` |
   | `SearchRequest.summarize_context` | `Option<bool>` (Rust only) | removed; the QA `context` column is always empty, as Python (`summarize_context=False` everywhere) |
   | `SESSION_SEARCH_MODE` not `sequential` / `concurrent` | warned and ignored | an error (`ConfigManager::check_supported` / `check_strict`), as Python's `Literal` |
 
@@ -1256,7 +1260,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session-turn persistence parity (SDK-1045).** A structured answer
   (`response_schema`) is now recorded as the turn's QA row, as compact JSON like
   Python's `model_dump_json`, in the sequential, concurrent and fan-out paths
-  (it was dropped); several answer texts are joined by a blank line everywhere;
+  (it was dropped); intentional divergence: Python's concurrent path stores
+  `model_dump_json()` but its sequential path stores `str(model)` (the pydantic
+  repr), whereas both modes store the JSON here so they agree; several answer texts are joined by a blank line everywhere;
   concurrent execution also needs the session cache to be available
   (`SessionManager::is_available`, Python's `is_session_available_for_completion`).
 

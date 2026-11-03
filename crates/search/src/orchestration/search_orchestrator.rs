@@ -1102,7 +1102,13 @@ impl SearchOrchestrator {
         // deliberately runs one logical turn for the whole fan-out (a
         // documented divergence). A retriever that opts out
         // (`supports_session_turn_preparation`: the raw retrieval modes),
-        // previews and batch searches skip this LLM call.
+        // previews and batch searches skip this LLM call. A selecting
+        // retriever (FEELING_LUCKY) is resolved first, as in Python, so its
+        // pick decides the capability and serves the search.
+        let retriever = match retriever.resolve_for_query(&request.query_text).await? {
+            Some(selected) => selected,
+            None => retriever,
+        };
         let raw_request = request.clone();
         let prepared_request;
         let mut turn_prepared = false;
@@ -1467,8 +1473,10 @@ impl SearchOrchestrator {
             }
         }
         // An `only_context` result is a preview (a prompt or the context), not
-        // an answer: nothing is written, as in the single-store run.
-        if !request.only_context() {
+        // an answer: nothing is written, as in the single-store run. Only the
+        // session-aware completion paths record a turn in Python, so an
+        // opted-out retriever (graph report, Cypher, ...) writes none.
+        if !request.only_context() && retriever.supports_session_turn_preparation() {
             self.save_session_turn(
                 &raw_request,
                 search_type,
@@ -1663,7 +1671,10 @@ impl SearchOrchestrator {
             )
             .await?;
 
-        if session_turn {
+        // Python records a turn only on the session-aware completion paths, so
+        // a retriever that opted out of turn preparation (graph report, Cypher,
+        // natural language, ...) writes no QA row.
+        if session_turn && retriever.supports_session_turn_preparation() {
             // The raw message is stored when the turn ran on a rewritten query.
             let mut stored = request.clone();
             if let Some(raw_query) = raw_session_query {
@@ -1945,7 +1956,8 @@ impl SearchOrchestrator {
 }
 
 /// The answer text a session turn records for `output`: text as is, a
-/// structured answer as compact JSON (Python's `model_dump_json`), several
+/// structured answer as compact JSON (Python's concurrent `model_dump_json`; its
+/// sequential path stores `str(model)`, which both modes here avoid), several
 /// texts joined by a blank line. `None` for retrieval items and for the empty
 /// `Texts` sentinel, which are not answers.
 fn session_answer(output: &SearchOutput) -> Option<String> {
@@ -2282,7 +2294,14 @@ mod tests {
             dir.path(),
         ))));
         manager
-            .save_qa(Some("s"), None, "old question", "old answer", None, None)
+            .save_qa(
+                Some("s"),
+                Some(&session_test_user().to_string()),
+                "old question",
+                "old answer",
+                None,
+                None,
+            )
             .await
             .unwrap();
         let retriever = Arc::new(SessionCompletionRetriever {
@@ -2294,8 +2313,14 @@ mod tests {
         let orchestrator = super::SearchOrchestrator::new(registry)
             .with_session_manager(manager.clone())
             .with_llm(Arc::new(TurnAnalysisLlm(analysis)))
-            .with_auto_feedback_default(true);
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Sequential);
         (orchestrator, retriever, manager, dir)
+    }
+
+    /// The user of the session fixtures: a turn needs one, as in Python.
+    fn session_test_user() -> uuid::Uuid {
+        uuid::Uuid::from_u128(1)
     }
 
     fn session_request(query: &str) -> SearchRequest {
@@ -2315,7 +2340,7 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            user_id: None,
+            user_id: Some(session_test_user()),
             tenant_id: None,
             verbose: None,
             feedback_influence: None,
@@ -2353,7 +2378,10 @@ mod tests {
             retriever.completion_query_seen.lock().unwrap().as_deref(),
             Some("effective query")
         );
-        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("s"), Some(&session_test_user().to_string()))
+            .await
+            .unwrap();
         assert_eq!(entries.last().unwrap().question, "raw follow-up");
         assert_eq!(entries.last().unwrap().answer, "generated answer");
     }
@@ -2379,13 +2407,16 @@ mod tests {
             &result.result,
             SearchOutput::Text(text) if text == "Thanks for the correction."
         ));
-        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("s"), Some(&session_test_user().to_string()))
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].question, "No, use X.");
         assert!(entries[0].feedback_text.is_none());
         assert!(entries[0].feedback_score.is_none());
         let context = manager
-            .get_session_context_entries(Some("s"), None)
+            .get_session_context_entries(Some("s"), Some(&session_test_user().to_string()))
             .await
             .unwrap();
         assert!(context.iter().any(|row| {

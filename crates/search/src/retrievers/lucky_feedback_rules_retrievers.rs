@@ -276,10 +276,12 @@ impl SearchRetriever for FeelingLuckyRetriever {
     }
 
     // Python resolves FEELING_LUCKY to the selected retriever before the turn
-    // is prepared; here the selection happens inside the delegate, so the
-    // selected retriever's analysis cannot run first.
-    fn supports_session_turn_preparation(&self) -> bool {
-        false
+    // is prepared; the orchestrator does the same through this hook.
+    async fn resolve_for_query(
+        &self,
+        query: &str,
+    ) -> Result<Option<SearchRetrieverRef>, SearchError> {
+        self.select_retriever(query).await.map(Some)
     }
 
     async fn get_context(

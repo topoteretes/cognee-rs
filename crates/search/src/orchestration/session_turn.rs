@@ -133,7 +133,9 @@ async fn analyze(
 }
 
 /// Analyze and persist one turn before retrieval. LLM/storage failures are
-/// fail-open and preserve the caller's raw query.
+/// fail-open and preserve the caller's raw query. Like Python's
+/// `is_session_available_for_completion`, a turn without a user or over an
+/// unavailable session cache makes no analysis call.
 pub async fn prepare_session_turn(
     manager: &Arc<SessionManager>,
     llm: &dyn Llm,
@@ -141,7 +143,7 @@ pub async fn prepare_session_turn(
     user_id: Option<&str>,
     query: &str,
 ) -> SessionTurnPreparation {
-    if query.trim().is_empty() {
+    if query.trim().is_empty() || user_id.is_none() || !manager.is_available() {
         return SessionTurnPreparation::pass_through(query);
     }
     let entries = match manager
@@ -572,11 +574,11 @@ mod tests {
             let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
 
             let prepared =
-                prepare_session_turn(&manager, &llm, "golden", None, &turn.raw_query).await;
+                prepare_session_turn(&manager, &llm, "golden", Some("user"), &turn.raw_query).await;
 
             assert_eq!(prepared.should_answer, turn.should_answer, "{}", turn.name);
             let rows = manager
-                .get_session_context_entries(Some("golden"), None)
+                .get_session_context_entries(Some("golden"), Some("user"))
                 .await
                 .unwrap();
             let feedback: Vec<_> = rows
@@ -733,13 +735,14 @@ mod tests {
         ))));
         let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
 
-        let prepared = prepare_session_turn(&manager, &llm, "first", None, &turn.raw_query).await;
+        let prepared =
+            prepare_session_turn(&manager, &llm, "first", Some("user"), &turn.raw_query).await;
 
         assert!(prepared.should_answer);
         assert_eq!(prepared.effective_query, turn.raw_query);
         assert_eq!(prepared.accepted_context_ids.len(), 1);
         let rows = manager
-            .get_session_context_entries(Some("first"), None)
+            .get_session_context_entries(Some("first"), Some("user"))
             .await
             .unwrap();
         assert!(rows.iter().any(|row| {
@@ -757,21 +760,31 @@ mod tests {
             dir.path(),
         ))));
         manager
-            .save_qa(Some("follow-up"), None, "previous", "answer", None, None)
+            .save_qa(
+                Some("follow-up"),
+                Some("user"),
+                "previous",
+                "answer",
+                None,
+                None,
+            )
             .await
             .unwrap();
         let llm = FixtureLlm(serde_json::to_value(&turn.analysis).unwrap());
 
         let prepared =
-            prepare_session_turn(&manager, &llm, "follow-up", None, &turn.raw_query).await;
+            prepare_session_turn(&manager, &llm, "follow-up", Some("user"), &turn.raw_query).await;
 
         assert!(prepared.should_answer);
         assert_eq!(prepared.effective_query, turn.effective_query);
-        let entries = manager.get_session(Some("follow-up"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("follow-up"), Some("user"))
+            .await
+            .unwrap();
         assert_eq!(entries[0].feedback_score, None);
         assert_eq!(entries[0].feedback_text, None);
         let rows = manager
-            .get_session_context_entries(Some("follow-up"), None)
+            .get_session_context_entries(Some("follow-up"), Some("user"))
             .await
             .unwrap();
         assert!(
@@ -797,17 +810,27 @@ mod tests {
             dir.path(),
         ))));
         manager
-            .save_qa(Some("failure"), None, "previous", "answer", None, None)
+            .save_qa(
+                Some("failure"),
+                Some("user"),
+                "previous",
+                "answer",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         let prepared =
-            prepare_session_turn(&manager, &FailingLlm, "failure", None, "raw query").await;
+            prepare_session_turn(&manager, &FailingLlm, "failure", Some("user"), "raw query").await;
 
         assert!(prepared.should_answer);
         assert_eq!(prepared.effective_query, "raw query");
         assert!(prepared.accepted_context_ids.is_empty());
-        let entries = manager.get_session(Some("failure"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("failure"), Some("user"))
+            .await
+            .unwrap();
         assert!(entries[0].feedback_score.is_none());
     }
 

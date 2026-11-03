@@ -371,20 +371,6 @@ impl SessionManager {
         .await
     }
 
-    /// Return the `qa_id` of the most-recent Q&A entry in the session.
-    ///
-    /// Returns `None` when the session has no entries yet. Used to route
-    /// conversationally-detected feedback to the prior QA entry before saving the
-    /// new turn (mirrors Python `session_manager.py:462-469`).
-    pub async fn latest_qa_id(
-        &self,
-        session_id: Option<&str>,
-        user_id: Option<&str>,
-    ) -> Result<Option<String>, SessionError> {
-        let resolved_id = self.resolve_session_id(session_id);
-        self.store.latest_qa_id(resolved_id, user_id).await
-    }
-
     /// Append one agent-trace step to the session and return the generated
     /// `trace_id` (UUID4).
     ///
