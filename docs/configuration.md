@@ -994,17 +994,16 @@ ownership rows survive as the record of what still needs deleting, whereas
 leaving the status row would wedge the dataset permanently — that gate never
 expires, and for an embedded consumer this is the only thing that clears it.
 
-##### A divergence from Python worth knowing about
+##### Same outcome as Python
 
-Retiring an orphan writes a **new `Errored` row** in Rust, where Python's
-recovery resets the run to `INITIATED`. Both resolve to "you may run" at the
-gate, and both are recorded rather than deleted, so nothing downstream
-behaves differently — but a status poller does see different things after the
-same crash: on Rust the run reads as a *failed build*, on Python as one that
-*never started*. Rust's answer is the truthful one (the run did start, and it
-did not finish) and it keeps the new-row-per-transition audit trail intact, so
-it is deliberate. Note that Rust's own `reset_pipeline_run_status` API writes
-`INITIATED`, matching Python; only the orphan sweep differs.
+Retiring an orphan writes a **new `Errored` row** whose `run_info` is
+`{"error": "<reason>"}`. Python's startup recovery does the same: it closes an
+abandoned run through `log_pipeline_run_error` (`cognee/modules/cognify/recovery.py`),
+whose row is `{"error": …}`, and since `dc0b4ad6a` it no longer appends an
+`INITIATED` row afterwards. Both SDKs record the transition rather than
+deleting the row, so a status poller sees a failed run on either side. (Rust's
+explicit `reset_pipeline_run_status` API still writes `INITIATED`; it is the
+re-arm for the opt-in pipeline cache, which Python has removed.)
 
 #### Who needs to set it
 
@@ -1286,7 +1285,7 @@ Three consequences worth stating plainly:
 
 **A divergence from Python worth knowing on a shared database.** A fully
 skipped Rust run writes no `pipeline_runs` rows at all: the marker check runs
-before the pipeline is built, so there is no `INITIATED` / `STARTED` /
+before the pipeline is built, so there is no `STARTED` /
 `COMPLETED` trail for that call, and nothing appears under
 `GET /api/v1/activity/pipeline-runs`. Python reaches the same end state by a
 different route — `run_tasks` logs the run start before it looks at any item

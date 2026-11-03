@@ -673,18 +673,21 @@ async fn list_recent_returns_rows_in_desc_order() {
 // ---------------------------------------------------------------------------
 //
 // The unit-level run_info helpers are exercised inline in
-// `crates/core/src/pipeline_run_registry/data_info.rs`. The tests below
+// `crates/core/src/pipeline_run_registry/run_info.rs`. The tests below
 // confirm that the persisted JSON makes a full round-trip through SeaORM
 // (write → read) preserving Python-parity byte shape, and that the
-// four-state lifecycle / dataset_id=None / reset-helper paths behave as
-// locked decisions 1, 4, 5, 7 mandate.
+// lifecycle / dataset_id=None / reset-helper paths behave as locked
+// decisions 1, 4, 5, 7 mandate. No pipeline run writes `INITIATED` any more
+// (Python `dc0b4ad6a`); the round-trips below still start from one because
+// the stored-row enum keeps it for legacy rows and the explicit re-arm API.
 
 // ---------------------------------------------------------------------------
-// (08-09) Four-state lifecycle round-trip — Initiated → Started → Completed
+// (08-09) Lifecycle round-trip from a legacy INITIATED row — Initiated →
+// Started → Completed
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn four_state_lifecycle_round_trip_completed() {
+async fn lifecycle_round_trip_from_legacy_initiated_completed() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
@@ -732,11 +735,12 @@ async fn four_state_lifecycle_round_trip_completed() {
 }
 
 // ---------------------------------------------------------------------------
-// (08-09) Four-state lifecycle round-trip — Initiated → Started → Errored
+// (08-09) Lifecycle round-trip from a legacy INITIATED row — Initiated →
+// Started → Errored
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn four_state_lifecycle_round_trip_errored() {
+async fn lifecycle_round_trip_from_legacy_initiated_errored() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
@@ -818,40 +822,19 @@ async fn log_pipeline_run_persists_with_none_dataset_id() {
 }
 
 // ---------------------------------------------------------------------------
-// (08-09) Exact run_info JSON shape — STARTED row stores `{"data":[<uuid>]}`
+// Exact run_info JSON shapes, as Python writes them since `a88402500`
+// (COG-6089): STARTED `{}`, ERRORED `{"error": …}` — no `data` key.
 // ---------------------------------------------------------------------------
 //
-// Tests the persistence round-trip: write a typed Started row with a
-// hand-built `{"data": [uuid, uuid]}` payload (same shape as
-// `cognee_core::pipeline_run_registry::run_info_for_running(&ids)`), read
-// the row back, and serialise the column to a JSON string.  The string
-// must be byte-identical including key ordering (locked decision 5).
+// Persistence round-trip: write a typed row with the payload the watchers
+// build (`cognee_core::pipeline_run_registry::run_info_for_*`), read it back,
+// and serialise the column. The string must be byte-identical.
 #[tokio::test]
 async fn run_info_started_shape_is_byte_identical_to_python() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
     let repo = make_repo(Arc::clone(&db));
-
-    let uuid1 = Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("uuid lit");
-    let uuid2 = Uuid::parse_str("00000000-0000-0000-0000-000000000002").expect("uuid lit");
-
-    // Build the payload exactly like run_info_for_running(&[uuid1, uuid2]).
-    let mut m = Map::with_capacity(1);
-    m.insert(
-        "data".into(),
-        Value::Array(vec![
-            Value::String(uuid1.to_string()),
-            Value::String(uuid2.to_string()),
-        ]),
-    );
-    let payload = Value::Object(m);
-    // Sanity check the input matches the byte-identical wire shape.
-    assert_eq!(
-        payload.to_string(),
-        "{\"data\":[\"00000000-0000-0000-0000-000000000001\",\
-         \"00000000-0000-0000-0000-000000000002\"]}"
-    );
 
     let prid = Uuid::new_v4();
     let pid = Uuid::new_v4();
@@ -861,7 +844,7 @@ async fn run_info_started_shape_is_byte_identical_to_python() {
         "shape_p",
         Some(ds),
         PipelineRunStatus::Started,
-        Some(payload),
+        Some(Value::Object(Map::new())),
     )
     .await
     .expect("log");
@@ -872,33 +855,17 @@ async fn run_info_started_shape_is_byte_identical_to_python() {
         .expect("get_pipeline_run")
         .expect("row present");
     let run_info = row.run_info.expect("run_info populated");
-    // Byte-identical, including key order and absence of whitespace.
-    assert_eq!(
-        run_info.to_string(),
-        "{\"data\":[\"00000000-0000-0000-0000-000000000001\",\
-         \"00000000-0000-0000-0000-000000000002\"]}"
-    );
+    assert_eq!(run_info.to_string(), "{}");
 }
 
-// ---------------------------------------------------------------------------
-// (08-09) Exact run_info JSON shape — ERRORED row stores `data` BEFORE `error`
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn run_info_errored_shape_preserves_data_before_error() {
+async fn run_info_errored_shape_is_the_error_alone() {
     let db = make_db().await;
     let ds = Uuid::new_v4();
     create_dataset(&db, ds).await;
     let repo = make_repo(Arc::clone(&db));
 
-    let uuid1 = Uuid::parse_str("00000000-0000-0000-0000-000000000003").expect("uuid lit");
-
-    // run_info_for_errored(&[uuid1], "boom"): keys "data" then "error".
-    let mut m = Map::with_capacity(2);
-    m.insert(
-        "data".into(),
-        Value::Array(vec![Value::String(uuid1.to_string())]),
-    );
+    let mut m = Map::with_capacity(1);
     m.insert("error".into(), Value::String("boom".to_string()));
     let payload = Value::Object(m);
 
@@ -921,58 +888,12 @@ async fn run_info_errored_shape_preserves_data_before_error() {
         .expect("get_pipeline_run")
         .expect("row present");
     let run_info = row.run_info.expect("run_info populated");
-
-    // Byte-identical wire shape (data first, then error).
-    assert_eq!(
-        run_info.to_string(),
-        "{\"data\":[\"00000000-0000-0000-0000-000000000003\"],\"error\":\"boom\"}"
-    );
-
-    let obj = run_info.as_object().expect("object");
-    let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
-    assert_eq!(keys, vec!["data", "error"], "data must precede error");
+    assert_eq!(run_info.to_string(), "{\"error\":\"boom\"}");
 }
 
 // ---------------------------------------------------------------------------
-// (08-09) Exact run_info JSON shape — empty data_ids emit `{"data":"None"}`
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn run_info_running_shape_with_empty_data_writes_none_literal() {
-    let db = make_db().await;
-    let ds = Uuid::new_v4();
-    create_dataset(&db, ds).await;
-    let repo = make_repo(Arc::clone(&db));
-
-    // run_info_for_running(&[]) → {"data": "None"} (literal string).
-    let mut m = Map::with_capacity(1);
-    m.insert("data".into(), Value::String("None".to_string()));
-    let payload = Value::Object(m);
-
-    let prid = Uuid::new_v4();
-    let pid = Uuid::new_v4();
-    repo.log_pipeline_run(
-        prid,
-        pid,
-        "none_p",
-        Some(ds),
-        PipelineRunStatus::Started,
-        Some(payload),
-    )
-    .await
-    .expect("log");
-
-    let row = repo
-        .get_pipeline_run(prid)
-        .await
-        .expect("get_pipeline_run")
-        .expect("row present");
-    let run_info = row.run_info.expect("run_info populated");
-    assert_eq!(run_info.to_string(), "{\"data\":\"None\"}");
-}
-
-// ---------------------------------------------------------------------------
-// (08-09) Exact run_info JSON shape — INITIATED row stores `{}`
+// (08-09) Exact run_info JSON shape — an INITIATED row (explicit re-arm
+// API only; no pipeline run writes one) stores `{}`
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

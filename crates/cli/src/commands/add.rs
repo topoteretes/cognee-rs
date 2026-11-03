@@ -49,7 +49,7 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
 
-        // Gap 08-07: persist the four-state `pipeline_runs` trail so CLI
+        // Gap 08-07: persist the `pipeline_runs` trail so CLI
         // add shows up in `/api/v1/activity/pipeline-runs`.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();

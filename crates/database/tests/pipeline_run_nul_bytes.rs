@@ -40,11 +40,11 @@ use cognee_models::Dataset;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-/// A `run_info` payload shaped like `run_info_for_errored`, with a literal NUL
-/// inside the error string — the shape a PDF-extraction failure produces.
-fn dirty_errored_run_info(data_id: Uuid) -> Value {
+/// A `run_info` payload shaped like `run_info_for_errored` (`{"error": …}`,
+/// Python's ERRORED shape since COG-6089), with a literal NUL inside the error
+/// string — the shape a PDF-extraction failure produces.
+fn dirty_errored_run_info() -> Value {
     json!({
-        "data": [data_id.to_string()],
         "error": "parse failed near: sour\u{0}ce te\u{0}xt",
     })
 }
@@ -110,7 +110,6 @@ async fn log_pipeline_run_strips_nul_from_run_info() {
     create_dataset(&db, dataset_id).await;
     let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&db));
 
-    let data_id = Uuid::new_v4();
     let pipeline_run_id = Uuid::new_v4();
     repo.log_pipeline_run(
         pipeline_run_id,
@@ -118,7 +117,7 @@ async fn log_pipeline_run_strips_nul_from_run_info() {
         "nul_pipeline",
         Some(dataset_id),
         PipelineRunStatus::Errored,
-        Some(dirty_errored_run_info(data_id)),
+        Some(dirty_errored_run_info()),
     )
     .await
     .expect("the Errored row must be written, not dropped");
@@ -137,7 +136,11 @@ async fn log_pipeline_run_strips_nul_from_run_info() {
         json!("parse failed near: source text"),
         "sanitizing must strip the NUL and nothing else"
     );
-    assert_eq!(run_info["data"], json!([data_id.to_string()]));
+    assert_eq!(
+        run_info.as_object().map(|m| m.len()),
+        Some(1),
+        "the ERRORED row is the error alone"
+    );
 }
 
 /// Object *keys* are sanitized too — `sanitize_json` rewrites them, and a NUL
@@ -287,7 +290,7 @@ async fn reset_orphans_strips_nul_from_reason() {
         .as_ref()
         .expect("reset_orphans always writes a reason");
     assert_no_nul(run_info, "stored reset_orphans reason");
-    assert_eq!(run_info, &json!({"reason": "server_restartorphan"}));
+    assert_eq!(run_info, &json!({"error": "server_restartorphan"}));
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +328,6 @@ mod postgres {
         create_dataset(db.as_ref(), dataset_id).await;
         let repo = SeaOrmPipelineRunRepository::new(Arc::clone(&db));
 
-        let data_id = Uuid::new_v4();
         let pipeline_run_id = Uuid::new_v4();
         repo.log_pipeline_run(
             pipeline_run_id,
@@ -333,7 +335,7 @@ mod postgres {
             "nul_pipeline",
             Some(dataset_id),
             PipelineRunStatus::Errored,
-            Some(dirty_errored_run_info(data_id)),
+            Some(dirty_errored_run_info()),
         )
         .await
         .expect("Postgres must accept the Errored row; a NUL must not lose it");

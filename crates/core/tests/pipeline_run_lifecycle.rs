@@ -5,11 +5,13 @@
 )]
 //! Executor-level lifecycle tests for `pipeline::execute` (task 08-09).
 //!
-//! Validates that `pipeline::execute` writes the four-state `pipeline_runs`
-//! trail (INITIATED → STARTED → COMPLETED / ERRORED) through a
-//! `DbPipelineWatcher` backed by the real `SeaOrmPipelineRunRepository`
-//! (in-memory SQLite). Also confirms locked decision 1: empty pipelines
-//! produce zero rows (early-return before INITIATED).
+//! Validates that `pipeline::execute` writes Python's `pipeline_runs` trail
+//! (STARTED → COMPLETED / ERRORED, no INITIATED row since Python `dc0b4ad6a`)
+//! through a `DbPipelineWatcher` backed by the real
+//! `SeaOrmPipelineRunRepository` (in-memory SQLite), with Python's `run_info`
+//! shapes (no `data` key since `a88402500`, COG-6089): STARTED `{}`,
+//! COMPLETED `{}`, ERRORED `{"error": …}`. Also confirms locked decision 1:
+//! empty pipelines produce zero rows.
 //!
 //! See [docs/telemetry/08/09-tests.md](../../../docs/telemetry/08/09-tests.md).
 
@@ -84,11 +86,11 @@ async fn stub_ctx(db: Arc<DatabaseConnection>) -> Arc<TaskContext> {
 }
 
 // ---------------------------------------------------------------------------
-// (a) Success path: INITIATED + STARTED + COMPLETED, in `created_at` order
+// (a) Success path: STARTED + COMPLETED, in `created_at` order
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn execute_writes_four_state_trail_on_success() {
+async fn execute_writes_started_then_completed_on_success() {
     let db = make_db().await;
     let repo = make_repo(Arc::clone(&db));
     let watcher = DbPipelineWatcher::new(Arc::clone(&repo));
@@ -109,18 +111,12 @@ async fn execute_writes_four_state_trail_on_success() {
     assert_eq!(outputs.len(), 1);
 
     let rows = repo.list_recent(None, 50).await.expect("list_recent");
-    // Exactly three rows: INITIATED, STARTED, COMPLETED.
-    assert_eq!(
-        rows.len(),
-        3,
-        "expected INITIATED + STARTED + COMPLETED; got {} rows",
-        rows.len()
-    );
+    // Exactly two rows: STARTED, COMPLETED. No INITIATED row.
+    assert_eq!(rows.len(), 2, "expected STARTED + COMPLETED; got {rows:?}");
 
     // list_recent is ORDER BY created_at DESC: index 0 is the freshest.
     assert_eq!(rows[0].status, PipelineRunStatus::Completed);
     assert_eq!(rows[1].status, PipelineRunStatus::Started);
-    assert_eq!(rows[2].status, PipelineRunStatus::Initiated);
 
     // Every row records who triggered the run (`pipeline_runs.user_id`,
     // Python `log_pipeline_run_start.py:35@37f788bd2`).
@@ -129,29 +125,19 @@ async fn execute_writes_four_state_trail_on_success() {
         "every status row carries the triggering user: {rows:?}"
     );
 
-    // All three rows share the same pipeline_run_id (decision 12).
+    // Both rows share the same pipeline_run_id (decision 12).
     assert_eq!(rows[0].pipeline_run_id, rows[1].pipeline_run_id);
-    assert_eq!(rows[1].pipeline_run_id, rows[2].pipeline_run_id);
 
-    // INITIATED row carries `run_info = {}` (decision 5).
-    let initiated_run_info = rows[2].run_info.as_ref().expect("run_info populated");
-    assert_eq!(initiated_run_info.to_string(), "{}");
-
-    // STARTED + COMPLETED rows carry `{"data": ...}`.
+    // STARTED and COMPLETED carry `{}`: no data items (COG-6089), and Rust
+    // has no recovery lock.
     let started_run_info = rows[1].run_info.as_ref().expect("run_info populated");
-    assert!(
-        started_run_info.get("data").is_some(),
-        "STARTED must carry `data` key (decision 5)"
-    );
+    assert_eq!(started_run_info.to_string(), "{}");
     let completed_run_info = rows[0].run_info.as_ref().expect("run_info populated");
-    assert!(
-        completed_run_info.get("data").is_some(),
-        "COMPLETED must carry `data` key (decision 5)"
-    );
+    assert_eq!(completed_run_info.to_string(), "{}");
 }
 
 // ---------------------------------------------------------------------------
-// (b) Failure path: INITIATED + STARTED + ERRORED with `run_info["error"]`
+// (b) Failure path: STARTED + ERRORED with `run_info = {"error": …}`
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -180,30 +166,25 @@ async fn execute_writes_errored_trail_on_failure() {
     }
 
     let rows = repo.list_recent(None, 50).await.expect("list_recent");
-    assert_eq!(
-        rows.len(),
-        3,
-        "expected INITIATED + STARTED + ERRORED; got {} rows",
-        rows.len()
-    );
+    assert_eq!(rows.len(), 2, "expected STARTED + ERRORED; got {rows:?}");
 
     assert_eq!(rows[0].status, PipelineRunStatus::Errored);
     assert_eq!(rows[1].status, PipelineRunStatus::Started);
-    assert_eq!(rows[2].status, PipelineRunStatus::Initiated);
+    assert_eq!(
+        rows[1]
+            .run_info
+            .as_ref()
+            .expect("run_info populated")
+            .to_string(),
+        "{}"
+    );
 
-    // ERRORED row must carry `{"data": …, "error": "..."}` (decision 5).
+    // ERRORED row carries only `{"error": "..."}` (Python
+    // `log_pipeline_run_error`, COG-6089).
     let errored = rows[0].run_info.as_ref().expect("run_info populated");
     let obj = errored.as_object().expect("object");
     let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
-    assert!(keys.contains(&"data"), "ERRORED run_info must include data");
-    assert!(
-        keys.contains(&"error"),
-        "ERRORED run_info must include error"
-    );
-    // Key order: `data` precedes `error` (decision 5).
-    let data_idx = keys.iter().position(|k| *k == "data").expect("data idx");
-    let error_idx = keys.iter().position(|k| *k == "error").expect("error idx");
-    assert!(data_idx < error_idx, "`data` must precede `error`");
+    assert_eq!(keys, vec!["error"], "ERRORED run_info is the error alone");
 
     let error_message = obj
         .get("error")
@@ -216,7 +197,7 @@ async fn execute_writes_errored_trail_on_failure() {
 }
 
 // ---------------------------------------------------------------------------
-// (c) NoTasks: empty pipeline writes zero rows (early-return before INITIATED)
+// (c) NoTasks: empty pipeline writes zero rows (early-return before STARTED)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

@@ -14,6 +14,7 @@ mod m20261016_000001_search_history_python_columns;
 mod m20261020_000001_pipeline_runs_user_id;
 mod m20261023_000001_dataset_database;
 mod m20261028_000001_dataset_scoped_data;
+mod m20261029_000001_drop_run_info_data;
 
 pub struct Migrator;
 
@@ -63,6 +64,7 @@ pub fn core_migrations() -> Vec<Box<dyn MigrationTrait>> {
         Box::new(m20261020_000001_pipeline_runs_user_id::Migration),
         Box::new(m20261023_000001_dataset_database::Migration),
         Box::new(m20261028_000001_dataset_scoped_data::Migration),
+        Box::new(m20261029_000001_drop_run_info_data::Migration),
     ]
 }
 

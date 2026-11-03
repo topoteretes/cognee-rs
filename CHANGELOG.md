@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `ImproveParams` | — | `+ dataset_locks`, `+ checkpoint_store` reads the stage watermarks (struct literals must set them) |
   | `DatasetLocks` | per-host registries only | `DatasetLocks::global()`, the process-wide registry: the default of `AddPipeline::new` and `DeleteService::new` (was none), and of `improve` |
   | `cognee_cognify::tasks::cognify`, `memify` | took no dataset lock | hold the dataset in `DatasetLocks::global()` for the run (re-entrant for a caller holding it there), as Python's `dataset_lock` |
-  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`; the Initiated resets skip them) when a pipeline-run repo is wired |
+  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`) when a pipeline-run repo is wired |
   | `improve()` | wrote no row of its own | records one `improve` row (`IMPROVE_WRITE_PIPELINE_NAME`) after its first stage that may have written to the graph |
 
   `global_context_index` is `already_completed` (`no_writes_since_last_improve`)
@@ -138,6 +138,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statistics are removed, as in
   Python: `record_override`, `override_counts_snapshot`,
   `clear_override_counts` and the `query_router_stats` module.
+
+- **Pipeline runs write Python's lifecycle and `run_info` (SDK-1039).** A run
+  writes `DATASET_PROCESSING_STARTED`, then `…_COMPLETED` or `…_ERRORED`; the
+  `DATASET_PROCESSING_INITIATED` row is gone, as in Python `dc0b4ad6a`. `run_info`
+  no longer carries the run's data items (Python `a88402500`, COG-6089):
+  STARTED and COMPLETED are `{}`, ERRORED is `{"error": …}` (cognify's
+  tolerantly completed runs still add the Rust-only `cognify_failures` key). The
+  orphan sweep's ERRORED row is `{"error": <reason>}` instead of
+  `{"reason": …}`. Migration `m20261029_000001_drop_run_info_data` strips the
+  `data` key from stored rows, as Python's alembic `b7e4c2a9d6f1` does. Deleting
+  a dataset or forgetting its memory no longer appends `INITIATED` reset rows.
+  API: `cognee_core::PipelineRunStatus::Initiated`,
+  `PipelineWatcher::on_pipeline_run_initiated`, `PipelineRunInfo::data_ids`,
+  `RunSpec::data_ids` and `pipeline_run_registry::{data_info, run_info_for_running}`
+  are removed (`DeleteService::with_pipeline_run_repo` stays: it now wires only
+  the delete's `forget` change row);
+  `run_info_for_errored` takes only the error, and `run_info_for_started` /
+  `run_info_for_completed` are new. The stored-row enum keeps `Initiated` to
+  read old rows, and the explicit `reset_pipeline_run_status` re-arm API (for
+  the opt-in pipeline cache) still writes it. A caller that sets
+  `CognifyConfig::use_pipeline_cache` must now call
+  `reset_dataset_pipeline_run_status` itself after a dataset delete or a
+  memory-only forget, or the next cognify of that dataset is a cache hit.
 
 - **`data` rows are dataset-scoped, with `uuid4` ids, as in Python (SDK-1039).**
   A new `data` row gets a random `uuid4` id (it was

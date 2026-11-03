@@ -1,12 +1,24 @@
-//! Python-parity reset helpers for the `pipeline_runs` table.
+//! Explicit re-arm helpers for the `pipeline_runs` table.
 //!
 //! Exposes [`reset_pipeline_run_status`] (single pipeline) and
 //! [`reset_dataset_pipeline_run_status`] (every pipeline registered against
 //! a dataset). Both write a fresh `INITIATED` row through the
 //! [`PipelineRunRepository`] (decision 11: single point of truth). The
 //! dataset-level helper short-circuits when the latest row for a pipeline is
-//! already `INITIATED`, matching Python's
-//! [`reset_dataset_pipeline_run_status`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/layers/reset_dataset_pipeline_run_status.py).
+//! already `INITIATED`.
+//!
+//! **Rust-only since Python `dc0b4ad6a`.** Python removed these helpers
+//! together with the pipeline-cache gate they re-armed, and no longer writes
+//! `INITIATED` anywhere. Rust still has that gate, opt-in through
+//! `CognifyConfig::use_pipeline_cache`, so these stay as its explicit re-arm
+//! API; nothing calls them implicitly (pipeline runs, add and delete write no
+//! `INITIATED` row). Removing both is a separate parity change.
+//!
+//! A caller that opts into the cache must call
+//! [`reset_dataset_pipeline_run_status`] itself after deleting a dataset or
+//! forgetting its memory: those paths no longer append a reset row, so the
+//! dataset's last `COMPLETED` row would otherwise make the next cognify a
+//! cache hit.
 //!
 //! See [docs/telemetry/08/05-reset-helpers.md](../../../docs/telemetry/08/05-reset-helpers.md)
 //! for the full design.
@@ -33,11 +45,11 @@ use super::error::ApiError;
 /// - `pipeline_id = uuid5(OID, "{user_id}{pipeline_name}{dataset_id}")`
 /// - `pipeline_run_id = uuid5(OID, "{pipeline_id}_{dataset_id}")`
 ///
-/// `run_info` is the empty object `{}` (decision 5,
-/// `crates/core/src/pipeline_run_registry/data_info.rs::run_info_for_initiated`).
+/// `run_info` is the empty object `{}`
+/// (`cognee_core::pipeline_run_registry::run_info_for_initiated`).
 ///
-/// Matches Python's
-/// [`reset_pipeline_run_status`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/methods/reset_pipeline_run_status.py).
+/// Ported from Python's former `reset_pipeline_run_status` (removed upstream
+/// in `dc0b4ad6a`; see the module docs).
 ///
 /// # Errors
 ///
@@ -69,8 +81,8 @@ pub async fn reset_pipeline_run_status(
 /// [`reset_pipeline_run_status`] for each, skipping ones whose latest
 /// status is already `INITIATED`.
 ///
-/// Matches Python's
-/// [`reset_dataset_pipeline_run_status`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/layers/reset_dataset_pipeline_run_status.py).
+/// Ported from Python's former `reset_dataset_pipeline_run_status` (removed
+/// upstream in `dc0b4ad6a`; see the module docs).
 ///
 /// Uses [`PipelineRunRepository::get_pipeline_runs_by_dataset`] (one latest
 /// row per `pipeline_name`) to enumerate the work — see action item 08-06.
@@ -91,7 +103,7 @@ pub async fn reset_dataset_pipeline_run_status(
 
     for run in runs {
         if matches!(run.status, PipelineRunStatus::Initiated) {
-            // Python skips runs already at INITIATED to avoid stacking
+            // Skip runs already at INITIATED to avoid stacking
             // duplicate rows when prune fires repeatedly.
             continue;
         }

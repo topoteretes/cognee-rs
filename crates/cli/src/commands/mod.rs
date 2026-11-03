@@ -118,10 +118,10 @@ pub(crate) fn validate_cognify_config(
 /// - the graph and vector backends — without them a deletion drops relational
 ///   rows only, which for the benchmark would turn a populated-dataset delete
 ///   into a metadata-row delete;
-/// - the pipeline-runs repository — without it a deletion writes no fresh
-///   `INITIATED` row. That only changes behaviour for a caller that enabled
-///   `CognifyConfig::use_pipeline_cache`: since the cache became opt-in, a
-///   `COMPLETED` row no longer short-circuits the default re-cognify path.
+/// - the pipeline-runs repository — without it a deletion writes no `forget`
+///   change row (Python's forget operation row), so an improve stage
+///   watermark would not see the delete. A deletion writes no `INITIATED`
+///   reset row (Python stopped writing one in `dc0b4ad6a`).
 pub(crate) async fn build_delete_service(
     cm: &Arc<ComponentManager>,
 ) -> Result<DeleteService, CliError> {

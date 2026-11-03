@@ -6,17 +6,25 @@ after an ``add`` + ``cognify`` run:
 1. Schema parity — both SDKs expose a ``pipeline_runs`` table with the
    same column set (after gap 08-01's nullability migration).
 2. ``dataset_id`` is nullable in both schemas.
-3. Cognify writes the full ``INITIATED → STARTED → COMPLETED`` lifecycle
-   (three rows per pipeline_run_id) on both sides.
-4. ``run_info`` JSON shape is byte-identical at every status:
-     - INITIATED → ``{}``
-     - STARTED / COMPLETED → ``{"data": [...]}`` or ``{"data": "None"}``
-     - ERRORED → ``{"data": ..., "error": ...}`` with ``data`` BEFORE
-       ``error`` (insertion-order matters per Decision 5).
+3. Cognify writes ``STARTED → COMPLETED`` (one row per transition, sharing a
+   ``pipeline_run_id``) on both sides, and no ``INITIATED`` row: Python stopped
+   writing ``DATASET_PROCESSING_INITIATED`` in ``dc0b4ad6a`` ("remove the
+   INITIATED reset row and the pipeline cache gate"); the enum value survives
+   only for rows that already carry it.
+4. ``run_info`` follows Python's contract since ``a88402500`` (COG-6089, "Stop
+   storing data items in run_info"; Python's own pin is
+   ``cognee/tests/unit/modules/pipelines/test_run_info_has_no_data.py``):
+     - no row carries a ``data`` key;
+     - STARTED → ``{}`` or ``{"recovery_lock": …}``, plus ``progress`` once the
+       run ticks (``log_pipeline_run_start.py``, ``log_pipeline_run_progress.py``).
+       ``recovery_lock`` and ``progress`` are Python-only: Rust has no recovery
+       lock and no in-row progress, so its STARTED row is ``{}``;
+     - COMPLETED → ``{}`` (``log_pipeline_run_complete.py``). Rust may add its
+       documented ``cognify_failures`` key on a run that completed with files
+       outstanding;
+     - ERRORED → ``{"error": …}`` (``log_pipeline_run_error.py``).
 
-The shape checks only assert *structure* (key set + value type), not
-exact byte equality of the payload — the data array contents differ
-between SDKs because each writes its own UUID strings.
+The shape checks assert key sets, not values.
 
 These tests skip when ``OPENAI_KEY`` is unavailable; they reuse the
 existing ``both_cognified`` fixture (defined in ``conftest.py``).
@@ -141,9 +149,16 @@ def _statuses_for_run(rows: list[dict], pipeline_run_id: str) -> list[str]:
     return [r["status"] for r in rows if r.get("pipeline_run_id") == pipeline_run_id]
 
 
+# The run_info keys each status may carry, per SDK. Python-only keys are
+# tolerated on the Python side only; Rust-only keys on the Rust side only.
+STARTED_KEYS = {"Python": {"recovery_lock", "progress"}, "Rust": set()}
+COMPLETED_KEYS = {"Python": set(), "Rust": {"cognify_failures"}}
+ERRORED_KEYS = {"Python": {"error"}, "Rust": {"error"}}
+
+
 @requires_openai
-def test_cognify_writes_four_state_lifecycle(both_cognified):
-    """Each SDK's cognify run writes INITIATED → STARTED → COMPLETED."""
+def test_cognify_writes_started_completed_lifecycle(both_cognified):
+    """Each SDK's cognify run writes STARTED → COMPLETED, and no INITIATED row."""
     py_ws, rust_ws = both_cognified
     py_db = python_db_path(py_ws)
     rust_db = rust_db_path(rust_ws)
@@ -160,7 +175,12 @@ def test_cognify_writes_four_state_lifecycle(both_cognified):
         finally:
             conn.close()
 
-        # Find every pipeline_run_id that belongs to cognify_pipeline.
+        initiated = [r for r in rows if r["status"] == "DATASET_PROCESSING_INITIATED"]
+        assert not initiated, (
+            f"{label}: no SDK writes INITIATED any more (Python dc0b4ad6a); got "
+            f"{[(r.get('pipeline_name'), r.get('pipeline_run_id')) for r in initiated]}"
+        )
+
         cognify_rows = [
             r
             for r in rows
@@ -171,21 +191,21 @@ def test_cognify_writes_four_state_lifecycle(both_cognified):
         run_ids = {r["pipeline_run_id"] for r in cognify_rows if r.get("pipeline_run_id")}
         assert run_ids, f"{label}: cognify rows missing pipeline_run_id"
 
-        # For at least one cognify run, the trail must include all three
-        # successful-lifecycle statuses.
-        full_lifecycle_found = False
+        # For at least one cognify run, the trail is STARTED then COMPLETED
+        # (rows are in created_at order).
+        lifecycle_found = False
         for rid in run_ids:
             statuses = _statuses_for_run(cognify_rows, rid)
             if (
-                "DATASET_PROCESSING_INITIATED" in statuses
-                and "DATASET_PROCESSING_STARTED" in statuses
+                "DATASET_PROCESSING_STARTED" in statuses
                 and "DATASET_PROCESSING_COMPLETED" in statuses
+                and statuses.index("DATASET_PROCESSING_STARTED")
+                < statuses.index("DATASET_PROCESSING_COMPLETED")
             ):
-                full_lifecycle_found = True
+                lifecycle_found = True
                 break
-        assert full_lifecycle_found, (
-            f"{label}: no cognify_pipeline run carried the full INITIATED + "
-            f"STARTED + COMPLETED trail. run_ids tried: {sorted(run_ids)}, "
+        assert lifecycle_found, (
+            f"{label}: no cognify_pipeline run carried STARTED then COMPLETED. "
             f"statuses observed: "
             f"{[(rid, _statuses_for_run(cognify_rows, rid)) for rid in run_ids]}"
         )
@@ -193,11 +213,11 @@ def test_cognify_writes_four_state_lifecycle(both_cognified):
 
 @requires_openai
 def test_run_info_shape_parity(both_cognified):
-    """``run_info`` JSON respects the four-state shape contract on both sides.
+    """``run_info`` follows Python's post-COG-6089 contract on both sides.
 
-    INITIATED rows carry ``{}``; STARTED + COMPLETED carry an object with a
-    ``data`` key; ERRORED carries both ``data`` and ``error`` keys (with
-    ``data`` first).
+    No ``data`` key anywhere; STARTED ⊆ ``{recovery_lock, progress}``
+    (Python-only keys); COMPLETED is ``{}`` (Rust may add ``cognify_failures``);
+    ERRORED is ``{"error": …}``.
     """
     py_ws, rust_ws = both_cognified
     py_db = python_db_path(py_ws)
@@ -219,16 +239,10 @@ def test_run_info_shape_parity(both_cognified):
 
         for r in rows:
             status = r["status"]
+            where = f"{label}: {r.get('pipeline_name')} {status}"
             run_info_raw = r.get("run_info")
             if run_info_raw is None:
-                # NULL run_info is acceptable only on rows that pre-date
-                # gap 08-03 — but every row written by gap-08 code must
-                # populate run_info. The fixture runs current code, so
-                # null rows are a regression.
-                pytest.fail(
-                    f"{label}: row with status={status} has NULL run_info "
-                    f"(violates locked decision 5)"
-                )
+                pytest.fail(f"{where} row has NULL run_info")
 
             # SQLite stores JSON as text — both SDKs serialise to bytes
             # then read back as text.
@@ -240,39 +254,29 @@ def test_run_info_shape_parity(both_cognified):
             try:
                 payload = json.loads(run_info_text)
             except json.JSONDecodeError as e:
-                pytest.fail(
-                    f"{label}: row with status={status} has non-JSON "
-                    f"run_info: {run_info_text!r} ({e})"
-                )
+                pytest.fail(f"{where} row has non-JSON run_info: {run_info_text!r} ({e})")
 
-            if status == "DATASET_PROCESSING_INITIATED":
-                assert payload == {}, (
-                    f"{label}: INITIATED run_info must be `{{}}`, got "
-                    f"{payload!r}"
+            assert isinstance(payload, dict), f"{where} run_info must be a JSON object"
+            keys = set(payload)
+            assert "data" not in keys, (
+                f"{where} run_info must not carry `data` (Python a88402500, COG-6089); "
+                f"got keys={sorted(keys)}"
+            )
+
+            if status == "DATASET_PROCESSING_STARTED":
+                assert keys <= STARTED_KEYS[label], (
+                    f"{where} run_info keys must be within "
+                    f"{sorted(STARTED_KEYS[label])}; got {sorted(keys)}"
                 )
-            elif status in (
-                "DATASET_PROCESSING_STARTED",
-                "DATASET_PROCESSING_COMPLETED",
-            ):
-                assert isinstance(payload, dict), (
-                    f"{label}: {status} run_info must be a JSON object"
-                )
-                assert "data" in payload, (
-                    f"{label}: {status} run_info must include a `data` "
-                    f"key (decision 5); got keys={list(payload.keys())}"
+            elif status == "DATASET_PROCESSING_COMPLETED":
+                assert keys <= COMPLETED_KEYS[label], (
+                    f"{where} run_info keys must be within "
+                    f"{sorted(COMPLETED_KEYS[label])}; got {sorted(keys)}"
                 )
             elif status == "DATASET_PROCESSING_ERRORED":
-                assert isinstance(payload, dict), (
-                    f"{label}: ERRORED run_info must be a JSON object"
+                assert keys == ERRORED_KEYS[label], (
+                    f"{where} run_info must be exactly `{{\"error\": …}}`; "
+                    f"got {sorted(keys)}"
                 )
-                keys = list(payload.keys())
-                assert "data" in keys and "error" in keys, (
-                    f"{label}: ERRORED run_info must include both `data` "
-                    f"and `error` keys; got {keys}"
-                )
-                # `data` must precede `error` on the wire so Python's
-                # json.loads preserves insertion order (3.7+).
-                assert keys.index("data") < keys.index("error"), (
-                    f"{label}: ERRORED run_info must order `data` before "
-                    f"`error` (decision 5); got {keys}"
-                )
+            else:
+                pytest.fail(f"{where}: unexpected status (no SDK writes INITIATED)")

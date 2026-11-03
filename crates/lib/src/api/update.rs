@@ -201,7 +201,7 @@ pub async fn update(
                 .map_err(|e| ApiError::Cognify(format!("failed to construct thread pool: {e}")))?,
         );
 
-        // Gap 08-07: persist the four-state `pipeline_runs` trail.
+        // Gap 08-07: persist the `pipeline_runs` trail.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
 
