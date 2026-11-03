@@ -539,6 +539,45 @@ impl ComponentManager {
         Ok(new)
     }
 
+    /// The loaders `add` extracts text with: the default text, HTML, PDF, CSV
+    /// and unstructured loaders, plus the image loader backed by
+    /// [`Self::llm`] and the audio loader backed by [`Self::transcriber`].
+    ///
+    /// Python runs its image and audio loaders at `add` (`ingest_data.py`), so
+    /// an image is stored as its description and an audio file as its
+    /// transcript. Pass the result to
+    /// [`AddPipeline::with_loader_registry`](cognee_ingestion::AddPipeline::with_loader_registry).
+    ///
+    /// Never fails: adding text needs no LLM, so an LLM or transcriber that
+    /// cannot be built only leaves its loader out (logged), and an image or
+    /// audio input then fails as an unsupported document type. A keyless LLM
+    /// is still registered; its calls fail with "LLM API key is not set.", as
+    /// Python's image loader fails without a key.
+    pub async fn add_loader_registry(&self) -> Arc<cognee_ingestion::LoaderRegistry> {
+        #[allow(unused_mut, reason = "mutated only with the media-loader features")]
+        let mut registry = cognee_ingestion::LoaderRegistry::default_registry();
+        #[cfg(feature = "image-loader")]
+        match self.llm().await {
+            Ok(llm) => registry.register_image_loader(llm),
+            Err(error) => {
+                tracing::warn!(%error, "no LLM, so `add` cannot describe images");
+            }
+        }
+        #[cfg(feature = "audio-loader")]
+        match self.transcriber().await {
+            Ok(Some(transcriber)) => registry.register_audio_loader(transcriber),
+            Ok(None) => {
+                tracing::debug!(
+                    "the LLM provider has no transcriber, so `add` cannot transcribe audio"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "no transcriber, so `add` cannot transcribe audio");
+            }
+        }
+        Arc::new(registry)
+    }
+
     /// Release every cached component, so the OS resources they hold go away now
     /// instead of at an unspecified later time — or never.
     ///
@@ -1361,6 +1400,45 @@ mod tests {
             .await
             .expect("transcriber() should not error for mock");
         assert!(result.is_none(), "non-openai provider must yield None");
+    }
+
+    /// Python runs its image and audio loaders at `add`, so with an OpenAI
+    /// LLM the add registry has both (SDK-1039 P15).
+    #[cfg(all(feature = "image-loader", feature = "audio-loader"))]
+    #[tokio::test]
+    async fn add_loader_registry_has_image_and_audio_for_openai() {
+        let cm = cm_with_provider("openai");
+        let registry = cm.add_loader_registry().await;
+        assert!(registry.get("text").is_some());
+        assert_eq!(
+            registry.get("image").map(|l| l.engine_name()),
+            Some("image_loader")
+        );
+        assert_eq!(
+            registry.get("audio").map(|l| l.engine_name()),
+            Some("audio_loader")
+        );
+    }
+
+    /// A provider with no transcriber leaves the audio loader out without
+    /// failing: adding text needs neither.
+    #[tokio::test]
+    async fn add_loader_registry_without_transcriber_has_no_audio() {
+        let settings = Settings {
+            sections: [
+                (
+                    "llm.provider".to_string(),
+                    serde_json::json!("mock".to_string()),
+                ),
+                ("llm.api_key".to_string(), serde_json::json!(String::new())),
+            ]
+            .into(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let registry = cm.add_loader_registry().await;
+        assert!(registry.get("text").is_some());
+        assert!(registry.get("audio").is_none());
     }
 
     #[tokio::test]

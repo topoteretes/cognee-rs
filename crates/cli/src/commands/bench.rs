@@ -710,7 +710,8 @@ async fn phase_add(
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
         .with_database(Arc::clone(&database))
-        .with_pipeline_run_repo(pipeline_run_repo);
+        .with_pipeline_run_repo(pipeline_run_repo)
+        .with_loader_registry(cm.add_loader_registry().await);
 
     let inputs: Vec<DataInput> = memories
         .iter()
