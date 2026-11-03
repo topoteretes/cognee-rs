@@ -96,6 +96,14 @@ Partial stages:
   block (`cognee_session::build_active_context_block`, SDK-1045) is ported and served on
   session searches for the `qa` profile; the `agent` profile renders through the same builder
   but nothing serves it into a prompt yet.
+- **Recall `session_context` scope** — Python's recall (`_fetch_session_context`) serves the
+  rendered guidance block (built with `stamp_served=False`) for the `session_context` scope.
+  Neither `cognee::api::recall` nor the HTTP `/recall` router renders it; the builder
+  (`cognee_session::build_active_context_block`) is ready for it.
+- **`TRIPLET_COMPLETION` preference lines** — Python treats it as an alias of
+  `GRAPH_COMPLETION`, whose session guidance merges the user's durable preference lines into
+  the `Preferences` section. Rust's `TripletRetriever` has no graph store to read preferences
+  from, so its guidance carries the stored session entries only.
 - **`update_user_preferences`** — ported. Differences: the graph trait has no edge delete, so a
   retired `prefers` edge is always rewritten as neutral (weight 0.5, turn 0) — Python's fallback
   for backends without `delete_edge_triples` — and the node is always written in full (every
