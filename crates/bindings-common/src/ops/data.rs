@@ -208,12 +208,14 @@ pub async fn update(
             .filter_map(|s| s.as_str().map(str::to_owned))
             .collect()
     });
-    let preferred_loaders: Option<std::collections::HashMap<String, String>> = opts
+    let preferred_loaders: Option<Vec<(String, String)>> = opts
         .get("preferredLoaders")
         .and_then(|v| v.as_object())
+        // `serde_json` keeps the object's key order (`preserve_order`), which
+        // is the order the loaders are tried in.
         .map(|obj| {
             obj.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned()))
                 .collect()
         });
     let incremental_loading = opts

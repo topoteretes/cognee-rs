@@ -6,7 +6,6 @@
 //!
 //! Equivalent to Python's `cognee.api.v1.update.update()`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
@@ -83,7 +82,7 @@ pub struct UpdateResult {
 ///   the delete and the add target `dataset_id`.
 /// * `owner_id` / `tenant_id` - Ownership context.
 /// * `node_set` - Optional graph node identifiers for access-control grouping.
-/// * `preferred_loaders` - Optional MIME-type-to-loader-name overrides.
+/// * `preferred_loaders` - Optional loaders to try first; the keys are Python loader names (see `AddParams::preferred_loaders`).
 /// * `incremental_loading` - When `true`, skip re-adding content already present.
 /// * `acl_db` - Optional ACL backend; when provided, a `write` permission check
 ///   is performed before any mutation.
@@ -113,7 +112,7 @@ pub async fn update(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     node_set: Option<Vec<String>>,
-    preferred_loaders: Option<HashMap<String, String>>,
+    preferred_loaders: Option<Vec<(String, String)>>,
     incremental_loading: bool,
     acl_db: Option<&dyn AclDb>,
     delete_service: &DeleteService,
