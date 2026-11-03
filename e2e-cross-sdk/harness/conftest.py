@@ -144,12 +144,12 @@ def both_added(python_add_result, synced_rust_workspace):
 # ── Fixture: both SDKs have added + cognified the same text ─────────────────
 
 
-@pytest.fixture
-def both_cognified(tmp_path):
+def _cognify_both(tmp_path, rust_extra=None):
     """Run add + cognify on the same text in both SDKs.
 
     Requires an OpenAI API key (cognify invokes the LLM).  Returns
-    ``(python_workspace, rust_workspace)``.
+    ``(python_workspace, rust_workspace)``. ``rust_extra`` is merged into the
+    Rust CLI settings (see ``write_rust_config``).
     """
     py_ws = tmp_path / "python"
     py_ws.mkdir()
@@ -179,7 +179,7 @@ def both_cognified(tmp_path):
     assert result.returncode == 0, f"Python cognify failed:\n{result.stdout}\n{result.stderr}"
 
     # ── Rust: add + cognify ──────────────────────────────────────────────
-    write_rust_config(rust_ws, user_id=owner_id)
+    write_rust_config(rust_ws, user_id=owner_id, extra=rust_extra)
 
     rust_add_args = ["add", str(input_rust), "-d", DATASET_NAME]
     if tenant_id_str:
@@ -192,3 +192,23 @@ def both_cognified(tmp_path):
     assert result.returncode == 0, f"Rust cognify failed:\n{result.stdout}\n{result.stderr}"
 
     return py_ws, rust_ws
+
+
+@pytest.fixture
+def both_cognified(tmp_path):
+    """Both SDKs have added + cognified the same text, each with its default settings."""
+    return _cognify_both(tmp_path)
+
+
+@pytest.fixture
+def both_cognified_json_schema(tmp_path):
+    """Like ``both_cognified``, but Rust sends Python's request shape.
+
+    Python's default structured-output request is a strict ``json_schema``; Rust's
+    default ``auto`` mode sends a forced tool call, which extracts fewer and less
+    consistent graph elements with gpt-4o-mini (SDK-1039 extra review: Rust edge
+    counts 19-37 in ``auto`` vs 25-28 in ``json_schema``, Python 22-40), so count
+    comparisons flake. Pinning Rust to ``json_schema`` compares like with like, as
+    ``test_temporal_search.py`` does. Changing Rust's default mode is SDK-1377.
+    """
+    return _cognify_both(tmp_path, rust_extra={"llm_structured_output_mode": "json_schema"})
