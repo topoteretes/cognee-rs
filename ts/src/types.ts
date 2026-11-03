@@ -31,11 +31,10 @@ export interface CogneeCognifyOptions {
   /** Accepted but inert on the default chunking path: no chunker reads it, so it changes no chunk boundary (Python's DefaultChunkEngine does consume it, but that engine is unreachable). Only validation reads it, rejecting overlap >= chunk size. Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs. */
   chunkOverlap?: number;
   summarization?: boolean;
-  temporalCognify?: boolean;
   /**
    * A custom graph model's JSON Schema (an object, or a string holding one),
    * extracted instead of the default `KnowledgeGraph` — Python's `graph_model`.
-   * `{}` means the default model. Not supported with `temporalCognify`; see
+   * `{}` means the default model; see
    * docs/guides/custom-graph-schema.md for the schema contract.
    */
   graphSchema?: Record<string, unknown> | string;

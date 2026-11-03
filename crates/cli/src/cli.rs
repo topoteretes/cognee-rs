@@ -234,11 +234,11 @@ pub struct PipelineUnblockArgs {
     #[arg(long = "dataset", short = 'd')]
     pub dataset: String,
 
-    /// Pipeline to inspect: `cognify_pipeline`, `temporal-cognify` or
-    /// `temporal-cognify`. Each claims a dataset under its own name, so they
-    /// never exclude each other.
+    /// Pipeline to inspect: `cognify_pipeline` (the only pipeline that claims a
+    /// dataset today). Each claiming pipeline claims under its own name, so
+    /// pipelines never exclude each other.
     ///
-    /// Omit to check both. Defaulting to one would answer "nothing is
+    /// Omit to check every known pipeline. Defaulting to one would answer "nothing is
     /// blocking" for a dataset wedged on another, and the failing run's error
     /// does not tell an operator which name to pass.
     ///
@@ -411,11 +411,6 @@ pub struct CognifyArgs {
     #[arg(long = "llm-max-parallel-requests", value_parser = clap::value_parser!(u32).range(1..))]
     pub llm_max_parallel_requests: Option<u32>,
 
-    /// Use temporal cognify pipeline (event/timestamp extraction instead of standard KG extraction).
-    /// Mirrors Python's `temporal_cognify=True` parameter.
-    #[arg(long = "temporal-cognify", default_value_t = false)]
-    pub temporal_cognify: bool,
-
     #[command(flatten)]
     pub graph_schema: GraphSchemaArgs,
 
@@ -494,7 +489,7 @@ pub struct AddAndCognifyArgs {
 pub struct GraphSchemaArgs {
     /// JSON file holding a custom graph model's JSON Schema, extracted instead
     /// of the default KnowledgeGraph (Python's `graph_model`). `{}` means the
-    /// default model. Not supported with `--temporal-cognify`. See
+    /// default model. See
     /// docs/guides/custom-graph-schema.md for the schema contract.
     #[arg(
         long = "graph-schema",

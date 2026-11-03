@@ -182,8 +182,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         settings
             .cognify_config()
             .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
-            .with_max_parallel_extractions(effective_max_parallel)
-            .with_temporal_cognify(args.temporal_cognify),
+            .with_max_parallel_extractions(effective_max_parallel),
         &args.graph_schema,
     )?;
 

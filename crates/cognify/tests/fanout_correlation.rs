@@ -3,11 +3,11 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Correlation and liveness coverage for the three fan-out loops in
+//! Correlation and liveness coverage for the two fan-out loops in
 //! [`cognee_cognify::tasks`] — **offline**, no LLM key, no skip path.
 //!
-//! Each of `extract_graph_from_data`, `extract_dynamic_graphs_from_data` and
-//! `extract_temporal_events` fans a batch of chunks out over a bounded stream
+//! Each of `extract_graph_from_data` and `extract_dynamic_graphs_from_data`
+//! fans a batch of chunks out over a bounded stream
 //! and then puts the results back against their chunks. Two properties have to
 //! hold and neither was covered before:
 //!
@@ -41,7 +41,6 @@ use async_trait::async_trait;
 use cognee_cognify::CognifyConfig;
 use cognee_cognify::tasks::{
     ExtractedChunks, extract_dynamic_graphs_from_data, extract_graph_from_data,
-    extract_temporal_events,
 };
 use cognee_database::ops::datasets::create_dataset;
 use cognee_llm::error::{LlmError, LlmResult};
@@ -154,20 +153,6 @@ impl Llm for MarkerLlm {
         _json_schema: &Value,
         _options: Option<GenerationOptions>,
     ) -> LlmResult<Value> {
-        let system = messages
-            .iter()
-            .find(|m| matches!(m.role, MessageRole::System))
-            .map(|m| m.content.as_str())
-            .unwrap_or_default();
-
-        // The temporal stage runs one aggregate enrichment call per batch after
-        // its fan-out has drained. It is not gated and not indexed: returning an
-        // empty list leaves every event untouched and in order, which is what
-        // the correlation assertion downstream reads.
-        if system.contains("entities from events") {
-            return Ok(json!({ "events": [] }));
-        }
-
         let user = messages
             .iter()
             .find(|m| matches!(m.role, MessageRole::User))
@@ -227,7 +212,6 @@ fn make_input() -> (ExtractedChunks, Vec<Uuid>, Vec<Uuid>) {
 fn config() -> CognifyConfig {
     let mut config = CognifyConfig::default().with_web_page_nodes(false);
     config.chunks_per_batch = CHUNKS;
-    config.data_per_batch = CHUNKS;
     config.max_parallel_extractions = MAX_PARALLEL;
     config
 }
@@ -354,56 +338,6 @@ async fn custom_graph_extraction_attributes_each_graph_to_its_own_chunk() {
             "chunk {index} must carry the graph extracted from its own text; the \
              loop re-sorts by carried position, so a completion-order zip would \
              attach each graph to the wrong chunk",
-        );
-    }
-}
-
-// ── Loop 3: extract_temporal_events ────────────────────────────────────────
-
-/// The event list the mock returns for chunk `index`: one event named after it.
-fn marker_events(index: usize) -> Value {
-    json!({
-        "events": [{
-            "name": format!("EVENT-{index:04}"),
-            "description": format!("Something happened in chunk {index}."),
-            "time_from": { "year": 1900 + index },
-            "time_to": null,
-            "location": null,
-        }],
-    })
-}
-
-#[tokio::test]
-async fn temporal_extraction_attributes_each_event_to_its_own_file() {
-    let llm: Arc<dyn Llm> = Arc::new(MarkerLlm::new(marker_events));
-    let (input, _, document_ids) = make_input();
-
-    let result = tokio::time::timeout(
-        STALL_TIMEOUT,
-        extract_temporal_events(&input, llm, &config()),
-    )
-    .await
-    .expect(
-        "the fan-out stalled: chunk 0 was never released, so chunks past \
-         max_parallel were never dispatched — the `.buffered` head-of-line block",
-    )
-    .expect("extraction should succeed");
-
-    assert_eq!(result.events.len(), CHUNKS, "one event per chunk");
-
-    for (index, document_id) in document_ids.iter().enumerate() {
-        let attributed = &result.events[index];
-        assert_eq!(
-            attributed.event.name,
-            format!("EVENT-{index:04}"),
-            "`all_events` must stay in input order — the batch is re-sorted by \
-             carried index precisely so this stays deterministic",
-        );
-        assert_eq!(
-            attributed.data_id, *document_id,
-            "event {index} must be attributed to the file of the chunk that \
-             produced it; the data ids are zipped onto the results positionally, \
-             so completion order would misattribute every event",
         );
     }
 }

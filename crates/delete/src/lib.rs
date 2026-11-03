@@ -77,6 +77,9 @@ const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("TextSummary", "text"),
     ("EdgeType", "relationship_name"),
     ("Triplet", "text"),
+    // Legacy: written only by the removed `temporal_cognify` event pipeline
+    // (SDK-1039). Kept so a wipe still clears what older builds wrote, as
+    // `Triplet_text` is.
     ("Event", "name"),
 ];
 
@@ -320,7 +323,8 @@ impl std::ops::AddAssign for DeletePreview {
 /// operation), on every dataset it touched.
 pub const FORGET_PIPELINE_NAME: &str = "forget";
 
-/// The Initiated resets of a dataset delete skip these rows.
+/// The change-record pipelines (`forget`, `improve`): rows that mark a write,
+/// not a runnable pipeline.
 pub use cognee_database::pipelines::CHANGE_RECORD_PIPELINE_NAMES;
 
 struct ResolvedDeleteTargets {
