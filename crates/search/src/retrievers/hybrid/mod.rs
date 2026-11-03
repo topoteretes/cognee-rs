@@ -17,6 +17,7 @@ mod candidates;
 mod chunks;
 mod context;
 mod entities;
+mod external_metadata;
 mod facts;
 mod overflow;
 mod pairs;
@@ -24,9 +25,13 @@ mod ranking;
 mod results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
-pub(crate) use chunks::{HybridChunksResult, retrieve_hybrid_chunks, search_collection};
+pub(crate) use chunks::{
+    DLT_ROW_TYPE, HybridChunksResult, chunk_collections, has_dlt_rows,
+    retrieve_hybrid_chunks_personalized, search_collection, search_collections,
+};
 pub(crate) use context::extract_used_ids;
 pub(crate) use entities::{build_entities, format_entities};
+pub(crate) use external_metadata::project_external_metadata;
 pub(crate) use facts::{edge_rank_by_id, format_facts};
 pub(crate) use results::{payload_matches_node_filter, result_id};
 
@@ -56,6 +61,7 @@ use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
+use crate::user_preferences::{ActivePreferences, append_preference_guidance, load_for_search};
 use crate::utils::{
     DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, EMPTY_GRAPH_MESSAGE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
     HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
@@ -83,7 +89,7 @@ fn lane_top_k(lane_knob: Option<usize>, top_k: Option<usize>, default: usize) ->
 }
 /// Default max edges expanded per entity (`HybridRetriever.__init__`).
 const DEFAULT_MAX_EDGES_PER_ENTITY: usize = 10;
-/// Default global-context-index top-k (inert in Phase 1).
+/// Default number of global-context bucket summaries to prepend.
 const DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K: usize = 3;
 /// Default node-name filter operator.
 const DEFAULT_NODE_NAME_FILTER_OPERATOR: &str = "OR";
@@ -137,8 +143,23 @@ fn chunk_lane_fusion(params: &SearchParams) -> ChunkLaneFusion {
 
 const ENTITY_DATA_TYPE: &str = "Entity";
 const ENTITY_FIELD: &str = "name";
+const ENTITY_COLLECTION: (&str, &str) = (ENTITY_DATA_TYPE, ENTITY_FIELD);
+const ENTITY_COLLECTIONS_WITH_DLT: &[(&str, &str)] = &[
+    ENTITY_COLLECTION,
+    ("DltColumn", "properties"),
+    ("SchemaTable", "name"),
+    ("SchemaRelationship", "name"),
+];
 const EDGE_TYPE_DATA_TYPE: &str = "EdgeType";
 const EDGE_TYPE_FIELD: &str = "relationship_name";
+
+fn entity_collections(include_dlt_rows: bool) -> &'static [(&'static str, &'static str)] {
+    if include_dlt_rows {
+        ENTITY_COLLECTIONS_WITH_DLT
+    } else {
+        &[ENTITY_COLLECTION]
+    }
+}
 
 /// The HYBRID_COMPLETION context budget and overflow handling (the
 /// `search.hybrid` settings).
@@ -188,10 +209,8 @@ impl Default for HybridBudget {
 /// set and exactly one dataset is in scope, the chunk lane is re-ranked by
 /// truth-subspace alignment; it fails open to baseline ranking on any error and
 /// stays default-off. **Global-context (`include_global_context_index` /
-/// `global_context_index_top_k`):** still accepted on the wire but inert — no
-/// global-context section is produced yet. The index and its shared loader
-/// ([`crate::utils::build_global_context_prelude`]) exist; wiring this
-/// channel is SDK-1045.
+/// `global_context_index_top_k`):** prepends the persisted global-context
+/// index when requested, without charging it to the hybrid lane budget.
 pub struct HybridRetriever {
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -205,12 +224,7 @@ pub struct HybridRetriever {
     use_importance_weight: bool,
     // Live as of Phase 2 (P2-07); default-off, fails open to baseline ranking.
     use_truth_weight: bool,
-    // Accepted on the wire but inert (locked deferral).
     include_global_context_index: bool,
-    #[allow(
-        dead_code,
-        reason = "global-context-index knob is accepted on the wire but inert in Phase 1"
-    )]
     global_context_index_top_k: usize,
     node_name: Option<Vec<String>>,
     node_name_filter_operator: String,
@@ -232,6 +246,8 @@ pub(crate) struct HybridLanes {
     pub text_summaries_top_k: Option<usize>,
     pub use_importance_weight: bool,
     pub use_truth_weight: bool,
+    pub include_external_metadata: bool,
+    pub external_metadata_keys: Vec<String>,
     pub node_name: Option<Vec<String>>,
     pub node_name_filter_operator: String,
     pub fusion: ChunkLaneFusion,
@@ -298,15 +314,6 @@ impl HybridRetriever {
     /// Three-layer resolution for the top-k family: request knob -> capped
     /// `top_k` -> constructor default (see [`lane_top_k`]).
     fn resolve_lanes(&self, params: &SearchParams) -> HybridLanes {
-        if params
-            .include_global_context_index
-            .unwrap_or(self.include_global_context_index)
-        {
-            debug!(
-                "HYBRID_COMPLETION: include_global_context_index is set but not wired yet \
-                 (SDK-1045); no global-context section will be produced"
-            );
-        }
         HybridLanes {
             chunks_top_k: lane_top_k(params.chunks_top_k, params.top_k, self.chunks_top_k),
             entities_top_k: lane_top_k(params.entities_top_k, params.top_k, self.entities_top_k),
@@ -334,6 +341,8 @@ impl HybridRetriever {
                 .use_importance_weight
                 .unwrap_or(self.use_importance_weight),
             use_truth_weight: params.use_truth_weight.unwrap_or(self.use_truth_weight),
+            include_external_metadata: params.include_external_metadata.unwrap_or(false),
+            external_metadata_keys: params.external_metadata_keys.clone().unwrap_or_default(),
             node_name: params.node_name.clone().or_else(|| self.node_name.clone()),
             node_name_filter_operator: params
                 .node_name_filter_operator
@@ -355,6 +364,29 @@ impl HybridRetriever {
         query: &str,
         lanes: &HybridLanes,
         dataset_id: Option<Uuid>,
+        preferences: &ActivePreferences,
+        personal_influence: f64,
+    ) -> Result<HybridCandidates, SearchError> {
+        let include_dlt_rows = has_dlt_rows(self.vector_db.as_ref()).await?;
+        self.fetch_candidates_with_dlt(
+            query,
+            lanes,
+            dataset_id,
+            include_dlt_rows,
+            preferences,
+            personal_influence,
+        )
+        .await
+    }
+
+    pub(crate) async fn fetch_candidates_with_dlt(
+        &self,
+        query: &str,
+        lanes: &HybridLanes,
+        dataset_id: Option<Uuid>,
+        include_dlt_rows: bool,
+        preferences: &ActivePreferences,
+        personal_influence: f64,
     ) -> Result<HybridCandidates, SearchError> {
         let node_name = lanes.node_name.as_deref();
         let node_name_filter_operator = lanes.node_name_filter_operator.as_str();
@@ -374,11 +406,12 @@ impl HybridRetriever {
                 dataset_id,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await;
 
         let (chunk_result, (entities, fact_candidates)) = tokio::try_join!(
-            retrieve_hybrid_chunks(
+            retrieve_hybrid_chunks_personalized(
                 &self.vector_db,
                 lanes.chunks_top_k,
                 lanes.text_summaries_top_k,
@@ -387,10 +420,13 @@ impl HybridRetriever {
                 lanes.fusion,
                 lanes.use_importance_weight,
                 &query_vector,
+                include_dlt_rows,
                 lanes.use_truth_weight,
                 q_coords.as_deref(),
                 truth_state_by_id.as_ref(),
                 current_truth_epoch,
+                (!preferences.weights.is_empty()).then_some(&preferences.weights),
+                personal_influence,
             ),
             self.retrieve_entities_and_facts(
                 &query_vector,
@@ -399,13 +435,19 @@ impl HybridRetriever {
                 lanes.max_edges_per_entity,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             ),
         )?;
 
         let HybridChunksResult {
-            chunks,
+            mut chunks,
             chunk_summaries,
         } = chunk_result;
+        project_external_metadata(
+            &mut chunks,
+            lanes.include_external_metadata,
+            &lanes.external_metadata_keys,
+        );
         Ok(HybridCandidates {
             chunks,
             chunk_summaries,
@@ -446,14 +488,15 @@ impl HybridRetriever {
         max_edges_per_entity: usize,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<(Vec<EntityResult>, FactCandidates), SearchError> {
         let max_ranked_bullets = entities_top_k.saturating_mul(max_edges_per_entity);
         let edge_limit = max_ranked_bullets.saturating_add(facts_top_k);
 
-        let entity_future = search_collection(
+        let entity_future = search_collections(
             &self.vector_db,
-            ENTITY_DATA_TYPE,
-            ENTITY_FIELD,
+            entity_collections(include_dlt_rows),
+            None,
             query_vector,
             entities_top_k,
             node_name,
@@ -511,6 +554,7 @@ impl HybridRetriever {
     /// loading fine but the graph batch call erroring) discards the
     /// already-computed `q_coords` and returns `(None, None, None)`, mirroring
     /// Python's one `try/except` around the whole computation.
+    #[allow(clippy::too_many_arguments)]
     async fn build_truth_context(
         &self,
         use_truth_weight: bool,
@@ -519,6 +563,7 @@ impl HybridRetriever {
         dataset_id: Option<Uuid>,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> (
         Option<Vec<f64>>,
         Option<HashMap<String, NodeTruthState>>,
@@ -538,6 +583,7 @@ impl HybridRetriever {
                 dataset_id,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await
         {
@@ -566,6 +612,7 @@ impl HybridRetriever {
         dataset_id: Uuid,
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<Option<(Vec<f64>, HashMap<String, NodeTruthState>, i64)>, SearchError> {
         let centroids =
             load_centroids(self.vector_db.as_ref(), &dataset_id.to_string(), DEFAULT_K).await?;
@@ -597,6 +644,7 @@ impl HybridRetriever {
                 query_vector,
                 node_name,
                 node_name_filter_operator,
+                include_dlt_rows,
             )
             .await?;
         if candidate_ids.is_empty() {
@@ -625,15 +673,16 @@ impl HybridRetriever {
         query_vector: &[f32],
         node_name: Option<&[String]>,
         node_name_filter_operator: &str,
+        include_dlt_rows: bool,
     ) -> Result<Vec<String>, SearchError> {
         let candidate_limit = chunks_top_k.saturating_mul(2);
         if candidate_limit == 0 {
             return Ok(vec![]);
         }
-        let hits = search_collection(
+        let hits = search_collections(
             &self.vector_db,
-            "DocumentChunk",
-            "text",
+            chunk_collections(include_dlt_rows),
+            include_dlt_rows.then_some((chunks::DLT_ROW_TYPE, "text")),
             query_vector,
             candidate_limit,
             node_name,
@@ -678,6 +727,14 @@ impl HybridRetriever {
                 _ => {}
             }
         }
+        // A caller may reuse context fetched under broader metadata settings.
+        // Treat prompt construction as the final trust boundary and apply the
+        // current request's projection to the cloned passages again.
+        project_external_metadata(
+            &mut chunks,
+            params.include_external_metadata.unwrap_or(false),
+            params.external_metadata_keys.as_deref().unwrap_or(&[]),
+        );
 
         let configured_system_prompt = params
             .system_prompt
@@ -714,15 +771,31 @@ impl HybridRetriever {
                         .len(),
                 ),
         };
-        let overhead = overhead_system + overhead_template + session.formatted_history.len();
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        let preference_guidance = preferences.rendered_text();
+        let guidance_overhead = if preference_guidance.is_empty() {
+            0
+        } else {
+            2 + preference_guidance.len()
+        };
+        let overhead = overhead_system
+            + overhead_template
+            + session.formatted_history.len()
+            + guidance_overhead;
+
+        // Python loads this while formatting the retrieved objects rather
+        // than treating it as a candidate lane. Keep that boundary: the
+        // optional prelude is context, but does not spend the hybrid
+        // passages/entities/facts budget.
+        let global_context = self.global_context_section(query, params).await?;
 
         let mut overflow_summaries =
             overflow::known(&chunks, self.budget.overflow_summary_file.as_deref());
         let (mut context_text, budgeted, unsummarized) =
             self.assemble_context(&chunks, &entities, &facts, overhead, &overflow_summaries);
 
-        // Nothing to answer from: no prompt (see `get_completion`).
-        if context_text.is_empty() {
+        // A global prelude alone is context, matching Python's formatter.
+        if context_text.is_empty() && global_context.is_empty() {
             return Ok(None);
         }
 
@@ -762,7 +835,12 @@ impl HybridRetriever {
                 }
             }
         }
-        let context_text = context_text;
+        let context_text = format_hybrid_context(
+            (!global_context.is_empty()).then_some(global_context.as_str()),
+            &context_text,
+            "",
+            "",
+        );
 
         // A context that had to be budgeted is a context long enough to lose
         // the question in, and a model with a window that small is the one
@@ -790,11 +868,45 @@ impl HybridRetriever {
         );
         debug!("LLM user prompt:\n{user_prompt}");
 
-        Ok(Some(build_messages_with_history(
-            system_prompt,
-            user_prompt,
-            session,
-        )))
+        let mut messages = build_messages_with_history(system_prompt, user_prompt, session);
+        append_preference_guidance(&mut messages, &preference_guidance);
+        Ok(Some(messages))
+    }
+
+    /// Build Python's `## Global context` hybrid section. Dataset filtering
+    /// is applied to both the root and vector-summary reads by the shared
+    /// loader; a missing vector collection is an empty channel.
+    async fn global_context_section(
+        &self,
+        query: &str,
+        params: &SearchParams,
+    ) -> Result<String, SearchError> {
+        if !params
+            .include_global_context_index
+            .unwrap_or(self.include_global_context_index)
+            || query.is_empty()
+        {
+            return Ok(String::new());
+        }
+        let prelude = crate::utils::build_global_context_prelude(
+            query,
+            params
+                .global_context_index_top_k
+                .unwrap_or(self.global_context_index_top_k),
+            params
+                .dataset_ids
+                .as_deref()
+                .filter(|dataset_ids| !dataset_ids.is_empty()),
+            self.graph_db.as_ref(),
+            self.vector_db.as_ref(),
+            self.embedding_engine.as_ref(),
+        )
+        .await?;
+        Ok(if prelude.is_empty() {
+            String::new()
+        } else {
+            format!("## Global context\n{prelude}")
+        })
     }
 
     fn assemble_context(
@@ -1056,6 +1168,12 @@ impl SearchRetriever for HybridRetriever {
         super::DatasetScoping::Membership
     }
 
+    fn previews_empty_context(&self, params: &SearchParams) -> bool {
+        params
+            .include_global_context_index
+            .unwrap_or(self.include_global_context_index)
+    }
+
     #[cfg(test)]
     fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
         crate::retrievers::AppliedTuning {
@@ -1081,8 +1199,19 @@ impl SearchRetriever for HybridRetriever {
         // Python's `_retrieve_one`: fetch uncut, then cut to the lane limits
         // straight away. The lanes already return at most their limits, so the
         // cut only decides the facts (against the entities shown).
+        let preferences = load_for_search(self.graph_db.as_ref(), params).await;
+        let personal_influence = params
+            .personalization
+            .as_ref()
+            .map_or(0.0, |config| config.influence);
         let candidates = self
-            .fetch_candidates(query, &lanes, params.dataset_id)
+            .fetch_candidates(
+                query,
+                &lanes,
+                params.dataset_id,
+                &preferences,
+                personal_influence,
+            )
             .await?;
         Ok(candidates
             .finalize(lanes.chunks_top_k, lanes.entities_top_k, None)
@@ -1174,11 +1303,19 @@ impl SearchRetriever for HybridRetriever {
         if self.graph_db.is_empty().await.unwrap_or(true) {
             return None;
         }
-        match chunks::has_chunk_collection(self.vector_db.as_ref()).await {
-            Ok(false) => Some("DocumentChunk_text collection missing".to_string()),
-            Ok(true) => None,
-            Err(error) => {
+        let chunks = chunks::has_chunk_collection(self.vector_db.as_ref()).await;
+        let dlt = chunks::has_dlt_rows(self.vector_db.as_ref()).await;
+        match (chunks, dlt) {
+            (Ok(false), Ok(false)) => {
+                Some("DocumentChunk_text and DltRow_text collections missing".to_string())
+            }
+            (Ok(true), _) | (_, Ok(true)) => None,
+            (Err(error), _) => {
                 debug!(%error, "hybrid chunk collection check failed; running hybrid");
+                None
+            }
+            (_, Err(error)) => {
+                debug!(%error, "hybrid DLT collection check failed; running hybrid");
                 None
             }
         }
@@ -1201,7 +1338,7 @@ mod retriever_tests {
     use cognee_embedding::engine::EmbeddingEngine;
     use cognee_graph::{GraphDBTrait, MockGraphDB};
     use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmResult, Message, TokenUsage};
-    use cognee_models::EdgeType;
+    use cognee_models::{EdgeType, GlobalContextSummary};
     use cognee_vector::{MockVectorDB, VectorDB, VectorPoint};
     use serde_json::{Value, json};
     use uuid::Uuid;
@@ -1219,6 +1356,20 @@ mod retriever_tests {
     const ENTITY_NAME: &str = "Alice";
     const BULLET_TEXT: &str = "Alice works at Acme.";
     const FACT_TEXT: &str = "Acme acquired Initech.";
+
+    #[test]
+    fn dlt_contract_enables_all_structured_entity_collections() {
+        assert_eq!(super::entity_collections(false), &[("Entity", "name")]);
+        assert_eq!(
+            super::entity_collections(true),
+            &[
+                ("Entity", "name"),
+                ("DltColumn", "properties"),
+                ("SchemaTable", "name"),
+                ("SchemaRelationship", "name"),
+            ]
+        );
+    }
 
     struct AlignedEmbedding;
 
@@ -1311,7 +1462,11 @@ mod retriever_tests {
             "text",
             &[VectorPoint::new(chunk_id, vec![1.0, 0.0])
                 .with_metadata("id", json!(chunk_id.to_string()))
-                .with_metadata("text", json!(CHUNK_TEXT))],
+                .with_metadata("text", json!(CHUNK_TEXT))
+                .with_metadata(
+                    "external_metadata",
+                    json!(r#"{"created_at":"2024-01-15","source_id":"private"}"#),
+                )],
         )
         .await
         .unwrap();
@@ -1402,6 +1557,177 @@ mod retriever_tests {
         )
     }
 
+    async fn global_context_dbs(
+        dataset_id: Uuid,
+        other_dataset_id: Uuid,
+    ) -> (Arc<dyn VectorDB>, Arc<dyn GraphDBTrait>) {
+        let vector = MockVectorDB::new();
+        vector
+            .create_collection(GlobalContextSummary::TYPE, "text", 2)
+            .await
+            .unwrap();
+        vector
+            .index_points(
+                GlobalContextSummary::TYPE,
+                "text",
+                &[
+                    VectorPoint::new(Uuid::new_v4(), vec![1.0, 0.0])
+                        .with_metadata("text", json!("their nearest area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(other_dataset_id.to_string())),
+                    VectorPoint::new(Uuid::new_v4(), vec![0.9, 0.1])
+                        .with_metadata("text", json!("our first area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string())),
+                    VectorPoint::new(Uuid::new_v4(), vec![0.8, 0.2])
+                        .with_metadata("text", json!("our second area"))
+                        .with_metadata("is_root", json!(false))
+                        .with_metadata("dataset_id", json!(dataset_id.to_string())),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let graph = MockGraphDB::new();
+        for (scope, text) in [(other_dataset_id, "their world"), (dataset_id, "our world")] {
+            let root =
+                GlobalContextSummary::new(Uuid::new_v4(), text, scope.to_string(), 1, true, None);
+            graph
+                .add_node_raw(serde_json::to_value(root).unwrap())
+                .await
+                .unwrap();
+        }
+        (Arc::new(vector), Arc::new(graph))
+    }
+
+    #[tokio::test]
+    async fn global_context_is_default_off_and_request_can_enable_and_size_it() {
+        let mine = Uuid::new_v4();
+        let (vector, graph) = global_context_dbs(mine, Uuid::new_v4()).await;
+        let retriever = retriever(vector, graph, Arc::new(CapturingLlm::default()));
+        let context = SearchContext::new();
+        assert!(
+            retriever
+                .completion_messages(
+                    "question",
+                    &context,
+                    &SessionContext::default(),
+                    &SearchParams::default(),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let params = SearchParams {
+            include_global_context_index: Some(true),
+            global_context_index_top_k: Some(2),
+            dataset_id: Some(mine),
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages("question", &context, &SessionContext::default(), &params)
+            .await
+            .unwrap()
+            .expect("global context alone is completion context");
+        let user = &messages.last().unwrap().content;
+        assert!(user.contains("## Global context\nWorld summary:\nour world"));
+        assert!(user.contains("Relevant areas:\nour first area\n\nour second area"));
+        assert!(!user.contains("their world"));
+        assert!(!user.contains("their nearest area"));
+    }
+
+    #[tokio::test]
+    async fn constructor_global_context_knobs_are_overridden_per_request() {
+        let mine = Uuid::new_v4();
+        let (vector, graph) = global_context_dbs(mine, Uuid::new_v4()).await;
+        let mut retriever = retriever(vector, graph, Arc::new(CapturingLlm::default()));
+        retriever.include_global_context_index = true;
+        retriever.global_context_index_top_k = 1;
+        let scope = SearchParams {
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages(
+                "question",
+                &SearchContext::new(),
+                &SessionContext::default(),
+                &scope,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(messages[1].content.contains("our first area"));
+        assert!(!messages[1].content.contains("our second area"));
+
+        let disabled = SearchParams {
+            include_global_context_index: Some(false),
+            ..scope
+        };
+        assert!(
+            retriever
+                .completion_messages(
+                    "question",
+                    &SearchContext::new(),
+                    &SessionContext::default(),
+                    &disabled,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_summary_index_fails_open_to_root_without_spending_lane_budget() {
+        let mine = Uuid::new_v4();
+        let graph = MockGraphDB::new();
+        let root = GlobalContextSummary::new(
+            Uuid::new_v4(),
+            "x".repeat(10_000),
+            mine.to_string(),
+            1,
+            true,
+            None,
+        );
+        graph
+            .add_node_raw(serde_json::to_value(root).unwrap())
+            .await
+            .unwrap();
+        let mut retriever = retriever(
+            Arc::new(MockVectorDB::new()),
+            Arc::new(graph),
+            Arc::new(CapturingLlm {
+                max_context: Some(1_024),
+                ..Default::default()
+            }),
+        );
+        retriever.budget.max_context_tokens = Some(1_024);
+        let context = vec![SearchItem {
+            id: Some(Uuid::new_v4()),
+            score: Some(1.0),
+            payload: json!({"kind": "chunk", "text": "kept passage"}),
+        }];
+        let params = SearchParams {
+            include_global_context_index: Some(true),
+            dataset_ids: Some(vec![mine]),
+            ..Default::default()
+        };
+        let messages = retriever
+            .completion_messages("question", &context, &SessionContext::default(), &params)
+            .await
+            .unwrap()
+            .unwrap();
+        let user = &messages[1].content;
+        assert!(user.contains("## Global context\nWorld summary:"));
+        assert!(user.contains("## Relevant passages\nkept passage"));
+        assert!(
+            user.find("## Global context").unwrap() < user.find("## Relevant passages").unwrap()
+        );
+    }
+
     fn kinds(context: &SearchContext) -> Vec<String> {
         context
             .iter()
@@ -1443,6 +1769,7 @@ mod retriever_tests {
 
         let chunk = &context[0];
         assert_eq!(chunk.payload["text"], json!(CHUNK_TEXT));
+        assert!(chunk.payload.get("external_metadata").is_none());
 
         let entity = &context[1];
         assert_eq!(entity.payload["name"], json!(ENTITY_NAME));
@@ -1450,6 +1777,58 @@ mod retriever_tests {
 
         let fact = &context[2];
         assert_eq!(fact.payload["text"], json!(FACT_TEXT));
+    }
+
+    #[tokio::test]
+    async fn external_metadata_projection_reaches_only_context_and_completion_context() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let llm = Arc::new(CapturingLlm::default());
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            include_external_metadata: Some(true),
+            external_metadata_keys: Some(vec!["created_at".into(), "missing".into()]),
+            ..Default::default()
+        };
+
+        let context = retriever.get_context("query", &params).await.unwrap();
+        let chunk = context
+            .iter()
+            .find(|item| item.payload.get("kind").and_then(Value::as_str) == Some("chunk"))
+            .unwrap();
+        assert_eq!(
+            chunk.payload["external_metadata"],
+            json!({"created_at": "2024-01-15"})
+        );
+        assert!(!chunk.payload.to_string().contains("source_id"));
+
+        retriever
+            .get_completion(
+                "query",
+                Some(context.clone()),
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap();
+        let user = {
+            let messages = llm.last_messages.lock().unwrap();
+            messages[1].content.clone()
+        };
+        assert!(user.contains("created_at: 2024-01-15\n"));
+        assert!(!user.contains("source_id"));
+        assert!(!user.contains("private"));
+
+        retriever
+            .get_completion(
+                "query",
+                Some(context),
+                &SessionContext::default(),
+                &SearchParams::default(),
+            )
+            .await
+            .unwrap();
+        let messages = llm.last_messages.lock().unwrap();
+        assert!(!messages[1].content.contains("created_at"));
     }
 
     /// Entity and fact items carry their **own** dataset membership, read
@@ -1595,6 +1974,70 @@ mod retriever_tests {
         let sent = llm.last_messages.lock().unwrap().clone();
         assert_eq!(sent[0].content, preview[0].content);
         assert_eq!(sent[1].content, preview[1].content);
+    }
+
+    #[tokio::test]
+    async fn preference_guidance_is_appended_once_and_last_in_preview_and_completion() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        crate::user_preferences::upsert_preference_node(
+            graph_db.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer terse tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let llm = Arc::new(CapturingLlm {
+            response_text: "hybrid answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            dataset_ids: Some(vec![dataset]),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let context = retriever
+            .get_context("what happened?", &params)
+            .await
+            .unwrap();
+        let preview = retriever
+            .completion_messages(
+                "what happened?",
+                &context,
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let preview_user = preview.last().unwrap().content.as_str();
+        assert_eq!(preview_user.matches("## What this user prefers").count(), 1);
+        assert!(preview_user.ends_with("Prefer terse tables"));
+
+        retriever
+            .get_completion(
+                "what happened?",
+                Some(context),
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap();
+        let sent = llm.last_messages.lock().unwrap().clone();
+        assert_eq!(
+            sent.last().unwrap().content,
+            preview.last().unwrap().content
+        );
     }
 
     #[tokio::test]
@@ -2482,6 +2925,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
 
@@ -2515,6 +2959,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2535,7 +2980,15 @@ mod truth_context_tests {
 
         let retriever = truth_retriever(vector_db, graph_db, true);
         let result = retriever
-            .build_truth_context(true, super::DEFAULT_TOP_K, &QUERY_VECTOR, None, None, "OR")
+            .build_truth_context(
+                true,
+                super::DEFAULT_TOP_K,
+                &QUERY_VECTOR,
+                None,
+                None,
+                "OR",
+                false,
+            )
             .await;
         assert_eq!(result, (None, None, None));
     }
@@ -2556,6 +3009,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2579,6 +3033,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2614,6 +3069,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
         assert_eq!(result, (None, None, None));
@@ -2638,6 +3094,7 @@ mod truth_context_tests {
                 Some(dataset_id),
                 None,
                 "OR",
+                false,
             )
             .await;
 
@@ -2666,7 +3123,7 @@ mod truth_context_tests {
 
         // Resolved chunks_top_k = 1 -> window = 2 -> at most 2 candidate ids.
         let narrow = retriever
-            .candidate_chunk_ids(1, &QUERY_VECTOR, None, "OR")
+            .candidate_chunk_ids(1, &QUERY_VECTOR, None, "OR", false)
             .await
             .unwrap();
         assert_eq!(
@@ -2677,7 +3134,7 @@ mod truth_context_tests {
 
         // A wide resolved value surfaces every seeded chunk (window 30 >= 5).
         let wide = retriever
-            .candidate_chunk_ids(super::DEFAULT_TOP_K, &QUERY_VECTOR, None, "OR")
+            .candidate_chunk_ids(super::DEFAULT_TOP_K, &QUERY_VECTOR, None, "OR", false)
             .await
             .unwrap();
         assert_eq!(

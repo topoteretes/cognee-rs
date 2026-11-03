@@ -29,6 +29,10 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Maximum Q&A pairs included in completion history.
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
+    }
     pub fn new(store: Arc<dyn SessionStore>) -> Self {
         Self {
             store,
@@ -242,6 +246,19 @@ impl SessionManager {
     ) -> Result<Vec<SessionQAEntry>, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
         self.store.get_all_qa_entries(resolved_id, user_id).await
+    }
+
+    /// Most recent Q&A entries, oldest first, without loading the whole session.
+    pub async fn get_latest_session_entries(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        last_n: usize,
+    ) -> Result<Vec<SessionQAEntry>, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store
+            .get_latest_qa_entries(resolved_id, user_id, last_n)
+            .await
     }
 
     /// Delete all entries for a session, its session-context rows included.
@@ -480,6 +497,7 @@ mod tests {
             feedback_text: None,
             feedback_score: None,
             used_graph_element_ids: None,
+            used_session_context_ids: None,
             memify_metadata: None,
         }
     }

@@ -1324,7 +1324,8 @@ Three `Settings` fields tune the search orchestrator itself, lowered by the same
 | Env var | `Settings` field | Default | Effect |
 |---|---|---|---|
 | `ENABLE_LAST_ACCESSED` | `enable_last_accessed` | `false` | Update `last_accessed` on the source data records of every search's retrieved context, as Python does on every retrieval (Python's flag, also default off). On a plain completion search the context is then fetched by the search itself and handed to the retriever, so it is still fetched once. `FEEDBACK` searches retrieve no data and are not tracked. |
-| `AUTO_FEEDBACK` | `auto_feedback` | `false` | Detect feedback in a session search's message (one extra LLM call per session turn) when the request leaves `auto_feedback_detection` unset, and only while `session.caching` is on (Python's `caching and auto_feedback`). The same switch gates improve's `extract_agent_context` stage (`auto_feedback_disabled` when off). **Python defaults it to `true`**; Rust keeps it off so a session search makes no extra LLM call unless asked. |
+| `AUTO_FEEDBACK` | `auto_feedback` | `true` | Analyze feedback, corrections, and follow-up queries in a session search when the request leaves `auto_feedback_detection` unset, and only while `session.caching` is on (Python's `caching and auto_feedback`). The same switch gates improve's `extract_agent_context` stage (`auto_feedback_disabled` when off). Disable it to avoid the additional structured-output call. |
+| `SESSION_SEARCH_MODE` | `session_search_mode` | `concurrent` | `concurrent` overlaps turn analysis with retrieval/completion for Python's eligible built-in RAG, graph, and hybrid completion paths; `sequential` applies a rewritten effective query before retrieval. Both modes preserve the raw user message in session history. Batch, preview, custom/community, feeling-lucky, and unsupported completion types use the sequential path. |
 | — | `default_system_prompt_path` | `answer_simple_question.txt` | System prompt file for a search that names neither a system prompt nor a prompt path. The default (Python's file name for the built-in prompt) and an empty value leave each retriever's own compiled-in prompt; any other value is read as a file. Rust-only (Python has no such setting). |
 
 ### Triplet retriever hub cap
@@ -1394,6 +1395,10 @@ explicit per-lane knob is never capped). The effective defaults are:
 | `chunk_lane_fusion` | `chunk_lane_fusion` | `"relative_score"` | **diverges** — Python is rank-only RRF (`"reciprocal_rank"`) |
 | `summary_lane_weight` | `summary_lane_weight` | `0.75` | no Python equivalent |
 | `use_importance_weight` | `use_importance_weight` | `true` | `use_importance_weight=True` |
+| `include_external_metadata` | `include_external_metadata` | `false` | `include_external_metadata=False` |
+| `external_metadata_keys` | `external_metadata_keys` | `[]` | `external_metadata_keys=None` |
+| `include_global_context_index` | `include_global_context_index` | `false` | `include_global_context_index=False` |
+| `global_context_index_top_k` | `global_context_index_top_k` | `3` | `global_context_index_top_k=3` |
 | `node_name` | `node_name` | `None` | reused query node filter |
 | `node_name_filter_operator` | `node_name_filter_operator` | `"OR"` | `"OR"` / `"AND"` |
 | `candidate_top_k` | `candidate_top_k` | `top_k * 4` (TEMPORAL only) | `candidate_top_k` (defaults to `top_k * 4`) |
@@ -1407,6 +1412,16 @@ its chunk and entity lanes are sized by `candidate_top_k` and its fact lane by
 time-window rerank then cuts the candidates back to `top_k`. A `top_k` of `0`
 or a `candidate_top_k` below `top_k` is rejected with `InvalidInput`, as in
 Python.
+
+**External metadata.** Metadata is opt-in and allowlist-only. When
+`include_external_metadata` is false (the default), the raw stored value is
+removed from returned passage objects and completion context. When true, only
+non-null keys named by `external_metadata_keys` are returned and rendered as
+`key: value` lines above a passage. Missing, malformed, and non-object values
+produce `external_metadata: null` and do not fail search. This PR is a consumer
+only: SDK-1057 owns copying metadata to normal chunk and DLT vector payloads.
+Existing datasets need re-cognification after that producer lands; there is no
+backfill or migration in SDK-1045.
 
 **Chunk-lane fusion.** `chunk_lane_fusion` chooses how the `DocumentChunk_text`
 lane and the `TextSummary_text` lane are combined:
@@ -1441,13 +1456,12 @@ previous epoch live and reports the `build_truth_subspace` stage as `errored`;
 a graph backend without truth-state support (`GraphDBTrait::supports_truth_state`)
 reports it as `skipped` / `backend_unsupported`.
 
-**Reserved (inert).** These keys are parsed and stored but have no effect yet —
-passing `true` must behave identically to the default:
-
-- `include_global_context_index` (default `false`) and
-  `global_context_index_top_k` (default `3`) — inert for `HYBRID_COMPLETION`
-  until SDK-1045. `GRAPH_COMPLETION` reads them: it prepends the global
-  context index `improve(build_global_context_index=true)` built.
+**Global context.** `include_global_context_index` (default `false`) makes
+`HYBRID_COMPLETION` prepend the same dataset-scoped root and nearest bucket
+summaries as `GRAPH_COMPLETION`; `global_context_index_top_k` (default `3`)
+limits the bucket summaries. The index must first be built by
+`improve(build_global_context_index=true)`. Missing or legacy index data
+degrades to the ordinary hybrid context rather than failing the search.
 
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
@@ -1513,8 +1527,8 @@ binding / `cognee-cli config set`), and is ignored with a warning from env.
 | `DEFAULT_FEEDBACK_INFLUENCE` | `default_feedback_influence` | `0.0` | Blend weight of the learned feedback signal in graph search, in [0, 1]: the `feedback_influence` of a search request that sets none. |
 | `PREFERENCE_ALPHA` | `preference_alpha` | `0.3` | How far one rating pulls a personal `prefers` weight, in (0, 1]. Read by improve's `update_user_preferences`. |
 | `PREFERENCE_BETA` | `preference_beta` | `0.02` | Per-turn decay of an untouched `prefers` weight, in [0, 1); applied on read, by the preference update and by the retrievers. |
-| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization: gates improve's `update_user_preferences` stage and the retrievers' preference read (graph and RAG completion). Off, nothing is written or read. |
-| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most a personal `prefers` weight may move a ranking score, in [0, 1] (graph triplet ranking, RAG chunk ranking). |
+| `PERSONALIZATION_ENABLED` | `personalization_enabled` | `false` | Master switch of preference personalization: gates improve's `update_user_preferences` stage and the retrievers' preference read (graph, RAG, and hybrid completion). Off, nothing is written or read. |
+| `PERSONALIZATION_INFLUENCE` | `personalization_influence` | `0.3` | The most a personal `prefers` weight may move a ranking score, in [0, 1] (graph triplet ranking and RAG/hybrid chunk ranking). |
 
 ## Ontology
 

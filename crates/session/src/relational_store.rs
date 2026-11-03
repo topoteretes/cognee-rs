@@ -50,6 +50,11 @@ fn row_to_entry(m: SessionQaRow) -> SessionQAEntry {
         .memify_metadata
         .as_deref()
         .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(s).ok());
+    let used_session_context_ids = m
+        .used_session_context_ids
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .filter(|ids| !ids.is_empty());
 
     SessionQAEntry {
         id: Uuid::parse_str(&m.id).unwrap_or_default(),
@@ -62,6 +67,7 @@ fn row_to_entry(m: SessionQaRow) -> SessionQAEntry {
         feedback_text: m.feedback_text,
         feedback_score: m.feedback_score,
         used_graph_element_ids,
+        used_session_context_ids,
         memify_metadata,
     }
 }
@@ -75,6 +81,10 @@ fn update_to_patch(updates: SessionQAUpdate) -> Result<SessionQaPatch, SessionEr
         feedback_score: updates.feedback_score,
         used_graph_element_ids: updates
             .used_graph_element_ids
+            .map(|ids| ids.as_ref().map(to_json).transpose())
+            .transpose()?,
+        used_session_context_ids: updates
+            .used_session_context_ids
             .map(|ids| ids.as_ref().map(to_json).transpose())
             .transpose()?,
         memify_metadata: updates
@@ -198,8 +208,11 @@ impl SessionStore for RelationalSessionStore {
         updates: SessionQAUpdate,
     ) -> Result<bool, SessionError> {
         let patch = update_to_patch(updates)?;
+        let normalized_qa_id = uuid::Uuid::parse_str(qa_id)
+            .map(|id| id.simple().to_string())
+            .unwrap_or_else(|_| qa_id.to_string());
         self.db
-            .update_session_qa_entry(session_id, user_id, qa_id, patch)
+            .update_session_qa_entry(session_id, user_id, &normalized_qa_id, patch)
             .await
             .map_err(store_err)
     }

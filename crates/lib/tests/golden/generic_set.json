@@ -167,16 +167,16 @@
     "key": "auto_feedback"
   },
   "auto_feedback <- false": {
-    "ok": {}
+    "ok": {
+      "auto_feedback": false
+    }
   },
   "auto_feedback <- null": {
     "err": "TypeMismatch",
     "key": "auto_feedback"
   },
   "auto_feedback <- true": {
-    "ok": {
-      "auto_feedback": true
-    }
+    "ok": {}
   },
   "auto_feedback <- {\"a\":1}": {
     "err": "TypeMismatch",
@@ -15933,6 +15933,66 @@
   "session_abandon_after_seconds <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "session_abandon_after_seconds"
+  },
+  "session_search_mode <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- -1": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- 0": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- 1": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- 70000": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- [1]": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- false": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- null": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- true": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
+  },
+  "session_search_mode <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "session_search_mode"
   },
   "session_store <- \"\"": {
     "ok": {}

@@ -432,6 +432,10 @@ async fn temporal_session_completion_records_used_graph_element_ids() {
     let session_id = "temporal-orchestrator-session";
     let mut request = temporal_request();
     request.session_id = Some(session_id.to_string());
+    // This test isolates temporal retrieval/completion accounting. Automatic
+    // turn analysis now defaults on (matching Python) and is covered by the
+    // session-turn tests.
+    request.auto_feedback_detection = Some(false);
     let response = orchestrator.search(&request).await.unwrap();
     assert!(matches!(response.result, SearchOutput::Text(ref text) if text == "answer"));
     // The context is fetched once and handed to the completion.

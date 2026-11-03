@@ -158,6 +158,7 @@
     "session.feedback_llm_timeout_ms",
     "session.store",
     "session.ttl_seconds",
+    "session_search_mode",
     "single_process",
     "skip_connection_test",
     "skip_preflight",
@@ -200,6 +201,7 @@
     "db_sslmode",
     "default_system_prompt_path",
     "auto_feedback",
+    "session_search_mode",
     "default_feedback_influence",
     "preference_alpha",
     "preference_beta",
@@ -495,15 +497,15 @@
     "err": true
   },
   "set auto_feedback <- false": {
-    "ok": {}
+    "ok": {
+      "auto_feedback": false
+    }
   },
   "set auto_feedback <- null": {
     "err": true
   },
   "set auto_feedback <- true": {
-    "ok": {
-      "auto_feedback": true
-    }
+    "ok": {}
   },
   "set auto_feedback <- {\"a\":1}": {
     "err": true
@@ -13428,6 +13430,51 @@
   "set session_abandon_after_seconds <- {\"a\":1}": {
     "err": true
   },
+  "set session_search_mode <- \"\"": {
+    "err": true
+  },
+  "set session_search_mode <- \"1\"": {
+    "err": true
+  },
+  "set session_search_mode <- \"s\"": {
+    "err": true
+  },
+  "set session_search_mode <- \"true\"": {
+    "err": true
+  },
+  "set session_search_mode <- -1": {
+    "err": true
+  },
+  "set session_search_mode <- 0": {
+    "err": true
+  },
+  "set session_search_mode <- 1": {
+    "err": true
+  },
+  "set session_search_mode <- 1.5": {
+    "err": true
+  },
+  "set session_search_mode <- 5000000000": {
+    "err": true
+  },
+  "set session_search_mode <- 70000": {
+    "err": true
+  },
+  "set session_search_mode <- [1]": {
+    "err": true
+  },
+  "set session_search_mode <- false": {
+    "err": true
+  },
+  "set session_search_mode <- null": {
+    "err": true
+  },
+  "set session_search_mode <- true": {
+    "err": true
+  },
+  "set session_search_mode <- {\"a\":1}": {
+    "err": true
+  },
   "set session_store <- \"\"": {
     "ok": {}
   },
@@ -17056,6 +17103,13 @@
     }
   },
   "unset session_abandon_after_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset session_search_mode": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

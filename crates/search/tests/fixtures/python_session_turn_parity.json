@@ -1,0 +1,70 @@
+[
+  {
+    "name": "first_turn_preference",
+    "has_previous": false,
+    "raw_query": "Please always answer in terse bullet points.",
+    "analysis": {
+      "response_to_user": "Understood.",
+      "query_to_answer": null,
+      "served_context_ratings": [],
+      "candidate_context_updates": [
+        {
+          "section": "preferences",
+          "content": "Answer in terse bullet points.",
+          "confidence": 0.95
+        }
+      ],
+      "previous_answer_rating": null
+    },
+    "should_answer": true,
+    "effective_query": "Please always answer in terse bullet points."
+  },
+  {
+    "name": "feedback_only",
+    "has_previous": true,
+    "raw_query": "That was wrong; use the public API next time.",
+    "analysis": {
+      "response_to_user": "Thanks for the correction.",
+      "query_to_answer": null,
+      "served_context_ratings": [],
+      "candidate_context_updates": [
+        {
+          "section": "lessons_learned",
+          "content": "Prefer the public API.",
+          "confidence": 0.9
+        }
+      ],
+      "previous_answer_rating": 2
+    },
+    "should_answer": false,
+    "effective_query": "That was wrong; use the public API next time."
+  },
+  {
+    "name": "feedback_with_follow_up",
+    "has_previous": true,
+    "raw_query": "That was useful. How does cancellation work?",
+    "analysis": {
+      "response_to_user": null,
+      "query_to_answer": "How does session-turn cancellation work?",
+      "served_context_ratings": [],
+      "candidate_context_updates": [],
+      "previous_answer_rating": 5
+    },
+    "should_answer": true,
+    "effective_query": "How does session-turn cancellation work?"
+  },
+  {
+    "name": "ordinary_follow_up",
+    "has_previous": true,
+    "raw_query": "What about Rust?",
+    "analysis": {
+      "response_to_user": null,
+      "query_to_answer": "Explain the same topic for Rust.",
+      "served_context_ratings": [],
+      "candidate_context_updates": [],
+      "previous_answer_rating": null
+    },
+    "should_answer": true,
+    "effective_query": "Explain the same topic for Rust."
+  }
+]

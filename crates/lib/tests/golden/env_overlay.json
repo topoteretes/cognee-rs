@@ -165,38 +165,60 @@
   "ANTHROPIC_BASE_URL=abc + ANTHROPIC_API_BASE=2": {
     "llm.anthropic.base_url": "abc"
   },
-  "AUTO_FEEDBACK=\"  \"": {},
+  "AUTO_FEEDBACK=\"  \"": {
+    "auto_feedback": false
+  },
   "AUTO_FEEDBACK=\"\"": {},
-  "AUTO_FEEDBACK=\"-1\"": {},
-  "AUTO_FEEDBACK=\"0\"": {},
-  "AUTO_FEEDBACK=\"1\"": {
-    "auto_feedback": true
+  "AUTO_FEEDBACK=\"-1\"": {
+    "auto_feedback": false
   },
-  "AUTO_FEEDBACK=\"1.5\"": {},
-  "AUTO_FEEDBACK=\"42\"": {},
-  "AUTO_FEEDBACK=\"5000000000\"": {},
-  "AUTO_FEEDBACK=\"70000\"": {},
-  "AUTO_FEEDBACK=\"TRUE\"": {
-    "auto_feedback": true
+  "AUTO_FEEDBACK=\"0\"": {
+    "auto_feedback": false
   },
-  "AUTO_FEEDBACK=\"[1]\"": {},
-  "AUTO_FEEDBACK=\"abc\"": {},
-  "AUTO_FEEDBACK=\"false\"": {},
-  "AUTO_FEEDBACK=\"no\"": {},
-  "AUTO_FEEDBACK=\"on\"": {
-    "auto_feedback": true
+  "AUTO_FEEDBACK=\"1\"": {},
+  "AUTO_FEEDBACK=\"1.5\"": {
+    "auto_feedback": false
   },
-  "AUTO_FEEDBACK=\"require\"": {},
-  "AUTO_FEEDBACK=\"true\"": {
-    "auto_feedback": true
+  "AUTO_FEEDBACK=\"42\"": {
+    "auto_feedback": false
   },
-  "AUTO_FEEDBACK=\"v\"": {},
-  "AUTO_FEEDBACK=\"yes\"": {
-    "auto_feedback": true
+  "AUTO_FEEDBACK=\"5000000000\"": {
+    "auto_feedback": false
   },
-  "AUTO_FEEDBACK=\"{\\\"a\\\":1}\"": {},
-  "AUTO_FEEDBACK=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "AUTO_FEEDBACK=\"{\\\"ssl\\\":true}\"": {},
+  "AUTO_FEEDBACK=\"70000\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"TRUE\"": {},
+  "AUTO_FEEDBACK=\"[1]\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"abc\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"false\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"no\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"on\"": {},
+  "AUTO_FEEDBACK=\"require\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"true\"": {},
+  "AUTO_FEEDBACK=\"v\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"yes\"": {},
+  "AUTO_FEEDBACK=\"{\\\"a\\\":1}\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "auto_feedback": false
+  },
+  "AUTO_FEEDBACK=\"{\\\"ssl\\\":true}\"": {
+    "auto_feedback": false
+  },
   "AUTO_RATE_LIMIT=\"  \"": {
     "llm.auto_rate_limit": false
   },
@@ -8021,6 +8043,28 @@
   "SESSION_ABANDON_AFTER_SECONDS=\"{\\\"a\\\":1}\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "SESSION_ABANDON_AFTER_SECONDS=\"{\\\"ssl\\\":true}\"": {},
+  "SESSION_SEARCH_MODE=\"  \"": {},
+  "SESSION_SEARCH_MODE=\"\"": {},
+  "SESSION_SEARCH_MODE=\"-1\"": {},
+  "SESSION_SEARCH_MODE=\"0\"": {},
+  "SESSION_SEARCH_MODE=\"1\"": {},
+  "SESSION_SEARCH_MODE=\"1.5\"": {},
+  "SESSION_SEARCH_MODE=\"42\"": {},
+  "SESSION_SEARCH_MODE=\"5000000000\"": {},
+  "SESSION_SEARCH_MODE=\"70000\"": {},
+  "SESSION_SEARCH_MODE=\"TRUE\"": {},
+  "SESSION_SEARCH_MODE=\"[1]\"": {},
+  "SESSION_SEARCH_MODE=\"abc\"": {},
+  "SESSION_SEARCH_MODE=\"false\"": {},
+  "SESSION_SEARCH_MODE=\"no\"": {},
+  "SESSION_SEARCH_MODE=\"on\"": {},
+  "SESSION_SEARCH_MODE=\"require\"": {},
+  "SESSION_SEARCH_MODE=\"true\"": {},
+  "SESSION_SEARCH_MODE=\"v\"": {},
+  "SESSION_SEARCH_MODE=\"yes\"": {},
+  "SESSION_SEARCH_MODE=\"{\\\"a\\\":1}\"": {},
+  "SESSION_SEARCH_MODE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "SESSION_SEARCH_MODE=\"{\\\"ssl\\\":true}\"": {},
   "SESSION_TTL_SECONDS=\"  \"": {},
   "SESSION_TTL_SECONDS=\"\"": {},
   "SESSION_TTL_SECONDS=\"-1\"": {
