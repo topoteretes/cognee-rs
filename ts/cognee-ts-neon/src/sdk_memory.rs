@@ -29,7 +29,7 @@ use crate::sdk::CogneeHandle;
 /// opts: `{ sessionId?, selfImprovement?, tenant? }`
 ///
 /// `RememberResult` derives `Serialize` — result is passed through
-/// `serde_json::to_value` directly (cognify_result / memify_result fields are
+/// `serde_json::to_value` directly (cognify_result / improve_result fields are
 /// `#[serde(skip)]` so they are invisible to JS).
 pub fn cognee_remember(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
