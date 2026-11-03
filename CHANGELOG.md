@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | A session search by a retriever that opted out of turn preparation (e.g. graph report, Cypher) | wrote a QA row when it answered with text | writes none: only the session-aware completion paths record a turn in Python |
   | Turn preparation with no user or an unavailable session cache | one analysis call (e.g. with a request `auto_feedback_detection: true`) | no call, as Python's `is_session_available_for_completion` |
   | `SearchRequest.summarize_context` | `Option<bool>` (Rust only) | removed; the QA `context` column is always empty, as Python (`summarize_context=False` everywhere) |
-  | `SESSION_SEARCH_MODE` not `sequential` / `concurrent` | warned and ignored | an error (`ConfigManager::check_supported` / `check_strict`), as Python's `Literal` |
+  | `SESSION_SEARCH_MODE` not `sequential` / `concurrent` | warned and ignored | an error (`ConfigManager::check_supported` / `check_strict`); exact lowercase values only, as Python's `Literal` (no trimming or case folding) |
 
   **Migration.** Drop `summarize_context: None` from `SearchRequest` literals;
   nothing read it by default. A custom retriever that must not prepare turns

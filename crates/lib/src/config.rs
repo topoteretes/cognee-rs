@@ -210,7 +210,8 @@ pub struct Settings {
     /// `SESSION_SEARCH_MODE` as a `Literal`, so an invalid value is an error
     /// rather than a warning. `#[serde(skip)]` keeps config snapshots stable.
     #[serde(skip)]
-    pub(crate) invalid_env: Vec<(&'static str, String)>,
+    #[doc(hidden)]
+    pub invalid_env: Vec<(&'static str, String)>,
 
     // -- Feedback & personalization ----------------------------------------------
     // Python's `BaseConfig` knobs (`cognee/base_config.py`). Each is range-checked
@@ -2867,7 +2868,12 @@ mod tests {
         manager.check_supported().unwrap();
 
         let mut settings = Settings::default();
-        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", " Sequential "));
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "Sequential "));
+        // Exact values only, as Python's `Literal`: no trimming or case folding.
+        assert!(ConfigManager::new(settings).check_supported().is_err());
+
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "sequential"));
         ConfigManager::new(settings).check_supported().unwrap();
 
         // A later overlay without the variable clears the stale rejection.
@@ -3090,7 +3096,7 @@ mod tests {
 
     /// The defaults keep the historical pipeline: Python's batch sizes, the
     /// built-in prompts (their Python file names select them), no schema,
-    /// no access tracking, with Python-parity automatic feedback detection.
+    /// no access tracking, with Python-parity session turn preparation.
     #[test]
     fn formerly_inert_settings_default_to_the_builtin_behaviour() {
         let s = Settings::default();

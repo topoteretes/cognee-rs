@@ -333,10 +333,10 @@ fn monitoring_tool(value: &str) -> Result<String, String> {
     }
 }
 
-/// The `session_search_mode` a value names (`sequential` or `concurrent`,
-/// case-insensitive), `None` for anything else.
+/// The `session_search_mode` a value names (exactly `sequential` or
+/// `concurrent`, like Python's `Literal`), `None` for anything else.
 fn session_search_mode(value: &str) -> Option<cognee_search::SessionSearchMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
+    match value {
         "sequential" => Some(cognee_search::SessionSearchMode::Sequential),
         "concurrent" => Some(cognee_search::SessionSearchMode::Concurrent),
         _ => None,

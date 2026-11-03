@@ -578,7 +578,7 @@ pub struct OpenAIAdapter {
     ///   [`Self::DEFAULT_MAX_COMPLETION_TOKENS`] for option-less calls: a lower
     ///   cap there would truncate tool-call JSON mid-object, so lowering the
     ///   completion ceiling never silently breaks internal structured calls
-    ///   (e.g. feedback detection). Callers wanting NO cap pass explicit
+    ///   (e.g. session turn analysis). Callers wanting NO cap pass explicit
     ///   `max_tokens: None` (as cognify's extraction paths do).
     ///
     ///   That cap used to arrive from [`GenerationOptions::default`] via
@@ -2348,7 +2348,7 @@ impl OpenAIAdapter {
         // `generate`): an option-less call keeps the historical 16384. Applying
         // the *configured* ceiling here risks truncating the tool-call JSON
         // mid-object, so a user lowering the answer ceiling never silently breaks
-        // internal structured calls (e.g. feedback detection). Callers that want
+        // internal structured calls (e.g. session turn analysis). Callers that want
         // NO cap at all pass explicit `max_tokens: None` (as cognify's extraction
         // paths do).
         //

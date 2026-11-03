@@ -1401,19 +1401,23 @@ async fn feeling_lucky_prepares_the_turn_by_its_selected_retriever() {
 /// deliberate divergence), and the context column is always empty.
 #[tokio::test]
 async fn a_structured_answer_is_persisted_as_compact_json() {
-    for mode in [
-        cognee_search::SessionSearchMode::Sequential,
-        cognee_search::SessionSearchMode::Concurrent,
+    for (mode, per_dataset) in [
+        (cognee_search::SessionSearchMode::Sequential, false),
+        (cognee_search::SessionSearchMode::Concurrent, false),
+        (cognee_search::SessionSearchMode::Sequential, true),
     ] {
         let harness = TurnHarness::new(
             mode,
-            false,
+            per_dataset,
             SearchOutput::Structured(json!({"city": "Paris", "n": 2})),
             answering_analysis(),
         )
         .await;
         let mut request = harness.request("Be terse. What now?");
         request.response_schema = Some(json!({"type": "object"}));
+        if per_dataset {
+            request.dataset_ids = Some(vec![Uuid::new_v4()]);
+        }
 
         harness.orchestrator.search(&request).await.unwrap();
 
@@ -1425,11 +1429,25 @@ async fn a_structured_answer_is_persisted_as_compact_json() {
             "effective question"
         };
         let asked = harness.retriever.completion_queries.lock().unwrap().clone(); // lock poison is unrecoverable
-        assert_eq!(asked, vec![expected.to_string()], "{mode:?}");
-        assert_eq!(harness.qa_count().await, 2, "{mode:?} records the turn");
+        assert_eq!(
+            asked,
+            vec![expected.to_string()],
+            "{mode:?} per_dataset={per_dataset}"
+        );
+        assert_eq!(
+            harness.qa_count().await,
+            2,
+            "{mode:?} per_dataset={per_dataset} records the turn"
+        );
         let (stored, context) = last_qa(&harness).await;
-        assert_eq!(stored, r#"{"city":"Paris","n":2}"#, "{mode:?}");
-        assert!(context.unwrap_or_default().is_empty(), "{mode:?}");
+        assert_eq!(
+            stored, r#"{"city":"Paris","n":2}"#,
+            "{mode:?} per_dataset={per_dataset}"
+        );
+        assert!(
+            context.unwrap_or_default().is_empty(),
+            "{mode:?} per_dataset={per_dataset}"
+        );
     }
 }
 

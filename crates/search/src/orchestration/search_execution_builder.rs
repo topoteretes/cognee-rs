@@ -447,7 +447,7 @@ impl SearchBuilder {
     }
 
     pub fn build(self) -> SearchOrchestrator {
-        // The orchestrator's own LLM runs session feedback detection.
+        // The orchestrator's own LLM runs session turn analysis.
         let llm = Arc::clone(&self.engines.llm);
         let mut retrievers = Self::standard_retrievers(self.engines, &self.tuning);
         retrievers.extend(self.retrievers);
