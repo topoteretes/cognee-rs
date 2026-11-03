@@ -323,7 +323,8 @@ impl std::ops::AddAssign for DeletePreview {
 /// operation), on every dataset it touched.
 pub const FORGET_PIPELINE_NAME: &str = "forget";
 
-/// The Initiated resets of a dataset delete skip these rows.
+/// The change-record pipelines (`forget`, `improve`): rows that mark a write,
+/// not a runnable pipeline.
 pub use cognee_database::pipelines::CHANGE_RECORD_PIPELINE_NAMES;
 
 struct ResolvedDeleteTargets {

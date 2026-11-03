@@ -32,8 +32,8 @@ cognify again.
 ```bash
 cognee-cli cognify -d my_dataset
 cognee-cli search "what happened in 1945?" -t TEMPORAL -d my_dataset
-# or let recall auto-route to a temporal strategy:
-cognee-cli recall "timeline of the project"
+# or let recall auto-route a question that names a date to TEMPORAL:
+cognee-cli recall "what happened in 2019?"
 ```
 
 This uses `SearchType::Temporal`, served by `TemporalHybridRetriever`
@@ -41,8 +41,8 @@ This uses `SearchType::Temporal`, served by `TemporalHybridRetriever`
 hybrid retrieval reranked by the `Timestamp` nodes inside the question's time
 window (see [operations.md](../operations.md#search-retrieval)). When the
 question names no time, or nothing in the graph is dated inside its window, the
-answer is the plain hybrid one. The recall router can auto-select the temporal
-strategy from the query
+answer is the plain hybrid one. The recall router picks the temporal strategy when a time
+preposition comes right before an absolute date (`in 2019`, `before July 1969`)
 ([`crates/search/src/query_router.rs`](../../crates/search/src/query_router.rs)).
 
 ## Pointers

@@ -14,8 +14,8 @@ mod edge_type;
 mod embedding;
 mod entity;
 mod entity_type;
-mod global_context_summary;
 mod extracted_timestamp;
+mod global_context_summary;
 pub mod has_datapoint;
 /// Vector payloads in the shape of Python's `IndexSchema`.
 pub mod index_schema;
@@ -41,8 +41,8 @@ pub use edge_type::EdgeType;
 pub use embedding::Embedding;
 pub use entity::Entity;
 pub use entity_type::EntityType;
-pub use global_context_summary::GlobalContextSummary;
 pub use extracted_timestamp::RawExtractedTimestamp;
+pub use global_context_summary::GlobalContextSummary;
 pub use has_datapoint::HasDataPoint;
 pub use index_schema::{
     INDEX_SCHEMA_KEYS, INDEX_SCHEMA_METADATA_KEY, INDEX_SCHEMA_TYPE, IndexRefs,
