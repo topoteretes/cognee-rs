@@ -9,6 +9,13 @@ use crate::types::{DatabaseError, GraphEdge, GraphNode};
 #[async_trait]
 pub trait DeleteDb: Send + Sync {
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
+    /// The canonical row id of `data_id` in `dataset_id`: the exact id, else
+    /// the row whose `legacy_id` it is (Python's `resolve_data_id`).
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError>;
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError>;
     /// How many datasets hold the row `data_id`: 1 while its `dataset_id`
     /// is set, 0 once it is detached (rows are dataset-scoped).
@@ -225,6 +232,14 @@ pub trait DeleteDb: Send + Sync {
 impl DeleteDb for DatabaseConnection {
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
         data::get_data(self, id).await
+    }
+
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        data::resolve_data_id(self, dataset_id, data_id).await
     }
 
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {

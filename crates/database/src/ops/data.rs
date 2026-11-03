@@ -56,6 +56,49 @@ pub async fn get_data(db: &DatabaseConnection, id: Uuid) -> Result<Option<Data>,
     Ok(result)
 }
 
+/// Resolve a caller-supplied data id to the canonical row id in a dataset —
+/// Python's `resolve_data_id` (`cognee/modules/data/methods/resolve_data_id.py`).
+///
+/// Users hold data ids in external mappings, so every id ever issued keeps
+/// resolving: the exact id wins (the normal case: ids survive updates and the
+/// dataset-scoping backfill); on a miss the id is matched against `legacy_id`,
+/// the recorded original of a row whose identity forked when a pre-scoping
+/// shared row was split per dataset. Both lookups are dataset-scoped, not
+/// owner-scoped. Returns `None` when the id is unknown in `dataset_id`.
+#[instrument(
+    name = "cognee.db.relational.data.resolve_data_id",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn resolve_data_id(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+    data_id: Uuid,
+) -> Result<Option<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let dataset_hex = uuid_hex::to_hex(dataset_id);
+    let exact = data::Entity::find()
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.eq(dataset_hex.clone()))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+    if let Some(row) = exact {
+        return Ok(Some(Data::from(row).id));
+    }
+    let legacy = data::Entity::find()
+        .filter(data::Column::LegacyId.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.eq(dataset_hex))
+        .order_by_asc(data::Column::CreatedAt)
+        .order_by_asc(data::Column::Id)
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(legacy.map(|row| Data::from(row).id))
+}
+
 /// The row holding `content_hash` in `dataset_id` for `owner_id` and
 /// `tenant_id`, if any — Python's `identify` / `identify_many`
 /// (`cognee/modules/ingestion/identify_many.py`): dedup is a lookup scoped to

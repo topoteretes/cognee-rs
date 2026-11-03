@@ -74,12 +74,14 @@ struct DataRow {
     name: String,
     content_hash: String,
     token_count: i64,
+    pipeline_status: Option<String>,
 }
 
 async fn data_rows(db: &DatabaseConnection) -> Vec<DataRow> {
     rows(
         db,
-        "SELECT id, dataset_id, legacy_id, name, content_hash, token_count FROM data ORDER BY id",
+        "SELECT id, dataset_id, legacy_id, name, content_hash, token_count, pipeline_status \
+         FROM data ORDER BY id",
     )
     .await
     .iter()
@@ -90,6 +92,7 @@ async fn data_rows(db: &DatabaseConnection) -> Vec<DataRow> {
         name: r.try_get("", "name").unwrap(),
         content_hash: r.try_get("", "content_hash").unwrap(),
         token_count: r.try_get("", "token_count").unwrap(),
+        pipeline_status: r.try_get("", "pipeline_status").unwrap(),
     })
     .collect()
 }
@@ -194,6 +197,17 @@ async fn impl_backfill_stamps_sole_rows_and_forks_shared_rows(db: &DatabaseConne
     insert_data(db, sole, "sole", owner).await;
     insert_data(db, shared, "shared", owner).await;
     insert_data(db, orphan, "orphan", owner).await;
+    // Both were cognified: the completion marker is set.
+    for id in [shared, sole] {
+        exec(
+            db,
+            &format!(
+                "UPDATE data SET pipeline_status = '{{\"cognify\":\"done\"}}' WHERE id = '{}'",
+                hex(id)
+            ),
+        )
+        .await;
+    }
 
     insert_membership(db, ds2, sole, "2026-01-02 00:00:00+00:00").await;
     // ds3 is the OLDEST membership of the shared row, so it keeps the id even
@@ -225,6 +239,10 @@ async fn impl_backfill_stamps_sole_rows_and_forks_shared_rows(db: &DatabaseConne
     // Shared: the oldest membership (ds3) keeps the id.
     assert_eq!(by_id(shared).dataset_id.as_deref(), Some(hex(ds3).as_str()));
     assert_eq!(by_id(shared).legacy_id, None);
+    assert!(
+        by_id(shared).pipeline_status.is_some() && by_id(sole).pipeline_status.is_some(),
+        "rows that did not fork keep their marker"
+    );
 
     for fork_ds in [ds1, ds2] {
         let fork = all
@@ -239,6 +257,10 @@ async fn impl_backfill_stamps_sole_rows_and_forks_shared_rows(db: &DatabaseConne
         assert_eq!(fork.name, "shared", "every column is copied");
         assert_eq!(fork.content_hash, "hash-shared");
         assert_eq!(fork.token_count, 7);
+        assert_eq!(
+            fork.pipeline_status, None,
+            "a fork's cognify marker is cleared (D16), so it is re-cognified"
+        );
 
         for table in ["nodes", "edges"] {
             let ids = ledger_data_ids(db, table, fork_ds).await;

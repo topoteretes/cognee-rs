@@ -86,7 +86,7 @@ pub unsafe extern "C" fn cg_sdk_forget(
 /// `opts_json` may be `NULL` or a JSON object with optional `"tenant"` (UUID string).
 ///
 /// On success `result_json` is:
-///   `{"deletedDataId":"<uuid>","deleteResult":{…},"newData":[…],"cognifyResult":{…}}`
+///   `{"dataId":"<uuid>","deleteResult":{…},"cognifyResult":{…}}`
 ///
 /// Async (D4, R1): callback fires on a tokio worker thread.
 ///
