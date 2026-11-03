@@ -1127,10 +1127,9 @@ pub async fn remember_entry(
     let entry_type_str = entry.type_str();
 
     let mut status = RememberStatus::SessionStored;
-    let entry_id: Option<String>;
     let mut error: Option<String> = None;
 
-    match entry {
+    let entry_id: Option<String> = match entry {
         MemoryEntry::Qa(q) => {
             let QAEntry {
                 question,
@@ -1181,7 +1180,7 @@ pub async fn remember_entry(
                     .await?;
             }
 
-            entry_id = Some(qa_id);
+            Some(qa_id)
         }
 
         MemoryEntry::Trace(t) => {
@@ -1211,7 +1210,7 @@ pub async fn remember_entry(
                 )
                 .await?;
 
-            entry_id = Some(trace_id);
+            Some(trace_id)
         }
 
         MemoryEntry::Feedback(f) => {
@@ -1239,9 +1238,9 @@ pub async fn remember_entry(
             }
             // Python parity: entry_id is set to the input qa_id even on
             // not-found (remember.py:307: `result.entry_id = entry.qa_id`).
-            entry_id = Some(qa_id);
+            Some(qa_id)
         }
-    }
+    };
 
     info!(
         session_id = session_id,

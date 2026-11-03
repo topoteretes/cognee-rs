@@ -425,12 +425,10 @@ impl TransparentResolution {
         for relationship in index.outgoing(container) {
             match index.nodes.get(&relationship.target) {
                 Some(target) if target.transparent => self.resolve(index, relationship.target),
-                Some(target) => {
-                    if self.seen_ids.insert(target.base.id) {
-                        self.resolved.push(relationship.target);
-                    }
+                Some(target) if self.seen_ids.insert(target.base.id) => {
+                    self.resolved.push(relationship.target);
                 }
-                None => {}
+                Some(_) | None => {}
             }
         }
         self.active.remove(&container);

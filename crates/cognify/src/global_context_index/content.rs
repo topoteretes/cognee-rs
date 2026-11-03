@@ -204,15 +204,16 @@ fn parse_nodes(
                     out.entity_type_names.insert(node_id.clone(), name);
                 }
             }
-            Some("GlobalContextSummary") => {
-                // Only this dataset's index nodes, so a shared database never
-                // deletes another dataset's.
-                if property(attributes, "dataset_id").is_some_and(|v| value_str(v) == dataset_id) {
-                    let text = property(attributes, "text")
-                        .map(value_str)
-                        .unwrap_or_default();
-                    out.existing_summary_texts.insert(node_id.clone(), text);
-                }
+            // Only this dataset's index nodes, so a shared database never
+            // deletes another dataset's.
+            Some("GlobalContextSummary")
+                if property(attributes, "dataset_id")
+                    .is_some_and(|v| value_str(v) == dataset_id) =>
+            {
+                let text = property(attributes, "text")
+                    .map(value_str)
+                    .unwrap_or_default();
+                out.existing_summary_texts.insert(node_id.clone(), text);
             }
             _ => {}
         }

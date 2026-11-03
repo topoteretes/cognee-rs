@@ -214,7 +214,7 @@ impl<K: std::hash::Hash + Eq + Clone> OrderedCounter<K> {
             .map(|key| (key.clone(), self.get(key)))
             .collect();
         // Stable sort: equal counts keep their first-seen relative order.
-        items.sort_by(|left, right| right.1.cmp(&left.1));
+        items.sort_by_key(|item| std::cmp::Reverse(item.1));
         items
     }
 
