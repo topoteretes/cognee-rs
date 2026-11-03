@@ -3570,7 +3570,10 @@ pub async fn cognify(
             [dataset_id],
             cognee_models::dataset_scope::with_dataset(
                 dataset_id,
-                cognify_in_scope(
+                // Boxed: the run's future is large, and inline it made every
+                // caller's future (remember, improve's cognify-backed stages)
+                // overflow a 2 MiB thread stack in debug builds.
+                Box::pin(cognify_in_scope(
                     data_items,
                     dataset_id,
                     user_id,
@@ -3586,7 +3589,7 @@ pub async fn cognify(
                     thread_pool,
                     ontology_resolver,
                     config,
-                ),
+                )),
             ),
         )
         .await
