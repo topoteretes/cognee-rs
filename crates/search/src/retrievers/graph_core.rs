@@ -104,7 +104,7 @@ impl GraphRetrieverCore {
 
     pub(crate) fn retrieval_config(&self, params: &SearchParams) -> GraphRetrievalConfig {
         GraphRetrievalConfig {
-            top_k: params.top_k_or(self.top_k),
+            top_k: self.top_k(params),
             wide_search_top_k: params.wide_search_top_k_or(self.wide_search_top_k),
             triplet_distance_penalty: params
                 .triplet_distance_penalty_or(self.triplet_distance_penalty),

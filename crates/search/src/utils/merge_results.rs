@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::retrievers::hybrid::results::{display_value, result_id};
+use super::results::{display_value, result_id};
 use crate::types::SearchItem;
 
 /// Slots held for results only the conversational lane found: roughly a third
@@ -324,5 +324,62 @@ mod tests {
             edge_identity(&triple(None)),
             edge_identity(&triple(Some(false)))
         );
+    }
+
+    fn tagged(id: &str, tag: &str) -> SearchItem {
+        SearchItem {
+            id: None,
+            score: None,
+            payload: json!({ "id": id, "tag": tag }),
+        }
+    }
+
+    fn tags(items: &[SearchItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|i| i.payload["tag"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    // Ports of Python's tests/unit/modules/retrieval/test_merge_results.py.
+
+    #[test]
+    fn items_in_both_lanes_rank_first_and_keep_the_primary_object() {
+        let merged = merge_ranked(
+            vec![tagged("a", "primary a"), tagged("b", "primary b")],
+            vec![tagged("b", "secondary b"), tagged("c", "secondary c")],
+            item_identity,
+            Some(3),
+            conversational_reserve(3),
+        );
+        assert_eq!(tags(&merged), ["primary b", "primary a", "secondary c"]);
+    }
+
+    #[test]
+    fn repeated_item_inside_one_lane_keeps_its_first_rank() {
+        let merged = merge_ranked(
+            vec![tagged("a", "first"), tagged("a", "duplicate")],
+            Vec::new(),
+            item_identity,
+            None,
+            0,
+        );
+        assert_eq!(tags(&merged), ["first"]);
+    }
+
+    #[test]
+    fn full_lanes_reserve_slots_for_conversational_only_items() {
+        let limit = 5;
+        let primary: Vec<SearchItem> = (0..limit).map(|n| item(&format!("raw{n}"))).collect();
+        let secondary = items(&["ctx0", "ctx1", "raw3", "ctx2", "ctx3"]);
+        let merged = merge_ranked(
+            primary,
+            secondary,
+            item_identity,
+            Some(limit),
+            conversational_reserve(limit),
+        );
+        // One reserved slot at limit 5: the lowest-ranked raw item yields to ctx0.
+        assert_eq!(ids(&merged), ["raw3", "raw0", "raw1", "raw2", "ctx0"]);
     }
 }

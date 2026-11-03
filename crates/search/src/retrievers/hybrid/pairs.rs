@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::retrievers::hybrid::results::{display_value, payload_matches_node_filter, result_id};
 use crate::types::SearchItem;
+use crate::utils::results::{display_value, payload_matches_node_filter, result_id};
 
 /// One candidate chunk together with the summary paired to it (if any) and the
 /// per-lane ranks that fed the fusion.

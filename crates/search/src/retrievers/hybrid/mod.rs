@@ -23,7 +23,8 @@ mod merge;
 mod overflow;
 mod pairs;
 mod ranking;
-pub(crate) mod results;
+
+use crate::utils::results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
 pub(crate) use chunks::{
@@ -1745,6 +1746,48 @@ mod retriever_tests {
         assert!(
             user.find("## Global context").unwrap() < user.find("## Relevant passages").unwrap()
         );
+    }
+
+    /// The session merge sizes each kind from the request's lane knobs, then
+    /// `top_k`, then the retriever's defaults (the same resolution a turn's
+    /// retrieval uses).
+    #[tokio::test]
+    async fn session_merge_caps_each_kind_from_the_resolved_lanes() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let retriever = retriever(vector_db, graph_db, Arc::new(CapturingLlm::default()));
+        let lane = |prefix: &str| -> SearchContext {
+            ["chunk", "entity", "fact"]
+                .iter()
+                .flat_map(|kind| {
+                    (0..4).map(move |n| SearchItem {
+                        id: None,
+                        score: None,
+                        payload: json!({ "kind": kind, "id": format!("{prefix}-{kind}-{n}") }),
+                    })
+                })
+                .collect()
+        };
+        let count = |context: &SearchContext, wanted: &str| {
+            kinds(context).iter().filter(|k| *k == wanted).count()
+        };
+
+        let params = SearchParams {
+            top_k: Some(2),
+            facts_top_k: Some(3),
+            ..Default::default()
+        };
+        let merged = retriever.merge_session_contexts(Some(lane("r")), Some(lane("c")), &params);
+        assert_eq!(count(&merged, "chunk"), 2);
+        assert_eq!(count(&merged, "entity"), 2);
+        assert_eq!(count(&merged, "fact"), 3);
+
+        // Without a request knob the retriever's own defaults apply.
+        let merged = retriever.merge_session_contexts(
+            Some(lane("r")),
+            Some(lane("c")),
+            &SearchParams::default(),
+        );
+        assert_eq!(count(&merged, "chunk"), super::DEFAULT_TOP_K);
     }
 
     fn kinds(context: &SearchContext) -> Vec<String> {

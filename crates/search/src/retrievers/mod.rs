@@ -8,7 +8,7 @@ mod decomposition_retriever;
 mod graph_completion_retriever;
 mod graph_core;
 mod graph_report_retriever;
-pub(crate) mod hybrid;
+mod hybrid;
 mod lexical_retriever;
 mod lucky_feedback_rules_retrievers;
 mod summaries_retriever;

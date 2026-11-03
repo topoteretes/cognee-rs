@@ -1133,4 +1133,76 @@ mod tests {
         assert_eq!(context.len(), 1, "only the non-internal edge: {context:?}");
         assert_eq!(context[0].payload["relationship"], "works_at");
     }
+
+    #[test]
+    fn session_merge_uses_edge_identity_and_the_top_k_of_the_request() {
+        use crate::graph_retrieval::RankedGraphEdge;
+        use crate::retrievers::graph_core::ranked_edge_to_item;
+
+        let retriever = GraphCompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                collections: HashMap::new(),
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestGraphDb {
+                empty: true,
+                nodes: vec![],
+                edges: vec![],
+            }),
+            Arc::new(TestLlm {
+                response_text: "unused".to_string(),
+                ..Default::default()
+            }),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let edge = |target: &str, score: f32| {
+            ranked_edge_to_item(RankedGraphEdge {
+                source_id: "a".into(),
+                target_id: target.into(),
+                relationship_name: "KNOWS".into(),
+                score,
+                source_name: "a".into(),
+                target_name: target.into(),
+                dataset_id: None,
+                source_text: None,
+                target_text: None,
+                source_description: None,
+                target_description: None,
+                edge_text: None,
+            })
+        };
+        let targets = |context: Vec<crate::types::SearchItem>| -> Vec<String> {
+            context
+                .iter()
+                .map(|item| item.payload["target_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // Retriever default 2; the shared triple (a, KNOWS, c) is one edge,
+        // found by both lanes, so it comes first.
+        let merged = retriever.merge_session_contexts(
+            Some(vec![edge("b", 1.0), edge("c", 2.0)]),
+            Some(vec![edge("c", 0.5), edge("d", 3.0)]),
+            &SearchParams::default(),
+        );
+        assert_eq!(targets(merged), ["c", "b"]);
+
+        // Request top_k 4 keeps the conversational-only edge too.
+        let params = SearchParams {
+            top_k: Some(4),
+            ..Default::default()
+        };
+        let merged = retriever.merge_session_contexts(
+            Some(vec![edge("b", 1.0), edge("c", 2.0)]),
+            Some(vec![edge("c", 0.5), edge("d", 3.0)]),
+            &params,
+        );
+        assert_eq!(targets(merged), ["c", "b", "d"]);
+    }
 }

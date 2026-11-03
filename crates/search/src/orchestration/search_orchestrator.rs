@@ -25,12 +25,6 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Retrieve for a session turn the way Python's concurrent turn does: the raw
-/// question and, when the last two turns give it something to add, a bounded
-/// conversational rewrite, merged by the retriever
-/// ([`SearchRetriever::merge_session_contexts`]). The rewrite lane is skipped
-/// when it would be the raw question again. A failed lane fails open to the
-/// other; only both failing is an error, the raw lane's.
 /// What [`SearchOrchestrator::load_turn_snapshot`] reads.
 struct TurnSnapshot {
     session: SessionContext,
@@ -38,6 +32,12 @@ struct TurnSnapshot {
     rows: Vec<cognee_session::SessionContextRow>,
 }
 
+/// Retrieve for a session turn the way Python's concurrent turn does: the raw
+/// question and, when the last two turns give it something to add, a bounded
+/// conversational rewrite, merged by the retriever
+/// ([`SearchRetriever::merge_session_contexts`]). The rewrite lane is skipped
+/// when it would be the raw question again. A failed lane fails open to the
+/// other; only both failing is an error, the raw lane's.
 async fn retrieve_session_context(
     retriever: &crate::retrievers::SearchRetrieverRef,
     query: &str,
@@ -2630,11 +2630,15 @@ mod tests {
         }));
     }
 
+    /// The lanes the merge hook was handed, as result ids.
+    type MergeInputs = (Option<Vec<String>>, Option<Vec<String>>);
+
     /// Records every retrieval query and what the merge hook was handed.
     struct LaneRecordingRetriever {
         queries: std::sync::Mutex<Vec<String>>,
-        merge_inputs: std::sync::Mutex<Option<(Option<Vec<String>>, Option<Vec<String>>)>>,
+        merge_inputs: std::sync::Mutex<Option<MergeInputs>>,
         fail_conversational: bool,
+        fail_raw: bool,
     }
 
     impl LaneRecordingRetriever {
@@ -2643,7 +2647,127 @@ mod tests {
                 queries: std::sync::Mutex::new(Vec::new()),
                 merge_inputs: std::sync::Mutex::new(None),
                 fail_conversational,
+                fail_raw: false,
             })
+        }
+
+        fn failing_raw() -> Arc<Self> {
+            Arc::new(Self {
+                queries: std::sync::Mutex::new(Vec::new()),
+                merge_inputs: std::sync::Mutex::new(None),
+                fail_conversational: false,
+                fail_raw: true,
+            })
+        }
+    }
+
+    /// A store that counts whole-session reads: a concurrent turn must only
+    /// read the last two turns (Python's `get_session(last_n=2)`).
+    struct CountingStore {
+        inner: FsSessionStore,
+        full_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl cognee_session::SessionStore for CountingStore {
+        async fn create_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            question: &str,
+            answer: &str,
+            context: Option<&str>,
+        ) -> Result<String, cognee_session::SessionError> {
+            self.inner
+                .create_qa_entry(session_id, user_id, question, answer, context)
+                .await
+        }
+
+        async fn get_latest_qa_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            last_n: usize,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            self.inner
+                .get_latest_qa_entries(session_id, user_id, last_n)
+                .await
+        }
+
+        async fn get_all_qa_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.get_all_qa_entries(session_id, user_id).await
+        }
+
+        async fn delete_session(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner.delete_session(session_id, user_id).await
+        }
+
+        async fn delete_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            qa_id: &str,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner.delete_qa_entry(session_id, user_id, qa_id).await
+        }
+
+        async fn prune(&self) -> Result<(), cognee_session::SessionError> {
+            self.inner.prune().await
+        }
+
+        async fn update_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            qa_id: &str,
+            updates: cognee_session::SessionQAUpdate,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner
+                .update_qa_entry(session_id, user_id, qa_id, updates)
+                .await
+        }
+
+        async fn create_session_context_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            entry: cognee_session::SessionContextRow,
+        ) -> Result<(), cognee_session::SessionError> {
+            self.inner
+                .create_session_context_entry(session_id, user_id, entry)
+                .await
+        }
+
+        async fn get_session_context_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<Vec<cognee_session::SessionContextRow>, cognee_session::SessionError> {
+            self.inner
+                .get_session_context_entries(session_id, user_id)
+                .await
+        }
+
+        async fn update_session_context_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            entry_id: &str,
+            merge: cognee_session::SessionContextRow,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner
+                .update_session_context_entry(session_id, user_id, entry_id, merge)
+                .await
         }
     }
 
@@ -2682,6 +2806,9 @@ mod tests {
                 }
                 return Ok(vec![lane_item("conv")]);
             }
+            if self.fail_raw {
+                return Err(SearchError::NotFound("raw lane down".into()));
+            }
             Ok(vec![lane_item("raw")])
         }
 
@@ -2713,9 +2840,11 @@ mod tests {
     ) -> SearchOutput {
         let user = Uuid::new_v4();
         let dir = tempfile::tempdir().unwrap();
-        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
-            dir.path(),
-        ))));
+        let store = Arc::new(CountingStore {
+            inner: FsSessionStore::new(dir.path()),
+            full_reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let manager = Arc::new(SessionManager::new(store.clone()));
         for (question, answer) in prior_turns {
             manager
                 .save_qa(
@@ -2740,7 +2869,13 @@ mod tests {
         let mut request = session_request("  where   is\nit?  ");
         request.user_id = Some(user);
         request.use_combined_context = Some(false);
-        orchestrator.search(&request).await.unwrap().result
+        let result = orchestrator.search(&request).await.unwrap().result;
+        assert_eq!(
+            store.full_reads.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a concurrent turn reads only the last two turns"
+        );
+        result
     }
 
     #[test]
@@ -2811,6 +2946,17 @@ mod tests {
             Some((Some(vec!["raw".into()]), None))
         );
         assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_raw_lane_fails_open_to_the_conversational_one() {
+        let retriever = LaneRecordingRetriever::failing_raw();
+        let result = lane_turn(&retriever, &[("q1", "a1")]).await;
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((None, Some(vec!["conv".into()])))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [conv]"));
     }
 
     #[async_trait]

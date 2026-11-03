@@ -1020,4 +1020,55 @@ mod tests {
             .collect();
         assert_eq!(order, ["c", "a", "b"]);
     }
+
+    #[test]
+    fn session_merge_is_capped_by_the_requests_top_k_else_the_retrievers() {
+        let retriever = CompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                has_collection: false,
+                results: vec![],
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestLlm {
+                response_text: "unused".to_string(),
+                ..Default::default()
+            }),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+        );
+        let lane = |prefix: &str| -> SearchContext {
+            (0..4)
+                .map(|n| SearchItem {
+                    id: None,
+                    score: None,
+                    payload: json!({ "id": format!("{prefix}{n}") }),
+                })
+                .collect()
+        };
+        let ids = |context: SearchContext| -> Vec<String> {
+            context
+                .iter()
+                .map(|item| item.payload["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // Retriever default 2: no reserve below three slots.
+        let merged = retriever.merge_session_contexts(
+            Some(lane("r")),
+            Some(lane("c")),
+            &SearchParams::default(),
+        );
+        assert_eq!(ids(merged), ["r0", "r1"]);
+
+        // Request top_k 3: one slot is held for the conversational lane.
+        let params = SearchParams {
+            top_k: Some(3),
+            ..Default::default()
+        };
+        let merged = retriever.merge_session_contexts(Some(lane("r")), Some(lane("c")), &params);
+        assert_eq!(ids(merged), ["r0", "r1", "c0"]);
+    }
 }

@@ -8,7 +8,8 @@
 //! not wait for each other.
 //!
 //! One `tokio::sync::Mutex` per `(user, session)` in a process-wide registry
-//! (not tied to a runtime). Scope: one process, like Python's single-worker
+//! (not tied to a runtime), itself guarded by a short-held `std::sync::Mutex`.
+//! The registry is pruned of idle identities once it grows large. Scope: one process, like Python's single-worker
 //! FastAPI model.
 
 use std::collections::HashMap;
@@ -37,7 +38,6 @@ static TURN_LOCKS: OnceLock<Registry> = OnceLock::new();
 pub async fn lock_session_turn(user_id: impl ToString, session_id: &str) -> OwnedMutexGuard<()> {
     let key = (user_id.to_string(), session_id.to_owned());
     let mutex = {
-        // lock poison is unrecoverable
         #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
         let mut locks = TURN_LOCKS
             .get_or_init(|| Mutex::new(HashMap::new()))
@@ -52,6 +52,10 @@ pub async fn lock_session_turn(user_id: impl ToString, session_id: &str) -> Owne
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -92,5 +96,36 @@ mod tests {
             .await
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn pruning_drops_idle_identities_but_keeps_held_and_awaited_ones() {
+        let held = lock_session_turn("prune-user", "held").await;
+        let awaited = lock_session_turn("prune-user", "awaited").await;
+        let waiter = tokio::spawn(lock_session_turn("prune-user", "awaited"));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for n in 0..PRUNE_THRESHOLD {
+            drop(lock_session_turn("prune-user", &format!("idle-{n}")).await);
+        }
+        // Past the threshold, the next acquisition prunes.
+        drop(lock_session_turn("prune-user", "trigger").await);
+
+        let count = |pred: &dyn Fn(&str) -> bool| {
+            // lock poison is unrecoverable
+            #[allow(clippy::unwrap_used, reason = "lock poison is unrecoverable")]
+            let locks = TURN_LOCKS.get().unwrap().lock().unwrap();
+            locks
+                .keys()
+                .filter(|(user, session)| user == "prune-user" && pred(session))
+                .count()
+        };
+        assert_eq!(count(&|s| s == "held"), 1);
+        assert_eq!(count(&|s| s == "awaited"), 1);
+        assert!(count(&|s| s.starts_with("idle-")) < PRUNE_THRESHOLD);
+
+        // The pruned registry still serialises the awaited identity.
+        drop(awaited);
+        let _second = waiter.await.unwrap();
+        drop(held);
     }
 }

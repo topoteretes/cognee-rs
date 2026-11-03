@@ -165,11 +165,20 @@ Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
   turn whose LLM call then fails, and the intermediate rounds of a CoT search are all stamped
   there. Rust stamps only the entries of an answered turn, in `save_session_turn`; the other
   cases leave the entries unstamped.
-- **The session-turn lock is taken inside `SessionManager::delete_session`.** Python takes
-  `session_turn_lock` in its `delete_session` lifecycle function, together with the improve claim
-  and the relational and vector clean-up. Rust has no equivalent lifecycle function yet, so the
-  manager's delete waits for the turn lock and holds it across the store delete; a caller that
-  already holds the lock for that session must release it first. Single process, as Python.
+- **No Rust entry point deletes a single session, so the turn lock has no production caller.**
+  Python takes `session_turn_lock` in its `delete_session` lifecycle function (behind
+  `DELETE /api/v1/sessions/{id}`), together with the improve claim and the relational and vector
+  clean-up. Rust has no such lifecycle function or route. `SessionManager::delete_session` waits for
+  the turn lock (when a user and session are given, as Python) and holds it across the store
+  delete, but nothing in the library, bindings or server calls it; whole-store prunes
+  (`DeleteScope::All`, `prune_system`) go straight to the store and take no lock. Whoever adds a
+  session lifecycle delete must take `cognee_session::lock_session_turn` across the store,
+  relational and vector clean-up. A caller that already holds the lock for that session must
+  release it first. Single process, as Python.
+- **Graph items carry no edge object id.** Python identifies a graph edge by its `edge_object_id`,
+  so two parallel edges with the same triple stay distinct when two retrievals are merged. Rust's
+  ranked triplets carry none, so the merge identifies an edge by `(source, relationship, target,
+  directed)` and collapses parallel edges with the same triple.
 - **A single-lane session retrieval is not passed through the merge.** Python calls
   `merge_retrieved_objects(raw, None)` even when the rewrite lane is skipped, which only trims the
   raw result to `top_k`; Rust returns the raw retrieval, which every built-in retriever already

@@ -4,6 +4,7 @@ mod edge_type_id;
 pub mod global_context;
 pub mod merge_results;
 mod resolve_edges_to_text;
+pub(crate) mod results;
 mod session_messages;
 
 pub use access_tracking::update_node_access_timestamps;

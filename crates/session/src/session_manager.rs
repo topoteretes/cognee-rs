@@ -283,7 +283,13 @@ impl SessionManager {
         user_id: Option<&str>,
     ) -> Result<bool, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
-        let _turn = crate::lock_session_turn(user_id.unwrap_or_default(), resolved_id).await;
+        // Python's `session_turn_lock` does not lock without a user or session.
+        let _turn = match user_id.filter(|user| !user.is_empty()) {
+            Some(user) if !resolved_id.is_empty() => {
+                Some(crate::lock_session_turn(user, resolved_id).await)
+            }
+            _ => None,
+        };
         self.store.delete_session(resolved_id, user_id).await
     }
 

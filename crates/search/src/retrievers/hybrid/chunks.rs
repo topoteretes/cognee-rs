@@ -23,8 +23,8 @@ use crate::retrievers::hybrid::pairs::{
     summary_id_for_chunk, summary_text_by_chunk_id,
 };
 use crate::retrievers::hybrid::ranking::{ChunkLaneFusion, rank_chunk_summary_pairs_personalized};
-use crate::retrievers::hybrid::results::{display_value, payload_matches_node_filter, result_id};
 use crate::types::{SearchError, SearchItem};
+use crate::utils::results::{display_value, payload_matches_node_filter, result_id};
 
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
 pub(crate) const DLT_ROW_TYPE: &str = "DltRow";
