@@ -2840,6 +2840,13 @@ mod tests {
         retriever: &Arc<LaneRecordingRetriever>,
         prior_turns: &[(&str, &str)],
     ) -> SearchOutput {
+        lane_turn_result(retriever, prior_turns).await.unwrap()
+    }
+
+    async fn lane_turn_result(
+        retriever: &Arc<LaneRecordingRetriever>,
+        prior_turns: &[(&str, &str)],
+    ) -> Result<SearchOutput, SearchError> {
         let user = Uuid::new_v4();
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CountingStore {
@@ -2871,7 +2878,7 @@ mod tests {
         let mut request = session_request("  where   is\nit?  ");
         request.user_id = Some(user);
         request.use_combined_context = Some(false);
-        let result = orchestrator.search(&request).await.unwrap().result;
+        let result = orchestrator.search(&request).await.map(|r| r.result);
         assert_eq!(
             store.full_reads.load(std::sync::atomic::Ordering::SeqCst),
             0,
@@ -3059,6 +3066,20 @@ mod tests {
             Some((None, Some(vec!["conv".into()])))
         );
         assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [conv]"));
+    }
+
+    #[tokio::test]
+    async fn both_lanes_failing_returns_the_raw_lanes_error() {
+        let retriever = Arc::new(LaneRecordingRetriever {
+            queries: std::sync::Mutex::new(Vec::new()),
+            merge_inputs: std::sync::Mutex::new(None),
+            fail_conversational: true,
+            fail_raw: true,
+        });
+        let err = lane_turn_result(&retriever, &[("q1", "a1")])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("raw lane down"), "{err}");
     }
 
     #[async_trait]

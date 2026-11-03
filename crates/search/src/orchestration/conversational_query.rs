@@ -152,6 +152,8 @@ mod tests {
         assert!(query.chars().count() <= 200);
         assert!(query.contains("Prior user: question one"));
         assert!(query.contains("Prior user: question two"));
+        assert!(query.contains("short"));
+        assert!(!query.contains(&long_answer));
         assert!(query.contains("Current user request: now"));
     }
 
