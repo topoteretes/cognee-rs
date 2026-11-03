@@ -680,6 +680,52 @@ async fn improve_reports_distilled_lessons() {
     );
 }
 
+/// A caller that already resolved (and authorized) the dataset passes its id,
+/// as Python's `improve(dataset=<UUID>)`: every session-fed stage adds into
+/// that dataset even though another user owns it, and nothing is created
+/// under the caller (a by-name add would have made a same-named one).
+#[tokio::test]
+async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "shared_ds_session";
+    let shared = create_dataset(&h, "shared_ds", Uuid::new_v4()).await;
+    let mut p = params(
+        &h,
+        &config,
+        "shared_ds",
+        Some(vec![session_id.to_string()]),
+        schema_llm(false),
+    );
+    p.dataset_id = Some(shared);
+    let caller = p.owner_id;
+    seed_qa(&h, caller, session_id).await;
+    let r = improve(p).await.unwrap();
+
+    assert_eq!(r.dataset_id, Some(shared));
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
+    assert!(distill.counts["documents"] > 0, "{distill:?}");
+
+    let in_shared = cognee_database::DeleteDb::get_dataset_data(&*h.db, shared)
+        .await
+        .unwrap();
+    assert!(
+        !in_shared.is_empty(),
+        "the session text and lessons land in the shared dataset"
+    );
+    let callers_own = cognee_database::DeleteDb::list_datasets_by_owner(&*h.db, caller)
+        .await
+        .unwrap();
+    assert!(
+        callers_own.is_empty(),
+        "no dataset is created under the caller: {callers_own:?}"
+    );
+}
+
 /// An exhausted LLM budget in a non-fatal stage ends the run there: the
 /// stage is errored and every later stage is skipped `budget_exhausted`,
 /// without an error (Python `test_improve_budget_exhaustion.py`).

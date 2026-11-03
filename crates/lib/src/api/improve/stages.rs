@@ -411,6 +411,7 @@ impl ImproveStages<'_> {
         let persisted = persist_sessions_in_knowledge_graph(
             &self.session_ids,
             &self.dataset_name,
+            self.dataset_id,
             self.owner_id,
             self.tenant_id,
             Arc::clone(store),
@@ -524,8 +525,11 @@ impl ImproveStages<'_> {
         let (Some(pipeline), Some(database)) = (self.add_pipeline, self.db.clone()) else {
             return Err("add pipeline and relational database are required".into());
         };
+        // The caller-resolved dataset (possibly shared with the caller) is the
+        // add's target; by name the add would only see the caller's own.
         let add_params = AddParams {
             node_set: Some(vec![AGENT_TRACE_FEEDBACKS_NODE_SET.to_string()]),
+            dataset_id: self.dataset_id,
             ..Default::default()
         };
         let data_rows = pipeline
@@ -713,6 +717,7 @@ impl ImproveStages<'_> {
         let r = distill_sessions_in_knowledge_graph(
             &self.session_ids,
             &self.dataset_name,
+            self.dataset_id,
             self.owner_id,
             self.tenant_id,
             Arc::clone(store),
