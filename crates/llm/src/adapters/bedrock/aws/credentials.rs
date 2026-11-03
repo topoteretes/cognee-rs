@@ -180,12 +180,13 @@ pub fn parse_arn_account_and_role_name(arn: &str) -> Option<(&str, &str, &str)> 
     let resource = &arn[resource_start..];
 
     let role_name = if let Some(rest) = resource.strip_prefix("role/") {
-        rest.rsplit('/').next().filter(|name| !name.is_empty())?
+        rest.rsplit('/').next()
     } else if let Some(rest) = resource.strip_prefix("assumed-role/") {
-        rest.split('/').next().filter(|name| !name.is_empty())?
+        rest.split('/').next()
     } else {
-        return None;
-    };
+        None
+    }
+    .filter(|name| !name.is_empty())?;
 
     Some((partition, account_id, role_name))
 }

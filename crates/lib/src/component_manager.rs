@@ -163,8 +163,8 @@ impl ComponentManager {
     /// it to a local before an `.await` keeps the delegating futures `Send`.
     ///
     /// Fails when the configuration holds a value this build does not support
-    /// ([`ConfigManager::check_supported`]: `enable_access_control = true`
-    /// without application-provided access control), so no component is ever
+    /// ([`ConfigManager::check_supported`]: today an invalid
+    /// `SESSION_SEARCH_MODE` recorded in `Settings::invalid_env`), so no component is ever
     /// built from such a configuration, whether or not the caller ran
     /// [`ConfigManager::check_strict`].
     async fn build_context(

@@ -1186,8 +1186,8 @@ pub enum ConfigError {
     #[error("Type mismatch for key '{key}': {reason}")]
     TypeMismatch { key: String, reason: String },
     /// The value is well formed but this build does not support it. `reason`
-    /// says why and what to do. No setting reports it today; see
-    /// [`Settings::check_supported`].
+    /// says why and what to do. [`Settings::check_supported`] reports it, today
+    /// for an invalid `SESSION_SEARCH_MODE` (`Settings::invalid_env`).
     #[error("Unsupported value for key '{key}': {reason}")]
     Unsupported { key: String, reason: String },
 }
