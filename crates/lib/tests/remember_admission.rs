@@ -109,7 +109,6 @@ async fn run(
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        None,
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(cognee::api::ImproveConfig::default()),
@@ -183,7 +182,6 @@ async fn admission_check_skips_the_automatic_improve() {
         db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
-        checkpoint_store: None,
         add_pipeline: Arc::clone(&h.add_pipeline),
         cognify_config: Arc::new(CognifyConfig::default()),
     })
