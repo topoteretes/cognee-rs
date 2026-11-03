@@ -96,6 +96,12 @@ impl GraphRetrieverCore {
         Ok(())
     }
 
+    /// How many triplets a retrieval keeps: the request's `top_k`, else the
+    /// retriever's.
+    pub(crate) fn top_k(&self, params: &SearchParams) -> usize {
+        params.top_k_or(self.top_k)
+    }
+
     pub(crate) fn retrieval_config(&self, params: &SearchParams) -> GraphRetrievalConfig {
         GraphRetrievalConfig {
             top_k: params.top_k_or(self.top_k),

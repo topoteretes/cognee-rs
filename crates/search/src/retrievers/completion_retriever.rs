@@ -15,8 +15,8 @@ use crate::retrievers::context_items::search_node_filtered;
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 use crate::user_preferences::{completion_guidance, load_for_search, personal_factor};
 use crate::utils::{
-    build_messages_with_history, render_user_prompt, resolve_system_prompt,
-    skip_completion_on_empty_context,
+    build_messages_with_history, conversational_reserve, item_identity, merge_ranked,
+    render_user_prompt, resolve_system_prompt, skip_completion_on_empty_context,
 };
 
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
@@ -175,6 +175,22 @@ impl SearchRetriever for CompletionRetriever {
 
     fn dataset_scoping(&self) -> super::DatasetScoping {
         super::DatasetScoping::Membership
+    }
+
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        params: &SearchParams,
+    ) -> SearchContext {
+        let top_k = params.top_k_or(self.top_k);
+        merge_ranked(
+            raw.unwrap_or_default(),
+            conversational.unwrap_or_default(),
+            item_identity,
+            Some(top_k),
+            conversational_reserve(top_k),
+        )
     }
 
     async fn get_context(

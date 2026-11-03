@@ -19,10 +19,11 @@ mod context;
 mod entities;
 mod external_metadata;
 mod facts;
+mod merge;
 mod overflow;
 mod pairs;
 mod ranking;
-mod results;
+pub(crate) mod results;
 
 pub(crate) use candidates::{FactCandidates, HybridCandidates, HybridView};
 pub(crate) use chunks::{
@@ -1183,6 +1184,24 @@ impl SearchRetriever for HybridRetriever {
             hybrid: Some(self.budget.clone()),
             ..Default::default()
         }
+    }
+
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        params: &SearchParams,
+    ) -> SearchContext {
+        let lanes = self.resolve_lanes(params);
+        merge::merge_hybrid_results(
+            raw.unwrap_or_default(),
+            conversational.unwrap_or_default(),
+            &merge::ChannelLimits {
+                chunks: lanes.chunks_top_k,
+                entities: lanes.entities_top_k,
+                facts: lanes.facts_top_k,
+            },
+        )
     }
 
     async fn get_context(

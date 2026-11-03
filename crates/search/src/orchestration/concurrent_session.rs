@@ -1,9 +1,4 @@
 use crate::types::{SearchRequest, SearchType};
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
-use tokio::sync::{Mutex, OwnedMutexGuard};
 
 /// A spawned analysis task that cannot outlive its owning request future.
 pub(crate) struct AbortOnDrop<T>(Option<tokio::task::JoinHandle<T>>);
@@ -58,23 +53,10 @@ pub(crate) fn eligible(request: &SearchRequest, resolved_type: SearchType, is_ba
         )
 }
 
-type TurnKey = (String, String);
-static TURN_LOCKS: OnceLock<Mutex<HashMap<TurnKey, Arc<Mutex<()>>>>> = OnceLock::new();
-
-/// Serialize turns for one cache identity while allowing unrelated sessions
-/// to run independently. This has the same single-process scope as Python's
-/// `session_turn_lock`.
-pub(crate) async fn lock(user_id: impl ToString, session_id: &str) -> OwnedMutexGuard<()> {
-    let key = (user_id.to_string(), session_id.to_owned());
-    let mutex = {
-        let mut locks = TURN_LOCKS
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-            .await;
-        Arc::clone(locks.entry(key).or_insert_with(|| Arc::new(Mutex::new(()))))
-    };
-    mutex.lock_owned().await
-}
+/// How many prior Q&A turns a concurrent turn reads: the previous turn for the
+/// analysis and the context of the conversational retrieval lane (Python
+/// `get_session(last_n=2)`).
+pub(crate) const RECENT_QA_TURNS: usize = 2;
 
 #[cfg(test)]
 mod tests {
@@ -136,33 +118,5 @@ mod tests {
         let mut r = request(SearchType::RagCompletion);
         r.custom_search_type = Some("subclass".into());
         assert!(!eligible(&r, SearchType::RagCompletion, false));
-    }
-
-    #[tokio::test]
-    async fn same_identity_is_serialized_but_different_sessions_are_not() {
-        use std::time::Duration;
-
-        let first = request(SearchType::RagCompletion);
-        let Some(user_id) = first.user_id else {
-            return;
-        };
-
-        let held = lock(user_id, "s").await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "s"))
-                .await
-                .is_err()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "other"))
-                .await
-                .is_ok()
-        );
-        drop(held);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), lock(user_id, "s"))
-                .await
-                .is_ok()
-        );
     }
 }

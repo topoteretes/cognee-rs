@@ -272,12 +272,18 @@ impl SessionManager {
     }
 
     /// Delete all entries for a session, its session-context rows included.
+    ///
+    /// Waits for the session's turn lock first ([`crate::lock_session_turn`]),
+    /// so a turn in flight finishes before its session disappears (Python's
+    /// `delete_session` runs under `session_turn_lock`). Must not be called
+    /// while holding that lock.
     pub async fn delete_session(
         &self,
         session_id: Option<&str>,
         user_id: Option<&str>,
     ) -> Result<bool, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
+        let _turn = crate::lock_session_turn(user_id.unwrap_or_default(), resolved_id).await;
         self.store.delete_session(resolved_id, user_id).await
     }
 

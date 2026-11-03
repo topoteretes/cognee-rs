@@ -13,8 +13,8 @@ use crate::retrievers::SearchRetriever;
 use crate::retrievers::graph_core::{GraphPrompts, GraphRetrieverCore, complete};
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 use crate::utils::{
-    DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K, build_global_context_prelude, render_edges_context,
-    skip_completion_on_empty_context,
+    DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K, build_global_context_prelude, conversational_reserve,
+    edge_identity, merge_ranked, render_edges_context, skip_completion_on_empty_context,
 };
 
 pub struct GraphCompletionRetriever {
@@ -143,6 +143,22 @@ impl SearchRetriever for GraphCompletionRetriever {
             neighbor_cap: Some(self.core.neighbor_cap),
             ..Default::default()
         }
+    }
+
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        params: &SearchParams,
+    ) -> SearchContext {
+        let top_k = self.core.top_k(params);
+        merge_ranked(
+            raw.unwrap_or_default(),
+            conversational.unwrap_or_default(),
+            edge_identity,
+            Some(top_k),
+            conversational_reserve(top_k),
+        )
     }
 
     #[tracing::instrument(

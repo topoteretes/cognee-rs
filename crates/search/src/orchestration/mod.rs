@@ -1,4 +1,5 @@
 mod concurrent_session;
+mod conversational_query;
 mod hybrid_fallback;
 mod prepare_search_result;
 mod search_execution_builder;
