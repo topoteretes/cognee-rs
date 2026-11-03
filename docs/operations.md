@@ -136,7 +136,9 @@ first, then trimming to `top_k`), by at most `personalization_influence`;
 graph and RAG completion also append the preference text (under
 `## What this user prefers`) to the question and context. The hybrid search
 uses them too: they weight its chunk ranking, and its completion and preview
-carry the preference text as guidance.
+carry the preference text as guidance. On a session search the preference
+lines instead join the `Preferences` section of the one "Active session
+guidance" block (see the session search docs): there is no second block.
 
 A run holds its dataset's lock for its whole length, then a claim on every
 session it targets (`session:{user_id}:{session_id}`), and releases both once

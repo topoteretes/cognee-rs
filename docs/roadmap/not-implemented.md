@@ -93,7 +93,9 @@ Partial stages:
   `SessionManager.add_agent_trace_step`; Rust's `add_agent_trace_step` stores the step only, so
   lessons appear when `improve()` runs. The passes exist as `cognee_session::
   extract_live_agent_context` / `extract_pending_agent_context`. The rendered session guidance
-  block that serves the lessons (Python's `build_active_context_block`) is not ported.
+  block (`cognee_session::build_active_context_block`, SDK-1045) is ported and served on
+  session searches for the `qa` profile; the `agent` profile renders through the same builder
+  but nothing serves it into a prompt yet.
 - **`update_user_preferences`** — ported. Differences: the graph trait has no edge delete, so a
   retired `prefers` edge is always rewritten as neutral (weight 0.5, turn 0) — Python's fallback
   for backends without `delete_edge_triples` — and the node is always written in full (every
@@ -101,16 +103,15 @@ Partial stages:
   (`referenced_qa_rating`) and the `preferences`-section entries that become the preference
   text are written by the session-turn analysis (`prepare_session_turn`), which is ported
   (SDK-1045): generative session searches write them, and an explicit `feedback_score`
-  (`add_feedback`) remains a rating source. Stored entries of either kind are honoured. What
-  is still missing is the rendered session guidance block (Python's
-  `build_active_context_block`, see the agent-context bullet above), so served guidance is not
-  stamped on QA rows yet (`used_session_context_ids` stays empty) and served-context ratings
-  have nothing to refer to.
+  (`add_feedback`) remains a rating source. Stored entries of either kind are honoured.
+  The rendered session guidance block is ported (SDK-1045): an answered turn records the
+  entries it served as `used_session_context_ids`, so the next turn's served-context ratings
+  apply.
 - **Personalized retrieval** — graph completions (triplet ranking) and RAG completion (chunk
   re-ranking, preference text as guidance) read the preferences, including hybrid chunk ranking
-  and hybrid completion/preview guidance (SDK-1045). Not yet: the session guidance block's
-  `Preferences` section. Rust appends the preference text on session searches too, since it has
-  no session guidance block; Python serves it there through that block. RAG scores are similarities in
+  and hybrid completion/preview guidance (SDK-1045). On a session search the preference lines
+  are the `Preferences` section of the session guidance block, as in Python; a sessionless
+  search carries the standalone preference block. RAG scores are similarities in
   Rust; the re-rank takes each back to Python's distance space (`1 - score`) and scales that,
   so the order matches Python's. A RAG completion's turn records its chunks' ids, so ratings
   can weight chunks.
