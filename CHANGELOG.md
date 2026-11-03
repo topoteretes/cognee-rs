@@ -222,7 +222,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   | Item | Before | After |
   |---|---|---|
-  | Stage stamp storage | `graph_sync_checkpoints` row `improve_stage:{stage}:{dataset_id}` | an `improve` `pipeline_runs` row (`Completed`, `user_id` the owner) whose `run_info` holds `{stage: {status, started_at}}`; written when the run did not end `errored` and a stage stamped |
+  | Stage stamp storage | `graph_sync_checkpoints` row `improve_stage:{stage}:{dataset_id}` | the run's `improve` `pipeline_runs` operation row (`user_id` the owner) whose `run_info` holds `{stage: {status, started_at}}`; only a `Completed` row is read as a watermark |
+| `improve()` change record | one `improve` row after the first stage that may have written to the graph | one `improve` operation row per run, written when it ends (`record_improve_operation`): `Completed` (Python `succeeded`), `Errored` (Python `failed`, keeps its stamps, never a watermark), none when every stage skipped (Python `noop`). As in Python every improve row but the stamped one counts as a change (`graph_changes.py:128-143`) |
   | `ImproveParams`, `cognee::api::remember`, `RememberRequest`, `CogneeServices` | `checkpoint_store` | **removed** |
   | `cognee_database` | `CheckpointStore`, `SeaOrmCheckpointStore`, `RelationalDb::checkpoints()`, `ops::checkpoint`, the `graph_sync_checkpoint` entity | **removed** |
   | `PipelineRunRepository` | `count_runs_created_after(since, dataset, exclude_names)` | `+ exclude_run_ids` (the stamped row itself is not a change); `+ latest_stamped_run(dataset, name, key)` |

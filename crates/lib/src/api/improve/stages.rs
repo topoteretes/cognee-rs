@@ -223,12 +223,6 @@ pub(crate) trait StageExecutor {
 
     /// Run the stage. Never fails: an error is an `errored` result.
     fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send;
-
-    /// Record that this run wrote to the dataset's graph, once, right after
-    /// the first stage that may have (see [`super::watermark`]). Best effort.
-    fn record_graph_write(&mut self) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
 }
 
 /// The stages of one real `improve()` run, over the run's inputs.
@@ -308,20 +302,6 @@ impl StageExecutor for ImproveStages<'_> {
             }
             _ => None,
         }
-    }
-
-    async fn record_graph_write(&mut self) {
-        let Some(db) = self.db.clone() else {
-            return;
-        };
-        let dataset_id = match self.dataset_id().await {
-            Ok(id) => id,
-            Err(e) => {
-                warn!("improve: could not resolve the dataset to record its graph write: {e}");
-                return;
-            }
-        };
-        super::watermark::record_graph_write(&*db.pipeline_runs(), dataset_id).await;
     }
 
     async fn run(&mut self, stage: StageKind) -> StageRun {

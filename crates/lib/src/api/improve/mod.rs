@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use super::error::ApiError;
 use stages::{GraphCapabilities, ImproveStages, StageExecutor, StageRun};
-use watermark::{StageStamp, save_stamps};
+use watermark::{StageStamp, record_improve_operation};
 
 pub use config::{
     DEFAULT_FEEDBACK_ALPHA, ImproveConfig, ImproveConfigError, parse_stages_disabled,
@@ -218,44 +218,6 @@ fn skip_stages(result: &mut ImproveResult, stages: &[StageKind], reason: &str) {
     );
 }
 
-/// Counts that say how much a stage wrote: when a stage reports any of them,
-/// it wrote iff one is positive.
-const WRITE_COUNTS: [&str; 10] = [
-    "entries_applied",
-    "sessions_persisted",
-    "windows",
-    "lessons",
-    "documents",
-    "edges_written",
-    "edges_pruned",
-    "text_lines_added",
-    "anchors",
-    "nodes_scored",
-];
-
-/// Whether `stage` may have written to the dataset's graph — what makes the
-/// run a change for the watermarked stages (Python counts every non-noop
-/// improve). Conservative: an errored stage may have written part of its
-/// data, and a completed one without a write count is assumed to have
-/// written. `global_context_index` is the watermark's own writer, and a
-/// skipped or `already_completed` stage wrote nothing.
-fn stage_may_have_written(stage: StageKind, result: &StageResult) -> bool {
-    if stage == StageKind::GlobalContextIndex {
-        return false;
-    }
-    match result.status {
-        StageStatus::Errored => true,
-        StageStatus::Completed => {
-            let mut counts = WRITE_COUNTS
-                .iter()
-                .filter_map(|key| result.counts.get(*key))
-                .peekable();
-            counts.peek().is_none() || counts.any(|n| *n > 0)
-        }
-        StageStatus::AlreadyCompleted | StageStatus::Skipped => false,
-    }
-}
-
 /// One [`StageResult`] per stage, in order — Python's `execute_stages`
 /// (`cognee/api/v1/improve/improve.py:242-280`).
 ///
@@ -277,7 +239,6 @@ async fn execute_stages<E: StageExecutor>(
     result: &mut ImproveResult,
     stamps: &mut Vec<StageStamp>,
 ) -> LoopEnd {
-    let mut graph_write_recorded = false;
     for (index, &stage) in stages.iter().enumerate() {
         let run = match gate_reason(stage, has_sessions, stages_disabled, executor) {
             Some(reason) => StageRun::from(StageResult::skipped(stage.name(), reason)),
@@ -307,10 +268,6 @@ async fn execute_stages<E: StageExecutor>(
                 error = run.result.error.as_deref().unwrap_or(""),
                 "improve: stage errored"
             );
-        }
-        if !graph_write_recorded && stage_may_have_written(stage, &run.result) {
-            executor.record_graph_write().await;
-            graph_write_recorded = true;
         }
         let error = run.result.error.clone();
         stamps.extend(run.stamp);
@@ -498,16 +455,6 @@ async fn run_improve(
                 &mut stamps,
             )
             .await;
-            // An errored run invalidates its stamps (Python marks its row
-            // `failed`): a stage after the stamping one may have half-written.
-            let runs = stages.db.clone().map(|db| db.pipeline_runs());
-            save_stamps(
-                runs.as_deref(),
-                owner_id,
-                result.status() == ImproveStatus::Errored,
-                &stamps,
-            )
-            .await;
             result.dataset_id = match stages.dataset_id {
                 Some(id) => Some(id),
                 // A stage may have created the dataset without looking it up.
@@ -520,6 +467,17 @@ async fn run_improve(
                 .await
                 .unwrap_or(None),
             };
+            // The run's `improve` operation row, carrying the stages' stamps
+            // (Python `record_operation("improve")`, `improve.py:230-233, 271-279, 312`).
+            let runs = stages.db.clone().map(|db| db.pipeline_runs());
+            record_improve_operation(
+                runs.as_deref(),
+                owner_id,
+                result.dataset_id,
+                result.status(),
+                &stamps,
+            )
+            .await;
             end
         })
         .await;
@@ -563,7 +521,6 @@ mod tests {
     struct Scripted {
         scripts: HashMap<StageKind, Script>,
         calls: Vec<&'static str>,
-        graph_writes: usize,
     }
 
     impl Scripted {
@@ -586,11 +543,6 @@ mod tests {
                 Script::Gate(reason) => Some(reason),
                 _ => None,
             }
-        }
-
-        fn record_graph_write(&mut self) -> impl Future<Output = ()> + Send {
-            self.graph_writes += 1;
-            std::future::ready(())
         }
 
         fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send {
@@ -842,49 +794,6 @@ mod tests {
             result.stages[2].reason.as_deref(),
             Some(REASON_BUDGET_EXHAUSTED)
         );
-    }
-
-    // Python counts every non-noop improve as a change to the dataset. A run
-    // records its graph write once, after the first stage that may have
-    // written; a run in which only the index ran records none.
-    #[tokio::test]
-    async fn a_run_records_one_graph_write_after_its_first_writing_stage() {
-        let mut executor = Scripted::default();
-        run_loop(&mut executor, true, &[]).await;
-        assert_eq!(executor.graph_writes, 1);
-
-        // Without sessions only the graph stages run; with review_conflicts
-        // off, that is the index, which is not a write.
-        let mut executor = Scripted::default();
-        run_loop(&mut executor, false, &["review_conflicts"]).await;
-        assert_eq!(executor.graph_writes, 0);
-    }
-
-    #[test]
-    fn a_stage_wrote_when_its_write_counts_say_so() {
-        let fw = StageKind::FeedbackWeights;
-        let completed = || StageResult::completed("feedback_weights");
-        assert!(stage_may_have_written(fw, &completed()));
-        assert!(!stage_may_have_written(
-            fw,
-            &completed().with_counts([("sessions", 1), ("entries_applied", 0)])
-        ));
-        assert!(stage_may_have_written(
-            fw,
-            &completed().with_counts([("entries_applied", 2)])
-        ));
-        assert!(stage_may_have_written(
-            fw,
-            &StageResult::errored("feedback_weights", "boom")
-        ));
-        assert!(!stage_may_have_written(
-            fw,
-            &StageResult::skipped("feedback_weights", "no_session_ids")
-        ));
-        assert!(!stage_may_have_written(
-            StageKind::GlobalContextIndex,
-            &StageResult::completed("global_context_index")
-        ));
     }
 
     // A budget signal on a stage that did not error is not an exhaustion.

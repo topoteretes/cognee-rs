@@ -1205,8 +1205,8 @@ async fn a_data_item_delete_invalidates_the_global_context_index() {
     );
 }
 
-/// Python counts every non-noop improve as a change. A run whose stage wrote
-/// to the graph records an `improve` row, so the next run rebuilds; a host's
+/// Python counts every non-noop improve as a change. Another run's `improve`
+/// operation row makes the next run rebuild; a host's
 /// own `improve_pipeline` row (the HTTP server's) does not count, so repeated
 /// index-only runs stay `already_completed`.
 #[tokio::test]
@@ -1259,7 +1259,7 @@ async fn an_improve_that_wrote_invalidates_the_index_and_a_host_row_does_not() {
     assert_eq!(
         stage(&run(None).await.unwrap(), "global_context_index").status,
         StageStatus::Completed,
-        "an improve that wrote is a change"
+        "another improve is a change"
     );
 }
 

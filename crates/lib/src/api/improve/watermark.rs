@@ -10,32 +10,32 @@
 //! the improve operation's own `pipeline_runs` row, under the stage name:
 //! `{"global_context_index": {"status": "completed", "started_at": "<iso>"}}`
 //! (`watermark_stamp`, `graph_changes.py:46-48`; `merge_run_info`,
-//! `record_operation.py:131-149`). The row is the operation record Python
-//! writes (`pipeline_name` `improve`, `Completed` = `outcome == "succeeded"`,
-//! the owner as `user_id`), written once the run ends and only when the run
-//! did not end `errored` and a stage stamped: Python marks an errored run's
-//! row `failed` and a run in which nothing ran `noop`, and its readers trust
-//! only `succeeded` rows (`improve.py:238-249`), so Rust writes no row for
-//! either. The newest `Completed` `improve` row carrying the stage's key is
-//! the watermark ([`last_improve_watermark`], `graph_changes.py:66-97`); a
+//! `record_operation.py:131-149`).
+//!
+//! Every improve run writes that row once it ends, like Python's
+//! `record_operation("improve")` (`improve.py:230-233, 271-279, 312`;
+//! [`record_improve_operation`]): `pipeline_name` `improve`, the owner as
+//! `user_id`, `run_info` holding the stamps the stages asked for. Rust's
+//! `pipeline_runs` has no `outcome` column, so Python's outcomes map onto the
+//! status: `succeeded` is `Completed` and `failed` (the run errored) is
+//! `Errored` — the stamps stay on that row as in Python, but only a
+//! `Completed` row is ever read as a watermark. A `noop` run (every stage
+//! skipped) writes no row: Python's `noop` row is ignored by both readers,
+//! and without an outcome column Rust could not tell it apart from a change.
+//! The newest `Completed` `improve` row carrying the stage's key is the
+//! watermark ([`last_improve_watermark`], `graph_changes.py:66-97`); a
 //! missing or malformed stamp means "changed".
 //!
 //! The dataset has changed since the stamp when any `pipeline_runs` row was
 //! written after it, except for reads (`search`, `recall`), the rows a host
 //! records an improve run under ([`IMPROVE_PIPELINE_NAME`]) and the stamped
-//! operation's own row (`graph_changes.py:128-141`; Python also leaves out the
-//! runs the stamped operation started and a `noop` improve, neither of which
-//! Rust has as rows). Python counts every other improve row as a change.
-//! Rust's `improve()` also records its own change instead of an operation row
-//! per run: right after the first stage that may have written to the graph
-//! (feedback weights, truth-subspace scores, the session stages...), it logs
-//! one [`IMPROVE_WRITE_PIPELINE_NAME`] row ([`record_graph_write`]). A run that
-//! only skipped, or only built the index, leaves none besides its stamp row —
-//! which is the watermark itself next time — so a host's own run rows stay
-//! uncounted and repeated index-only improves do not rebuild. That row
-//! precedes the run's own `global_context_index` stamp, so it never
-//! invalidates it. A delete records a `forget` row on every dataset it
-//! touched (`cognee_delete`), Python's `forget` operation row.
+//! operation's own row (`graph_changes.py:128-143`). Every other improve
+//! row — a failed one, or one that stamped nothing — counts, as in Python.
+//! Python also leaves out the runs the stamped operation started (by
+//! `parent_operation_id`); Rust's only stamping stage, the last one, starts
+//! no `pipeline_runs` row, so there is nothing to leave out. A delete records
+//! a `forget` row on every dataset it touched (`cognee_delete`), Python's
+//! `forget` operation row.
 //! Missing or unreadable state means "changed": being conservative costs extra
 //! work, never lost work.
 
@@ -45,7 +45,7 @@ use serde_json::{Map, Value, json};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use super::result::StageStatus;
+use super::result::{ImproveStatus, StageStatus};
 use super::stages::StageKind;
 
 /// `already_completed` reason of a stage whose dataset saw no writes since
@@ -56,14 +56,13 @@ pub const REASON_NO_WRITES_SINCE_LAST_IMPROVE: &str = "no_writes_since_last_impr
 pub const IMPROVE_PIPELINE_NAME: &str = "improve_pipeline";
 
 /// The `pipeline_runs` name of the `improve` operation row (Python's
-/// `IMPROVE_OPERATION_NAME`, `graph_changes.py:31`): the row an improve run
-/// that wrote to the graph records its change under, and the row that carries
-/// the run's stage stamps.
+/// `IMPROVE_OPERATION_NAME`, `graph_changes.py:31`): the row every improve
+/// run but a `noop` one writes when it ends, carrying the run's stage stamps.
 pub const IMPROVE_WRITE_PIPELINE_NAME: &str = "improve";
 
 /// Runs that are not writes to the dataset: reads (Python
-/// `READ_OPERATION_NAMES`) and the host rows of improve runs, whose writes
-/// are counted through [`IMPROVE_WRITE_PIPELINE_NAME`].
+/// `READ_OPERATION_NAMES`) and the host rows of improve runs, which are
+/// counted through their [`IMPROVE_WRITE_PIPELINE_NAME`] operation row.
 pub(crate) const UNCOUNTED_PIPELINE_NAMES: [&str; 3] = ["search", "recall", IMPROVE_PIPELINE_NAME];
 
 /// The `run_info` key of `stage`'s stamp: the stage name (Python's
@@ -207,73 +206,49 @@ pub(crate) async fn has_dataset_changed_since_last_improve(
     }
 }
 
-/// Log the [`IMPROVE_WRITE_PIPELINE_NAME`] row of a run that wrote to the
-/// graph of `dataset_id` (`None`: a dataset the run could not resolve; the
-/// any-dataset check still sees it). Best effort: a missed row only leaves an
-/// index stale until the next write, so a failure is logged.
-pub(crate) async fn record_graph_write(runs: &dyn PipelineRunRepository, dataset_id: Option<Uuid>) {
-    if let Err(e) = runs
-        .log_pipeline_run(
-            Uuid::new_v4(),
-            improve_pipeline_id(),
-            IMPROVE_WRITE_PIPELINE_NAME,
-            dataset_id,
-            PipelineRunStatus::Completed,
-            None,
-        )
-        .await
-    {
-        warn!(
-            ?dataset_id,
-            "improve: could not record the run's graph write: {e}"
-        );
-    }
-}
-
-/// Write the run's operation row carrying `stamps` in its `run_info`, unless
-/// the run errored (Python's row is then `failed`, which invalidates every
-/// stamp it carries: a stage after the stamping one may have half-written) or
-/// nothing stamped. `owner_id` is the triggering user. A failed write only
-/// costs the next run a rebuild, so it is logged.
-pub(crate) async fn save_stamps(
+/// Write the run's [`IMPROVE_WRITE_PIPELINE_NAME`] operation row, its
+/// `run_info` holding `stamps` merged by key (Python's `record_operation`
+/// row, `record_operation.py:131-149, 160-191`; outcome set by
+/// `improve.py:271-279`). An errored run's row is `Errored` (Python
+/// `failed`): it invalidates every stamp it carries, since a stage after the
+/// stamping one may have half-written, and counts as a change. A run in which
+/// every stage skipped (`noop`) writes none. `owner_id` is the triggering
+/// user. A failed write only costs the next run a rebuild, so it is logged.
+pub(crate) async fn record_improve_operation(
     runs: Option<&dyn PipelineRunRepository>,
     owner_id: Uuid,
-    run_errored: bool,
+    dataset_id: Option<Uuid>,
+    run_status: ImproveStatus,
     stamps: &[StageStamp],
 ) {
-    if run_errored || stamps.is_empty() {
-        return;
-    }
+    let status = match run_status {
+        ImproveStatus::Completed => PipelineRunStatus::Completed,
+        ImproveStatus::Errored => PipelineRunStatus::Errored,
+        ImproveStatus::Skipped | ImproveStatus::Running => return,
+    };
     let Some(runs) = runs else {
         return;
     };
-    // One operation row per dataset; a run has one, so one row. Stages
-    // namespace their entries by key, so merging never drops another's
-    // (`record_operation.py:131-149`).
-    let mut rows: Vec<(Uuid, Map<String, Value>)> = Vec::new();
-    for stamp in stamps {
-        let index = match rows.iter().position(|(id, _)| *id == stamp.dataset_id) {
-            Some(index) => index,
-            None => {
-                rows.push((stamp.dataset_id, Map::new()));
-                rows.len() - 1
-            }
-        };
-        rows[index].1.insert(stamp.key.to_string(), stamp.entry());
-    }
-    for (dataset_id, run_info) in rows {
-        let entry = PipelineRunEntry {
-            pipeline_run_id: Uuid::new_v4(),
-            pipeline_id: improve_pipeline_id(),
-            pipeline_name: IMPROVE_WRITE_PIPELINE_NAME,
-            dataset_id: Some(dataset_id),
-            status: PipelineRunStatus::Completed,
-            run_info: Some(Value::Object(run_info)),
-            user_id: Some(owner_id),
-        };
-        if let Err(e) = runs.log_pipeline_run_entry(entry).await {
-            warn!(%dataset_id, "improve: could not save the stage watermark: {e}");
-        }
+    // Stages namespace their entries by key, so merging never drops another's.
+    let run_info: Map<String, Value> = stamps
+        .iter()
+        .map(|stamp| (stamp.key.to_string(), stamp.entry()))
+        .collect();
+    let entry = PipelineRunEntry {
+        pipeline_run_id: Uuid::new_v4(),
+        pipeline_id: improve_pipeline_id(),
+        pipeline_name: IMPROVE_WRITE_PIPELINE_NAME,
+        // A run has one dataset; a stamp names it when the run could not.
+        dataset_id: dataset_id.or_else(|| stamps.first().map(|stamp| stamp.dataset_id)),
+        status,
+        run_info: (!run_info.is_empty()).then_some(Value::Object(run_info)),
+        user_id: Some(owner_id),
+    };
+    if let Err(e) = runs.log_pipeline_run_entry(entry).await {
+        warn!(
+            ?dataset_id,
+            "improve: could not record the improve operation: {e}"
+        );
     }
 }
 
@@ -330,10 +305,11 @@ mod tests {
         }
 
         async fn stamp(&self, at: DateTime<Utc>) {
-            save_stamps(
+            record_improve_operation(
                 Some(&*self.runs),
                 Uuid::new_v4(),
-                false,
+                Some(self.dataset_id),
+                ImproveStatus::Completed,
                 &[StageStamp::new(
                     STAGE,
                     self.dataset_id,
@@ -413,19 +389,31 @@ mod tests {
     #[tokio::test]
     async fn a_stamp_on_another_stage_or_dataset_does_not_count() {
         let f = fixture().await;
-        save_stamps(
+        record_improve_operation(
             Some(&*f.runs),
             Uuid::new_v4(),
-            false,
-            &[
-                StageStamp::new(
-                    StageKind::ReviewConflicts,
-                    f.dataset_id,
-                    StageStatus::Completed,
-                    Utc::now(),
-                ),
-                StageStamp::new(STAGE, Uuid::new_v4(), StageStatus::Completed, Utc::now()),
-            ],
+            Some(f.dataset_id),
+            ImproveStatus::Completed,
+            &[StageStamp::new(
+                StageKind::ReviewConflicts,
+                f.dataset_id,
+                StageStatus::Completed,
+                Utc::now(),
+            )],
+        )
+        .await;
+        let other = Uuid::new_v4();
+        record_improve_operation(
+            Some(&*f.runs),
+            Uuid::new_v4(),
+            Some(other),
+            ImproveStatus::Completed,
+            &[StageStamp::new(
+                STAGE,
+                other,
+                StageStatus::Completed,
+                Utc::now(),
+            )],
         )
         .await;
         assert!(f.changed(false).await);
@@ -440,10 +428,11 @@ mod tests {
     #[tokio::test]
     async fn the_stamps_of_a_run_share_one_row() {
         let f = fixture().await;
-        save_stamps(
+        record_improve_operation(
             Some(&*f.runs),
             Uuid::new_v4(),
-            false,
+            Some(f.dataset_id),
+            ImproveStatus::Completed,
             &[
                 StageStamp::new(
                     StageKind::ReviewConflicts,
@@ -573,15 +562,17 @@ mod tests {
         assert!(!f.changed(false).await);
     }
 
-    // The row is not written for an errored run (Python's row is `failed`,
-    // which invalidates its stamps) or for a run that stamped nothing.
+    // An errored run's row is `Errored` (Python `failed`) and keeps its
+    // stamps, but is never a watermark; it counts as a change against an
+    // older stamp (`improve.py:271-275`, `graph_changes.py:6, 110-112`).
     #[tokio::test]
-    async fn an_errored_run_saves_no_stamp() {
+    async fn an_errored_run_is_never_a_watermark_and_is_a_change() {
         let f = fixture().await;
-        save_stamps(
+        record_improve_operation(
             Some(&*f.runs),
             Uuid::new_v4(),
-            true,
+            Some(f.dataset_id),
+            ImproveStatus::Errored,
             &[StageStamp::new(
                 STAGE,
                 f.dataset_id,
@@ -590,15 +581,63 @@ mod tests {
             )],
         )
         .await;
-        save_stamps(Some(&*f.runs), Uuid::new_v4(), false, &[]).await;
+        let row = f
+            .runs
+            .get_pipeline_run_by_dataset(f.dataset_id, IMPROVE_WRITE_PIPELINE_NAME)
+            .await
+            .unwrap()
+            .expect("the failed operation row");
+        assert_eq!(row.status, PipelineRunStatus::Errored);
+        assert!(row.run_info.expect("run_info")["global_context_index"].is_object());
         assert!(
-            f.runs
-                .get_pipeline_run_by_dataset(f.dataset_id, IMPROVE_WRITE_PIPELINE_NAME)
+            last_improve_watermark(&*f.runs, STAGE, f.dataset_id)
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(f.changed(false).await);
+
+        let f = fixture().await;
+        f.stamp(Utc::now() - Duration::seconds(1)).await;
+        assert!(!f.changed(false).await);
+        record_improve_operation(
+            Some(&*f.runs),
+            Uuid::new_v4(),
+            Some(f.dataset_id),
+            ImproveStatus::Errored,
+            &[],
+        )
+        .await;
+        assert!(f.changed(false).await, "a failed improve is a change");
+    }
+
+    // Python counts every improve row but a `noop` one (`graph_changes.py:
+    // 142-143`): a completed run that stamped nothing is a change; a run in
+    // which every stage skipped writes no row (`improve.py:276-279`).
+    #[tokio::test]
+    async fn a_completed_run_is_a_change_and_a_noop_run_writes_nothing() {
+        let f = fixture().await;
+        f.stamp(Utc::now() - Duration::seconds(1)).await;
+        for status in [ImproveStatus::Skipped, ImproveStatus::Running] {
+            record_improve_operation(
+                Some(&*f.runs),
+                Uuid::new_v4(),
+                Some(f.dataset_id),
+                status,
+                &[],
+            )
+            .await;
+        }
+        assert!(!f.changed(false).await, "a noop run is no change");
+        record_improve_operation(
+            Some(&*f.runs),
+            Uuid::new_v4(),
+            Some(f.dataset_id),
+            ImproveStatus::Completed,
+            &[],
+        )
+        .await;
+        assert!(f.changed(false).await, "a completed improve is a change");
     }
 
     // `_stamped_stage_start`: missing or malformed means rerun.
@@ -659,10 +698,11 @@ mod tests {
         assert!(changed);
 
         // A failed save is logged, not raised.
-        save_stamps(
+        record_improve_operation(
             Some(&noop),
             Uuid::new_v4(),
-            false,
+            Some(f.dataset_id),
+            ImproveStatus::Completed,
             &[StageStamp::new(
                 STAGE,
                 f.dataset_id,
