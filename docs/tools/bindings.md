@@ -21,7 +21,7 @@ binding's README and its generated docs.
 `cognify` / `addAndCognify` take an options object parsed once, in
 `cognee_bindings_common::ops::pipeline::apply_cognify_opts`, for every binding:
 `tenant`, `chunkSize`, `chunkOverlap`, `summarization`, `temporalCognify`,
-`triplet`, `graphBackend`, `extractor` (Python's argument: `auto`, `llm`,
+`graphBackend`, `extractor` (Python's argument: `auto`, `llm`,
 `gliner`/`gliner_demo` or another registered kind; `graphBackend` wins when both
 are given), `graphSchema` (a custom graph model's JSON Schema, as
 an object or a JSON string; alias `graphModel`), `graphSpec` (the same model in

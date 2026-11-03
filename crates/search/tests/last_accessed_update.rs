@@ -117,10 +117,8 @@ async fn test_search_updates_last_accessed_timestamp() {
     assert_eq!(data_items.len(), 1, "Expected 1 data item in dataset");
     let data_id = data_items[0].id;
 
-    // ── Cognify (summarization=false, triplet_embeddings=false) ──────────────
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    // ── Cognify (summarization=false) ──────────────
+    let config = CognifyConfig::default().with_summarization(false);
 
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
         cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),

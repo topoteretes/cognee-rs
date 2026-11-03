@@ -160,9 +160,7 @@ async fn cognify_e2e_stamps_with_expected_task_names() {
 
     // ── Step 2: cognify ──────────────────────────────────────────────────
     let user_email = Some("alice@example.com".to_string());
-    let config = CognifyConfig::default()
-        .with_summarization(true)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(true);
 
     let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(
         cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool init"),

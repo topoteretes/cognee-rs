@@ -303,11 +303,6 @@ pub struct CognifyConfig {
     /// Default: true (matches Python)
     pub enable_summarization: bool,
 
-    /// Whether to generate and index triplet embeddings.
-    /// Triplets are formatted as "source › relationship › target"
-    /// Python config: CognifyConfig.triplet_embedding (default: False)
-    pub embed_triplets: bool,
-
     /// Keep every chunk, entity and summary vector in
     /// [`CognifyResult::embeddings`](crate::CognifyResult::embeddings) when
     /// the run ends.
@@ -320,7 +315,7 @@ pub struct CognifyConfig {
     /// vectors themselves, as the embedding integration tests do.
     pub retain_embeddings: bool,
 
-    /// Batch size for embedding generation (all types: chunks, entities, summaries, triplets).
+    /// Batch size for embedding generation (all types: chunks, entities, summaries, edge types).
     /// Python default: varies by provider (36 for OpenAI, 100 for others)
     /// Controls how many texts are embedded in a single API call
     pub embedding_batch_size: usize,
@@ -599,7 +594,6 @@ impl Default for CognifyConfig {
 
             enable_summarization: true,
 
-            embed_triplets: false,
             retain_embeddings: false,
             embedding_batch_size: 100,
             vector_collection_prefix: String::new(),
@@ -708,12 +702,6 @@ impl CognifyConfig {
     /// Enable or disable summarization.
     pub fn with_summarization(mut self, enable: bool) -> Self {
         self.enable_summarization = enable;
-        self
-    }
-
-    /// Enable or disable triplet embeddings.
-    pub fn with_triplet_embeddings(mut self, enable: bool) -> Self {
-        self.embed_triplets = enable;
         self
     }
 
@@ -1192,7 +1180,6 @@ mod tests {
         assert!(config.enable_summarization);
 
         // Embedding defaults
-        assert!(!config.embed_triplets);
         assert_eq!(config.embedding_batch_size, 100);
         assert_eq!(config.vector_collection_prefix, "");
 
@@ -1238,13 +1225,11 @@ mod tests {
     fn test_config_builder_all_features() {
         let config = CognifyConfig::default()
             .with_chunk_size(2000)
-            .with_triplet_embeddings(true)
             .with_incremental_loading(false)
             .with_summarization(false)
             .with_temporal_cognify(true);
 
         assert_eq!(config.max_chunk_size, Some(2000));
-        assert!(config.embed_triplets);
         assert!(!config.incremental_loading);
         assert!(!config.enable_summarization);
         assert!(config.temporal_cognify);

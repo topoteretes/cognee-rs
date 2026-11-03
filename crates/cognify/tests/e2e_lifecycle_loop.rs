@@ -166,9 +166,7 @@ async fn test_readd_and_recognify_after_delete() {
     println!("First cycle: data_id={original_data_id}, dataset_id={original_dataset_id}");
 
     // Cognify (first cycle)
-    let config = CognifyConfig::default()
-        .with_summarization(false)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(false);
 
     let result_1 = match cognify(
         data_items_1,
