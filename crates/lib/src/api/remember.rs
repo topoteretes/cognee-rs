@@ -323,14 +323,16 @@ fn auto_improve_config(
 ///    on the dataset (as Python's `remember(self_improvement=True)` does;
 ///    memify is not involved). `IMPROVE_AUTO_ENABLED=false` is the kill switch
 ///    on both paths, as in Python (`remember.py`:
-///    `self_improvement and auto_improve_enabled()`).
+///    `self_improvement and auto_improve_enabled()`). A host admission check
+///    ([`register_auto_improve_admission`]) may decline it first; its reason
+///    is reported as `improve_skipped`.
 ///
 /// **Session Memory Mode** (with `session_id`):
 /// 1. Convert data inputs to text.
 /// 2. Store in session cache as Q&A entry.
 /// 3. If `self_improvement=true` and `improve_config` allows it
-///    (`auto_enabled`, then the debounce of `debounce_entries` /
-///    `debounce_seconds`), launch `improve(session_ids=[session_id])` as a
+///    (`auto_enabled`, then the host admission check, then the debounce of
+///    `debounce_entries` / `debounce_seconds`), launch `improve(session_ids=[session_id])` as a
 ///    **detached** background task in the process-wide
 ///    [`BackgroundTasks`](crate::BackgroundTasks) registry, as Python does.
 ///    Its failures are logged, never returned. A short-lived host drains the
@@ -564,7 +566,10 @@ async fn run_permanent_inner(
     // real SeaORM repo when a database is available; embedded callers fall
     // back to the no-op repo.
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
-    let cognify_result = cognify(
+    // Boxed, as is the improve below: their futures are large, and inline
+    // they would make `remember()`'s own future overflow a 2 MiB thread
+    // stack in debug builds.
+    let cognify_result = Box::pin(cognify(
         data_items,
         dataset_id,
         Some(owner_id),
@@ -580,7 +585,7 @@ async fn run_permanent_inner(
         thread_pool,
         Arc::clone(&ontology_resolver),
         cognify_config,
-    )
+    ))
     .await
     .map_err(|e| ApiError::Cognify(e.to_string()))?;
 
@@ -590,7 +595,7 @@ async fn run_permanent_inner(
     let mut improve_result = None;
     let mut improve_error = None;
     if let Some(config) = improve_config {
-        match improve(ImproveParams {
+        match Box::pin(improve(ImproveParams {
             dataset_name: dataset_name.to_string(),
             dataset_id: None,
             session_ids: None,
@@ -615,7 +620,7 @@ async fn run_permanent_inner(
             build_global_context_index: false,
             build_truth_subspace: false,
             run_in_background: false,
-        })
+        }))
         .await
         {
             Ok(r) => {
@@ -782,31 +787,9 @@ async fn remember_session(
         Err(e) => return Err(e.into()),
     }
 
-    // Host admission (Python `remember.py:2033-2047`), asked only when the
-    // improve would otherwise be launched: the entry stays stored, the improve
-    // is skipped with the host's reason.
-    let mut self_improvement = self_improvement;
-    let mut improve_skipped: Option<String> = None;
-    if self_improvement && improve_config.as_ref().is_some_and(|c| c.auto_enabled) {
-        improve_skipped = auto_improve_skip_reason(AutoImproveContext {
-            owner_id,
-            tenant_id,
-            dataset_name: dataset_name.to_string(),
-            dataset_id: Some(cognee_ingestion::generate_dataset_id(
-                dataset_name,
-                owner_id,
-                tenant_id,
-            )),
-            session_id: Some(session_id.to_string()),
-            session_ids: vec![session_id.to_string()],
-        })
-        .await;
-        if improve_skipped.is_some() {
-            self_improvement = false;
-        }
-    }
-
-    let improve_launched = launch_session_auto_improve(SessionAutoImprove {
+    // Gate, host admission (asked inside, so every launcher is gated),
+    // debounce, then the detached improve.
+    let launch = launch_session_auto_improve(SessionAutoImprove {
         dataset_name: dataset_name.to_string(),
         dataset_id: None,
         session_id: session_id.to_string(),
@@ -849,8 +832,8 @@ async fn remember_session(
         improve: None,
         improve_error: None,
         after_run_error: None,
-        improve_skipped,
-        improve_launched,
+        improve_skipped: launch.skipped,
+        improve_launched: launch.launched,
     })
 }
 
@@ -906,16 +889,29 @@ pub struct SessionAutoImprove {
     pub cognify_config: Arc<CognifyConfig>,
 }
 
+/// What [`launch_session_auto_improve`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionAutoImproveLaunch {
+    /// The improve was launched as a detached background task.
+    pub launched: bool,
+    /// The host admission check's reason for declining the improve
+    /// ([`register_auto_improve_admission`]); `launched` is then `false`. The
+    /// caller reports it as `RememberResult.improve_skipped`.
+    pub skipped: Option<String>,
+}
+
 /// The automatic improve of a session `remember()` — Python's session
-/// branch after `_add_to_session`: gate (`self_improvement` and
-/// `improve.auto_enabled`), debounce, then `improve(session_ids=[session])`
-/// as a **detached** task in the process-wide background registry
-/// ([`crate::wait_for_background_tasks`] drains it). Its failures are logged,
-/// never returned. `true` when the improve was launched.
+/// branch: gate (`self_improvement` and `improve.auto_enabled`), the host
+/// admission check (`remember.py:2025-2047`, asked before the debounce so a
+/// declined improve does not spend the debounce window), debounce, then
+/// `improve(session_ids=[session])` as a **detached** task in the
+/// process-wide background registry ([`crate::wait_for_background_tasks`]
+/// drains it). Its failures are logged, never returned.
 ///
 /// [`remember`] calls this after storing the entry; a host that stores the
-/// session entry itself (the HTTP server) calls it the same way.
-pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
+/// session entry itself (the HTTP server) calls it the same way and gets the
+/// same admission check.
+pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> SessionAutoImproveLaunch {
     let SessionAutoImprove {
         dataset_name,
         dataset_id,
@@ -943,14 +939,33 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
         if self_improvement {
             debug!("remember: automatic improve disabled or unavailable");
         }
-        return false;
+        return SessionAutoImproveLaunch::default();
     };
+    // Host admission, asked only when the improve would otherwise run: the
+    // entry stays stored, the improve is skipped with the host's reason.
+    let skipped = auto_improve_skip_reason(AutoImproveContext {
+        owner_id,
+        tenant_id,
+        dataset_name: dataset_name.clone(),
+        dataset_id: Some(dataset_id.unwrap_or_else(|| {
+            cognee_ingestion::generate_dataset_id(&dataset_name, owner_id, tenant_id)
+        })),
+        session_id: Some(session_id.clone()),
+        session_ids: vec![session_id.clone()],
+    })
+    .await;
+    if skipped.is_some() {
+        return SessionAutoImproveLaunch {
+            launched: false,
+            skipped,
+        };
+    }
     // Debounce: bridge only after enough new entries or enough time since the
     // last automatic improve of this session. The default thresholds fire
     // every time and read nothing.
     let user_id = owner_id.to_string();
     if !session_improve_due(session_manager.as_deref(), &config, &user_id, &session_id).await {
-        return false;
+        return SessionAutoImproveLaunch::default();
     }
 
     // Detached, as Python's `asyncio.create_task(_session_improve())`: the
@@ -1005,7 +1020,10 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             ),
         }
     });
-    true
+    SessionAutoImproveLaunch {
+        launched: true,
+        skipped: None,
+    }
 }
 
 /// Dispatch a typed [`MemoryEntry`] to the appropriate `SessionManager`

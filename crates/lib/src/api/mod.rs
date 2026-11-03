@@ -38,8 +38,9 @@ pub use recall::{
 };
 pub use remember::{
     AutoImproveAdmission, AutoImproveContext, RememberItemInfo, RememberResult, RememberStatus,
-    SessionAutoImprove, auto_improve_skip_reason, clear_auto_improve_admission,
-    launch_session_auto_improve, register_auto_improve_admission, remember, remember_entry,
+    SessionAutoImprove, SessionAutoImproveLaunch, auto_improve_skip_reason,
+    clear_auto_improve_admission, launch_session_auto_improve, register_auto_improve_admission,
+    remember, remember_entry,
 };
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

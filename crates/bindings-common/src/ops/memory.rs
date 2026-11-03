@@ -43,9 +43,14 @@
 //!
 //! ### `improve` opts (required: `datasetName`)
 //! ```json
-//! {"datasetName":"...", "sessionIds":["..."],
+//! {"datasetName":"...", "datasetId":"<uuid>", "sessionIds":["..."],
 //!  "feedbackAlpha":0.1, "tenant":"<uuid>"}
 //! ```
+//!
+//! `datasetId` (optional) targets a dataset the caller already resolved and
+//! authorized, possibly one shared with it, as Python's
+//! `improve(dataset=<UUID>)`; without it `datasetName` is looked up among the
+//! caller's own datasets.
 //!
 //! ### `improve` result
 //! ```json
@@ -349,6 +354,13 @@ pub async fn run_improve(
         })
     });
 
+    // Optional id of a dataset the caller already resolved and authorized
+    // (possibly owned by another user); Python `improve(dataset=<UUID>)`. A
+    // present but non-string id is rejected rather than ignored: ignoring it
+    // would silently fall back to the by-name lookup among the caller's own
+    // datasets.
+    let dataset_id = improve_dataset_id(opts)?;
+
     // Explicit wins; otherwise `improve()` uses `improve.feedback_alpha`.
     let feedback_alpha = opts.get("feedbackAlpha").and_then(|v| v.as_f64());
     let (improve_config, personalization, auto_feedback) = {
@@ -372,7 +384,7 @@ pub async fn run_improve(
 
     let result = cognee::api::improve(ImproveParams {
         dataset_name,
-        dataset_id: None,
+        dataset_id,
         session_ids,
         owner_id,
         tenant_id,
@@ -403,6 +415,19 @@ pub async fn run_improve(
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
     Ok(improve_result_json(&result))
+}
+
+/// The `datasetId` improve opt: `None` when absent or null, else a UUID string.
+fn improve_dataset_id(opts: &serde_json::Value) -> Result<Option<uuid::Uuid>, SdkError> {
+    match opts.get("datasetId") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(raw)) => uuid::Uuid::parse_str(raw)
+            .map(Some)
+            .map_err(|e| SdkError::Validation(format!("`datasetId` is not a valid UUID: {e}"))),
+        Some(other) => Err(SdkError::Validation(format!(
+            "`datasetId` must be a UUID string, got {other}"
+        ))),
+    }
 }
 
 /// The binding error of a failed `improve()`. A fatal-stage abort keeps its
@@ -507,5 +532,27 @@ mod tests {
                 "status": "skipped",
             })
         );
+    }
+
+    // Python `improve(dataset=<UUID>)`: the id is taken as given; a value that
+    // is not a UUID string is an error, never a silent fall back to the name.
+    #[test]
+    fn improve_dataset_id_opt() {
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(improve_dataset_id(&json!({})).unwrap(), None);
+        assert_eq!(
+            improve_dataset_id(&json!({"datasetId": null})).unwrap(),
+            None
+        );
+        assert_eq!(
+            improve_dataset_id(&json!({"datasetId": id.to_string()})).unwrap(),
+            Some(id)
+        );
+        for bad in [json!({"datasetId": "nope"}), json!({"datasetId": 7})] {
+            assert!(matches!(
+                improve_dataset_id(&bad),
+                Err(SdkError::Validation(_))
+            ));
+        }
     }
 }

@@ -30,8 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `self_improvement=True`); pass `false` to keep the old behaviour.
   - New `register_auto_improve_admission` / `clear_auto_improve_admission`: a
     host check that can decline the automatic improve with a reason, reported as
-    `RememberResult::improve_skipped` (Python's admission hook). A host that
-    launches a session improve itself calls `auto_improve_skip_reason` first.
+    `RememberResult::improve_skipped` (Python's admission hook).
+    `launch_session_auto_improve` asks it too, so a host that launches a
+    session improve itself is gated the same way; it now returns a
+    `SessionAutoImproveLaunch` (`launched`, and the check's `skipped` reason)
+    instead of `bool`.
+  - The bindings' improve opts accept `datasetId` (a UUID string), as
+    Python's `improve(dataset=<UUID>)`: the improve targets that dataset,
+    possibly one shared with the caller, instead of looking `datasetName` up
+    among the caller's own datasets. A non-string or malformed id is an error.
 
 - **`cognee-search`: recall notes a graph that is not built instead of
   searching it.** As Python's recall does, a graph-only recall first reads

@@ -12,7 +12,8 @@
 use std::sync::Arc;
 
 use cognee::api::remember::{
-    AutoImproveContext, clear_auto_improve_admission, register_auto_improve_admission, remember,
+    AutoImproveContext, SessionAutoImprove, clear_auto_improve_admission,
+    launch_session_auto_improve, register_auto_improve_admission, remember,
 };
 use cognee_cognify::CognifyConfig;
 use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
@@ -159,6 +160,41 @@ async fn admission_check_skips_the_automatic_improve() {
         assert!(seen[1].session_ids.is_empty());
         assert_eq!(seen[1].dataset_name, "ds_admission");
         assert!(seen[1].dataset_id.is_some());
+    }
+
+    // A host that stores the session entry itself and launches the improve
+    // directly (the HTTP server) is gated by the same check.
+    let launch = launch_session_auto_improve(SessionAutoImprove {
+        dataset_name: "ds_admission".to_string(),
+        dataset_id: None,
+        session_id: "sess-direct".to_string(),
+        owner_id: Uuid::new_v4(),
+        tenant_id: None,
+        self_improvement: true,
+        improve_config: Some(cognee::api::ImproveConfig::default()),
+        personalization: cognee::search::PreferenceConfig::default(),
+        auto_feedback: false,
+        llm: Arc::new(MockLlm::new(vec![])),
+        storage: Arc::clone(&h.storage),
+        graph_db: h.graph_db.clone() as Arc<_>,
+        vector_db: h.vector_db.clone() as Arc<_>,
+        embedding_engine: h.embedding_engine.clone() as Arc<_>,
+        ontology_resolver: Arc::clone(&h.ontology),
+        db: Some(h.db.clone()),
+        session_store: Some(Arc::clone(&h.session_store)),
+        session_manager: Some(Arc::clone(&h.session_manager)),
+        checkpoint_store: None,
+        add_pipeline: Arc::clone(&h.add_pipeline),
+        cognify_config: Arc::new(CognifyConfig::default()),
+    })
+    .await;
+    assert!(!launch.launched);
+    assert_eq!(launch.skipped.as_deref(), Some("insufficient_credits"));
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[2].session_id.as_deref(), Some("sess-direct"));
+        assert!(seen[2].dataset_id.is_some());
     }
 
     // With self_improvement off the check is never asked.

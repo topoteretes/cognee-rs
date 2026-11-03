@@ -154,6 +154,7 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
 /// Apply graph improvement based on session feedback.
 ///
 /// `opts_json` is a JSON object with required field `"datasetName"` and optional:
+///   `"datasetId"` (UUID string, a dataset the caller already resolved),
 ///   `"sessionIds"` (string array),
 ///   `"feedbackAlpha"` (float in (0, 1], default the `improve.feedback_alpha` setting, 0.1), `"tenant"` (UUID string).
 ///

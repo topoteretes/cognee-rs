@@ -1514,10 +1514,10 @@ async fn a_background_improve_returns_at_once_and_runs_after_the_holder() {
         add_pipeline: Arc::new(locked_add_pipeline(&h, &DatasetLocks::global())),
         cognify_config: Arc::new(CognifyConfig::default()),
     });
-    let launched = tokio::time::timeout(SHORT, launch)
+    let launch = tokio::time::timeout(SHORT, launch)
         .await
         .expect("the launch returns at once");
-    assert!(launched);
+    assert!(launch.launched);
     assert!(
         !cognee::wait_for_background_tasks(Some(SHORT)).await,
         "the improve waits for the holder"

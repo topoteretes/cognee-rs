@@ -584,8 +584,12 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *
  *   CogneeDataInput — same discriminated union as cg_sdk_add (see above).
  *
- *   RememberResult — JSON object (fields vary; cognify_result/improve_result
- *     are skipped in serialisation via #[serde(skip)]).
+ *   RememberResult — JSON object, snake_case (fields vary; cognify_result is
+ *     skipped in serialisation via #[serde(skip)]). When the automatic improve
+ *     ran it carries "improve" (an ImproveResult in snake_case, with
+ *     "duration_ms" per stage); "improve_error" and "improve_skipped" appear
+ *     only when set. A session-mode improve runs in the background, so its
+ *     result is not reported.
  *
  *   ImproveResult — {"datasetId":null|"<uuid>","datasetName":"…",
  *                    "sessionIds":[…],"stages":[ImproveStage…],
@@ -604,8 +608,8 @@ void cg_sdk_recall(const CgSdk*        sdk,
  * inputs_json   — CogneeDataInput object or array (required).
  * dataset_name  — target dataset name (required).
  * opts_json     — NULL or JSON object with optional keys:
- *                 "sessionId" (string), "selfImprovement" (bool),
- *                 "tenant" (UUID string).
+ *                 "sessionId" (string), "selfImprovement" (bool, default
+ *                 true), "tenant" (UUID string).
  *
  * result_json on success: RememberResult JSON object.
  *
@@ -657,6 +661,9 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
  *
  * opts_json — required JSON object with:
  *   "datasetName" (string, required),
+ *   "datasetId"   (UUID string, optional: a dataset the caller already
+ *                  resolved, possibly shared with it, as Python's
+ *                  improve(dataset=<UUID>)),
  *   "sessionIds"  (string array, optional),
  *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
  *   "tenant"      (UUID string, optional).
