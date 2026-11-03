@@ -503,18 +503,8 @@ fn entries_to_messages(entries: &[SessionQAEntry]) -> Vec<Message> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_default_session_is_scoped_to_a_dataset() {
-        let manager = SessionManager::new(Arc::new(crate::DisabledSessionStore));
-        let dataset = uuid::Uuid::from_u128(7);
-        assert_eq!(manager.default_session_id_for(None), "default_session");
-        assert_eq!(
-            manager.default_session_id_for(Some(dataset)),
-            format!("default_session_{dataset}")
-        );
-    }
-
     use super::*;
+    use crate::DisabledSessionStore;
 
     fn make_entry(question: &str, answer: &str) -> SessionQAEntry {
         SessionQAEntry {
@@ -531,6 +521,17 @@ mod tests {
             used_session_context_ids: None,
             memify_metadata: None,
         }
+    }
+
+    #[test]
+    fn the_default_session_is_scoped_to_a_dataset() {
+        let manager = SessionManager::new(Arc::new(DisabledSessionStore));
+        let dataset = uuid::Uuid::from_u128(7);
+        assert_eq!(manager.default_session_id_for(None), "default_session");
+        assert_eq!(
+            manager.default_session_id_for(Some(dataset)),
+            format!("default_session_{dataset}")
+        );
     }
 
     #[test]

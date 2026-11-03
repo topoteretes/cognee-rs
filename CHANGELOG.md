@@ -91,8 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Item | Before | After |
   |---|---|---|
   | Completion search with no `session_id`, a user and an available session cache | stateless: no history, no turn analysis, no QA row | uses `default_session_<dataset_id>` when one dataset is searched, else `default_session` (Python's `SessionManager.resolve_session_id(None)` with the dataset context): history and guidance are read, the turn is analysed and the QA is saved, in sequential, concurrent and per-dataset fan-out paths |
-  | Two datasets searched without a session | n/a | never share a session: each dataset has its own default session |
-  | A multi-dataset search (one logical turn) | n/a | the unscoped `default_session`, as Python's no-access-control multi-dataset search |
+  | Separate searches of two different datasets, no session | n/a | never share a session: each dataset has its own default session |
+  | A search over several datasets, or one naming none (one logical turn) | n/a | the unscoped `default_session`. Intentional divergence: Python's access-control path runs one leg, so one `default_session_<id>`, per dataset (the HTTP router does the same, one leg per dataset), and its non-access-control path scopes to the user's only dataset; `dataset_ids` is de-duplicated first. Under per-dataset storage with exactly one readable dataset the id is that dataset's |
+  | Retrievers that opt out of turn preparation (chunks, summaries, lexical, Cypher, ...) | n/a | no default session: no store read, no analysis, no QA row, as Python resolves it only in the session-aware completion retrievers |
   | No user, or session memory off (`session.caching = false`) | stateless | unchanged: stateless, as Python's `is_session_available_for_completion` |
   | `SessionManager` | `resolve_session_id` private, always the global default | `default_session_id_for(Option<Uuid>)`; the default id stays fixed (`default_session`, no setting, as Python) |
 
@@ -100,8 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one analysis call (unless `auto_feedback_detection` is off, or the retriever
   opts out of turn preparation). Turn session memory off with
   `session.caching = false`, or give the search an explicit `session_id`.
-  `only_context` previews and batch searches read the default session but do
-  not analyse or write, as with an explicit session.
+  `only_context` previews read the default session but neither analyse nor
+  write; batch searches do not analyse but record the turn, as with an
+  explicit session.
 
 
 - **`cognee-search` / `cognee-session`: session searches serve Python's
