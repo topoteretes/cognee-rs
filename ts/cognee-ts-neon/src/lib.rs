@@ -93,7 +93,7 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
         sdk_datasets::cognee_delete_all_datasets,
     )?;
 
-    // Admin / session / pipeline-run / user / notebook ops (Phase 5).
+    // Admin / session / pipeline-run / user ops (Phase 5).
     cx.export_function(
         "cogneeResetPipelineRunStatus",
         sdk_admin::cognee_reset_pipeline_run_status,
@@ -106,10 +106,6 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
         "cogneeGetOrCreateDefaultUser",
         sdk_admin::cognee_get_or_create_default_user,
     )?;
-    cx.export_function("cogneeListNotebooks", sdk_admin::cognee_list_notebooks)?;
-    cx.export_function("cogneeCreateNotebook", sdk_admin::cognee_create_notebook)?;
-    cx.export_function("cogneeUpdateNotebook", sdk_admin::cognee_update_notebook)?;
-    cx.export_function("cogneeDeleteNotebook", sdk_admin::cognee_delete_notebook)?;
     cx.export_function("cogneeGetSession", sdk_admin::cognee_get_session)?;
     cx.export_function("cogneeAddFeedback", sdk_admin::cognee_add_feedback)?;
     cx.export_function("cogneeDeleteFeedback", sdk_admin::cognee_delete_feedback)?;

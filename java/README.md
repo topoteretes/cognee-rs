@@ -104,7 +104,7 @@ Every async op returns a `CompletableFuture<T>`. The generated
 | Memory | `remember(...)`, `rememberEntry(...)`, `improve(ImproveOptions)` |
 | Data lifecycle | `forget(ForgetTarget[, tenant])`, `update(...)`, `pruneData()`, `pruneSystem([PruneSystemOptions])` |
 | Visualization | `visualize([VisualizeOptions])`, `visualizeToFile(VisualizeOptions)` |
-| Sub-surfaces | `datasets()`, `sessions()`, `users()`, `notebooks()`, `config()` |
+| Sub-surfaces | `datasets()`, `sessions()`, `users()`, `config()` |
 | Module statics | `Cognee.setupLogging([Map])`, `Cognee.initOtlp([Map])`, `Cognee.setTelemetryEnabled(boolean)`, `Cognee.isTelemetryEnabled()`, `Cognee.initTelemetry()`, `Cognee.version()` |
 
 Inputs are built with the `DataInput` factories: `DataInput.text(String)`,

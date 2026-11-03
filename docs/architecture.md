@@ -66,7 +66,7 @@ cognee-rs/
 
 **cognee-storage** — Abstract file storage layer. Trait: `StorageTrait` (+ `StorageExt`, `StorageWriter`). Impls: `LocalStorage`, `MockStorage`.
 
-**cognee-database** — Relational database abstraction. `RelationalDb` is the one object components hold (`Arc<dyn RelationalDb>`): a supertrait of the domain traits `IngestDb`, `DeleteDb`, `SearchHistoryDb`, `NotebookDb`, `DatasetConfigDb`, `SessionLifecycleDb`, `SessionQaDb` (session Q&A tables) and `ProvenanceDb` (cognify's provenance ledger and run rows), plus the pipeline-run / checkpoint / sync repositories and lifecycle (`ping`, `close`). Callers upcast to the narrow trait they need. Impl: `DatabaseConnection` (SQLite/Postgres via SeaORM); no code outside the crate depends on the concrete type.
+**cognee-database** — Relational database abstraction. `RelationalDb` is the one object components hold (`Arc<dyn RelationalDb>`): a supertrait of the domain traits `IngestDb`, `DeleteDb`, `SearchHistoryDb`, `DatasetConfigDb`, `SessionLifecycleDb`, `SessionQaDb` (session Q&A tables) and `ProvenanceDb` (cognify's provenance ledger and run rows), plus the pipeline-run / checkpoint / sync repositories and lifecycle (`ping`, `close`). Callers upcast to the narrow trait they need. Impl: `DatabaseConnection` (SQLite/Postgres via SeaORM); no code outside the crate depends on the concrete type.
 
 **cognee-ingestion** — Pipeline for ingesting data: streams content, computes hashes, deduplicates, and stores. Main type: `AddPipeline`. No trait abstraction — uses `StorageTrait` and `IngestDb` from sibling crates.
 

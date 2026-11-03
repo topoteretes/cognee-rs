@@ -361,28 +361,6 @@ await cognee.sessions.add_feedback("session-uuid", "qa-uuid", "Great answer!", 5
 await cognee.sessions.delete_feedback("session-uuid", "qa-uuid")
 ```
 
-### Notebooks
-
-```python
-notebooks = await cognee.notebooks.list()
-for nb in notebooks:
-    print(nb["id"], nb["name"])
-
-# Create a new notebook (cells defaults to empty list; deletable is always True)
-nb = await cognee.notebooks.create("My Notebook")
-nb = await cognee.notebooks.create("My Notebook", cells=[...])
-
-# Update a notebook's name and/or cells
-nb = await cognee.notebooks.update(notebook_id, {"name": "New Name"})
-nb = await cognee.notebooks.update(notebook_id, {"cells": [...]})
-
-# Delete by UUID — returns True if deleted, False if not found
-deleted = await cognee.notebooks.delete(notebook_id)
-```
-
-`cognee.notebooks` is a `CogneeNotebooks` sub-object accessible on every `Cognee`
-instance. `notebook_id` is a UUID string.
-
 ### Users and pipeline-run admin
 
 ```python

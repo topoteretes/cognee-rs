@@ -1,9 +1,8 @@
-//! Phase 5 — admin / session / pipeline-run / user / notebook ops.
+//! Phase 5 — admin / session / pipeline-run / user ops.
 //!
 //! Covers:
 //!   - Pipeline-run resets (#14)
 //!   - Default user (#15)
-//!   - Notebooks (#16)
 //!   - Session CRUD (#13)
 //!
 //! Delegates to the shared async logic in
@@ -16,8 +15,8 @@ use neon::prelude::*;
 use cognee_bindings_common::ops::admin;
 use cognee_bindings_common::ops::sessions;
 
-use crate::errors::{SdkError, throw_sdk_error};
-use crate::json::{js_to_value, parse_js, read_opts};
+use crate::errors::throw_sdk_error;
+use crate::json::{parse_js, read_opts};
 use crate::runtime::runtime;
 use crate::sdk::CogneeHandle;
 
@@ -91,124 +90,6 @@ pub fn cognee_get_or_create_default_user(mut cx: FunctionContext) -> JsResult<Js
                 let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
                 parse_js(&mut cx, &json_str)
             }
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-// ---------------------------------------------------------------------------
-// Notebooks (#16)
-// ---------------------------------------------------------------------------
-
-/// `cogneeListNotebooks(handle) -> Promise<Notebook[]>`
-///
-/// Seeds tutorial notebooks on the very first call for a new user (idempotent).
-/// `Notebook` derives `Serialize` → direct serde.
-pub fn cognee_list_notebooks(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_list_notebooks(&state).await;
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(val) => {
-                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "[]".to_string());
-                parse_js(&mut cx, &json_str)
-            }
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-/// `cogneeCreateNotebook(handle, name, cells?, deletable?) -> Promise<Notebook>`
-pub fn cognee_create_notebook(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let name = cx.argument::<JsString>(1)?.value(&mut cx);
-
-    // cells: optional JSON array (default empty array)
-    let cells_json: serde_json::Value = match cx.argument_opt(2) {
-        Some(arg) if !arg.is_a::<JsUndefined, _>(&mut cx) && !arg.is_a::<JsNull, _>(&mut cx) => {
-            js_to_value(&mut cx, arg)?
-        }
-        _ => serde_json::Value::Array(vec![]),
-    };
-
-    // deletable: optional boolean (ignored — forced to true by Python parity)
-    let deletable = match cx.argument_opt(3) {
-        Some(arg) if !arg.is_a::<JsUndefined, _>(&mut cx) && !arg.is_a::<JsNull, _>(&mut cx) => arg
-            .downcast::<JsBoolean, _>(&mut cx)
-            .map(|b| b.value(&mut cx))
-            .unwrap_or(true),
-        _ => true,
-    };
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_create_notebook(&state, name, cells_json, deletable).await;
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(val) => {
-                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
-                parse_js(&mut cx, &json_str)
-            }
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-/// `cogneeUpdateNotebook(handle, id, patch) -> Promise<Notebook | null>`
-///
-/// `patch`: `{ name?: string, cells?: any }`
-/// `NotebookUpdatePatch` does NOT derive `Serialize` — marshalled from JS by hand.
-pub fn cognee_update_notebook(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let id_str = cx.argument::<JsString>(1)?.value(&mut cx);
-    let patch_arg = cx.argument::<JsValue>(2)?;
-    let patch_json = js_to_value(&mut cx, patch_arg)?;
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_update_notebook(&state, &id_str, patch_json).await;
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(val) => {
-                let json_str = serde_json::to_string(&val).unwrap_or_else(|_| "null".to_string());
-                parse_js(&mut cx, &json_str)
-            }
-            Err(e) => throw_sdk_error(&mut cx, e),
-        });
-    });
-
-    Ok(promise)
-}
-
-/// `cogneeDeleteNotebook(handle, id) -> Promise<boolean>`
-pub fn cognee_delete_notebook(mut cx: FunctionContext) -> JsResult<JsPromise> {
-    let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
-    let state = Arc::clone(&handle.state);
-    let id_str = cx.argument::<JsString>(1)?.value(&mut cx);
-
-    let channel = cx.channel();
-    let (deferred, promise) = cx.promise();
-
-    runtime().spawn(async move {
-        let result = admin::run_delete_notebook(&state, &id_str).await;
-        deferred.settle_with(&channel, move |mut cx| match result {
-            Ok(serde_json::Value::Bool(removed)) => Ok(cx.boolean(removed)),
-            Ok(_) => Ok(cx.boolean(false)),
             Err(e) => throw_sdk_error(&mut cx, e),
         });
     });

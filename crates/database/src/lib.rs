@@ -13,12 +13,6 @@ mod traits;
 mod types;
 pub mod uuid_hex;
 
-// Re-export tutorial seeder for use by an HTTP server that can't depend on
-// `cognee` directly.
-pub use ops::tutorial_seeder::{
-    TUTORIAL_BASICS_ID, TUTORIAL_PYTHON_DEV_ID, seed_tutorials_if_first_call,
-};
-
 pub use connection::{close, connect, initialize, sqlite_url_is_in_memory};
 pub use single_process::{
     SINGLE_PROCESS_ENV, parse_single_process_override, resolve_single_process,
@@ -68,9 +62,8 @@ pub use sync::{
 pub use traits::{
     AclDb, CostByModelRow, DatasetConfigDb, DatasetConfiguration, DatasetConfigurationPatch,
     DatasetDatabaseDb, DatasetDatabaseRecord, DatasetDb, DatasetStorageLifecycle, DeleteDb,
-    IngestDb, Notebook, NotebookDb, NotebookUpdatePatch, ProvenanceDb, RelationalDb,
-    SearchHistoryDb, SessionLifecycleDb, SessionListFilters, SessionListPage, SessionQaDb,
-    SessionRowWithStatus, SessionStats,
+    IngestDb, ProvenanceDb, RelationalDb, SearchHistoryDb, SessionLifecycleDb, SessionListFilters,
+    SessionListPage, SessionQaDb, SessionRowWithStatus, SessionStats,
 };
 pub use types::{
     DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,

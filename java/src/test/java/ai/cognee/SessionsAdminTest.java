@@ -1,9 +1,7 @@
 package ai.cognee;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -20,15 +18,6 @@ class SessionsAdminTest {
         try (Cognee cognee = handle(dir)) {
             CogneeUser u = cognee.users().getOrCreateDefault().join();
             assertNotNull(u.id());
-        }
-    }
-
-    @Test
-    void notebookCrud(@TempDir Path dir) {
-        try (Cognee cognee = handle(dir)) {
-            CogneeNotebook nb = cognee.notebooks().create("nb1").join();
-            assertEquals("nb1", nb.name());
-            assertTrue(cognee.notebooks().delete(nb.id()).join());
         }
     }
 
