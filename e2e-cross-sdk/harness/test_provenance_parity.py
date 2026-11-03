@@ -14,10 +14,10 @@ directory:
 * The Docker harness builds both CLIs and runs ``add`` + ``cognify`` via
   the existing ``both_cognified`` fixture in
   :mod:`harness/conftest.py`.
-* Provenance attributes round-trip into the ``nodes`` table of each
-  SDK's relational SQLite store; we read them via the existing
-  ``query_nodes`` helper (which already normalises the
-  ``type``/``node_type`` column rename across SDKs).
+* Rust's provenance attributes round-trip into the ``nodes`` table of
+  its relational SQLite store, read via ``query_nodes``. Python on Ladybug
+  keeps provenance in the graph and leaves that table empty, so its nodes
+  are read from the graph through ``python_graph`` (same row shape).
 * All assertions tolerate LLM non-determinism — the harness is
   intentionally approximate.
 """
@@ -26,7 +26,7 @@ import pytest
 
 from helpers import (
     open_db,
-    python_db_path,
+    python_graph,
     query_nodes,
     rust_db_path,
 )
@@ -77,6 +77,13 @@ def _attr(node, key):
     return None
 
 
+def _nodes(backend, ws):
+    """Graph nodes of one SDK's workspace (see the module docstring)."""
+    if backend == "python":
+        return python_graph(ws)[0]
+    return query_nodes(open_db(rust_db_path(ws)))
+
+
 def _group_tasks_by_type(nodes):
     """Build ``{node_type: set(source_task)}`` from a list of node rows.
 
@@ -103,11 +110,8 @@ def test_provenance_pipeline_field_set_on_every_node(both_cognified):
     "cognify_pipeline"`` in both backends."""
     py_ws, rust_ws = both_cognified
 
-    for backend, ws, path_fn in (
-        ("python", py_ws, python_db_path),
-        ("rust", rust_ws, rust_db_path),
-    ):
-        nodes = query_nodes(open_db(path_fn(ws)))
+    for backend, ws in (("python", py_ws), ("rust", rust_ws)):
+        nodes = _nodes(backend, ws)
         assert nodes, f"{backend}: cognify produced zero nodes"
         stamped = [n for n in nodes if _attr(n, "source_pipeline")]
         # Tolerate adapters that don't surface provenance in the
@@ -138,11 +142,8 @@ def test_provenance_user_field_present_when_stamped(both_cognified):
     """
     py_ws, rust_ws = both_cognified
 
-    for backend, ws, path_fn in (
-        ("python", py_ws, python_db_path),
-        ("rust", rust_ws, rust_db_path),
-    ):
-        nodes = query_nodes(open_db(path_fn(ws)))
+    for backend, ws in (("python", py_ws), ("rust", rust_ws)):
+        nodes = _nodes(backend, ws)
         users = [_attr(n, "source_user") for n in nodes]
         users = [u for u in users if u]
         if not users:
@@ -159,11 +160,8 @@ def test_source_task_values_are_in_expected_set(both_cognified):
     that ``cognify_pipeline`` is allowed to emit."""
     py_ws, rust_ws = both_cognified
 
-    for backend, ws, path_fn in (
-        ("python", py_ws, python_db_path),
-        ("rust", rust_ws, rust_db_path),
-    ):
-        nodes = query_nodes(open_db(path_fn(ws)))
+    for backend, ws in (("python", py_ws), ("rust", rust_ws)):
+        nodes = _nodes(backend, ws)
         seen = {_attr(n, "source_task") for n in nodes}
         seen.discard(None)
         if not seen:
@@ -189,8 +187,8 @@ def test_source_task_jaccard_overlap_per_node_type(both_cognified):
     """
     py_ws, rust_ws = both_cognified
 
-    py_groups = _group_tasks_by_type(query_nodes(open_db(python_db_path(py_ws))))
-    rust_groups = _group_tasks_by_type(query_nodes(open_db(rust_db_path(rust_ws))))
+    py_groups = _group_tasks_by_type(_nodes("python", py_ws))
+    rust_groups = _group_tasks_by_type(_nodes("rust", rust_ws))
 
     if not py_groups or not rust_groups:
         pytest.skip(

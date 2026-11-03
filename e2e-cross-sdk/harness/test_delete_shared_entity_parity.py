@@ -18,6 +18,7 @@ from helpers import (
     query_nodes,
     query_edges,
     python_db_path,
+    python_graph,
     rust_db_path,
     run_python_cli,
     run_rust_cli,
@@ -135,7 +136,8 @@ def test_shared_entity_delete_parity(tmp_path):
     py_conn = open_db(py_db)
     py_datasets = query_datasets(py_conn)
     py_data = query_data(py_conn)
-    py_nodes = query_nodes(py_conn)
+    # Python on Ladybug keeps its nodes in the graph only (helpers.python_graph).
+    py_nodes = python_graph(py_ws)[0]
     py_conn.close()
 
     rust_conn = open_db(rust_db)
