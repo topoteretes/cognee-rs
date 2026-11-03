@@ -122,11 +122,6 @@ mod tests {
             assert!(eligible(&request(ty), ty, false));
         }
         assert!(!eligible(
-            &request(SearchType::TripletCompletion),
-            SearchType::TripletCompletion,
-            false
-        ));
-        assert!(!eligible(
             &request(SearchType::FeelingLucky),
             SearchType::GraphCompletion,
             false

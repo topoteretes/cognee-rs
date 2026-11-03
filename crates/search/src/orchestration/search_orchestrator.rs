@@ -1109,7 +1109,6 @@ impl SearchOrchestrator {
             && matches!(
                 search_type,
                 SearchType::RagCompletion
-                    | SearchType::TripletCompletion
                     | SearchType::GraphCompletion
                     | SearchType::GraphCompletionDecomposition
                     | SearchType::GraphSummaryCompletion
