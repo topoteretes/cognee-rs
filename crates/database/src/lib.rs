@@ -36,7 +36,6 @@ pub(crate) fn connection_system_label<C: sea_orm::ConnectionTrait>(db: &C) -> &'
 pub fn database_system_label(db: &DatabaseConnection) -> &'static str {
     connection_system_label(db)
 }
-pub use ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 /// The run-scoped sweep selector. Re-exported because it is the only argument
 /// every run-scoped provenance query takes, and callers outside this crate
 /// should not have to name `ops::graph_storage` to build one.
@@ -47,7 +46,7 @@ pub use pipelines::sea_orm_impl::{
 };
 pub use pipelines::{
     NoopPipelineRunRepository, PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository,
-    PipelineRunVisibility, PipelineRunWithAttributionRow,
+    PipelineRunVisibility, PipelineRunWithAttributionRow, StampedRun,
 };
 pub use sea_orm::DatabaseConnection;
 pub use session_qa::{SessionQaPatch, SessionQaRow, SessionTraceRow};

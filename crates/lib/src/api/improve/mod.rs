@@ -38,7 +38,7 @@ use std::time::Instant;
 
 use cognee_cognify::CognifyConfig;
 use cognee_core::DatasetLocks;
-use cognee_database::{CheckpointStore, RelationalDb};
+use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -151,10 +151,6 @@ pub struct ImproveParams<'a> {
     pub session_manager: Option<Arc<SessionManager>>,
     /// Add pipeline (borrowed). Required by the cognify-backed stages.
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Checkpoint store of the stage watermarks
-    /// (`improve_stage:{stage}:{dataset_id}`). Without one a watermarked stage
-    /// always runs.
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// The dataset lock registry the run holds its dataset in, for its whole
     /// length. `None` uses the add pipeline's registry
     /// ([`AddPipeline::dataset_locks`]) and, without one, the process-wide
@@ -383,7 +379,6 @@ async fn run_improve(
         session_ids: _,
         // Deprecated options (SDK-1115), ignored as Python ignores them
         // without custom tasks.
-        checkpoint_store,
         dataset_locks,
         owner_id,
         tenant_id,
@@ -491,7 +486,6 @@ async fn run_improve(
                 session_store,
                 session_manager,
                 add_pipeline,
-                checkpoint_store,
                 cognify_config,
             };
             let mut stamps = Vec::new();
@@ -506,8 +500,10 @@ async fn run_improve(
             .await;
             // An errored run invalidates its stamps (Python marks its row
             // `failed`): a stage after the stamping one may have half-written.
+            let runs = stages.db.clone().map(|db| db.pipeline_runs());
             save_stamps(
-                stages.checkpoint_store.as_deref(),
+                runs.as_deref(),
+                owner_id,
                 result.status() == ImproveStatus::Errored,
                 &stamps,
             )

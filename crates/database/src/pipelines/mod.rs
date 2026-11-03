@@ -5,7 +5,7 @@ pub mod sea_orm_impl;
 pub use noop::NoopPipelineRunRepository;
 pub use repository::{
     GraphBuildEvidence, PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository,
-    PipelineRunVisibility, PipelineRunWithAttributionRow,
+    PipelineRunVisibility, PipelineRunWithAttributionRow, StampedRun,
 };
 pub use sea_orm_impl::SeaOrmPipelineRunRepository;
 

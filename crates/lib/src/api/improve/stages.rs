@@ -16,7 +16,7 @@ use cognee_cognify::{
     persist_sessions_in_knowledge_graph,
 };
 use cognee_core::CpuPool;
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -261,8 +261,6 @@ pub(crate) struct ImproveStages<'a> {
     pub session_store: Option<Arc<dyn SessionStore>>,
     pub session_manager: Option<Arc<SessionManager>>,
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Where the stage watermarks live.
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     pub cognify_config: &'a CognifyConfig,
 }
 
@@ -824,14 +822,7 @@ impl ImproveStages<'_> {
                 // Rust has no notion of whether datasets share one graph here,
                 // so every dataset's runs count (Python narrows that to the
                 // dataset under backend access control).
-                !has_dataset_changed_since_last_improve(
-                    self.checkpoint_store.as_deref(),
-                    runs.as_deref(),
-                    KIND,
-                    id,
-                    true,
-                )
-                .await
+                !has_dataset_changed_since_last_improve(runs.as_deref(), KIND, id, true).await
             }
             None => false,
         };
@@ -845,7 +836,7 @@ impl ImproveStages<'_> {
         };
         let stamp = match (dataset_id, result.status) {
             (Some(id), StageStatus::Completed | StageStatus::AlreadyCompleted) => {
-                Some(StageStamp::new(KIND, id, started_at))
+                Some(StageStamp::new(KIND, id, result.status, started_at))
             }
             _ => None,
         };

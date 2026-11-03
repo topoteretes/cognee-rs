@@ -18,7 +18,7 @@ use crate::uuid_hex;
 
 use super::repository::{
     GraphBuildEvidence, PipelineRunEntry, PipelineRunListQuery, PipelineRunRepository,
-    PipelineRunRow, PipelineRunWithAttributionRow,
+    PipelineRunRow, PipelineRunWithAttributionRow, StampedRun,
 };
 
 /// Bound parameters [`PipelineRunRepository::list_runs`] puts into **one**
@@ -606,6 +606,7 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
         since: chrono::DateTime<Utc>,
         dataset_id: Option<Uuid>,
         exclude_pipeline_names: &[&str],
+        exclude_run_ids: &[Uuid],
     ) -> Result<u64, DatabaseError> {
         use sea_orm::PaginatorTrait;
 
@@ -620,9 +621,69 @@ impl PipelineRunRepository for SeaOrmPipelineRunRepository {
                     .is_not_in(exclude_pipeline_names.iter().copied()),
             );
         }
+        if !exclude_run_ids.is_empty() {
+            query = query.filter(
+                pipeline_run::Column::PipelineRunId
+                    .is_not_in(exclude_run_ids.iter().map(|id| uuid_hex::to_hex(*id))),
+            );
+        }
         query.count(self.db.as_ref()).await.map_err(|e| {
             DatabaseError::QueryError(format!("count_runs_created_after query failed: {e}"))
         })
+    }
+
+    async fn latest_stamped_run(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+        key: &str,
+    ) -> Result<Option<StampedRun>, DatabaseError> {
+        // The key is matched in Rust, not in SQL: SQLite and Postgres spell a
+        // JSON member test differently. Rows page newest first and stop at the
+        // first match, so a stage that ran recently reads one page.
+        const PAGE: u64 = 64;
+        let mut offset = 0;
+        loop {
+            let rows = pipeline_run::Entity::find()
+                .filter(pipeline_run::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+                .filter(pipeline_run::Column::PipelineName.eq(pipeline_name))
+                .filter(pipeline_run::Column::Status.eq(pipeline_run::PipelineRunStatus::Completed))
+                .filter(pipeline_run::Column::RunInfo.is_not_null())
+                .order_by_desc(pipeline_run::Column::CreatedAt)
+                .order_by_desc(pipeline_run::Column::Id)
+                .limit(PAGE)
+                .offset(offset)
+                .all(self.db.as_ref())
+                .await
+                .map_err(|e| {
+                    DatabaseError::QueryError(format!("latest_stamped_run query failed: {e}"))
+                })?;
+            let fetched = rows.len() as u64;
+            for row in rows {
+                let stamp = row
+                    .run_info
+                    .as_ref()
+                    .and_then(|info| info.get(key))
+                    .filter(|stamp| stamp.is_object());
+                if let Some(stamp) = stamp {
+                    let pipeline_run_id =
+                        uuid_hex::from_hex(&row.pipeline_run_id).map_err(|e| {
+                            DatabaseError::QueryError(format!(
+                                "malformed pipeline_run_id {:?}: {e}",
+                                row.pipeline_run_id
+                            ))
+                        })?;
+                    return Ok(Some(StampedRun {
+                        pipeline_run_id,
+                        stamp: stamp.clone(),
+                    }));
+                }
+            }
+            if fetched < PAGE {
+                return Ok(None);
+            }
+            offset += PAGE;
+        }
     }
 
     async fn graph_build_evidence(
