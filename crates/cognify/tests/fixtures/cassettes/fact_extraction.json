@@ -2,461 +2,162 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "4c195b99f477d90889a4f0abf03b0f5970e49401c046a9b0402c994f82bbd059": {
-      "method": "structured_output",
-      "user_input_preview": "\nDr. Maria Rodriguez leads the Quantum Computing Laboratory at MIT, where she has been conducting groundbreaking \nresear",
-      "schema_name": "KnowledgeGraph",
-      "response": {
-        "nodes": [
-          {
-            "id": "Maria_Rodriguez",
-            "name": "Dr. Maria Rodriguez",
-            "type": "PERSON",
-            "description": "Dr. Maria Rodriguez leads the Quantum Computing Laboratory at MIT and conducts research on quantum error correction."
-          },
-          {
-            "id": "Quantum_Computing_Laboratory_MIT",
-            "name": "Quantum Computing Laboratory at MIT",
-            "type": "ORGANIZATION",
-            "description": "The Quantum Computing Laboratory at MIT conducts research in quantum computing, led by Dr. Maria Rodriguez."
-          },
-          {
-            "id": "MIT",
-            "name": "MIT",
-            "type": "ORGANIZATION",
-            "description": "MIT is a research university where the Quantum Computing Laboratory is based."
-          },
-          {
-            "id": "James_Lee",
-            "name": "Dr. James Lee",
-            "type": "PERSON",
-            "description": "Dr. James Lee is a researcher from South Korea working in the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "id": "South_Korea",
-            "name": "South Korea",
-            "type": "LOCATION",
-            "description": "South Korea is the country of origin for Dr. James Lee."
-          },
-          {
-            "id": "Fatima_Abbas",
-            "name": "Dr. Fatima Abbas",
-            "type": "PERSON",
-            "description": "Dr. Fatima Abbas is a researcher from Egypt working in the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "id": "Egypt",
-            "name": "Egypt",
-            "type": "LOCATION",
-            "description": "Egypt is the country of origin for Dr. Fatima Abbas."
-          },
-          {
-            "id": "National_Science_Foundation",
-            "name": "National Science Foundation",
-            "type": "ORGANIZATION",
-            "description": "The National Science Foundation provided a $10 million grant to the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "id": "QuantumTech_Industries",
-            "name": "QuantumTech Industries",
-            "type": "ORGANIZATION",
-            "description": "QuantumTech Industries is a Canadian company specializing in quantum hardware, supplying quantum computers to the MIT laboratory."
-          },
-          {
-            "id": "Canada",
-            "name": "Canada",
-            "type": "LOCATION",
-            "description": "Canada is the country of origin for QuantumTech Industries."
-          },
-          {
-            "id": "Nature_Physics",
-            "name": "Nature Physics",
-            "type": "WORK",
-            "description": "Nature Physics is a scientific journal where Dr. Maria Rodriguez published research on quantum decoherence."
-          },
-          {
-            "id": "Chen_Wei",
-            "name": "Professor Chen Wei",
-            "type": "PERSON",
-            "description": "Professor Chen Wei is a co-author from Tsinghua University in Beijing, collaborating on research published in Nature Physics."
-          },
-          {
-            "id": "Tsinghua_University",
-            "name": "Tsinghua University",
-            "type": "ORGANIZATION",
-            "description": "Tsinghua University in Beijing is where Professor Chen Wei works."
-          },
-          {
-            "id": "Beijing",
-            "name": "Beijing",
-            "type": "LOCATION",
-            "description": "Beijing is the city where Tsinghua University is located."
-          },
-          {
-            "id": "Cambridge_University",
-            "name": "Cambridge University",
-            "type": "ORGANIZATION",
-            "description": "Cambridge University in the UK collaborates with the MIT Quantum Computing Laboratory."
-          },
-          {
-            "id": "United_Kingdom",
-            "name": "United Kingdom",
-            "type": "LOCATION",
-            "description": "The United Kingdom is the country where Cambridge University is located."
-          },
-          {
-            "id": "Max_Planck_Institute",
-            "name": "Max Planck Institute",
-            "type": "ORGANIZATION",
-            "description": "Max Planck Institute in Germany collaborates with the MIT Quantum Computing Laboratory."
-          },
-          {
-            "id": "Germany",
-            "name": "Germany",
-            "type": "LOCATION",
-            "description": "Germany is the country where Max Planck Institute is located."
-          },
-          {
-            "id": "RIKEN",
-            "name": "RIKEN",
-            "type": "ORGANIZATION",
-            "description": "RIKEN in Japan collaborates with the MIT Quantum Computing Laboratory."
-          },
-          {
-            "id": "Japan",
-            "name": "Japan",
-            "type": "LOCATION",
-            "description": "Japan is the country where RIKEN is located."
-          },
-          {
-            "id": "Timestamp_2018",
-            "name": "2018",
-            "type": "TIMESTAMP",
-            "description": "The year 2018."
-          },
-          {
-            "id": "Timestamp_2020",
-            "name": "2020",
-            "type": "TIMESTAMP",
-            "description": "The year 2020."
-          }
-        ],
-        "edges": [
-          {
-            "source_node_id": "Maria_Rodriguez",
-            "target_node_id": "Quantum_Computing_Laboratory_MIT",
-            "relationship_name": "leads",
-            "description": "Dr. Maria Rodriguez leads the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "MIT",
-            "relationship_name": "located_in",
-            "description": "The Quantum Computing Laboratory is located at MIT."
-          },
-          {
-            "source_node_id": "Maria_Rodriguez",
-            "target_node_id": "Timestamp_2018",
-            "relationship_name": "conducts_research_since",
-            "description": "Dr. Maria Rodriguez has been conducting research on quantum error correction since 2018."
-          },
-          {
-            "source_node_id": "James_Lee",
-            "target_node_id": "South_Korea",
-            "relationship_name": "from_country",
-            "description": "Dr. James Lee is from South Korea."
-          },
-          {
-            "source_node_id": "Fatima_Abbas",
-            "target_node_id": "Egypt",
-            "relationship_name": "from_country",
-            "description": "Dr. Fatima Abbas is from Egypt."
-          },
-          {
-            "source_node_id": "James_Lee",
-            "target_node_id": "Quantum_Computing_Laboratory_MIT",
-            "relationship_name": "member_of_team",
-            "description": "Dr. James Lee is a member of the research team at the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "source_node_id": "Fatima_Abbas",
-            "target_node_id": "Quantum_Computing_Laboratory_MIT",
-            "relationship_name": "member_of_team",
-            "description": "Dr. Fatima Abbas is a member of the research team at the Quantum Computing Laboratory at MIT."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "National_Science_Foundation",
-            "relationship_name": "funded_by",
-            "description": "The Quantum Computing Laboratory at MIT is funded by a $10 million grant from the National Science Foundation."
-          },
-          {
-            "source_node_id": "National_Science_Foundation",
-            "target_node_id": "Timestamp_2020",
-            "relationship_name": "awarded_grant_at",
-            "description": "The National Science Foundation awarded the grant in 2020."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "QuantumTech_Industries",
-            "relationship_name": "acquired_hardware_from",
-            "description": "The MIT laboratory acquired quantum computers from QuantumTech Industries."
-          },
-          {
-            "source_node_id": "QuantumTech_Industries",
-            "target_node_id": "Canada",
-            "relationship_name": "located_in",
-            "description": "QuantumTech Industries is located in Canada."
-          },
-          {
-            "source_node_id": "Maria_Rodriguez",
-            "target_node_id": "Nature_Physics",
-            "relationship_name": "published_in",
-            "description": "Dr. Maria Rodriguez published a paper in Nature Physics."
-          },
-          {
-            "source_node_id": "Maria_Rodriguez",
-            "target_node_id": "Chen_Wei",
-            "relationship_name": "co_authored_with",
-            "description": "Dr. Maria Rodriguez co-authored a paper with Professor Chen Wei."
-          },
-          {
-            "source_node_id": "Chen_Wei",
-            "target_node_id": "Tsinghua_University",
-            "relationship_name": "works_at",
-            "description": "Professor Chen Wei works at Tsinghua University."
-          },
-          {
-            "source_node_id": "Tsinghua_University",
-            "target_node_id": "Beijing",
-            "relationship_name": "located_in",
-            "description": "Tsinghua University is located in Beijing."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "Cambridge_University",
-            "relationship_name": "collaborates_with",
-            "description": "The MIT Quantum Computing Laboratory collaborates with Cambridge University in the UK."
-          },
-          {
-            "source_node_id": "Cambridge_University",
-            "target_node_id": "United_Kingdom",
-            "relationship_name": "located_in",
-            "description": "Cambridge University is located in the United Kingdom."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "Max_Planck_Institute",
-            "relationship_name": "collaborates_with",
-            "description": "The MIT Quantum Computing Laboratory collaborates with Max Planck Institute in Germany."
-          },
-          {
-            "source_node_id": "Max_Planck_Institute",
-            "target_node_id": "Germany",
-            "relationship_name": "located_in",
-            "description": "Max Planck Institute is located in Germany."
-          },
-          {
-            "source_node_id": "Quantum_Computing_Laboratory_MIT",
-            "target_node_id": "RIKEN",
-            "relationship_name": "collaborates_with",
-            "description": "The MIT Quantum Computing Laboratory collaborates with RIKEN in Japan."
-          },
-          {
-            "source_node_id": "RIKEN",
-            "target_node_id": "Japan",
-            "relationship_name": "located_in",
-            "description": "RIKEN is located in Japan."
-          }
-        ]
-      }
-    },
-    "513b2c34d4065a08ab245de2167e935915430bebad93c612a59d0c344cad858c": {
+    "0b5f2f6aa0994fabf255a31cbaf88b784f7520e71c6d7092f1f9bde5b0b135e8": {
       "method": "structured_output",
       "user_input_preview": "\nAlice Johnson is a software engineer at TechCorp, a technology company based in San Francisco, California. \nShe has bee",
       "schema_name": "KnowledgeGraph",
       "response": {
         "nodes": [
           {
-            "id": "Alice Johnson",
+            "id": "1",
             "name": "Alice Johnson",
             "type": "PERSON",
-            "description": "Alice Johnson is a software engineer at TechCorp specializing in machine learning and artificial intelligence."
+            "description": "Software engineer at TechCorp specializing in machine learning and artificial intelligence for five years."
           },
           {
-            "id": "TechCorp",
+            "id": "2",
             "name": "TechCorp",
             "type": "ORGANIZATION",
-            "description": "TechCorp is a technology company based in San Francisco, California, founded in 2010 and has grown to over 500 employees."
+            "description": "A technology company based in San Francisco, California."
           },
           {
-            "id": "San Francisco",
+            "id": "3",
             "name": "San Francisco",
             "type": "LOCATION",
-            "description": "San Francisco is a city in California where TechCorp is based."
+            "description": "City in California where TechCorp headquarters are located."
           },
           {
-            "id": "California",
-            "name": "California",
-            "type": "LOCATION",
-            "description": "California is a state in the United States where San Francisco is located."
-          },
-          {
-            "id": "Bob Smith",
+            "id": "4",
             "name": "Bob Smith",
             "type": "PERSON",
-            "description": "Bob Smith is the CEO and founder of TechCorp, who founded the company in 2010 with a vision to revolutionize business data use."
+            "description": "CEO of TechCorp and founder of the company in 2010."
           },
           {
-            "id": "New York City",
+            "id": "5",
+            "name": "San Francisco's Financial District",
+            "type": "LOCATION",
+            "description": "Location of TechCorp's headquarters in San Francisco."
+          },
+          {
+            "id": "6",
             "name": "New York City",
             "type": "LOCATION",
-            "description": "New York City is a city where TechCorp has a satellite office."
+            "description": "City with a TechCorp satellite office."
           },
           {
-            "id": "Austin, Texas",
+            "id": "7",
             "name": "Austin, Texas",
             "type": "LOCATION",
-            "description": "Austin, Texas is a city where TechCorp has a satellite office."
+            "description": "City with a TechCorp satellite office."
           },
           {
-            "id": "Seattle, Washington",
+            "id": "8",
+            "name": "AI Conference",
+            "type": "EVENT",
+            "description": "Conference where Alice Johnson presented her latest project last month."
+          },
+          {
+            "id": "9",
             "name": "Seattle, Washington",
             "type": "LOCATION",
-            "description": "Seattle, Washington is the city where the AI Conference was held."
+            "description": "City where the AI Conference took place."
           },
           {
-            "id": "AI Conference",
-            "name": "AI Conference",
-            "type": "CONCEPT",
-            "description": "AI Conference is the event where Alice presented her latest project last month."
-          },
-          {
-            "id": "Dr. Emma Chen",
+            "id": "10",
             "name": "Dr. Emma Chen",
             "type": "PERSON",
-            "description": "Dr. Emma Chen is a researcher from Stanford University who collaborated with Alice Johnson on improving natural language processing models."
+            "description": "Researcher from Stanford University who collaborated with Alice Johnson on natural language processing models."
           },
           {
-            "id": "Stanford University",
+            "id": "11",
             "name": "Stanford University",
             "type": "ORGANIZATION",
-            "description": "Stanford University is an educational institution where Dr. Emma Chen is based."
+            "description": "University where Dr. Emma Chen is affiliated."
           },
           {
-            "id": "DataSystems Inc.",
+            "id": "12",
             "name": "DataSystems Inc.",
             "type": "ORGANIZATION",
-            "description": "DataSystems Inc. is a major player in the technology sector that recently partnered with TechCorp."
-          },
-          {
-            "id": "2010",
-            "name": "2010",
-            "type": "TIMESTAMP",
-            "description": "The year when TechCorp was founded."
-          },
-          {
-            "id": "five years",
-            "name": "five years",
-            "type": "CONCEPT",
-            "description": "Duration Alice Johnson has been working at TechCorp."
-          },
-          {
-            "id": "last month",
-            "name": "last month",
-            "type": "TIMESTAMP",
-            "description": "The time when Alice presented her project at the AI Conference."
+            "description": "Technology company partnering with TechCorp to integrate AI capabilities and cloud infrastructure."
           }
         ],
         "edges": [
           {
-            "source_node_id": "Alice Johnson",
-            "target_node_id": "TechCorp",
-            "relationship_name": "works_at",
-            "description": "Alice Johnson works at TechCorp."
+            "source_node_id": "1",
+            "target_node_id": "2",
+            "relationship_name": "WORKS_AT",
+            "description": "Alice Johnson works as a software engineer at TechCorp."
           },
           {
-            "source_node_id": "TechCorp",
-            "target_node_id": "San Francisco",
-            "relationship_name": "located_in",
-            "description": "TechCorp is based in San Francisco."
+            "source_node_id": "1",
+            "target_node_id": "10",
+            "relationship_name": "COLLABORATES_WITH",
+            "description": "Alice Johnson collaborated with Dr. Emma Chen from Stanford University on research."
           },
           {
-            "source_node_id": "San Francisco",
-            "target_node_id": "California",
-            "relationship_name": "located_in",
-            "description": "San Francisco is located in California."
-          },
-          {
-            "source_node_id": "Bob Smith",
-            "target_node_id": "TechCorp",
-            "relationship_name": "ceo_of",
+            "source_node_id": "4",
+            "target_node_id": "2",
+            "relationship_name": "CELEAD",
             "description": "Bob Smith is the CEO of TechCorp."
           },
           {
-            "source_node_id": "Bob Smith",
-            "target_node_id": "TechCorp",
-            "relationship_name": "founded",
-            "description": "Bob Smith founded TechCorp."
-          },
-          {
-            "source_node_id": "Bob Smith",
-            "target_node_id": "2010",
-            "relationship_name": "founded_at",
+            "source_node_id": "4",
+            "target_node_id": "2",
+            "relationship_name": "FOUNDED",
             "description": "Bob Smith founded TechCorp in 2010."
           },
           {
-            "source_node_id": "TechCorp",
-            "target_node_id": "New York City",
-            "relationship_name": "has_satellite_office_in",
+            "source_node_id": "2",
+            "target_node_id": "3",
+            "relationship_name": "HEADQUARTERED_IN",
+            "description": "TechCorp is based in San Francisco, California."
+          },
+          {
+            "source_node_id": "2",
+            "target_node_id": "5",
+            "relationship_name": "HEADQUARTERS_LOCATION",
+            "description": "TechCorp headquarters are located in San Francisco's Financial District."
+          },
+          {
+            "source_node_id": "2",
+            "target_node_id": "6",
+            "relationship_name": "HAS_SATELLITE_OFFICE",
             "description": "TechCorp has a satellite office in New York City."
           },
           {
-            "source_node_id": "TechCorp",
-            "target_node_id": "Austin, Texas",
-            "relationship_name": "has_satellite_office_in",
+            "source_node_id": "2",
+            "target_node_id": "7",
+            "relationship_name": "HAS_SATELLITE_OFFICE",
             "description": "TechCorp has a satellite office in Austin, Texas."
           },
           {
-            "source_node_id": "Alice Johnson",
-            "target_node_id": "five years",
-            "relationship_name": "worked_for_duration_at",
-            "description": "Alice Johnson has worked at TechCorp for five years."
+            "source_node_id": "1",
+            "target_node_id": "8",
+            "relationship_name": "PRESENTED_AT",
+            "description": "Alice Johnson presented her project at the AI Conference."
           },
           {
-            "source_node_id": "Alice Johnson",
-            "target_node_id": "AI Conference",
-            "relationship_name": "presented_project_at",
-            "description": "Alice Johnson presented her latest project at the AI Conference."
+            "source_node_id": "8",
+            "target_node_id": "9",
+            "relationship_name": "LOCATED_IN",
+            "description": "The AI Conference took place in Seattle, Washington."
           },
           {
-            "source_node_id": "AI Conference",
-            "target_node_id": "Seattle, Washington",
-            "relationship_name": "held_in",
-            "description": "The AI Conference was held in Seattle, Washington."
+            "source_node_id": "10",
+            "target_node_id": "11",
+            "relationship_name": "AFFILIATED_WITH",
+            "description": "Dr. Emma Chen is affiliated with Stanford University."
           },
           {
-            "source_node_id": "Alice Johnson",
-            "target_node_id": "Dr. Emma Chen",
-            "relationship_name": "collaborated_with",
-            "description": "Alice Johnson collaborated with Dr. Emma Chen on research."
-          },
-          {
-            "source_node_id": "Dr. Emma Chen",
-            "target_node_id": "Stanford University",
-            "relationship_name": "based_at",
-            "description": "Dr. Emma Chen is based at Stanford University."
-          },
-          {
-            "source_node_id": "TechCorp",
-            "target_node_id": "DataSystems Inc.",
-            "relationship_name": "partnered_with",
-            "description": "TechCorp recently announced a partnership with DataSystems Inc."
+            "source_node_id": "2",
+            "target_node_id": "12",
+            "relationship_name": "PARTNERS_WITH",
+            "description": "TechCorp recently formed a partnership with DataSystems Inc."
           }
         ]
       }
     },
-    "a80204149912e5db70764402d3376aa8d4b4754efbb1a0dac9078fa7917c7598": {
+    "108db7d7cf91151d0ac1d22c9873b1876c4545a66134e75c6199282fed427f9e": {
       "method": "structured_output",
       "user_input_preview": "\nAlice Johnson is a software engineer at TechCorp, a technology company based in San Francisco, California. \nShe has bee",
       "schema_name": "KnowledgeGraph",
@@ -465,62 +166,74 @@
           {
             "id": "Alice_Johnson",
             "name": "Alice Johnson",
-            "type": "PERSON",
-            "description": "Software engineer at TechCorp with 5 years of experience specializing in machine learning and artificial intelligence."
+            "type": "Person",
+            "description": "Alice Johnson is a software engineer specializing in machine learning and artificial intelligence."
           },
           {
             "id": "Bob_Smith",
             "name": "Bob Smith",
-            "type": "PERSON",
-            "description": "CEO and founder of TechCorp, founded the company in 2010 with a vision to revolutionize business data use."
+            "type": "Person",
+            "description": "Bob Smith is the CEO of TechCorp who founded the company in 2010 with a vision to revolutionize business data use."
           },
           {
             "id": "TechCorp",
             "name": "TechCorp",
-            "type": "ORGANIZATION",
-            "description": "Technology company based in San Francisco with over 500 employees."
+            "type": "Organization",
+            "description": "TechCorp is a technology company headquartered in San Francisco, California, with over 500 employees and satellite offices in New York City and Austin, Texas."
           },
           {
             "id": "San_Francisco_California",
             "name": "San Francisco, California",
-            "type": "LOCATION",
-            "description": "City where TechCorp headquarters is located."
+            "type": "Place",
+            "description": "San Francisco, California, is the location of TechCorp headquarters, specifically in the financial district."
           },
           {
             "id": "New_York_City",
             "name": "New York City",
-            "type": "LOCATION",
-            "description": "Location of one of TechCorp's satellite offices."
+            "type": "Place",
+            "description": "New York City is one of the locations of TechCorp satellite offices."
           },
           {
             "id": "Austin_Texas",
             "name": "Austin, Texas",
-            "type": "LOCATION",
-            "description": "Location of one of TechCorp's satellite offices."
+            "type": "Place",
+            "description": "Austin, Texas is one of the locations of TechCorp satellite offices."
           },
           {
-            "id": "Stanford_University",
-            "name": "Stanford University",
-            "type": "ORGANIZATION",
-            "description": "University where Dr. Emma Chen works."
+            "id": "AI_Conference_Seattle",
+            "name": "AI Conference, Seattle, Washington",
+            "type": "Event",
+            "description": "The AI Conference held in Seattle, Washington where Alice Johnson presented her latest project."
           },
           {
             "id": "Emma_Chen",
             "name": "Dr. Emma Chen",
-            "type": "PERSON",
-            "description": "Researcher at Stanford University, collaborated with Alice Johnson on natural language processing research."
+            "type": "Person",
+            "description": "Dr. Emma Chen is a collaborator with Alice Johnson on research related to improving natural language processing models, affiliated with Stanford University."
           },
           {
-            "id": "Seattle_Washington",
-            "name": "Seattle, Washington",
-            "type": "LOCATION",
-            "description": "Location of the AI Conference where Alice Johnson presented her project."
+            "id": "Stanford_University",
+            "name": "Stanford University",
+            "type": "Organization",
+            "description": "Stanford University is the institution affiliated with Dr. Emma Chen."
           },
           {
             "id": "DataSystems_Inc",
             "name": "DataSystems Inc.",
-            "type": "ORGANIZATION",
-            "description": "Technology company partnered with TechCorp to integrate AI with cloud infrastructure."
+            "type": "Organization",
+            "description": "DataSystems Inc. is a technology sector company partnering with TechCorp to integrate AI capabilities with cloud infrastructure."
+          },
+          {
+            "id": "2010",
+            "name": "2010",
+            "type": "Timestamp",
+            "description": "Year when TechCorp was founded."
+          },
+          {
+            "id": "Last_Month",
+            "name": "2024-05",
+            "type": "Timestamp",
+            "description": "The last month relative to the current date for Alice Johnson's presentation."
           }
         ],
         "edges": [
@@ -531,58 +244,351 @@
             "description": "Alice Johnson works at TechCorp as a software engineer."
           },
           {
-            "source_node_id": "Bob_Smith",
-            "target_node_id": "TechCorp",
-            "relationship_name": "works_at",
-            "description": "Bob Smith is the CEO of TechCorp."
-          },
-          {
-            "source_node_id": "Bob_Smith",
-            "target_node_id": "TechCorp",
-            "relationship_name": "founded",
-            "description": "Bob Smith founded TechCorp in 2010."
-          },
-          {
-            "source_node_id": "TechCorp",
+            "source_node_id": "Alice_Johnson",
             "target_node_id": "San_Francisco_California",
-            "relationship_name": "located_in",
-            "description": "TechCorp is located in San Francisco, California."
-          },
-          {
-            "source_node_id": "TechCorp",
-            "target_node_id": "New_York_City",
-            "relationship_name": "has_office_in",
-            "description": "TechCorp has a satellite office in New York City."
-          },
-          {
-            "source_node_id": "TechCorp",
-            "target_node_id": "Austin_Texas",
-            "relationship_name": "has_office_in",
-            "description": "TechCorp has a satellite office in Austin, Texas."
+            "relationship_name": "works_in",
+            "description": "Alice Johnson works in San Francisco, California at TechCorp headquarters."
           },
           {
             "source_node_id": "Alice_Johnson",
-            "target_node_id": "Seattle_Washington",
+            "target_node_id": "AI_Conference_Seattle",
             "relationship_name": "presented_at",
             "description": "Alice Johnson presented her latest project at the AI Conference in Seattle, Washington."
           },
           {
             "source_node_id": "Alice_Johnson",
             "target_node_id": "Emma_Chen",
-            "relationship_name": "collaborates_with",
-            "description": "Alice Johnson collaborated with Dr. Emma Chen on natural language processing research."
+            "relationship_name": "collaborated_with",
+            "description": "Alice Johnson collaborated with Dr. Emma Chen from Stanford University on research for improving natural language processing models."
           },
           {
-            "source_node_id": "Emma_Chen",
-            "target_node_id": "Stanford_University",
-            "relationship_name": "works_at",
-            "description": "Dr. Emma Chen works at Stanford University."
+            "source_node_id": "Bob_Smith",
+            "target_node_id": "TechCorp",
+            "relationship_name": "is_ceo_of",
+            "description": "Bob Smith is the CEO of TechCorp."
+          },
+          {
+            "source_node_id": "Bob_Smith",
+            "target_node_id": "2010",
+            "relationship_name": "founded_at",
+            "description": "Bob Smith founded TechCorp in 2010."
+          },
+          {
+            "source_node_id": "TechCorp",
+            "target_node_id": "San_Francisco_California",
+            "relationship_name": "headquartered_in",
+            "description": "TechCorp is headquartered in San Francisco, California."
+          },
+          {
+            "source_node_id": "TechCorp",
+            "target_node_id": "New_York_City",
+            "relationship_name": "has_satellite_office_in",
+            "description": "TechCorp has a satellite office in New York City."
+          },
+          {
+            "source_node_id": "TechCorp",
+            "target_node_id": "Austin_Texas",
+            "relationship_name": "has_satellite_office_in",
+            "description": "TechCorp has a satellite office in Austin, Texas."
           },
           {
             "source_node_id": "TechCorp",
             "target_node_id": "DataSystems_Inc",
             "relationship_name": "partnered_with",
-            "description": "TechCorp partnered with DataSystems Inc. to integrate AI with cloud infrastructure."
+            "description": "TechCorp partnered with DataSystems Inc. to integrate AI capabilities with cloud infrastructure."
+          }
+        ]
+      }
+    },
+    "b1f333674776453ce42953df7f4133a88b606e8cce62066f36f026d4b7e822ca": {
+      "method": "structured_output",
+      "user_input_preview": "\nDr. Maria Rodriguez leads the Quantum Computing Laboratory at MIT, where she has been conducting groundbreaking \nresear",
+      "schema_name": "KnowledgeGraph",
+      "response": {
+        "nodes": [
+          {
+            "id": "Maria_Rodriguez",
+            "name": "Dr. Maria Rodriguez",
+            "type": "Person",
+            "description": "Leader of the Quantum Computing Laboratory at MIT"
+          },
+          {
+            "id": "Quantum_Computing_Laboratory",
+            "name": "Quantum Computing Laboratory",
+            "type": "Organization",
+            "description": "Lab at MIT conducting research on quantum error correction since 2018"
+          },
+          {
+            "id": "MIT",
+            "name": "MIT",
+            "type": "Organization",
+            "description": "Academic institution hosting the Quantum Computing Laboratory"
+          },
+          {
+            "id": "Quantum_error_correction",
+            "name": "Quantum error correction",
+            "type": "Concept",
+            "description": "Research focus of the Quantum Computing Laboratory since 2018"
+          },
+          {
+            "id": "2018",
+            "name": "2018",
+            "type": "Timestamp",
+            "description": "Start year of quantum error correction research by the Quantum Computing Laboratory"
+          },
+          {
+            "id": "James_Lee",
+            "name": "Dr. James Lee",
+            "type": "Person",
+            "description": "Researcher from South Korea in the Quantum Computing Laboratory"
+          },
+          {
+            "id": "South_Korea",
+            "name": "South Korea",
+            "type": "Place",
+            "description": "Country of origin of Dr. James Lee"
+          },
+          {
+            "id": "Fatima_Abbas",
+            "name": "Dr. Fatima Abbas",
+            "type": "Person",
+            "description": "Researcher from Egypt in the Quantum Computing Laboratory"
+          },
+          {
+            "id": "Egypt",
+            "name": "Egypt",
+            "type": "Place",
+            "description": "Country of origin of Dr. Fatima Abbas"
+          },
+          {
+            "id": "National_Science_Foundation",
+            "name": "National Science Foundation",
+            "type": "Organization",
+            "description": "Funding organization providing a $10 million grant in 2020"
+          },
+          {
+            "id": "2020",
+            "name": "2020",
+            "type": "Timestamp",
+            "description": "Year when NSF awarded the grant"
+          },
+          {
+            "id": "QuantumTech_Industries",
+            "name": "QuantumTech Industries",
+            "type": "Organization",
+            "description": "Canadian company specializing in quantum hardware"
+          },
+          {
+            "id": "Canada",
+            "name": "Canada",
+            "type": "Place",
+            "description": "Country of origin of QuantumTech Industries"
+          },
+          {
+            "id": "Nature_Physics",
+            "name": "Nature Physics",
+            "type": "Work",
+            "description": "Journal where Dr. Rodriguez published a paper"
+          },
+          {
+            "id": "Chen_Wei",
+            "name": "Professor Chen Wei",
+            "type": "Person",
+            "description": "Co-author of Dr. Rodriguez's paper from Tsinghua University"
+          },
+          {
+            "id": "Tsinghua_University",
+            "name": "Tsinghua University",
+            "type": "Organization",
+            "description": "Academic institution in Beijing, where Professor Chen Wei works"
+          },
+          {
+            "id": "Beijing",
+            "name": "Beijing",
+            "type": "Place",
+            "description": "City where Tsinghua University is located"
+          },
+          {
+            "id": "Quantum_decoherence",
+            "name": "Quantum decoherence",
+            "type": "Concept",
+            "description": "Phenomenon addressed in the research paper by Dr. Rodriguez and Professor Chen Wei"
+          },
+          {
+            "id": "Cambridge_University",
+            "name": "Cambridge University",
+            "type": "Organization",
+            "description": "Collaborating institution in the UK with the Quantum Computing Laboratory"
+          },
+          {
+            "id": "United_Kingdom",
+            "name": "United Kingdom",
+            "type": "Place",
+            "description": "Country where Cambridge University is located"
+          },
+          {
+            "id": "Max_Planck_Institute",
+            "name": "Max Planck Institute",
+            "type": "Organization",
+            "description": "Collaborating institution in Germany with the Quantum Computing Laboratory"
+          },
+          {
+            "id": "Germany",
+            "name": "Germany",
+            "type": "Place",
+            "description": "Country where Max Planck Institute is located"
+          },
+          {
+            "id": "RIKEN",
+            "name": "RIKEN",
+            "type": "Organization",
+            "description": "Collaborating institution in Japan with the Quantum Computing Laboratory"
+          },
+          {
+            "id": "Japan",
+            "name": "Japan",
+            "type": "Place",
+            "description": "Country where RIKEN is located"
+          }
+        ],
+        "edges": [
+          {
+            "source_node_id": "Maria_Rodriguez",
+            "target_node_id": "Quantum_Computing_Laboratory",
+            "relationship_name": "leads",
+            "description": "Dr. Maria Rodriguez leads the Quantum Computing Laboratory"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "MIT",
+            "relationship_name": "part_of",
+            "description": "Quantum Computing Laboratory is part of MIT"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "Quantum_error_correction",
+            "relationship_name": "conducts_research_on",
+            "description": "Quantum Computing Laboratory conducts research on quantum error correction"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "2018",
+            "relationship_name": "begins_at",
+            "description": "Quantum Computing Laboratory has been conducting research on quantum error correction since 2018"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "James_Lee",
+            "relationship_name": "has_researcher",
+            "description": "Quantum Computing Laboratory has researcher Dr. James Lee"
+          },
+          {
+            "source_node_id": "James_Lee",
+            "target_node_id": "South_Korea",
+            "relationship_name": "originates_from",
+            "description": "Dr. James Lee is from South Korea"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "Fatima_Abbas",
+            "relationship_name": "has_researcher",
+            "description": "Quantum Computing Laboratory has researcher Dr. Fatima Abbas"
+          },
+          {
+            "source_node_id": "Fatima_Abbas",
+            "target_node_id": "Egypt",
+            "relationship_name": "originates_from",
+            "description": "Dr. Fatima Abbas is from Egypt"
+          },
+          {
+            "source_node_id": "National_Science_Foundation",
+            "target_node_id": "Quantum_Computing_Laboratory",
+            "relationship_name": "funds",
+            "description": "National Science Foundation funds the Quantum Computing Laboratory"
+          },
+          {
+            "source_node_id": "National_Science_Foundation",
+            "target_node_id": "2020",
+            "relationship_name": "awarded_at",
+            "description": "National Science Foundation awarded a $10 million grant in 2020"
+          },
+          {
+            "source_node_id": "QuantumTech_Industries",
+            "target_node_id": "Canada",
+            "relationship_name": "located_in",
+            "description": "QuantumTech Industries is a Canadian company"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "QuantumTech_Industries",
+            "relationship_name": "acquired_equipment_from",
+            "description": "Quantum Computing Laboratory acquired quantum computers from QuantumTech Industries"
+          },
+          {
+            "source_node_id": "Maria_Rodriguez",
+            "target_node_id": "Nature_Physics",
+            "relationship_name": "published_in",
+            "description": "Dr. Maria Rodriguez published a paper in Nature Physics"
+          },
+          {
+            "source_node_id": "Maria_Rodriguez",
+            "target_node_id": "Chen_Wei",
+            "relationship_name": "coauthored_paper_with",
+            "description": "Dr. Maria Rodriguez co-authored a paper with Professor Chen Wei"
+          },
+          {
+            "source_node_id": "Chen_Wei",
+            "target_node_id": "Tsinghua_University",
+            "relationship_name": "works_at",
+            "description": "Professor Chen Wei works at Tsinghua University"
+          },
+          {
+            "source_node_id": "Tsinghua_University",
+            "target_node_id": "Beijing",
+            "relationship_name": "located_in",
+            "description": "Tsinghua University is located in Beijing"
+          },
+          {
+            "source_node_id": "Maria_Rodriguez",
+            "target_node_id": "Quantum_decoherence",
+            "relationship_name": "research_demonstrates_approach_to_reduce",
+            "description": "Research by Dr. Maria Rodriguez demonstrates a novel approach to reducing quantum decoherence"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "Cambridge_University",
+            "relationship_name": "collaborates_with",
+            "description": "Quantum Computing Laboratory collaborates with Cambridge University"
+          },
+          {
+            "source_node_id": "Cambridge_University",
+            "target_node_id": "United_Kingdom",
+            "relationship_name": "located_in",
+            "description": "Cambridge University is located in the United Kingdom"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "Max_Planck_Institute",
+            "relationship_name": "collaborates_with",
+            "description": "Quantum Computing Laboratory collaborates with Max Planck Institute"
+          },
+          {
+            "source_node_id": "Max_Planck_Institute",
+            "target_node_id": "Germany",
+            "relationship_name": "located_in",
+            "description": "Max Planck Institute is located in Germany"
+          },
+          {
+            "source_node_id": "Quantum_Computing_Laboratory",
+            "target_node_id": "RIKEN",
+            "relationship_name": "collaborates_with",
+            "description": "Quantum Computing Laboratory collaborates with RIKEN"
+          },
+          {
+            "source_node_id": "RIKEN",
+            "target_node_id": "Japan",
+            "relationship_name": "located_in",
+            "description": "RIKEN is located in Japan"
           }
         ]
       }
