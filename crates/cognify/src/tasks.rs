@@ -25,9 +25,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use cognee_chunking::{
-    CutType, NAMESPACE_OID, TokenCountMode, TokenCounterKind, chunk_by_row, chunk_text,
-};
+use cognee_chunking::{NAMESPACE_OID, TokenCountMode, TokenCounterKind, chunk_by_row, chunk_text};
 use cognee_core::{
     CpuPool, DatasetLocks, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder,
     TypedTask, Value,
@@ -42,7 +40,7 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, IndexRefs,
+    DLT_ROW_TYPE, Data, Document, DocumentChunk, EdgeType, Embedding, IndexRefs,
     classify_documents as model_classify_documents, index_schema_payload,
 };
 use cognee_ontology::OntologyResolver;
@@ -411,8 +409,10 @@ async fn chunk_one_document(
         .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
     // ---- DLT short-circuit ----
-    // DLT documents emit exactly one chunk with cut_type="dlt_row".
-    // No word/sentence/paragraph chunking. Mirrors Python DltRowDocument.read().
+    // DLT documents emit exactly one `DltRow` chunk with cut_type="dlt_row".
+    // No word/sentence/paragraph chunking. Mirrors Python DltSourceDocument.read():
+    // the row is its own graph type and indexes into `DltRow_text`, not
+    // `DocumentChunk_text`.
     if document.document_type == "dlt_row" {
         let text = String::from_utf8(content_bytes)
             .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
@@ -420,14 +420,13 @@ async fn chunk_one_document(
         if trimmed.is_empty() {
             return Ok(vec![]);
         }
-        let chunk_id = Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
         let word_count = counter.count_tokens(trimmed);
-        let mut chunk = DocumentChunk::new(
-            chunk_id,
+        let mut chunk = DocumentChunk::dlt_row(
+            dlt_row_chunk_id(document.base.id),
+            dlt_row_name(document),
             trimmed.to_string(),
             word_count,
             0, // chunk_index
-            CutType::DltRow.to_string(),
             document.base.id,
         );
         if document.base.belongs_to_set.is_some() {
@@ -2965,6 +2964,41 @@ where
     folded
 }
 
+/// Id of the single `DltRow` chunk a DLT document produces.
+///
+/// Deterministic in the document's id, so the teardown
+/// ([`extract_dlt_fk_edges`]) can name a row's chunk node — the source of its
+/// `is_row_of`, foreign-key and column-value edges — without the chunks.
+pub fn dlt_row_chunk_id(document_id: Uuid) -> Uuid {
+    Uuid::new_v5(&NAMESPACE_OID, format!("{document_id}-0").as_bytes())
+}
+
+/// Python's `DltRow.name`: `table:primary_key_value`, read from the document's
+/// `external_metadata`. A document that names no table falls back to its own
+/// name, and one that names no key to the table alone.
+fn dlt_row_name(document: &Document) -> String {
+    let metadata = document
+        .external_metadata
+        .as_deref()
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok());
+    let field = |key: &str| {
+        metadata
+            .as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .filter(|v| !v.is_empty())
+    };
+    match (field("table_name"), field("primary_key_value")) {
+        (Some(table), Some(key)) => format!("{table}:{key}"),
+        (Some(table), None) => table,
+        (None, _) => document.name.clone(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Task 6: extract_dlt_fk_edges
 // ---------------------------------------------------------------------------
@@ -2974,9 +3008,17 @@ where
 /// Mirrors the Python `cognee/tasks/ingestion/extract_dlt_fk_edges.py`.
 /// This task runs after `add_data_points` in the cognify pipeline. It:
 /// 1. Identifies DLT documents from the classified documents list
-/// 2. Parses `external_metadata` for table info and foreign key definitions
-/// 3. Creates `is_row_of` edges from DLT document nodes to their source table
-/// 4. Creates FK-based edges between documents of related rows
+/// 2. Parses `external_metadata` for table info, foreign key definitions and
+///    the optional `column_values` (column -> cell value) of the row
+/// 3. Creates `is_row_of` edges from each row's [`DltRow`](cognee_models::DLT_ROW_TYPE)
+///    chunk node (see [`dlt_row_chunk_id`]) to its source `SchemaTable`
+/// 4. Creates FK-based edges between the chunk nodes of related rows, and
+///    column-named edges from a row to the shared `DltColumn` node of each of
+///    its cell values
+/// 5. Embeds the schema nodes into `SchemaTable_{name,description}`,
+///    `SchemaRelationship_{name,description}` and `DltColumn_properties`, the
+///    collections Python's `index_data_points` writes and the hybrid entity
+///    lane reads
 ///
 /// If no DLT documents are present, this is a no-op.
 ///
@@ -2986,9 +3028,10 @@ where
 /// — but its artifacts still need to be *reachable* by a sweep, so they are
 /// stamped with the run id like everything else the run wrote.
 pub async fn extract_dlt_fk_edges(
-    _chunks: &[DocumentChunk],
     documents: &[Document],
     graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
     db: &dyn RelationalDb,
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
@@ -3192,21 +3235,26 @@ pub async fn extract_dlt_fk_edges(
         }
     }
 
-    // Phase 3: Create row-level edges (document -> table, document -> referenced document)
+    // Phase 3: Create row-level edges. They leave the row's `DltRow` chunk
+    // node (Python's DltRow), not its document node.
     let mut seen_row_edges: HashSet<(String, String, String)> = HashSet::new();
+    let mut column_value_nodes: BTreeMap<Uuid, serde_json::Value> = BTreeMap::new();
+    let mut row_chunk_docs: HashMap<Uuid, Uuid> = HashMap::new();
 
     for (doc_id, ext_metadata) in &dlt_doc_meta {
+        let row_id = dlt_row_chunk_id(*doc_id);
+        row_chunk_docs.insert(row_id, *doc_id);
         let table_name = ext_metadata
             .get("table_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        // Link document to its SchemaTable node
+        // Link the row to its SchemaTable node
         if let Some(&table_node_id) = table_node_ids.get(table_name) {
             let mut props = HashMap::new();
             props.insert(
                 std::borrow::Cow::Borrowed("source_node_id"),
-                json!(doc_id.to_string()),
+                json!(row_id.to_string()),
             );
             props.insert(
                 std::borrow::Cow::Borrowed("target_node_id"),
@@ -3217,7 +3265,7 @@ pub async fn extract_dlt_fk_edges(
                 json!("is_row_of"),
             );
             all_edges.push((
-                doc_id.to_string(),
+                row_id.to_string(),
                 table_node_id.to_string(),
                 "is_row_of".to_string(),
                 props,
@@ -3232,9 +3280,16 @@ pub async fn extract_dlt_fk_edges(
             .unwrap_or_default();
 
         for fk_ref in &fk_references {
-            let target_data_id = match fk_ref.get("target_data_id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => continue,
+            // The reference names the target's data item; its row node is
+            // that document's `DltRow` chunk.
+            let Some(target_id) = fk_ref
+                .get("target_data_id")
+                .and_then(|v| v.as_str())
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .map(dlt_row_chunk_id)
+                .map(|id| id.to_string())
+            else {
+                continue;
             };
 
             let relationship_name = fk_ref
@@ -3244,8 +3299,8 @@ pub async fn extract_dlt_fk_edges(
                 .to_string();
 
             let edge_key = (
-                doc_id.to_string(),
-                target_data_id.clone(),
+                row_id.to_string(),
+                target_id.clone(),
                 relationship_name.clone(),
             );
             if seen_row_edges.contains(&edge_key) {
@@ -3256,11 +3311,11 @@ pub async fn extract_dlt_fk_edges(
             let mut props = HashMap::new();
             props.insert(
                 std::borrow::Cow::Borrowed("source_node_id"),
-                json!(doc_id.to_string()),
+                json!(row_id.to_string()),
             );
             props.insert(
                 std::borrow::Cow::Borrowed("target_node_id"),
-                json!(target_data_id.clone()),
+                json!(target_id.clone()),
             );
             props.insert(
                 std::borrow::Cow::Borrowed("relationship_name"),
@@ -3288,27 +3343,92 @@ pub async fn extract_dlt_fk_edges(
                 json!(fk_ref.get("column").and_then(|v| v.as_str()).unwrap_or("")),
             );
 
-            all_edges.push((doc_id.to_string(), target_data_id, relationship_name, props));
+            all_edges.push((row_id.to_string(), target_id, relationship_name, props));
+        }
+
+        // Cell-level nodes: one shared DltColumn node per unique
+        // (table, column, value), with an edge named after the column, so rows
+        // sharing a value connect through the same node.
+        let column_values = ext_metadata
+            .get("column_values")
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flatten();
+        for (column, value) in column_values {
+            let Some(value) = dlt_cell_text(value) else {
+                continue;
+            };
+            let value_node_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("dlt:colval:{table_name}:{column}:{value}").as_bytes(),
+            );
+            column_value_nodes.entry(value_node_id).or_insert_with(|| {
+                json!({
+                    "id": value_node_id.to_string(),
+                    "name": format!("{table_name}:{column}:{value}"),
+                    "properties": format!("{column} {value} {table_name}"),
+                    "description": format!(
+                        "Value '{value}' of column '{column}' in DLT-ingested table '{table_name}'."
+                    ),
+                    "data_type": "DltColumn",
+                })
+            });
+
+            let edge_key = (
+                row_id.to_string(),
+                value_node_id.to_string(),
+                column.clone(),
+            );
+            if !seen_row_edges.insert(edge_key) {
+                continue;
+            }
+            let mut props = HashMap::new();
+            props.insert(
+                std::borrow::Cow::Borrowed("source_node_id"),
+                json!(row_id.to_string()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("target_node_id"),
+                json!(value_node_id.to_string()),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("relationship_name"),
+                json!(column),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("edge_text"),
+                json!(format!("{column} {value}")),
+            );
+            props.insert(
+                std::borrow::Cow::Borrowed("source_table"),
+                json!(table_name),
+            );
+            all_edges.push((
+                row_id.to_string(),
+                value_node_id.to_string(),
+                column.clone(),
+                props,
+            ));
         }
     }
+    schema_nodes.extend(column_value_nodes.into_values());
 
     // I1: claim every schema node and FK edge before a single one of them
     // reaches the graph.
-    let row_doc_ids: HashSet<Uuid> = dlt_doc_meta.keys().copied().collect();
-    let (prov_nodes, prov_edges) = dlt_provenance_rows(id, &schema_nodes, &all_edges, &row_doc_ids);
+    let (prov_nodes, prov_edges) =
+        dlt_provenance_rows(id, &schema_nodes, &all_edges, &row_chunk_docs);
     cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
 
-    // Persist schema nodes to graph DB (SchemaTable + SchemaRelationship)
-    // NOTE: Python also calls `index_data_points(schema_nodes)` to embed these
-    // into vector DB. That is out of scope for Phase 0; Rust's `add_data_points`
-    // task handles vector indexing for the main pipeline data.
+    // Persist schema nodes to graph DB (SchemaTable, SchemaRelationship and
+    // DltColumn), then embed them as Python's `index_data_points` does.
     if !schema_nodes.is_empty() {
         let node_count = schema_nodes.len();
         graph_db
-            .add_nodes_raw(schema_nodes)
+            .add_nodes_raw(schema_nodes.clone())
             .await
             .map_err(CognifyError::from)?;
         info!("Added {} DLT schema nodes to graph", node_count);
+        index_dlt_schema_nodes(&schema_nodes, id.dataset_id, &embedding_engine, &vector_db).await?;
     }
 
     // Persist edges to graph DB
@@ -3337,16 +3457,17 @@ pub async fn extract_dlt_fk_edges(
 ///   node is shared by every row-document of that table, and the table→
 ///   relationship→table edges belong to the schema, not to a row. This is the
 ///   same shape the structural edges and EntityType rows already use.
-/// - the producing document's id for the row-level edges (`is_row_of` and the
-///   FK row references), whose source node *is* that document.
+/// - the producing document's id for the row-level edges (`is_row_of`, the FK
+///   row references and the column-value edges), whose source node is that
+///   document's `DltRow` chunk (`row_chunk_docs` maps chunk id to document id).
 ///
-/// `indexed_fields` is empty because Rust does not vector-index these nodes
-/// (Python does; see the note at the `add_nodes_raw` call).
+/// `indexed_fields` names the collections [`index_dlt_schema_nodes`] writes, so
+/// a delete reaches them.
 fn dlt_provenance_rows(
     id: LedgerIdentity,
     schema_nodes: &[serde_json::Value],
     edges: &[cognee_graph::EdgeData],
-    row_doc_ids: &HashSet<Uuid>,
+    row_chunk_docs: &HashMap<Uuid, Uuid>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
@@ -3386,8 +3507,8 @@ fn dlt_provenance_rows(
             dataset_id: id.dataset_id,
             pipeline_run_id: id.pipeline_run_id,
             label,
+            indexed_fields: json!(dlt_index_fields(&node_type)),
             node_type,
-            indexed_fields: json!([]),
             attributes: Some(node.clone()),
             created_at: Utc::now(),
         });
@@ -3397,13 +3518,13 @@ fn dlt_provenance_rows(
     for (source, target, relationship_name, properties) in edges {
         let source_id = Uuid::parse_str(source).unwrap_or(Uuid::nil());
         let target_id = Uuid::parse_str(target).unwrap_or(Uuid::nil());
-        // A row-level edge leaves the DLT document node it was built from; a
-        // schema-level one leaves a SchemaTable / SchemaRelationship node.
-        let data_id = if row_doc_ids.contains(&source_id) {
-            source_id
-        } else {
-            Uuid::nil()
-        };
+        // A row-level edge leaves the DltRow chunk node of the document it was
+        // built from; a schema-level one leaves a SchemaTable /
+        // SchemaRelationship node.
+        let data_id = row_chunk_docs
+            .get(&source_id)
+            .copied()
+            .unwrap_or_else(Uuid::nil);
 
         let attributes = if properties.is_empty() {
             None
@@ -3441,6 +3562,107 @@ fn dlt_provenance_rows(
     }
 
     (prov_nodes, prov_edges)
+}
+
+/// The fields Python indexes for a DLT schema node type (its `metadata.index_fields`).
+fn dlt_index_fields(node_type: &str) -> &'static [&'static str] {
+    match node_type {
+        "SchemaTable" | "SchemaRelationship" => &["description", "name"],
+        "DltColumn" => &["properties"],
+        _ => &[],
+    }
+}
+
+/// A DLT cell value as text: strings as they are, numbers and booleans in JSON
+/// form. Null, empty and nested values name no value node.
+fn dlt_cell_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// Embed the DLT schema nodes into one collection per `(type, index field)`:
+/// `SchemaTable_{name,description}`, `SchemaRelationship_{name,description}`
+/// and `DltColumn_properties`. The payload follows the entity collections':
+/// `type`, `field`, `text` (the indexed value), `name`, `dataset_id`.
+async fn index_dlt_schema_nodes(
+    nodes: &[serde_json::Value],
+    dataset_id: Uuid,
+    engine: &Arc<dyn EmbeddingEngine>,
+    vector_db: &Arc<dyn VectorDB>,
+) -> Result<(), CognifyError> {
+    let window = cognee_vector::write_window_points(engine.dimension()).max(1);
+    // (node id, node, indexed text) per `(type, field)` collection.
+    type Entry<'a> = (Uuid, &'a serde_json::Value, &'a str);
+    let mut groups: BTreeMap<(String, &'static str), Vec<Entry<'_>>> = BTreeMap::new();
+    for node in nodes {
+        let Some(node_type) = node.get("data_type").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(node_id) = node
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+        else {
+            continue;
+        };
+        for &field in dlt_index_fields(node_type) {
+            if let Some(text) = node
+                .get(field)
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.trim().is_empty())
+            {
+                groups
+                    .entry((node_type.to_string(), field))
+                    .or_default()
+                    .push((node_id, node, text));
+            }
+        }
+    }
+
+    for ((node_type, field), entries) in groups {
+        if !vector_db
+            .has_collection(&node_type, field)
+            .await
+            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
+        {
+            vector_db
+                .create_collection(&node_type, field, engine.dimension())
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
+        for window_entries in entries.chunks(window) {
+            let texts: Vec<&str> = window_entries.iter().map(|(_, _, t)| *t).collect();
+            let vectors = engine
+                .embed(&texts)
+                .await
+                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+            let points: Vec<VectorPoint> = window_entries
+                .iter()
+                .zip(vectors)
+                .map(|((node_id, node, text), vector)| {
+                    VectorPoint::new(*node_id, vector)
+                        .with_metadata("type", json!(node_type))
+                        .with_metadata("field", json!(field))
+                        .with_metadata("text", json!(text))
+                        .with_metadata(
+                            "name",
+                            node.get("name").cloned().unwrap_or(serde_json::Value::Null),
+                        )
+                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
+                })
+                .collect();
+            vector_db
+                .index_points(&node_type, field, &points)
+                .await
+                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
+        }
+        info!("Indexed {} DLT {node_type}.{field} points", entries.len());
+    }
+    Ok(())
 }
 
 /// Graph node representing a DLT-ingested relational table.
@@ -3885,9 +4107,10 @@ async fn cognify_in_scope(
             let after_completion = async {
                 let result = extract_cognify_outputs(outputs)?;
                 extract_dlt_fk_edges(
-                    &result.chunks,
                     &result.documents_for_dlt,
                     Arc::clone(&graph_db),
+                    Arc::clone(&vector_db),
+                    Arc::clone(&embedding_engine),
                     &*database,
                     LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
                 )
@@ -4944,7 +5167,7 @@ async fn generate_embeddings(
         for (chunk, vector) in chunks.iter().zip(chunk_vectors) {
             embeddings.push(Embedding::new(
                 chunk.base.id,
-                "DocumentChunk",
+                &chunk.base.data_type,
                 "text",
                 vector,
             ));
@@ -5172,20 +5395,30 @@ async fn index_data_points_windowed(
         .map(|doc| (doc.base.id, document_display_name(doc)))
         .collect();
 
-    // 1. Index DocumentChunk.text field
-    if !chunks.is_empty() {
+    // 1. Index the chunks' `text` field: document chunks into
+    //    `DocumentChunk_text`, DLT rows into their own `DltRow_text` (Python's
+    //    `DltRow.vector_collection()`; chunk search is documents-only).
+    let (dlt_rows, document_chunks): (Vec<&DocumentChunk>, Vec<&DocumentChunk>) =
+        chunks.iter().partition(|chunk| chunk.is_dlt_row());
+    for (data_type, chunks) in [
+        ("DocumentChunk", &document_chunks),
+        (DLT_ROW_TYPE, &dlt_rows),
+    ] {
+        if chunks.is_empty() {
+            continue;
+        }
         if !vector_db
-            .has_collection("DocumentChunk", "text")
+            .has_collection(data_type, "text")
             .await
             .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
         {
             vector_db
-                .create_collection("DocumentChunk", "text", dimension)
+                .create_collection(data_type, "text", dimension)
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        announce_index_write(&vector_db, "DocumentChunk", "text", chunks.len()).await?;
+        announce_index_write(&vector_db, data_type, "text", chunks.len()).await?;
         for chunk_window in chunks.chunks(window) {
             let ids: Vec<Uuid> = chunk_window.iter().map(|c| c.base.id).collect();
             let texts: Vec<_> = chunk_window.iter().map(|c| c.text.as_str()).collect();
@@ -5219,13 +5452,13 @@ async fn index_data_points_windowed(
                 .collect();
 
             vector_db
-                .index_points("DocumentChunk", "text", &points)
+                .index_points(data_type, "text", &points)
                 .await
                 .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
         }
 
-        stats.record("DocumentChunk", "text", chunks.len());
-        info!("Indexed {} document chunks", chunks.len());
+        stats.record(data_type, "text", chunks.len());
+        info!("Indexed {} {data_type} chunks", chunks.len());
     }
 
     // 2a. Index Entity.name field
@@ -7624,7 +7857,10 @@ mod tests {
             mime_type: "text/plain".to_string(),
             extension: "txt".to_string(),
             data_id: doc_id,
-            external_metadata: None,
+            external_metadata: Some(
+                json!({"source": "dlt", "table_name": "orders", "primary_key_value": 42})
+                    .to_string(),
+            ),
         };
 
         let input = ClassifiedDocuments {
@@ -7653,6 +7889,11 @@ mod tests {
         let chunk = &result.chunks[0];
         assert_eq!(chunk.text, "some dlt row content");
         assert_eq!(chunk.cut_type, "dlt_row");
+        // The row is its own graph type with Python's `table:pk` name and the
+        // id the teardown derives from the document.
+        assert_eq!(chunk.base.data_type, "DltRow");
+        assert_eq!(chunk.name.as_deref(), Some("orders:42"));
+        assert_eq!(chunk.base.id, dlt_row_chunk_id(doc_id));
         assert_eq!(chunk.chunk_index, 0);
         assert_eq!(chunk.document_id, doc_id);
         // importance_weight propagates on the DLT short-circuit path too.
@@ -8147,6 +8388,69 @@ mod tests {
 
         // 5 from generate_embeddings + 1 entity-type (not precomputed) = 6.
         assert_eq!(engine.embedded_text_count(), 6);
+    }
+
+    /// DLT rows index into `DltRow_text`, never `DocumentChunk_text`, with a
+    /// Python-shaped payload; a mixed batch fills both collections.
+    #[tokio::test]
+    async fn index_data_points_routes_dlt_rows_to_their_own_collection() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let vector = Arc::new(MockVectorDB::new());
+        let doc_id = Uuid::new_v4();
+        let plain = test_chunk(Uuid::new_v4(), doc_id, "plain document chunk");
+        let mut row = DocumentChunk::dlt_row(
+            Uuid::new_v4(),
+            "orders:42".to_string(),
+            "Table: orders\nRow Data:\n  id: 42".to_string(),
+            5,
+            0,
+            Uuid::new_v4(),
+        );
+        row.base.importance_weight = Some(0.9);
+        row.base.belongs_to_set = Some(vec![json!("crm")]);
+        let dataset_id = Uuid::new_v4();
+
+        let stats = index_data_points(
+            &[plain.clone(), row.clone()],
+            &[],
+            &[],
+            &[],
+            &[],
+            dataset_id,
+            engine,
+            vector.clone(),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            vector
+                .collection_size("DocumentChunk", "text")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(vector.collection_size("DltRow", "text").await.unwrap(), 1);
+        assert!(
+            vector
+                .get_payload("DocumentChunk", "text", row.base.id)
+                .is_none(),
+            "a DLT row must not appear in DocumentChunk_text"
+        );
+        let payload = vector
+            .get_payload("DltRow", "text", row.base.id)
+            .expect("row payload");
+        assert_eq!(payload["text"], row.text);
+        assert_eq!(payload["document_id"], row.document_id.to_string());
+        assert_eq!(payload["dataset_id"], dataset_id.to_string());
+        assert_eq!(payload["importance_weight"], 0.9);
+        assert_eq!(payload["belongs_to_set"], json!(["crm"]));
+        assert_eq!(stats.get("DltRow", "text"), 1);
+        assert_eq!(stats.get("DocumentChunk", "text"), 1);
     }
 
     /// Delegates to [`cognee_vector::MockVectorDB`] and logs every bulk-scope
@@ -12281,9 +12585,10 @@ mod tests {
         failing.set_add_nodes_error("graph is down");
         assert!(
             extract_dlt_fk_edges(
-                &[],
                 std::slice::from_ref(&document),
                 failing.clone(),
+                Arc::new(cognee_vector::MockVectorDB::new()),
+                Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
                 &db,
                 id
             )
@@ -12322,6 +12627,134 @@ mod tests {
                     && row.data_id == Uuid::nil()),
             "the schema-level FK edge spans data items"
         );
+    }
+
+    /// One DLT row document as the ingestion produces it: the row's table, key,
+    /// foreign keys, references and cell values in `external_metadata`.
+    fn dlt_row_document(doc_id: Uuid, metadata: serde_json::Value) -> Document {
+        let mut base = DataPoint::new("DltRowDocument", None);
+        base.id = doc_id;
+        Document {
+            base,
+            document_type: "dlt_row".to_string(),
+            name: "row.json".to_string(),
+            raw_data_location: "file:///tmp/row.json".to_string(),
+            mime_type: "application/json".to_string(),
+            extension: "json".to_string(),
+            data_id: doc_id,
+            external_metadata: Some(metadata.to_string()),
+        }
+    }
+
+    /// The teardown hangs a row's edges on its `DltRow` chunk node (Python's
+    /// DltRow), shares one `DltColumn` node between rows with the same cell
+    /// value, and embeds the schema nodes into the collections the hybrid
+    /// entity lane reads.
+    #[tokio::test]
+    async fn dlt_teardown_emits_row_edges_column_nodes_and_indexes_schema_nodes() {
+        use cognee_graph::GraphDBTrait;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let customer = dlt_row_document(
+            Uuid::new_v4(),
+            json!({
+                "source": "dlt",
+                "table_name": "customers",
+                "primary_key_value": "7",
+                "dlt_db_name": "shop",
+                "schema_info": [{"name": "id"}],
+                "foreign_keys": [],
+                "column_values": {"status": "open"},
+            }),
+        );
+        let order = dlt_row_document(
+            Uuid::new_v4(),
+            json!({
+                "source": "dlt",
+                "table_name": "orders",
+                "primary_key_value": "1",
+                "dlt_db_name": "shop",
+                "schema_info": [{"name": "id"}],
+                "foreign_keys": [
+                    {"column": "customer_id", "ref_table": "customers", "ref_column": "id"}
+                ],
+                "fk_references": [{
+                    "column": "customer_id",
+                    "target_table": "customers",
+                    "target_data_id": customer.base.id.to_string(),
+                    "relationship_name": "customer_id_references_customers",
+                }],
+                "column_values": {"status": "open", "total": 12, "note": ""},
+            }),
+        );
+
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector = Arc::new(cognee_vector::MockVectorDB::new());
+        let id = LedgerIdentity::new(None, Some(Uuid::new_v4()), dataset_id, Some(Uuid::new_v4()));
+        extract_dlt_fk_edges(
+            &[order.clone(), customer.clone()],
+            graph.clone(),
+            vector.clone(),
+            Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
+            &db,
+            id,
+        )
+        .await
+        .expect("teardown");
+
+        let order_row = dlt_row_chunk_id(order.base.id).to_string();
+        let customer_row = dlt_row_chunk_id(customer.base.id).to_string();
+        let table = |name: &str| {
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("dlt:{name}").as_bytes()).to_string()
+        };
+        let (_, edges) = graph.get_graph_data().await.expect("graph data");
+        let has = |source: &str, target: &str, name: &str| {
+            edges
+                .iter()
+                .any(|(s, t, n, _)| s == source && t == target && n == name)
+        };
+        assert!(has(&order_row, &table("orders"), "is_row_of"));
+        assert!(has(&customer_row, &table("customers"), "is_row_of"));
+        assert!(
+            has(
+                &order_row,
+                &customer_row,
+                "customer_id_references_customers"
+            ),
+            "a foreign key links the two rows' chunk nodes"
+        );
+
+        // One DltColumn per unique (table, column, value); empty cells name none.
+        let status = |t: &str| {
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("dlt:colval:{t}:status:open").as_bytes(),
+            )
+            .to_string()
+        };
+        assert!(has(&order_row, &status("orders"), "status"));
+        assert!(has(&customer_row, &status("customers"), "status"));
+        let column_edges = edges.iter().filter(|(_, _, n, _)| n == "total").count();
+        assert_eq!(column_edges, 1, "numbers become values too");
+        assert!(
+            edges.iter().all(|(_, _, n, _)| n != "note"),
+            "an empty cell has no value node"
+        );
+
+        for (data_type, field, size) in [
+            ("SchemaTable", "name", 2),
+            ("SchemaTable", "description", 2),
+            ("SchemaRelationship", "name", 1),
+            ("SchemaRelationship", "description", 1),
+            ("DltColumn", "properties", 3),
+        ] {
+            assert_eq!(
+                vector.collection_size(data_type, field).await.unwrap(),
+                size,
+                "{data_type}_{field}"
+            );
+        }
     }
 }
 

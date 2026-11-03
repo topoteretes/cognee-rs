@@ -48,7 +48,8 @@ pub(crate) async fn has_chunk_collection(vector_db: &dyn VectorDB) -> VectorDBRe
         .await
 }
 
-/// Whether SDK-1057's DLT row producer has populated this dataset.
+/// Whether cognify's DLT row producer has populated this dataset (it indexes
+/// rows into `DltRow_text`, not `DocumentChunk_text`).
 ///
 /// This is deliberately the single capability check shared by the chunk and
 /// entity lanes. The row collection is the producer contract's marker; the

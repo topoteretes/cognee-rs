@@ -70,11 +70,14 @@ pub const DEFAULT_TRIPLET_DISTANCE_PENALTY: f32 = 6.5;
 /// Triplet hits that don't match a graph node ID are therefore harmless — they add the
 /// point ID to candidate_node_ids but never match any graph edge endpoint, so no
 /// spurious edges are surfaced.
-const SEARCH_COLLECTIONS: [(&str, &str); 6] = [
+const SEARCH_COLLECTIONS: [(&str, &str); 7] = [
     ("Entity", "name"),
     ("TextSummary", "text"),
     ("EntityType", "name"),
     ("DocumentChunk", "text"),
+    // DLT rows live in their own collection: chunk search is documents-only,
+    // but graph completion covers row text too (Python parity).
+    ("DltRow", "text"),
     ("EdgeType", "relationship_name"),
     ("Triplet", "text"),
 ];
@@ -1170,15 +1173,13 @@ mod penalty_default_tests {
         );
     }
 
-    /// Verifies that the false "intentionally excluded" comment is gone.
-    /// Triplet_text is now included, not excluded.
+    /// Graph completion covers DLT row text: rows live in `DltRow_text`, not
+    /// `DocumentChunk_text` (Python's `DltRow.vector_collection()` in
+    /// `brute_force_triplet_search`'s default collections).
     #[test]
-    fn search_collections_has_six_entries() {
-        // 5 original + Triplet_text = 6 total
-        assert_eq!(
-            SEARCH_COLLECTIONS.len(),
-            6,
-            "SEARCH_COLLECTIONS should have 6 entries after adding Triplet_text"
-        );
+    fn search_collections_include_dlt_rows_and_triplets() {
+        assert_eq!(SEARCH_COLLECTIONS.len(), 7);
+        assert!(SEARCH_COLLECTIONS.contains(&("DltRow", "text")));
+        assert!(SEARCH_COLLECTIONS.contains(&("DocumentChunk", "text")));
     }
 }

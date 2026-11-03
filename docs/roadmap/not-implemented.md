@@ -68,8 +68,17 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
   post-extraction canonicalization, and entity-description consolidation (guides/POCs). Not ported.
 - **Hybrid external-metadata producer/backfill** — the query-time consumer is ported: normal and
   DLT passage hits remove raw metadata by default and can expose only caller-allowlisted keys.
-  SDK-1057 still owns copying document metadata into vector payloads. Existing datasets require
-  re-cognification after that producer lands; SDK-1045 provides no migration or backfill.
+  SDK-1057 still owns copying document metadata into vector payloads (including `DltRow_text`,
+  whose payload shape is otherwise Python's). Existing datasets require re-cognification after
+  that producer lands; SDK-1045 provides no migration or backfill.
+- **DLT source ingestion and some DLT graph detail** — cognify produces Python's `DltRow` nodes
+  (`DltRow_text`), `SchemaTable` / `SchemaRelationship` nodes (`*_name`, `*_description`) and
+  `DltColumn` cell-value nodes (`DltColumn_properties`) from documents whose `external_metadata`
+  says `source: "dlt"`. Not ported: running dlt itself (`ingest_dlt_source`, connectors, the
+  manifest-based `DltSourceDocument` with one data item per source), `Timestamp` edges from
+  temporal cells (`dlt_temporal`), and the per-source table scoping, primary key and row count
+  Python records on `SchemaTable`. Datasets cognified before DLT rows moved to `DltRow_text` need
+  a re-cognify; there is no migration.
 - **No Rust entry point deletes a single session, so the turn lock has no production caller.**
   Python takes `session_turn_lock` in its `delete_session` lifecycle function (behind
   `DELETE /api/v1/sessions/{id}`), together with the improve claim and the relational and vector
