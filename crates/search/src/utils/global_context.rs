@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cognee_embedding::EmbeddingEngine;
-use cognee_graph::GraphDBTrait;
+use cognee_graph::{GraphDBTrait, GraphNode};
 use cognee_models::GlobalContextSummary;
 use cognee_vector::VectorDB;
 use serde_json::Value;
@@ -48,6 +48,40 @@ fn in_scope(value: Option<&Value>, dataset_ids: Option<&[Uuid]>) -> bool {
         .is_some_and(|id| dataset_ids.contains(&id))
 }
 
+/// Every global context root node in the graph (Python's `load_root_text`
+/// scan: `GlobalContextSummary` nodes whose `is_root` is truthy).
+async fn load_root_nodes(graph_db: &dyn GraphDBTrait) -> Result<Vec<GraphNode>, SearchError> {
+    let filters = HashMap::from([(
+        Cow::Borrowed("type"),
+        vec![Value::from(GlobalContextSummary::TYPE)],
+    )]);
+    let (nodes, _) = graph_db
+        .get_filtered_graph_data(&filters)
+        .await
+        .map_err(|e| SearchError::GraphError(e.to_string()))?;
+    Ok(nodes
+        .into_iter()
+        .filter(|(_, attributes)| {
+            attributes.get("type").and_then(Value::as_str) == Some(GlobalContextSummary::TYPE)
+                && is_root(attributes.get("is_root"))
+        })
+        .collect())
+}
+
+/// The ids of the global context roots, which the vector search drops from
+/// its hits. The vector payload is exactly Python's `IndexSchema` row and
+/// carries no `is_root`, so the root is recognised by its id.
+pub async fn load_root_ids(graph_db: &dyn GraphDBTrait) -> Result<Vec<Uuid>, SearchError> {
+    Ok(root_ids(&load_root_nodes(graph_db).await?))
+}
+
+fn root_ids(roots: &[GraphNode]) -> Vec<Uuid> {
+    roots
+        .iter()
+        .filter_map(|(id, _)| Uuid::parse_str(id).ok())
+        .collect()
+}
+
 /// The root summary's text, or `None` when no root exists in scope.
 ///
 /// Python relies on backend access control to read one dataset's graph. Here
@@ -60,18 +94,11 @@ pub async fn load_root_text(
     graph_db: &dyn GraphDBTrait,
     dataset_ids: Option<&[Uuid]>,
 ) -> Result<Option<String>, SearchError> {
-    let filters = HashMap::from([(
-        Cow::Borrowed("type"),
-        vec![Value::from(GlobalContextSummary::TYPE)],
-    )]);
-    let (nodes, _) = graph_db
-        .get_filtered_graph_data(&filters)
-        .await
-        .map_err(|e| SearchError::GraphError(e.to_string()))?;
-    let roots = nodes.iter().filter(|(_, attributes)| {
-        attributes.get("type").and_then(Value::as_str) == Some(GlobalContextSummary::TYPE)
-            && is_root(attributes.get("is_root"))
-    });
+    Ok(root_text(&load_root_nodes(graph_db).await?, dataset_ids))
+}
+
+fn root_text(roots: &[GraphNode], dataset_ids: Option<&[Uuid]>) -> Option<String> {
+    let roots = roots.iter();
     let text = |attributes: &HashMap<Cow<'_, str>, Value>| {
         attributes
             .get("text")
@@ -80,7 +107,7 @@ pub async fn load_root_text(
             .map(str::to_string)
     };
     let Some(scope) = dataset_ids else {
-        return Ok(roots.into_iter().next().and_then(|(_, a)| text(a)));
+        return roots.into_iter().next().and_then(|(_, a)| text(a));
     };
     let roots: Vec<_> = roots.collect();
     let texts: Vec<String> = scope
@@ -97,7 +124,7 @@ pub async fn load_root_text(
                 .and_then(|(_, attributes)| text(attributes))
         })
         .collect();
-    Ok((!texts.is_empty()).then(|| texts.join("\n\n")))
+    (!texts.is_empty()).then(|| texts.join("\n\n"))
 }
 
 /// How many nearest summaries a scoped search reads before keeping the
@@ -106,7 +133,11 @@ pub async fn load_root_text(
 const SCOPED_SUMMARY_FETCH: usize = 4096;
 
 /// Up to `top_k` non-root summary texts nearest `query_vector`; empty when
-/// `top_k` is 0 or the collection does not exist. A scoped search
+/// `top_k` is 0 or the collection does not exist. `root_ids` are the global
+/// context roots (`load_root_ids`), dropped from the hits by id: Python drops
+/// them by the payload's `is_root` (`global_context.py::
+/// search_top_global_context_summaries`, `_is_root(payload)`), but the Rust
+/// payload is exactly an `IndexSchema` row without that key. A scoped search
 /// (`dataset_ids`) keeps only those datasets' summaries, by their payload's
 /// `dataset_id`.
 pub async fn search_top_global_context_summaries(
@@ -114,6 +145,7 @@ pub async fn search_top_global_context_summaries(
     query_vector: &[f32],
     top_k: usize,
     dataset_ids: Option<&[Uuid]>,
+    root_ids: &[Uuid],
 ) -> Result<Vec<String>, SearchError> {
     if top_k == 0 {
         return Ok(Vec::new());
@@ -147,7 +179,7 @@ pub async fn search_top_global_context_summaries(
         .map_err(vector_error)?;
     Ok(results
         .into_iter()
-        .filter(|result| !is_root(result.metadata.get("is_root")))
+        .filter(|result| !root_ids.contains(&result.id))
         .filter(|result| in_scope(result.metadata.get("dataset_id"), dataset_ids))
         .filter_map(|result| {
             result
@@ -188,7 +220,8 @@ pub async fn build_global_context_prelude(
     if query.is_empty() {
         return Ok(String::new());
     }
-    let root_text = load_root_text(graph_db, dataset_ids).await?;
+    let roots = load_root_nodes(graph_db).await?;
+    let root_text = root_text(&roots, dataset_ids);
     let top_summaries = if top_k == 0 {
         Vec::new()
     } else {
@@ -199,7 +232,14 @@ pub async fn build_global_context_prelude(
             .into_iter()
             .next()
             .ok_or_else(|| SearchError::EmbeddingError("no query embedding".to_string()))?;
-        search_top_global_context_summaries(vector_db, &vector, top_k, dataset_ids).await?
+        search_top_global_context_summaries(
+            vector_db,
+            &vector,
+            top_k,
+            dataset_ids,
+            &root_ids(&roots),
+        )
+        .await?
     };
     Ok(format_global_context_prelude(
         root_text.as_deref(),
@@ -249,6 +289,9 @@ mod tests {
         );
     }
 
+    /// The id of the first point `store` writes: the root in these tests.
+    const ROOT_ID: Uuid = Uuid::from_u128(1);
+
     async fn store(points: &[(f32, Value)]) -> BruteForceVectorDB {
         let db = BruteForceVectorDB::new();
         db.create_collection(GlobalContextSummary::TYPE, "text", 2)
@@ -256,8 +299,10 @@ mod tests {
             .unwrap();
         let points: Vec<VectorPoint> = points
             .iter()
-            .map(|(x, metadata)| {
-                let mut point = VectorPoint::new(Uuid::new_v4(), vec![*x, 1.0 - *x]);
+            .enumerate()
+            .map(|(i, (x, metadata))| {
+                let id = if i == 0 { ROOT_ID } else { Uuid::new_v4() };
+                let mut point = VectorPoint::new(id, vec![*x, 1.0 - *x]);
                 for (k, v) in metadata.as_object().unwrap() {
                     point = point.with_metadata(k.clone(), v.clone());
                 }
@@ -274,14 +319,14 @@ mod tests {
     async fn top_summaries_are_empty_when_top_k_is_zero_or_no_collection() {
         let db = BruteForceVectorDB::new();
         assert!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 3, None)
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 3, None, &[])
                 .await
                 .unwrap()
                 .is_empty()
         );
         let db = store(&[(1.0, json!({"text": "A"}))]).await;
         assert!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 0, None)
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 0, None, &[])
                 .await
                 .unwrap()
                 .is_empty()
@@ -291,21 +336,21 @@ mod tests {
     #[tokio::test]
     async fn top_summaries_drop_roots_skip_missing_text_and_cap_at_top_k() {
         let db = store(&[
-            (1.0, json!({"text": "root", "is_root": true})),
-            (0.9, json!({"text": "A", "is_root": false})),
-            (0.8, json!({"is_root": "false"})),
+            (1.0, json!({"text": "root"})),
+            (0.9, json!({"text": "A"})),
+            (0.8, json!({})),
             (0.7, json!({"text": "B"})),
             (0.6, json!({"text": "C"})),
         ])
         .await;
         assert_eq!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 2, None)
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 2, None, &[ROOT_ID])
                 .await
                 .unwrap(),
             ["A"]
         );
         assert_eq!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 4, None)
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 4, None, &[ROOT_ID])
                 .await
                 .unwrap(),
             ["A", "B", "C"]
@@ -327,13 +372,13 @@ mod tests {
         ])
         .await;
         assert_eq!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 1, Some(&[mine]))
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 1, Some(&[mine]), &[])
                 .await
                 .unwrap(),
             ["mine"]
         );
         assert_eq!(
-            search_top_global_context_summaries(&db, &[1.0, 0.0], 1, None)
+            search_top_global_context_summaries(&db, &[1.0, 0.0], 1, None, &[])
                 .await
                 .unwrap(),
             ["theirs"]
@@ -373,5 +418,7 @@ mod tests {
             None
         );
         assert!(load_root_text(&graph, None).await.unwrap().is_some());
+        // Both datasets' roots are named, so neither leaks into the hits.
+        assert_eq!(load_root_ids(&graph).await.unwrap().len(), 2);
     }
 }

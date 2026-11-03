@@ -132,9 +132,9 @@ impl IndexStore<'_> {
                     // Python indexes the summaries through `add_data_points`, so
                     // the payload is an `IndexSchema` row (SDK-1039 P6), whose
                     // `document_id` reference is the document a bucket
-                    // summarizes. Rust adds `is_root` on top (a Rust-only key):
-                    // the read side filters the root out of the nearest
-                    // buckets on it.
+                    // summarizes. The payload is exactly that row, with no `is_root`:
+                    // the read side drops the root from the nearest buckets
+                    // by its id from the graph.
                     let document_id = summary
                         .document_id
                         .as_deref()
@@ -143,13 +143,12 @@ impl IndexStore<'_> {
                         document_id,
                         ..IndexRefs::default()
                     };
-                    let mut metadata = index_schema_payload(
+                    let metadata = index_schema_payload(
                         &summary.base,
                         summary.text.clone(),
                         &refs,
                         Uuid::parse_str(&summary.dataset_id).ok(),
                     );
-                    metadata.insert("is_root".to_string(), json!(summary.is_root));
                     VectorPoint {
                         id: summary.base.id,
                         vector,

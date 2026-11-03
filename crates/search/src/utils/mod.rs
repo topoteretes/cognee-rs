@@ -18,7 +18,8 @@ pub(crate) use edge_type_id::edge_type_point_id;
 pub use feedback_detection::detect_feedback;
 pub use global_context::{
     DEFAULT_GLOBAL_CONTEXT_INDEX_TOP_K, build_global_context_prelude,
-    format_global_context_prelude, load_root_text, search_top_global_context_summaries,
+    format_global_context_prelude, load_root_ids, load_root_text,
+    search_top_global_context_summaries,
 };
 pub(crate) use resolve_edges_to_text::DEFAULT_STOP_WORDS;
 pub use resolve_edges_to_text::resolve_edges_to_text as render_edges_context;

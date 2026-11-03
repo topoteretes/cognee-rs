@@ -413,7 +413,7 @@ async fn from_entities_writes_only_changed_nodes_and_deletes_the_rest() {
         )
         .await
         .unwrap();
-    assert_eq!(root_point[0].metadata["is_root"], json!(true));
+    assert!(!root_point[0].metadata.contains_key("is_root"));
     assert_eq!(root_point[0].metadata["text"], json!(texts[2]));
 
     // Ownership rows name the dataset, so deleting it removes the index.
