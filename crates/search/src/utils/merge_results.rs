@@ -24,11 +24,19 @@ pub fn conversational_reserve(limit: usize) -> usize {
 /// expresses: `(source, relationship, target, directed)`.
 pub fn edge_identity(item: &SearchItem) -> Option<String> {
     let payload = &item.payload;
+    // Python's `a or b or edge`: the first truthy value wins even when it is
+    // not an object, and a non-object then reads as no attributes at all.
+    let empty = Value::Object(Default::default());
     let attributes = ["attributes", "edge_attributes"]
         .iter()
         .filter_map(|key| payload.get(key))
-        .find(|value| value.as_object().is_some_and(|map| !map.is_empty()))
+        .find(|value| is_truthy(value))
         .unwrap_or(payload);
+    let attributes = if attributes.is_object() {
+        attributes
+    } else {
+        &empty
+    };
     let field = |value: &Value, keys: &[&str]| {
         keys.iter()
             .filter_map(|key| value.get(key))
@@ -51,6 +59,18 @@ pub fn edge_identity(item: &SearchItem) -> Option<String> {
         relationship.unwrap_or_default(),
         target.unwrap_or_default(),
     ))
+}
+
+/// Python truthiness of a JSON value.
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(map) => !map.is_empty(),
+    }
 }
 
 /// The identity [`merge_ranked`] uses by default: the result's id.
@@ -295,6 +315,25 @@ mod tests {
             0,
         );
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn a_truthy_non_object_attributes_value_reads_as_no_attributes() {
+        // Python takes the first truthy value, then treats a non-dict as {}.
+        let item = SearchItem {
+            id: None,
+            score: None,
+            payload: json!({
+                "attributes": "oops",
+                "edge_attributes": {"edge_object_id": "e1"},
+                "source_id": "s",
+                "target_id": "t",
+            }),
+        };
+        assert_eq!(
+            edge_identity(&item).as_deref(),
+            Some("graph:s\u{1f}\u{1f}t\u{1f}true")
+        );
     }
 
     #[test]

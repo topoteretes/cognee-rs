@@ -179,10 +179,6 @@ Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
   so two parallel edges with the same triple stay distinct when two retrievals are merged. Rust's
   ranked triplets carry none, so the merge identifies an edge by `(source, relationship, target,
   directed)` and collapses parallel edges with the same triple.
-- **A single-lane session retrieval is not passed through the merge.** Python calls
-  `merge_retrieved_objects(raw, None)` even when the rewrite lane is skipped, which only trims the
-  raw result to `top_k`; Rust returns the raw retrieval, which every built-in retriever already
-  limits to its `top_k`.
 - **TEMPORAL honours `include_global_context_index`.** Python's TEMPORAL retriever factory does
   not pass the flag through; Rust forwards it, as it does for the other hybrid searches.
 - **Temporal window expansion re-projects external metadata.** Rust runs the expanded window's

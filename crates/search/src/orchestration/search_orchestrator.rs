@@ -47,7 +47,9 @@ async fn retrieve_session_context(
     let conversational =
         build_conversational_query(query, &session.recent_qas, MAX_CONVERSATIONAL_QUERY_CHARS);
     if conversational.is_empty() || conversational == normalize_query(query) {
-        return retriever.get_context(query, params).await;
+        // A lone lane still goes through the merge, which trims it to top_k.
+        let raw = retriever.get_context(query, params).await?;
+        return Ok(retriever.merge_session_contexts(Some(raw), None, params));
     }
     let (raw, conversational) = tokio::join!(
         retriever.get_context(query, params),
@@ -2903,7 +2905,22 @@ mod tests {
         let retriever = LaneRecordingRetriever::new(false);
         let result = lane_turn(&retriever, &[]).await;
         assert_eq!(*retriever.queries.lock().unwrap(), ["  where   is\nit?  "]);
-        assert!(retriever.merge_inputs.lock().unwrap().is_none());
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), None))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
+    }
+
+    #[tokio::test]
+    async fn a_history_of_empty_turns_runs_one_retrieval_lane() {
+        let retriever = LaneRecordingRetriever::new(false);
+        let result = lane_turn(&retriever, &[("  ", "\n"), ("", " ")]).await;
+        assert_eq!(*retriever.queries.lock().unwrap(), ["  where   is\nit?  "]);
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), None))
+        );
         assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
     }
 
@@ -2935,6 +2952,91 @@ mod tests {
             Some((Some(vec!["raw".into()]), Some(vec!["conv".into()])))
         );
         assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw,conv]"));
+    }
+
+    /// Holds its retrieval open until released, so a turn stays in flight.
+    struct GatedRetriever {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for GatedRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::RagCompletion
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(vec![lane_item("raw")])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("answer".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_delete_waits_for_a_running_search_turn() {
+        use std::time::Duration;
+
+        let user = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let retriever = Arc::new(GatedRetriever {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(TurnAnalysisLlm(json!({}))))
+            .with_auto_feedback_default(false)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("where is it?");
+        request.user_id = Some(user);
+        request.use_combined_context = Some(false);
+
+        let turn = tokio::spawn(async move { orchestrator.search(&request).await.unwrap() });
+        retriever.entered.notified().await;
+
+        let deleter = manager.clone();
+        let user_id = user.to_string();
+        let delete = tokio::spawn(async move {
+            deleter
+                .delete_session(Some("s"), Some(&user_id))
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!delete.is_finished(), "delete must wait for the turn");
+
+        retriever.release.notify_one();
+        turn.await.unwrap();
+        assert!(delete.await.unwrap());
+        // The turn saved its answer before releasing the lock; the delete then
+        // removed it, rather than racing it and leaving the turn's entry.
+        assert!(
+            manager
+                .get_session(Some("s"), Some(&user.to_string()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
