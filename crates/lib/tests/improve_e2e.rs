@@ -681,7 +681,8 @@ async fn improve_reports_distilled_lessons() {
 }
 
 /// A caller that already resolved (and authorized) the dataset passes its id,
-/// as Python's `improve(dataset=<UUID>)`: every session-fed stage adds into
+/// as Python's `improve(dataset=<UUID>)`: every session-fed stage (session
+/// Q&A, agent trace feedback, distilled lessons) adds into
 /// that dataset even though another user owns it, and nothing is created
 /// under the caller (a by-name add would have made a same-named one).
 #[tokio::test]
@@ -700,12 +701,31 @@ async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
     p.dataset_id = Some(shared);
     let caller = p.owner_id;
     seed_qa(&h, caller, session_id).await;
+    // A trace step with feedback, so the trace stage adds into the dataset too.
+    h.session_manager
+        .add_agent_trace_step(
+            &caller.to_string(),
+            Some(session_id),
+            "search",
+            "success",
+            "",
+            "",
+            serde_json::json!({}),
+            None,
+            "",
+            false,
+        )
+        .await
+        .unwrap();
     let r = improve(p).await.unwrap();
 
     assert_eq!(r.dataset_id, Some(shared));
     let persist = stage(&r, "persist_session_qa");
     assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
     assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+    let traces = stage(&r, "persist_agent_traces");
+    assert_eq!(traces.status, StageStatus::Completed, "{traces:?}");
+    assert_eq!(traces.counts.get("windows"), Some(&1));
     let distill = stage(&r, "distill_sessions");
     assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
     assert!(distill.counts["documents"] > 0, "{distill:?}");
