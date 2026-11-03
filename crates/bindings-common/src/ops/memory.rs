@@ -274,7 +274,6 @@ pub async fn run_remember(
         Some(svc.database.clone()),
         Some(svc.session_store.clone()),
         Some(svc.session_manager.clone()),
-        Some(svc.checkpoint_store.clone()),
         svc.ontology_resolver.clone(),
         cognify_config,
         improve_config,
@@ -393,7 +392,6 @@ pub async fn run_improve(
         session_store: Some(svc.session_store.clone()),
         session_manager: Some(svc.session_manager.clone()),
         add_pipeline: Some(svc.add_pipeline.as_ref()),
-        checkpoint_store: Some(svc.checkpoint_store.clone()),
         // The add pipeline's registry (none here), else the process-wide one.
         dataset_locks: None,
         cognify_config: &cognify_config,

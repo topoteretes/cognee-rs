@@ -48,6 +48,16 @@ pub struct PipelineRunEntry<'a> {
     pub user_id: Option<Uuid>,
 }
 
+/// An operation row found by its `run_info` stamp, for
+/// [`PipelineRunRepository::latest_stamped_run`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct StampedRun {
+    /// The row's `pipeline_run_id` (Python's `operation_id`).
+    pub pipeline_run_id: Uuid,
+    /// The value stored under the key (an object, as Python requires).
+    pub stamp: serde_json::Value,
+}
+
 /// Who may see which runs, for [`PipelineRunRepository::list_runs`]: a run
 /// is visible when it was triggered by one of `user_ids` **or** is on one of
 /// `dataset_ids` — Python's activity-feed predicate `PipelineRun.user_id IN
@@ -313,24 +323,49 @@ pub trait PipelineRunRepository: Send + Sync {
 
     /// How many rows were written strictly after `since`, on `dataset_id`
     /// (`None`: on any dataset, or none), whose `pipeline_name` is not one of
-    /// `exclude_pipeline_names`. Every status row counts, whatever its status:
-    /// a started or errored run may already have written data.
+    /// `exclude_pipeline_names` and whose `pipeline_run_id` is not one of
+    /// `exclude_run_ids`. Every status row counts, whatever its status: a
+    /// started or errored run may already have written data.
     ///
     /// Backs the improve stage watermarks (Python
     /// `has_dataset_changed_since_last_improve`,
-    /// `cognee/modules/improve/graph_changes.py`).
+    /// `cognee/modules/improve/graph_changes.py:100-154`, which leaves out
+    /// the stamped operation's own row by `pipeline_run_id`, `:132`).
     ///
-    /// The default implementation fails: a repository that cannot answer must
-    /// not be read as "nothing changed".
+    /// The default implementation fails: a repository that cannot answer
+    /// must not be read as "nothing changed".
     async fn count_runs_created_after(
         &self,
         since: DateTime<Utc>,
         dataset_id: Option<Uuid>,
         exclude_pipeline_names: &[&str],
+        exclude_run_ids: &[Uuid],
     ) -> Result<u64, DbError> {
-        let _ = (since, dataset_id, exclude_pipeline_names);
+        let _ = (since, dataset_id, exclude_pipeline_names, exclude_run_ids);
         Err(DatabaseError::QueryError(
             "count_runs_created_after is not supported by this repository".to_string(),
+        ))
+    }
+
+    /// The newest `Completed` row named `pipeline_name` on `dataset_id`
+    /// whose `run_info` is a JSON object holding `key`: the operation row an
+    /// improve stage stamped its watermark on (Python
+    /// `last_improve_watermark`, `cognee/modules/improve/graph_changes.py:66-97`,
+    /// which reads the newest `succeeded` `improve` row carrying the key).
+    /// `Completed` is Python's `outcome == "succeeded"`: a run that errored
+    /// is written `Errored` or not at all, so its stamps are never read.
+    ///
+    /// The default implementation fails, like
+    /// [`Self::count_runs_created_after`].
+    async fn latest_stamped_run(
+        &self,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+        key: &str,
+    ) -> Result<Option<StampedRun>, DbError> {
+        let _ = (dataset_id, pipeline_name, key);
+        Err(DatabaseError::QueryError(
+            "latest_stamped_run is not supported by this repository".to_string(),
         ))
     }
 

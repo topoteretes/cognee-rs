@@ -310,6 +310,10 @@ async fn test_scope_graph_context_is_a_deprecated_alias_of_graph() {
 
     assert!(!result.items.is_empty());
     assert!(
+        !result.items.is_empty(),
+        "the alias must run the graph source, not an empty snapshot leg"
+    );
+    assert!(
         result.items.iter().all(|i| i.source == RecallSource::Graph),
         "the alias recalls graph results only"
     );

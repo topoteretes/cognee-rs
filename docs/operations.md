@@ -183,9 +183,11 @@ when no `pipeline_runs` row other than a `search`, a `recall` or a host's
 `forget` row on every dataset it touched, and an improve run whose stage may
 have written to the graph (anything but the index itself, unless its write
 counts say it wrote nothing) records one `improve` row, so both count as
-changes, as in Python. A run that did not end `errored` stamps the stage's start in the
-checkpoint store (`improve_stage:{stage}:{dataset_id}`); without a checkpoint
-store or a relational database, or on any error reading them, the stage runs.
+changes, as in Python. A run that did not end `errored` stamps the stage's start in the `run_info` of
+its `improve` operation row (`{"global_context_index": {"status", "started_at"}}`),
+where Python keeps it (`graph_changes.py`); the newest such row is the
+watermark, and the row itself is not a change. Without a relational database,
+a stamp, or on any error reading them, the stage runs.
 rustdoc: `api::improve`.
 
 ### forget

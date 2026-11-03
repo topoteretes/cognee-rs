@@ -28,8 +28,9 @@ use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
 use cognee_core::DatasetLocks;
-use cognee_database::CheckpointStore;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{
+    DatabaseConnection, IngestDb, RelationalDb, StampedRun, connect, initialize,
+};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_ingestion::AddPipeline;
@@ -139,7 +140,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -170,8 +170,6 @@ async fn make_harness() -> Harness {
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
-
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -184,7 +182,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -217,7 +214,6 @@ fn params<'a>(
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         dataset_locks: None,
         cognify_config: config,
         build_global_context_index: false,
@@ -1087,6 +1083,20 @@ async fn log_write(h: &Harness, dataset_id: Uuid) {
 /// A completed `global_context_index` stamps its start; the next run with no
 /// write since reports `already_completed`; a write makes it run again
 /// (Python `GlobalContextIndexStage`, `graph_changes.py`).
+/// The stamp the `global_context_index` stage left on the dataset's improve
+/// operation row (`run_info["global_context_index"]`).
+async fn stamp_of(h: &Harness, dataset_id: Uuid) -> Option<StampedRun> {
+    Arc::clone(&h.db)
+        .pipeline_runs()
+        .latest_stamped_run(
+            dataset_id,
+            IMPROVE_WRITE_PIPELINE_NAME,
+            stage_watermark_key(StageKind::GlobalContextIndex),
+        )
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn global_context_index_is_already_completed_without_writes_since_last_improve() {
     let h = make_harness().await;
@@ -1105,15 +1115,11 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
         stage(&first, "global_context_index").status,
         StageStatus::Completed
     );
-    let stamp = h
-        .checkpoint_store
-        .load(&stage_watermark_key(
-            StageKind::GlobalContextIndex,
-            dataset_id,
-        ))
-        .await
-        .unwrap();
-    assert!(stamp.is_some(), "a completed run stamps the stage");
+    let stamped = stamp_of(&h, dataset_id).await;
+    let stamped = stamped.expect("a completed run stamps the stage");
+    // Python's stamp, on the improve operation row: `{status, started_at}`.
+    assert_eq!(stamped.stamp["status"], "completed");
+    assert!(stamped.stamp["started_at"].is_string());
 
     let second = run().await.unwrap();
     let gci = stage(&second, "global_context_index");
@@ -1199,8 +1205,8 @@ async fn a_data_item_delete_invalidates_the_global_context_index() {
     );
 }
 
-/// Python counts every non-noop improve as a change. A run whose stage wrote
-/// to the graph records an `improve` row, so the next run rebuilds; a host's
+/// Python counts every non-noop improve as a change. Another run's `improve`
+/// operation row makes the next run rebuild; a host's
 /// own `improve_pipeline` row (the HTTP server's) does not count, so repeated
 /// index-only runs stay `already_completed`.
 #[tokio::test]
@@ -1253,7 +1259,7 @@ async fn an_improve_that_wrote_invalidates_the_index_and_a_host_row_does_not() {
     assert_eq!(
         stage(&run(None).await.unwrap(), "global_context_index").status,
         StageStatus::Completed,
-        "an improve that wrote is a change"
+        "another improve is a change"
     );
 }
 
@@ -1277,15 +1283,10 @@ async fn an_errored_run_does_not_stamp_the_stage() {
         StageStatus::Errored
     );
     assert_eq!(r.status(), ImproveStatus::Errored);
-    let stamp = h
-        .checkpoint_store
-        .load(&stage_watermark_key(
-            StageKind::GlobalContextIndex,
-            dataset_id,
-        ))
-        .await
-        .unwrap();
-    assert!(stamp.is_none(), "an errored run saves no stamp");
+    assert!(
+        stamp_of(&h, dataset_id).await.is_none(),
+        "an errored run saves no stamp"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1510,7 +1511,6 @@ async fn a_background_improve_returns_at_once_and_runs_after_the_holder() {
         db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         add_pipeline: Arc::new(locked_add_pipeline(&h, &DatasetLocks::global())),
         cognify_config: Arc::new(CognifyConfig::default()),
     });

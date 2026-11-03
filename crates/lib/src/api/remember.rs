@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use cognee_cognify::cognify;
 use cognee_cognify::{CognifyConfig, CognifyResult};
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb, SessionLifecycleDb};
+use cognee_database::{PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -247,7 +247,6 @@ pub async fn remember(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
@@ -303,7 +302,6 @@ pub async fn remember(
             db,
             session_store,
             session_manager,
-            checkpoint_store,
             ontology_resolver,
             cognify_config,
             improve_config,
@@ -336,7 +334,6 @@ pub async fn remember(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         ontology_resolver,
         &cognify_config,
         start,
@@ -378,7 +375,6 @@ async fn run_permanent_inner(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PermanentOutcome, ApiError> {
@@ -474,7 +470,6 @@ async fn run_permanent_inner(
             session_store,
             session_manager,
             add_pipeline: Some(add_pipeline),
-            checkpoint_store,
             dataset_locks: None,
             cognify_config,
             build_global_context_index: false,
@@ -522,7 +517,6 @@ async fn remember_permanent_blocking(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -544,7 +538,6 @@ async fn remember_permanent_blocking(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         ontology_resolver,
         cognify_config,
     )
@@ -594,7 +587,6 @@ async fn remember_session(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
@@ -659,7 +651,6 @@ async fn remember_session(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         add_pipeline,
         cognify_config,
     })
@@ -732,8 +723,6 @@ pub struct SessionAutoImprove {
     pub session_store: Option<Arc<dyn SessionStore>>,
     /// Session manager (also the debounce state).
     pub session_manager: Option<Arc<SessionManager>>,
-    /// Checkpoint store (stage watermarks).
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// Add pipeline of the cognify-backed stages (and its dataset locks).
     pub add_pipeline: Arc<AddPipeline>,
     /// Cognify configuration of the cognify-backed stages.
@@ -769,7 +758,6 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         add_pipeline,
         cognify_config,
     } = request;
@@ -811,7 +799,6 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             session_store,
             session_manager,
             add_pipeline: Some(add_pipeline.as_ref()),
-            checkpoint_store,
             // The add pipeline's registry, else the process-wide one.
             dataset_locks: None,
             cognify_config: &cognify_config,

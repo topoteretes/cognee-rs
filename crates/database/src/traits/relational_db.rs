@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 
-use crate::ops::checkpoint::{CheckpointStore, SeaOrmCheckpointStore};
 use crate::pipelines::{PipelineRunRepository, SeaOrmPipelineRunRepository};
 use crate::sync::{SeaOrmSyncOperationRepository, SyncOperationRepository};
 use crate::traits::{
@@ -49,9 +48,6 @@ pub trait RelationalDb:
     /// repository shares it (the owner sees every holder in its strong count).
     fn pipeline_runs(self: Arc<Self>) -> Arc<dyn PipelineRunRepository>;
 
-    /// The cognify checkpoint store over this database.
-    fn checkpoints(self: Arc<Self>) -> Arc<dyn CheckpointStore>;
-
     /// The sync-operation repository over this database.
     fn sync_operations(self: Arc<Self>) -> Arc<dyn SyncOperationRepository>;
 
@@ -77,10 +73,6 @@ pub trait RelationalDb:
 impl RelationalDb for DatabaseConnection {
     fn pipeline_runs(self: Arc<Self>) -> Arc<dyn PipelineRunRepository> {
         Arc::new(SeaOrmPipelineRunRepository::new(self))
-    }
-
-    fn checkpoints(self: Arc<Self>) -> Arc<dyn CheckpointStore> {
-        Arc::new(SeaOrmCheckpointStore::new(self))
     }
 
     fn sync_operations(self: Arc<Self>) -> Arc<dyn SyncOperationRepository> {

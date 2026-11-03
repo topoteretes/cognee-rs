@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Item | Before | After |
   |---|---|---|
   | `cognee-session` improve lock | `try_acquire_improve_lock(session_id) -> bool`, `release_improve_lock`, `ImproveLockGuard` (a concurrent improve of the session skipped) | `acquire_improve_lock_many(&keys) -> ImproveClaim` (waits; released on drop) and `improve_lock_keys(sessions, user)` (`session:{user}:{session}`) |
-  | `ImproveParams` | — | `+ dataset_locks`, `+ checkpoint_store` reads the stage watermarks (struct literals must set them) |
+  | `ImproveParams` | — | `+ dataset_locks` (struct literals must set it) |
   | `DatasetLocks` | per-host registries only | `DatasetLocks::global()`, the process-wide registry: the default of `AddPipeline::new` and `DeleteService::new` (was none), and of `improve` |
   | `cognee_cognify::tasks::cognify`, `memify` | took no dataset lock | hold the dataset in `DatasetLocks::global()` for the run (re-entrant for a caller holding it there), as Python's `dataset_lock` |
   | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`) when a pipeline-run repo is wired |
@@ -211,6 +211,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Closed-side callers (HTTP server) must call `recover_stale_pipeline_runs`,
     drop `new_with_orphan_reset` and `COGNEE_SINGLE_PROCESS`, and pass
     `DatasetLocks::global()` to their `add` / `delete` wiring.
+
+- **Improve stage stamps live in the operation row's `run_info`, and
+  `graph_sync_checkpoints` is gone (SDK-1039).** Python keeps a stage's
+  watermark on the `improve` operation's `pipeline_runs` row, as
+  `run_info[<stage>] = {"status", "started_at"}`
+  (`cognee/modules/improve/graph_changes.py:46-48`, read by
+  `last_improve_watermark`, `:66-97`), and has no checkpoint table. Rust now
+  does the same.
+
+  | Item | Before | After |
+  |---|---|---|
+  | Stage stamp storage | `graph_sync_checkpoints` row `improve_stage:{stage}:{dataset_id}` | the run's `improve` `pipeline_runs` operation row (`user_id` the owner) whose `run_info` holds `{stage: {status, started_at}}`; only a `Completed` row is read as a watermark |
+| `improve()` change record | one `improve` row after the first stage that may have written to the graph | one `improve` operation row per run, written when it ends (`record_improve_operation`): `Completed` (Python `succeeded`), `Errored` (Python `failed`, keeps its stamps, never a watermark), none when every stage skipped (Python `noop`). As in Python every improve row but the stamped one counts as a change (`graph_changes.py:128-143`) |
+  | `ImproveParams`, `cognee::api::remember`, `RememberRequest`, `CogneeServices` | `checkpoint_store` | **removed** |
+  | `cognee_database` | `CheckpointStore`, `SeaOrmCheckpointStore`, `RelationalDb::checkpoints()`, `ops::checkpoint`, the `graph_sync_checkpoint` entity | **removed** |
+  | `PipelineRunRepository` | `count_runs_created_after(since, dataset, exclude_names)` | `+ exclude_run_ids` (the stamped row itself is not a change); `+ latest_stamped_run(dataset, name, key)` |
+  | `stage_watermark_key(stage, dataset_id)` | `improve_stage:{stage}:{dataset_id}` | `stage_watermark_key(stage)` is the stage name (the `run_info` key) |
+  | Migration | | `m20261031_000001_improve_stamps_to_run_info` moves each existing `improve_stage:*` row into an `improve` row and drops the table, so a stage is not rerun because of the upgrade |
 
 - **`update()` keeps the data id, and legacy data ids resolve (SDK-1039).**
   As in Python (`update.py`, `resolve_data_id`): the id passed to `update()` is

@@ -103,7 +103,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             SessionManager::new(Arc::clone(&session_store))
                 .with_feedback_llm_timeout(feedback_llm_timeout),
         );
-        let checkpoint_store = Arc::clone(&database).checkpoints();
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
@@ -130,7 +129,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             session_store: Some(session_store),
             session_manager: Some(session_manager),
             add_pipeline: Some(&add_pipeline),
-            checkpoint_store: Some(checkpoint_store),
             // The add pipeline's registry (none here), else the process-wide one.
             dataset_locks: None,
             cognify_config: &cognify_config,
