@@ -7,7 +7,7 @@ use chrono::Utc;
 use cognee_database::{GraphNode, ProvenanceDb, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
-use cognee_models::GlobalContextSummary;
+use cognee_models::{GlobalContextSummary, IndexRefs, index_schema_payload};
 use cognee_vector::{VectorDB, VectorPoint};
 use serde_json::json;
 use uuid::Uuid;
@@ -129,15 +129,31 @@ impl IndexStore<'_> {
                 .iter()
                 .zip(vectors)
                 .map(|(summary, vector)| {
-                    let mut point = VectorPoint::new(summary.base.id, vector);
-                    // The full data point, as Python's payload carries it:
-                    // the read side keys on `is_root` and `text`.
-                    if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(summary) {
-                        for (key, value) in fields {
-                            point = point.with_metadata(key, value);
-                        }
+                    // Python indexes the summaries through `add_data_points`, so
+                    // the payload is an `IndexSchema` row (SDK-1039 P6), whose
+                    // `document_id` reference is the document a bucket
+                    // summarizes. The payload is exactly that row, with no `is_root`:
+                    // the read side drops the root from the nearest buckets
+                    // by its id from the graph.
+                    let document_id = summary
+                        .document_id
+                        .as_deref()
+                        .and_then(|id| Uuid::parse_str(id).ok());
+                    let refs = IndexRefs {
+                        document_id,
+                        ..IndexRefs::default()
+                    };
+                    let metadata = index_schema_payload(
+                        &summary.base,
+                        summary.text.clone(),
+                        &refs,
+                        Uuid::parse_str(&summary.dataset_id).ok(),
+                    );
+                    VectorPoint {
+                        id: summary.base.id,
+                        vector,
+                        metadata,
                     }
-                    point.with_metadata("field", json!("text"))
                 })
                 .collect();
             self.vector_db

@@ -765,26 +765,26 @@ mod tests {
     /// store holding two bucket summaries.
     async fn retriever_with_global_context(llm: &Arc<TestLlm>) -> GraphCompletionRetriever {
         use cognee_graph::GraphDBTraitExt;
+        const ROOT_ID: Uuid = Uuid::from_u128(1);
         let graph = cognee_graph::MockGraphDB::new();
         graph
-            .add_node(&json!({"id": "root", "type": "GlobalContextSummary",
-                              "text": "Topics: Person (2)", "is_root": true}))
+            .add_node(
+                &json!({"id": ROOT_ID.to_string(), "type": "GlobalContextSummary",
+                              "text": "Topics: Person (2)", "is_root": true}),
+            )
             .await
             .unwrap();
-        let hit = |text: &str, is_root: bool| SearchResult {
-            id: Uuid::new_v4(),
+        let hit = |id: Uuid, text: &str| SearchResult {
+            id,
             score: 0.9,
-            metadata: HashMap::from([
-                ("text".to_string(), json!(text)),
-                ("is_root".to_string(), json!(is_root)),
-            ]),
+            metadata: HashMap::from([("text".to_string(), json!(text))]),
         };
         let collections = HashMap::from([(
             TestVectorDb::key("GlobalContextSummary", "text"),
             vec![
-                hit("Topics: Person (2)", true),
-                hit("alpha.md\nPerson: Alice", false),
-                hit("beta.md\nPerson: Bob", false),
+                hit(ROOT_ID, "Topics: Person (2)"),
+                hit(Uuid::new_v4(), "alpha.md\nPerson: Alice"),
+                hit(Uuid::new_v4(), "beta.md\nPerson: Bob"),
             ],
         )]);
         GraphCompletionRetriever::new(

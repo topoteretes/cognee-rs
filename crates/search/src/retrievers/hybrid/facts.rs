@@ -197,7 +197,10 @@ pub(crate) fn select_facts(
         let hit_id = result_id(hit);
         let hit_payload = payload(hit);
 
-        // first_display_value(text, relationship_name).
+        // first_display_value(text, relationship_name). Every EdgeType row
+        // Rust writes since SDK-1039 carries `text`, as Python's `IndexSchema`
+        // does; the `relationship_name` fallback stays for rows written before
+        // then, which have no `text` (D6: no payload migration).
         let mut candidates: Vec<&Value> = Vec::new();
         if let Some(value) = hit_payload.get("text") {
             candidates.push(value);
@@ -496,6 +499,29 @@ mod tests {
     fn select_facts_falls_back_to_relationship_name_payload() {
         let mut item = hit("ignored");
         item.payload = json!({ "relationship_name": "Alice works at Acme." });
+        let facts = select_facts(&[item], &HashSet::new(), 5);
+        let texts: Vec<&str> = facts.iter().map(|f| f.text.as_str()).collect();
+        assert_eq!(texts, ["Alice works at Acme."]);
+    }
+
+    /// SDK-1039: the row cognify now writes for an EdgeType is Python's
+    /// `IndexSchema` row — the retrieval text under `text`, no
+    /// `relationship_name` — and the fact renders from it.
+    #[test]
+    fn select_facts_renders_an_index_schema_edge_type_row() {
+        let edge_type = EdgeType::new_deterministic("Alice works at Acme.", None);
+        let payload = cognee_models::index_schema_payload(
+            &edge_type.base,
+            edge_type.relationship_name.clone(),
+            &cognee_models::IndexRefs::default(),
+            Some(uuid::Uuid::new_v4()),
+        );
+        assert!(!payload.contains_key("relationship_name"));
+        let item = SearchItem {
+            id: Some(edge_type.base.id),
+            score: None,
+            payload: serde_json::to_value(payload).unwrap(),
+        };
         let facts = select_facts(&[item], &HashSet::new(), 5);
         let texts: Vec<&str> = facts.iter().map(|f| f.text.as_str()).collect();
         assert_eq!(texts, ["Alice works at Acme."]);

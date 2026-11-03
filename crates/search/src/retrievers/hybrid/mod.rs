@@ -1573,15 +1573,12 @@ mod retriever_tests {
                 &[
                     VectorPoint::new(Uuid::new_v4(), vec![1.0, 0.0])
                         .with_metadata("text", json!("their nearest area"))
-                        .with_metadata("is_root", json!(false))
                         .with_metadata("dataset_id", json!(other_dataset_id.to_string())),
                     VectorPoint::new(Uuid::new_v4(), vec![0.9, 0.1])
                         .with_metadata("text", json!("our first area"))
-                        .with_metadata("is_root", json!(false))
                         .with_metadata("dataset_id", json!(dataset_id.to_string())),
                     VectorPoint::new(Uuid::new_v4(), vec![0.8, 0.2])
                         .with_metadata("text", json!("our second area"))
-                        .with_metadata("is_root", json!(false))
                         .with_metadata("dataset_id", json!(dataset_id.to_string())),
                 ],
             )
