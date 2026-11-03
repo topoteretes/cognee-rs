@@ -12,4 +12,3 @@ and [operations.md](../operations.md).
 | [custom-graph-schema.md](custom-graph-schema.md) | Supply custom summarization and runtime graph-extraction schemas. |
 | [ontology.md](ontology.md) | Ground extraction with an RDF/OWL/JSON-LD ontology. |
 | [temporal-cognify.md](temporal-cognify.md) | Extract events/timestamps and query them with temporal recall. |
-| [memify-node-filtering.md](memify-node-filtering.md) | Scope memify enrichment to specific node types / names (node sets). |

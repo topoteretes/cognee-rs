@@ -1,6 +1,6 @@
 //! Report and clear what a killed run left behind on a dataset (SDK-616).
 //!
-//! A cognify or memify run is refused with "already running" by **two**
+//! A cognify run is refused with "already running" by **two**
 //! independent gates, and a killed process leaves both of them set:
 //!
 //! 1. `check_pipeline_run_qualification` reads the latest `pipeline_runs` row
@@ -35,7 +35,7 @@ use crate::error::CliError;
 /// Pipeline names that take a claim. An unrecognised `--pipeline` would
 /// otherwise look up a pair that cannot exist and report, confidently, that
 /// nothing is blocking.
-const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline", "temporal-cognify", "memify_pipeline"];
+const KNOWN_PIPELINES: &[&str] = &["cognify_pipeline", "temporal-cognify"];
 
 /// Recorded on the `Errored` row this command writes, so the audit trail says
 /// who retired the run rather than leaving it looking like a real failure.
@@ -232,14 +232,14 @@ pub fn run(args: PipelineUnblockArgs, cm: Arc<ComponentManager>) -> Result<(), C
 /// wedged `temporal-cognify`, which is the confident-wrong-answer
 /// `KNOWN_PIPELINES` exists to prevent — and nothing in the failing cognify
 /// output tells the operator which pipeline name to pass. So an omitted
-/// `--pipeline` sweeps all three and tells them which one is wedged.
+/// `--pipeline` sweeps both and tells them which one is wedged.
 ///
-/// *Clearing* must not inherit that breadth. The three pipelines are
+/// *Clearing* must not inherit that breadth. The two pipelines are
 /// independent — each claims a dataset under its own name — so the operator who
 /// diagnosed a wedged `cognify_pipeline` and reaches for `--clear` would also
-/// retire a `memify_pipeline` run that is alive and mid-flight, marking it
+/// retire a `temporal-cognify` run that is alive and mid-flight, marking it
 /// failed and releasing its fresh claim. Nothing in the report they just read
-/// warned them, because the report is *supposed* to cover all three. Naming the
+/// warned them, because the report is *supposed* to cover both. Naming the
 /// pipeline is therefore required for the destructive path: the operator has
 /// already read which one is wedged, so it costs them a word, and it is the
 /// same word the reporting output tells them to pass.
@@ -394,8 +394,8 @@ mod tests {
         assert_eq!(resolved, KNOWN_PIPELINES);
     }
 
-    /// The destructive path does not inherit that breadth. `--clear` on all
-    /// three retires a live `memify_pipeline` run while the operator is
+    /// The destructive path does not inherit that breadth. `--clear` on
+    /// both retires a live `temporal-cognify` run while the operator is
     /// unblocking cognify.
     #[test]
     fn clearing_without_a_pipeline_is_refused() {
@@ -415,8 +415,8 @@ mod tests {
     #[test]
     fn clearing_one_named_pipeline_is_allowed() {
         let resolved =
-            resolve_pipelines(Some("memify_pipeline"), true).expect("a named pipeline clears");
-        assert_eq!(resolved, vec!["memify_pipeline".to_string()]);
+            resolve_pipelines(Some("temporal-cognify"), true).expect("a named pipeline clears");
+        assert_eq!(resolved, vec!["temporal-cognify".to_string()]);
     }
 
     #[test]

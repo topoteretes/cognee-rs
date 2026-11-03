@@ -94,9 +94,6 @@ pub struct ImproveParams<'a> {
     /// Session ids that feed the session stages. `None` or empty skips them
     /// with `no_session_ids`; empty ids are dropped.
     pub session_ids: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115): it only scoped the removed triplet
-    /// stage and the deprecated custom tasks. Ignored.
-    pub node_name: Option<Vec<String>>,
     /// Owner UUID under which graph/session reads and writes are scoped.
     pub owner_id: Uuid,
     /// Optional tenant UUID for multi-tenant deployments.
@@ -119,14 +116,6 @@ pub struct ImproveParams<'a> {
     /// ([`Settings::auto_feedback_enabled`](crate::config::Settings::auto_feedback_enabled)):
     /// gates `extract_agent_context` (`auto_feedback_disabled`).
     pub auto_feedback: bool,
-
-    /// Deprecated in Python (SDK-1115): custom extraction tasks, which Python
-    /// runs as a trailing `custom_tasks` stage. Not supported; ignored.
-    pub extraction_tasks: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
-    pub enrichment_tasks: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
-    pub data: Option<String>,
 
     /// Opt in to the `global_context_index` stage (Python's
     /// `build_global_context_index`). Default `false`.
@@ -394,10 +383,6 @@ async fn run_improve(
         session_ids: _,
         // Deprecated options (SDK-1115), ignored as Python ignores them
         // without custom tasks.
-        node_name: _,
-        extraction_tasks: _,
-        enrichment_tasks: _,
-        data: _,
         checkpoint_store,
         dataset_locks,
         owner_id,

@@ -339,7 +339,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     })
 }
 
-/// The datasets a dataset-wide command (`cognify`, `memify`) runs on, for
+/// The datasets a dataset-wide command (`cognify`) runs on, for
 /// `owner_id` in `tenant_id` with **strict** tenant equality (`None` ⇔ a
 /// tenant-less row).
 ///

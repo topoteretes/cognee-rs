@@ -9,7 +9,7 @@
 //!   short-circuit without re-running.
 //!
 //! Source of truth: [`check_pipeline_run_qualification.py`][py]. Locked
-//! decision 3 ships this gate at the `cognify` and `memify` entry points;
+//! decision 3 ships this gate at the `cognify` entry point;
 //! ingestion is intentionally excluded.
 //!
 //! [py]: https://github.com/topoteretes/cognee/blob/main/cognee/modules/pipelines/layers/check_pipeline_run_qualification.py

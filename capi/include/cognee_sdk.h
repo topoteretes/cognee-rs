@@ -578,7 +578,7 @@ void cg_sdk_recall(const CgSdk*        sdk,
 
 /* ── Memory ops (Phase 6) ─────────────────────────────────────────────────── */
 /*
- * All four ops are async (D4, R1): the callback fires on a tokio worker
+ * All three ops are async (D4, R1): the callback fires on a tokio worker
  * thread, never synchronously from the initiating call.
  *
  * Wire shapes (camelCase, D3):
@@ -587,9 +587,6 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *
  *   RememberResult — JSON object (fields vary; cognify_result/improve_result
  *     are skipped in serialisation via #[serde(skip)]).
- *
- *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,
- *                    "alreadyCompleted":bool,"priorPipelineRunId":null|"<uuid>"}
  *
  *   ImproveResult — {"datasetId":null|"<uuid>","datasetName":"…",
  *                    "sessionIds":[…],"stages":[ImproveStage…],
@@ -600,11 +597,6 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
  *                    "skipped"|"errored","reason":null|"…","error":null|"…",
  *                    "counts":{"…":N},"durationMs":N}
- *
- * NOTE: MemifyTask callbacks (extraction_tasks / enrichment_tasks) are not
- * exposed in v1 (TS parity scope).  Reserved post-parity extension:
- *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
- *   exceeds TS parity; record in STATUS decision log when Phase 6 lands.
  */
 
 /**
@@ -662,32 +654,11 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
                             void*               user_data);
 
 /**
- * Run the memify pipeline: create triplet embeddings for all graph edges
- * and index them in the vector DB.  Idempotent.
- *
- * opts_json — NULL or JSON object with optional fields:
- *   "tripletBatchSize" (integer), "nodeTypeFilter" (string),
- *   "nodeNameFilter" (string array), "nodeNameFilterOperator" (string).
- *
- * result_json on success: MemifyResult JSON object (see wire shape above).
- *
- * @param sdk       A valid CgSdk*.
- * @param opts_json NULL or null-terminated UTF-8 JSON options object.
- * @param callback  Called exactly once with the result.
- * @param user_data Forwarded to callback unchanged.
- */
-void cg_sdk_memify(const CgSdk*        sdk,
-                   const char*         opts_json,
-                   CgSdkResultCallback callback,
-                   void*               user_data);
-
-/**
  * Apply graph improvement based on session feedback.
  *
  * opts_json — required JSON object with:
  *   "datasetName" (string, required),
  *   "sessionIds"  (string array, optional),
- *   "nodeName"    (string array, optional),
  *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
  *   "tenant"      (UUID string, optional).
  *
@@ -1192,11 +1163,6 @@ CgErrorCode cg_sdk_config_get(const CgSdk* sdk, char** out_json);
  *
  *   cg_sdk_visualize_to_file result — quoted JSON string of the written path:
  *                                   "\"/absolute/path/graph_visualization.html\""
- *
- * NOTE: MemifyTask callbacks (CgMemifyTaskFn) are not exposed in v1 (TS parity
- * scope).  Reserved post-parity extension:
- *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
- *   exceeds TS parity; record in STATUS when Phase 6 lands.
  */
 
 /**

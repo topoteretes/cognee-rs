@@ -309,19 +309,6 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
     }
 
-    // --- memify ---
-    /** Index triplet embeddings from the existing graph (enables triplet search). */
-    public CompletableFuture<MemifyResult> memify(MemifyOptions opts) {
-        CompletableFuture<String> f = new CompletableFuture<>();
-        dispatchVoid(h -> Native.memify(h, Options.jsonOf(opts), f));
-        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, MemifyResult.class));
-    }
-
-    /** Index triplet embeddings with default options. */
-    public CompletableFuture<MemifyResult> memify() {
-        return memify(null);
-    }
-
     // --- improve ---
     /** Run the session-graph bridge pipeline ({@link ImproveOptions}'s {@code datasetName} is required). */
     public CompletableFuture<ImproveResult> improve(ImproveOptions opts) {

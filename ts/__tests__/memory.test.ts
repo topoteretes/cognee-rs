@@ -1,5 +1,5 @@
 /**
- * Memory ops — remember / rememberEntry / memify / improve.
+ * Memory ops — remember / rememberEntry / improve.
  *
  * ─── Tier-A (no LLM, no network) ────────────────────────────────────────────
  *
@@ -9,7 +9,7 @@
  *
  * ─── Tier-B (live LLM + embedding model) ────────────────────────────────────
  *
- * Tier-B tests run the full remember → memify → improve round-trip and only
+ * Tier-B tests run the full remember → improve round-trip and only
  * activate when all required env vars are present. They skip cleanly in CI.
  *
  * Required env for Tier-B:
@@ -104,35 +104,6 @@ describe("memory ops (Tier-A — no LLM)", () => {
     });
   });
 
-  // ── memify — no existing graph → should return alreadyCompleted=false ───────
-
-  describe("memify", () => {
-    it("memify on an empty graph returns a MemifyResult without error", async () => {
-      const h = makeTempHandle("memify_empty@example.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const result = await native.cogneeMemify(h.handle);
-        expect(typeof result).toBe("object");
-        expect(typeof result.tripletCount).toBe("number");
-        expect(typeof result.indexedCount).toBe("number");
-        expect(typeof result.alreadyCompleted).toBe("boolean");
-      } finally {
-        cleanup(h.tmpDir);
-      }
-    });
-
-    it("memify accepts optional options without error", async () => {
-      const h = makeTempHandle("memify_opts@example.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        const result = await native.cogneeMemify(h.handle, {});
-        expect(typeof result).toBe("object");
-      } finally {
-        cleanup(h.tmpDir);
-      }
-    });
-  });
-
   // ── improve — runs on empty graph, returns structured result ─────────────────
 
   describe("improve", () => {
@@ -160,13 +131,6 @@ describe("memory ops (Tier-A — no LLM)", () => {
       expect(() => {
         // @ts-expect-error intentionally omitting required args
         native.cogneeRemember(handle);
-      }).toThrow();
-    });
-
-    it("cogneeMemify throws synchronously when handle is missing", () => {
-      expect(() => {
-        // @ts-expect-error intentionally omitting required arg
-        native.cogneeMemify();
       }).toThrow();
     });
 
@@ -232,17 +196,6 @@ describeMaybe("memory ops (Tier-B — live LLM)", () => {
       expect(result.dataset_name).toBe("mem_b_ds");
     },
     300_000
-  );
-
-  it(
-    "cogneeMemify indexes triplets and returns MemifyResult",
-    async () => {
-      const result = await native.cogneeMemify(handle);
-      expect(typeof result.tripletCount).toBe("number");
-      expect(typeof result.indexedCount).toBe("number");
-      expect(typeof result.alreadyCompleted).toBe("boolean");
-    },
-    120_000
   );
 
   it(

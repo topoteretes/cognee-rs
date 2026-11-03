@@ -18,15 +18,6 @@ class MemoryMarshallingTest {
     }
 
     @Test
-    void memifyResultDeserializes() {
-        String canned = "{\"tripletCount\":5,\"indexedCount\":5,\"batchCount\":1,"
-                + "\"alreadyCompleted\":false,\"priorPipelineRunId\":null}";
-        MemifyResult r = Json.fromJson(canned, MemifyResult.class);
-        assertEquals(5, r.tripletCount());
-        assertEquals(1, r.batchCount());
-    }
-
-    @Test
     void improveResultDeserializes() {
         String canned = "{\"datasetId\":null,\"datasetName\":\"ds\",\"sessionIds\":[\"s1\"],"
                 + "\"stages\":[{\"stage\":\"feedback_weights\",\"status\":\"completed\","

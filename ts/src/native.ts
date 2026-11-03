@@ -16,8 +16,6 @@ import type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeForgetTarget,
@@ -50,8 +48,6 @@ export type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeImproveStage,
@@ -150,7 +146,7 @@ export interface NativeBindings {
     opts?: CogneeRecallOptions
   ): Promise<CogneeRecallResult>;
 
-  // Memory ops (Phase 5): remember / remember_entry / memify / improve.
+  // Memory ops (Phase 5): remember / remember_entry / improve.
   //
   // `cogneeRemember` is a one-call add+cognify+optional-improve composite.
   // opts.selfImprovement runs improve() after cognify.
@@ -159,11 +155,7 @@ export interface NativeBindings {
   // `cogneeRememberEntry` stores a typed MemoryEntry in a session. The
   // `entry` discriminated union supports "qa", "trace", and "feedback" types.
   //
-  // `cogneeMemify` indexes triplet embeddings from the existing knowledge graph.
-  // NOTE: extraction_tasks, enrichment_tasks, custom_data fields in MemifyConfig
-  // are closures and cannot be passed from JS.
-  //
-  // `cogneeImprove` runs the four-stage session-graph bridge pipeline.
+  // `cogneeImprove` runs the session-graph bridge pipeline.
   cogneeRemember(
     handle: NativeBox,
     dataInput: CogneeDataInput | CogneeDataInput[],
@@ -177,10 +169,6 @@ export interface NativeBindings {
     sessionId: string,
     opts?: { tenant?: string }
   ): Promise<CogneeRememberResult>;
-  cogneeMemify(
-    handle: NativeBox,
-    opts?: CogneeMemifyOptions
-  ): Promise<CogneeMemifyResult>;
   cogneeImprove(
     handle: NativeBox,
     opts: CogneeImproveOptions
