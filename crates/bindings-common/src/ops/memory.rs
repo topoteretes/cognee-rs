@@ -232,10 +232,11 @@ pub async fn run_remember(
             "`extractor` is not supported when `sessionId` is provided".to_string(),
         ));
     }
+    // Python's `remember(self_improvement=True)` improves unless told not to.
     let self_improvement = opts
         .get("selfImprovement")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;

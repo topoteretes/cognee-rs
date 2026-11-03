@@ -27,7 +27,8 @@ use crate::sdk_ops::parse_c_str_or_fire;
 /// `inputs_json` is a `CogneeDataInput` object **or** array.
 /// `dataset_name` is the target dataset name.
 /// `opts_json` may be `NULL` or a JSON object with optional fields:
-///   `"sessionId"` (string), `"selfImprovement"` (boolean), `"tenant"` (UUID string).
+///   `"sessionId"` (string), `"selfImprovement"` (boolean, default `true`),
+///   `"tenant"` (UUID string).
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread, never
 /// synchronously from this call.

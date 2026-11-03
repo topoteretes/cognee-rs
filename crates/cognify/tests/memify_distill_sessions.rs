@@ -174,7 +174,6 @@ async fn distill_no_qa_returns_no_qa_entries() {
     let res = distill_session(
         "no_such_session",
         "ds_noqa",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -224,7 +223,6 @@ async fn distill_curator_failopen_yields_no_proposed_lessons() {
     let res = distill_session(
         session_id,
         "ds_curator_fail",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -277,7 +275,6 @@ async fn distill_writer_rejects_yields_no_accepted_lessons() {
     let res = distill_session(
         session_id,
         "ds_reject",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -340,7 +337,6 @@ async fn distill_writer_failopen_yields_no_accepted_lessons() {
     let res = distill_session(
         session_id,
         "ds_writer_failopen",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -409,7 +405,6 @@ async fn distill_sessions_failopen_isolates_sessions() {
     let r = distill_sessions_in_knowledge_graph(
         &[session_a.to_string(), session_b.to_string()],
         "ds_iso",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -506,7 +501,6 @@ async fn distill_happy_path_tags_both_node_sets() {
     let r = distill_sessions_in_knowledge_graph(
         &[session_id.to_string()],
         "ds_happy",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),

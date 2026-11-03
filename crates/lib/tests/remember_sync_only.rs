@@ -151,7 +151,10 @@ fn remember_result_has_no_inner_field_in_json() {
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        improve_result: None,
+        improve: None,
+        improve_error: None,
+        after_run_error: None,
+        improve_skipped: None,
         improve_launched: false,
     };
     let json = r.to_dict();
@@ -277,12 +280,12 @@ async fn remember_permanent_self_improvement_runs_improve() {
     assert_eq!(result.status, RememberStatus::Completed);
     assert!(result.error.is_none(), "improve error: {:?}", result.error);
     assert!(
-        result.improve_result.is_some(),
+        result.improve.is_some(),
         "self_improvement=true must run improve()"
     );
     // improve() has no memify/triplet stage (SDK-1115), so nothing wrote the
     // `Triplet_text` collection.
-    let improve = result.improve_result.as_ref().expect("improve ran");
+    let improve = result.improve.as_ref().expect("improve ran");
     assert!(
         !improve.stages.iter().any(|stage| stage.stage == "memify"),
         "improve must not report a memify stage: {:?}",
@@ -321,5 +324,5 @@ async fn remember_permanent_self_improvement_runs_improve() {
     )
     .await
     .expect("permanent remember without self-improvement");
-    assert!(result.improve_result.is_none());
+    assert!(result.improve.is_none());
 }

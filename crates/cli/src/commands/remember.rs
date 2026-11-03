@@ -40,9 +40,8 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         ));
     }
 
-    // `--no-improve` flips the default-on self-improvement (`improve`) pass;
-    // `IMPROVE_AUTO_ENABLED=false` (`improve.auto_enabled`) switches it off too.
-    let self_improvement = !args.no_improve && cm.settings().auto_improve_enabled();
+    // `--no-improve` flips the default-on self-improvement (`improve`) pass.
+    let self_improvement = !args.no_improve;
 
     let inputs = args
         .data

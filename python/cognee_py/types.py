@@ -142,6 +142,7 @@ class RememberOpts(TypedDict, total=False):
     """Options accepted by :meth:`Cognee.remember`."""
 
     session_id: str
+    # Run ``improve()`` after the remember (default ``True``, as in Python).
     self_improvement: bool
     tenant: str
 

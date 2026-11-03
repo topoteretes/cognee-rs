@@ -95,7 +95,6 @@ async fn persist_empty_sessions_returns_zero() {
     let res = persist_sessions_in_knowledge_graph(
         &["no_such_session".to_string()],
         "ds_empty",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -166,7 +165,6 @@ async fn persist_tags_nodes_with_user_sessions_node_set() {
     let _ = persist_sessions_in_knowledge_graph(
         &[session_id.to_string()],
         "ds_persist",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),
@@ -259,7 +257,6 @@ async fn persist_sessions_tenantless_never_touches_a_tenanted_same_named_dataset
     let _ = persist_sessions_in_knowledge_graph(
         &[session_id.to_string()],
         "ds_persist",
-        None,
         owner,
         None,
         Arc::clone(&h.session_store),

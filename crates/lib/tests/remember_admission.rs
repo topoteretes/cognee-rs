@@ -108,8 +108,12 @@ async fn run(
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
+        None,
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
+        Some(cognee::api::ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
+        false,
     )
     .await
     .expect("remember")

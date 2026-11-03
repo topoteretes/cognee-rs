@@ -772,7 +772,8 @@ class Cognee:
     ) -> Any:
         """One-call add + cognify + optional self-improvement.
 
-        Accepted *opts* keys: ``sessionId``, ``selfImprovement``, ``tenant``
+        Accepted *opts* keys: ``sessionId``, ``selfImprovement`` (default
+        ``True``, as in Python), ``tenant``
         (``snake_case`` spellings accepted too).
         Returns the ``RememberResult`` as a dict.
         """
