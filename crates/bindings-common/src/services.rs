@@ -17,7 +17,9 @@ use cognee::add::AddPipeline;
 use cognee::api::get_or_create_default_user;
 use cognee::cognify::CognifyConfig;
 use cognee::core::{CpuPool, DatasetLocks, RayonThreadPool};
-use cognee::database::{DeleteDb, IngestDb, PipelineRunRepository, RelationalDb, SearchHistoryDb};
+use cognee::database::{
+    CheckpointStore, DeleteDb, IngestDb, PipelineRunRepository, RelationalDb, SearchHistoryDb,
+};
 use cognee::delete::DeleteService;
 use cognee::embedding::EmbeddingEngine;
 use cognee::graph::GraphDBTrait;
@@ -44,7 +46,7 @@ pub struct CogneeServices {
     /// The relational backend, as built by the `ComponentManager` registry.
     /// [`RelationalDb`] has every per-domain DB trait as a supertrait, so derived
     /// services upcast it with `Arc::clone(&database) as Arc<dyn IngestDb>` (etc.),
-    /// or use its accessors such as `pipeline_runs()`.
+    /// or use its accessors such as `pipeline_runs()` and `checkpoints()`.
     pub database: Arc<dyn RelationalDb>,
     pub graph_db: Arc<dyn GraphDBTrait>,
     pub vector_db: Arc<dyn VectorDB>,
@@ -61,6 +63,7 @@ pub struct CogneeServices {
     pub session_manager: Arc<SessionManager>,
     pub ontology_resolver: Arc<dyn OntologyResolver>,
     pub cognify_config: CognifyConfig,
+    pub checkpoint_store: Arc<dyn CheckpointStore>,
     /// The manager these services were built from; per-run components (the
     /// graph-extraction backend) are built through its registry.
     pub component_manager: Arc<ComponentManager>,
@@ -338,6 +341,8 @@ impl CogneeServices {
         // CognifyConfig from Settings.
         let cognify_config = cm.settings().cognify_config();
 
+        let checkpoint_store: Arc<dyn CheckpointStore> = Arc::clone(&database).checkpoints();
+
         let services = CogneeServices {
             storage,
             database,
@@ -354,6 +359,7 @@ impl CogneeServices {
             session_manager,
             ontology_resolver,
             cognify_config,
+            checkpoint_store,
             component_manager: Arc::clone(cm),
         };
 

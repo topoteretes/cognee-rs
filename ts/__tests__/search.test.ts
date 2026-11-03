@@ -66,6 +66,7 @@ const ALL_RECALL_SCOPES = [
   "graph",
   "session",
   "trace",
+  "graph_context",
   "all",
 ] as const;
 

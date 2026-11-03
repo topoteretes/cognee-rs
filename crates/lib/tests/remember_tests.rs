@@ -20,7 +20,7 @@ use std::sync::Arc;
 use cognee::api::ImproveConfig;
 use cognee::api::remember::{RememberItemInfo, RememberStatus, remember};
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
@@ -45,6 +45,7 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
+    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -77,6 +78,8 @@ async fn make_harness() -> Harness {
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
+    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
+
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -89,6 +92,7 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
+        checkpoint_store,
     }
 }
 
@@ -123,6 +127,7 @@ async fn remember_session_stores_qa_entry() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
+        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -178,6 +183,7 @@ async fn remember_session_with_caching_off_succeeds_without_storing() {
         Some(h.db.clone()),
         Some(Arc::clone(&store)),
         Some(manager),
+        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -223,6 +229,7 @@ async fn remember_session_self_improvement_runs_in_background() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
+        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -263,6 +270,7 @@ async fn remember_session_requires_session_store() {
         Some(h.db.clone()),
         /* session_store */ None,
         /* session_manager */ None,
+        None,
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -298,6 +306,7 @@ async fn display_and_to_dict_on_session_result() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
+        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),

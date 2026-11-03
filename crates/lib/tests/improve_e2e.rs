@@ -1062,24 +1062,6 @@ async fn review_conflicts_config_opts_in() {
         stage(&r, "review_conflicts").reason.as_deref(),
         Some(REASON_NO_LLM_CONFIGURED)
     );
-    // The fs store kept the snapshot at `{user}/_graph_context_{session}.json`;
-    // nothing may write it any more.
-    let snapshot = h
-        ._sess_dir
-        .path()
-        .join(&user_id)
-        .join(format!("_graph_context_{session_id}.json"));
-    assert!(!snapshot.exists(), "no graph snapshot may be written");
-    let entries = h
-        .session_store
-        .get_all_qa_entries(session_id, Some(&user_id))
-        .await
-        .unwrap();
-    assert_eq!(entries.len(), 1, "the session keeps only its own Q&A");
-    assert!(
-        !entries[0].answer.contains("Background knowledge"),
-        "no graph prefix may be stored"
-    );
 }
 
 // ---------------------------------------------------------------------------
