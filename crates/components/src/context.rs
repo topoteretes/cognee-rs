@@ -115,6 +115,8 @@ pub struct EmbeddingInputs {
     /// Resolved API key (embedding-specific, falling back to the LLM key).
     pub api_key: Option<String>,
     pub batch_size: usize,
+    /// `embedding.max_concurrent_data_points`.
+    pub max_concurrent_data_points: usize,
     /// Pace embedding dispatch (`EMBEDDING_RATE_LIMIT_ENABLED`). Flag-gated
     /// only: unlike the LLM path, provider overload never switches this on by
     /// itself, matching Python's embedding limiter.

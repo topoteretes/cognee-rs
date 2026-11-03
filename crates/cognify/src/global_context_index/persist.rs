@@ -118,13 +118,15 @@ impl IndexStore<'_> {
                 .await
                 .map_err(vector_error)?;
         }
+        // Python's `index_data_points`: batches of the engine's batch size,
+        // `max_concurrent_batches()` of them in flight (SDK-1039 P7).
+        let texts: Vec<&str> = summaries.iter().map(|s| s.text.as_str()).collect();
+        let mut vectors = cognee_embedding::embed_in_batches(self.embedding_engine, &texts)
+            .await
+            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?
+            .into_iter();
         for batch in summaries.chunks(self.embedding_engine.batch_size().max(1)) {
-            let texts: Vec<&str> = batch.iter().map(|s| s.text.as_str()).collect();
-            let vectors = self
-                .embedding_engine
-                .embed(&texts)
-                .await
-                .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
+            let vectors: Vec<Vec<f32>> = vectors.by_ref().take(batch.len()).collect();
             let points: Vec<VectorPoint> = batch
                 .iter()
                 .zip(vectors)
