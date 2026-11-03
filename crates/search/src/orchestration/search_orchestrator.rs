@@ -2834,6 +2834,90 @@ mod tests {
         assert!(qa_questions(&manager, "default_session").await.is_empty());
     }
 
+    /// Python's `load_read_only_session_prompt`: a sessionless preview reads
+    /// the default session, so its prompt carries that session's history.
+    #[tokio::test]
+    async fn a_sessionless_preview_prompt_carries_the_default_sessions_history() {
+        struct HistoryEchoRetriever;
+
+        #[async_trait]
+        impl SearchRetriever for HistoryEchoRetriever {
+            fn search_type(&self) -> SearchType {
+                SearchType::RagCompletion
+            }
+
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
+                Ok(vec![crate::types::SearchItem {
+                    id: None,
+                    score: Some(0.9),
+                    payload: json!({ "text": "ctx" }),
+                }])
+            }
+
+            async fn completion_messages(
+                &self,
+                _query: &str,
+                _context: &SearchContext,
+                session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<Option<Vec<Message>>, SearchError> {
+                Ok(Some(vec![
+                    Message::system("system"),
+                    Message::user(format!(
+                        "[{}] {}",
+                        session.session_id.as_deref().unwrap_or("none"),
+                        session.formatted_history
+                    )),
+                ]))
+            }
+
+            async fn get_completion(
+                &self,
+                _query: &str,
+                _context: Option<SearchContext>,
+                _session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<SearchOutput, SearchError> {
+                Ok(SearchOutput::Text("unused".into()))
+            }
+        }
+
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![Arc::new(HistoryEchoRetriever)]);
+        let user = session_test_user().to_string();
+        manager
+            .save_qa(
+                None,
+                Some(&user),
+                "earlier question",
+                "earlier answer",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let mut preview = session_request("preview");
+        preview.session_id = None;
+        preview.only_context = Some(true);
+
+        let response = orchestrator.search(&preview).await.unwrap();
+
+        let prompt = format!("{:?}", response.result);
+        assert!(prompt.contains("[default_session]"), "{prompt}");
+        assert!(prompt.contains("earlier question"), "{prompt}");
+        assert!(prompt.contains("earlier answer"), "{prompt}");
+        assert_eq!(analysis_calls(&calls), 0);
+        assert_eq!(
+            qa_questions(&manager, "default_session").await,
+            ["earlier question"]
+        );
+    }
+
     /// A batch search skips turn analysis whatever its session, but records
     /// its answer like any completion: here in the default session.
     #[tokio::test]
