@@ -40,6 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     possibly one shared with the caller, instead of looking `datasetName` up
     among the caller's own datasets. A non-string or malformed id is an error.
 
+- **`cognee-search`: session-turn preparation follows Python's capability
+  model; the legacy feedback detector is gone; `summarize_context` is removed
+  (SDK-1045).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | Which retrievers prepare a session turn | a fixed list of search types | `SearchRetriever::supports_session_turn_preparation()` (provided, default `true`, as Python's `BaseRetriever`); chunks, lexical, summaries, Cypher, natural language and graph report opt out, as do feedback and feeling-lucky (not Python `BaseRetriever`s) |
+  | `CodingRules`, custom / community retrievers in a session search | no turn preparation | prepare turns |
+  | Opted-out retriever in a session search | one legacy `detect_feedback` LLM call, feedback written to the prior QA row | no analysis call, no feedback written (Python's `detect_feedback` has no callers) |
+  | `cognee_search::detect_feedback`, `FeedbackDetectionResult` | public | removed |
+  | `SearchRequest.summarize_context` | `Option<bool>` (Rust only) | removed; the QA `context` column is always empty, as Python (`summarize_context=False` everywhere) |
+  | `SESSION_SEARCH_MODE` not `sequential` / `concurrent` | warned and ignored | an error (`ConfigManager::check_supported` / `check_strict`), as Python's `Literal` |
+
+  **Migration.** Drop `summarize_context: None` from `SearchRequest` literals;
+  nothing read it by default. A custom retriever that must not prepare turns
+  overrides `supports_session_turn_preparation` to return `false`.
+
+
 - **`cognee-search`: recall notes a graph that is not built instead of
   searching it.** As Python's recall does, a graph-only recall first reads
   `pipeline_runs` for the datasets the caller can read. When no graph was ever
@@ -1234,6 +1252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider that omits it goes through the adapter's corrective retry. Rust's default structured-output mode is still a forced tool
   call; Python's `strict` `json_schema` request is the opt-in
   `LLM_STRUCTURED_OUTPUT_MODE=json_schema`.
+
+- **Session-turn persistence parity (SDK-1045).** A structured answer
+  (`response_schema`) is now recorded as the turn's QA row, as compact JSON like
+  Python's `model_dump_json`, in the sequential, concurrent and fan-out paths
+  (it was dropped); several answer texts are joined by a blank line everywhere;
+  concurrent execution also needs the session cache to be available
+  (`SessionManager::is_available`, Python's `is_session_available_for_completion`).
+
 
 - **Session-turn commit parity (SDK-1045).** `cognee-search` now matches
   Python's turn semantics: a concurrent or fan-out turn that produced no

@@ -275,6 +275,13 @@ impl SearchRetriever for FeelingLuckyRetriever {
         SearchType::FeelingLucky
     }
 
+    // Python resolves FEELING_LUCKY to the selected retriever before the turn
+    // is prepared; here the selection happens inside the delegate, so the
+    // selected retriever's analysis cannot run first.
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
+    }
+
     async fn get_context(
         &self,
         query: &str,
@@ -447,6 +454,11 @@ impl FeedbackRetriever {
 impl SearchRetriever for FeedbackRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Feedback
+    }
+
+    // Not a Python `BaseRetriever`: the message is the feedback, not a turn.
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
     }
 
     fn dataset_scoping(&self) -> super::DatasetScoping {

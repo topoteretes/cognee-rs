@@ -860,7 +860,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         }
     }
 
@@ -1042,7 +1041,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1122,7 +1120,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1176,7 +1173,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let result = orchestrator.search(&request).await;
@@ -1215,6 +1211,46 @@ mod tests {
                 .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
             assert_eq!(retriever.search_type(), search_type);
         }
+    }
+
+    /// Python's `supports_session_turn_preparation` matrix
+    /// (`base_retriever.py`, with the overrides of the chunks, lexical,
+    /// summaries, Cypher, natural-language and graph-report retrievers): the
+    /// raw retrieval modes opt out, every other standard retriever (coding
+    /// rules included) prepares session turns.
+    #[test]
+    fn session_turn_preparation_capability_matches_python() {
+        use super::{SearchTuning, StandardEngines};
+
+        let retrievers = SearchBuilder::standard_retrievers(
+            StandardEngines {
+                vector_db: Arc::new(TestVectorDb),
+                embedding_engine: Arc::new(TestEmbedding),
+                graph_db: Arc::new(TestGraphDb),
+                llm: Arc::new(TestLlm),
+            },
+            &SearchTuning::default(),
+        );
+        let opted_out = [
+            SearchType::Chunks,
+            SearchType::ChunksLexical,
+            SearchType::Summaries,
+            SearchType::Cypher,
+            SearchType::NaturalLanguage,
+            SearchType::GraphReport,
+            // Not Python `BaseRetriever`s: the feedback message itself, and
+            // the selector whose delegate is chosen inside the call.
+            SearchType::Feedback,
+            SearchType::FeelingLucky,
+        ];
+        for (search_type, retriever) in &retrievers {
+            assert_eq!(
+                retriever.supports_session_turn_preparation(),
+                !opted_out.contains(search_type),
+                "{search_type:?}"
+            );
+        }
+        assert!(retrievers.contains_key(&SearchType::CodingRules));
     }
 
     /// `with_tuning` must reach every standard retriever that consumes a

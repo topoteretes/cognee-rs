@@ -391,7 +391,6 @@ pub fn build_search_request(
         auto_feedback_detection,
         neighborhood_depth,
         neighborhood_seed_top_k,
-        summarize_context: None,
     })
 }
 

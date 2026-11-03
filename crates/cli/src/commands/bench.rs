@@ -838,7 +838,6 @@ fn bench_search_request(
         node_name_filter_operator: None,
         wide_search_top_k: None,
         triplet_distance_penalty: None,
-        summarize_context: None,
         user_id: Some(owner_id),
         tenant_id: None,
         verbose: None,
