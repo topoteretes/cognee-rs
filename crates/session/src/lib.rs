@@ -7,7 +7,9 @@
 //! - `SessionContextEntry` / `SessionContextRow` — session-context rows
 //!   (guidance entries and internal state rows), and `StateRowWatermark`,
 //!   the state-row watermark the improve stages share
-//! - `apply_candidate_updates` — the deterministic applier that stores
+//! - `build_active_context_block` — the deterministic ranker and renderer of
+//!   the "Active session guidance" block a session turn serves;
+//!   `apply_candidate_updates` — the deterministic applier that stores
 //!   proposed guidance, and `extract_pending_agent_context`, the LLM pass
 //!   that turns agent trace steps into agent-profile lessons
 //! - `FsSessionStore` (feature `fs`), `RedisSessionStore`, `RelationalSessionStore`
@@ -43,8 +45,13 @@ pub use agent_context_extraction::{
     extract_pending_agent_context, sanitize_error_text, trace_window_size,
 };
 pub use context_builder::{
-    CandidateContextUpdate, MIN_CANDIDATE_CONFIDENCE, apply_candidate_updates,
-    apply_candidate_updates_for_user,
+    AGENT_SECTION_HEADINGS, ActiveContextSelection, BLOCK_TITLE, CONFLICT_INSTRUCTION,
+    CandidateContextUpdate, ContextRanker, DEFAULT_PER_SECTION_CHAR_BUDGET,
+    DEFAULT_TOTAL_CHAR_BUDGET, DeterministicRanker, MIN_CANDIDATE_CONFIDENCE, NET_HELP_CLAMP,
+    SECTION_HEADINGS, apply_candidate_updates, apply_candidate_updates_for_user,
+    build_active_context_block, build_active_context_block_safe, build_active_context_selection,
+    build_active_context_selection_safe, clamped_net_helpfulness, fit_preference_lines,
+    headings_for_profile, render_preference_block, select_context_entries,
 };
 pub use context_entry::{
     AGENT_CONTEXT_SECTIONS, CONTEXT_ENTRY_KIND, CONTEXT_PROFILE_AGENT, CONTEXT_PROFILE_QA,

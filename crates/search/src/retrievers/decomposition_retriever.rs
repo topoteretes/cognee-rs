@@ -329,6 +329,7 @@ impl GraphCompletionDecompositionRetriever {
             subquery,
             &render_edges_context(context),
             &SessionContext::default(),
+            "",
             params,
         )?;
         Ok(self
@@ -381,8 +382,9 @@ impl GraphCompletionDecompositionRetriever {
         let final_context = self
             .final_context(query, context, combined_context, params)
             .await?;
+        let guidance = self.core.guidance(session, params, false).await;
         self.prompts
-            .messages(query, &final_context, session, params)
+            .messages(query, &final_context, session, &guidance, params)
             .map(Some)
     }
 

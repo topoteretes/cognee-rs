@@ -1,28 +1,30 @@
 use cognee_llm::Message;
 use cognee_session::SessionContext;
 
-/// Build the full LLM message list, prepending session history to the system
-/// prompt when present, followed by the current user prompt.
+/// Build the LLM message list a completion sends (Python's
+/// `build_completion_prompts`).
 ///
-/// When `session.formatted_history` is non-empty, it is prepended to the
-/// system prompt with a `\nTASK:` separator so the LLM sees prior context
-/// before the current instructions. When history is empty, the system prompt
-/// is passed through unchanged.
+/// The system prompt is the retriever's task template, nothing else. The user
+/// prompt is the session history, then the rendered question and context,
+/// then the `guidance` block last; empty layers are skipped and the rest are
+/// joined by a blank line.
 pub fn build_messages_with_history(
     system_prompt: String,
     user_prompt: String,
     session: &SessionContext,
+    guidance: &str,
 ) -> Vec<Message> {
-    let effective_system_prompt = if session.formatted_history.is_empty() {
-        system_prompt
-    } else {
-        format!("{}\nTASK:{}", session.formatted_history, system_prompt)
-    };
-
-    vec![
-        Message::system(effective_system_prompt),
-        Message::user(user_prompt),
+    let user_prompt = [
+        session.formatted_history.as_str(),
+        user_prompt.as_str(),
+        guidance,
     ]
+    .into_iter()
+    .filter(|layer| !layer.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
+
+    vec![Message::system(system_prompt), Message::user(user_prompt)]
 }
 
 #[cfg(test)]
@@ -30,12 +32,15 @@ mod tests {
     use super::*;
     use cognee_session::SessionContext;
 
+    const HISTORY: &str = "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n";
+
     #[test]
-    fn empty_history_passes_system_prompt_unchanged() {
+    fn no_session_layers_leave_the_prompts_unchanged() {
         let messages = build_messages_with_history(
             "system instructions".to_string(),
             "user question".to_string(),
             &SessionContext::default(),
+            "",
         );
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].content, "system instructions");
@@ -43,25 +48,33 @@ mod tests {
     }
 
     #[test]
-    fn history_prepended_to_system_prompt_with_task_separator() {
+    fn history_leads_and_guidance_trails_the_user_prompt() {
         let session = SessionContext {
             session_id: Some("s1".to_string()),
-            history: vec![],
-            formatted_history: "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n"
-                .to_string(),
+            formatted_history: HISTORY.to_string(),
+            ..Default::default()
         };
         let messages = build_messages_with_history(
             "You are a helpful assistant.".to_string(),
             "What is Rust?".to_string(),
             &session,
+            "## Active session guidance",
         );
-        assert_eq!(messages.len(), 2);
-        assert!(messages[0].content.starts_with("Previous conversation:"));
-        assert!(
-            messages[0]
-                .content
-                .contains("\nTASK:You are a helpful assistant.")
+        assert_eq!(messages[0].content, "You are a helpful assistant.");
+        assert_eq!(
+            messages[1].content,
+            format!("{HISTORY}\n\nWhat is Rust?\n\n## Active session guidance")
         );
-        assert_eq!(messages[1].content, "What is Rust?");
+    }
+
+    #[test]
+    fn guidance_alone_follows_the_user_prompt() {
+        let messages = build_messages_with_history(
+            "sys".to_string(),
+            "q".to_string(),
+            &SessionContext::default(),
+            "guide",
+        );
+        assert_eq!(messages[1].content, "q\n\nguide");
     }
 }

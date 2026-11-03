@@ -126,8 +126,9 @@ impl GraphSummaryCompletionRetriever {
             .await?
             .content;
 
+        let guidance = self.core.guidance(session, params, false).await;
         self.prompts
-            .messages(query, &summarized_context, session, params)
+            .messages(query, &summarized_context, session, &guidance, params)
             .map(Some)
     }
 }
@@ -318,11 +319,13 @@ impl GraphCompletionContextExtensionRetriever {
             return Ok(None);
         }
         let extended_context = self.extend_context(query, context, params).await?;
+        let guidance = self.core.guidance(session, params, false).await;
         self.prompts
             .messages(
                 query,
                 &render_edges_context(&extended_context),
                 session,
+                &guidance,
                 params,
             )
             .map(Some)
@@ -483,6 +486,7 @@ impl GraphCompletionCotRetriever {
                 .as_deref()
                 .or(self.prompts.system_prompt_path.as_deref()),
         )?;
+        let guidance = self.core.guidance(session, params, false).await;
         let max_iter = params.max_iter.unwrap_or(self.max_iter);
         let answer_over = |context: &SearchContext| {
             render_graph_user_prompt(
@@ -500,6 +504,7 @@ impl GraphCompletionCotRetriever {
                     system_prompt.clone(),
                     answer_over(&current_context),
                     session,
+                    &guidance,
                 ),
                 self.generation_options.clone(),
             )
@@ -569,6 +574,7 @@ impl GraphCompletionCotRetriever {
                         system_prompt.clone(),
                         answer_over(&current_context),
                         session,
+                        &guidance,
                     ),
                     self.generation_options.clone(),
                 )
@@ -628,11 +634,13 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         let outcome = self
             .reason(query, context.clone(), session, params, false)
             .await?;
+        let guidance = self.core.guidance(session, params, false).await;
         self.prompts
             .messages(
                 query,
                 &render_edges_context(&outcome.context),
                 session,
+                &guidance,
                 params,
             )
             .map(Some)
@@ -660,10 +668,12 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         if params.response_schema.is_some() {
             // CoT builds the answer as plain text; structured output is the
             // final prompt re-run as a structured call.
+            let guidance = self.core.guidance(session, params, false).await;
             let messages = self.prompts.messages(
                 query,
                 &render_edges_context(&outcome.context),
                 session,
+                &guidance,
                 params,
             )?;
             complete(

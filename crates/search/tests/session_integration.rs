@@ -811,6 +811,7 @@ impl TurnHarness {
                 "old answer",
                 None,
                 None,
+                None,
             )
             .await;
         let retriever = Arc::new(ScriptedRetriever {
@@ -1305,6 +1306,7 @@ async fn seeded_session(dir: &tempfile::TempDir) -> (Arc<SessionManager>, Uuid) 
             "old answer",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1505,4 +1507,305 @@ async fn concurrent_mode_needs_an_available_session_cache() {
     let completion_queries = harness.retriever.completion_queries.lock().unwrap().clone(); // lock poison is unrecoverable
     assert_eq!(completion_queries, vec!["Be terse. What now?".to_string()]);
     assert_eq!(harness.qa_count().await, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Session guidance block and served-context lineage (SDK-1045 P3): a seeded
+// guidance entry is served into the turn's guidance, recorded on the answered
+// turn's QA, stamped as served, and rated by the next turn's analysis; an
+// acknowledgement turn records no served ids.
+// ---------------------------------------------------------------------------
+
+/// Answers each analysis call from a queue (a drained queue analyses "no signal").
+struct QueueLlm {
+    analyses: Mutex<std::collections::VecDeque<serde_json::Value>>,
+}
+
+#[async_trait]
+impl cognee_llm::Llm for QueueLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+        Err(cognee_llm::LlmError::ConfigError("not used".into()))
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<serde_json::Value> {
+        Ok(self
+            .analyses
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .pop_front()
+            .unwrap_or_else(no_signal_analysis))
+    }
+
+    fn model(&self) -> &str {
+        "queue-test"
+    }
+}
+
+fn no_signal_analysis() -> serde_json::Value {
+    json!({
+        "response_to_user": null,
+        "query_to_answer": null,
+        "served_context_ratings": [],
+        "candidate_context_updates": [],
+        "previous_answer_rating": null
+    })
+}
+
+/// Answers every completion and keeps the session each one received.
+struct SessionCapturingRetriever {
+    sessions: Mutex<Vec<SessionContext>>,
+}
+
+#[async_trait]
+impl SearchRetriever for SessionCapturingRetriever {
+    fn search_type(&self) -> SearchType {
+        SearchType::GraphCompletion
+    }
+
+    async fn get_context(
+        &self,
+        _query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        Ok(vec![])
+    }
+
+    async fn get_completion(
+        &self,
+        _query: &str,
+        _context: Option<SearchContext>,
+        session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<SearchOutput, SearchError> {
+        self.sessions.lock().unwrap().push(session.clone()); // lock poison is unrecoverable
+        Ok(SearchOutput::Text("the answer".into()))
+    }
+}
+
+const RULE_ID: &str = "rule-1";
+const GUIDANCE_BLOCK: &str = "## Active session guidance\n\
+     Items are listed oldest to newest within each section. \
+     When guidance conflicts, prefer the later item.\n\
+     ### Rules\n- [10:14:22] Cite the source file";
+
+struct GuidanceHarness {
+    orchestrator: SearchOrchestrator,
+    manager: Arc<SessionManager>,
+    llm: Arc<QueueLlm>,
+    retriever: Arc<SessionCapturingRetriever>,
+    user: Uuid,
+    per_dataset: bool,
+    _dir: tempfile::TempDir,
+}
+
+impl GuidanceHarness {
+    /// A session holding one prior turn and one stored `qa` rules entry.
+    async fn new(mode: cognee_search::SessionSearchMode, per_dataset: bool) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path().join("sessions"),
+        ))));
+        let user = Uuid::new_v4();
+        let user_id = user.to_string();
+        manager
+            .save_qa(
+                Some(SESSION),
+                Some(&user_id),
+                "old question",
+                "old answer",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let entry = cognee_session::SessionContextEntry {
+            id: RULE_ID.to_string(),
+            section: "rules".to_string(),
+            context_profile: cognee_session::CONTEXT_PROFILE_QA.to_string(),
+            content: "Cite the source file".to_string(),
+            normalized_content: "cite the source file".to_string(),
+            confidence: 0.9,
+            created_at: "2026-06-10T10:14:22".to_string(),
+            source_feedback_ids: vec![],
+            source_trace_ids: vec![],
+            helpful_count: 0,
+            harmful_count: 0,
+            priority: 0,
+            last_served_at: None,
+            embedding: None,
+            kind: cognee_session::CONTEXT_ENTRY_KIND.to_string(),
+        };
+        manager
+            .create_session_context_entry(Some(SESSION), Some(&user_id), entry.to_row().unwrap())
+            .await
+            .unwrap();
+        let retriever = Arc::new(SessionCapturingRetriever {
+            sessions: Mutex::new(vec![]),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let llm = Arc::new(QueueLlm {
+            analyses: Mutex::new(Default::default()),
+        });
+        let orchestrator = SearchOrchestrator::new(registry)
+            .with_database(Arc::new(NoOpHistoryDb))
+            .with_session_manager(manager.clone())
+            .with_llm(llm.clone())
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(mode)
+            .with_per_dataset_storage(per_dataset);
+        Self {
+            orchestrator,
+            manager,
+            llm,
+            retriever,
+            user,
+            per_dataset,
+            _dir: dir,
+        }
+    }
+
+    fn queue_analysis(&self, analysis: serde_json::Value) {
+        self.llm.analyses.lock().unwrap().push_back(analysis); // lock poison is unrecoverable
+    }
+
+    async fn turn(&self, query: &str) -> SearchOutput {
+        let mut request = graph_request(query, Some(SESSION));
+        request.user_id = Some(self.user);
+        if self.per_dataset {
+            request.dataset_ids = Some(vec![Uuid::new_v4(), Uuid::new_v4()]);
+        }
+        self.orchestrator.search(&request).await.unwrap().result
+    }
+
+    fn captured(&self) -> Vec<SessionContext> {
+        std::mem::take(&mut *self.retriever.sessions.lock().unwrap()) // lock poison is unrecoverable
+    }
+
+    async fn qa(&self) -> Vec<cognee_session::SessionQAEntry> {
+        self.manager
+            .get_session(Some(SESSION), Some(&self.user.to_string()))
+            .await
+            .unwrap()
+    }
+
+    async fn rule_row(&self) -> cognee_session::SessionContextRow {
+        self.manager
+            .get_session_context_entries(Some(SESSION), Some(&self.user.to_string()))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.get("id").and_then(serde_json::Value::as_str) == Some(RULE_ID))
+            .unwrap()
+    }
+}
+
+fn rendered(session: &SessionContext) -> String {
+    session
+        .guidance
+        .as_ref()
+        .expect("a session search carries guidance")
+        .render::<&str>(&[])
+}
+
+#[tokio::test]
+async fn served_guidance_is_recorded_stamped_and_rated_on_the_next_turn() {
+    use cognee_search::SessionSearchMode::{Concurrent, Sequential};
+    // Sequential, concurrent, per-dataset sequential and per-dataset fan-out.
+    for (mode, per_dataset) in [
+        (Sequential, false),
+        (Concurrent, false),
+        (Sequential, true),
+        (Concurrent, true),
+    ] {
+        let label = format!("{mode:?}/per_dataset={per_dataset}");
+        let harness = GuidanceHarness::new(mode, per_dataset).await;
+
+        // Turn 2: answered with the guidance block served.
+        harness.queue_analysis(no_signal_analysis());
+        harness.turn("What is Rust?").await;
+        let sessions = harness.captured();
+        assert!(!sessions.is_empty(), "{label}");
+        for session in &sessions {
+            assert_eq!(rendered(session), GUIDANCE_BLOCK, "{label}");
+        }
+        let qa = harness.qa().await;
+        assert_eq!(qa.len(), 2, "{label}");
+        assert_eq!(
+            qa[1].used_session_context_ids.as_deref(),
+            Some(&[RULE_ID.to_string()][..]),
+            "{label}: the answer records the entries it was served"
+        );
+        assert!(
+            harness.rule_row().await["last_served_at"].is_string(),
+            "{label}: the served entry is stamped"
+        );
+
+        // Turn 3: the user rates what was served; the acknowledgement records no ids.
+        harness.queue_analysis(json!({
+            "response_to_user": "Glad it helped.",
+            "query_to_answer": null,
+            "served_context_ratings": [{"entry_id": RULE_ID, "rating": "helpful"}],
+            "candidate_context_updates": [],
+            "previous_answer_rating": null
+        }));
+        let output = harness.turn("that was helpful").await;
+        assert!(
+            matches!(&output, SearchOutput::Text(t) if t == "Glad it helped."),
+            "{label}: {output:?}"
+        );
+        // A concurrent turn answers in parallel with its analysis and discards
+        // that answer when the analysis declines.
+        if mode == Sequential {
+            assert!(
+                harness.captured().is_empty(),
+                "{label}: no answer is generated"
+            );
+        }
+        assert_eq!(harness.rule_row().await["helpful_count"], 1, "{label}");
+        let qa = harness.qa().await;
+        assert_eq!(qa.len(), 3, "{label}");
+        assert!(qa[2].used_session_context_ids.is_none(), "{label}");
+    }
+}
+
+#[tokio::test]
+async fn with_auto_feedback_off_no_stored_entry_is_served() {
+    let harness = GuidanceHarness::new(cognee_search::SessionSearchMode::Sequential, false).await;
+    let mut request = graph_request("What is Rust?", Some(SESSION));
+    request.user_id = Some(harness.user);
+    request.auto_feedback_detection = Some(false);
+    harness.orchestrator.search(&request).await.unwrap();
+
+    let sessions = harness.captured();
+    // The preferences-only guidance: nothing to render without preference lines.
+    assert_eq!(rendered(&sessions[0]), "");
+    assert!(sessions[0].served_context_ids.is_empty());
+    assert!(harness.qa().await[1].used_session_context_ids.is_none());
+    assert!(harness.rule_row().await["last_served_at"].is_null());
+}
+
+#[tokio::test]
+async fn a_sessionless_search_carries_no_guidance() {
+    let harness = GuidanceHarness::new(cognee_search::SessionSearchMode::Sequential, false).await;
+    harness
+        .orchestrator
+        .search(&graph_request("What is Rust?", None))
+        .await
+        .unwrap();
+
+    let sessions = harness.captured();
+    assert!(sessions[0].guidance.is_none());
+    assert!(sessions[0].served_context_ids.is_empty());
+    assert!(harness.rule_row().await["last_served_at"].is_null());
 }

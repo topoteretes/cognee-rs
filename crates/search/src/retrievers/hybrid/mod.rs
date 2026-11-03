@@ -61,7 +61,7 @@ use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
-use crate::user_preferences::{ActivePreferences, append_preference_guidance, load_for_search};
+use crate::user_preferences::{ActivePreferences, guidance_from, load_for_search};
 use crate::utils::{
     DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, EMPTY_GRAPH_MESSAGE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
     HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
@@ -772,11 +772,11 @@ impl HybridRetriever {
                 ),
         };
         let preferences = load_for_search(self.graph_db.as_ref(), params).await;
-        let preference_guidance = preferences.rendered_text();
-        let guidance_overhead = if preference_guidance.is_empty() {
+        let guidance = guidance_from(session, &preferences);
+        let guidance_overhead = if guidance.is_empty() {
             0
         } else {
-            2 + preference_guidance.len()
+            2 + guidance.len()
         };
         let overhead = overhead_system
             + overhead_template
@@ -868,9 +868,12 @@ impl HybridRetriever {
         );
         debug!("LLM user prompt:\n{user_prompt}");
 
-        let mut messages = build_messages_with_history(system_prompt, user_prompt, session);
-        append_preference_guidance(&mut messages, &preference_guidance);
-        Ok(Some(messages))
+        Ok(Some(build_messages_with_history(
+            system_prompt,
+            user_prompt,
+            session,
+            &guidance,
+        )))
     }
 
     /// Build Python's `## Global context` hybrid section. Dataset filtering

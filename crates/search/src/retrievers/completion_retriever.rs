@@ -13,7 +13,7 @@ use cognee_session::SessionContext;
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_node_filtered;
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
-use crate::user_preferences::{append_preference_guidance, load_for_search, personal_factor};
+use crate::user_preferences::{completion_guidance, load_for_search, personal_factor};
 use crate::utils::{
     build_messages_with_history, render_user_prompt, resolve_system_prompt,
     skip_completion_on_empty_context,
@@ -92,8 +92,11 @@ impl CompletionRetriever {
 
     /// The system + user messages a completion over `context` sends, or
     /// `None` when the rendered context is empty. Shared by `get_completion`
-    /// and the `only_context` preview.
-    fn build_completion_messages(
+    /// and the `only_context` preview. The guidance follows the question and
+    /// context: the session's block on a session search, else (Python's
+    /// sessionless `SessionPrompt(guidance=load_preference_text())`) the
+    /// user's preference text.
+    async fn build_completion_messages(
         &self,
         query: &str,
         context: &SearchContext,
@@ -130,30 +133,13 @@ impl CompletionRetriever {
         );
         debug!("LLM user prompt:\n{user_prompt}");
 
+        let guidance = completion_guidance(self.graph_db.as_deref(), session, params, true).await;
         Ok(Some(build_messages_with_history(
             system_prompt,
             user_prompt,
             session,
+            &guidance,
         )))
-    }
-
-    /// [`Self::build_completion_messages`] with the user's preference text as
-    /// guidance after the question and context (Python's sessionless
-    /// `SessionPrompt(guidance=load_preference_text())`).
-    async fn personalized_messages(
-        &self,
-        query: &str,
-        context: &SearchContext,
-        session: &SessionContext,
-        params: &SearchParams,
-    ) -> Result<Option<Vec<Message>>, SearchError> {
-        let Some(mut messages) = self.build_completion_messages(query, context, session, params)?
-        else {
-            return Ok(None);
-        };
-        let preferences = self.preferences(params).await;
-        append_preference_guidance(&mut messages, &preferences.rendered_text());
-        Ok(Some(messages))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -253,7 +239,7 @@ impl SearchRetriever for CompletionRetriever {
         session: &SessionContext,
         params: &SearchParams,
     ) -> Result<Option<Vec<Message>>, SearchError> {
-        self.personalized_messages(query, context, session, params)
+        self.build_completion_messages(query, context, session, params)
             .await
     }
 
@@ -270,7 +256,7 @@ impl SearchRetriever for CompletionRetriever {
         };
 
         let Some(messages) = self
-            .personalized_messages(query, &completion_context, session, params)
+            .build_completion_messages(query, &completion_context, session, params)
             .await?
         else {
             return Ok(skip_completion_on_empty_context());
@@ -846,6 +832,148 @@ mod tests {
             "{}",
             messages[1].content
         );
+    }
+
+    /// Python's `build_completion_prompts` with a session: the system prompt
+    /// is the task template alone; the user prompt is the history, then the
+    /// rendered template, then ONE guidance block in which the durable
+    /// preference lines join the stored entries' `Preferences` section (no
+    /// standalone "What this user prefers" block).
+    #[tokio::test]
+    async fn a_session_prompt_carries_history_then_template_then_one_guidance_block() {
+        use cognee_session::{
+            CONTEXT_ENTRY_KIND, CONTEXT_PROFILE_QA, FsSessionStore, SessionContextEntry,
+            SessionManager, build_active_context_selection_safe, normalize_content,
+        };
+
+        let db = cognee_vector::BruteForceVectorDB::new();
+        db.create_collection("DocumentChunk", "text", 2)
+            .await
+            .unwrap();
+        db.index_points(
+            "DocumentChunk",
+            "text",
+            &[VectorPoint {
+                id: Uuid::new_v4(),
+                vector: vec![0.6, 0.4],
+                metadata: HashMap::from([("text".to_string(), json!("the chunk"))]),
+            }],
+        )
+        .await
+        .unwrap();
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let (user, dataset) = (Uuid::new_v4(), Uuid::new_v4());
+        crate::user_preferences::upsert_preference_node(
+            graph.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Answer in one sentence",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::new(Arc::new(FsSessionStore::new(dir.path())));
+        let content = "Cite the source file";
+        let entry = SessionContextEntry {
+            id: "rule-1".to_string(),
+            section: "rules".to_string(),
+            context_profile: CONTEXT_PROFILE_QA.to_string(),
+            content: content.to_string(),
+            normalized_content: normalize_content(content),
+            confidence: 0.9,
+            created_at: "2026-06-10T10:14:22".to_string(),
+            source_feedback_ids: vec![],
+            source_trace_ids: vec![],
+            helpful_count: 0,
+            harmful_count: 0,
+            priority: 0,
+            last_served_at: None,
+            embedding: None,
+            kind: CONTEXT_ENTRY_KIND.to_string(),
+        };
+        manager
+            .create_session_context_entry(Some("s"), Some("u"), entry.to_row().unwrap())
+            .await
+            .unwrap();
+        let (guidance, served) =
+            build_active_context_selection_safe(&manager, "s", Some("u"), "q", true).await;
+        assert_eq!(served, ["rule-1"]);
+        let history = "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n";
+        let session = SessionContext {
+            session_id: Some("s".to_string()),
+            formatted_history: history.to_string(),
+            guidance: Some(guidance),
+            served_context_ids: served,
+            ..Default::default()
+        };
+
+        let llm = Arc::new(TestLlm {
+            response_text: "answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = CompletionRetriever::new(
+            Arc::new(db),
+            Arc::new(TestEmbeddingEngine),
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+        )
+        .with_graph_db(graph);
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..SearchParams::default()
+        };
+
+        retriever
+            .get_completion("q", None, &session, &params)
+            .await
+            .unwrap();
+        let messages = llm.last_messages.lock().unwrap().clone();
+        assert_eq!(messages[0].content, DEFAULT_RAG_SYSTEM_PROMPT);
+        let rendered = crate::utils::render_user_prompt(None, "q", "the chunk");
+        assert_eq!(
+            messages[1].content,
+            format!(
+                "{history}\n\n{rendered}\n\n## Active session guidance\n\
+                 Items are listed oldest to newest within each section. \
+                 When guidance conflicts, prefer the later item.\n\
+                 ### Rules\n- [10:14:22] Cite the source file\n\
+                 ### Preferences\n- Answer in one sentence"
+            )
+        );
+
+        // Session guidance off (no stored entries served): the preference
+        // lines still render through the same block, never the standalone one.
+        let preferences_only = SessionContext {
+            guidance: Some(cognee_session::ActiveContextSelection::preferences_only()),
+            ..session
+        };
+        retriever
+            .get_completion("q", None, &preferences_only, &params)
+            .await
+            .unwrap();
+        let prompt = llm.last_messages.lock().unwrap()[1].content.clone();
+        assert!(
+            prompt.ends_with(
+                "\n\n## Active session guidance\n\
+                 Items are listed oldest to newest within each section. \
+                 When guidance conflicts, prefer the later item.\n\
+                 ### Preferences\n- Answer in one sentence"
+            ),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("What this user prefers"), "{prompt}");
     }
 
     // Python ranks in distance space: a liked chunk's distance shrinks. With

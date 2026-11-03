@@ -410,19 +410,40 @@ pub async fn load_for_search(
     .clone()
 }
 
-/// Put the preference guidance block after the question and context, as
-/// Python's `build_completion_prompts` places `SessionPrompt.guidance` last
-/// in the user prompt. An empty block adds nothing.
-pub fn append_preference_guidance(messages: &mut [cognee_llm::Message], guidance: &str) {
-    if guidance.is_empty() {
-        return;
+/// The guidance block a completion carries after the question and context
+/// (Python's `SessionPrompt.guidance`).
+///
+/// On a session search the turn's guidance owns it: the stored entries the
+/// orchestrator selected, with the user's durable preference lines merged
+/// into their `Preferences` section ([`cognee_session::ActiveContextSelection::render`]),
+/// so there is no second preference block. A sessionless search carries the
+/// standalone "What this user prefers" block, when the retriever renders one
+/// (`standalone_preferences`). Preferences are read from `graph_db`; without
+/// one, or without personalization, there are none.
+pub async fn completion_guidance(
+    graph_db: Option<&dyn GraphDBTrait>,
+    session: &cognee_session::SessionContext,
+    params: &crate::types::SearchParams,
+    standalone_preferences: bool,
+) -> String {
+    if session.guidance.is_none() && !standalone_preferences {
+        return String::new();
     }
-    if let Some(user) = messages
-        .iter_mut()
-        .rev()
-        .find(|message| message.role == cognee_llm::MessageRole::User)
-    {
-        user.content = format!("{}\n\n{guidance}", user.content);
+    let preferences = match graph_db {
+        Some(graph_db) => load_for_search(graph_db, params).await,
+        None => ActivePreferences::default(),
+    };
+    guidance_from(session, &preferences)
+}
+
+/// [`completion_guidance`] over preferences a retriever has already loaded.
+pub fn guidance_from(
+    session: &cognee_session::SessionContext,
+    preferences: &ActivePreferences,
+) -> String {
+    match &session.guidance {
+        Some(selection) => selection.render(&preferences.lines()),
+        None => preferences.rendered_text(),
     }
 }
 

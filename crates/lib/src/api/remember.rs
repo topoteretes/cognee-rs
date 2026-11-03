@@ -1150,6 +1150,7 @@ pub async fn remember_entry(
                     // used_graph_element_ids handled by the follow-up update below
                     // when the raw JSON value needs schema-validation first.
                     None,
+                    None,
                 )
                 .await?;
 

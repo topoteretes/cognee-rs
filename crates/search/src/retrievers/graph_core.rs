@@ -21,7 +21,7 @@ use crate::graph_retrieval::{
     brute_force_triplet_search, brute_force_triplet_search_batch, validate_query_batch,
 };
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
-use crate::user_preferences::load_for_search;
+use crate::user_preferences::{completion_guidance, load_for_search};
 use crate::utils::{
     EMPTY_GRAPH_MESSAGE, build_messages_with_history, render_graph_user_prompt,
     resolve_system_prompt,
@@ -44,6 +44,24 @@ pub(crate) struct GraphRetrieverCore {
 }
 
 impl GraphRetrieverCore {
+    /// The guidance block a completion appends (see
+    /// [`crate::user_preferences::completion_guidance`]), reading the user's
+    /// preferences from this retriever's graph.
+    pub(crate) async fn guidance(
+        &self,
+        session: &SessionContext,
+        params: &SearchParams,
+        standalone_preferences: bool,
+    ) -> String {
+        completion_guidance(
+            Some(self.graph_db.as_ref()),
+            session,
+            params,
+            standalone_preferences,
+        )
+        .await
+    }
+
     pub(crate) fn new(
         vector_db: Arc<dyn VectorDB>,
         embedding_engine: Arc<dyn EmbeddingEngine>,
@@ -244,6 +262,7 @@ impl GraphPrompts {
         query: &str,
         context_text: &str,
         session: &SessionContext,
+        guidance: &str,
         params: &SearchParams,
     ) -> Result<Vec<Message>, SearchError> {
         let system_prompt = resolve_system_prompt(
@@ -263,6 +282,7 @@ impl GraphPrompts {
             system_prompt,
             user_prompt,
             session,
+            guidance,
         ))
     }
 }
