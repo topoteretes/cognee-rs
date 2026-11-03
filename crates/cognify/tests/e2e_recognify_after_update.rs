@@ -10,7 +10,8 @@
 //! searchable.
 //!
 //! In Rust, "update" means adding new content with a different hash, which
-//! produces a different `data_id` (UUID5 determinism). The test:
+//! creates a new row with a fresh `uuid4` `data_id` (dataset-scoped dedup
+//! only reuses a row for the same content). The test:
 //! 1. Adds text about "Alice at TechCorp", cognifies, verifies searchable
 //! 2. Adds text about "Bob at QuantumLab" (same dataset), cognifies both
 //! 3. Verifies both A and B are searchable
@@ -366,7 +367,7 @@ async fn test_recognify_after_content_update() {
     let data_id_v2 = data_items_v2[0].id;
     println!("Step 4: Ingested text_v2, data_id={data_id_v2}");
 
-    // Verify different content produces different data_id (UUID5 determinism)
+    // Different content is a new row with its own data_id (no dedup match)
     assert_ne!(
         data_id_v1, data_id_v2,
         "Different content must produce different data_id"

@@ -892,17 +892,15 @@ async fn by_name_delete_resolves_and_deletes_only_in_the_callers_tenant() {
     );
 }
 
-/// #4. Data shared between two authorized datasets: `preview(All)` must
-/// count it once (as `execute(All)` deletes it), not 0 + 0.
+/// #4. `preview(All)` over two authorized datasets counts each dataset's
+/// row, as `execute(All)` deletes them. (This pinned a shared row counted
+/// once, not 0 + 0; rows are dataset-scoped now, so no row is shared.)
 #[tokio::test]
 async fn all_scope_preview_agrees_with_execute_on_shared_data() {
     let (db, storage, acl) = setup().await;
     let caller = Uuid::new_v4();
-    let (a, shared) = seed_in_tenant(&db, &storage, &acl, caller, "a", None).await;
+    let (a, _only_a) = seed_in_tenant(&db, &storage, &acl, caller, "a", None).await;
     let (b, _only_b) = seed_in_tenant(&db, &storage, &acl, caller, "b", None).await;
-    database::ops::datasets::attach_data_to_dataset(&db, b, shared)
-        .await
-        .unwrap();
     grant_delete_permission(&acl, caller, a).await;
     grant_delete_permission(&acl, caller, b).await;
     let svc = build_authorized_service(&db, &storage, &acl);
@@ -912,7 +910,7 @@ async fn all_scope_preview_agrees_with_execute_on_shared_data() {
         .await
         .unwrap();
     assert_eq!(preview.datasets_to_delete, 2);
-    assert_eq!(preview.data_to_delete, 2, "shared item once + b's own item");
+    assert_eq!(preview.data_to_delete, 2, "a's row + b's row");
 
     let result = svc
         .execute(&request(DeleteScope::All), caller, None)

@@ -489,36 +489,15 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
     """Dataset membership as ``[{"dataset_id": ..., "data_id": ...}]``.
 
-    The two SDKs model membership differently, so this cannot be one query:
+    Both SDKs keep membership on a ``data.dataset_id`` column, so a ``data``
+    row belongs to exactly one dataset: Python since alembic
+    ``d6e8f0a2b4c6_backfill_dataset_scoped_data_drop_dataset_data``, Rust since
+    ``m20261028_000001_dataset_scoped_data`` (SDK-1039). Both migrations drop
+    the old ``dataset_data`` junction table. A database written before either
+    migration ran may still carry it, which is why both shapes are read.
 
-    * **Rust** keeps the ``dataset_data`` junction table, so a ``data`` row is
-      dataset-agnostic and may be linked to several datasets.
-    * **Python** retired that table (alembic
-      ``d6e8f0a2b4c6_backfill_dataset_scoped_data_drop_dataset_data``) and moved
-      membership onto a ``data.dataset_id`` column, so a ``data`` row belongs to
-      exactly one dataset.
-
-    Selecting from ``dataset_data`` unconditionally — which is what this helper
-    did — raises ``sqlite3.OperationalError: no such table: dataset_data``
-    against any current Python database. Its three callers therefore errored out
-    before reaching an assertion, and reported no parity verdict at all.
-
-    Detecting the schema rather than the SDK is what keeps this correct for
-    the cross-read tests, where one SDK opens a database the other one wrote —
-    but detection alone is not enough, because the two shapes are not mutually
-    exclusive. Rust's baseline migration creates ``dataset_data`` with
-    ``.if_not_exists()`` and Rust's ``data`` entity has no ``dataset_id``
-    column, so a Python-written database that Rust has since opened carries
-    **both**: Python's rows in ``data.dataset_id`` and an empty (or partial)
-    ``dataset_data``. Preferring the junction table there would report ``[]``
-    and silently drop Python's membership. Both shapes are therefore read and
-    unioned whenever both are present.
-
-    Note that the row *counts* legitimately differ once the same bytes are added
-    to two datasets: Python yields two ``data`` rows and Rust one row with two
-    junction links. That divergence is real (see
-    ``docs/roadmap/python-parity-audit.md`` §1.1); this helper only makes it
-    observable instead of masking it behind an error.
+    Both shapes are read and unioned whenever both are present, so a database
+    that one SDK wrote and the other has not migrated yet is still read whole.
     """
     rows: list[dict] = []
     if _table_exists(conn, "dataset_data"):

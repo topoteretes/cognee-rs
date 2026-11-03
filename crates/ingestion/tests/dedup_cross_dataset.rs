@@ -5,9 +5,10 @@
 )]
 //! Cross-dataset deduplication integration tests.
 //!
-//! Verifies that content-addressed deduplication works correctly when the same
-//! data is added to multiple datasets, and that the MD5-based naming and
-//! junction-table linking behave as expected.
+//! Rows are dataset-scoped, as in Python (`ingest_data.py`, D7 of SDK-1039):
+//! a new row gets a random `uuid4`, re-adding content dedups only within the
+//! same `(dataset, owner, tenant)`, and the same content in another dataset is
+//! another row.
 
 use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize, ops};
@@ -54,11 +55,11 @@ async fn make_pipeline(
 }
 
 // ---------------------------------------------------------------------------
-// C1.1 — Same content reused across datasets
+// C1.1 — Same content in two datasets is two rows
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn same_content_reused_across_datasets() {
+async fn same_content_in_two_datasets_is_two_rows() {
     let dir = TempDir::new().expect("tempdir");
     let (pipeline, database, _storage) = make_pipeline(&dir).await;
     let owner = Uuid::new_v4();
@@ -75,13 +76,16 @@ async fn same_content_reused_across_datasets() {
         .await
         .expect("add to dataset B");
 
-    // Same content + same owner → same Data record
-    assert_eq!(
+    // Python `ingest_data`: dedup is scoped to the dataset, so the second
+    // dataset gets its own row with its own uuid4 id.
+    assert_ne!(
         result_a[0].id, result_b[0].id,
-        "identical content should yield the same data_id across datasets"
+        "the same content in another dataset is another row"
     );
+    assert_eq!(result_a[0].id.get_version_num(), 4, "data ids are uuid4");
+    assert_eq!(result_b[0].id.get_version_num(), 4, "data ids are uuid4");
+    assert_eq!(result_a[0].content_hash, result_b[0].content_hash);
 
-    // Two distinct datasets exist
     let ds_a = ops::datasets::get_dataset_by_name_in_tenant(&database, "A", owner, None)
         .await
         .expect("get ds A")
@@ -90,22 +94,74 @@ async fn same_content_reused_across_datasets() {
         .await
         .expect("get ds B")
         .expect("dataset B should exist");
-
     assert_ne!(ds_a.id, ds_b.id, "datasets A and B must have different IDs");
+    assert_eq!(result_a[0].dataset_id, Some(ds_a.id));
+    assert_eq!(result_b[0].dataset_id, Some(ds_b.id));
 
-    // Both datasets reference the same data_id
     let ds_a_data = ops::datasets::get_dataset_data(&database, ds_a.id)
         .await
         .expect("ds A data");
     let ds_b_data = ops::datasets::get_dataset_data(&database, ds_b.id)
         .await
         .expect("ds B data");
-
     assert_eq!(ds_a_data.len(), 1, "dataset A should have 1 data item");
     assert_eq!(ds_b_data.len(), 1, "dataset B should have 1 data item");
-    assert_eq!(
-        ds_a_data[0].id, ds_b_data[0].id,
-        "both datasets must reference the same underlying data record"
+    assert_eq!(ds_a_data[0].id, result_a[0].id);
+    assert_eq!(ds_b_data[0].id, result_b[0].id);
+
+    // Re-adding to A still dedups to A's row.
+    let again = pipeline
+        .add(vec![DataInput::Text(text.to_string())], "A", owner, None)
+        .await
+        .expect("re-add to dataset A");
+    assert_eq!(again[0].id, result_a[0].id, "dedup within a dataset");
+}
+
+/// Dedup is scoped to the owner too: another user's dataset never reuses a
+/// row, and a tenant-less row is not reused for a tenanted add of the same
+/// owner (strict tenant equality, Python `identify_many`).
+#[tokio::test]
+async fn dedup_is_scoped_to_owner_and_tenant() {
+    let dir = TempDir::new().expect("tempdir");
+    let (_pipeline, database, _storage) = make_pipeline(&dir).await;
+    let owner = Uuid::new_v4();
+    let tenant = Uuid::new_v4();
+    let dataset = Uuid::new_v4();
+
+    let row = cognee_models::Data::builder(
+        Uuid::new_v4(),
+        "text_x",
+        "file:///x",
+        "file:///x",
+        "txt",
+        "text/plain",
+        "hash-x",
+        owner,
+    )
+    .dataset_id(dataset)
+    .build();
+    IngestDb::create_data(&*database, row.clone())
+        .await
+        .expect("create row");
+
+    let hit = |owner, tenant| {
+        let database = database.clone();
+        async move {
+            IngestDb::find_data_in_dataset(&*database, dataset, "hash-x", owner, tenant)
+                .await
+                .expect("lookup")
+                .map(|d| d.id)
+        }
+    };
+    assert_eq!(hit(owner, None).await, Some(row.id));
+    assert_eq!(hit(Uuid::new_v4(), None).await, None, "another owner");
+    assert_eq!(hit(owner, Some(tenant)).await, None, "another tenant");
+    assert!(
+        IngestDb::find_data_in_dataset(&*database, Uuid::new_v4(), "hash-x", owner, None)
+            .await
+            .expect("lookup")
+            .is_none(),
+        "another dataset"
     );
 }
 
@@ -190,7 +246,7 @@ async fn dedup_file_copies_with_different_names() {
         "identical content files should deduplicate to the same data_id"
     );
 
-    // Only 1 row in the dataset_data junction
+    // Only 1 row in the dataset
     let ds = ops::datasets::get_dataset_by_name_in_tenant(&database, "file_dedup", owner, None)
         .await
         .expect("get dataset")
@@ -233,7 +289,7 @@ async fn dedup_across_multiple_add_calls() {
         "same text to same dataset should return the same data_id"
     );
 
-    // Only 1 junction row (no duplicate attachment)
+    // Only 1 row in the dataset (no duplicate row)
     let ds = ops::datasets::get_dataset_by_name_in_tenant(&database, "ds", owner, None)
         .await
         .expect("get dataset")
@@ -244,7 +300,7 @@ async fn dedup_across_multiple_add_calls() {
     assert_eq!(
         ds_data.len(),
         1,
-        "duplicate add should not create a second junction row"
+        "duplicate add should not create a second row"
     );
 
     // Also verify via link count

@@ -57,6 +57,19 @@ pub trait IngestDb: Send + Sync {
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
 
+    /// The row holding `content_hash` in `dataset_id` for `owner_id` and
+    /// `tenant_id` (strict tenant equality), if any. This is the ingest
+    /// dedup lookup — Python's `identify_many`: rows are dataset-scoped, so
+    /// the same content in another dataset, or added by another owner, is
+    /// not a match.
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError>;
+
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError>;
 
     /// Set the `node_set` and `external_metadata` columns of an existing Data
@@ -81,6 +94,10 @@ pub trait IngestDb: Send + Sync {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError>;
 
+    /// Make `dataset_id` the owning dataset of the existing row `data_id`
+    /// (`data.dataset_id`). Rows are dataset-scoped: a row of another dataset
+    /// is refused. The ingest pipeline does not need it (it creates rows with
+    /// their dataset); it serves callers that build `Data` rows themselves.
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -136,6 +153,16 @@ impl IngestDb for DatabaseConnection {
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
         data::get_data(self, id).await
+    }
+
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError> {
+        data::find_data_in_dataset(self, dataset_id, content_hash, owner_id, tenant_id).await
     }
 
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
