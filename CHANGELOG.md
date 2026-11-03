@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`remember` reports its automatic improve as Python does (SDK-1039).**
+  - `RememberResult::improve_result` (formerly `#[serde(skip)]`) is renamed
+    `improve` and serializes the `ImproveResult`; `improve_error`,
+    `after_run_error` and `improve_skipped` are new. Each is serialized only
+    when set. A failed improve (the error `improve()` returned, or its errored
+    stages, as Python's `_improve_error_text`) is reported on `improve_error`
+    and no longer on `error`. A session-mode improve runs detached, so `improve`
+    stays `None` there (`improve_launched`).
+  - **`selfImprovement` now defaults to `true` in every binding** (Python's
+    `self_improvement=True`); pass `false` to keep the old behaviour.
+  - New `register_auto_improve_admission` / `clear_auto_improve_admission`: a
+    host check that can decline the automatic improve with a reason, reported as
+    `RememberResult::improve_skipped` (Python's admission hook).
+    `launch_session_auto_improve` asks it too, so a host that launches a
+    session improve itself is gated the same way; it now returns a
+    `SessionAutoImproveLaunch` (`launched`, and the check's `skipped` reason)
+    instead of `bool`.
+  - The bindings' improve opts accept `datasetId` (a UUID string), as
+    Python's `improve(dataset=<UUID>)`: the improve targets that dataset,
+    possibly one shared with the caller, instead of looking `datasetName` up
+    among the caller's own datasets. A non-string or malformed id is an error.
+
 - **`cognee-search`: recall notes a graph that is not built instead of
   searching it.** As Python's recall does, a graph-only recall first reads
   `pipeline_runs` for the datasets the caller can read. When no graph was ever

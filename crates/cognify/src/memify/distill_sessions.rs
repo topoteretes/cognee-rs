@@ -647,6 +647,7 @@ pub fn render_lesson_document(
 async fn publish_distilled_lessons(
     session_id: &str,
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     accepted: &[WrittenLesson],
@@ -670,6 +671,7 @@ async fn publish_distilled_lessons(
 
     let params = AddParams {
         node_set: Some(distillate_node_set(session_id)),
+        dataset_id,
         ..Default::default()
     };
     let inputs: Vec<DataInput> = documents.iter().cloned().map(DataInput::Text).collect();
@@ -684,17 +686,22 @@ async fn publish_distilled_lessons(
         ));
     }
 
-    let dataset_id = match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-        &*database,
-        dataset_name,
-        owner_id,
-        tenant_id,
-    )
-    .await
-    {
-        Ok(Some(ds)) => ds.id,
-        Ok(None) => return Err(DistillError::DatasetNotFound(dataset_name.to_string())),
-        Err(e) => return Err(DistillError::Ingestion(e.to_string())),
+    let dataset_id = match dataset_id {
+        // A caller-resolved dataset (possibly owned by another user): used as
+        // is, never re-resolved by name among the caller's own.
+        Some(id) => id,
+        None => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
+            &*database,
+            dataset_name,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        {
+            Ok(Some(ds)) => ds.id,
+            Ok(None) => return Err(DistillError::DatasetNotFound(dataset_name.to_string())),
+            Err(e) => return Err(DistillError::Ingestion(e.to_string())),
+        },
     };
 
     cognify(
@@ -732,6 +739,7 @@ async fn publish_distilled_lessons(
 pub async fn distill_session(
     session_id: &str,
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     session_store: Arc<dyn SessionStore>,
@@ -791,6 +799,7 @@ pub async fn distill_session(
     let (documents, dataset_id) = publish_distilled_lessons(
         session_id,
         dataset_name,
+        dataset_id,
         owner_id,
         tenant_id,
         &accepted,
@@ -826,6 +835,7 @@ pub async fn distill_session(
 pub async fn distill_sessions_in_knowledge_graph(
     session_ids: &[String],
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     session_store: Arc<dyn SessionStore>,
@@ -847,6 +857,7 @@ pub async fn distill_sessions_in_knowledge_graph(
         match distill_session(
             sid,
             dataset_name,
+            dataset_id,
             owner_id,
             tenant_id,
             Arc::clone(&session_store),

@@ -680,6 +680,172 @@ async fn improve_reports_distilled_lessons() {
     );
 }
 
+/// A caller that already resolved (and authorized) the dataset passes its id,
+/// as Python's `improve(dataset=<UUID>)`: every session-fed stage (session
+/// Q&A, agent trace feedback, distilled lessons) adds into
+/// that dataset even though another user owns it, and nothing is created
+/// under the caller (a by-name add would have made a same-named one).
+#[tokio::test]
+async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "shared_ds_session";
+    let shared = create_dataset(&h, "shared_ds", Uuid::new_v4()).await;
+    let mut p = params(
+        &h,
+        &config,
+        "shared_ds",
+        Some(vec![session_id.to_string()]),
+        schema_llm(false),
+    );
+    p.dataset_id = Some(shared);
+    let caller = p.owner_id;
+    seed_qa(&h, caller, session_id).await;
+    // A trace step with feedback, so the trace stage adds into the dataset too.
+    h.session_manager
+        .add_agent_trace_step(
+            &caller.to_string(),
+            Some(session_id),
+            "search",
+            "success",
+            "",
+            "",
+            serde_json::json!({}),
+            None,
+            "",
+            false,
+        )
+        .await
+        .unwrap();
+    let r = improve(p).await.unwrap();
+
+    assert_eq!(r.dataset_id, Some(shared));
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+    let traces = stage(&r, "persist_agent_traces");
+    assert_eq!(traces.status, StageStatus::Completed, "{traces:?}");
+    assert_eq!(traces.counts.get("windows"), Some(&1));
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
+    assert!(distill.counts["documents"] > 0, "{distill:?}");
+
+    let in_shared = cognee_database::DeleteDb::get_dataset_data(&*h.db, shared)
+        .await
+        .unwrap();
+    assert!(
+        !in_shared.is_empty(),
+        "the session text and lessons land in the shared dataset"
+    );
+    let callers_own = cognee_database::DeleteDb::list_datasets_by_owner(&*h.db, caller)
+        .await
+        .unwrap();
+    assert!(
+        callers_own.is_empty(),
+        "no dataset is created under the caller: {callers_own:?}"
+    );
+}
+
+/// A [`SchemaDispatchLlm`] whose cognify summarization fails after
+/// `ok_summaries` calls: the session persist (one summary) succeeds, then the
+/// distill stage's publish-and-cognify fails.
+struct FailingSummaryLlm {
+    inner: SchemaDispatchLlm,
+    ok_summaries: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl cognee_llm::Llm for FailingSummaryLlm {
+    async fn generate(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+    ) -> Result<GenerationResponse, LlmError> {
+        self.inner.generate(messages, options).await
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+    ) -> Result<Value, LlmError> {
+        let schema = json_schema.to_string();
+        let is_summary = !schema.contains("why_learned")
+            && !schema.contains("working_statement")
+            && !schema.contains("environment_facts")
+            && schema.contains("summary");
+        if is_summary {
+            use std::sync::atomic::Ordering;
+            let left = self.ok_summaries.load(Ordering::SeqCst);
+            if left == 0 {
+                return Err(LlmError::ApiError("summary budget exhausted".to_string()));
+            }
+            self.ok_summaries.store(left - 1, Ordering::SeqCst);
+        }
+        self.inner
+            .create_structured_output_with_messages_raw(messages, json_schema, options)
+            .await
+    }
+
+    fn model(&self) -> &str {
+        "failing-summary"
+    }
+}
+
+/// Python reports `distill_sessions` errored when a session's distillation
+/// fails, keeping the last error and the failure count (`DistillSessionsStage.run`,
+/// `cognee/modules/improve/stages.py`), and the run's status follows.
+#[tokio::test]
+async fn improve_reports_a_distill_failure_as_an_errored_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "distill_fail_session";
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(FailingSummaryLlm {
+        inner: SchemaDispatchLlm {
+            accepted_statement: "TerraScout indexes data nightly.".to_string(),
+            curator_out_of_budget: false,
+            agent_lessons_fail: false,
+        },
+        ok_summaries: std::sync::atomic::AtomicUsize::new(1),
+    });
+    let p = params(
+        &h,
+        &config,
+        "ds_distill_fail",
+        Some(vec![session_id.to_string()]),
+        llm,
+    );
+    seed_qa(&h, p.owner_id, session_id).await;
+    let r = improve(p).await.unwrap();
+
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Errored, "{distill:?}");
+    assert!(
+        distill.error.is_some(),
+        "the last error is kept: {distill:?}"
+    );
+    assert_eq!(distill.counts.get("sessions_failed"), Some(&1));
+    assert_eq!(r.status(), ImproveStatus::Errored);
+}
+
+/// An explicit dataset id that names no dataset is an error, not a silent run
+/// against a dataset created by name (Python `load_or_create_datasets` raises
+/// for a UUID matching no dataset).
+#[tokio::test]
+async fn improve_with_an_unknown_dataset_id_is_an_error() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let mut p = params(&h, &config, "ds_unknown_id", None, mock_llm());
+    p.dataset_id = Some(Uuid::new_v4());
+    let err = improve(p)
+        .await
+        .expect_err("an unknown dataset id must fail");
+    assert!(err.to_string().contains("not found"), "{err}");
+}
+
 /// An exhausted LLM budget in a non-fatal stage ends the run there: the
 /// stage is errored and every later stage is skipped `budget_exhausted`,
 /// without an error (Python `test_improve_budget_exhaustion.py`).
@@ -1514,10 +1680,10 @@ async fn a_background_improve_returns_at_once_and_runs_after_the_holder() {
         add_pipeline: Arc::new(locked_add_pipeline(&h, &DatasetLocks::global())),
         cognify_config: Arc::new(CognifyConfig::default()),
     });
-    let launched = tokio::time::timeout(SHORT, launch)
+    let launch = tokio::time::timeout(SHORT, launch)
         .await
         .expect("the launch returns at once");
-    assert!(launched);
+    assert!(launch.launched);
     assert!(
         !cognee::wait_for_background_tasks(Some(SHORT)).await,
         "the improve waits for the holder"

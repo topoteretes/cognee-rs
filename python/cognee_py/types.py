@@ -142,6 +142,7 @@ class RememberOpts(TypedDict, total=False):
     """Options accepted by :meth:`Cognee.remember`."""
 
     session_id: str
+    # Run ``improve()`` after the remember (default ``True``, as in Python).
     self_improvement: bool
     tenant: str
 
@@ -153,6 +154,9 @@ class ImproveOpts(TypedDict, total=False):
     """
 
     dataset_name: str  # required — missing raises CogneeValidationError at runtime
+    # UUID of a dataset the caller already resolved (possibly shared with it),
+    # as Python's ``improve(dataset=<UUID>)``.
+    dataset_id: str
     session_ids: list[str]
     feedback_alpha: float
     tenant: str

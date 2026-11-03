@@ -120,6 +120,7 @@ fn concat_session_entries(session_id: &str, entries: &[cognee_session::SessionQA
 pub async fn persist_sessions_in_knowledge_graph(
     session_ids: &[String],
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     session_store: Arc<dyn SessionStore>,
@@ -159,6 +160,7 @@ pub async fn persist_sessions_in_knowledge_graph(
 
         let params = AddParams {
             node_set: Some(vec![USER_SESSIONS_NODE_SET.to_string()]),
+            dataset_id,
             ..Default::default()
         };
 
@@ -186,39 +188,41 @@ pub async fn persist_sessions_in_knowledge_graph(
             continue;
         }
 
-        // Each Data row in add_result belongs to exactly one dataset; use the
-        // first row's dataset lookup by querying via name. AddPipeline does
-        // not currently return the dataset_id directly, so we derive it from
-        // the node_set-tagged Data entries through the same helper that
-        // cognify_dataset_refs uses: look up by name/owner.
-        let dataset_id = match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-            &*database,
-            dataset_name,
-            owner_id,
-            tenant_id,
-        )
-        .await
-        {
-            Ok(Some(ds)) => ds.id,
-            Ok(None) => {
-                warn!(
-                    session_id = sid,
-                    dataset_name = dataset_name,
-                    "persist_sessions: dataset lookup returned None"
-                );
-                result.fail(format!(
-                    "session {sid}: dataset '{dataset_name}' not found after add"
-                ));
-                continue;
-            }
-            Err(e) => {
-                warn!(
-                    session_id = sid,
-                    "persist_sessions: dataset lookup failed: {e}"
-                );
-                result.fail(format!("session {sid}: dataset lookup failed: {e}"));
-                continue;
-            }
+        // A caller-resolved dataset (possibly owned by another user) is used
+        // as is, never re-resolved by name among the caller's own. Otherwise
+        // AddPipeline does not return the dataset id, so look the dataset up
+        // by name/owner, as cognify_dataset_refs does.
+        let dataset_id = match dataset_id {
+            Some(id) => id,
+            None => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
+                &*database,
+                dataset_name,
+                owner_id,
+                tenant_id,
+            )
+            .await
+            {
+                Ok(Some(ds)) => ds.id,
+                Ok(None) => {
+                    warn!(
+                        session_id = sid,
+                        dataset_name = dataset_name,
+                        "persist_sessions: dataset lookup returned None"
+                    );
+                    result.fail(format!(
+                        "session {sid}: dataset '{dataset_name}' not found after add"
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    warn!(
+                        session_id = sid,
+                        "persist_sessions: dataset lookup failed: {e}"
+                    );
+                    result.fail(format!("session {sid}: dataset lookup failed: {e}"));
+                    continue;
+                }
+            },
         };
 
         match cognify(

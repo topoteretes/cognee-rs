@@ -445,7 +445,7 @@ export interface CogneeRecallResult {
 export interface CogneeRememberOptions {
   /** Session ID — switches to session-memory mode (no graph writes). */
   sessionId?: string;
-  /** Run `improve()` after cognify, or on the session in session mode (default false). */
+  /** Run `improve()` after cognify, or on the session in session mode (default true, as in Python). */
   selfImprovement?: boolean;
   /** Tenant UUID string (multi-tenant scoping). */
   tenant?: string;
@@ -521,6 +521,35 @@ export interface CogneeRememberResult {
   entry_type: string | null;
   /** Typed-entry id from the session manager; `null` on the file/text path. */
   entry_id: string | null;
+  /**
+   * The automatic `improve()` that followed the remember, when it ran. Absent
+   * when it was turned off, declined (`improve_skipped`), failed
+   * (`improve_error`), or (session mode) is running in the background.
+   */
+  improve?: CogneeRememberImprove;
+  /** Why the automatic improve failed; the remember itself succeeded. Present only when set. */
+  improve_error?: string;
+  /** Why a host admission check declined the automatic improve. Present only when set. */
+  improve_skipped?: string;
+}
+
+/** Python's `ImproveResult` as nested in a `CogneeRememberResult` (snake_case). */
+export interface CogneeRememberImprove {
+  dataset_id: string | null;
+  dataset_name: string;
+  session_ids: string[];
+  stages: Array<{
+    stage: string;
+    status: "completed" | "already_completed" | "skipped" | "errored";
+    reason: string | null;
+    error: string | null;
+    counts: Record<string, number>;
+    duration_ms: number;
+  }>;
+  background: boolean;
+  finished: boolean;
+  error: string | null;
+  status: "completed" | "errored" | "skipped" | "running";
 }
 
 /** A typed memory entry for `cogneeRememberEntry`. */
@@ -555,6 +584,8 @@ export type CogneeMemoryEntry =
 /** Options accepted by `cogneeImprove`. */
 export interface CogneeImproveOptions {
   datasetName: string;
+  /** UUID of a dataset the caller already resolved (possibly shared with it), as Python's `improve(dataset=<UUID>)`. */
+  datasetId?: string;
   sessionIds?: string[];
   feedbackAlpha?: number;
   tenant?: string;

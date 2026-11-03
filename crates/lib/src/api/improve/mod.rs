@@ -331,7 +331,7 @@ async fn run_improve(
     session_ids: Vec<String>,
 ) -> Result<ImproveResult, ApiError> {
     let ImproveParams {
-        dataset_name,
+        mut dataset_name,
         dataset_id,
         session_ids: _,
         // Deprecated options (SDK-1115), ignored as Python ignores them
@@ -367,6 +367,20 @@ async fn run_improve(
         .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
     let feedback_alpha = validate_feedback_alpha(feedback_alpha.unwrap_or(config.feedback_alpha))
         .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+
+    // A dataset named by id is resolved once, as Python's `improve(dataset=<UUID>)`
+    // does, and every stage then targets that id: the by-name lookups only see
+    // the owner's own datasets, so a dataset another user shared with the
+    // caller would be recreated under the caller. An id naming no dataset is
+    // an error (Python's `load_or_create_datasets` raises for a UUID matching
+    // none), and the stored name replaces the caller's.
+    if let (Some(id), Some(db)) = (dataset_id, db.as_ref()) {
+        let dataset = cognee_database::IngestDb::get_dataset(&**db, id)
+            .await
+            .map_err(|e| ApiError::Improve(format!("dataset lookup failed for '{id}': {e}")))?
+            .ok_or_else(|| ApiError::Improve(format!("dataset '{id}' not found")))?;
+        dataset_name = dataset.name;
+    }
 
     let mut result = ImproveResult::new(dataset_name.clone(), session_ids.clone());
     result.background = run_in_background;

@@ -102,7 +102,7 @@ impl PyCognee {
     ///     result = await cognee.remember({"type": "text", "text": "Fact A"}, "mem_ds")
     ///
     /// Supported ``opts`` keys (snake_case spellings accepted too):
-    /// ``sessionId``, ``selfImprovement``, ``tenant``.
+    /// ``sessionId``, ``selfImprovement`` (default ``True``), ``tenant``.
     ///
     /// Returns the ``RememberResult`` as a dict.
     #[pyo3(signature = (inputs, dataset_name, opts=None))]

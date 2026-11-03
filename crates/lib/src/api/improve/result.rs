@@ -210,6 +210,22 @@ impl ImproveResult {
         ImproveStatus::Completed
     }
 
+    /// Why the run went wrong, if it did, as Python's `_improve_error_text`
+    /// (`cognee/api/v1/remember/remember.py:73-91`): the fatal error, else the
+    /// errored stages as `"<stage>: <error>"` joined by `"; "`.
+    pub fn error_text(&self) -> Option<String> {
+        if let Some(error) = &self.error {
+            return Some(error.clone());
+        }
+        let errored: Vec<String> = self
+            .stages
+            .iter()
+            .filter(|s| s.status == StageStatus::Errored)
+            .map(|s| format!("{}: {}", s.stage, s.error.as_deref().unwrap_or("errored")))
+            .collect();
+        (!errored.is_empty()).then(|| errored.join("; "))
+    }
+
     /// The result of the stage called `name`, if it was recorded.
     pub fn stage(&self, name: &str) -> Option<&StageResult> {
         self.stages.iter().find(|stage| stage.stage == name)

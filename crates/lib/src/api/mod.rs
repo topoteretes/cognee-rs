@@ -37,8 +37,10 @@ pub use recall::{
     normalize_scope, recall,
 };
 pub use remember::{
-    RememberItemInfo, RememberResult, RememberStatus, SessionAutoImprove,
-    launch_session_auto_improve, remember, remember_entry,
+    AutoImproveAdmission, AutoImproveContext, RememberItemInfo, RememberResult, RememberStatus,
+    SessionAutoImprove, SessionAutoImproveLaunch, auto_improve_skip_reason,
+    clear_auto_improve_admission, launch_session_auto_improve, register_auto_improve_admission,
+    remember, remember_entry,
 };
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;
