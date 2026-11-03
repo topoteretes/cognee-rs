@@ -48,7 +48,7 @@ EXPECTED_TASKS = {
     "classify_documents",
     "extract_chunks_from_documents",
     "extract_graph_from_data",
-    "summarize_text",
+    "extract_graph_and_summarize",
 }
 
 
@@ -215,4 +215,31 @@ def test_source_task_jaccard_overlap_per_node_type(both_cognified):
             f"source_task Jaccard for node_type {node_type!r}: "
             f"{jaccard:.2f} (rust={sorted(rust_set)}, "
             f"python={sorted(py_set)})"
+        )
+
+
+@requires_openai
+def test_text_summary_source_task_is_extract_graph_and_summarize(both_cognified):
+    """TextSummary nodes are stamped ``extract_graph_and_summarize`` in
+    both SDKs (the summary is produced by that task, not by
+    ``extract_graph_from_data``); the Jaccard gate above would still pass
+    with the wrong task on this one type."""
+    py_ws, rust_ws = both_cognified
+
+    for backend, ws in (("python", py_ws), ("rust", rust_ws)):
+        summaries = [
+            n
+            for n in _nodes(backend, ws)
+            if (n.get("type") or n.get("node_type")) == "TextSummary"
+        ]
+        assert summaries, f"{backend}: cognify produced no TextSummary nodes"
+        tasks = {_attr(n, "source_task") for n in summaries}
+        tasks.discard(None)
+        assert tasks, (
+            f"{backend}: TextSummary nodes carry no source_task; the stamp "
+            "is required in both SDKs"
+        )
+        assert tasks == {"extract_graph_and_summarize"}, (
+            f"{backend}: TextSummary source_task must be "
+            f"extract_graph_and_summarize, got {sorted(tasks)}"
         )
