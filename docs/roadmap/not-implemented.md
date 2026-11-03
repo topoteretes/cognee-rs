@@ -165,6 +165,15 @@ Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
   turn whose LLM call then fails, and the intermediate rounds of a CoT search are all stamped
   there. Rust stamps only the entries of an answered turn, in `save_session_turn`; the other
   cases leave the entries unstamped.
+- **The session-turn lock is taken inside `SessionManager::delete_session`.** Python takes
+  `session_turn_lock` in its `delete_session` lifecycle function, together with the improve claim
+  and the relational and vector clean-up. Rust has no equivalent lifecycle function yet, so the
+  manager's delete waits for the turn lock and holds it across the store delete; a caller that
+  already holds the lock for that session must release it first. Single process, as Python.
+- **A single-lane session retrieval is not passed through the merge.** Python calls
+  `merge_retrieved_objects(raw, None)` even when the rewrite lane is skipped, which only trims the
+  raw result to `top_k`; Rust returns the raw retrieval, which every built-in retriever already
+  limits to its `top_k`.
 - **TEMPORAL honours `include_global_context_index`.** Python's TEMPORAL retriever factory does
   not pass the flag through; Rust forwards it, as it does for the other hybrid searches.
 - **Temporal window expansion re-projects external metadata.** Rust runs the expanded window's
