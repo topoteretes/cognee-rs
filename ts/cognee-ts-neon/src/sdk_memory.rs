@@ -29,8 +29,9 @@ use crate::sdk::CogneeHandle;
 /// opts: `{ sessionId?, selfImprovement? (default true), tenant? }`
 ///
 /// `RememberResult` derives `Serialize` — result is passed through
-/// `serde_json::to_value` directly (cognify_result / improve_result fields are
-/// `#[serde(skip)]` so they are invisible to JS).
+/// `serde_json::to_value` directly (`cognify_result` is `#[serde(skip)]`, so
+/// it is invisible to JS; `improve`, `improve_error` and `improve_skipped` are
+/// present only when set).
 pub fn cognee_remember(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
     let state = Arc::clone(&handle.state);

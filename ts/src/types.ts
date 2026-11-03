@@ -584,6 +584,8 @@ export type CogneeMemoryEntry =
 /** Options accepted by `cogneeImprove`. */
 export interface CogneeImproveOptions {
   datasetName: string;
+  /** UUID of a dataset the caller already resolved (possibly shared with it), as Python's `improve(dataset=<UUID>)`. */
+  datasetId?: string;
   sessionIds?: string[];
   feedbackAlpha?: number;
   tenant?: string;
