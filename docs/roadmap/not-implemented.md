@@ -152,6 +152,11 @@ Differences from the Python SDK that are deliberate, not gaps (SDK-1045):
   `apply_served_context_ratings` rates any session-context entry of kind `context`; Rust only
   rates entries stamped on the previous answer (`used_session_context_ids`), so a model cannot
   increment arbitrary rows. Counters accumulate per turn as in Python.
+- **`last_served_at` is stamped after the answer is recorded.** Python stamps while it builds
+  the guidance block, so a concurrent turn that turns out to be an acknowledgement, a sequential
+  turn whose LLM call then fails, and the intermediate rounds of a CoT search are all stamped
+  there. Rust stamps only the entries of an answered turn, in `save_session_turn`; the other
+  cases leave the entries unstamped.
 - **TEMPORAL honours `include_global_context_index`.** Python's TEMPORAL retriever factory does
   not pass the flag through; Rust forwards it, as it does for the other hybrid searches.
 - **Temporal window expansion re-projects external metadata.** Rust runs the expanded window's

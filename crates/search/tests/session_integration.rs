@@ -1602,6 +1602,22 @@ impl SearchRetriever for SessionCapturingRetriever {
         }
         Ok(SearchOutput::Text("the answer".into()))
     }
+
+    fn previews_empty_context(&self, _params: &SearchParams) -> bool {
+        true
+    }
+
+    /// The preview prompt: just the guidance block the session carries.
+    async fn completion_messages(
+        &self,
+        _query: &str,
+        _context: &SearchContext,
+        session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<Option<Vec<cognee_llm::Message>>, SearchError> {
+        let guidance = session.guidance.as_ref().map(|g| g.render::<&str>(&[]));
+        Ok(guidance.map(|text| vec![cognee_llm::Message::user(text)]))
+    }
 }
 
 const RULE_ID: &str = "rule-1";
@@ -1797,6 +1813,41 @@ async fn served_guidance_is_recorded_stamped_and_rated_on_the_next_turn() {
         let qa = harness.qa().await;
         assert_eq!(qa.len(), 3, "{label}");
         assert!(qa[2].used_session_context_ids.is_none(), "{label}");
+    }
+}
+
+#[tokio::test]
+async fn an_only_context_preview_shows_the_guidance_without_stamping_it() {
+    use cognee_search::SessionSearchMode::{Concurrent, Sequential};
+    for (mode, per_dataset) in [
+        (Sequential, false),
+        (Concurrent, false),
+        (Sequential, true),
+        (Concurrent, true),
+    ] {
+        let label = format!("{mode:?}/per_dataset={per_dataset}");
+        let harness = GuidanceHarness::new(mode, per_dataset).await;
+        let mut request = graph_request("What is Rust?", Some(SESSION));
+        request.user_id = Some(harness.user);
+        request.only_context = Some(true);
+        if per_dataset {
+            request.dataset_ids = Some(vec![Uuid::new_v4()]);
+        }
+        let output = harness.orchestrator.search(&request).await.unwrap().result;
+
+        assert!(
+            matches!(&output, SearchOutput::Text(t) if t == GUIDANCE_BLOCK),
+            "{label}: {output:?}"
+        );
+        assert!(
+            harness.rule_row().await["last_served_at"].is_null(),
+            "{label}: a preview does not stamp"
+        );
+        assert_eq!(
+            harness.qa().await.len(),
+            1,
+            "{label}: a preview saves no turn"
+        );
     }
 }
 
