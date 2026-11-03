@@ -185,15 +185,6 @@ impl DatasetLocks {
         })
     }
 
-    /// The process-wide registry. Pipeline runs (`cognify`), `add`, `delete`
-    /// and startup recovery of the bindings all take their locks here, so they
-    /// exclude each other as Python's single `get_dataset_lock` registry does.
-    pub fn global() -> Arc<DatasetLocks> {
-        static GLOBAL: std::sync::LazyLock<Arc<DatasetLocks>> =
-            std::sync::LazyLock::new(|| Arc::new(DatasetLocks::new()));
-        Arc::clone(&GLOBAL)
-    }
-
     /// Run `fut` holding the locks of every id in `dataset_ids`.
     ///
     /// Ids the current task already holds (an enclosing `hold`) are not
