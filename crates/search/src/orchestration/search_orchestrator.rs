@@ -603,24 +603,27 @@ impl SearchOrchestrator {
         }
     }
 
-    /// [`Self::assess_memory_readiness`] for the datasets a search with
-    /// `request` would cover. Its datasets are checked and resolved as the
-    /// search does, so a denied id or unknown names fail here, before
-    /// probing. Without a caller there is nothing to scope by, and the graph
-    /// is warm.
+    /// [`Self::assess_memory_readiness`] for the datasets a recall by
+    /// `requester` names. They are checked and resolved as a search does, so
+    /// a denied id or unknown names fail here, before probing. `dataset_ids`
+    /// wins over `datasets`; naming neither covers what the caller may read.
     pub async fn assess_recall_readiness(
         &self,
-        request: &SearchRequest,
+        requester: uuid::Uuid,
+        tenant: Option<uuid::Uuid>,
+        datasets: Option<&[String]>,
+        dataset_ids: Option<&[uuid::Uuid]>,
     ) -> Result<WarmupProbe, SearchError> {
-        let Some(requester) = request.user_id else {
-            return Ok(WarmupProbe::warm());
-        };
-        let targets = match self.authorize_and_resolve_datasets(request).await? {
-            Some(resolved) => Some(resolved),
-            None => request.dataset_ids.clone().filter(|ids| !ids.is_empty()),
-        };
+        let resolved = self
+            .authorize_and_resolve_datasets(Some(requester), tenant, datasets, dataset_ids)
+            .await?;
+        let targets = resolved.or_else(|| {
+            dataset_ids
+                .filter(|ids| !ids.is_empty())
+                .map(<[uuid::Uuid]>::to_vec)
+        });
         Ok(self
-            .assess_memory_readiness(requester, request.tenant_id, targets.as_deref())
+            .assess_memory_readiness(requester, tenant, targets.as_deref())
             .await)
     }
 
@@ -651,13 +654,15 @@ impl SearchOrchestrator {
             .map_err(|e| SearchError::DatabaseError(e.to_string()))
     }
 
-    /// Check the request's explicit `dataset_ids` against what the caller may
-    /// read, and resolve its dataset names, as a search does before it runs.
-    /// `Some(ids)`: the names resolved to `ids`, which the search then runs
-    /// over.
+    /// Check explicit `dataset_ids` against what the caller may read, and
+    /// resolve dataset names, as a search does before it runs. `Some(ids)`:
+    /// the names resolved to `ids`, which the search then runs over.
     async fn authorize_and_resolve_datasets(
         &self,
-        request: &SearchRequest,
+        user_id: Option<uuid::Uuid>,
+        tenant_id: Option<uuid::Uuid>,
+        datasets: Option<&[String]>,
+        dataset_ids: Option<&[uuid::Uuid]>,
     ) -> Result<Option<Vec<uuid::Uuid>>, SearchError> {
         // Authorize caller-supplied dataset UUIDs. Python runs every explicit
         // id through `get_authorized_existing_datasets(dataset_ids, "read",
@@ -675,16 +680,16 @@ impl SearchOrchestrator {
         // `dataset_ids or None` down). What "no dataset named" means depends on
         // the mode — every dataset the caller may read with an ACL wired,
         // unscoped without one — and is settled after name resolution below.
-        if let Some(ids) = request.dataset_ids.as_ref().filter(|ids| !ids.is_empty())
+        if let Some(ids) = dataset_ids.filter(|ids| !ids.is_empty())
             && (self.acl_db.is_some() || self.dataset_resolver.is_some())
         {
-            let requester = request.user_id.ok_or_else(|| {
+            let requester = user_id.ok_or_else(|| {
                 SearchError::InvalidInput(
                     "dataset_ids filter requires SearchRequest.user_id to authorize the caller"
                         .to_string(),
                 )
             })?;
-            self.authorize_dataset_ids(requester, request.tenant_id, ids)
+            self.authorize_dataset_ids(requester, tenant_id, ids)
                 .await?;
         }
 
@@ -712,10 +717,9 @@ impl SearchOrchestrator {
         //     resolution (Python's `if datasets:` short-circuits empty lists
         //     too); the request then counts as naming no dataset at all.
         //   - explicit `dataset_ids` always wins over `datasets`
-        match (&request.datasets, &request.dataset_ids) {
+        match (datasets, dataset_ids) {
             (Some(names), maybe_ids)
-                if !names.is_empty()
-                    && maybe_ids.as_ref().map(|v| v.is_empty()).unwrap_or(true) =>
+                if !names.is_empty() && maybe_ids.map(|v| v.is_empty()).unwrap_or(true) =>
             {
                 let resolver = self.dataset_resolver.as_ref().ok_or_else(|| {
                     SearchError::InvalidInput(
@@ -724,7 +728,7 @@ impl SearchOrchestrator {
                             .to_string(),
                     )
                 })?;
-                let owner_id = request.user_id.ok_or_else(|| {
+                let owner_id = user_id.ok_or_else(|| {
                     SearchError::InvalidInput(
                         "dataset name filter requires SearchRequest.user_id to identify the owner"
                             .to_string(),
@@ -742,7 +746,7 @@ impl SearchOrchestrator {
                 let mut missing = Vec::new();
                 for name in names {
                     match resolver
-                        .get_dataset_by_name_in_tenant(name, owner_id, request.tenant_id)
+                        .get_dataset_by_name_in_tenant(name, owner_id, tenant_id)
                         .await?
                     {
                         Some(ds) => resolved.push(ds.id),
@@ -778,7 +782,7 @@ impl SearchOrchestrator {
                 // owner-wide dataset listing to every name-scoped search for
                 // a result that is provably `Ok(())`.
                 if self.acl_db.is_some() {
-                    self.authorize_dataset_ids(owner_id, request.tenant_id, &resolved)
+                    self.authorize_dataset_ids(owner_id, tenant_id, &resolved)
                         .await?;
                 }
 
@@ -931,7 +935,15 @@ impl SearchOrchestrator {
         let scoping = retriever.dataset_scoping();
 
         let resolved_request_owned;
-        let request: &SearchRequest = match self.authorize_and_resolve_datasets(request).await? {
+        let resolved = self
+            .authorize_and_resolve_datasets(
+                request.user_id,
+                request.tenant_id,
+                request.datasets.as_deref(),
+                request.dataset_ids.as_deref(),
+            )
+            .await?;
+        let request: &SearchRequest = match resolved {
             Some(resolved) => {
                 let mut clone = request.clone();
                 clone.dataset_ids = Some(resolved);

@@ -20,7 +20,9 @@ use cognee_search::observability::{
     COGNEE_RECALL_SCOPE, COGNEE_RECALL_SOURCE, COGNEE_RESULT_COUNT, COGNEE_SEARCH_QUERY,
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
-use cognee_search::recall_scope::{run_graph, search_session, search_trace, warmup_note};
+use cognee_search::recall_scope::{
+    has_dataset_filter, plan_graph, run_graph, search_session, search_trace,
+};
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
@@ -37,11 +39,13 @@ pub struct RecallResult {
     /// Source-tagged results -- order matches the iteration order of the
     /// resolved `sources` list (Python `recall.py:503-513`).
     pub items: Vec<RecallItem>,
-    /// The search type that was used (if graph search ran).
+    /// The search type that was used (if graph search ran), or would have
+    /// been when the warm-up guard skipped it.
     pub search_type_used: Option<SearchType>,
     /// Whether auto-routing was applied (only relevant when graph ran).
     pub auto_routed: bool,
-    /// The raw graph search response (if graph search ran).
+    /// The raw graph search response (if graph search ran); empty when the
+    /// warm-up guard skipped it.
     pub search_response: Option<SearchResponse>,
 }
 
@@ -86,7 +90,20 @@ pub async fn recall(
         // unknown strings are rejected at the HTTP/CLI boundary before they
         // reach this function.
         Some(v) if v.is_empty() => vec![RecallScope::Auto],
-        Some(v) => v,
+        // A repeated source runs once, as `normalize_scope` dedupes the wire
+        // form, and next to real sources the `Auto` sentinel is none.
+        Some(v) => {
+            let mut seen = std::collections::HashSet::new();
+            let unique: Vec<RecallScope> = v.into_iter().filter(|s| seen.insert(*s)).collect();
+            if unique.len() > 1 {
+                unique
+                    .into_iter()
+                    .filter(|s| *s != RecallScope::Auto)
+                    .collect()
+            } else {
+                unique
+            }
+        }
     };
 
     let auto_mode = normalized.as_slice() == [RecallScope::Auto];
@@ -94,8 +111,7 @@ pub async fn recall(
         // Python recall.py:466-476: `has_dataset_scope = bool(dataset_ids)
         // or bool(datasets)` — either filter counts, and an empty list does
         // not.
-        let has_dataset_scope = dataset_ids.as_ref().is_some_and(|d| !d.is_empty())
-            || datasets.as_ref().is_some_and(|d| !d.is_empty());
+        let has_dataset_scope = has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref());
         match (session_id, has_dataset_scope, query_type) {
             (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
             (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
@@ -175,45 +191,59 @@ pub async fn recall(
                     .map_err(|e| ApiError::Search(e.to_string()))?
             }
             RecallScope::Graph => {
-                let note = warmup_note(
-                    search_orchestrator,
+                let search_err =
+                    |e: cognee_search::types::SearchError| ApiError::Search(e.to_string());
+                let plan = plan_graph(
+                    query_text,
+                    query_type,
+                    auto_route,
                     datasets.as_deref(),
                     dataset_ids.as_deref(),
                     user_id,
-                    options.as_ref(),
+                    search_orchestrator,
+                    &span,
                 )
-                .await
-                .map_err(|e| ApiError::Search(e.to_string()))?;
-                // A graph that is not built is not searched: it answers with a
-                // note when it is the one source, and with nothing next to
-                // others.
-                if let Some(note) = note {
-                    if sources.as_slice() == [RecallScope::Graph] {
-                        vec![note]
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    let (items, used_type, was_auto, response) = run_graph(
+                .map_err(search_err)?;
+                let note = plan
+                    .warmup_note(
+                        search_orchestrator,
+                        datasets.as_deref(),
+                        dataset_ids.as_deref(),
+                        options.as_ref(),
+                    )
+                    .await
+                    .map_err(search_err)?;
+                // A graph that is not built is not searched: it answers the
+                // note as the one source, and nothing next to others.
+                let (items, used_type, was_auto, response) = match note {
+                    Some(note) => (
+                        if sources.as_slice() == [RecallScope::Graph] {
+                            vec![note]
+                        } else {
+                            Vec::new()
+                        },
+                        plan.search_type(),
+                        plan.auto_routed(),
+                        plan.empty_response(),
+                    ),
+                    None => run_graph(
+                        &plan,
                         query_text,
-                        query_type,
                         datasets.clone(),
                         dataset_ids.clone(),
                         top_k,
-                        auto_route,
                         session_id,
-                        user_id,
                         search_orchestrator,
                         &span,
                         options.as_ref(),
                     )
                     .await
-                    .map_err(|e| ApiError::Search(e.to_string()))?;
-                    graph_search_type = Some(used_type);
-                    graph_auto_routed = was_auto;
-                    graph_response = Some(response);
-                    items
-                }
+                    .map_err(search_err)?,
+                };
+                graph_search_type = Some(used_type);
+                graph_auto_routed = was_auto;
+                graph_response = Some(response);
+                items
             }
         };
 

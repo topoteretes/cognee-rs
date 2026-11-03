@@ -431,64 +431,38 @@ pub async fn search_trace(
         .collect())
 }
 
-/// Lifted from the original recall body — runs the graph search via the
-/// orchestrator. Mirrors Python's inline `_run_graph` closure
-/// (`recall.py:455-493`). Returns `(items, search_type_used, auto_routed,
-/// raw_response)`.
-///
-/// `user_id` is the caller's identity in the same string form the session
-/// helpers take. It becomes `SearchRequest.user_id`, which the orchestrator
-/// needs to resolve `datasets` *names* owner-scoped — without it any name
-/// filter fails with "dataset name filter requires SearchRequest.user_id" —
-/// and to authorize explicit `dataset_ids` against their owner.
-///
-/// `dataset_ids` takes precedence over `datasets`: when it is non-empty the
-/// names are never resolved (Python `recall.py:655-657`,
-/// `search_dataset_ids = dataset_ids or None`). An empty list is the same as
-/// `None`.
+/// A recall's graph search, decided once before anything runs: who asks, and
+/// how to search. [`plan_graph`] makes it; the warm-up guard
+/// ([`GraphPlan::warmup_note`]) and every [`run_graph`] of the recall share it.
+#[derive(Debug, Clone, Copy)]
+pub struct GraphPlan {
+    owner: Option<Uuid>,
+    decision: RouteDecision,
+    /// The rule that picked the type, set only when the router chose it, so
+    /// a retry never second-guesses an explicit type.
+    routed_rule: Option<&'static str>,
+    /// What a routed search that fails or finds nothing is retried as.
+    fallback: RouteDecision,
+}
+
+/// Plans a recall's graph search: its owner, the caller's `user_id` as a UUID,
+/// and how to search, recorded on `span`. An explicit `query_type` is used as given;
+/// otherwise `auto_route` picks the type from the query text, or the
+/// deployment's default does.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_graph(
+pub fn plan_graph(
     query_text: &str,
     query_type: Option<SearchType>,
-    datasets: Option<Vec<String>>,
-    dataset_ids: Option<Vec<Uuid>>,
-    top_k: usize,
     auto_route: bool,
-    session_id: Option<&str>,
+    datasets: Option<&[String]>,
+    dataset_ids: Option<&[Uuid]>,
     user_id: Option<&str>,
     search_orchestrator: &SearchOrchestrator,
     span: &tracing::Span,
-    options: Option<&RecallOptions>,
-) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
-    // The orchestrator resolves dataset *names* owner-scoped and authorizes
-    // explicit *ids* against their owner (Python `_run_graph` ->
-    // `get_authorized_existing_datasets(datasets, "read", user)` and
-    // `authorized_search(dataset_ids=...)`), so it needs the caller's identity
-    // on the request. Recall's `user_id` is a string because the session
-    // helpers key on strings; the graph side needs the UUID form. A non-UUID
-    // caller id with a dataset filter is the caller's mistake and is reported
-    // as such. Without a filter the graph search has no owner scope to apply
-    // and the value is simply not forwarded, as before.
-    let has_dataset_filter = datasets.as_ref().is_some_and(|d| !d.is_empty())
-        || dataset_ids.as_ref().is_some_and(|d| !d.is_empty());
-    let owner_id: Option<Uuid> = match user_id {
-        None => None,
-        Some(raw) => match Uuid::parse_str(raw) {
-            Ok(id) => Some(id),
-            Err(error) if has_dataset_filter => {
-                return Err(SearchError::InvalidInput(format!(
-                    "dataset filter requires a UUID user_id to identify the owner, \
-                     got '{raw}': {error}"
-                )));
-            }
-            Err(_) => None,
-        },
-    };
-
+) -> Result<GraphPlan, SearchError> {
+    let owner = graph_owner(user_id, datasets, dataset_ids)?;
     let constraints = search_orchestrator.routing_constraints();
     let fallback = default_route(&constraints);
-    // `routed_rule` is set only when the router chose the type, so the retry
-    // below never second-guesses an explicit type.
     let (decision, routed_rule) = match (query_type, auto_route) {
         (Some(qt), _) => (pinned_route(qt, &constraints), None),
         (None, true) => {
@@ -497,13 +471,50 @@ pub async fn run_graph(
         }
         (None, false) => (fallback, None),
     };
-    let mut search_type = decision.search_type;
-    let auto_routed = routed_rule.is_some();
-
-    span.record(COGNEE_SEARCH_TYPE, format!("{search_type:?}").as_str());
+    span.record(
+        COGNEE_SEARCH_TYPE,
+        format!("{:?}", decision.search_type).as_str(),
+    );
     if let Some(rule) = routed_rule {
         span.record(COGNEE_RECALL_ROUTE_RULE, rule);
     }
+    Ok(GraphPlan {
+        owner,
+        decision,
+        routed_rule,
+        fallback,
+    })
+}
+
+/// Lifted from the original recall body — runs the graph search via the
+/// orchestrator. Mirrors Python's inline `_run_graph` closure
+/// (`recall.py:455-493`), searching as `plan` decided. Returns `(items,
+/// search_type_used, auto_routed, raw_response)`.
+///
+/// `dataset_ids` takes precedence over `datasets`: when it is non-empty the
+/// names are never resolved (Python `recall.py:655-657`,
+/// `search_dataset_ids = dataset_ids or None`). An empty list is the same as
+/// `None`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_graph(
+    plan: &GraphPlan,
+    query_text: &str,
+    datasets: Option<Vec<String>>,
+    dataset_ids: Option<Vec<Uuid>>,
+    top_k: usize,
+    session_id: Option<&str>,
+    search_orchestrator: &SearchOrchestrator,
+    span: &tracing::Span,
+    options: Option<&RecallOptions>,
+) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
+    let GraphPlan {
+        owner: owner_id,
+        decision,
+        routed_rule,
+        fallback,
+    } = *plan;
+    let mut search_type = decision.search_type;
+    let auto_routed = routed_rule.is_some();
 
     // Under per-dataset storage an unfiltered graph search covers the datasets
     // the caller may read, which needs a caller. With none (or one that is not
@@ -513,7 +524,10 @@ pub async fn run_graph(
     // recall's other sources (session, trace) and its auto-mode
     // fall-through still run. Python has no such case, since `recall()`
     // resolves a missing user to the default user first.
-    if search_orchestrator.scopes_unfiltered_search() && owner_id.is_none() && !has_dataset_filter {
+    if search_orchestrator.scopes_unfiltered_search()
+        && owner_id.is_none()
+        && !has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref())
+    {
         debug!("recall: per-dataset storage and an unknown caller; no graph results");
         let response = empty_graph_response(search_type);
         return Ok((Vec::new(), search_type, auto_routed, response));
@@ -607,6 +621,36 @@ pub async fn run_graph(
     Ok((items, search_type, auto_routed, response))
 }
 
+/// Whether a recall names any dataset: an empty list names none.
+pub fn has_dataset_filter(datasets: Option<&[String]>, dataset_ids: Option<&[Uuid]>) -> bool {
+    datasets.is_some_and(|d| !d.is_empty()) || dataset_ids.is_some_and(|d| !d.is_empty())
+}
+
+/// The graph search's owner: the caller's `user_id` as a UUID. The
+/// orchestrator resolves dataset names owner-scoped and authorizes explicit
+/// ids against their owner. Recall's `user_id` is a string because the
+/// session helpers key on strings. A non-UUID id with a dataset filter is the
+/// caller's mistake and an error; without a filter there is no owner scope to
+/// apply, and no owner.
+fn graph_owner(
+    user_id: Option<&str>,
+    datasets: Option<&[String]>,
+    dataset_ids: Option<&[Uuid]>,
+) -> Result<Option<Uuid>, SearchError> {
+    let Some(raw) = user_id else {
+        return Ok(None);
+    };
+    match Uuid::parse_str(raw) {
+        Ok(id) => Ok(Some(id)),
+        Err(error) if has_dataset_filter(datasets, dataset_ids) => {
+            Err(SearchError::InvalidInput(format!(
+                "dataset filter requires a UUID user_id to identify the owner, got '{raw}': {error}"
+            )))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 /// Routed types whose empty result is retried as [`ROUTER_FALLBACK_TYPE`]: a
 /// lexical or rules search that finds nothing says nothing about the question.
 const RETRY_ON_EMPTY: [SearchType; 2] = [SearchType::ChunksLexical, SearchType::CodingRules];
@@ -668,49 +712,65 @@ fn warmup_marker(probe: &WarmupProbe, threshold: u64) -> RecallItem {
     }
 }
 
-/// Recall's warm-up guard: the note to return instead of searching a graph
-/// that is not built, or `None` to search it. It probes all of a recall's
-/// datasets at once, so a caller that searches them one by one asks before
-/// the first. The datasets are checked and resolved as the search would, so
-/// one the caller cannot read fails here.
-///
-/// `None` without a probe, with the short-circuit off, for a caller asking
-/// for `only_context` (who expects context, not a note), or when `user_id`
-/// is not a UUID, which the search reports.
-pub async fn warmup_note(
-    search_orchestrator: &SearchOrchestrator,
-    datasets: Option<&[String]>,
-    dataset_ids: Option<&[Uuid]>,
-    user_id: Option<&str>,
-    options: Option<&RecallOptions>,
-) -> Result<Option<RecallItem>, SearchError> {
-    let Some(warmup) = search_orchestrator.graph_warmup() else {
-        return Ok(None);
-    };
-    if !warmup.config().shortcircuit || options.and_then(|o| o.only_context).unwrap_or(false) {
-        return Ok(None);
+impl GraphPlan {
+    /// The type the search runs as planned, before any fallback retry.
+    pub fn search_type(&self) -> SearchType {
+        self.decision.search_type
     }
-    let Some(requester) = user_id.and_then(|id| Uuid::parse_str(id).ok()) else {
-        return Ok(None);
-    };
-    let request = SearchRequest {
-        datasets: datasets.map(<[String]>::to_vec),
-        dataset_ids: dataset_ids.map(<[Uuid]>::to_vec),
-        user_id: Some(requester),
-        tenant_id: options.and_then(|o| o.tenant_id),
-        ..SearchRequest::default()
-    };
-    let probe = search_orchestrator
-        .assess_recall_readiness(&request)
-        .await?;
-    if probe.is_warm() {
-        return Ok(None);
+
+    /// Whether the router chose the type.
+    pub fn auto_routed(&self) -> bool {
+        self.routed_rule.is_some()
     }
-    info!(
-        state = probe.state.as_str(),
-        "recall: the graph is not built; skipping the search"
-    );
-    Ok(Some(warmup_marker(&probe, warmup.config().threshold)))
+
+    /// What a search that does not run reports: no items, over no dataset.
+    pub fn empty_response(&self) -> SearchResponse {
+        empty_graph_response(self.search_type())
+    }
+
+    /// Recall's warm-up guard: a note on the graph's state when none of the
+    /// recall's datasets has a built graph, or `None` to search. It probes
+    /// them all at once, so a caller that searches them one by one asks
+    /// before the first. They are checked and resolved as the search would,
+    /// so one the caller cannot read fails here.
+    ///
+    /// On a note the caller does not search. It answers the note when the
+    /// graph is the recall's one source, nothing next to others, and reports
+    /// [`Self::search_type`], [`Self::auto_routed`] and
+    /// [`Self::empty_response`].
+    ///
+    /// `None` without a probe: with the short-circuit off, for a caller
+    /// asking for `only_context` (who expects context, not a note), or
+    /// without an owner to scope by.
+    pub async fn warmup_note(
+        &self,
+        search_orchestrator: &SearchOrchestrator,
+        datasets: Option<&[String]>,
+        dataset_ids: Option<&[Uuid]>,
+        options: Option<&RecallOptions>,
+    ) -> Result<Option<RecallItem>, SearchError> {
+        let Some(warmup) = search_orchestrator.graph_warmup() else {
+            return Ok(None);
+        };
+        if !warmup.config().shortcircuit || options.and_then(|o| o.only_context).unwrap_or(false) {
+            return Ok(None);
+        }
+        let Some(requester) = self.owner else {
+            return Ok(None);
+        };
+        let tenant = options.and_then(|o| o.tenant_id);
+        let probe = search_orchestrator
+            .assess_recall_readiness(requester, tenant, datasets, dataset_ids)
+            .await?;
+        if probe.is_warm() {
+            return Ok(None);
+        }
+        info!(
+            state = probe.state.as_str(),
+            "recall: the graph is not built; skipping the search"
+        );
+        Ok(Some(warmup_marker(&probe, warmup.config().threshold)))
+    }
 }
 
 /// The response of a graph search that did not run: no items, over no
@@ -743,6 +803,45 @@ fn tokenize(text: &str) -> HashSet<String> {
 )]
 mod tests {
     use super::*;
+
+    /// Plans the graph search, then runs it.
+    #[allow(clippy::too_many_arguments)]
+    async fn plan_and_run(
+        query_text: &str,
+        query_type: Option<SearchType>,
+        datasets: Option<Vec<String>>,
+        dataset_ids: Option<Vec<Uuid>>,
+        top_k: usize,
+        auto_route: bool,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        search_orchestrator: &SearchOrchestrator,
+        span: &tracing::Span,
+        options: Option<&RecallOptions>,
+    ) -> Result<(Vec<RecallItem>, SearchType, bool, SearchResponse), SearchError> {
+        let plan = plan_graph(
+            query_text,
+            query_type,
+            auto_route,
+            datasets.as_deref(),
+            dataset_ids.as_deref(),
+            user_id,
+            search_orchestrator,
+            span,
+        )?;
+        run_graph(
+            &plan,
+            query_text,
+            datasets,
+            dataset_ids,
+            top_k,
+            session_id,
+            search_orchestrator,
+            span,
+            options,
+        )
+        .await
+    }
 
     #[test]
     fn tokenize_splits_and_lowercases() {
@@ -1015,7 +1114,7 @@ mod tests {
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 
-        let (_items, used, auto, _response) = run_graph(
+        let (_items, used, auto, _response) = plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
@@ -1057,7 +1156,7 @@ mod tests {
             orchestrator_with_seeded_dataset("notes", owner).await;
         let span = tracing::Span::none();
 
-        let err = run_graph(
+        let err = plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
@@ -1089,7 +1188,7 @@ mod tests {
             orchestrator_with_seeded_dataset("notes", owner).await;
         let span = tracing::Span::none();
 
-        let err = run_graph(
+        let err = plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             Some(vec!["notes".to_string()]),
@@ -1112,7 +1211,7 @@ mod tests {
         }
 
         // Without a name filter the same id is tolerated, as before the fix.
-        run_graph(
+        plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             None,
@@ -1141,7 +1240,7 @@ mod tests {
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 
-        run_graph(
+        plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             None,
@@ -1181,7 +1280,7 @@ mod tests {
             orchestrator_with_seeded_dataset("notes", owner).await;
         let span = tracing::Span::none();
 
-        let err = run_graph(
+        let err = plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             None,
@@ -1229,7 +1328,7 @@ mod tests {
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 
-        run_graph(
+        plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             None,
@@ -1274,7 +1373,7 @@ mod tests {
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
 
-        let (items, _used, _auto, _response) = run_graph(
+        let (items, _used, _auto, _response) = plan_and_run(
             "anything",
             Some(SearchType::Chunks),
             None,
@@ -1296,7 +1395,7 @@ mod tests {
         );
 
         for caller in [None, Some("user-1")] {
-            let (items, _used, _auto, _response) = run_graph(
+            let (items, _used, _auto, _response) = plan_and_run(
                 "anything",
                 Some(SearchType::Chunks),
                 None,

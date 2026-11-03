@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::types::SearchType;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query_text: String,
     #[serde(default)]

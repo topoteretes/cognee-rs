@@ -17,6 +17,7 @@ use cognee_database::{
 use cognee_models::Dataset;
 use cognee_search::graph_warmup::{GraphWarmup, WarmupConfig};
 use cognee_search::orchestration::SearchTypeRegistry;
+use cognee_search::recall_scope::{plan_graph, run_graph};
 use cognee_search::retrievers::SearchRetriever;
 use cognee_search::types::{SearchContext, SearchError, SearchOutput, SearchParams};
 use cognee_search::{SearchOrchestrator, SearchType};
@@ -104,12 +105,23 @@ impl Fixture {
         scope: Vec<RecallScope>,
         options: Option<RecallOptions>,
     ) -> RecallResult {
+        self.recall_datasets(orchestrator, vec![self.dataset_id], scope, options)
+            .await
+    }
+
+    async fn recall_datasets(
+        &self,
+        orchestrator: &SearchOrchestrator,
+        dataset_ids: Vec<Uuid>,
+        scope: Vec<RecallScope>,
+        options: Option<RecallOptions>,
+    ) -> RecallResult {
         let owner = self.owner.to_string();
         recall(
             "Who won?",
             Some(SearchType::HybridCompletion),
             None,
-            Some(vec![self.dataset_id]),
+            Some(dataset_ids),
             10,
             false,
             None,
@@ -147,6 +159,12 @@ async fn a_graph_that_is_not_built_gets_a_note_until_it_is() {
         .await;
     assert_eq!(statuses(&cold.items), ["memory_warming_up"]);
     assert!(!answered(&cold.items));
+    // It still reports the search it would have run, with nothing found.
+    assert_eq!(cold.search_type_used, Some(SearchType::HybridCompletion));
+    let response = cold
+        .search_response
+        .expect("a skipped search has a response");
+    assert!(matches!(&response.result, SearchOutput::Items(items) if items.is_empty()));
 
     fixture
         .log_cognify(PipelineRunStatus::Completed, None)
@@ -156,6 +174,34 @@ async fn a_graph_that_is_not_built_gets_a_note_until_it_is() {
         .await;
     assert!(statuses(&warm.items).is_empty());
     assert!(answered(&warm.items));
+}
+
+#[tokio::test]
+async fn a_cold_graph_reports_the_type_the_router_picked() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    let owner = fixture.owner.to_string();
+    // Routed to CODING_RULES, not the fallback, so the result tells them apart.
+    let result = recall(
+        "What are the coding rules mentioned?",
+        None,
+        None,
+        Some(vec![fixture.dataset_id]),
+        10,
+        true,
+        None,
+        Some(&owner),
+        &orchestrator,
+        None,
+        None,
+        Some(vec![RecallScope::Graph]),
+        None,
+    )
+    .await
+    .expect("recall should succeed");
+    assert_eq!(statuses(&result.items), ["memory_warming_up"]);
+    assert!(result.auto_routed);
+    assert_eq!(result.search_type_used, Some(SearchType::CodingRules));
 }
 
 #[tokio::test]
@@ -183,6 +229,18 @@ async fn next_to_another_source_a_cold_graph_contributes_nothing() {
     let scope = vec![RecallScope::Graph, RecallScope::Trace];
     let result = fixture.recall(&orchestrator, scope, None).await;
     assert!(result.items.is_empty(), "{:?}", result.items);
+}
+
+#[tokio::test]
+async fn a_repeated_source_or_the_auto_sentinel_beside_one_runs_it_once() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    use RecallScope::{Auto, Graph};
+    // A repeated `Auto` is auto mode, which without a session is the graph.
+    for scope in [vec![Auto, Graph], vec![Graph, Graph], vec![Auto, Auto]] {
+        let result = fixture.recall(&orchestrator, scope.clone(), None).await;
+        assert_eq!(statuses(&result.items), ["memory_warming_up"], "{scope:?}");
+    }
 }
 
 #[tokio::test]
@@ -246,26 +304,102 @@ async fn one_built_graph_among_the_datasets_is_enough_to_search() {
         .expect("create_dataset");
     let orchestrator = fixture.orchestrator(WarmupConfig::default());
 
-    let note = cognee_search::recall_scope::warmup_note(
-        &orchestrator,
-        None,
-        Some(&[unbuilt, fixture.dataset_id]),
-        Some(&fixture.owner.to_string()),
-        None,
-    )
-    .await
-    .expect("warmup_note");
-    assert!(note.is_none(), "{note:?}");
+    let graph = || vec![RecallScope::Graph];
+    let both = vec![unbuilt, fixture.dataset_id];
+    let result = fixture
+        .recall_datasets(&orchestrator, both, graph(), None)
+        .await;
+    assert!(statuses(&result.items).is_empty());
+    assert!(answered(&result.items));
 
-    let alone = cognee_search::recall_scope::warmup_note(
-        &orchestrator,
+    let alone = fixture
+        .recall_datasets(&orchestrator, vec![unbuilt], graph(), None)
+        .await;
+    assert_eq!(statuses(&alone.items), ["memory_warming_up"]);
+}
+
+#[tokio::test]
+async fn run_graph_searches_a_cold_graph_without_a_note() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    let owner = fixture.owner.to_string();
+    let span = tracing::Span::none();
+    let ids = vec![fixture.dataset_id];
+    let plan = plan_graph(
+        "Who won?",
+        Some(SearchType::HybridCompletion),
+        false,
         None,
-        Some(&[unbuilt]),
-        Some(&fixture.owner.to_string()),
+        Some(&ids),
+        Some(&owner),
+        &orchestrator,
+        &span,
+    )
+    .expect("plan_graph");
+    let (items, _, _, _) = run_graph(
+        &plan,
+        "Who won?",
+        None,
+        Some(ids.clone()),
+        10,
+        None,
+        &orchestrator,
+        &span,
         None,
     )
     .await
-    .expect("warmup_note");
-    let status = alone.expect("an unbuilt dataset alone gets a note").content["status"].clone();
-    assert_eq!(status, "memory_warming_up");
+    .expect("run_graph");
+    assert!(statuses(&items).is_empty());
+    assert!(answered(&items));
+}
+
+#[tokio::test]
+async fn a_non_uuid_caller_with_a_dataset_filter_is_refused() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    let result = recall(
+        "Who won?",
+        Some(SearchType::HybridCompletion),
+        None,
+        Some(vec![fixture.dataset_id]),
+        10,
+        false,
+        None,
+        Some("not-a-uuid"),
+        &orchestrator,
+        None,
+        None,
+        Some(vec![RecallScope::Graph]),
+        None,
+    )
+    .await;
+    let error = result.expect_err("a dataset filter needs a UUID caller");
+    assert!(error.to_string().contains("UUID user_id"), "{error}");
+}
+
+#[tokio::test]
+async fn without_an_owner_a_cold_graph_is_searched_not_noted() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    for user_id in [None, Some("not-a-uuid")] {
+        let result = recall(
+            "Who won?",
+            Some(SearchType::HybridCompletion),
+            None,
+            None,
+            10,
+            false,
+            None,
+            user_id,
+            &orchestrator,
+            None,
+            None,
+            Some(vec![RecallScope::Graph]),
+            None,
+        )
+        .await
+        .expect("recall should succeed");
+        assert!(statuses(&result.items).is_empty(), "{user_id:?}");
+        assert!(answered(&result.items), "{user_id:?}");
+    }
 }
