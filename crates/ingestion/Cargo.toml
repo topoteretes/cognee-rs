@@ -43,6 +43,7 @@ toml = { workspace = true, optional = true }
 texting_robots = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
 pdfium-render = { workspace = true, optional = true }
 pdfium-auto = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
@@ -59,7 +60,7 @@ pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
 pdf-pure-rust = ["dep:pdf-extract"]
 csv-loader = ["dep:csv"]
 # HTML file loading + URL crawling/ingestion (shared scraper/toml machinery).
-html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util"]
+html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util", "dep:encoding_rs"]
 unstructured-xlsx = ["dep:calamine"]
 unstructured-docx = ["dep:quick-xml", "dep:zip"]
 unstructured-pptx = ["dep:quick-xml", "dep:zip"]

@@ -21,6 +21,7 @@ use cognee_core::pipeline::DataIdFn;
 use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
+use cognee_database::ops::data::DataRowRefresh;
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
@@ -103,6 +104,12 @@ pub struct ProcessedInput {
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
+    /// The item's own `external_metadata` text, before the source URI is merged
+    /// in. A re-add of existing content patches the stored metadata from it
+    /// (Python `merge_existing_row_metadata`): absent keeps the stored value.
+    pub item_external_metadata: Option<String>,
+    /// Where the content came from (`_cognee.source_uri`), if anywhere.
+    pub source_uri: Option<String>,
     /// Node-set names for graph organisation — the add call's
     /// [`AddParams::node_set`]. [`persist_data`] writes them to the
     /// `Data.node_set` column and under `external_metadata["node_set"]`; an
@@ -200,16 +207,6 @@ pub async fn process_input_with_loaders(
         return Err(Box::new(IngestionError::S3IngestionUnavailable));
     }
 
-    let raw_source_uri = if let Some(metadata) = resolved_url_metadata.as_ref()
-        && is_html_url_metadata(metadata)
-    {
-        let raw_file_name = format!("source_placeholder.{}", metadata.source_extension);
-        let raw_location = storage.store(&metadata.raw_bytes, &raw_file_name).await?;
-        Some(storage_location_to_uri(storage.base_path(), &raw_location))
-    } else {
-        None
-    };
-
     // Rebindable stored-file metadata. For non-URL inputs the loader runs at
     // ADD time (Python parity, ingest_data.py:103) and the stored artifact
     // becomes extracted text, so these are overridden to txt/text/plain below.
@@ -218,8 +215,9 @@ pub async fn process_input_with_loaders(
     let mut loader_engine = loader_engine;
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
-    // the already-extracted text; for everything else it is the raw original
-    // bytes, which we hash (UNCHANGED — sacred) and then feed to the loader.
+    // the fetched content (a page as its raw HTML text); for everything else
+    // it is the raw original bytes, which we hash (UNCHANGED — sacred) and
+    // then feed to the loader.
     let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
     let raw_bytes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -258,12 +256,25 @@ pub async fn process_input_with_loaders(
 
     // Store the artifact + compute `raw_content_hash` (MD5 of the stored
     // extracted-text file — Python parity, ingest_data.py:195).
-    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() {
-        // URL path: the loader already ran at fetch time, so `collected` IS the
-        // extracted text. Store it verbatim under the metadata-derived name and
-        // extension (preserving the existing URL behaviour, incl. non-HTML
-        // URLs that keep their source extension). `raw_content_hash` is the MD5
-        // of that stored file, which equals `content_hash` here.
+    //
+    // A fetched HTML page is the exception that follows Python: the page is
+    // kept as `text_<content_hash>.html` and goes through the regular text
+    // branch below, so `text_loader` stores it as `text_<content_hash>.txt`
+    // (`save_data_item_to_storage.py:82-89`, `ingest_data.py:315-331`).
+    let is_html_url = resolved_url_metadata
+        .as_ref()
+        .is_some_and(is_html_url_metadata);
+    let raw_source_uri = if is_html_url {
+        let raw_file_name = format!("text_{content_hash}.html");
+        let raw_location = storage.store(&collected, &raw_file_name).await?;
+        Some(storage_location_to_uri(storage.base_path(), &raw_location))
+    } else {
+        None
+    };
+    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() && !is_html_url {
+        // Other URL types: the content is stored verbatim under the
+        // metadata-derived name and extension, as before. `raw_content_hash`
+        // is the MD5 of that stored file, which equals `content_hash` here.
         let location = storage.store(&collected, &file_name).await?;
         (location, content_hash.clone())
     } else {
@@ -345,8 +356,9 @@ pub async fn process_input_with_loaders(
             _ => extract_original_location(input),
         }
     };
+    let source_uri = source_uri_from_input(input);
     let external_metadata =
-        merge_external_metadata(data_item_metadata, resolved_url_metadata.as_ref())?;
+        merge_external_metadata(data_item_metadata.clone(), source_uri.as_deref())?;
 
     Ok(ProcessedInput {
         content_hash,
@@ -367,6 +379,8 @@ pub async fn process_input_with_loaders(
         owner_id,
         tenant_id,
         external_metadata,
+        item_external_metadata: data_item_metadata,
+        source_uri,
         node_set: None,
         importance_weight: None,
     })
@@ -487,7 +501,8 @@ pub async fn persist_data_with_acl_and_locks(
     // `ProcessedInput` with a node set to a `persist_data*` function gets the
     // same two writes, and so does the re-add path below. Python stores
     // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
-    // else None`), so an empty list is treated as no node set.
+    // else None`), so an empty list writes no node set; on a re-add it still
+    // clears the stored one (see the re-add path).
     //
     // Checked before the dataset is resolved: a rejected name must not leave
     // behind an empty dataset (with its owner grants) that nothing attached
@@ -634,19 +649,23 @@ pub async fn persist_data_with_acl_and_locks(
         .await?
     {
         let data_id = existing_data.id;
-        // Python's `ingest_data` update branch rewrites the existing row's
-        // `node_set` and `external_metadata` from the re-add's values. Only
-        // the node set is refreshed here (the rest of the row stays as
-        // stored), and only when the call supplies one: a re-add without a
-        // node set leaves the stored tags alone. The write is skipped when
-        // the row already carries this set, which is the common re-add
-        // (improve's session persist re-adds under one fixed set). "Carries"
-        // is decided on the parsed JSON, not the stored text: a row Python
-        // wrote spells the same set `["a", "b"]` (json.dumps spacing) and may
-        // order metadata keys differently, and must not be rewritten on every
-        // re-add.
+        // Python's `ingest_data` update branch rewrites the existing row from
+        // the re-add (`ingest_data.py` ~470-545): name, raw / original
+        // locations, extensions and mime types, loader engine, hashes, size,
+        // the label when the item carries one, and `external_metadata` and
+        // `node_set` through `merge_existing_row_metadata` (a PATCH: absent
+        // keeps the stored value, a value replaces it). `pipeline_status` is
+        // reset only when the content changed, which a dedup hit by content
+        // hash never is. A re-add without a node set leaves the stored tags
+        // alone. The write is skipped when the row already carries every one
+        // of these values, which is the common re-add (improve's session
+        // persist re-adds under one fixed set). "Carries" is decided on the
+        // parsed JSON for the two JSON columns, not the stored text: a row
+        // Python wrote spells the same set `["a", "b"]` (json.dumps spacing)
+        // and may order metadata keys differently, and must not be rewritten
+        // on every re-add.
         //
-        // The write is a targeted update of the two columns, not a full-row
+        // The write is a targeted update of these columns, not a full-row
         // write of the snapshot read above: a `token_count`, `last_accessed`
         // or `pipeline_status` a concurrent cognify or search wrote in between
         // has to survive.
@@ -666,37 +685,89 @@ pub async fn persist_data_with_acl_and_locks(
         // pinned row; Rust adds the replacement first, then deletes the old
         // item — or, when the replacement dedups onto this same row,
         // drops only its memory and completion marker).
-        if let Some(names) = node_set {
-            let external_metadata = with_node_set_in_external_metadata(
-                existing_data.external_metadata.as_deref(),
-                names,
-            )
-            .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?;
-            if !same_json(
+        // PATCH rule for the node set (Python `requested_node_set`,
+        // `ingest_data.py:551-555`): absent keeps the stored set, an explicit
+        // empty list clears it, a list replaces it.
+        let clears_node_set = processed
+            .node_set
+            .as_ref()
+            .is_some_and(|names| names.is_empty());
+        let requested_node_set: Option<&[String]> =
+            if clears_node_set { Some(&[]) } else { node_set };
+        let node_set_column_to_write = match requested_node_set {
+            Some(_) => node_set_column.clone(),
+            None => existing_data.node_set.clone(),
+        };
+        let external_metadata = merge_existing_row_metadata(
+            existing_data.external_metadata.as_deref(),
+            existing_data.node_set.as_deref(),
+            processed.item_external_metadata.as_deref(),
+            processed.source_uri.as_deref(),
+            requested_node_set,
+        )
+        .map_err(|e| format!("Failed to merge external_metadata on re-add: {e}"))?;
+        let refresh = DataRowRefresh {
+            name: processed.name.clone(),
+            raw_data_location: processed.raw_data_uri.clone(),
+            original_data_location: processed.original_location.clone(),
+            extension: processed.stored_extension.clone(),
+            mime_type: processed.stored_mime_type.clone(),
+            original_extension: Some(processed.original_extension.clone()),
+            original_mime_type: Some(processed.original_mime_type.clone()),
+            loader_engine: Some(processed.loader_engine.clone()),
+            raw_content_hash: Some(processed.raw_content_hash.clone()),
+            data_size: processed.data_size,
+            label: processed.label.clone(),
+            node_set: node_set_column_to_write,
+            external_metadata,
+        };
+        let unchanged = existing_data.name == refresh.name
+            && existing_data.raw_data_location == refresh.raw_data_location
+            && existing_data.original_data_location == refresh.original_data_location
+            && existing_data.extension == refresh.extension
+            && existing_data.mime_type == refresh.mime_type
+            && existing_data.original_extension == refresh.original_extension
+            && existing_data.original_mime_type == refresh.original_mime_type
+            && existing_data.loader_engine == refresh.loader_engine
+            && existing_data.raw_content_hash == refresh.raw_content_hash
+            && existing_data.data_size == refresh.data_size
+            && refresh
+                .label
+                .as_ref()
+                .is_none_or(|l| existing_data.label.as_ref() == Some(l))
+            && same_json(
                 existing_data.node_set.as_deref(),
-                node_set_column.as_deref(),
-            ) || !same_json(
+                refresh.node_set.as_deref(),
+            )
+            && same_json(
                 existing_data.external_metadata.as_deref(),
-                external_metadata.as_deref(),
-            ) {
-                // A row deleted since the read above fails the write with
-                // `DatabaseError::NotFound`, which propagates: the call does
-                // not report a row that no longer exists.
-                let updated_at = database
-                    .update_data_node_set(
-                        data_id,
-                        node_set_column.as_deref(),
-                        external_metadata.as_deref(),
-                    )
-                    .await?;
-                info!(data_id = %data_id, "node_set refreshed on re-add");
-                // Patch the snapshot with exactly what was written rather than
-                // reading the row back: the three columns are the only ones the
-                // refresh touches, and `updated_at` is the value stored.
-                existing_data.node_set = node_set_column;
-                existing_data.external_metadata = external_metadata;
-                existing_data.updated_at = Some(updated_at);
+                refresh.external_metadata.as_deref(),
+            );
+        if !unchanged {
+            // A row deleted since the read above fails the write with
+            // `DatabaseError::NotFound`, which propagates: the call does
+            // not report a row that no longer exists.
+            let updated_at = database.refresh_data_row(data_id, &refresh).await?;
+            info!(data_id = %data_id, "row refreshed on re-add");
+            // Patch the snapshot with exactly what was written rather than
+            // reading the row back: these are the only columns the refresh
+            // touches, and `updated_at` is the value stored.
+            existing_data.name = refresh.name;
+            existing_data.raw_data_location = refresh.raw_data_location;
+            existing_data.original_data_location = refresh.original_data_location;
+            existing_data.extension = refresh.extension;
+            existing_data.mime_type = refresh.mime_type;
+            existing_data.original_extension = refresh.original_extension;
+            existing_data.original_mime_type = refresh.original_mime_type;
+            existing_data.loader_engine = refresh.loader_engine;
+            existing_data.raw_content_hash = refresh.raw_content_hash;
+            existing_data.data_size = refresh.data_size;
+            if refresh.label.is_some() {
+                existing_data.label = refresh.label;
             }
+            existing_data.node_set = refresh.node_set;
+            existing_data.external_metadata = refresh.external_metadata;
+            existing_data.updated_at = Some(updated_at);
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
@@ -1180,52 +1251,138 @@ fn with_node_set_in_external_metadata(
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
 }
 
+/// Where an add's content came from, as Python's `_source_uri_from_input`
+/// reports it (`ingest_data.py:140-181`): an explicit `source_uri` string in
+/// the item's own metadata wins; otherwise a URL or `s3://` path is its own
+/// locator and a local file is its absolute `file://` URI. Raw text, binary uploads and
+/// anything else have none.
+fn source_uri_from_input(input: &DataInput) -> Option<String> {
+    if let DataInput::DataItem {
+        external_metadata, ..
+    } = input
+        && let ItemMetadata::Object(object) = classify_item_metadata(external_metadata.as_deref())
+        && let Some(explicit) = object.get("source_uri").and_then(|v| v.as_str())
+        && !explicit.trim().is_empty()
+    {
+        return Some(explicit.trim().to_string());
+    }
+    match unwrap_data_item(input) {
+        // Python returns an `http`, `https`, `s3` or `file` locator as given.
+        DataInput::Url(url) | DataInput::S3Path(url) => Some(url.clone()),
+        DataInput::FilePath(path) => Some(file_uri(path)),
+        _ => None,
+    }
+}
+
+/// The `file://` URI of a local path, as Python's `Path(p).resolve().as_uri()`
+/// builds it. A path that already is a `file://` URI is kept as given, which is
+/// what Python does for any `file`, `http`, `https` or `s3` string.
+fn file_uri(path: &str) -> String {
+    if path.starts_with("file://") {
+        path.to_string()
+    } else {
+        path_to_file_uri(path)
+    }
+}
+
+fn path_to_file_uri(path: &str) -> String {
+    let path = Path::new(path);
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        }
+    });
+    let mut uri = String::from("file://");
+    for byte in absolute.to_string_lossy().as_bytes() {
+        // `urllib.parse.quote(path)`: letters, digits, `_.-~` and `/` stay.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/') {
+            uri.push(char::from(*byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
+/// The `external_metadata` a re-added existing row ends up with, as Python's
+/// `merge_existing_row_metadata` resolves it for unchanged content
+/// (`ingest_data.py:60-113`): a PATCH. An item without metadata keeps the
+/// stored object; an item with metadata replaces it. `_cognee.source_uri` is
+/// set from the new source when there is one. The node set (`None` keeps the
+/// stored column's names) is recorded under `node_set`, or the key is dropped
+/// when there is none. A stored value that is not a JSON object counts as
+/// empty.
+fn merge_existing_row_metadata(
+    stored_metadata: Option<&str>,
+    stored_node_set: Option<&str>,
+    item_metadata: Option<&str>,
+    source_uri: Option<&str>,
+    node_set: Option<&[String]>,
+) -> Result<Option<String>, serde_json::Error> {
+    let item = classify_item_metadata(item_metadata);
+    let mut metadata = if matches!(item, ItemMetadata::Absent) {
+        match stored_metadata.map(serde_json::from_str::<serde_json::Value>) {
+            Some(Ok(serde_json::Value::Object(object))) => object,
+            _ => serde_json::Map::new(),
+        }
+    } else {
+        item_metadata_map(item)
+    };
+    if let Some(source_uri) = source_uri {
+        let mut cognee = match metadata.get("_cognee") {
+            Some(serde_json::Value::Object(object)) => object.clone(),
+            _ => serde_json::Map::new(),
+        };
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+        metadata.insert("_cognee".to_string(), serde_json::Value::Object(cognee));
+    }
+    let resolved: Vec<String> = match node_set {
+        Some(names) => names.to_vec(),
+        None => stored_node_set
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .unwrap_or_default(),
+    };
+    if resolved.is_empty() {
+        metadata.remove("node_set");
+    } else {
+        metadata.insert("node_set".to_string(), serde_json::json!(resolved));
+    }
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map(Some)
+}
+
+/// The `external_metadata` a new `data` row gets, built as Python's
+/// `merge_existing_row_metadata` builds a new row's (`ingest_data.py:60-109`):
+/// the item's own object, with `_cognee.source_uri` set when the content has
+/// a source. Plain text has no source and no item metadata, and stores `{}`.
+///
+/// Metadata that is not a JSON object is kept under
+/// `data_item_external_metadata_raw` when a source URI has to be merged into
+/// it, and verbatim otherwise.
 fn merge_external_metadata(
     data_item_metadata: Option<String>,
-    url_metadata: Option<&UrlMetadata>,
+    source_uri: Option<&str>,
 ) -> Result<Option<String>, serde_json::Error> {
-    let Some(metadata) = url_metadata else {
-        // Nothing to merge with: the item's text is stored verbatim, unless
-        // it spells "no metadata".
-        return Ok(data_item_metadata.filter(|item_metadata| {
-            !matches!(
-                classify_item_metadata(Some(item_metadata)),
-                ItemMetadata::Absent
-            )
+    let Some(source_uri) = source_uri else {
+        // Nothing to merge: the item's text is stored verbatim, unless it
+        // spells "no metadata", which Python stores as `{}`.
+        return Ok(Some(match data_item_metadata {
+            Some(text) if !matches!(classify_item_metadata(Some(&text)), ItemMetadata::Absent) => {
+                text
+            }
+            _ => "{}".to_string(),
         }));
     };
 
-    let data_item_metadata = classify_item_metadata(data_item_metadata.as_deref());
-    let user_metadata_object = match &data_item_metadata {
-        ItemMetadata::Object(object) => Some(serde_json::Value::Object(object.clone())),
-        _ => None,
-    };
-    let mut merged = item_metadata_map(data_item_metadata);
-    let mut has_conflict = false;
-
-    let url_fields = [
-        ("source", serde_json::json!("url")),
-        ("url", serde_json::json!(metadata.requested_url.clone())),
-        ("final_url", serde_json::json!(metadata.final_url.clone())),
-        (
-            "content_type",
-            serde_json::json!(metadata.content_type.clone()),
-        ),
-    ];
-    for (key, value) in url_fields {
-        if merged.contains_key(key) {
-            has_conflict = true;
-        }
-        merged.insert(key.to_string(), value);
-    }
-    if let Some(title) = &metadata.title {
-        if merged.contains_key("title") {
-            has_conflict = true;
-        }
-        merged.insert("title".to_string(), serde_json::json!(title));
-    }
-    if has_conflict && let Some(user_metadata) = user_metadata_object {
-        merged.insert("data_item_external_metadata".to_string(), user_metadata);
+    let mut merged = item_metadata_map(classify_item_metadata(data_item_metadata.as_deref()));
+    if let Some(serde_json::Value::Object(cognee)) = merged.get_mut("_cognee") {
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+    } else {
+        merged.insert(
+            "_cognee".to_string(),
+            serde_json::json!({ "source_uri": source_uri }),
+        );
     }
 
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
@@ -1982,7 +2139,7 @@ mod tests {
 
     #[cfg(feature = "html-loader")]
     #[tokio::test]
-    async fn test_process_input_url_html_stores_text_with_source_metadata() {
+    async fn test_process_input_url_html_stores_the_raw_page_as_text() {
         let mut server = server_with_robots().await;
         let html = "<html><head><title>Example</title><style>.x{display:none}</style></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
         let url = format!("{}/page.html", server.url());
@@ -2005,33 +2162,43 @@ mod tests {
         .await
         .unwrap();
 
-        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
-        let raw_html = storage.retrieve(raw_source_uri).await.unwrap();
-        assert_eq!(raw_html, html.as_bytes());
-        assert!(raw_source_uri.ends_with(".html"));
-        assert!(processed.raw_data_uri.ends_with(".txt"));
-        assert_ne!(processed.raw_data_uri, *raw_source_uri);
+        // Python stores the page whole: the hash, the size and both stored
+        // files describe the raw HTML (`ingest_data.py:315-331`).
+        let hash =
+            crate::content_hasher::ContentHasher::hash_content(html.as_bytes(), HashAlgorithm::Md5);
+        assert_eq!(processed.content_hash, hash);
+        assert_eq!(processed.raw_content_hash, hash);
+        assert_eq!(processed.data_size, html.len() as i64);
+        assert_eq!(processed.name, format!("text_{hash}"));
 
-        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
-        let stored_text = String::from_utf8(stored).unwrap();
-        assert!(stored_text.contains("Visible text"));
-        assert!(!stored_text.contains("<html>"));
-        assert!(!stored_text.contains("hidden()"));
-        assert!(!stored_text.contains("display:none"));
+        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
+        assert!(raw_source_uri.ends_with(&format!("text_{hash}.html")));
+        assert_eq!(
+            storage.retrieve(raw_source_uri).await.unwrap(),
+            html.as_bytes()
+        );
+        assert!(
+            processed
+                .raw_data_uri
+                .ends_with(&format!("text_{hash}.txt"))
+        );
+        assert_eq!(
+            storage.retrieve(&processed.raw_data_uri).await.unwrap(),
+            html.as_bytes()
+        );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
-        assert_eq!(processed.original_extension, "html");
-        assert_eq!(processed.original_mime_type, "text/html");
-        assert_eq!(processed.loader_engine, "beautiful_soup_loader");
+        assert_eq!(processed.original_extension, "txt");
+        assert_eq!(processed.original_mime_type, "text/plain");
+        assert_eq!(processed.loader_engine, "text_loader");
         assert_eq!(processed.original_location, *raw_source_uri);
 
         let metadata: serde_json::Value =
             serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html; charset=utf-8");
-        assert_eq!(metadata["title"], "Example");
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": url}})
+        );
     }
 
     #[cfg(feature = "html-loader")]
@@ -2077,12 +2244,9 @@ mod tests {
                 .unwrap(),
             html.as_bytes()
         );
-        assert_eq!(data.original_extension.as_deref(), Some("html"));
-        assert_eq!(
-            data.original_mime_type.as_deref(),
-            Some("application/xhtml+xml")
-        );
-        assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
+        assert_eq!(data.original_extension.as_deref(), Some("txt"));
+        assert_eq!(data.original_mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(data.loader_engine.as_deref(), Some("text_loader"));
     }
 
     #[cfg(feature = "html-loader")]
@@ -2125,11 +2289,8 @@ mod tests {
             serde_json::from_str(data.external_metadata.as_ref().unwrap()).unwrap();
         assert_eq!(metadata["custom"], "keep");
         assert_eq!(metadata["rank"], 7);
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html");
-        assert_eq!(metadata["title"], "Wrapped");
+        assert_eq!(metadata["_cognee"]["source_uri"], url);
+        assert!(metadata.get("source").is_none() && metadata.get("title").is_none());
     }
 
     #[cfg(feature = "html-loader")]
@@ -2170,8 +2331,7 @@ mod tests {
             let metadata: serde_json::Value =
                 serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
             assert_eq!(metadata["data_item_external_metadata_raw"], user_metadata);
-            assert_eq!(metadata["source"], "url");
-            assert_eq!(metadata["url"], url);
+            assert_eq!(metadata["_cognee"]["source_uri"], url);
         }
     }
 
@@ -2220,6 +2380,14 @@ mod tests {
 
             assert_eq!(processed.raw_source_uri, None);
             assert_eq!(processed.original_location, url);
+            // Every URL add records where it came from (`ingest_data.py:157-164`).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    processed.external_metadata.as_deref().unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({"_cognee": {"source_uri": url}})
+            );
             assert_eq!(processed.stored_extension, expected_ext);
             assert_eq!(processed.stored_mime_type, expected_mime);
             assert_eq!(
@@ -3066,8 +3234,9 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            result[0].external_metadata, None,
-            "DataItem with no external_metadata should produce None on Data"
+            result[0].external_metadata.as_deref(),
+            Some("{}"),
+            "a Python add stores `{{}}` for content with no metadata and no source"
         );
     }
 
@@ -3187,7 +3356,7 @@ mod tests {
             .await
             .expect("first add");
         assert_eq!(first[0].node_set, None);
-        assert_eq!(first[0].external_metadata, None);
+        assert_eq!(first[0].external_metadata.as_deref(), Some("{}"));
 
         // A re-add that supplies a node set tags the existing row.
         let second = pipeline
@@ -3248,6 +3417,149 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    /// A dedup hit rewrites the label and `external_metadata` like Python's
+    /// update branch (`merge_existing_row_metadata`): an item without metadata
+    /// keeps the stored object, an item with metadata replaces it, a label is
+    /// written only when the item carries one.
+    #[tokio::test]
+    async fn re_add_refreshes_label_and_external_metadata() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let item = |label: &str, meta: Option<&str>| {
+            vec![DataInput::DataItem {
+                data: Box::new(DataInput::Text("Refreshed content".into())),
+                label: label.into(),
+                external_metadata: meta.map(String::from),
+            }]
+        };
+        let first = pipeline
+            .add(
+                item("one", Some(r#"{"a":1}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(first[0].label.as_deref(), Some("one"));
+
+        let second = pipeline
+            .add(
+                item("two", Some(r#"{"b":2}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        assert_eq!(second[0].label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&second[0]), serde_json::json!({"b": 2}));
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&stored), serde_json::json!({"b": 2}));
+
+        // No item metadata: the stored object is kept.
+        let third = pipeline
+            .add(item("three", None), "refresh_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(third[0].label.as_deref(), Some("three"));
+        assert_eq!(metadata_json(&third[0]), serde_json::json!({"b": 2}));
+
+        // Plain text carries no label: the stored one stays.
+        let fourth = pipeline
+            .add(
+                vec![DataInput::Text("Refreshed content".into())],
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fourth[0].label.as_deref(), Some("three"));
+    }
+
+    /// The same content added from another file refreshes the source URI and
+    /// the original location, as Python's update branch does with
+    /// `source_uri` and `original_data_location`.
+    #[tokio::test]
+    async fn re_add_from_another_source_refreshes_source_uri() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "same bytes in two files").unwrap();
+            DataInput::FilePath(path.to_string_lossy().into_owned())
+        };
+        let (a, b) = (write("a.txt"), write("b.txt"));
+        let first = pipeline
+            .add(vec![a], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        let first_uri = metadata_json(&first[0])["_cognee"]["source_uri"].clone();
+        assert!(first_uri.as_str().unwrap().ends_with("a.txt"));
+
+        let second = pipeline
+            .add(vec![b], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        let uri = metadata_json(&second[0])["_cognee"]["source_uri"].clone();
+        assert!(uri.as_str().unwrap().ends_with("b.txt"), "got {uri}");
+        assert!(second[0].original_data_location.ends_with("b.txt"));
+        assert_eq!(second[0].name, "b");
+    }
+
+    /// A re-add with an explicit empty node set clears the stored one, as
+    /// Python's update branch does (`requested_node_set` is `[]`, then
+    /// `merge_existing_row_metadata` drops the key, `ingest_data.py:551-564,
+    /// 573`); a re-add without a node set keeps it.
+    #[tokio::test]
+    async fn re_add_with_an_empty_node_set_clears_the_stored_one() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let add = |node_set: Option<Vec<String>>| {
+            let pipeline = &pipeline;
+            async move {
+                let params = AddParams {
+                    node_set,
+                    ..AddParams::default()
+                };
+                pipeline
+                    .add_with_params(
+                        vec![DataInput::Text("Tagged content".into())],
+                        "clear_set_ds",
+                        owner_id,
+                        None,
+                        &params,
+                    )
+                    .await
+                    .expect("add")
+            }
+        };
+        let first = add(Some(vec!["tag".into()])).await;
+        assert!(first[0].node_set.is_some());
+
+        let kept = add(None).await;
+        assert_eq!(kept[0].node_set, first[0].node_set, "absent keeps the set");
+
+        let cleared = add(Some(vec![])).await;
+        assert_eq!(cleared[0].id, first[0].id);
+        assert_eq!(cleared[0].node_set, None);
+        assert!(metadata_json(&cleared[0]).get("node_set").is_none());
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_set, None);
+        assert!(metadata_json(&stored).get("node_set").is_none());
     }
 
     /// Python: `node_set=json.dumps(effective_node_set) if effective_node_set
@@ -3387,11 +3699,15 @@ mod tests {
         assert!(validate_node_set_names(&["a".into(), String::new()]).is_err());
     }
 
-    /// JSON `null` and a blank string are "no metadata", for both merges.
+    /// JSON `null` and a blank string are "no metadata", for both merges, and
+    /// no metadata is stored as `{}`, as Python does.
     #[test]
     fn json_null_item_metadata_is_no_metadata() {
         for absent in [None, Some("null".to_string()), Some(String::new())] {
-            assert_eq!(merge_external_metadata(absent, None).unwrap(), None);
+            assert_eq!(
+                merge_external_metadata(absent, None).unwrap(),
+                Some("{}".to_string())
+            );
         }
         assert_eq!(
             merge_external_metadata(Some(r#"{"a":1}"#.into()), None).unwrap(),
@@ -3407,6 +3723,113 @@ mod tests {
             classify_item_metadata(Some("[1]")),
             ItemMetadata::Raw(raw) if raw == "[1]"
         ));
+    }
+
+    /// Python writes `_cognee.source_uri` for a file add too
+    /// (`ingest_data.py:157-164`): the file's absolute `file://` URI. Raw text
+    /// has no source and stores `{}`.
+    #[tokio::test]
+    async fn file_add_writes_source_uri_and_text_add_writes_empty_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "from a file").unwrap();
+        let storage = MockStorage::new();
+
+        let processed = process_input(
+            &DataInput::FilePath(file.to_string_lossy().into_owned()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(processed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": format!("file://{}", canonical.display())}})
+        );
+
+        let text = process_input(
+            &DataInput::Text("plain".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(text.external_metadata.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn source_uri_follows_python() {
+        let item = |meta: &str, data: DataInput| DataInput::DataItem {
+            data: Box::new(data),
+            label: "l".into(),
+            external_metadata: Some(meta.to_string()),
+        };
+        assert_eq!(
+            source_uri_from_input(&DataInput::Url("https://example.com/a".into())),
+            Some("https://example.com/a".to_string())
+        );
+        assert_eq!(
+            source_uri_from_input(&DataInput::FilePath("file:///tmp/a.txt".into())),
+            Some("file:///tmp/a.txt".to_string())
+        );
+        assert_eq!(source_uri_from_input(&DataInput::Text("x".into())), None);
+        // An explicit `source_uri` in the item's metadata wins.
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": " s3://b/k "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("s3://b/k".to_string())
+        );
+        assert_eq!(path_to_file_uri("/tmp/a b.txt"), "file:///tmp/a%20b.txt");
+        // `urllib.parse.quote` percent-encodes the UTF-8 bytes, upper-case hex.
+        assert_eq!(
+            path_to_file_uri("/tmp/caf\u{e9}/x+y.txt"),
+            "file:///tmp/caf%C3%A9/x%2By.txt"
+        );
+        // `Path.resolve()`: a relative path is made absolute.
+        let relative = path_to_file_uri("Cargo.toml");
+        let absolute = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert_eq!(relative, format!("file://{}", absolute.display()));
+        // `s3://` is kept as given, as Python keeps an `s3` locator.
+        assert_eq!(
+            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into())),
+            Some("s3://bucket/key.txt".to_string())
+        );
+        // A blank explicit `source_uri` does not win (`explicit.strip()`).
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": "   "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("https://example.com/a".to_string())
+        );
+        // Neither does one that is not a string.
+        assert_eq!(
+            source_uri_from_input(&item(r#"{"source_uri": 7}"#, DataInput::Text("x".into()))),
+            None
+        );
+    }
+
+    #[test]
+    fn merge_external_metadata_nests_source_uri_under_cognee() {
+        let merged = merge_external_metadata(
+            Some(r#"{"k":1,"_cognee":{"x":2}}"#.into()),
+            Some("https://example.com"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&merged).unwrap(),
+            serde_json::json!({"k": 1, "_cognee": {"x": 2, "source_uri": "https://example.com"}})
+        );
     }
 
     /// A caller of the public `persist_data` with `ProcessedInput::node_set`
@@ -3559,6 +3982,13 @@ mod tests {
         )
         .node_set(python_column)
         .external_metadata(python_metadata)
+        // Python fills these on every row; a row without them would be
+        // refreshed on the re-add, which is not what is under test.
+        .original_extension(processed.original_extension.clone())
+        .original_mime_type(processed.original_mime_type.clone())
+        .loader_engine(processed.loader_engine.clone())
+        .raw_content_hash(processed.raw_content_hash.clone())
+        .data_size(processed.data_size)
         // Rows are dataset-scoped: the row Python wrote belongs to the
         // dataset the re-add targets, whose id is derived from its name.
         .dataset_id(generate_dataset_id("python_row_ds", owner_id, None))
@@ -3694,6 +4124,17 @@ mod tests {
         }
         async fn create_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
             IngestDb::create_data(&*self.inner, d).await
+        }
+        async fn refresh_data_row(
+            &self,
+            data_id: Uuid,
+            refresh: &cognee_database::ops::data::DataRowRefresh,
+        ) -> Result<chrono::DateTime<chrono::Utc>, cognee_database::DatabaseError> {
+            let written = IngestDb::refresh_data_row(&*self.inner, data_id, refresh).await;
+            if let AfterRead::CountOverlap { in_flight, .. } = &self.hook {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            written
         }
         async fn update_data_node_set(
             &self,

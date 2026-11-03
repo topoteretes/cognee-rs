@@ -14,6 +14,7 @@ and code_repo). The tests check that shape instead (SDK-1039 D7).
 """
 
 import json
+import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -337,25 +338,16 @@ def _public_network_available():
 
 
 def test_add_public_url_ingests_same_page_in_both(tmp_path):
-    """Both SDKs fetch the same public URL and keep the page's raw bytes.
+    """Both SDKs fetch the same public URL and store the page the same way.
 
     Needs outbound network access; skips cleanly when there is none
     (SDK-1039 D9). The fixture is a public page because both SDKs refuse
     loopback/private hosts (see the rejection test above).
 
-    This compares only what the two SDKs share. They intentionally differ in
-    how a fetched page is stored, and the test does not hide that:
-
-    * Python (1d3ed15, ``save_data_item_to_storage.py:82-90``) stores the raw
-      HTML as the document (``text_loader``; ``content_hash`` is the HTML's
-      hash) and records only ``external_metadata._cognee.source_uri``.
-    * Rust extracts the page text at add time (``beautiful_soup_loader``;
-      ``content_hash`` is over the extracted text) and records
-      ``source``/``url``/``final_url``/``content_type``/``title``.
-
-    So the checks are: both succeed and write exactly one row; the original
-    (``original_data_location``) bytes are the same fetched HTML; and each
-    SDK records the requested URL as the source, in its own metadata shape.
+    Python (1d3ed15, ``save_data_item_to_storage.py:82-89``) stores the raw
+    HTML as a plain-text document (``text_loader``), hashes the HTML, and
+    records ``external_metadata._cognee.source_uri``. Rust follows it for URL
+    adds (SDK-1039 P19, D14); only local ``.html`` files differ.
     """
     if not _public_network_available():
         pytest.skip("no outbound network access to example.com:443")
@@ -375,20 +367,36 @@ def test_add_public_url_ingests_same_page_in_both(tmp_path):
     assert len(py_rows) == len(rust_rows) == 1
     py_row, rust_row = py_rows[0], rust_rows[0]
 
+    content_hash = py_row["content_hash"]
+    assert rust_row["content_hash"] == content_hash
+    assert rust_row["raw_content_hash"] == py_row["raw_content_hash"]
     for row in (py_row, rust_row):
-        assert row["original_data_location"].endswith(".html")
-        assert row["raw_data_location"]
+        assert row["loader_engine"] == "text_loader"
+        assert (row["extension"], row["mime_type"]) == ("txt", "text/plain")
+        assert (row["original_extension"], row["original_mime_type"]) == (
+            "txt",
+            "text/plain",
+        )
+        assert row["name"] == f"text_{content_hash}"
+        assert os.path.basename(row["raw_data_location"]) == f"text_{content_hash}.txt"
+        assert (
+            os.path.basename(row["original_data_location"])
+            == f"text_{content_hash}.html"
+        )
+    assert rust_row["data_size"] == py_row["data_size"]
 
     py_raw = read_stored_file(py_ws / ".data_storage", py_row["original_data_location"])
     rust_raw = read_stored_file(rust_ws / ".data_storage", rust_row["original_data_location"])
     assert py_raw == rust_raw, "the two SDKs stored different bytes for the same page"
     assert b"Example Domain" in py_raw
+    # ``raw_data_location`` holds the same HTML, read by ``text_loader``.
+    assert read_stored_file(
+        py_ws / ".data_storage", py_row["raw_data_location"]
+    ) == read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
 
-    py_meta = _json_metadata(py_row)
-    rust_meta = _json_metadata(rust_row)
-    assert py_meta["_cognee"]["source_uri"] == _PUBLIC_URL
-    assert rust_meta["source"] == "url"
-    assert rust_meta["url"] == _PUBLIC_URL
+    expected = {"_cognee": {"source_uri": _PUBLIC_URL}}
+    assert _json_metadata(py_row) == expected
+    assert _json_metadata(rust_row) == expected
 
 
 # ── Deduplication ────────────────────────────────────────────────────────────

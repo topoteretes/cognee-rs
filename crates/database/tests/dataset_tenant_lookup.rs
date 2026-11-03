@@ -64,6 +64,13 @@ impl IngestDb for DefaultsOnly<'_> {
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         IngestDb::create_data(self.0, d).await
     }
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &cognee_database::ops::data::DataRowRefresh,
+    ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
+        IngestDb::refresh_data_row(self.0, data_id, refresh).await
+    }
     async fn update_data_node_set(
         &self,
         data_id: Uuid,

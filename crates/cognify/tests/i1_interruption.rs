@@ -1265,9 +1265,7 @@ async fn interrupting_any_dlt_write_preserves_i1() {
 /// own, and this is what interrupts it.
 fn url_metadata() -> String {
     serde_json::json!({
-        "source": "url",
-        "final_url": "https://example.com/alice",
-        "title": "Alice at Acme"
+        "_cognee": {"source_uri": "https://example.com/alice"}
     })
     .to_string()
 }

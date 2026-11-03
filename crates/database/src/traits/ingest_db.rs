@@ -4,6 +4,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
+use crate::ops::data::DataRowRefresh;
 use crate::ops::{data, datasets, pipeline_runs};
 use crate::types::{DatabaseError, PipelineRunStatus};
 
@@ -94,6 +95,18 @@ pub trait IngestDb: Send + Sync {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError>;
 
+    /// Rewrite the columns Python's `ingest_data` update branch rewrites on a
+    /// re-add of an existing row: name, locations, extensions, mime types,
+    /// loader engine, hashes, size, label (only when given), `node_set` and
+    /// `external_metadata`; stamps `updated_at`. Every other column, notably
+    /// `pipeline_status`, is left as it is. Returns the `updated_at` written.
+    /// A missing row is [`DatabaseError::NotFound`].
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &DataRowRefresh,
+    ) -> Result<DateTime<Utc>, DatabaseError>;
+
     /// Make `dataset_id` the owning dataset of the existing row `data_id`
     /// (`data.dataset_id`). Rows are dataset-scoped: a row of another dataset
     /// is refused. The ingest pipeline does not need it (it creates rows with
@@ -176,6 +189,14 @@ impl IngestDb for DatabaseConnection {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError> {
         data::update_data_node_set(self, data_id, node_set, external_metadata).await
+    }
+
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &DataRowRefresh,
+    ) -> Result<DateTime<Utc>, DatabaseError> {
+        data::refresh_data_row(self, data_id, refresh).await
     }
 
     async fn attach_data_to_dataset(

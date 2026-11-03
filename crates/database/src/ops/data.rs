@@ -224,6 +224,105 @@ pub async fn update_data_node_set(
     Ok(updated_at)
 }
 
+/// The columns Python's `ingest_data` update branch rewrites on a re-add of
+/// an existing row (`ingest_data.py` ~470-545), minus the ones the dedup
+/// lookup already fixes (`content_hash`, `owner_id`, `tenant_id`,
+/// `dataset_id`). `label` is only written when `Some` (Python: "absent means
+/// leave unchanged").
+#[derive(Debug, Clone)]
+pub struct DataRowRefresh {
+    pub name: String,
+    pub raw_data_location: String,
+    pub original_data_location: String,
+    pub extension: String,
+    pub mime_type: String,
+    pub original_extension: Option<String>,
+    pub original_mime_type: Option<String>,
+    pub loader_engine: Option<String>,
+    pub raw_content_hash: Option<String>,
+    pub data_size: i64,
+    pub label: Option<String>,
+    pub node_set: Option<String>,
+    pub external_metadata: Option<String>,
+}
+
+/// Rewrite the re-add columns of `data_id` (see [`DataRowRefresh`]) and stamp
+/// `updated_at`, leaving every other column (`token_count`, `last_accessed`,
+/// `pipeline_status`, ...) as it is: a targeted update, like
+/// [`update_data_node_set`], so a concurrent cognify or search write survives.
+///
+/// Returns the `updated_at` written. A missing row is
+/// [`DatabaseError::NotFound`].
+#[instrument(
+    name = "cognee.db.relational.data.refresh_data_row",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn refresh_data_row(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    refresh: &DataRowRefresh,
+) -> Result<DateTime<Utc>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let updated_at = Utc::now().trunc_subsecs(6);
+    let mut update = data::Entity::update_many()
+        .col_expr(data::Column::Name, Expr::value(refresh.name.clone()))
+        .col_expr(
+            data::Column::RawDataLocation,
+            Expr::value(refresh.raw_data_location.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalDataLocation,
+            Expr::value(refresh.original_data_location.clone()),
+        )
+        .col_expr(
+            data::Column::Extension,
+            Expr::value(refresh.extension.clone()),
+        )
+        .col_expr(
+            data::Column::MimeType,
+            Expr::value(refresh.mime_type.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalExtension,
+            Expr::value(refresh.original_extension.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalMimeType,
+            Expr::value(refresh.original_mime_type.clone()),
+        )
+        .col_expr(
+            data::Column::LoaderEngine,
+            Expr::value(refresh.loader_engine.clone()),
+        )
+        .col_expr(
+            data::Column::RawContentHash,
+            Expr::value(refresh.raw_content_hash.clone()),
+        )
+        .col_expr(data::Column::DataSize, Expr::value(refresh.data_size))
+        .col_expr(data::Column::NodeSet, Expr::value(refresh.node_set.clone()))
+        .col_expr(
+            data::Column::ExternalMetadata,
+            Expr::value(refresh.external_metadata.clone()),
+        )
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)));
+    if let Some(label) = &refresh.label {
+        update = update.col_expr(data::Column::Label, Expr::value(Some(label.clone())));
+    }
+    let result = update
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
+    Ok(updated_at)
+}
+
 #[instrument(
     name = "cognee.db.relational.data.count_data_dataset_links",
     level = "info",
