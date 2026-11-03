@@ -22,8 +22,7 @@ Running
 What it does
 ------------
 1. Adds text to a dataset and runs the cognify pipeline.
-2. Runs ``memify`` to build triplet embeddings from the knowledge graph, enabling
-   ``TripletCompletion`` search.
+2. Runs ``memify`` to build triplet embeddings from the knowledge graph.
 3. Demonstrates ``recall``, which combines graph search with session-history routing.
 4. Shows ``remember``, the single-call add+cognify shortcut.
 """
@@ -94,7 +93,7 @@ async def main() -> None:
     # ── Step 2: memify ─────────────────────────────────────────────────────────
     #
     # Builds triplet embeddings from all edges in the knowledge graph.
-    # After memify, you can use SearchType.TRIPLET_COMPLETION in search.
+    # GRAPH_COMPLETION search does not depend on memify.
     # Idempotent — safe to call multiple times.
     print("\nRunning memify (builds triplet embeddings)...")
     memify_result = await cognee.memify()
@@ -107,10 +106,10 @@ async def main() -> None:
     #
     # recall() routes the query through session history first, then falls back
     # to graph search.  scope controls which sources are checked.
-    print("\nRecalling with TRIPLET_COMPLETION search type...")
+    print("\nRecalling with GRAPH_COMPLETION search type...")
     recall_result = await cognee.recall(
         "What fields did Marie Curie work in?",
-        {"search_type": "TRIPLET_COMPLETION", "top_k": 5},
+        {"search_type": "GRAPH_COMPLETION", "top_k": 5},
     )
     print(
         f"Recall: searchTypeUsed={recall_result['searchTypeUsed']}, "

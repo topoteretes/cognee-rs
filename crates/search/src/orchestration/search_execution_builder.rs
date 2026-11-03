@@ -17,7 +17,7 @@ use crate::retrievers::{
     GraphCompletionCotRetriever, GraphCompletionDecompositionRetriever, GraphCompletionRetriever,
     GraphReportRetriever, GraphSummaryCompletionRetriever, HybridBudget, HybridRetriever,
     LexicalRetriever, NaturalLanguageRetriever, SearchRetrieverRef, SummariesRetriever,
-    TemporalHybridRetriever, TripletRetriever,
+    TemporalHybridRetriever,
 };
 use crate::types::SearchType;
 use crate::user_preferences::PreferenceConfig;
@@ -222,20 +222,6 @@ impl SearchBuilder {
                 )
                 .with_graph_db(Arc::clone(&graph_db)),
             ),
-        );
-
-        retrievers.insert(
-            SearchType::TripletCompletion,
-            Arc::new(TripletRetriever::new(
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&llm),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )),
         );
 
         retrievers.insert(

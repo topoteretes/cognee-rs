@@ -283,7 +283,6 @@ async fn test_search_type_matrix() {
         SearchType::GraphCompletionCot,
         SearchType::GraphCompletionContextExtension,
         SearchType::GraphSummaryCompletion,
-        SearchType::TripletCompletion,
     ];
 
     // Retrieval-only search types
