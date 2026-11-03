@@ -51,7 +51,7 @@ pub use context_builder::{
     SECTION_HEADINGS, apply_candidate_updates, apply_candidate_updates_for_user,
     build_active_context_block, build_active_context_block_safe, build_active_context_selection,
     build_active_context_selection_safe, clamped_net_helpfulness, fit_preference_lines,
-    headings_for_profile, render_preference_block, select_context_entries,
+    headings_for_profile, render_preference_block, select_context_entries, stamp_served_entries,
 };
 pub use context_entry::{
     AGENT_CONTEXT_SECTIONS, CONTEXT_ENTRY_KIND, CONTEXT_PROFILE_AGENT, CONTEXT_PROFILE_QA,

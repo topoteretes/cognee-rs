@@ -382,7 +382,7 @@ impl GraphCompletionDecompositionRetriever {
         let final_context = self
             .final_context(query, context, combined_context, params)
             .await?;
-        let guidance = self.core.guidance(session, params, false).await;
+        let guidance = self.core.guidance(session, params, true).await;
         self.prompts
             .messages(query, &final_context, session, &guidance, params)
             .map(Some)
@@ -880,6 +880,54 @@ mod tests {
             prompts[2].starts_with("The question is: `Tell me about Alice and Bob`"),
             "{}",
             prompts[2]
+        );
+    }
+
+    /// Python's decomposition retriever inherits the graph retriever's
+    /// sessionless completion, which appends the user's preference text.
+    #[tokio::test]
+    async fn a_sessionless_final_answer_carries_the_preference_block() {
+        let (vector_db, graph) = graph().await;
+        let (user, dataset) = (Uuid::new_v4(), Uuid::new_v4());
+        crate::user_preferences::upsert_preference_node(
+            graph.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Answer in one sentence",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let llm = ScriptedLlm::new(Some(vec!["Who is Alice?"]));
+        let retriever = retriever(vector_db, graph, Arc::clone(&llm));
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..SearchParams::default()
+        };
+        retriever
+            .get_completion("Who is Alice?", None, &SessionContext::default(), &params)
+            .await
+            .unwrap();
+        let prompts = llm.user_prompts();
+        let expected_tail = format!(
+            "\n\n{}\nAnswer in one sentence",
+            crate::user_preferences::PREFERENCE_RENDER_HEADER
+        );
+        assert!(
+            prompts.last().unwrap().ends_with(&expected_tail),
+            "{prompts:?}"
+        );
+        // The sub-question answers carry no guidance.
+        assert!(
+            !prompts[0].contains("What this user prefers"),
+            "{}",
+            prompts[0]
         );
     }
 

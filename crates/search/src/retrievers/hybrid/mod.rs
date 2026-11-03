@@ -2041,6 +2041,73 @@ mod retriever_tests {
     }
 
     #[tokio::test]
+    async fn a_session_prompt_carries_history_then_context_then_the_guidance_block() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let (user, dataset) = (Uuid::new_v4(), Uuid::new_v4());
+        crate::user_preferences::upsert_preference_node(
+            graph_db.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer terse tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let llm = Arc::new(CapturingLlm {
+            response_text: "hybrid answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            dataset_ids: Some(vec![dataset]),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let history = "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n";
+        let session = SessionContext {
+            session_id: Some("s".to_string()),
+            formatted_history: history.to_string(),
+            guidance: Some(cognee_session::ActiveContextSelection::preferences_only()),
+            ..Default::default()
+        };
+        let context = retriever
+            .get_context("what happened?", &params)
+            .await
+            .unwrap();
+        let messages = retriever
+            .completion_messages("what happened?", &context, &session, &params)
+            .await
+            .unwrap()
+            .unwrap();
+        // The system prompt is the task template alone.
+        assert!(!messages[0].content.contains("Previous conversation"));
+        let user_prompt = &messages[1].content;
+        let guidance = "## Active session guidance\n\
+             Items are listed oldest to newest within each section. \
+             When guidance conflicts, prefer the later item.\n\
+             ### Preferences\n- Prefer terse tables";
+        assert!(
+            user_prompt.starts_with(&format!("{history}\n\n")),
+            "{user_prompt}"
+        );
+        assert!(
+            user_prompt.ends_with(&format!("\n\n{guidance}")),
+            "{user_prompt}"
+        );
+        assert!(
+            !user_prompt.contains("What this user prefers"),
+            "{user_prompt}"
+        );
+        assert_eq!(user_prompt.matches("Previous conversation").count(), 1);
+    }
+
+    #[tokio::test]
     async fn get_completion_reuses_provided_context_without_running_lanes() {
         // Empty vector DB: if the lanes ran, the chunk lane would raise NotFound
         // on the missing DocumentChunk_text collection.

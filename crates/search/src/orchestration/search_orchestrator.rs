@@ -16,7 +16,7 @@ use cognee_llm::{Llm, Message, MessageRole};
 use cognee_models::dataset_scope::with_dataset;
 use cognee_session::{
     ActiveContextSelection, SessionContext, SessionManager, UsedGraphElementIds,
-    build_active_context_selection_safe,
+    build_active_context_selection_safe, stamp_served_entries,
 };
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -1159,23 +1159,6 @@ impl SearchOrchestrator {
             request = &prepared_request;
         }
 
-        // A per-dataset search of a sequential session serves one guidance
-        // block for its one logical turn: stamp the served entries now and
-        // remember their ids for the turn the tail records. Each dataset run
-        // then reads the same guidance without writing.
-        if !fanout_concurrent
-            && self.per_dataset_storage
-            && scoping != DatasetScoping::NotDatasetData
-            && !is_batch
-            && !request.only_context()
-            && retriever.supports_session_turn_preparation()
-        {
-            fanout_served_context_ids = self
-                .session_guidance(request, &request.query_text, true)
-                .await
-                .1;
-        }
-
         // A retriever whose results are not dataset data (feedback analysis)
         // reads no store, so it is never fanned out.
         if !self.per_dataset_storage || scoping == DatasetScoping::NotDatasetData {
@@ -1194,6 +1177,7 @@ impl SearchOrchestrator {
                     true,
                     turn_prepared.then_some(raw_request.query_text.as_str()),
                     None,
+                    false,
                 )
                 .await?;
             self.log_search_history(&raw_request, &response).await;
@@ -1257,6 +1241,21 @@ impl SearchOrchestrator {
             return Ok(Vec::new());
         }
 
+        // A per-dataset search of a sequential session is one logical turn:
+        // its history and guidance are built once, so every dataset run
+        // serves the same block and the turn records exactly the ids served.
+        if !fanout_concurrent
+            && !is_batch
+            && !request.only_context()
+            && request.session_id.is_some()
+            && self.session_manager.is_some()
+            && retriever.supports_session_turn_preparation()
+        {
+            let session = self.load_session_context(request, true).await;
+            fanout_served_context_ids = session.served_context_ids.clone();
+            fanout_session = Some(session);
+        }
+
         if fanout_concurrent {
             let manager = Arc::clone(self.session_manager.as_ref().ok_or_else(|| {
                 SearchError::InvalidInput("concurrent session search requires a manager".into())
@@ -1275,7 +1274,7 @@ impl SearchOrchestrator {
             let (entries, rows, (guidance, served_context_ids)) = tokio::join!(
                 manager.get_session(Some(&session_id), user_id.as_deref()),
                 manager.get_session_context_entries(Some(&session_id), user_id.as_deref()),
-                self.session_guidance(request, &request.query_text, true)
+                self.session_guidance(request, &request.query_text)
             );
             let entries = entries.unwrap_or_default();
             let rows = rows.unwrap_or_default();
@@ -1354,6 +1353,7 @@ impl SearchOrchestrator {
                             false,
                             None,
                             session_snapshot.as_ref(),
+                            fanout_concurrent,
                         ),
                     )
                     .await;
@@ -1553,6 +1553,7 @@ impl SearchOrchestrator {
         session_turn: bool,
         raw_session_query: Option<&str>,
         session_snapshot: Option<&SessionContext>,
+        conversational_retrieval: bool,
     ) -> Result<SearchResponse, crate::types::SearchError> {
         let mut params = SearchParams::from(request);
         params.personalization = Some(self.personalization).filter(|config| config.enabled);
@@ -1563,11 +1564,11 @@ impl SearchOrchestrator {
             request.only_context() || request.use_combined_context() || keep_context;
         let context = if include_context {
             let ctx = match session_snapshot {
-                Some(session) => {
+                Some(session) if conversational_retrieval => {
                     retrieve_session_context(retriever, &request.query_text, session, &params)
                         .await?
                 }
-                None => retriever.get_context(&request.query_text, &params).await?,
+                _ => retriever.get_context(&request.query_text, &params).await?,
             };
 
             if self.enable_access_tracking {
@@ -1601,7 +1602,6 @@ impl SearchOrchestrator {
                         self.load_session_context(
                             request,
                             retriever.supports_session_turn_preparation(),
-                            false,
                         )
                         .await,
                     );
@@ -1651,17 +1651,13 @@ impl SearchOrchestrator {
             return Ok(response);
         }
 
-        // The turn owner (`session_turn`) stamps the entries it serves; a
-        // dataset run of a fan-out reads the same guidance without writing.
+        // A fan-out hands every dataset run the one snapshot its turn was
+        // built from; the turn owner records it and stamps its served entries.
         let session_context = match session_snapshot {
             Some(snapshot) => snapshot.clone(),
             None => {
-                self.load_session_context(
-                    request,
-                    retriever.supports_session_turn_preparation(),
-                    session_turn,
-                )
-                .await
+                self.load_session_context(request, retriever.supports_session_turn_preparation())
+                    .await
             }
         };
 
@@ -1788,7 +1784,7 @@ impl SearchOrchestrator {
         let (entries, rows, (guidance, served_context_ids)) = tokio::join!(
             manager.get_session(Some(session_id), user_id.as_deref()),
             manager.get_session_context_entries(Some(session_id), user_id.as_deref()),
-            self.session_guidance(request, &request.query_text, true)
+            self.session_guidance(request, &request.query_text)
         );
         let entries = entries.unwrap_or_default();
         let rows = rows.unwrap_or_default();
@@ -1970,17 +1966,24 @@ impl SearchOrchestrator {
                 Some(served_context_ids.to_vec()),
             )
             .await;
+        // The answer was generated with these entries in its prompt.
+        stamp_served_entries(
+            sm.as_ref(),
+            session_id,
+            user_id_str.as_deref(),
+            served_context_ids,
+        )
+        .await;
     }
 
     /// The session layer a completion carries: the conversation history and,
     /// when the retriever serves guidance (`with_guidance`), the turn's
-    /// guidance. `stamp_served` marks the served entries' `last_served_at`;
-    /// everything else is read-only.
+    /// guidance. Read-only: the served entries are stamped by
+    /// [`Self::save_session_turn`] once an answer is recorded.
     async fn load_session_context(
         &self,
         request: &SearchRequest,
         with_guidance: bool,
-        stamp_served: bool,
     ) -> SessionContext {
         let user_id_str = request.user_id.map(|id| id.to_string());
         if let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) {
@@ -1989,8 +1992,7 @@ impl SearchOrchestrator {
                 .await
                 .unwrap_or_default();
             let (guidance, served_context_ids) = if with_guidance {
-                self.session_guidance(request, &request.query_text, stamp_served)
-                    .await
+                self.session_guidance(request, &request.query_text).await
             } else {
                 (None, Vec::new())
             };
@@ -2012,14 +2014,15 @@ impl SearchOrchestrator {
 
     /// The guidance of one session turn, built once from the stored entries
     /// and gated as in Python: with auto feedback on, the active guidance
-    /// entries (ranked against `query`, budgeted, and stamped served when
-    /// `stamp_served`); with it off, no stored entry is served and only the
-    /// user's durable preferences render. `None` without a session.
+    /// entries (ranked against `query` and budgeted); with it off, no stored
+    /// entry is served and only the user's durable preferences render. `None`
+    /// without a session. Read-only: the entries are stamped served when the
+    /// turn is recorded ([`Self::save_session_turn`]), not when built, so a
+    /// search that ends without an answer marks nothing served.
     async fn session_guidance(
         &self,
         request: &SearchRequest,
         query: &str,
-        stamp_served: bool,
     ) -> (Option<ActiveContextSelection>, Vec<String>) {
         let (Some(session_id), Some(manager)) = (&request.session_id, &self.session_manager) else {
             return (None, Vec::new());
@@ -2036,7 +2039,7 @@ impl SearchOrchestrator {
             session_id,
             user_id.as_deref(),
             query,
-            stamp_served,
+            false,
         )
         .await;
         (Some(selection), served)

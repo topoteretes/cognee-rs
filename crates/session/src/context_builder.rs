@@ -330,17 +330,9 @@ pub struct ActiveContextSelection {
     existing_normalized: HashSet<String>,
     per_section_char_budget: usize,
     total_char_budget: usize,
-}
-
-impl Default for ActiveContextSelection {
-    /// No stored entries, default budgets: renders the preference lines alone.
-    fn default() -> Self {
-        Self::with_budgets(
-            headings_for_profile(CONTEXT_PROFILE_QA),
-            DEFAULT_PER_SECTION_CHAR_BUDGET,
-            DEFAULT_TOTAL_CHAR_BUDGET,
-        )
-    }
+    /// Set by a failed build: the block renders nothing, preference lines
+    /// included (Python's builder returns `("", [])` on any error).
+    suppressed: bool,
 }
 
 impl ActiveContextSelection {
@@ -359,17 +351,31 @@ impl ActiveContextSelection {
             existing_normalized: HashSet::new(),
             per_section_char_budget,
             total_char_budget,
+            suppressed: false,
         }
     }
 
-    /// The selection of a session whose stored-entry layer is off: only
-    /// durable preference lines render.
+    /// The selection of a session whose stored-entry layer is off: no stored
+    /// entries, default budgets, so only durable preference lines render.
     pub fn preferences_only() -> Self {
-        Self::default()
+        Self::with_budgets(
+            headings_for_profile(CONTEXT_PROFILE_QA),
+            DEFAULT_PER_SECTION_CHAR_BUDGET,
+            DEFAULT_TOTAL_CHAR_BUDGET,
+        )
     }
 
-    /// Whether neither stored entries nor preference lines could render.
-    pub fn is_empty_without_preferences(&self) -> bool {
+    /// The selection of a failed build: renders `""` whatever the preference
+    /// lines, so a builder error serves no guidance at all.
+    pub fn fail_open() -> Self {
+        Self {
+            suppressed: true,
+            ..Self::preferences_only()
+        }
+    }
+
+    /// Whether no stored entry was selected.
+    pub fn has_no_entries(&self) -> bool {
         self.sections
             .iter()
             .all(|(_, _, bullets)| bullets.is_empty())
@@ -379,6 +385,9 @@ impl ActiveContextSelection {
     /// `Preferences` section under the shared budgets, or `""` when there is
     /// nothing to render.
     pub fn render<S: AsRef<str>>(&self, preference_lines: &[S]) -> String {
+        if self.suppressed {
+            return String::new();
+        }
         let fitted = if self
             .sections
             .iter()
@@ -395,7 +404,7 @@ impl ActiveContextSelection {
         } else {
             Vec::new()
         };
-        if self.is_empty_without_preferences() && fitted.is_empty() {
+        if self.has_no_entries() && fitted.is_empty() {
             return String::new();
         }
         let groups: Vec<(&str, Vec<String>)> = self
@@ -485,8 +494,9 @@ pub async fn build_active_context_selection(
 }
 
 /// [`build_active_context_selection`] with the default ranker, budgets and
-/// QA profile, fail-open: any error yields an empty selection and no ids,
-/// so guidance can never block answer generation.
+/// QA profile, fail-open: any error yields a selection that renders nothing
+/// (preference lines included, as in Python) and no ids, so guidance can
+/// never block answer generation.
 pub async fn build_active_context_selection_safe(
     manager: &SessionManager,
     session_id: &str,
@@ -510,7 +520,7 @@ pub async fn build_active_context_selection_safe(
         Ok(built) => built,
         Err(error) => {
             tracing::debug!(%error, "falling back after an error building the active context");
-            (ActiveContextSelection::default(), Vec::new())
+            (ActiveContextSelection::fail_open(), Vec::new())
         }
     }
 }
@@ -587,7 +597,8 @@ pub async fn build_active_context_block_safe<S: AsRef<str>>(
 }
 
 /// Best-effort `last_served_at` stamp on the entries rendered into a block.
-async fn stamp_served_entries(
+/// A search stamps the ids it served once it has an answer to record.
+pub async fn stamp_served_entries(
     manager: &SessionManager,
     session_id: &str,
     user_id: Option<&str>,
@@ -1109,6 +1120,142 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn the_safe_selection_fails_open_to_a_block_without_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(&dir);
+        let mut bad = entry("goals", "ok", "g1").to_row().unwrap();
+        bad.insert("section".into(), "nonsense".into());
+        manager
+            .create_session_context_entry(Some("s"), Some("u"), bad)
+            .await
+            .unwrap();
+        let (selection, served) =
+            build_active_context_selection_safe(&manager, "s", Some("u"), "q", true).await;
+        assert!(served.is_empty());
+        assert_eq!(selection.render(&["Keep it short."]), "");
+    }
+
+    /// A store whose context-entry updates always fail.
+    struct UpdateFailingStore {
+        rows: Vec<SessionContextRow>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::SessionStore for UpdateFailingStore {
+        async fn create_qa_entry(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<String, SessionError> {
+            Err(SessionError::StoreError("unused".into()))
+        }
+        async fn get_latest_qa_entries(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: usize,
+        ) -> Result<Vec<crate::SessionQAEntry>, SessionError> {
+            Ok(Vec::new())
+        }
+        async fn get_all_qa_entries(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<crate::SessionQAEntry>, SessionError> {
+            Ok(Vec::new())
+        }
+        async fn delete_session(&self, _: &str, _: Option<&str>) -> Result<bool, SessionError> {
+            Ok(false)
+        }
+        async fn delete_qa_entry(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+        ) -> Result<bool, SessionError> {
+            Ok(false)
+        }
+        async fn prune(&self) -> Result<(), SessionError> {
+            Ok(())
+        }
+        async fn update_qa_entry(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: crate::SessionQAUpdate,
+        ) -> Result<bool, SessionError> {
+            Ok(false)
+        }
+        async fn get_session_context_entries(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<Vec<SessionContextRow>, SessionError> {
+            Ok(self.rows.clone())
+        }
+        async fn update_session_context_entry(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: &str,
+            _: SessionContextRow,
+        ) -> Result<bool, SessionError> {
+            Err(SessionError::StoreError("update refused".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_block_is_returned_when_stamping_served_entries_fails() {
+        let store = UpdateFailingStore {
+            rows: vec![entry("goals", "Ship the MVP", "g1").to_row().unwrap()],
+        };
+        let manager = SessionManager::new(Arc::new(store));
+        let (block, served) = build(&manager, "anything", &[]).await;
+        assert!(block.contains("Ship the MVP"));
+        assert_eq!(served, ["g1"]);
+    }
+
+    #[tokio::test]
+    async fn an_agent_block_ignores_qa_entries_and_uses_agent_headings() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(&dir);
+        let mut agent = entry("tool_rules", "use uv run", "a1");
+        agent.context_profile = CONTEXT_PROFILE_AGENT.to_string();
+        seed(&manager, &[entry("rules", "be concise", "q1"), agent]).await;
+        let (block, served) = build_active_context_block(
+            &manager,
+            "s",
+            Some("u"),
+            "q",
+            &DeterministicRanker,
+            400,
+            1200,
+            CONTEXT_PROFILE_AGENT,
+            true,
+            &[] as &[&str],
+        )
+        .await
+        .unwrap();
+        assert_eq!(served, ["a1"]);
+        assert!(block.contains("### Tool rules"));
+        assert!(!block.contains("be concise"));
+    }
+
+    #[test]
+    fn the_agent_ranker_puts_failure_lessons_above_success_patterns() {
+        let ranker = DeterministicRanker;
+        let mut failure = entry("failure_lessons", "sync before tests", "f");
+        failure.context_profile = CONTEXT_PROFILE_AGENT.to_string();
+        let mut success = entry("success_patterns", "this worked", "s");
+        success.context_profile = CONTEXT_PROFILE_AGENT.to_string();
+        assert!(ranker.score(&failure, "x") > ranker.score(&success, "x"));
     }
 
     // ---- preference lines (Python `test_build_*preference*`)
