@@ -763,7 +763,7 @@
   window._schemaSpotlight = null;
 
   // ── Transformation impact-layer ──────────────────────────────────
-  // Operations (cognify, memify, improve, …) shown as a rail of chips with
+  // Operations (cognify, improve, …) shown as a rail of chips with
   // color-coded edges to the schema types they affect. Off by default.
   window._schemaShowOps = window._schemaShowOps || false;
   window._opRects = window._opRects || {};

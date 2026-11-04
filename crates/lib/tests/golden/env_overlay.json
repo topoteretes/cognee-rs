@@ -1579,36 +1579,6 @@
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES=\"{\\\"ssl\\\":true}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"  \"": {},
-  "COGNEE_DATA_PER_BATCH=\"\"": {},
-  "COGNEE_DATA_PER_BATCH=\"-1\"": {},
-  "COGNEE_DATA_PER_BATCH=\"0\"": {
-    "cognify.data_per_batch": 0
-  },
-  "COGNEE_DATA_PER_BATCH=\"1\"": {
-    "cognify.data_per_batch": 1
-  },
-  "COGNEE_DATA_PER_BATCH=\"1.5\"": {},
-  "COGNEE_DATA_PER_BATCH=\"42\"": {
-    "cognify.data_per_batch": 42
-  },
-  "COGNEE_DATA_PER_BATCH=\"5000000000\"": {},
-  "COGNEE_DATA_PER_BATCH=\"70000\"": {
-    "cognify.data_per_batch": 70000
-  },
-  "COGNEE_DATA_PER_BATCH=\"TRUE\"": {},
-  "COGNEE_DATA_PER_BATCH=\"[1]\"": {},
-  "COGNEE_DATA_PER_BATCH=\"abc\"": {},
-  "COGNEE_DATA_PER_BATCH=\"false\"": {},
-  "COGNEE_DATA_PER_BATCH=\"no\"": {},
-  "COGNEE_DATA_PER_BATCH=\"on\"": {},
-  "COGNEE_DATA_PER_BATCH=\"require\"": {},
-  "COGNEE_DATA_PER_BATCH=\"true\"": {},
-  "COGNEE_DATA_PER_BATCH=\"v\"": {},
-  "COGNEE_DATA_PER_BATCH=\"yes\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"a\\\":1}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "COGNEE_DATA_PER_BATCH=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_DATA_ROOT_DIRECTORY=\"  \"": {
     "data_root_directory": "  "
   },
@@ -2591,68 +2561,6 @@
   "COGNEE_SESSION_STORE=\"{\\\"ssl\\\":true}\"": {
     "session.store": "{\"ssl\":true}"
   },
-  "COGNEE_SINGLE_PROCESS=\"  \"": {},
-  "COGNEE_SINGLE_PROCESS=\"\"": {},
-  "COGNEE_SINGLE_PROCESS=\"-1\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"0\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"1\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"1.5\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"42\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"5000000000\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"70000\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"TRUE\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"[1]\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"abc\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"false\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"no\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"on\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"require\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"true\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"v\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"yes\"": {
-    "single_process": true
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"a\\\":1}\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "single_process": false
-  },
-  "COGNEE_SINGLE_PROCESS=\"{\\\"ssl\\\":true}\"": {
-    "single_process": false
-  },
   "COGNEE_SKIP_CONNECTION_TEST=\"  \"": {},
   "COGNEE_SKIP_CONNECTION_TEST=\"\"": {},
   "COGNEE_SKIP_CONNECTION_TEST=\"-1\"": {},
@@ -2717,6 +2625,38 @@
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"a\\\":1}\"": {},
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_SKIP_PREFLIGHT=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"  \"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"-1\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"0\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 0
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"1\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 1
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"1.5\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"42\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 42
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"5000000000\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 5000000000
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"70000\"": {
+    "cognify.stale_run_recovery_min_age_seconds": 70000
+  },
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"TRUE\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"[1]\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"abc\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"false\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"no\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"on\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"require\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"true\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"v\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"yes\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_STRICT_CONFIG=\"  \"": {},
   "COGNEE_STRICT_CONFIG=\"\"": {},
   "COGNEE_STRICT_CONFIG=\"-1\"": {},
@@ -3894,6 +3834,36 @@
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"a\\\":1}\"": {},
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "EMBEDDING_MAX_COMPLETION_TOKENS=\"{\\\"ssl\\\":true}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"  \"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"-1\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"0\"": {
+    "embedding.max_concurrent_data_points": 0
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"1\"": {
+    "embedding.max_concurrent_data_points": 1
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"1.5\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"42\"": {
+    "embedding.max_concurrent_data_points": 42
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"5000000000\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"70000\"": {
+    "embedding.max_concurrent_data_points": 70000
+  },
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"TRUE\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"[1]\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"abc\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"false\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"no\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"on\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"require\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"true\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"v\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"yes\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"a\\\":1}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "EMBEDDING_MAX_CONCURRENT_DATA_POINTS=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"  \"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"\"": {},
   "EMBEDDING_MAX_SEQUENCE_LENGTH=\"-1\"": {},
@@ -4061,36 +4031,6 @@
   "EMBEDDING_MODEL_PATH=abc + COGNEE_E2E_EMBED_MODEL_PATH=2": {
     "embedding.onnx.model_path": "abc"
   },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"  \"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"-1\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"0\"": {
-    "embedding.onnx.batch_size": 0
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"1\"": {
-    "embedding.onnx.batch_size": 1
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"1.5\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"42\"": {
-    "embedding.onnx.batch_size": 42
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"5000000000\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"70000\"": {
-    "embedding.onnx.batch_size": 70000
-  },
-  "EMBEDDING_ONNX_BATCH_SIZE=\"TRUE\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"[1]\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"abc\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"false\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"no\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"on\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"require\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"true\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"v\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"yes\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"a\\\":1}\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
-  "EMBEDDING_ONNX_BATCH_SIZE=\"{\\\"ssl\\\":true}\"": {},
   "EMBEDDING_PROVIDER=\"  \"": {
     "embedding.provider": "  "
   },

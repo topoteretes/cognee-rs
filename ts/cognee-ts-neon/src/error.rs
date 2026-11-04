@@ -11,6 +11,7 @@ pub fn throw_execution_error<'cx, T>(
         ExecutionError::Cancelled => "CANCELLED",
         ExecutionError::NoTasks => "NO_TASKS",
         ExecutionError::InvalidConfig { .. } => "INVALID_CONFIG",
+        ExecutionError::RunRecordFailed { .. } => "RUN_RECORD_FAILED",
     };
     let msg = err.to_string();
     let js_err = cx.error(msg)?;

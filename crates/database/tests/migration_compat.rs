@@ -93,7 +93,6 @@ async fn impl_migration_creates_all_tables(url: &str) {
     let expected_tables = [
         "datasets",
         "data",
-        "dataset_data",
         "queries",
         "results",
         "nodes",
@@ -199,14 +198,14 @@ async fn baseline_creates_full_table_set_sqlite() {
     // Auth tables (principals, permissions, acls, tenants, users, roles,
     // user_tenants, user_roles, user_api_key, role/user/tenant_default_permissions,
     // principal_configuration) are not part of the OSS schema. The OSS
-    // baseline creates only the 17 non-auth tables.
+    // chain leaves the 15 non-auth tables listed here (the baseline also creates
+    // `dataset_data`, which `m20261028_000001_dataset_scoped_data` drops).
     let db = connect("sqlite::memory:").await.expect("connect");
     initialize(&db).await.expect("initialize");
     let tables = table_names(&db).await;
     for t in [
         "datasets",
         "data",
-        "dataset_data",
         "queries",
         "results",
         "nodes",
@@ -214,7 +213,6 @@ async fn baseline_creates_full_table_set_sqlite() {
         "pipeline_runs",
         "task_runs",
         "graph_metrics",
-        "graph_sync_checkpoints",
         "sync_operations",
         "notebooks",
         "pipeline_run_payload_fields",
@@ -227,6 +225,17 @@ async fn baseline_creates_full_table_set_sqlite() {
             "missing table {t}: {tables:?}"
         );
     }
+    // `graph_sync_checkpoints` is retired: the improve watermarks live in the
+    // operation rows' `run_info`.
+    assert!(
+        !tables.iter().any(|x| x == "graph_sync_checkpoints"),
+        "graph_sync_checkpoints must be dropped by the stamps migration: {tables:?}"
+    );
+    // `dataset_data` is retired: membership is `data.dataset_id`.
+    assert!(
+        !tables.iter().any(|x| x == "dataset_data"),
+        "dataset_data must be dropped by the dataset-scoping migration: {tables:?}"
+    );
     // The OSS migrator must NOT create any of the moved auth tables.
     for t in [
         "principals",
@@ -294,6 +303,17 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 10 for `m20261023_000001_dataset_database`: the per-dataset
 /// storage table (Python's `dataset_database`, SDK-1162), created only if
 /// missing because a database Python migrated already has it.
+/// Bumped to 11 for `m20261028_000001_dataset_scoped_data`: `data` rows become
+/// dataset-scoped (`data.dataset_id`, `data.legacy_id`) and `dataset_data` is
+/// backfilled into them and dropped (Python alembic `d6e8f0a2b4c6`).
+/// Bumped to 12 for `m20261029_000001_drop_run_info_data`: the `data` key is
+/// stripped from stored `pipeline_runs.run_info` (Python alembic
+/// `b7e4c2a9d6f1`, COG-6089).
+/// Bumped to 13 for `m20261030_000001_drop_pipeline_run_claims`: the Rust-only
+/// exclusive-run claim table goes with the claim (SDK-1039).
+/// Bumped to 14 for `m20261031_000001_improve_stamps_to_run_info`: the improve
+/// stage watermarks move into the `improve` operation rows' `run_info`, as in
+/// Python, and `graph_sync_checkpoints` is dropped (SDK-1039).
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -303,7 +323,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        10,
+        14,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(

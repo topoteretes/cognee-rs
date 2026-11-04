@@ -3,23 +3,18 @@
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-//! Integration tests for adding image and audio files via `AddPipeline`.
+//! Integration tests for adding image and audio files via `AddPipeline`
+//! without image and audio loaders.
 //!
-//! As of task 17 ("Run loaders at ADD + correct `raw_content_hash`"), the
-//! document loader runs at **ingest time** and the stored artifact is the
-//! extracted text (Python parity, `ingest_data.py:103`). The image and audio
-//! loaders extract via vision / Whisper and therefore require an LLM /
-//! transcriber handle that `AddPipeline` does not currently carry, so they are
-//! NOT part of `LoaderRegistry::default_registry()`.
-//!
-//! Consequently, adding an image/audio input now surfaces a clear error rather
-//! than silently storing raw bytes with image/audio metadata (the old, buggy
-//! behaviour). These tests assert that contract. Wiring an LLM-backed
-//! image/audio loader into the ADD path (so the extracted text is stored, as
-//! Python does) is a residual parity gap tracked separately.
-//!
-//! `content_hash` / `data_id` (derived from the raw bytes) are unaffected and
-//! still match Python; only the stored artifact + extraction differ.
+//! The document loader runs at **ingest time** and the stored artifact is the
+//! extracted text (Python parity, `ingest_data.py`). The image and audio
+//! loaders need an LLM / transcriber, so they are not part of
+//! `LoaderRegistry::default_registry()`, the registry an `AddPipeline` uses
+//! until `with_loader_registry` gives it one with them (the CLI and the
+//! bindings pass `ComponentManager::add_loader_registry`). Without them an
+//! image or audio input fails with a clear error rather than silently storing
+//! raw bytes with image/audio metadata. These tests assert that contract;
+//! `image_audio_add_loaders.rs` covers the add with the loaders registered.
 
 use cognee_core::RayonThreadPool;
 use cognee_database::{IngestDb, connect, initialize};

@@ -150,6 +150,7 @@ pub fn build_embedding_config(
     config.api_key = inputs.api_key.clone();
     config.max_completion_tokens = inputs.max_completion_tokens;
     config.batch_size = inputs.batch_size;
+    config.max_concurrent_data_points = inputs.max_concurrent_data_points;
     config.mock = inputs.mock;
     config.mock_mode = inputs.mock_mode;
     config.api_version = crate::sections::non_empty(
@@ -182,7 +183,8 @@ pub fn build_embedding_config(
             model_name: inputs.model.clone(),
             dimensions: inputs.dimensions,
             max_sequence_length: inputs.max_sequence_length,
-            batch_size: onnx.batch_size as usize,
+            batch_size: inputs.batch_size,
+            max_concurrent_data_points: inputs.max_concurrent_data_points,
             pooling,
             query_instruction,
         };
@@ -312,7 +314,8 @@ mod tests {
             dimensions: 384,
             endpoint: None,
             api_key: None,
-            batch_size: 36,
+            batch_size: 32,
+            max_concurrent_data_points: 150,
             rate_limit_enabled: false,
             rate_limit_requests: 60,
             rate_limit_interval: 60,
@@ -409,6 +412,38 @@ mod tests {
             .provider,
             EmbeddingProvider::Bedrock
         );
+    }
+
+    /// SDK-1039 P7: the section defaults are Python's (32 per batch, 150 data
+    /// points in flight) and both reach the embedding config.
+    #[test]
+    fn batch_size_and_concurrency_defaults_reach_the_embedding_config() {
+        use cognee_config_core::ConfigSection as _;
+        let sections = cognee_config_core::ConfigValues::default();
+        let section = crate::sections::EmbeddingConfig::from_values(&sections);
+        assert_eq!(section.batch_size, 32);
+        assert_eq!(section.max_concurrent_data_points, 150);
+
+        let mut inputs = inputs("openai_compatible", false);
+        inputs.batch_size = section.batch_size as usize;
+        inputs.max_concurrent_data_points = section.max_concurrent_data_points as usize;
+        let config = build_embedding_config(&inputs, &sections, std::path::Path::new(""));
+        assert_eq!(config.batch_size, 32);
+        assert_eq!(config.max_concurrent_data_points, 150);
+    }
+
+    /// SDK-1039 P23: Python's fastembed engine is built with the single
+    /// `EMBEDDING_BATCH_SIZE`; the ONNX engine follows `embedding.batch_size`
+    /// and `embedding.max_concurrent_data_points`, with no knob of its own.
+    #[test]
+    #[cfg(feature = "onnx")]
+    fn onnx_engine_follows_the_embedding_batch_settings() {
+        let mut inputs = inputs("onnx", false);
+        inputs.batch_size = 8;
+        inputs.max_concurrent_data_points = 40;
+        let config = build_embedding_config(&inputs, &Default::default(), std::path::Path::new(""));
+        assert_eq!(config.onnx.batch_size, 8);
+        assert_eq!(config.onnx.max_concurrent_data_points, 40);
     }
 
     /// The carry-across in `build_embedding_config`: without it the Bedrock

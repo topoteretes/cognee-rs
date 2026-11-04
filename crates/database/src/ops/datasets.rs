@@ -1,6 +1,6 @@
 use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
-use sea_orm::sea_query::OnConflict;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder,
@@ -8,9 +8,9 @@ use sea_orm::{
 use tracing::{Span, instrument};
 use uuid::Uuid;
 
-use crate::conversions::{ignore_do_nothing, make_dataset_data_active, map_sea_err};
+use crate::conversions::map_sea_err;
 use crate::database_system_label;
-use crate::entities::{data, dataset, dataset_data};
+use crate::entities::{data, dataset};
 use crate::types::DatabaseError;
 use crate::uuid_hex;
 
@@ -219,6 +219,14 @@ pub async fn delete_dataset(db: &DatabaseConnection, id: Uuid) -> Result<(), Dat
     Ok(())
 }
 
+/// Make `dataset_id` the owning dataset of the row `data_id`
+/// (`data.dataset_id`).
+///
+/// Rows are dataset-scoped, as in Python: a row belongs to exactly one
+/// dataset. Stamping a row that already belongs to `dataset_id` is a no-op;
+/// a row of **another** dataset is refused with [`DatabaseError::QueryError`]
+/// (the same content in a second dataset is a second row, which the ingest
+/// pipeline creates). A missing row is [`DatabaseError::NotFound`].
 #[instrument(
     name = "cognee.db.relational.datasets.attach_data_to_dataset",
     level = "info",
@@ -232,23 +240,34 @@ pub async fn attach_data_to_dataset(
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let model = make_dataset_data_active(dataset_id, data_id);
-    let res = dataset_data::Entity::insert(model)
-        .on_conflict(
-            OnConflict::columns([
-                dataset_data::Column::DatasetId,
-                dataset_data::Column::DataId,
-            ])
-            .do_nothing()
-            .to_owned(),
-        )
+    let dataset_hex = uuid_hex::to_hex(dataset_id);
+    let result = data::Entity::update_many()
+        .col_expr(data::Column::DatasetId, Expr::value(dataset_hex.clone()))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.is_null())
         .exec(db)
         .await
-        .map_err(map_sea_err)
-        .map(|_| ());
-    ignore_do_nothing(res)
+        .map_err(map_sea_err)?;
+    if result.rows_affected > 0 {
+        return Ok(());
+    }
+    match data::Entity::find_by_id(uuid_hex::to_hex(data_id))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?
+    {
+        None => Err(DatabaseError::NotFound(format!("Data {data_id} not found"))),
+        Some(row) if row.dataset_id.as_deref() == Some(dataset_hex.as_str()) => Ok(()),
+        Some(_) => Err(DatabaseError::QueryError(format!(
+            "Data {data_id} belongs to another dataset; rows are dataset-scoped"
+        ))),
+    }
 }
 
+/// Detach the row `data_id` from `dataset_id`: clear its `data.dataset_id`
+/// when it belongs to that dataset, leaving the row in place for the delete
+/// path to remove (it removes a row once no dataset holds it). A row of
+/// another dataset, or a missing row, is left alone.
 #[instrument(
     name = "cognee.db.relational.datasets.detach_data_from_dataset",
     level = "info",
@@ -262,12 +281,10 @@ pub async fn detach_data_from_dataset(
     data_id: Uuid,
 ) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    dataset_data::Entity::delete_many()
-        .filter(
-            dataset_data::Column::DatasetId
-                .eq(uuid_hex::to_hex(dataset_id))
-                .and(dataset_data::Column::DataId.eq(uuid_hex::to_hex(data_id))),
-        )
+    data::Entity::update_many()
+        .col_expr(data::Column::DatasetId, Expr::value(Option::<String>::None))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .exec(db)
         .await
         .map_err(map_sea_err)?;
@@ -276,7 +293,7 @@ pub async fn detach_data_from_dataset(
 
 /// Count the number of data items linked to a dataset without loading them.
 ///
-/// Uses `SELECT COUNT(*)` on the `dataset_data` junction table for efficiency.
+/// Uses `SELECT COUNT(*)` on the indexed `data.dataset_id` for efficiency.
 #[instrument(
     name = "cognee.db.relational.datasets.count_dataset_data",
     level = "info",
@@ -292,8 +309,8 @@ pub async fn count_dataset_data(
     dataset_id: Uuid,
 ) -> Result<usize, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let count: u64 = dataset_data::Entity::find()
-        .filter(dataset_data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+    let count: u64 = data::Entity::find()
+        .filter(data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .count(db)
         .await
         .map_err(map_sea_err)?;
@@ -316,14 +333,15 @@ pub async fn get_dataset_data(
     dataset_id: Uuid,
 ) -> Result<Vec<Data>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let pairs = dataset::Entity::find_by_id(uuid_hex::to_hex(dataset_id))
-        .find_with_related(data::Entity)
+    // Oldest first (ties by id), so listings are stable across calls.
+    let rows: Vec<Data> = data::Entity::find()
+        .filter(data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .order_by_asc(data::Column::CreatedAt)
+        .order_by_asc(data::Column::Id)
         .all(db)
         .await
-        .map_err(map_sea_err)?;
-    let rows: Vec<Data> = pairs
+        .map_err(map_sea_err)?
         .into_iter()
-        .flat_map(|(_, data_list)| data_list)
         .map(Data::from)
         .collect();
     Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);

@@ -19,8 +19,9 @@ const FAILURE_SUMMARY_MARKER: &str = "cognify completed with failures";
 /// How many failed data ids the summary lists before it switches to counting.
 ///
 /// A run over 171 888 documents can fail thousands of them; the full set is on
-/// disk in `pipeline_runs.run_info.cognify_failures.failed_data_ids`, so the
-/// console line only needs enough ids to start with.
+/// in the returned `FailureReport` (the run row's `run_info` is Python's `{}`,
+/// it does not carry them), so the console line only needs enough ids to start
+/// with.
 const FAILED_ID_PREVIEW: usize = 10;
 
 /// Render the operator-facing summary of a run that tolerated failures.
@@ -29,9 +30,8 @@ const FAILED_ID_PREVIEW: usize = 10;
 /// the success path keeps exactly the output it had before this existed.
 ///
 /// The counts come straight from the [`FailureReport`] the pipeline returns,
-/// which is the same data
-/// `cognee_cognify::rollback::run_info_with_failures` persists under the
-/// `cognify_failures` key. Nothing here is recomputed.
+/// which the sweep and the completion markers are also decided from. Nothing
+/// here is recomputed.
 pub fn format_failure_summary(dataset_name: &str, report: &FailureReport) -> Option<String> {
     if report.is_empty() {
         return None;
@@ -65,10 +65,9 @@ pub fn format_failure_summary(dataset_name: &str, report: &FailureReport) -> Opt
         }
     };
 
-    // Whether anything is actually left to redo. This is the same condition
-    // `cognee_cognify::rollback` uses to decide whether to persist a
-    // `cognify_failures` record at all (`failed ∪ unreached`, non-empty), so
-    // the advice printed here cannot contradict what was written down.
+    // Whether anything is actually left to redo (`failed ∪ unreached`,
+    // non-empty), the same set the completion markers leave unmarked, so the
+    // advice printed here cannot contradict what the next run will do.
     //
     // It matters because a report can be non-empty with nothing outstanding:
     // under `tolerate_summarization_failures` a failed summary is recorded but
@@ -182,8 +181,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         settings
             .cognify_config()
             .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
-            .with_max_parallel_extractions(effective_max_parallel)
-            .with_temporal_cognify(args.temporal_cognify),
+            .with_max_parallel_extractions(effective_max_parallel),
         &args.graph_schema,
     )?;
 
@@ -290,7 +288,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 })?,
             );
 
-            // Gap 08-07: persist the four-state `pipeline_runs` trail so
+            // Gap 08-07: persist the `pipeline_runs` trail so
             // CLI cognify shows up in `/api/v1/activity/pipeline-runs`.
             let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
                 Arc::clone(&database).pipeline_runs();
@@ -339,7 +337,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     })
 }
 
-/// The datasets a dataset-wide command (`cognify`, `memify`) runs on, for
+/// The datasets a dataset-wide command (`cognify`) runs on, for
 /// `owner_id` in `tenant_id` with **strict** tenant equality (`None` ⇔ a
 /// tenant-less row).
 ///

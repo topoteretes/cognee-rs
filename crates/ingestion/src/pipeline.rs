@@ -8,7 +8,6 @@
 //! - [`build_add_pipeline`] — build a composable cognee-core [`Pipeline`]
 //! - [`AddPipeline`] — convenience wrapper with a simple `add()` API
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, instrument};
@@ -21,6 +20,7 @@ use cognee_core::pipeline::DataIdFn;
 use cognee_core::pipeline_run_registry::DbPipelineWatcher;
 use cognee_core::task::{TaskError, Value};
 use cognee_core::{Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask};
+use cognee_database::ops::data::DataRowRefresh;
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
@@ -29,7 +29,7 @@ use cognee_vector::VectorDB;
 
 use crate::content_hasher::HashAlgorithm;
 use crate::dataset_locks::DatasetLocks;
-use crate::id_generation::{generate_data_id, generate_dataset_id};
+use crate::id_generation::generate_dataset_id;
 use crate::loader_registry::get_loader_name;
 use crate::loaders::{LoaderOutput, LoaderRegistry};
 use crate::url_resolver::UrlMetadata;
@@ -56,8 +56,15 @@ pub struct AddParams {
     /// Target an existing dataset by UUID instead of name.
     pub dataset_id: Option<Uuid>,
 
-    /// Maps MIME types or file extensions to preferred loader names.
-    pub preferred_loaders: Option<HashMap<String, String>>,
+    /// Loaders to try before the default priority order, as Python's
+    /// `preferred_loaders`. The KEYS are Python loader names (`text_loader`,
+    /// `pypdf_loader`, `image_loader`, `audio_loader`, `csv_loader`,
+    /// `code_loader`, `unstructured_loader`), tried in the order given (Python's
+    /// dict order, `LoaderEngine.py:103-114`); Python's per-loader config (the
+    /// value) is not used. The first one that is
+    /// registered and accepts the file's type reads it; a name that is not
+    /// registered is skipped, as Python's "Preferred Loader not registered".
+    pub preferred_loaders: Option<Vec<(String, String)>>,
 
     /// Importance weight (0.0 to 1.0) for relevance scoring.
     pub importance_weight: Option<f64>,
@@ -67,6 +74,18 @@ pub struct AddParams {
     /// parameter. Defaults to `false`; callers that want Python-parity should
     /// set this to `true`.
     pub incremental_loading: bool,
+
+    /// Pin the one item of the call to an existing data id (Python's
+    /// `DataItem(data, data_id=...)`, which `update()` uses). The id is
+    /// resolved first (exact, then `legacy_id`; see
+    /// [`IngestDb::resolve_data_id`]) and an unknown id is kept as the new
+    /// row's id. A pinned item skips the content-hash lookup and refreshes the
+    /// row in place: name, locations, extensions, MIME types, loader, both
+    /// hashes, size and metadata (a PATCH: absent keeps the stored value), and
+    /// the cognify completion marker is cleared when the content changed. A
+    /// row that belongs to another dataset is refused. A pinned add takes
+    /// exactly one input (`update()` replaces one document).
+    pub pinned_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +102,10 @@ pub struct ProcessedInput {
     /// MD5 of the EXTRACTED-text file (Python parity, `ingest_data.py:195`).
     /// Equals `content_hash` only when extracted text == raw bytes (plain text).
     pub raw_content_hash: String,
+    /// The id a **new** row gets: a random `uuid4`, as in Python's `add`
+    /// (`ingest_data.py`). When the dataset already holds this content for
+    /// the same owner and tenant, [`persist_data`] reuses that row and its id
+    /// instead, so the returned [`Data::id`] is the one to use.
     pub data_id: Uuid,
     pub storage_location: String,
     pub label: Option<String>,
@@ -99,6 +122,12 @@ pub struct ProcessedInput {
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
     pub external_metadata: Option<String>,
+    /// The item's own `external_metadata` text, before the source URI is merged
+    /// in. A re-add of existing content patches the stored metadata from it
+    /// (Python `merge_existing_row_metadata`): absent keeps the stored value.
+    pub item_external_metadata: Option<String>,
+    /// Where the content came from (`_cognee.source_uri`), if anywhere.
+    pub source_uri: Option<String>,
     /// Node-set names for graph organisation — the add call's
     /// [`AddParams::node_set`]. [`persist_data`] writes them to the
     /// `Data.node_set` column and under `external_metadata["node_set"]`; an
@@ -106,6 +135,10 @@ pub struct ProcessedInput {
     pub node_set: Option<Vec<String>>,
     /// Importance weight for ranking (0.0 to 1.0).
     pub importance_weight: Option<f64>,
+    /// The call's [`AddParams::pinned_id`]: when set, [`persist_data`]
+    /// refreshes (or creates under that id) the pinned row instead of
+    /// deduplicating by content hash.
+    pub pinned_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +148,68 @@ pub struct ProcessedInput {
 /// Process a single [`DataInput`]: resolve URLs, stream to storage, compute
 /// content hash, and extract all metadata needed to create a [`Data`] record.
 ///
-/// This is the first step of the ingest pipeline (Task 1).
-#[instrument(name = "ingestion.process_input", skip(input, storage))]
+/// This is the first step of the ingest pipeline (Task 1). It extracts text
+/// with [`LoaderRegistry::default_registry`], which has no image or audio
+/// loader; use [`process_input_with_loaders`] to pass a registry that has them.
 pub async fn process_input(
     input: &DataInput,
     storage: &dyn StorageTrait,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_with_loaders(
+        input,
+        storage,
+        &LoaderRegistry::default_registry(),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+    .await
+}
+
+/// Like [`process_input`], but extracts text with `loaders`.
+///
+/// As in Python's `ingest_data`, the loader for the input's document type runs
+/// at `add`: an image or audio file is stored as its description or transcript
+/// (`text_<content_hash>.txt`, `txt` / `text/plain`), and
+/// `original_data_location` keeps the raw file. The loader is chosen by the
+/// sniffed content type, as Python's `LoaderEngine.get_loader` does
+/// (`file_type.rs`): a file no loader claims fails with
+/// [`IngestionError::NoLoaderForFile`], and one whose document type has no
+/// loader in `loaders` fails with [`IngestionError::UnsupportedDocumentType`].
+pub async fn process_input_with_loaders(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    loaders: &LoaderRegistry,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_preferring(
+        input,
+        storage,
+        loaders,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        &[],
+    )
+    .await
+}
+
+/// Like [`process_input_with_loaders`], trying the Python loader names in
+/// `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+#[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
+pub async fn process_input_preferring(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    loaders: &LoaderRegistry,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    preferred_loaders: &[String],
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -167,26 +254,21 @@ pub async fn process_input(
         return Err(Box::new(IngestionError::S3IngestionUnavailable));
     }
 
-    let raw_source_uri = if let Some(metadata) = resolved_url_metadata.as_ref()
-        && is_html_url_metadata(metadata)
-    {
-        let raw_file_name = format!("source_placeholder.{}", metadata.source_extension);
-        let raw_location = storage.store(&metadata.raw_bytes, &raw_file_name).await?;
-        Some(storage_location_to_uri(storage.base_path(), &raw_location))
-    } else {
-        None
-    };
-
     // Rebindable stored-file metadata. For non-URL inputs the loader runs at
     // ADD time (Python parity, ingest_data.py:103) and the stored artifact
     // becomes extracted text, so these are overridden to txt/text/plain below.
     let mut stored_extension = stored_extension;
     let mut stored_mime_type = stored_mime_type;
     let mut loader_engine = loader_engine;
+    // For files the row records the SNIFFED extension and MIME type, as
+    // Python's `get_file_metadata` does; set below once the bytes are in hand.
+    let mut original_extension = original_extension;
+    let mut original_mime_type = original_mime_type;
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
-    // the already-extracted text; for everything else it is the raw original
-    // bytes, which we hash (UNCHANGED — sacred) and then feed to the loader.
+    // the fetched content (a page as its raw HTML text); for everything else
+    // it is the raw original bytes, which we hash (UNCHANGED — sacred) and
+    // then feed to the loader.
     let size_counter: Arc<Mutex<i64>> = Arc::new(Mutex::new(0i64));
     let raw_bytes: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -207,8 +289,8 @@ pub async fn process_input(
         .await?;
 
     // Finalise hash — content-only, no owner_id (Python compatible). For
-    // non-URL inputs this is the MD5 of the RAW original bytes; `data_id` is
-    // derived from it. Both are SACRED and must not change.
+    // non-URL inputs this is the MD5 of the RAW original bytes. It is SACRED
+    // and must not change: it names the stored file and is the dedup key.
     let collected = Arc::try_unwrap(raw_bytes)
         .map_err(|_| "Failed to unwrap bytes")?
         .into_inner();
@@ -218,49 +300,87 @@ pub async fn process_input(
         .map_err(|_| "Failed to unwrap size counter")?
         .into_inner();
 
-    let data_id = generate_data_id(&content_hash, owner_id, tenant_id);
+    // The id a new row gets: a random uuid4, as in Python's `add`
+    // (`ingest_data.py:364-389`). `persist_data` swaps it for the existing
+    // row's id when the dataset already holds this content.
+    let data_id = Uuid::new_v4();
 
     // Store the artifact + compute `raw_content_hash` (MD5 of the stored
     // extracted-text file — Python parity, ingest_data.py:195).
-    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() {
-        // URL path: the loader already ran at fetch time, so `collected` IS the
-        // extracted text. Store it verbatim under the metadata-derived name and
-        // extension (preserving the existing URL behaviour, incl. non-HTML
-        // URLs that keep their source extension). `raw_content_hash` is the MD5
-        // of that stored file, which equals `content_hash` here.
+    //
+    // A fetched HTML page is the exception that follows Python: the page is
+    // kept as `text_<content_hash>.html` and goes through the regular text
+    // branch below, so `text_loader` stores it as `text_<content_hash>.txt`
+    // (`save_data_item_to_storage.py:82-89`, `ingest_data.py:315-331`).
+    let is_html_url = resolved_url_metadata
+        .as_ref()
+        .is_some_and(is_html_url_metadata);
+    let raw_source_uri = if is_html_url {
+        let raw_file_name = format!("text_{content_hash}.html");
+        let raw_location = storage.store(&collected, &raw_file_name).await?;
+        Some(storage_location_to_uri(storage.base_path(), &raw_location))
+    } else {
+        None
+    };
+    let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() && !is_html_url {
+        // Other URL types: the content is stored verbatim under the
+        // metadata-derived name and extension, as before. `raw_content_hash`
+        // is the MD5 of that stored file, which equals `content_hash` here.
         let location = storage.store(&collected, &file_name).await?;
         (location, content_hash.clone())
     } else {
         // Non-URL path: run the document loader at ADD time and store the
         // EXTRACTED text as `text_<content_hash>.txt` (Python text_loader.py:76
         // names the file with the ORIGINAL file's content hash).
-        let registry = LoaderRegistry::default_registry();
-        let doc_type = cognee_models::doc_type_for_extension(&original_extension)
-            .unwrap_or("text")
-            .to_string();
+        let registry = loaders;
 
-        // Binary/non-text blob fallback (pre-task-17 raw-storage parity).
-        //
-        // Rust classifies by extension only, so a file with no (or an unknown)
-        // extension falls back to `doc_type = "text"` and the text loader. The
-        // text loader rejects non-UTF-8 bytes, which would make `add` fail for
-        // generic binary blobs that have no specific loader — a regression
-        // introduced by running loaders at ADD time (task 17).
-        //
-        // Match the pre-task-17 behaviour: when the would-be loader is the
-        // *text* loader but the bytes are not valid UTF-8 text, store the RAW
-        // bytes verbatim instead of running text extraction. This only affects
-        // the generic-text fallback path: files routed to a real loader by
-        // their extension (text/csv/html/pdf — actually-text content; or
-        // image/audio — `UnsupportedDocumentType`) are unchanged.
-        let is_text_doc_type = doc_type == "text";
-        if is_text_doc_type && std::str::from_utf8(&collected).is_err() {
-            let stored_name = format!("text_{content_hash}.bin");
-            let location = storage.store(&collected, &stored_name).await?;
-            // Raw bytes are stored verbatim, so `raw_content_hash` equals the
-            // (content-only) `content_hash` of those same bytes.
-            (location, content_hash.clone())
+        // Route by content type, as Python's `LoaderEngine.get_loader` does:
+        // sniff the bytes (`guess_file_type`), then take the first loader
+        // whose `can_handle` accepts the path or the sniffed extension with
+        // the sniffed MIME type. A file no loader claims fails the add
+        // (Python: "No loader found"). Non-UTF-8 bytes routed to the text
+        // loader fail in it (D15; Python: `UnreadableFileContentError`), so
+        // there is no raw-blob fallback.
+        let doc_type = if resolved_url_metadata.is_some() {
+            // A fetched HTML page: its raw markup goes through `text_loader`
+            // (D14), and its metadata comes from the response.
+            "text".to_string()
         } else {
+            let sniffed = crate::file_type::guess_file_type(&collected, &original_extension);
+            let doc_type = crate::file_type::route_loader_preferring(
+                &original_extension,
+                &sniffed,
+                preferred_loaders,
+                |doc_type| registry.get(doc_type).is_some(),
+            )
+            .ok_or_else(|| {
+                Box::new(IngestionError::NoLoaderForFile {
+                    extension: sniffed.extension.clone(),
+                    mime_type: sniffed.mime.clone(),
+                }) as Box<dyn std::error::Error>
+            })?;
+            // Python's vision call takes the MIME type from the NAME
+            // (`mimetypes.guess_type`, `native_adapter.py:633-638`), so an
+            // image whose name does not say "image" is routed to the image
+            // loader and then fails there.
+            let name_is_image = mime_guess::from_path(&file_name)
+                .first()
+                .is_some_and(|mime| mime.type_() == mime_guess::mime::IMAGE);
+            if doc_type == "image" && !name_is_image {
+                return Err(Box::new(IngestionError::ImageMimeTypeUndetermined {
+                    name: file_name,
+                }));
+            }
+            // A local HTML file keeps the path's metadata (D14); every other
+            // file is described by what the bytes are.
+            if doc_type != "html" {
+                original_extension = sniffed.extension;
+                original_mime_type = sniffed.mime;
+            }
+            doc_type.to_string()
+        };
+
+        {
             let loader = registry.get(&doc_type).ok_or_else(|| {
                 Box::new(IngestionError::UnsupportedDocumentType {
                     document_type: doc_type.clone(),
@@ -272,6 +392,7 @@ pub async fn process_input(
             let descriptor = build_loader_descriptor(
                 data_id,
                 &extract_name(input, &content_hash),
+                &doc_type,
                 &original_extension,
                 &original_mime_type,
             );
@@ -310,8 +431,9 @@ pub async fn process_input(
             _ => extract_original_location(input),
         }
     };
+    let source_uri = source_uri_from_input(input);
     let external_metadata =
-        merge_external_metadata(data_item_metadata, resolved_url_metadata.as_ref())?;
+        merge_external_metadata(data_item_metadata.clone(), source_uri.as_deref())?;
 
     Ok(ProcessedInput {
         content_hash,
@@ -332,8 +454,11 @@ pub async fn process_input(
         owner_id,
         tenant_id,
         external_metadata,
+        item_external_metadata: data_item_metadata,
+        source_uri,
         node_set: None,
         importance_weight: None,
+        pinned_id: None,
     })
 }
 
@@ -342,8 +467,10 @@ pub async fn process_input(
 // ---------------------------------------------------------------------------
 
 /// Persist a [`ProcessedInput`] as a [`Data`] record: resolve or create the
-/// dataset, deduplicate by content hash, create the record if new, and attach
-/// it to the dataset.
+/// dataset, then reuse the row that already holds this content in that
+/// dataset for the same owner and tenant, or create a new dataset-scoped row
+/// with the input's fresh `uuid4` (Python `ingest_data`: dedup by
+/// `(content_hash, dataset_id, owner, tenant)`).
 ///
 /// Dataset resolution uses a deterministic UUID5 ID so the lookup + optional
 /// `INSERT OR IGNORE` is idempotent and cheap — safe to call once per item.
@@ -352,7 +479,7 @@ pub async fn process_input(
 #[instrument(
     name = "ingestion.persist_data",
     skip(processed, database),
-    fields(data_id = %processed.data_id)
+    fields(new_data_id = %processed.data_id)
 )]
 pub async fn persist_data(
     processed: &ProcessedInput,
@@ -427,7 +554,7 @@ pub async fn persist_data_with_acl(
 #[instrument(
     name = "ingestion.persist_data_with_acl",
     skip(processed, database, acl_db, dataset_locks),
-    fields(data_id = %processed.data_id)
+    fields(new_data_id = %processed.data_id)
 )]
 #[allow(
     clippy::too_many_arguments,
@@ -450,7 +577,8 @@ pub async fn persist_data_with_acl_and_locks(
     // `ProcessedInput` with a node set to a `persist_data*` function gets the
     // same two writes, and so does the re-add path below. Python stores
     // `None`, not `[]`, for an empty set (`json.dumps(...) if effective_node_set
-    // else None`), so an empty list is treated as no node set.
+    // else None`), so an empty list writes no node set; on a re-add it still
+    // clears the stored one (see the re-add path).
     //
     // Checked before the dataset is resolved: a rejected name must not leave
     // behind an empty dataset (with its owner grants) that nothing attached
@@ -557,18 +685,19 @@ pub async fn persist_data_with_acl_and_locks(
     // `add` into one dataset behind a single file at a time.
     drop(dataset_guard);
 
-    let data_id = processed.data_id;
-
-    // Serialize the read-modify-write of this data row against every other
-    // `persist_data*` call for the same `data_id` in this process. The re-add
-    // refresh below derives the `external_metadata` it writes from the row it
-    // read here; without the lock two concurrent re-adds of the same content
-    // with different node sets could interleave read-read-write-write, so the
-    // later write would merge into a stale snapshot — dropping whatever the
-    // other wrote to the metadata — and the two calls would each return a row
-    // the store no longer holds. Under the lock every refresh reads the row
-    // the previous one wrote, and the `node_set` column and the metadata key
-    // it writes are always derived from that one read.
+    // Serialize the dedup lookup and the read-modify-write of this content's
+    // row against every other `persist_data*` call for the same content in
+    // the same dataset (and owner, tenant) in this process. Without it two
+    // concurrent adds of the same content could both miss the lookup and
+    // create two rows. The re-add refresh below also derives the
+    // `external_metadata` it writes from the row it read here; without the
+    // lock two concurrent re-adds with different node sets could interleave
+    // read-read-write-write, so the later write would merge into a stale
+    // snapshot — dropping whatever the other wrote to the metadata — and the
+    // two calls would each return a row the store no longer holds. Under the
+    // lock every refresh reads the row the previous one wrote, and the
+    // `node_set` column and the metadata key it writes are always derived
+    // from that one read.
     //
     // In-process only, like `DatasetLocks` (and keyed the same way): two
     // processes re-adding the same content to a shared database can still
@@ -579,23 +708,67 @@ pub async fn persist_data_with_acl_and_locks(
     // compare-and-swap on `updated_at`, which neither SQLite nor the
     // `IngestDb` trait offers today; it is not worth a cross-process lock for
     // a refresh whose inputs are the caller's own re-add.
-    let _data_guard = data_id_locks().lock(data_id).await;
+    //
+    // A pinned item has an identity instead of a lookup: it is locked by its
+    // id, and skips the dedup lookup below.
+    let _data_guard = match processed.pinned_id {
+        Some(pin) => data_id_locks().lock(pin).await,
+        None => {
+            data_id_locks()
+                .lock(content_lock_key(
+                    dataset.id,
+                    &processed.content_hash,
+                    owner_id,
+                    tenant_id,
+                ))
+                .await
+        }
+    };
 
-    if let Some(mut existing_data) = database.get_data(data_id).await? {
-        database.attach_data_to_dataset(dataset.id, data_id).await?;
-        // Python's `ingest_data` update branch rewrites the existing row's
-        // `node_set` and `external_metadata` from the re-add's values. Only
-        // the node set is refreshed here (the rest of the row stays as
-        // stored), and only when the call supplies one: a re-add without a
-        // node set leaves the stored tags alone. The write is skipped when
-        // the row already carries this set, which is the common re-add
-        // (memify's session persist re-adds under one fixed set). "Carries"
-        // is decided on the parsed JSON, not the stored text: a row Python
-        // wrote spells the same set `["a", "b"]` (json.dumps spacing) and may
-        // order metadata keys differently, and must not be rewritten on every
-        // re-add.
+    // A pinned item refreshes its row in place (see
+    // `persist_pinned_row`); a pin that matches no row creates one under the
+    // pinned id.
+    let mut new_row_id = processed.data_id;
+    if let Some(pin) = processed.pinned_id {
+        let resolved = database
+            .resolve_data_id(dataset.id, pin)
+            .await?
+            .unwrap_or(pin);
+        if let Some(row) = database.get_data(resolved).await? {
+            return persist_pinned_row(processed, database, dataset.id, row).await;
+        }
+        new_row_id = resolved;
+    }
+
+    // Dedup is a lookup, not an identity (Python `identify_many`): the row
+    // holding this content in this dataset for this owner and tenant, if any.
+    // The same content in another dataset is another row.
+    let existing = if processed.pinned_id.is_some() {
+        None
+    } else {
+        database
+            .find_data_in_dataset(dataset.id, &processed.content_hash, owner_id, tenant_id)
+            .await?
+    };
+    if let Some(mut existing_data) = existing {
+        let data_id = existing_data.id;
+        // Python's `ingest_data` update branch rewrites the existing row from
+        // the re-add (`ingest_data.py` ~470-545): name, raw / original
+        // locations, extensions and mime types, loader engine, hashes, size,
+        // the label when the item carries one, and `external_metadata` and
+        // `node_set` through `merge_existing_row_metadata` (a PATCH: absent
+        // keeps the stored value, a value replaces it). `pipeline_status` is
+        // reset only when the content changed, which a dedup hit by content
+        // hash never is. A re-add without a node set leaves the stored tags
+        // alone. The write is skipped when the row already carries every one
+        // of these values, which is the common re-add (improve's session
+        // persist re-adds under one fixed set). "Carries" is decided on the
+        // parsed JSON for the two JSON columns, not the stored text: a row
+        // Python wrote spells the same set `["a", "b"]` (json.dumps spacing)
+        // and may order metadata keys differently, and must not be rewritten
+        // on every re-add.
         //
-        // The write is a targeted update of the two columns, not a full-row
+        // The write is a targeted update of these columns, not a full-row
         // write of the snapshot read above: a `token_count`, `last_accessed`
         // or `pipeline_status` a concurrent cognify or search wrote in between
         // has to survive.
@@ -610,47 +783,98 @@ pub async fn persist_data_with_acl_and_locks(
         // item on top of its existing memory, and whatever the old extraction
         // produced that the new one does not reproduce (entities, edges,
         // summaries) would stay in the graph and vector stores. In both SDKs
-        // `update()` is the way to re-tag cognified content: it removes the
-        // item's memory and re-cognifies it (Python resets the marker on the
-        // pinned row; Rust adds the replacement first, then deletes the old
-        // item — or, when the replacement is this same content-addressed row,
-        // drops only its memory and completion marker).
-        if let Some(names) = node_set {
-            let external_metadata = with_node_set_in_external_metadata(
-                existing_data.external_metadata.as_deref(),
-                names,
-            )
-            .map_err(|e| format!("Failed to record node_set in external_metadata: {e}"))?;
-            if !same_json(
+        // `update()` is the way to re-tag cognified content: it drops the
+        // item's memory and completion marker, re-adds it pinned to the same
+        // id and re-cognifies it.
+        // PATCH rule for the node set (Python `requested_node_set`,
+        // `ingest_data.py:551-555`): absent keeps the stored set, an explicit
+        // empty list clears it, a list replaces it.
+        let clears_node_set = processed
+            .node_set
+            .as_ref()
+            .is_some_and(|names| names.is_empty());
+        let requested_node_set: Option<&[String]> =
+            if clears_node_set { Some(&[]) } else { node_set };
+        let node_set_column_to_write = match requested_node_set {
+            Some(_) => node_set_column.clone(),
+            None => existing_data.node_set.clone(),
+        };
+        let external_metadata = merge_existing_row_metadata(
+            existing_data.external_metadata.as_deref(),
+            existing_data.node_set.as_deref(),
+            processed.item_external_metadata.as_deref(),
+            processed.source_uri.as_deref(),
+            requested_node_set,
+        )
+        .map_err(|e| format!("Failed to merge external_metadata on re-add: {e}"))?;
+        let refresh = DataRowRefresh {
+            name: processed.name.clone(),
+            raw_data_location: processed.raw_data_uri.clone(),
+            original_data_location: processed.original_location.clone(),
+            extension: processed.stored_extension.clone(),
+            mime_type: processed.stored_mime_type.clone(),
+            original_extension: Some(processed.original_extension.clone()),
+            original_mime_type: Some(processed.original_mime_type.clone()),
+            loader_engine: Some(processed.loader_engine.clone()),
+            raw_content_hash: Some(processed.raw_content_hash.clone()),
+            data_size: processed.data_size,
+            label: processed.label.clone(),
+            node_set: node_set_column_to_write,
+            external_metadata,
+        };
+        let unchanged = existing_data.name == refresh.name
+            && existing_data.raw_data_location == refresh.raw_data_location
+            && existing_data.original_data_location == refresh.original_data_location
+            && existing_data.extension == refresh.extension
+            && existing_data.mime_type == refresh.mime_type
+            && existing_data.original_extension == refresh.original_extension
+            && existing_data.original_mime_type == refresh.original_mime_type
+            && existing_data.loader_engine == refresh.loader_engine
+            && existing_data.raw_content_hash == refresh.raw_content_hash
+            && existing_data.data_size == refresh.data_size
+            && refresh
+                .label
+                .as_ref()
+                .is_none_or(|l| existing_data.label.as_ref() == Some(l))
+            && same_json(
                 existing_data.node_set.as_deref(),
-                node_set_column.as_deref(),
-            ) || !same_json(
+                refresh.node_set.as_deref(),
+            )
+            && same_json(
                 existing_data.external_metadata.as_deref(),
-                external_metadata.as_deref(),
-            ) {
-                // A row deleted since the read above fails the write with
-                // `DatabaseError::NotFound`, which propagates: the call does
-                // not report a row that no longer exists.
-                let updated_at = database
-                    .update_data_node_set(
-                        data_id,
-                        node_set_column.as_deref(),
-                        external_metadata.as_deref(),
-                    )
-                    .await?;
-                info!(data_id = %data_id, "node_set refreshed on re-add");
-                // Patch the snapshot with exactly what was written rather than
-                // reading the row back: the three columns are the only ones the
-                // refresh touches, and `updated_at` is the value stored.
-                existing_data.node_set = node_set_column;
-                existing_data.external_metadata = external_metadata;
-                existing_data.updated_at = Some(updated_at);
+                refresh.external_metadata.as_deref(),
+            );
+        if !unchanged {
+            // A row deleted since the read above fails the write with
+            // `DatabaseError::NotFound`, which propagates: the call does
+            // not report a row that no longer exists.
+            let updated_at = database.refresh_data_row(data_id, &refresh).await?;
+            info!(data_id = %data_id, "row refreshed on re-add");
+            // Patch the snapshot with exactly what was written rather than
+            // reading the row back: these are the only columns the refresh
+            // touches, and `updated_at` is the value stored.
+            existing_data.name = refresh.name;
+            existing_data.raw_data_location = refresh.raw_data_location;
+            existing_data.original_data_location = refresh.original_data_location;
+            existing_data.extension = refresh.extension;
+            existing_data.mime_type = refresh.mime_type;
+            existing_data.original_extension = refresh.original_extension;
+            existing_data.original_mime_type = refresh.original_mime_type;
+            existing_data.loader_engine = refresh.loader_engine;
+            existing_data.raw_content_hash = refresh.raw_content_hash;
+            existing_data.data_size = refresh.data_size;
+            if refresh.label.is_some() {
+                existing_data.label = refresh.label;
             }
+            existing_data.node_set = refresh.node_set;
+            existing_data.external_metadata = refresh.external_metadata;
+            existing_data.updated_at = Some(updated_at);
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
     }
 
+    let data_id = new_row_id;
     let external_metadata = match node_set {
         Some(names) => {
             with_node_set_in_external_metadata(processed.external_metadata.as_deref(), names)
@@ -669,6 +893,7 @@ pub async fn persist_data_with_acl_and_locks(
         processed.content_hash.clone(),
         processed.owner_id,
     )
+    .dataset_id(dataset.id)
     .original_extension(processed.original_extension.clone())
     .original_mime_type(processed.original_mime_type.clone())
     .loader_engine(processed.loader_engine.clone())
@@ -693,8 +918,6 @@ pub async fn persist_data_with_acl_and_locks(
 
     let saved_data = database.create_data(data).await?;
 
-    database.attach_data_to_dataset(dataset.id, data_id).await?;
-
     info!(data_id = %data_id, is_duplicate = false, "input processed");
     Ok(saved_data)
 }
@@ -703,18 +926,212 @@ pub async fn persist_data_with_acl_and_locks(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// The process-wide per-`data_id` locks [`persist_data_with_acl_and_locks`]
-/// holds across its read-modify-write of one data row.
+/// Refresh the pinned row `row` in place with the re-ingested item — the
+/// existing-row branch of Python's `ingest_data` for a pinned `DataItem`
+/// (`ingest_data.py:517-581`).
+///
+/// A row of another dataset is refused and never mutated. Everything the item
+/// describes is rewritten (name, locations, extensions, MIME types, loader,
+/// both hashes, size, owner, tenant); the metadata and node set are a PATCH
+/// ([`merge_pinned_row_metadata`]); `label` and `importance_weight` follow the
+/// same rule (absent keeps the stored value). The cognify completion marker is
+/// cleared only when the content changed.
+async fn persist_pinned_row(
+    processed: &ProcessedInput,
+    database: &dyn IngestDb,
+    dataset_id: Uuid,
+    mut row: Data,
+) -> Result<Data, Box<dyn std::error::Error>> {
+    if row.dataset_id != Some(dataset_id) {
+        info!(
+            data_id = %row.id,
+            owning_dataset = ?row.dataset_id,
+            pinned_from = %dataset_id,
+            "foreign pin refused"
+        );
+        return Err(IngestionError::PinnedIdNotInDataset {
+            data_id: row.id,
+            dataset_id,
+        }
+        .into());
+    }
+
+    let content_changed = row.content_hash != processed.content_hash;
+    let requested_node_set = processed.node_set.as_deref();
+    let (external_metadata, row_node_set) = merge_pinned_row_metadata(
+        row.external_metadata.as_deref(),
+        row.node_set.as_deref(),
+        processed.item_external_metadata.as_deref(),
+        processed.source_uri.as_deref(),
+        requested_node_set,
+        content_changed,
+    )?;
+
+    row.name = processed.name.clone();
+    row.raw_data_location = processed.raw_data_uri.clone();
+    row.original_data_location = processed.original_location.clone();
+    row.extension = processed.stored_extension.clone();
+    row.mime_type = processed.stored_mime_type.clone();
+    row.original_extension = Some(processed.original_extension.clone());
+    row.original_mime_type = Some(processed.original_mime_type.clone());
+    row.loader_engine = Some(processed.loader_engine.clone());
+    row.owner_id = processed.owner_id;
+    row.content_hash = processed.content_hash.clone();
+    row.raw_content_hash = Some(processed.raw_content_hash.clone());
+    row.data_size = processed.data_size;
+    row.tenant_id = processed.tenant_id;
+    row.external_metadata = external_metadata;
+    row.node_set = row_node_set;
+    if let Some(label) = &processed.label {
+        row.label = Some(label.clone());
+    }
+    if let Some(weight) = processed.importance_weight {
+        row.importance_weight = Some(weight);
+    }
+    if content_changed {
+        row.pipeline_status = None;
+    }
+
+    let saved = database.update_data(row).await?;
+    info!(data_id = %saved.id, content_changed, "pinned row refreshed");
+    Ok(saved)
+}
+
+/// The `external_metadata` and `node_set` column a re-ingested (pinned) row
+/// ends up with: Python's `merge_existing_row_metadata`
+/// (`ingest_data.py:60-113`), a PATCH.
+///
+/// * `item_metadata` is the item's own metadata, as the caller gave it:
+///   absent (`None`, blank or `null`) keeps the stored metadata, an explicit
+///   `{}` clears it, an object replaces it (other JSON is kept under
+///   `data_item_external_metadata_raw`, as for a new row).
+/// * `source_uri` (where the new content came from) is written to
+///   `_cognee.source_uri` on top. When the content changed and there is no
+///   new source (raw text, an upload), the stored one described the old
+///   content and is dropped; unchanged content keeps it.
+/// * `node_set`: `None` keeps the stored one, a list replaces it (the union of
+///   the call's and the item's own), an empty one clears it. It is mirrored
+///   under `external_metadata["node_set"]`.
+fn merge_pinned_row_metadata(
+    stored_metadata: Option<&str>,
+    stored_node_set: Option<&str>,
+    item_metadata: Option<&str>,
+    source_uri: Option<&str>,
+    node_set: Option<&[String]>,
+    content_changed: bool,
+) -> Result<(Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    // Stored metadata that is not an object (older versions could write it)
+    // counts as empty, as in Python.
+    let stored = match stored_metadata.map(serde_json::from_str::<serde_json::Value>) {
+        Some(Ok(serde_json::Value::Object(map))) => map,
+        _ => serde_json::Map::new(),
+    };
+    let item = match classify_item_metadata(item_metadata) {
+        ItemMetadata::Absent => None,
+        other => Some(item_metadata_map(other)),
+    };
+    let mut metadata = match &item {
+        None => stored,
+        Some(item) => item.clone(),
+    };
+
+    if source_uri.is_some() || content_changed {
+        let mut cognee = match metadata.get("_cognee") {
+            Some(serde_json::Value::Object(map)) => map.clone(),
+            _ => serde_json::Map::new(),
+        };
+        match source_uri {
+            Some(uri) => {
+                cognee.insert("source_uri".to_string(), serde_json::json!(uri));
+            }
+            None => {
+                cognee.remove("source_uri");
+            }
+        }
+        if cognee.is_empty() {
+            metadata.remove("_cognee");
+        } else {
+            metadata.insert("_cognee".to_string(), serde_json::Value::Object(cognee));
+        }
+    }
+
+    // The item's own node set (a list in its metadata) counts as passed.
+    let item_node_set: Option<Vec<String>> = item
+        .as_ref()
+        .and_then(|item| item.get("node_set"))
+        .and_then(|v| {
+            v.as_array().map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect()
+            })
+        });
+    let requested: Option<Vec<String>> = match (node_set, item_node_set) {
+        (None, None) => None,
+        (call, item) => {
+            let mut union: Vec<String> = Vec::new();
+            for name in call
+                .unwrap_or_default()
+                .iter()
+                .cloned()
+                .chain(item.unwrap_or_default())
+            {
+                if !union.contains(&name) {
+                    union.push(name);
+                }
+            }
+            Some(union)
+        }
+    };
+    let resolved: Option<Vec<String>> = match requested {
+        None => stored_node_set
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .filter(|names| !names.is_empty()),
+        Some(names) => Some(names).filter(|names| !names.is_empty()),
+    };
+    match &resolved {
+        Some(names) => {
+            metadata.insert("node_set".to_string(), serde_json::json!(names));
+        }
+        None => {
+            metadata.remove("node_set");
+        }
+    }
+    let node_set_column = resolved.as_ref().map(serde_json::to_string).transpose()?;
+    let metadata_column = serde_json::to_string(&serde_json::Value::Object(metadata))?;
+    Ok((Some(metadata_column), node_set_column))
+}
+
+/// The process-wide per-content locks [`persist_data_with_acl_and_locks`]
+/// holds across its dedup lookup and its read-modify-write of one data row,
+/// keyed by [`content_lock_key`].
 ///
 /// Process-wide rather than an `AddPipeline` option: the race it closes —
 /// two concurrent re-adds of the same content — needs no server to happen
 /// (any embedder can run two `add`s at once), and every `persist_data*` entry
 /// point must take the same lock for it to mean anything. Contention is only
-/// ever between calls for the same `data_id`. A registry of its own, separate
-/// from any [`DatasetLocks`] a caller wires for datasets.
+/// ever between calls for the same content in the same dataset. A registry of
+/// its own, separate from any [`DatasetLocks`] a caller wires for datasets.
 fn data_id_locks() -> &'static DatasetLocks {
     static LOCKS: std::sync::LazyLock<DatasetLocks> = std::sync::LazyLock::new(DatasetLocks::new);
     &LOCKS
+}
+
+/// The [`data_id_locks`] key of one content in one dataset: the dedup scope
+/// of `find_data_in_dataset` — `(dataset, content_hash, owner, tenant)` —
+/// folded into a `uuid5`, since the registry is keyed by `Uuid`.
+fn content_lock_key(
+    dataset_id: Uuid,
+    content_hash: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Uuid {
+    let tenant = tenant_id.map_or_else(|| "None".to_string(), |t| t.to_string());
+    Uuid::new_v5(
+        &cognee_utils::NAMESPACE_OID,
+        format!("{dataset_id}:{content_hash}:{owner_id}:{tenant}").as_bytes(),
+    )
 }
 
 /// Resolve the MIME type for a file extension.
@@ -749,12 +1166,11 @@ fn unwrap_data_item(input: &DataInput) -> &DataInput {
 fn build_loader_descriptor(
     data_id: Uuid,
     name: &str,
+    doc_type: &str,
     extension: &str,
     mime_type: &str,
 ) -> Document {
-    let doc_type = cognee_models::doc_type_for_extension(extension)
-        .unwrap_or("text")
-        .to_string();
+    let doc_type = doc_type.to_string();
     let mut base = DataPoint::new("Document", None);
     base.id = data_id;
     Document {
@@ -989,9 +1405,9 @@ fn same_json(stored: Option<&str>, candidate: Option<&str>) -> bool {
 ///
 /// [`AddPipeline::add_with_params`] runs this first, so a bad name fails the
 /// whole call rather than one item mid-run. It is public for callers that do
-/// irreversible work *before* they add — `cognee::api::update` deletes the
-/// document it replaces first, and must refuse a node set the add would
-/// refuse while the old data is still there.
+/// irreversible work *before* they add — `cognee::api::update` drops the
+/// document's memory first, and must refuse a node set the add would refuse
+/// while that memory is still there.
 pub fn validate_add_inputs(
     inputs: &[DataInput],
     node_set: Option<&[String]>,
@@ -1099,52 +1515,138 @@ fn with_node_set_in_external_metadata(
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
 }
 
+/// Where an add's content came from, as Python's `_source_uri_from_input`
+/// reports it (`ingest_data.py:140-181`): an explicit `source_uri` string in
+/// the item's own metadata wins; otherwise a URL or `s3://` path is its own
+/// locator and a local file is its absolute `file://` URI. Raw text, binary uploads and
+/// anything else have none.
+fn source_uri_from_input(input: &DataInput) -> Option<String> {
+    if let DataInput::DataItem {
+        external_metadata, ..
+    } = input
+        && let ItemMetadata::Object(object) = classify_item_metadata(external_metadata.as_deref())
+        && let Some(explicit) = object.get("source_uri").and_then(|v| v.as_str())
+        && !explicit.trim().is_empty()
+    {
+        return Some(explicit.trim().to_string());
+    }
+    match unwrap_data_item(input) {
+        // Python returns an `http`, `https`, `s3` or `file` locator as given.
+        DataInput::Url(url) | DataInput::S3Path(url) => Some(url.clone()),
+        DataInput::FilePath(path) => Some(file_uri(path)),
+        _ => None,
+    }
+}
+
+/// The `file://` URI of a local path, as Python's `Path(p).resolve().as_uri()`
+/// builds it. A path that already is a `file://` URI is kept as given, which is
+/// what Python does for any `file`, `http`, `https` or `s3` string.
+fn file_uri(path: &str) -> String {
+    if path.starts_with("file://") {
+        path.to_string()
+    } else {
+        path_to_file_uri(path)
+    }
+}
+
+fn path_to_file_uri(path: &str) -> String {
+    let path = Path::new(path);
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        }
+    });
+    let mut uri = String::from("file://");
+    for byte in absolute.to_string_lossy().as_bytes() {
+        // `urllib.parse.quote(path)`: letters, digits, `_.-~` and `/` stay.
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/') {
+            uri.push(char::from(*byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
+}
+
+/// The `external_metadata` a re-added existing row ends up with, as Python's
+/// `merge_existing_row_metadata` resolves it for unchanged content
+/// (`ingest_data.py:60-113`): a PATCH. An item without metadata keeps the
+/// stored object; an item with metadata replaces it. `_cognee.source_uri` is
+/// set from the new source when there is one. The node set (`None` keeps the
+/// stored column's names) is recorded under `node_set`, or the key is dropped
+/// when there is none. A stored value that is not a JSON object counts as
+/// empty.
+fn merge_existing_row_metadata(
+    stored_metadata: Option<&str>,
+    stored_node_set: Option<&str>,
+    item_metadata: Option<&str>,
+    source_uri: Option<&str>,
+    node_set: Option<&[String]>,
+) -> Result<Option<String>, serde_json::Error> {
+    let item = classify_item_metadata(item_metadata);
+    let mut metadata = if matches!(item, ItemMetadata::Absent) {
+        match stored_metadata.map(serde_json::from_str::<serde_json::Value>) {
+            Some(Ok(serde_json::Value::Object(object))) => object,
+            _ => serde_json::Map::new(),
+        }
+    } else {
+        item_metadata_map(item)
+    };
+    if let Some(source_uri) = source_uri {
+        let mut cognee = match metadata.get("_cognee") {
+            Some(serde_json::Value::Object(object)) => object.clone(),
+            _ => serde_json::Map::new(),
+        };
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+        metadata.insert("_cognee".to_string(), serde_json::Value::Object(cognee));
+    }
+    let resolved: Vec<String> = match node_set {
+        Some(names) => names.to_vec(),
+        None => stored_node_set
+            .and_then(|text| serde_json::from_str::<Vec<String>>(text).ok())
+            .unwrap_or_default(),
+    };
+    if resolved.is_empty() {
+        metadata.remove("node_set");
+    } else {
+        metadata.insert("node_set".to_string(), serde_json::json!(resolved));
+    }
+    serde_json::to_string(&serde_json::Value::Object(metadata)).map(Some)
+}
+
+/// The `external_metadata` a new `data` row gets, built as Python's
+/// `merge_existing_row_metadata` builds a new row's (`ingest_data.py:60-109`):
+/// the item's own object, with `_cognee.source_uri` set when the content has
+/// a source. Plain text has no source and no item metadata, and stores `{}`.
+///
+/// Metadata that is not a JSON object is kept under
+/// `data_item_external_metadata_raw` when a source URI has to be merged into
+/// it, and verbatim otherwise.
 fn merge_external_metadata(
     data_item_metadata: Option<String>,
-    url_metadata: Option<&UrlMetadata>,
+    source_uri: Option<&str>,
 ) -> Result<Option<String>, serde_json::Error> {
-    let Some(metadata) = url_metadata else {
-        // Nothing to merge with: the item's text is stored verbatim, unless
-        // it spells "no metadata".
-        return Ok(data_item_metadata.filter(|item_metadata| {
-            !matches!(
-                classify_item_metadata(Some(item_metadata)),
-                ItemMetadata::Absent
-            )
+    let Some(source_uri) = source_uri else {
+        // Nothing to merge: the item's text is stored verbatim, unless it
+        // spells "no metadata", which Python stores as `{}`.
+        return Ok(Some(match data_item_metadata {
+            Some(text) if !matches!(classify_item_metadata(Some(&text)), ItemMetadata::Absent) => {
+                text
+            }
+            _ => "{}".to_string(),
         }));
     };
 
-    let data_item_metadata = classify_item_metadata(data_item_metadata.as_deref());
-    let user_metadata_object = match &data_item_metadata {
-        ItemMetadata::Object(object) => Some(serde_json::Value::Object(object.clone())),
-        _ => None,
-    };
-    let mut merged = item_metadata_map(data_item_metadata);
-    let mut has_conflict = false;
-
-    let url_fields = [
-        ("source", serde_json::json!("url")),
-        ("url", serde_json::json!(metadata.requested_url.clone())),
-        ("final_url", serde_json::json!(metadata.final_url.clone())),
-        (
-            "content_type",
-            serde_json::json!(metadata.content_type.clone()),
-        ),
-    ];
-    for (key, value) in url_fields {
-        if merged.contains_key(key) {
-            has_conflict = true;
-        }
-        merged.insert(key.to_string(), value);
-    }
-    if let Some(title) = &metadata.title {
-        if merged.contains_key("title") {
-            has_conflict = true;
-        }
-        merged.insert("title".to_string(), serde_json::json!(title));
-    }
-    if has_conflict && let Some(user_metadata) = user_metadata_object {
-        merged.insert("data_item_external_metadata".to_string(), user_metadata);
+    let mut merged = item_metadata_map(classify_item_metadata(data_item_metadata.as_deref()));
+    if let Some(serde_json::Value::Object(cognee)) = merged.get_mut("_cognee") {
+        cognee.insert("source_uri".to_string(), serde_json::json!(source_uri));
+    } else {
+        merged.insert(
+            "_cognee".to_string(),
+            serde_json::json!({ "source_uri": source_uri }),
+        );
     }
 
     serde_json::to_string(&serde_json::Value::Object(merged)).map(Some)
@@ -1220,9 +1722,48 @@ fn preserve_ingestion_error(e: Box<dyn std::error::Error>) -> TaskError {
 }
 
 /// Build a [`TypedTask`] that streams a [`DataInput`] to storage, hashes its
-/// content, and returns a self-contained [`ProcessedInput`].
+/// content, and returns a self-contained [`ProcessedInput`]. Text is extracted
+/// with [`LoaderRegistry::default_registry`].
 pub fn make_process_input_task(
     storage: Arc<dyn StorageTrait>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_with_loaders(
+        storage,
+        Arc::new(LoaderRegistry::default_registry()),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+}
+
+/// Like [`make_process_input_task`], but extracts text with `loaders` (see
+/// [`process_input_with_loaders`]).
+pub fn make_process_input_task_with_loaders(
+    storage: Arc<dyn StorageTrait>,
+    loaders: Arc<LoaderRegistry>,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> TypedTask<DataInput, ProcessedInput> {
+    make_process_input_task_preferring(
+        storage,
+        loaders,
+        Arc::new(Vec::new()),
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+    )
+}
+
+/// [`make_process_input_task_with_loaders`] that tries the Python loader names
+/// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
+fn make_process_input_task_preferring(
+    storage: Arc<dyn StorageTrait>,
+    loaders: Arc<LoaderRegistry>,
+    preferred_loaders: Arc<Vec<String>>,
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
@@ -1230,11 +1771,21 @@ pub fn make_process_input_task(
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
+        let loaders = Arc::clone(&loaders);
+        let preferred_loaders = Arc::clone(&preferred_loaders);
         Box::pin(async move {
-            process_input(&input, &*storage, hash_algorithm, owner_id, tenant_id)
-                .await
-                .map(Box::new)
-                .map_err(preserve_ingestion_error)
+            process_input_preferring(
+                &input,
+                &*storage,
+                &loaders,
+                hash_algorithm,
+                owner_id,
+                tenant_id,
+                &preferred_loaders,
+            )
+            .await
+            .map(Box::new)
+            .map_err(preserve_ingestion_error)
         })
     })
 }
@@ -1285,11 +1836,23 @@ struct AddParamsInjection {
     node_set: Option<Vec<String>>,
     importance_weight: Option<f64>,
     target_dataset_id: Option<Uuid>,
+    /// [`AddParams::pinned_id`].
+    pinned_id: Option<Uuid>,
     /// Identity locks serializing dataset create-and-grant against concurrent
     /// writers, or `None` for the unsynchronised single-caller default. Wired
     /// by embedders that serve concurrent requests — see
     /// [`AddPipeline::with_dataset_locks`].
     dataset_locks: Option<Arc<DatasetLocks>>,
+    /// Python loader names to try first (`AddParams::preferred_loaders` keys).
+    preferred_loaders: Arc<Vec<String>>,
+}
+
+/// The keys of `preferred_loaders` in the caller's order, which is Python's
+/// dict order (`LoaderEngine.py:103-114`).
+fn loader_names(preferred: Option<&[(String, String)]>) -> Vec<String> {
+    preferred
+        .map(|pairs| pairs.iter().map(|(name, _)| name.clone()).collect())
+        .unwrap_or_default()
 }
 
 /// Build a persist task whose closure also patches the [`ProcessedInput`]
@@ -1312,6 +1875,7 @@ fn make_persist_data_task_with_acl_and_params(
         if let Some(w) = add_params.importance_weight {
             processed.importance_weight = Some(w);
         }
+        processed.pinned_id = add_params.pinned_id;
         let override_ds = add_params.target_dataset_id;
         let dataset_locks = add_params.dataset_locks.clone();
         let database = Arc::clone(&database);
@@ -1378,15 +1942,15 @@ pub fn build_add_pipeline_with_acl(
         owner_id,
         tenant_id,
         acl_db,
+        Arc::new(LoaderRegistry::default_registry()),
         AddParamsInjection::default(),
     )
 }
 
 /// Internal builder used by both [`build_add_pipeline_with_acl`] and the
 /// executor-routed [`AddPipeline::add_with_params`]. Threads
-/// [`AddParamsInjection`] into the persist task and attaches a
-/// `data_id_fn` so the executor's `run_info["data"]` carrier is populated
-/// for the
+/// [`AddParamsInjection`] into the persist task. The run's `pipeline_runs`
+/// trail is written by the
 /// [`cognee_core::pipeline_run_registry::DbPipelineWatcher`] wired by
 /// [`AddPipeline::with_pipeline_run_repo`] (gap 08-07).
 #[allow(clippy::too_many_arguments)]
@@ -1398,17 +1962,25 @@ fn build_add_pipeline_internal(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     acl_db: Option<Arc<dyn AclDb>>,
+    loaders: Arc<LoaderRegistry>,
     add_params: AddParamsInjection,
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
     // the pipeline input (`DataInput`), which has no UUID until
-    // `persist_data` runs. Return `None` here; the executor's run_info
-    // `data_ids` stays empty (the watcher maps it to Python's `"None"`).
-    // Gap-08 task 07 revisits this once the watcher is real.
+    // `persist_data` runs, so it returns `None` and no item is ever skipped
+    // as already completed. (`run_info` carries no data items either way,
+    // as in Python since COG-6089.)
     let data_id_fn: DataIdFn = Arc::new(|_v: Arc<dyn Value>| None);
     PipelineBuilder::new_with_task(
         "ingestion.add",
-        make_process_input_task(Arc::clone(&storage), hash_algorithm, owner_id, tenant_id),
+        make_process_input_task_preferring(
+            Arc::clone(&storage),
+            loaders,
+            Arc::clone(&add_params.preferred_loaders),
+            hash_algorithm,
+            owner_id,
+            tenant_id,
+        ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
         database,
@@ -1460,6 +2032,10 @@ pub struct AddPipeline {
     pipeline_run_repo: Option<Arc<dyn PipelineRunRepository>>,
     // ─── Concurrency (SDK-636) ────────────────────────────────────────────
     dataset_locks: Option<Arc<DatasetLocks>>,
+    // ─── Add-time loaders (SDK-1039) ──────────────────────────────────────
+    loaders: Arc<LoaderRegistry>,
+    // ─── Run-ownership markers (SDK-1039 P22) ─────────────────────────────
+    run_ownership_dir: Option<std::path::PathBuf>,
 }
 
 impl AddPipeline {
@@ -1484,6 +2060,8 @@ impl AddPipeline {
             db_connection: None,
             pipeline_run_repo: None,
             dataset_locks: None,
+            loaders: Arc::new(LoaderRegistry::default_registry()),
+            run_ownership_dir: None,
         }
     }
 
@@ -1506,6 +2084,8 @@ impl AddPipeline {
             // Python's add takes the process's one dataset lock registry;
             // `with_dataset_locks` swaps in a host's own.
             dataset_locks: Some(DatasetLocks::global()),
+            loaders: Arc::new(LoaderRegistry::default_registry()),
+            run_ownership_dir: None,
         }
     }
 
@@ -1544,6 +2124,30 @@ impl AddPipeline {
         self.dataset_locks.as_ref()
     }
 
+    /// Hold a run-ownership marker under `dir` for every `add` run and record
+    /// it in the run's `STARTED` row as `{"recovery_lock": …}`, as Python's
+    /// `run_tasks` does for every pipeline (`run_tasks.py:96`,
+    /// `log_pipeline_run_start.py:27`). Startup recovery can then prove an
+    /// `add` run abandoned and close it (`add` has no rollback, as in Python's
+    /// `ROLLBACK_HANDLERS`). Unset, the row is `{}` and never recovered.
+    pub fn with_run_ownership_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.run_ownership_dir = Some(dir.into());
+        self
+    }
+
+    /// Extract text at `add` with `loaders` instead of
+    /// [`LoaderRegistry::default_registry`].
+    ///
+    /// Python runs its image and audio loaders at `add`, so an embedder that
+    /// has an LLM or a transcriber passes a registry with
+    /// [`LoaderRegistry::register_image_loader`] /
+    /// [`LoaderRegistry::register_audio_loader`]. Without one, an image or
+    /// audio input fails with [`IngestionError::UnsupportedDocumentType`].
+    pub fn with_loader_registry(mut self, loaders: Arc<LoaderRegistry>) -> Self {
+        self.loaders = loaders;
+        self
+    }
+
     /// Attach the CPU pool used by [`cognee_core::TaskContext`].
     pub fn with_thread_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
         self.thread_pool = Some(pool);
@@ -1570,7 +2174,7 @@ impl AddPipeline {
         self
     }
 
-    /// Attach the `PipelineRunRepository` used to persist the four-state
+    /// Attach the `PipelineRunRepository` used to persist the
     /// `pipeline_runs` trail (gap 08-07).
     ///
     /// Embedded callers pass `Arc::new(NoopPipelineRunRepository::new())`
@@ -1646,17 +2250,27 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // A pin names one row, so it can only go with one item (Python's
+        // `update()` refuses a list, `update.py:201-206`).
+        if params.pinned_id.is_some() && inputs.len() != 1 {
+            return Err(IngestionError::PinnedIdNeedsOneItem {
+                items: inputs.len(),
+            }
+            .into());
+        }
 
         // ── Add-params injected per item (Decision 7) ────────────────────
         let add_params_inj = AddParamsInjection {
             node_set: params.node_set.clone(),
             importance_weight: params.importance_weight,
             target_dataset_id: params.dataset_id,
+            pinned_id: params.pinned_id,
             dataset_locks: self.dataset_locks.clone(),
+            preferred_loaders: Arc::new(loader_names(params.preferred_loaders.as_deref())),
         };
 
         // ── Build the typed pipeline ─────────────────────────────────────
-        let pipeline = build_add_pipeline_internal(
+        let mut pipeline = build_add_pipeline_internal(
             Arc::clone(&self.storage),
             Arc::clone(&self.database),
             self.hash_algorithm,
@@ -1664,6 +2278,7 @@ impl AddPipeline {
             owner_id,
             tenant_id,
             self.acl_db.clone(),
+            Arc::clone(&self.loaders),
             add_params_inj,
         );
 
@@ -1702,16 +2317,33 @@ impl AddPipeline {
             .collect();
 
         // ── Run the executor (gap 08-07 Decision 11: DbPipelineWatcher
-        //    persists the four-state `pipeline_runs` trail; defaults to a
+        //    persists the `pipeline_runs` trail; defaults to a
         //    no-op repo when the caller hasn't attached one). ───────────────
         let pipeline_run_repo = self
             .pipeline_run_repo
             .clone()
             .unwrap_or_else(cognee_database::NoopPipelineRunRepository::arc);
         let watcher = DbPipelineWatcher::new(pipeline_run_repo);
-        let outputs = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher)
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        // The run's ownership marker (Python `pipeline_run_ownership()`),
+        // taken right before the run so no early return can strand it.
+        let mut ownership = self
+            .run_ownership_dir
+            .as_deref()
+            .map(cognee_core::RunOwnership::acquire);
+        pipeline.recovery_lock = ownership
+            .as_ref()
+            .and_then(cognee_core::RunOwnership::token);
+        let executed = cognee_core::pipeline::execute(&pipeline, typed_inputs, ctx, &watcher).await;
+        // The executor wrote the run's terminal row either way: nothing is
+        // left to recover, so the marker goes (Python `ownership.closed`) —
+        // unless that write failed, which leaves the run `STARTED` for
+        // startup recovery to retire.
+        if let Some(ownership) = ownership.as_mut()
+            && !watcher.terminal_write_failed()
+        {
+            ownership.mark_closed();
+        }
+        let outputs = executed.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
         extract_data_outputs(outputs)
     }
@@ -1780,11 +2412,33 @@ pub enum IngestionError {
     /// extension (the relevant loader feature is disabled in this build).
     #[error("Unsupported document type at ingest: {document_type}")]
     UnsupportedDocumentType { document_type: String },
+    /// No add-time loader claims the file: neither its name's extension nor
+    /// the extension its bytes sniff as is handled with the sniffed MIME type.
+    /// Python raises "No loader found" (`LoaderEngine.load_file`).
+    #[error("No loader found for a '{extension}' file of type '{mime_type}'")]
+    NoLoaderForFile {
+        extension: String,
+        mime_type: String,
+    },
+    /// The file was routed to the image loader by its content, but its name
+    /// does not carry an image extension, so the vision call has no MIME type
+    /// (Python: `ValueError: Could not determine MIME type for image file`).
+    #[error("Could not determine MIME type for image file: {name}. Is the extension correct?")]
+    ImageMimeTypeUndetermined { name: String },
     /// A node set — the add call's or one in a data item's
     /// `external_metadata["node_set"]` — is not a list of non-empty names.
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
     #[error("Invalid node_set: {reason}")]
     InvalidNodeSet { reason: String },
+    /// An add pinned to a data id ([`AddParams::pinned_id`]) got a number of
+    /// items other than one.
+    #[error("A pinned add replaces exactly one item; got {items}.")]
+    PinnedIdNeedsOneItem { items: usize },
+    /// The pinned data id names a row of another dataset. The owning dataset
+    /// is deliberately not named: it would tell a caller with no access to it
+    /// which dataset holds the id.
+    #[error("Data id {data_id} is not available in dataset {dataset_id}.")]
+    PinnedIdNotInDataset { data_id: Uuid, dataset_id: Uuid },
 }
 
 // ---------------------------------------------------------------------------
@@ -1799,6 +2453,20 @@ pub enum IngestionError {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loader_names_keep_the_callers_order() {
+        let pairs = vec![
+            ("unstructured_loader".to_string(), String::new()),
+            ("text_loader".to_string(), String::new()),
+            ("csv_loader".to_string(), String::new()),
+        ];
+        assert_eq!(
+            loader_names(Some(&pairs)),
+            ["unstructured_loader", "text_loader", "csv_loader"]
+        );
+        assert!(loader_names(None).is_empty());
+    }
     use cognee_database::{connect, initialize, ops};
     use cognee_graph::MockGraphDB;
     #[cfg(feature = "html-loader")]
@@ -1809,6 +2477,49 @@ mod tests {
     use mockito::{Server, ServerGuard};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    /// Python's image loader claims `jpeg`, `jpe` and `tiff` at `add`, which
+    /// its cognify-time `EXTENSION_TO_DOCUMENT_CLASS` lacks (SDK-1039 P15); the
+    /// route needs the MIME type as well (P20).
+    #[test]
+    fn add_time_routing_claims_python_image_loader_extensions() {
+        use crate::file_type::{FileType, route_loader};
+        let sniffed = |mime: &str, ext: &str| FileType {
+            mime: mime.to_string(),
+            extension: ext.to_string(),
+        };
+        for (ext, mime, sniffed_ext) in [
+            ("jpeg", "image/jpeg", "jpg"),
+            ("JPEG", "image/jpeg", "jpg"),
+            ("jpe", "image/jpeg", "jpg"),
+            ("tiff", "image/tiff", "tif"),
+            ("png", "image/png", "png"),
+            ("jpg", "image/jpeg", "jpg"),
+            ("tif", "image/tiff", "tif"),
+        ] {
+            assert_eq!(
+                route_loader(ext, &sniffed(mime, sniffed_ext)),
+                Some("image"),
+                "{ext}"
+            );
+        }
+        assert_eq!(
+            route_loader("wav", &sniffed("audio/x-wav", "wav")),
+            Some("audio")
+        );
+        assert_eq!(
+            route_loader("pdf", &sniffed("application/pdf", "pdf")),
+            Some("pdf")
+        );
+        assert_eq!(
+            route_loader("unknown-ext", &sniffed("text/plain", "txt")),
+            Some("text")
+        );
+        assert_eq!(
+            route_loader("", &sniffed("text/plain", "txt")),
+            Some("text")
+        );
+    }
 
     async fn make_pipeline() -> (AddPipeline, Arc<cognee_database::DatabaseConnection>) {
         let db = connect("sqlite::memory:").await.unwrap();
@@ -1836,7 +2547,7 @@ mod tests {
 
     #[cfg(feature = "html-loader")]
     #[tokio::test]
-    async fn test_process_input_url_html_stores_text_with_source_metadata() {
+    async fn test_process_input_url_html_stores_the_raw_page_as_text() {
         let mut server = server_with_robots().await;
         let html = "<html><head><title>Example</title><style>.x{display:none}</style></head><body><h1>Visible text</h1><script>hidden()</script></body></html>";
         let url = format!("{}/page.html", server.url());
@@ -1859,33 +2570,43 @@ mod tests {
         .await
         .unwrap();
 
-        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
-        let raw_html = storage.retrieve(raw_source_uri).await.unwrap();
-        assert_eq!(raw_html, html.as_bytes());
-        assert!(raw_source_uri.ends_with(".html"));
-        assert!(processed.raw_data_uri.ends_with(".txt"));
-        assert_ne!(processed.raw_data_uri, *raw_source_uri);
+        // Python stores the page whole: the hash, the size and both stored
+        // files describe the raw HTML (`ingest_data.py:315-331`).
+        let hash =
+            crate::content_hasher::ContentHasher::hash_content(html.as_bytes(), HashAlgorithm::Md5);
+        assert_eq!(processed.content_hash, hash);
+        assert_eq!(processed.raw_content_hash, hash);
+        assert_eq!(processed.data_size, html.len() as i64);
+        assert_eq!(processed.name, format!("text_{hash}"));
 
-        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
-        let stored_text = String::from_utf8(stored).unwrap();
-        assert!(stored_text.contains("Visible text"));
-        assert!(!stored_text.contains("<html>"));
-        assert!(!stored_text.contains("hidden()"));
-        assert!(!stored_text.contains("display:none"));
+        let raw_source_uri = processed.raw_source_uri.as_ref().unwrap();
+        assert!(raw_source_uri.ends_with(&format!("text_{hash}.html")));
+        assert_eq!(
+            storage.retrieve(raw_source_uri).await.unwrap(),
+            html.as_bytes()
+        );
+        assert!(
+            processed
+                .raw_data_uri
+                .ends_with(&format!("text_{hash}.txt"))
+        );
+        assert_eq!(
+            storage.retrieve(&processed.raw_data_uri).await.unwrap(),
+            html.as_bytes()
+        );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
-        assert_eq!(processed.original_extension, "html");
-        assert_eq!(processed.original_mime_type, "text/html");
-        assert_eq!(processed.loader_engine, "beautiful_soup_loader");
+        assert_eq!(processed.original_extension, "txt");
+        assert_eq!(processed.original_mime_type, "text/plain");
+        assert_eq!(processed.loader_engine, "text_loader");
         assert_eq!(processed.original_location, *raw_source_uri);
 
         let metadata: serde_json::Value =
             serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html; charset=utf-8");
-        assert_eq!(metadata["title"], "Example");
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": url}})
+        );
     }
 
     #[cfg(feature = "html-loader")]
@@ -1931,12 +2652,9 @@ mod tests {
                 .unwrap(),
             html.as_bytes()
         );
-        assert_eq!(data.original_extension.as_deref(), Some("html"));
-        assert_eq!(
-            data.original_mime_type.as_deref(),
-            Some("application/xhtml+xml")
-        );
-        assert_eq!(data.loader_engine.as_deref(), Some("beautiful_soup_loader"));
+        assert_eq!(data.original_extension.as_deref(), Some("txt"));
+        assert_eq!(data.original_mime_type.as_deref(), Some("text/plain"));
+        assert_eq!(data.loader_engine.as_deref(), Some("text_loader"));
     }
 
     #[cfg(feature = "html-loader")]
@@ -1979,11 +2697,8 @@ mod tests {
             serde_json::from_str(data.external_metadata.as_ref().unwrap()).unwrap();
         assert_eq!(metadata["custom"], "keep");
         assert_eq!(metadata["rank"], 7);
-        assert_eq!(metadata["source"], "url");
-        assert_eq!(metadata["url"], url);
-        assert_eq!(metadata["final_url"], url);
-        assert_eq!(metadata["content_type"], "text/html");
-        assert_eq!(metadata["title"], "Wrapped");
+        assert_eq!(metadata["_cognee"]["source_uri"], url);
+        assert!(metadata.get("source").is_none() && metadata.get("title").is_none());
     }
 
     #[cfg(feature = "html-loader")]
@@ -2024,8 +2739,7 @@ mod tests {
             let metadata: serde_json::Value =
                 serde_json::from_str(processed.external_metadata.as_ref().unwrap()).unwrap();
             assert_eq!(metadata["data_item_external_metadata_raw"], user_metadata);
-            assert_eq!(metadata["source"], "url");
-            assert_eq!(metadata["url"], url);
+            assert_eq!(metadata["_cognee"]["source_uri"], url);
         }
     }
 
@@ -2074,6 +2788,14 @@ mod tests {
 
             assert_eq!(processed.raw_source_uri, None);
             assert_eq!(processed.original_location, url);
+            // Every URL add records where it came from (`ingest_data.py:157-164`).
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    processed.external_metadata.as_deref().unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({"_cognee": {"source_uri": url}})
+            );
             assert_eq!(processed.stored_extension, expected_ext);
             assert_eq!(processed.stored_mime_type, expected_mime);
             assert_eq!(
@@ -2233,7 +2955,7 @@ mod tests {
             result1[0].content_hash, result2[0].content_hash,
             "content hash is owner-independent"
         );
-        // But data_id differs because owner_id is mixed into UUID5 seed
+        // But the rows differ: each owner's dataset holds its own row
         assert_ne!(result1[0].id, result2[0].id, "data_id must differ by owner");
     }
 
@@ -2622,8 +3344,9 @@ mod tests {
     }
 
     /// Text-path no-regression: the stored artifact is byte-identical to the
-    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, and the
-    /// content hash / data_id match the pinned Python-compatible values.
+    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, the
+    /// content hash matches the pinned Python-compatible value, and the new
+    /// row's id is a uuid4.
     #[tokio::test]
     async fn test_text_path_no_regression_hashes_and_stored_bytes() {
         use cognee_storage::LocalStorage;
@@ -2647,12 +3370,13 @@ mod tests {
         .await
         .unwrap();
 
-        // content_hash + data_id derived from RAW bytes — SACRED, must not change.
+        // content_hash derived from RAW bytes — SACRED, must not change. The
+        // data id is a random uuid4, as in Python's `add` (no content in it).
         assert_eq!(processed.content_hash, HELLO_WORLD_MD5);
         assert_eq!(
-            processed.data_id,
-            generate_data_id(HELLO_WORLD_MD5, owner_id, None),
-            "data_id must remain uuid5(content_hash + owner + tenant)"
+            processed.data_id.get_version_num(),
+            4,
+            "a new row's data_id is a uuid4, as in Python"
         );
 
         // For plain text the extracted text equals the raw bytes.
@@ -2918,8 +3642,9 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            result[0].external_metadata, None,
-            "DataItem with no external_metadata should produce None on Data"
+            result[0].external_metadata.as_deref(),
+            Some("{}"),
+            "a Python add stores `{{}}` for content with no metadata and no source"
         );
     }
 
@@ -3039,7 +3764,7 @@ mod tests {
             .await
             .expect("first add");
         assert_eq!(first[0].node_set, None);
-        assert_eq!(first[0].external_metadata, None);
+        assert_eq!(first[0].external_metadata.as_deref(), Some("{}"));
 
         // A re-add that supplies a node set tags the existing row.
         let second = pipeline
@@ -3100,6 +3825,149 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    /// A dedup hit rewrites the label and `external_metadata` like Python's
+    /// update branch (`merge_existing_row_metadata`): an item without metadata
+    /// keeps the stored object, an item with metadata replaces it, a label is
+    /// written only when the item carries one.
+    #[tokio::test]
+    async fn re_add_refreshes_label_and_external_metadata() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let item = |label: &str, meta: Option<&str>| {
+            vec![DataInput::DataItem {
+                data: Box::new(DataInput::Text("Refreshed content".into())),
+                label: label.into(),
+                external_metadata: meta.map(String::from),
+            }]
+        };
+        let first = pipeline
+            .add(
+                item("one", Some(r#"{"a":1}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(first[0].label.as_deref(), Some("one"));
+
+        let second = pipeline
+            .add(
+                item("two", Some(r#"{"b":2}"#)),
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        assert_eq!(second[0].label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&second[0]), serde_json::json!({"b": 2}));
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.label.as_deref(), Some("two"));
+        assert_eq!(metadata_json(&stored), serde_json::json!({"b": 2}));
+
+        // No item metadata: the stored object is kept.
+        let third = pipeline
+            .add(item("three", None), "refresh_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(third[0].label.as_deref(), Some("three"));
+        assert_eq!(metadata_json(&third[0]), serde_json::json!({"b": 2}));
+
+        // Plain text carries no label: the stored one stays.
+        let fourth = pipeline
+            .add(
+                vec![DataInput::Text("Refreshed content".into())],
+                "refresh_ds",
+                owner_id,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fourth[0].label.as_deref(), Some("three"));
+    }
+
+    /// The same content added from another file refreshes the source URI and
+    /// the original location, as Python's update branch does with
+    /// `source_uri` and `original_data_location`.
+    #[tokio::test]
+    async fn re_add_from_another_source_refreshes_source_uri() {
+        let (pipeline, _db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "same bytes in two files").unwrap();
+            DataInput::FilePath(path.to_string_lossy().into_owned())
+        };
+        let (a, b) = (write("a.txt"), write("b.txt"));
+        let first = pipeline
+            .add(vec![a], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        let first_uri = metadata_json(&first[0])["_cognee"]["source_uri"].clone();
+        assert!(first_uri.as_str().unwrap().ends_with("a.txt"));
+
+        let second = pipeline
+            .add(vec![b], "source_ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(second[0].id, first[0].id);
+        let uri = metadata_json(&second[0])["_cognee"]["source_uri"].clone();
+        assert!(uri.as_str().unwrap().ends_with("b.txt"), "got {uri}");
+        assert!(second[0].original_data_location.ends_with("b.txt"));
+        assert_eq!(second[0].name, "b");
+    }
+
+    /// A re-add with an explicit empty node set clears the stored one, as
+    /// Python's update branch does (`requested_node_set` is `[]`, then
+    /// `merge_existing_row_metadata` drops the key, `ingest_data.py:551-564,
+    /// 573`); a re-add without a node set keeps it.
+    #[tokio::test]
+    async fn re_add_with_an_empty_node_set_clears_the_stored_one() {
+        let (pipeline, db) = make_pipeline().await;
+        let owner_id = Uuid::new_v4();
+        let add = |node_set: Option<Vec<String>>| {
+            let pipeline = &pipeline;
+            async move {
+                let params = AddParams {
+                    node_set,
+                    ..AddParams::default()
+                };
+                pipeline
+                    .add_with_params(
+                        vec![DataInput::Text("Tagged content".into())],
+                        "clear_set_ds",
+                        owner_id,
+                        None,
+                        &params,
+                    )
+                    .await
+                    .expect("add")
+            }
+        };
+        let first = add(Some(vec!["tag".into()])).await;
+        assert!(first[0].node_set.is_some());
+
+        let kept = add(None).await;
+        assert_eq!(kept[0].node_set, first[0].node_set, "absent keeps the set");
+
+        let cleared = add(Some(vec![])).await;
+        assert_eq!(cleared[0].id, first[0].id);
+        assert_eq!(cleared[0].node_set, None);
+        assert!(metadata_json(&cleared[0]).get("node_set").is_none());
+        let stored = cognee_database::IngestDb::get_data(&*db, first[0].id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.node_set, None);
+        assert!(metadata_json(&stored).get("node_set").is_none());
     }
 
     /// Python: `node_set=json.dumps(effective_node_set) if effective_node_set
@@ -3239,11 +4107,15 @@ mod tests {
         assert!(validate_node_set_names(&["a".into(), String::new()]).is_err());
     }
 
-    /// JSON `null` and a blank string are "no metadata", for both merges.
+    /// JSON `null` and a blank string are "no metadata", for both merges, and
+    /// no metadata is stored as `{}`, as Python does.
     #[test]
     fn json_null_item_metadata_is_no_metadata() {
         for absent in [None, Some("null".to_string()), Some(String::new())] {
-            assert_eq!(merge_external_metadata(absent, None).unwrap(), None);
+            assert_eq!(
+                merge_external_metadata(absent, None).unwrap(),
+                Some("{}".to_string())
+            );
         }
         assert_eq!(
             merge_external_metadata(Some(r#"{"a":1}"#.into()), None).unwrap(),
@@ -3259,6 +4131,113 @@ mod tests {
             classify_item_metadata(Some("[1]")),
             ItemMetadata::Raw(raw) if raw == "[1]"
         ));
+    }
+
+    /// Python writes `_cognee.source_uri` for a file add too
+    /// (`ingest_data.py:157-164`): the file's absolute `file://` URI. Raw text
+    /// has no source and stores `{}`.
+    #[tokio::test]
+    async fn file_add_writes_source_uri_and_text_add_writes_empty_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "from a file").unwrap();
+        let storage = MockStorage::new();
+
+        let processed = process_input(
+            &DataInput::FilePath(file.to_string_lossy().into_owned()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(processed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            metadata,
+            serde_json::json!({"_cognee": {"source_uri": format!("file://{}", canonical.display())}})
+        );
+
+        let text = process_input(
+            &DataInput::Text("plain".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(text.external_metadata.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn source_uri_follows_python() {
+        let item = |meta: &str, data: DataInput| DataInput::DataItem {
+            data: Box::new(data),
+            label: "l".into(),
+            external_metadata: Some(meta.to_string()),
+        };
+        assert_eq!(
+            source_uri_from_input(&DataInput::Url("https://example.com/a".into())),
+            Some("https://example.com/a".to_string())
+        );
+        assert_eq!(
+            source_uri_from_input(&DataInput::FilePath("file:///tmp/a.txt".into())),
+            Some("file:///tmp/a.txt".to_string())
+        );
+        assert_eq!(source_uri_from_input(&DataInput::Text("x".into())), None);
+        // An explicit `source_uri` in the item's metadata wins.
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": " s3://b/k "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("s3://b/k".to_string())
+        );
+        assert_eq!(path_to_file_uri("/tmp/a b.txt"), "file:///tmp/a%20b.txt");
+        // `urllib.parse.quote` percent-encodes the UTF-8 bytes, upper-case hex.
+        assert_eq!(
+            path_to_file_uri("/tmp/caf\u{e9}/x+y.txt"),
+            "file:///tmp/caf%C3%A9/x%2By.txt"
+        );
+        // `Path.resolve()`: a relative path is made absolute.
+        let relative = path_to_file_uri("Cargo.toml");
+        let absolute = std::fs::canonicalize("Cargo.toml").unwrap();
+        assert_eq!(relative, format!("file://{}", absolute.display()));
+        // `s3://` is kept as given, as Python keeps an `s3` locator.
+        assert_eq!(
+            source_uri_from_input(&DataInput::S3Path("s3://bucket/key.txt".into())),
+            Some("s3://bucket/key.txt".to_string())
+        );
+        // A blank explicit `source_uri` does not win (`explicit.strip()`).
+        assert_eq!(
+            source_uri_from_input(&item(
+                r#"{"source_uri": "   "}"#,
+                DataInput::Url("https://example.com/a".into())
+            )),
+            Some("https://example.com/a".to_string())
+        );
+        // Neither does one that is not a string.
+        assert_eq!(
+            source_uri_from_input(&item(r#"{"source_uri": 7}"#, DataInput::Text("x".into()))),
+            None
+        );
+    }
+
+    #[test]
+    fn merge_external_metadata_nests_source_uri_under_cognee() {
+        let merged = merge_external_metadata(
+            Some(r#"{"k":1,"_cognee":{"x":2}}"#.into()),
+            Some("https://example.com"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&merged).unwrap(),
+            serde_json::json!({"k": 1, "_cognee": {"x": 2, "source_uri": "https://example.com"}})
+        );
     }
 
     /// A caller of the public `persist_data` with `ProcessedInput::node_set`
@@ -3306,6 +4285,379 @@ mod tests {
             err.downcast_ref::<IngestionError>(),
             Some(IngestionError::InvalidNodeSet { .. })
         ));
+    }
+
+    /// Process `text` for `owner_id` and persist it pinned to `pin` in the
+    /// dataset `name` (`None`: unpinned).
+    async fn persist_text(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner_id: Uuid,
+        name: &str,
+        text: &str,
+        pin: Option<Uuid>,
+    ) -> Result<Data, Box<dyn std::error::Error>> {
+        let mut processed = process_input(
+            &DataInput::Text(text.into()),
+            storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.pinned_id = pin;
+        persist_data(&processed, db, name, owner_id, None).await
+    }
+
+    /// A pinned item refreshes its row in place: the id, owner, creation time
+    /// and (here) the cognify marker of unchanged content survive; changed
+    /// content rewrites the hashes and locations and clears the marker.
+    #[tokio::test]
+    async fn a_pinned_persist_refreshes_the_row_and_keeps_its_id() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let old = persist_text(&db, &storage, owner_id, "ds", "old content", None)
+            .await
+            .unwrap();
+        let dataset_id = old.dataset_id.unwrap();
+        ops::data::mark_cognify_pipeline_status_complete(&db, old.id, dataset_id)
+            .await
+            .unwrap();
+
+        // Same content, pinned: the row is kept, the marker too.
+        let same = persist_text(&db, &storage, owner_id, "ds", "old content", Some(old.id))
+            .await
+            .unwrap();
+        assert_eq!(same.id, old.id);
+        assert!(
+            same.pipeline_status.is_some(),
+            "unchanged content keeps the marker"
+        );
+
+        // New content, pinned: same id, new hash and locations, marker cleared.
+        let new = persist_text(&db, &storage, owner_id, "ds", "new content", Some(old.id))
+            .await
+            .unwrap();
+        assert_eq!(new.id, old.id);
+        assert_ne!(new.content_hash, old.content_hash);
+        assert_ne!(new.raw_data_location, old.raw_data_location);
+        assert_eq!(new.created_at, old.created_at);
+        let stored = IngestDb::get_data(&db, old.id).await.unwrap().unwrap();
+        assert_eq!(stored.content_hash, new.content_hash);
+        assert!(
+            stored.pipeline_status.is_none(),
+            "changed content clears the cognify marker"
+        );
+        let in_dataset = cognee_database::DeleteDb::get_dataset_data(&db, dataset_id)
+            .await
+            .unwrap();
+        assert_eq!(in_dataset.len(), 1, "still one row");
+    }
+
+    /// A pin resolves through `legacy_id`, and keeps it.
+    #[tokio::test]
+    async fn a_pinned_persist_resolves_a_legacy_id() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut forked = persist_text(&db, &storage, owner_id, "ds", "content", None)
+            .await
+            .unwrap();
+        let legacy = Uuid::new_v4();
+        forked.legacy_id = Some(legacy);
+        IngestDb::update_data(&db, forked.clone()).await.unwrap();
+
+        let refreshed = persist_text(&db, &storage, owner_id, "ds", "changed", Some(legacy))
+            .await
+            .unwrap();
+        assert_eq!(refreshed.id, forked.id, "resolved to the forked row");
+        let stored = IngestDb::get_data(&db, forked.id).await.unwrap().unwrap();
+        assert_eq!(stored.legacy_id, Some(legacy), "the legacy id is kept");
+        assert!(
+            IngestDb::get_data(&db, legacy).await.unwrap().is_none(),
+            "no row was created under the legacy id"
+        );
+    }
+
+    /// A pin that names no row creates one under that id (dlt derives stable
+    /// ids this way); content equal to ANOTHER row's gets a row of its own,
+    /// since a pinned item skips the content-hash lookup.
+    #[tokio::test]
+    async fn a_pinned_persist_of_an_unknown_id_creates_it_and_skips_dedup() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let first = persist_text(&db, &storage, owner_id, "ds", "same content", None)
+            .await
+            .unwrap();
+        let pin = Uuid::new_v4();
+        let second = persist_text(&db, &storage, owner_id, "ds", "same content", Some(pin))
+            .await
+            .unwrap();
+        assert_eq!(second.id, pin, "created under the pinned id");
+        assert_ne!(second.id, first.id, "no dedup onto the other row");
+        let rows = cognee_database::DeleteDb::get_dataset_data(&db, first.dataset_id.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "two rows hold the content");
+    }
+
+    /// A pinned id that belongs to a row of another dataset is refused and
+    /// the row is not touched.
+    #[tokio::test]
+    async fn a_foreign_pin_is_refused_and_leaves_the_row_alone() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let theirs = persist_text(&db, &storage, owner_id, "ds_a", "theirs", None)
+            .await
+            .unwrap();
+        persist_text(&db, &storage, owner_id, "ds_b", "mine", None)
+            .await
+            .unwrap();
+
+        let err = persist_text(
+            &db,
+            &storage,
+            owner_id,
+            "ds_b",
+            "overwrite",
+            Some(theirs.id),
+        )
+        .await
+        .expect_err("a row of another dataset");
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::PinnedIdNotInDataset { .. })
+            ),
+            "got {err}"
+        );
+        let stored = IngestDb::get_data(&db, theirs.id).await.unwrap().unwrap();
+        assert_eq!(stored.content_hash, theirs.content_hash, "row untouched");
+    }
+
+    /// The metadata of a pinned refresh is a PATCH, as Python's
+    /// `merge_existing_row_metadata` (`ingest_data.py:60-113`): an item with no
+    /// metadata keeps the stored one, an explicit `{}` clears it, an object
+    /// replaces it; the new `source_uri` always lands in `_cognee.source_uri`,
+    /// and a content change without one drops the stored one; node set:
+    /// `None` keeps, a list replaces, an empty list clears.
+    #[test]
+    fn pinned_metadata_is_a_patch() {
+        let stored = r#"{"k":"v","node_set":["a"],"_cognee":{"source_uri":"file:///old","x":1}}"#;
+        let stored_ns = Some(r#"["a"]"#);
+        let json = |meta: Option<String>| -> serde_json::Value {
+            serde_json::from_str(&meta.expect("metadata is always written")).unwrap()
+        };
+
+        // Nothing carried, content unchanged: everything stored is kept.
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, None, false).unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::from_str::<serde_json::Value>(stored).unwrap()
+        );
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // `null` and a blank string are "nothing carried" too.
+        for absent in ["null", " "] {
+            let (meta, _) =
+                merge_pinned_row_metadata(Some(stored), stored_ns, Some(absent), None, None, false)
+                    .unwrap();
+            assert_eq!(json(meta)["k"], "v", "{absent:?} keeps the stored metadata");
+        }
+
+        // Raw text replaced, no source: the stale source uri goes, the rest of
+        // `_cognee` stays.
+        let (meta, _) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, None, true).unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::json!({"k": "v", "node_set": ["a"], "_cognee": {"x": 1}})
+        );
+
+        // A plain file replaces the content: the stored keys are KEPT and the
+        // source uri is the new file's.
+        let (meta, _) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            None,
+            Some("file:///new.txt"),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::json!({
+                "k": "v",
+                "node_set": ["a"],
+                "_cognee": {"source_uri": "file:///new.txt", "x": 1}
+            })
+        );
+
+        // An explicit `{}` clears the stored metadata (the node set column
+        // still mirrors in).
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, Some("{}"), None, None, true)
+                .unwrap();
+        assert_eq!(json(meta), serde_json::json!({"node_set": ["a"]}));
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // The item brings metadata: it replaces the stored one; the source
+        // lands on top.
+        let (meta, ns) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            Some(r#"{"x":1}"#),
+            Some("https://new"),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::json!({"x": 1, "_cognee": {"source_uri": "https://new"}, "node_set": ["a"]})
+        );
+        assert_eq!(ns.as_deref(), Some(r#"["a"]"#));
+
+        // Stored metadata that is not an object counts as empty.
+        let (meta, _) =
+            merge_pinned_row_metadata(Some("[1,2]"), None, None, Some("s3://b/k"), None, true)
+                .unwrap();
+        assert_eq!(
+            json(meta),
+            serde_json::json!({"_cognee": {"source_uri": "s3://b/k"}})
+        );
+
+        // A node set replaces; an empty one clears; the item's own node set
+        // counts as passed and is unioned with the call's.
+        let names = vec!["b".to_string()];
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, Some(&names), false)
+                .unwrap();
+        assert_eq!(ns.as_deref(), Some(r#"["b"]"#));
+        assert_eq!(json(meta)["node_set"], serde_json::json!(["b"]));
+        let (meta, ns) =
+            merge_pinned_row_metadata(Some(stored), stored_ns, None, None, Some(&[]), false)
+                .unwrap();
+        assert_eq!(ns, None);
+        assert!(json(meta).get("node_set").is_none());
+        let (_, ns) = merge_pinned_row_metadata(
+            Some(stored),
+            stored_ns,
+            Some(r#"{"node_set":["c","b"]}"#),
+            None,
+            Some(&names),
+            false,
+        )
+        .unwrap();
+        assert_eq!(ns.as_deref(), Some(r#"["b","c"]"#));
+    }
+
+    /// End to end through `process_input` + `persist_data`: a pinned refresh
+    /// with a plain file keeps the user's stored metadata keys and records the
+    /// new file as `_cognee.source_uri` (Python keeps stored metadata when the
+    /// item carries none, `ingest_data.py:85-87`).
+    #[tokio::test]
+    async fn a_pinned_file_refresh_keeps_the_stored_metadata() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let first = process_input(
+            &DataInput::DataItem {
+                data: Box::new(DataInput::Text("old content".into())),
+                label: "item".into(),
+                external_metadata: Some(r#"{"source":"crm"}"#.into()),
+            },
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let old = persist_data(&first, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.txt");
+        std::fs::write(&path, "new content").unwrap();
+        let mut processed = process_input(
+            &DataInput::FilePath(path.to_string_lossy().into_owned()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        processed.pinned_id = Some(old.id);
+        let refreshed = persist_data(&processed, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.id, old.id);
+        let meta: serde_json::Value =
+            serde_json::from_str(refreshed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["source"], "crm", "the stored key survives: {meta}");
+        let uri = meta["_cognee"]["source_uri"].as_str().unwrap();
+        assert!(
+            uri.starts_with("file://") && uri.ends_with("/new.txt"),
+            "{uri}"
+        );
+    }
+
+    /// A pinned add takes exactly one item.
+    #[tokio::test]
+    async fn a_pinned_add_refuses_other_than_one_item() {
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage: Arc<dyn StorageTrait> = Arc::new(MockStorage::new());
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(MockGraphDB::new());
+        let vector_db: Arc<dyn VectorDB> = Arc::new(cognee_vector::MockVectorDB::new());
+        let pipeline = AddPipeline::new(Arc::clone(&storage), db.clone() as Arc<dyn IngestDb>)
+            .with_thread_pool(Arc::new(
+                cognee_core::RayonThreadPool::with_default_threads().unwrap(),
+            ))
+            .with_graph_db(graph_db)
+            .with_vector_db(vector_db)
+            .with_database(db.clone());
+        let params = AddParams {
+            pinned_id: Some(Uuid::new_v4()),
+            ..AddParams::default()
+        };
+        let err = pipeline
+            .add_with_params(
+                vec![DataInput::Text("a".into()), DataInput::Text("b".into())],
+                "ds",
+                Uuid::new_v4(),
+                None,
+                &params,
+            )
+            .await
+            .expect_err("two items");
+        assert!(
+            matches!(
+                err.downcast_ref::<IngestionError>(),
+                Some(IngestionError::PinnedIdNeedsOneItem { items: 2 })
+            ),
+            "got {err}"
+        );
     }
 
     /// A direct `persist_data*` caller whose node set is refused must not
@@ -3411,6 +4763,16 @@ mod tests {
         )
         .node_set(python_column)
         .external_metadata(python_metadata)
+        // Python fills these on every row; a row without them would be
+        // refreshed on the re-add, which is not what is under test.
+        .original_extension(processed.original_extension.clone())
+        .original_mime_type(processed.original_mime_type.clone())
+        .loader_engine(processed.loader_engine.clone())
+        .raw_content_hash(processed.raw_content_hash.clone())
+        .data_size(processed.data_size)
+        // Rows are dataset-scoped: the row Python wrote belongs to the
+        // dataset the re-add targets, whose id is derived from its name.
+        .dataset_id(generate_dataset_id("python_row_ds", owner_id, None))
         .build();
         cognee_database::IngestDb::create_data(&db, row)
             .await
@@ -3463,8 +4825,7 @@ mod tests {
     enum AfterRead {
         /// Write `token_count` and the cognify completion marker.
         WriteOtherColumns,
-        /// Delete the row once it has been attached (the dataset link goes
-        /// with it, `ON DELETE CASCADE`).
+        /// Delete the row right after the pipeline's dedup lookup read it.
         DeleteRow,
         /// Track how many calls are between their read and their refresh at
         /// once, yielding after the read so an unserialized second call would
@@ -3496,9 +4857,27 @@ mod tests {
             IngestDb::list_datasets_by_owner(&*self.inner, owner_id).await
         }
         async fn get_data(&self, id: Uuid) -> Result<Option<Data>, cognee_database::DatabaseError> {
+            IngestDb::get_data(&*self.inner, id).await
+        }
+        /// The pipeline's read of an existing row is its dedup lookup.
+        async fn find_data_in_dataset(
+            &self,
+            dataset_id: Uuid,
+            content_hash: &str,
+            owner_id: Uuid,
+            tenant_id: Option<Uuid>,
+        ) -> Result<Option<Data>, cognee_database::DatabaseError> {
             use std::sync::atomic::Ordering;
-            let snapshot = IngestDb::get_data(&*self.inner, id).await?;
-            if snapshot.is_some() {
+            let snapshot = IngestDb::find_data_in_dataset(
+                &*self.inner,
+                dataset_id,
+                content_hash,
+                owner_id,
+                tenant_id,
+            )
+            .await?;
+            if let Some(row) = &snapshot {
+                let id = row.id;
                 match &self.hook {
                     AfterRead::WriteOtherColumns => {
                         ops::data::update_data_token_count(&self.inner, id, 42).await?;
@@ -3509,7 +4888,9 @@ mod tests {
                         )
                         .await?;
                     }
-                    AfterRead::DeleteRow => {}
+                    AfterRead::DeleteRow => {
+                        ops::data::delete_data(&self.inner, id).await?;
+                    }
                     AfterRead::CountOverlap {
                         in_flight,
                         max_in_flight,
@@ -3522,8 +4903,29 @@ mod tests {
             }
             Ok(snapshot)
         }
+        async fn resolve_data_id(
+            &self,
+            dataset_id: Uuid,
+            data_id: Uuid,
+        ) -> Result<Option<Uuid>, cognee_database::DatabaseError> {
+            IngestDb::resolve_data_id(&*self.inner, dataset_id, data_id).await
+        }
         async fn create_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
             IngestDb::create_data(&*self.inner, d).await
+        }
+        async fn refresh_data_row(
+            &self,
+            data_id: Uuid,
+            refresh: &cognee_database::ops::data::DataRowRefresh,
+        ) -> Result<chrono::DateTime<chrono::Utc>, cognee_database::DatabaseError> {
+            let written = IngestDb::refresh_data_row(&*self.inner, data_id, refresh).await;
+            if let AfterRead::CountOverlap { in_flight, .. } = &self.hook {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            written
+        }
+        async fn update_data(&self, d: Data) -> Result<Data, cognee_database::DatabaseError> {
+            IngestDb::update_data(&*self.inner, d).await
         }
         async fn update_data_node_set(
             &self,
@@ -3544,11 +4946,7 @@ mod tests {
             dataset_id: Uuid,
             data_id: Uuid,
         ) -> Result<(), cognee_database::DatabaseError> {
-            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await?;
-            if matches!(self.hook, AfterRead::DeleteRow) {
-                ops::data::delete_data(&self.inner, data_id).await?;
-            }
-            Ok(())
+            IngestDb::attach_data_to_dataset(&*self.inner, dataset_id, data_id).await
         }
         async fn update_last_accessed(
             &self,

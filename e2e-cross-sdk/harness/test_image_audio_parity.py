@@ -1,23 +1,32 @@
 """Cross-SDK add parity tests for image and audio inputs.
 
-Both SDKs are tested against **deterministic** assertions only — no LLM or
-API key is required.  The ``add`` operation stores raw bytes as-is and records
-metadata derived from the file extension.  LLM-based content extraction
-(vision / Whisper) happens during ``cognify``, not ``add``.
+Both SDKs run their image and audio loaders at ``add``: an image is described
+by the vision LLM and an audio file transcribed by Whisper, both through the
+configured LLM key, so these tests need a key on both sides. Python 1d3ed15
+(``cognee/tasks/ingestion/ingest_data.py``, ``loaders/store_derived_text.py``,
+``loaders/core/image_loader.py``) stores the derived text, not the raw file, in
+``raw_data_location``, and keeps the raw file in ``original_data_location``
+(SDK-1039 D11).
+
+Only deterministic fields are compared; the description and the transcript are
+LLM output and are never compared across SDKs.
 
 Verified assertions per media type:
 - ``content_hash``   — MD5 of raw bytes is identical in both SDKs
-- ``data.id``        — UUID5(content_hash, owner_id, tenant_id) matches
-- ``extension``      — derived from the file name
-- ``mime_type``      — MIME inferred from extension
-- ``loader_engine``  — Python-compatible engine name (``image_loader`` /
-                       ``audio_loader``)
-- stored bytes       — the raw file saved to disk is byte-for-byte identical
+- ``data.id``        — a random uuid4 owned by the dataset in both SDKs (D7);
+                       ids are not compared across SDKs
+- ``extension`` / ``mime_type`` — ``txt`` / ``text/plain`` (the derived text)
+- ``loader_engine``  — ``image_loader`` / ``audio_loader``
+- stored files       — ``original_data_location`` holds the raw bytes;
+                       ``raw_data_location`` is ``text_<md5(raw)>.txt`` and
+                       ``raw_content_hash`` is the MD5 of that file
 """
 
 import hashlib
 import struct
+import uuid
 import zlib
+from pathlib import Path
 
 from helpers import (
     open_db,
@@ -25,7 +34,7 @@ from helpers import (
     query_datasets,
     python_db_path,
     rust_db_path,
-    read_stored_file,
+    resolve_stored_file,
     run_python_cli,
     run_rust_cli,
     write_rust_config,
@@ -52,8 +61,13 @@ def _make_minimal_png() -> bytes:
 
 
 def _make_minimal_wav() -> bytes:
-    """Return a minimal valid WAV file containing ~0.05 s of silence (mono, 16-bit, 8 kHz)."""
-    num_samples = 400   # 0.05 s at 8 kHz
+    """Return a minimal valid WAV file containing 0.5 s of silence (mono, 16-bit, 8 kHz).
+
+    At least 0.1 s: Python transcribes audio during ``add`` (its loader runs
+    at ingest), and OpenAI's transcription endpoint rejects shorter files with
+    "Audio file is too short. Minimum audio length is 0.1 seconds."
+    """
+    num_samples = 4000   # 0.5 s at 8 kHz
     sample_rate = 8000
     num_channels = 1
     bits_per_sample = 16
@@ -145,6 +159,65 @@ def _run_both_sdks(tmp_path, filename: str, file_bytes: bytes, dataset: str):
     return py_ws, rust_ws, py_rows[0], rust_rows[0]
 
 
+def _assert_dataset_scoped_uuid4(db_path, sdk: str) -> None:
+    """The one data row is a random uuid4 owned by its dataset (SDK-1039 D7).
+
+    Python's ``add`` mints ``uuid4()`` for a new ``data`` row and dedups by
+    ``(content_hash, dataset_id, owner_id, tenant_id)``
+    (``cognee/tasks/ingestion/ingest_data.py:364-389``); Rust does the same,
+    so data ids are never equal across SDKs.
+    """
+    conn = open_db(db_path)
+    rows = query_data(conn)
+    datasets = query_datasets(conn)
+    conn.close()
+    assert len(rows) == 1, f"{sdk}: expected 1 data row, got {len(rows)}"
+    assert len(datasets) == 1, f"{sdk}: expected 1 dataset, got {len(datasets)}"
+    assert uuid.UUID(str(rows[0]["id"])).version == 4, (
+        f"{sdk}: data.id {rows[0]['id']} is not a uuid4"
+    )
+    assert rows[0].get("dataset_id") == datasets[0]["id"], (
+        f"{sdk}: data.dataset_id {rows[0].get('dataset_id')!r} is not the "
+        f"dataset's id {datasets[0]['id']!r}"
+    )
+
+
+def _read_location(ws: Path, location: str) -> bytes:
+    """Read a stored location; a relative path is relative to the workspace."""
+    path = resolve_stored_file(ws / ".data_storage", location)
+    if not path.is_absolute() and not path.exists():
+        path = ws / path
+    return path.read_bytes()
+
+
+def _assert_stored_files_match_python_contract(
+    py_ws: Path, rust_ws: Path, py_row: dict, rust_row: dict, raw: bytes
+) -> None:
+    """Both SDKs store the derived text and keep the raw file (SDK-1039 D11).
+
+    Python 1d3ed15, run on these fixtures: ``raw_data_location`` is the derived
+    ``text_<md5(raw)>.txt`` and ``raw_content_hash`` its MD5;
+    ``original_data_location`` holds the raw file. The text itself is LLM
+    output and is not compared across SDKs.
+    """
+    expected_name = f"text_{hashlib.md5(raw).hexdigest()}.txt"
+    for sdk, ws, row in (("Python", py_ws, py_row), ("Rust", rust_ws, rust_row)):
+        original = _read_location(ws, row["original_data_location"])
+        assert original == raw, (
+            f"{sdk}: original_data_location {row['original_data_location']!r} holds "
+            f"{len(original)} bytes, not the {len(raw)}-byte fixture"
+        )
+        location = row["raw_data_location"]
+        assert Path(resolve_stored_file(ws, location)).name == expected_name, (
+            f"{sdk}: raw_data_location {location!r} is not {expected_name}"
+        )
+        stored = _read_location(ws, location)
+        assert row.get("raw_content_hash") == hashlib.md5(stored).hexdigest(), (
+            f"{sdk}: raw_content_hash {row.get('raw_content_hash')!r} is not the MD5 "
+            f"of the stored text"
+        )
+
+
 # ── Image parity tests ────────────────────────────────────────────────────────
 
 
@@ -163,14 +236,17 @@ def test_add_image_content_hash_matches(tmp_path):
     )
 
 
-def test_add_image_data_id_matches(tmp_path):
-    """With synced user_id + tenant_id, image data.id must be identical (UUID5)."""
-    _, _, py_row, rust_row = _run_both_sdks(
+def test_add_image_data_id_is_dataset_scoped_uuid4(tmp_path):
+    """Both SDKs give the image's data row a random uuid4 owned by its dataset.
+
+    Replaces the cross-SDK ``data.id`` equality check, whose uuid5 premise
+    Python no longer has (SDK-1039 D7).
+    """
+    py_ws, rust_ws, _, _ = _run_both_sdks(
         tmp_path, "photo.png", _PNG_BYTES, "image_parity"
     )
-    assert py_row["id"] == rust_row["id"], (
-        f"data.id mismatch:\n  Python: {py_row['id']}\n  Rust:   {rust_row['id']}"
-    )
+    _assert_dataset_scoped_uuid4(python_db_path(py_ws), "Python")
+    _assert_dataset_scoped_uuid4(rust_db_path(rust_ws), "Rust")
 
 
 def test_add_image_metadata_matches(tmp_path):
@@ -189,19 +265,78 @@ def test_add_image_metadata_matches(tmp_path):
     )
 
 
-def test_add_image_stored_bytes_match(tmp_path):
-    """The PNG bytes stored on disk must be byte-for-byte identical in both SDKs."""
+def test_add_image_stored_files_match(tmp_path):
+    """Both SDKs keep the raw PNG and store its description as text (D11)."""
     py_ws, rust_ws, py_row, rust_row = _run_both_sdks(
         tmp_path, "photo.png", _PNG_BYTES, "image_parity"
     )
-    py_stored = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
-    rust_stored = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
-
-    assert py_stored == rust_stored == _PNG_BYTES, (
-        f"Stored PNG bytes differ.\n"
-        f"  Python size: {len(py_stored)}, Rust size: {len(rust_stored)}, "
-        f"Expected: {len(_PNG_BYTES)}"
+    _assert_stored_files_match_python_contract(
+        py_ws, rust_ws, py_row, rust_row, _PNG_BYTES
     )
+
+
+# ── Loader routing by content (SDK-1039 P20) ─────────────────────────────────
+
+
+def test_add_png_named_jpg_routes_by_content(tmp_path):
+    """PNG bytes named ``.jpg`` are an image in both SDKs, recorded as PNG.
+
+    Python ``LoaderEngine.get_loader`` sniffs the bytes, so ``image_loader``
+    claims the file through the sniffed ``png`` / ``image/png``, and the row
+    stores those sniffed values rather than the name's. Rust now does the same.
+    """
+    py_ws, rust_ws, py_row, rust_row = _run_both_sdks(
+        tmp_path, "image.jpg", _PNG_BYTES, "image_routing"
+    )
+    for field in (
+        "loader_engine",
+        "original_extension",
+        "original_mime_type",
+        "extension",
+        "mime_type",
+    ):
+        assert py_row.get(field) == rust_row.get(field), (
+            f"{field} mismatch:\n"
+            f"  Python: {py_row.get(field)!r}\n"
+            f"  Rust:   {rust_row.get(field)!r}"
+        )
+    assert rust_row["loader_engine"] == "image_loader"
+    assert rust_row["original_extension"] == "png"
+    assert rust_row["original_mime_type"] == "image/png"
+    _assert_stored_files_match_python_contract(
+        py_ws, rust_ws, py_row, rust_row, _PNG_BYTES
+    )
+
+
+def test_add_png_without_extension_fails_in_both(tmp_path):
+    """A PNG with no extension is routed to the image loader and fails there.
+
+    Premise corrected with Python evidence (SDK-1039 P20). ``get_loader``
+    does pick ``image_loader`` for it (sniffed ``png`` / ``image/png``), but
+    the vision call takes the MIME type from the file NAME
+    (``native_adapter.py:633-638``: ``mimetypes.guess_type(input)``, else
+    ``ValueError: Could not determine MIME type for image file ... Is the
+    extension correct?``), so Python 1d3ed15 fails the add. Rust matches.
+    """
+    py_ws = tmp_path / "python"
+    rust_ws = tmp_path / "rust"
+    py_ws.mkdir()
+    rust_ws.mkdir()
+    py_file = py_ws / "image"
+    rust_file = rust_ws / "image"
+    py_file.write_bytes(_PNG_BYTES)
+    rust_file.write_bytes(_PNG_BYTES)
+
+    py_result = run_python_cli(py_ws, ["add", str(py_file), "-d", "image_noext"], check=False)
+    write_rust_config(rust_ws)
+    rust_result = run_rust_cli(rust_ws, ["add", str(rust_file), "-d", "image_noext"], check=False)
+
+    py_out = f"{py_result.stdout}\n{py_result.stderr}"
+    rust_out = f"{rust_result.stdout}\n{rust_result.stderr}"
+    assert py_result.returncode != 0, f"Python accepted an extensionless image:\n{py_out}"
+    assert "Could not determine MIME type" in py_out, py_out
+    assert rust_result.returncode != 0, f"Rust accepted an extensionless image:\n{rust_out}"
+    assert "Could not determine MIME type" in rust_out, rust_out
 
 
 # ── Audio parity tests ────────────────────────────────────────────────────────
@@ -222,14 +357,17 @@ def test_add_audio_content_hash_matches(tmp_path):
     )
 
 
-def test_add_audio_data_id_matches(tmp_path):
-    """With synced user_id + tenant_id, audio data.id must be identical (UUID5)."""
-    _, _, py_row, rust_row = _run_both_sdks(
+def test_add_audio_data_id_is_dataset_scoped_uuid4(tmp_path):
+    """Both SDKs give the audio file's data row a random uuid4 owned by its dataset.
+
+    Replaces the cross-SDK ``data.id`` equality check, whose uuid5 premise
+    Python no longer has (SDK-1039 D7).
+    """
+    py_ws, rust_ws, _, _ = _run_both_sdks(
         tmp_path, "speech.wav", _WAV_BYTES, "audio_parity"
     )
-    assert py_row["id"] == rust_row["id"], (
-        f"data.id mismatch:\n  Python: {py_row['id']}\n  Rust:   {rust_row['id']}"
-    )
+    _assert_dataset_scoped_uuid4(python_db_path(py_ws), "Python")
+    _assert_dataset_scoped_uuid4(rust_db_path(rust_ws), "Rust")
 
 
 def test_add_audio_metadata_matches(tmp_path):
@@ -248,18 +386,13 @@ def test_add_audio_metadata_matches(tmp_path):
     )
 
 
-def test_add_audio_stored_bytes_match(tmp_path):
-    """The WAV bytes stored on disk must be byte-for-byte identical in both SDKs."""
+def test_add_audio_stored_files_match(tmp_path):
+    """Both SDKs keep the raw WAV and store its transcript as text (D11)."""
     py_ws, rust_ws, py_row, rust_row = _run_both_sdks(
         tmp_path, "speech.wav", _WAV_BYTES, "audio_parity"
     )
-    py_stored = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
-    rust_stored = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
-
-    assert py_stored == rust_stored == _WAV_BYTES, (
-        f"Stored WAV bytes differ.\n"
-        f"  Python size: {len(py_stored)}, Rust size: {len(rust_stored)}, "
-        f"Expected: {len(_WAV_BYTES)}"
+    _assert_stored_files_match_python_contract(
+        py_ws, rust_ws, py_row, rust_row, _WAV_BYTES
     )
 
 

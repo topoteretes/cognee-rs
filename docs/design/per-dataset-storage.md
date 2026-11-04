@@ -294,6 +294,6 @@ Per-dataset storage is isolation, not authorization. It never replaces the
 | S4a | cognee-rs | this ADR |
 | S4b-1 | cognee-rs | `dataset_database` table and repository; the dataset scope; routing engines; the handler trait and registry; the `DatasetStorage` resolver (provision, cache, delete, prune); the `ladybug`, `lancedb` and `memory` handlers; the flag and handler settings |
 | S4b-2 | cognee-rs | `pgvector`, `pgvector_shared`, `postgres_graph` and `postgres_graph_shared` handlers; schema-pinned Postgres adapters |
-| S4b-3 | cognee-rs | operations run in the dataset scope: add, cognify, memify/improve, remember, update, rollback and startup recovery, visualize; delete, forget and prune lifecycle |
+| S4b-3 | cognee-rs | operations run in the dataset scope: add, cognify, improve, remember, update, rollback and startup recovery, visualize; delete, forget and prune lifecycle |
 | S4b-4 | cognee-rs | search: per-dataset fan-out, per-dataset results, post-filter and six-type refusal removed |
 | S5 | cognee-cloud-rs | adopt: flag default, wiring, routers (visualize, dataset graph, activity export, cognify WebSocket, `/v1/search` shape), recall auto-route interim removed, qdrant/evokoa refusal |

@@ -52,8 +52,34 @@ impl IngestDb for DefaultsOnly<'_> {
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError> {
         IngestDb::get_data(self.0, id).await
     }
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError> {
+        IngestDb::find_data_in_dataset(self.0, dataset_id, content_hash, owner_id, tenant_id).await
+    }
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        IngestDb::resolve_data_id(self.0, dataset_id, data_id).await
+    }
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         IngestDb::create_data(self.0, d).await
+    }
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &cognee_database::ops::data::DataRowRefresh,
+    ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
+        IngestDb::refresh_data_row(self.0, data_id, refresh).await
+    }
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
+        IngestDb::update_data(self.0, d).await
     }
     async fn update_data_node_set(
         &self,

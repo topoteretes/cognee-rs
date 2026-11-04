@@ -8,6 +8,7 @@ use cognee_database::{PipelineRunRepository, PipelineRunStatus as DbStatus};
 
 use crate::pipeline::{
     PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineStatus, PipelineWatcher, TaskStatus,
+    WatcherError,
 };
 
 use super::types::{RunEvent, RunEventKind, RunPhase};
@@ -75,7 +76,6 @@ impl ScopedRunWatcher {
 /// lives here at the seam.
 fn core_to_db_status(status: &CoreStatus) -> DbStatus {
     match status {
-        CoreStatus::Initiated => DbStatus::Initiated,
         CoreStatus::Started => DbStatus::Started,
         CoreStatus::Completed => DbStatus::Completed,
         CoreStatus::Errored => DbStatus::Errored,
@@ -100,40 +100,11 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     // ── Rich lifecycle events ─────────────────────────────────────────────
 
-    async fn on_pipeline_run_initiated(&self, run: &PipelineRunInfo) {
-        // Write durable row — non-fatal on failure.
-        // Python parity: `run_info = {}` (per log_pipeline_run_initiated.py).
-        let run_info = Some(super::run_info_for_initiated());
-        let db_result = self
-            .db
-            .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
-                pipeline_run_id: run.run_id,
-                pipeline_id: run.pipeline_id,
-                pipeline_name: &run.pipeline_name,
-                dataset_id: run.dataset_id,
-                status: DbStatus::Initiated,
-                run_info,
-                user_id: run.user_id,
-            })
-            .await;
-
-        if let Err(e) = db_result {
-            tracing::warn!(
-                run_id = %self.run_id,
-                "ScopedRunWatcher: DB write for Initiated failed (non-fatal): {e}"
-            );
-        }
-
-        // Locked decision 13: no `RunEvent` broadcast for INITIATED. The
-        // phase watch stays at its initial `Pending` value (set when the
-        // slot was created in `DefaultPipelineRunRegistry`) until
-        // `on_pipeline_run_started` flips it to `Running`.
-    }
-
     async fn on_pipeline_run_started(&self, run: &PipelineRunInfo) {
         // 1. Write durable row — non-fatal on failure.
-        //    Python parity: `run_info = {"data": data_info(data)}`.
-        let run_info = Some(super::run_info_for_running(&run.data_ids));
+        //    Python parity: `log_pipeline_run_start` writes no data items
+        //    (COG-6089); the row carries the run's recovery token when it has one.
+        let run_info = Some(super::run_info_for_started(run.recovery_lock));
         let db_result = self
             .db
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
@@ -164,11 +135,16 @@ impl PipelineWatcher for ScopedRunWatcher {
         });
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, _output_count: usize) {
-        // 1. Write durable row — non-fatal on failure.
-        //    Python parity: `run_info = {"data": data_info(data)}` — same
-        //    shape as STARTED.
-        let run_info = Some(super::run_info_for_running(&run.data_ids));
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        _output_count: usize,
+    ) -> Result<(), WatcherError> {
+        // 1. Write durable row. A failed write fails the run (Python: the
+        //    COMPLETED write sits inside `run_tasks`' `try`); no `Completed`
+        //    event is published for it, the executor's ERRORED follows.
+        //    Python parity: `log_pipeline_run_complete` writes `{}`.
+        let run_info = Some(super::run_info_for_completed());
         let db_result = self
             .db
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
@@ -185,8 +161,9 @@ impl PipelineWatcher for ScopedRunWatcher {
         if let Err(e) = db_result {
             tracing::warn!(
                 run_id = %self.run_id,
-                "ScopedRunWatcher: DB write for Completed failed (non-fatal): {e}"
+                "ScopedRunWatcher: DB write for Completed failed: {e}"
             );
+            return Err(WatcherError(e.to_string()));
         }
 
         // 2. Publish live event.
@@ -197,6 +174,7 @@ impl PipelineWatcher for ScopedRunWatcher {
             payload: serde_json::Value::Null,
             at: Utc::now(),
         });
+        Ok(())
     }
 
     async fn on_payload_field(&self, run_id: Uuid, key: &str, value: serde_json::Value) {
@@ -211,8 +189,8 @@ impl PipelineWatcher for ScopedRunWatcher {
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {
         // 1. Write durable row — non-fatal on failure.
-        //    Python parity: `run_info = {"data": data_info(data), "error": str(e)}`.
-        let run_info = Some(super::run_info_for_errored(&run.data_ids, error));
+        //    Python parity: `log_pipeline_run_error` writes `{"error": …}`.
+        let run_info = Some(super::run_info_for_errored(error));
         let db_result = self
             .db
             .log_pipeline_run_entry(cognee_database::PipelineRunEntry {

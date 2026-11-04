@@ -7,19 +7,17 @@
 //! 4. [`summarize_text`] — + summaries via LLM
 //! 5. [`add_data_points`] — embeddings + vector indexing → [`CognifyResult`]
 //!
-//! Temporal pipeline variant:
-//! 1. [`classify_documents`] — same
-//! 2. [`extract_chunks_from_documents`] — same
-//! 3. [`extract_temporal_events`] — Chunks → [`AttributedEvent`]s (via two LLM passes)
-//! 4. [`add_temporal_data_points`] — persists events, timestamps, intervals, entities → graph+vector
+//! There is no separate temporal pipeline: as in Python (since cognee 1.6.3),
+//! the default graph extraction writes dates as `Timestamp` nodes, which the
+//! TEMPORAL search type reranks by.
 //!
 //! Public surface:
 //! - Intermediate types: [`CognifyInput`], [`ClassifiedDocuments`],
 //!   [`ExtractedChunks`], [`ExtractedGraphData`], [`SummarizedChunks`],
-//!   [`SummarizedData`], [`ExtractedTemporalEvents`], [`AttributedEvent`]
+//!   [`SummarizedData`]
 //! - Task implementations (free functions)
 //! - [`TypedTask`] factories: [`make_classify_documents_task`], etc.
-//! - Pipeline builders: [`build_cognify_pipeline`], [`build_temporal_cognify_pipeline`]
+//! - Pipeline builder: [`build_cognify_pipeline`]
 
 use cognee_database::RelationalDb;
 use std::borrow::Cow;
@@ -31,9 +29,10 @@ use cognee_chunking::{
     CutType, NAMESPACE_OID, TokenCountMode, TokenCounterKind, chunk_by_row, chunk_text,
 };
 use cognee_core::{
-    CpuPool, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder, TypedTask, Value,
+    CpuPool, DatasetLocks, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder,
+    TypedTask, Value,
 };
-use cognee_database::PipelineRunRepository;
+use cognee_database::{PipelineRunRepository, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
 #[cfg(feature = "audio-loader")]
@@ -43,8 +42,8 @@ use cognee_ingestion::loaders::image::ImageLoader;
 use cognee_ingestion::loaders::{LoaderOutput, LoaderRegistry};
 use cognee_llm::{GenerationOptions, Llm, Message, MessageRole};
 use cognee_models::{
-    Data, Document, DocumentChunk, EdgeType, Embedding, Entity, TemporalEvent, Triplet,
-    classify_documents as model_classify_documents,
+    Data, Document, DocumentChunk, EdgeType, Embedding, IndexRefs,
+    classify_documents as model_classify_documents, index_schema_payload,
 };
 use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
@@ -73,10 +72,8 @@ use crate::graph_integration::{
     deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
-use crate::qualification::{Qualification, check_pipeline_run_qualification};
 use crate::rollback;
 use crate::summarization::{SummaryExtractor, TextSummary};
-use crate::temporal_extraction::{TemporalEntityEnricher, TemporalEventExtractor};
 use cognee_models::DataPoint;
 
 // ---------------------------------------------------------------------------
@@ -264,35 +261,6 @@ pub struct DynamicExtractionData {
     /// documents too, so a partially extracted file never reaches storage.
     /// Empty unless the run aborted.
     pub excluded_items: HashSet<Uuid>,
-}
-
-/// One extracted event and the data item whose chunk produced it.
-///
-/// Temporal events are content-addressed by name (`uuid5("event:{name}")`), so
-/// two files describing the same event land on one graph node with two
-/// producers — the same many-to-one shape merged entities have. The producing
-/// `data_id` travels *with* the event rather than in a side map, because the
-/// abort-time partition below filters the event list in place and a parallel
-/// `Vec<Uuid>` would be one `retain` away from silent misattribution.
-#[derive(Debug, Clone)]
-pub struct AttributedEvent {
-    pub event: TemporalEvent,
-    pub data_id: Uuid,
-}
-
-/// Output of [`extract_temporal_events`]: temporal events extracted from chunks
-/// via two LLM passes (event extraction + entity enrichment).
-///
-/// Used as the intermediate type between Task 3 and Task 4 in the temporal pipeline.
-#[derive(Debug, Clone)]
-pub struct ExtractedTemporalEvents {
-    pub events: Vec<AttributedEvent>,
-    pub dataset_id: Uuid,
-    pub user_id: Option<Uuid>,
-    pub tenant_id: Option<Uuid>,
-    /// Forwarded from [`ExtractedChunks::failures`], plus the extraction and
-    /// enrichment failures this stage collected itself.
-    pub failures: FailureReport,
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,36 +1536,28 @@ pub async fn extract_graph_from_data(
 struct WebPageMetadata {
     url: String,
     domain: String,
-    title: Option<String>,
 }
 
+/// The page a document was fetched from: Python's `_cognee.source_uri`, which
+/// `add` writes for a URL (`ingest_data.py:92-100`). Only an `http(s)` URL
+/// counts. The page title is not known: `add` keeps the raw page and does not
+/// parse it.
 fn parse_web_page_metadata(document: &Document) -> Option<WebPageMetadata> {
     let metadata = document.external_metadata.as_ref()?;
     let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    let source = value.get("source").and_then(|v| v.as_str())?;
-    if source != "url" {
-        return None;
-    }
-
     let url = value
-        .get("final_url")
-        .or_else(|| value.get("url"))
+        .get("_cognee")
+        .and_then(|v| v.get("source_uri"))
         .and_then(|v| v.as_str())?;
     let parsed = Url::parse(url).ok()?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
     let domain = parsed.host_str()?.to_ascii_lowercase();
-    let title = value
-        .get("title")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
 
     Some(WebPageMetadata {
         url: parsed.to_string(),
         domain,
-        title,
     })
 }
 
@@ -1679,7 +1639,6 @@ pub async fn create_web_page_nodes(
             "id": page_id_str,
             "type": "WebPage",
             "url": metadata.url,
-            "title": metadata.title,
             "content": document_content_preview(document.base.id, chunks),
         });
         let site_node = json!({
@@ -1698,10 +1657,7 @@ pub async fn create_web_page_nodes(
             document.base.id,
             page_id,
             "WebPage",
-            metadata
-                .title
-                .clone()
-                .unwrap_or_else(|| metadata.url.clone()),
+            metadata.url.clone(),
             &page_node,
         ));
         prov_nodes.push(web_page_provenance_row(
@@ -2362,7 +2318,9 @@ pub async fn summarize_text(
 /// Generate embeddings and index all data points in vector DB (Task 5).
 ///
 /// Generates embeddings for chunks, entities (name + description), summaries,
-/// and optionally triplets. Creates vector collections and indexes points.
+/// entity types, edge types and documents, then creates the vector collections
+/// and indexes the points. No triplets: Python stopped embedding them in
+/// SDK-1115, and so did Rust (SDK-1039).
 ///
 /// Writes the provenance records (nodes/edges) to the relational database
 /// *before* the first graph or vector write, mirroring Python's
@@ -2592,8 +2550,7 @@ pub async fn add_data_points(
 
     // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
     // `source_*` provenance keys are populated before they are vector-indexed
-    // (collection `EdgeType_relationship_name`) and before the Triplet payloads
-    // copy those keys from the originating EdgeType (gap-05/08 §4.4, below).
+    // (collection `EdgeType_relationship_name`).
     // The LLM-derived edge-type names trace back to the entity-extraction task,
     // so the `source_pipeline` / `source_task` literals match.
     //
@@ -2603,10 +2560,9 @@ pub async fn add_data_points(
     // `task_rank: None` — Python's `create_edge_type_datapoints`
     // (`index_graph_edges.py:50`) builds these objects locally and never
     // returns them from `add_data_points`, so no stamper ever assigns them a
-    // rank and they reach the vector payload with the `0` sentinel. Stamping
-    // a rank here would put a non-Python value in the persisted
-    // `EdgeType_relationship_name` payload (`DataPoint::vector_metadata`
-    // serialises `topological_rank` unconditionally).
+    // rank. The vector payload does not carry a rank either way: it is
+    // Python's `IndexSchema` row, whose `topological_rank` is always the `0`
+    // default (`cognee_models::index_schema_payload`).
     //
     // DLT-derived edges (`extract_dlt_fk_edges`) construct
     // `GraphEdgePair` instances rather than DataPoints; they carry no
@@ -2660,17 +2616,12 @@ pub async fn add_data_points(
     let mut indexed_fields = index_data_points(
         &input.chunks,
         &input.entities,
-        &input.timestamps,
         &input.summaries,
         &input.documents,
-        &input.edges,
         &edge_types,
         input.dataset_id,
-        input.user_id,
-        input.tenant_id,
         Arc::clone(&embedding_engine),
         Arc::clone(&vector_db),
-        config,
         &embeddings,
     )
     .await?;
@@ -2678,11 +2629,7 @@ pub async fn add_data_points(
         let dynamic_node_values: Vec<&DynamicDataPoint> = dynamic_nodes.values().copied().collect();
         let dynamic_embeddings = index_dynamic_graph(
             &dynamic_node_values,
-            &dynamic_edges,
-            &edge_types,
             input.dataset_id,
-            input.user_id,
-            input.tenant_id,
             embedding_engine,
             vector_db,
             config,
@@ -2712,18 +2659,13 @@ pub async fn add_data_points(
     })
 }
 
-/// Vector-index runtime custom DataPoints and, when enabled, their field
-/// triplets, inside a bulk-load scope of their own handled exactly like
+/// Vector-index runtime custom DataPoints inside a bulk-load scope of their own handled exactly like
 /// [`index_data_points`]': a store that rejects the hint is written without
 /// it, and the scope is finished on success and failure alike.
 #[allow(clippy::too_many_arguments)]
 async fn index_dynamic_graph(
     nodes: &[&DynamicDataPoint],
-    edges: &[EdgeData],
-    edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     config: &CognifyConfig,
@@ -2736,11 +2678,8 @@ async fn index_dynamic_graph(
             None
         }
     };
-    let indexed = index_dynamic_graph_points(
-        nodes, edges, edge_types, dataset_id, user_id, tenant_id, &engine, &vector_db, config,
-        stats,
-    )
-    .await;
+    let indexed =
+        index_dynamic_graph_points(nodes, dataset_id, &engine, &vector_db, config, stats).await;
     if let Some(bulk) = bulk
         && let Err(e) = bulk.finish().await
     {
@@ -2750,15 +2689,11 @@ async fn index_dynamic_graph(
 }
 
 /// The body of [`index_dynamic_graph`]: one `{type}_{field}` collection per
-/// declared index field (Python `index_data_points`), then the triplets.
+/// declared index field (Python `index_data_points`).
 #[allow(clippy::too_many_arguments)]
 async fn index_dynamic_graph_points(
     nodes: &[&DynamicDataPoint],
-    edges: &[EdgeData],
-    edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: &Arc<dyn EmbeddingEngine>,
     vector_db: &Arc<dyn VectorDB>,
     config: &CognifyConfig,
@@ -2793,8 +2728,7 @@ async fn index_dynamic_graph_points(
                 .iter()
                 .map(|(_, text)| text.as_str())
                 .collect();
-            let vectors = engine
-                .embed(&texts)
+            let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &texts)
                 .await
                 .map_err(|error| CognifyError::EmbeddingError(error.to_string()))?;
             let points: Vec<VectorPoint> = window_entries
@@ -2809,17 +2743,15 @@ async fn index_dynamic_graph_points(
                             vector.clone(),
                         ));
                     }
-                    let mut metadata = node.base.vector_metadata();
-                    metadata.extend(node.properties.clone());
-                    metadata.insert("field".to_string(), json!(field));
-                    metadata.insert("text".to_string(), json!(text));
-                    metadata.insert("dataset_id".to_string(), json!(dataset_id.to_string()));
-                    if let Some(user_id) = user_id {
-                        metadata.insert("user_id".to_string(), json!(user_id.to_string()));
-                    }
-                    if let Some(tenant_id) = tenant_id {
-                        metadata.insert("tenant_id".to_string(), json!(tenant_id.to_string()));
-                    }
+                    // Python's `IndexSchema` row: the custom model's own
+                    // properties stay on the graph node, never in the payload,
+                    // except the reference scalars `getattr` would find.
+                    let metadata = index_schema_payload(
+                        &node.base,
+                        text.clone(),
+                        &dynamic_index_refs(&node.properties),
+                        Some(dataset_id),
+                    );
                     VectorPoint {
                         id: node.base.id,
                         vector,
@@ -2835,902 +2767,7 @@ async fn index_dynamic_graph_points(
         stats.record(data_type, field, entries.len());
     }
 
-    // Field edges only, as the default path indexes its semantic edges and not
-    // the structural ones. Node text and relationship text follow Python's
-    // `_create_triplets_from_graph`: every index field, and the edge's
-    // stamped `edge_text`.
-    if config.embed_triplets && !edges.is_empty() {
-        let node_map: HashMap<Uuid, (String, String)> = nodes
-            .iter()
-            .map(|node| (node.base.id, (node.label(), node.embeddable_text())))
-            .collect();
-        let edge_pairs: Vec<GraphEdgePair> = edges
-            .iter()
-            .filter_map(|(source, target, relationship, properties)| {
-                let mut pair = GraphEdgePair::new(
-                    Uuid::parse_str(source).ok()?,
-                    Uuid::parse_str(target).ok()?,
-                    relationship.clone(),
-                );
-                if let Some(text) = properties
-                    .get("edge_text")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    pair.properties
-                        .insert("edge_text".to_string(), text.to_string());
-                }
-                Some(pair)
-            })
-            .collect();
-        let triplets =
-            crate::triplet_creation::create_triplets_from_node_texts(&node_map, &edge_pairs);
-        if !triplets.is_empty() {
-            index_triplet_points(
-                &triplets,
-                &edge_pairs,
-                edge_types,
-                engine,
-                vector_db,
-                window,
-            )
-            .await?;
-            stats.triplet_count += triplets.len();
-        }
-    }
     Ok(retained)
-}
-
-// ---------------------------------------------------------------------------
-// Temporal Task 3: extract_temporal_events
-// ---------------------------------------------------------------------------
-
-/// Extract temporal events from text chunks via two LLM passes (Temporal Task 3).
-///
-/// Mirrors the Python `get_temporal_tasks` pipeline stage 3:
-/// `extract_events_and_timestamps` followed by `extract_knowledge_graph_from_events`.
-///
-/// Steps:
-/// 1. Collects all non-DLT [`DocumentChunk`]s from `input`.
-/// 2. Batches by `config.data_per_batch`.
-/// 3. For each chunk in a batch, runs [`TemporalEventExtractor::extract_events`]
-///    in parallel (bounded by `config.max_parallel_extractions`).
-/// 4. Flattens per-chunk results and enriches each batch with entity attributes
-///    via [`TemporalEntityEnricher::enrich`].
-/// 5. Returns all events as [`ExtractedTemporalEvents`], each attributed to the
-///    data item whose chunk produced it.
-///
-/// Neither LLM pass propagates on failure. Both *collect* — the extraction pass
-/// per chunk, the enrichment pass per chunk of the batch it covered — and the
-/// configured [`FailureStop`] then decides whether to keep going, exactly as
-/// the standard [`extract_graph_from_data`] loop does.
-pub async fn extract_temporal_events(
-    input: &ExtractedChunks,
-    llm: Arc<dyn Llm>,
-    config: &CognifyConfig,
-) -> Result<ExtractedTemporalEvents, CognifyError> {
-    if input.chunks.is_empty() {
-        return Ok(ExtractedTemporalEvents {
-            events: vec![],
-            dataset_id: input.dataset_id,
-            user_id: input.user_id,
-            tenant_id: input.tenant_id,
-            failures: input.failures.clone(),
-        });
-    }
-
-    // Filter out DLT chunks — same rationale as extract_graph_from_data.
-    let dlt_doc_ids: HashSet<Uuid> = input
-        .documents
-        .iter()
-        .filter(|d| d.document_type == "dlt_row")
-        .map(|d| d.base.id)
-        .collect();
-
-    let non_dlt_chunks: Vec<&DocumentChunk> = input
-        .chunks
-        .iter()
-        .filter(|c| !dlt_doc_ids.contains(&c.document_id))
-        .collect();
-
-    if non_dlt_chunks.is_empty() {
-        return Ok(ExtractedTemporalEvents {
-            events: vec![],
-            dataset_id: input.dataset_id,
-            user_id: input.user_id,
-            tenant_id: input.tenant_id,
-            failures: input.failures.clone(),
-        });
-    }
-
-    // NOTE: unlike the graph-extraction stages, the batch loop here is
-    // structural, not a throttle: `enricher.enrich` runs one aggregate LLM pass
-    // per batch, so the barrier is a real data dependency and is kept.
-    let batch_size = config.data_per_batch;
-    let failure_policy = config.failure_policy();
-    let max_parallel = config.max_parallel_extractions.max(1);
-    let extractor = Arc::new(TemporalEventExtractor::new(Arc::clone(&llm)));
-    let enricher = TemporalEntityEnricher::new(Arc::clone(&llm));
-
-    let mut failures = input.failures.clone();
-    let mut all_events: Vec<AttributedEvent> = Vec::new();
-    // `Some(n)` once a FailFast abort has fired, naming the first chunk index
-    // (into `non_dlt_chunks`) that was never dispatched.
-    let mut aborted_at: Option<usize> = None;
-
-    for (batch_idx, batch) in non_dlt_chunks.chunks(batch_size).enumerate() {
-        // Owned inputs. `chunk_ids` and `chunk_documents` run parallel to them:
-        // a failure is attributed to its chunk and its file, neither of which
-        // the stream items carry, and the events a chunk produced are attributed
-        // to its file the same way — so the results must be back in input order
-        // before the zip below.
-        let inputs: Vec<String> = batch.iter().map(|chunk| chunk.text.clone()).collect();
-        let chunk_ids: Vec<Uuid> = batch.iter().map(|chunk| chunk.base.id).collect();
-        let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
-
-        // The whole batch is collected before any result is inspected, so a
-        // FailFast abort reports every failure in the batch that tripped it —
-        // not only the first one to come back.
-        // `buffer_unordered`, not `buffered`, for the reason spelled out in
-        // `extract_graph_from_data`: `buffered` keeps a completed-but-undrained
-        // output in its slot, so one slow chunk blocks every chunk behind it.
-        // Each future carries its index and the batch is re-sorted, which both
-        // keeps the zip below correlated and keeps `all_events` deterministic
-        // for a given input.
-        let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-            .map(|(index, text)| {
-                let ext = Arc::clone(&extractor);
-                async move {
-                    let result = tokio::spawn(async move { ext.extract_events(&text).await }).await;
-                    (index, result)
-                }
-            })
-            .buffer_unordered(max_parallel)
-            .collect()
-            .await;
-        indexed_results.sort_by_key(|(index, _)| *index);
-        let batch_results: Vec<_> = indexed_results
-            .into_iter()
-            .map(|(_, result)| result)
-            .collect();
-
-        let mut batch_events: Vec<TemporalEvent> = Vec::new();
-        let mut batch_data_ids: Vec<Uuid> = Vec::new();
-        let mut extraction_failed_chunks: HashSet<Uuid> = HashSet::new();
-        let mut batch_failed = false;
-        for ((result, chunk_id), document_id) in batch_results
-            .into_iter()
-            .zip(chunk_ids.iter().copied())
-            .zip(chunk_documents.iter().copied())
-        {
-            let outcome = result
-                .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
-                .and_then(|inner| inner);
-            match outcome {
-                Ok(events) => {
-                    batch_data_ids.extend(std::iter::repeat_n(document_id, events.len()));
-                    batch_events.extend(events);
-                }
-                Err(e) => {
-                    warn!(
-                        data_id = %document_id,
-                        chunk_id = %chunk_id,
-                        "temporal event extraction failed for chunk: {e}"
-                    );
-                    failures.record_error(
-                        StageFailure {
-                            stage: FailureStage::TemporalExtraction,
-                            data_id: document_id,
-                            chunk_id: Some(chunk_id),
-                            error: e.to_string(),
-                            fails_item: true,
-                        },
-                        &e,
-                    );
-                    extraction_failed_chunks.insert(chunk_id);
-                    batch_failed = true;
-                }
-            }
-        }
-
-        info!(
-            "Temporal extraction batch {}/{}: {} events extracted",
-            batch_idx + 1,
-            non_dlt_chunks.len().div_ceil(batch_size),
-            batch_events.len()
-        );
-
-        // ── Entity enrichment pass for the whole batch ──────────────────────
-        // One LLM call covers every event the batch produced, across many
-        // chunks and possibly many files, so a failure here is recorded
-        // against *each* chunk that fed it rather than once for the batch. The
-        // chunk failure ratio counts chunks; a batch-shaped failure recorded
-        // once would contribute almost nothing to it, and a `FailedItems` run
-        // could then "complete" having swept most of the dataset. A chunk whose
-        // *extraction* already failed is skipped — it is one failed chunk, not
-        // two.
-        match enricher.enrich(batch_events).await {
-            Ok(enriched) => {
-                // `enrich` preserves input order, which is what lets the data
-                // ids collected above be zipped straight back on. A change
-                // there is the one way ownership could be silently
-                // misattributed.
-                debug_assert_eq!(
-                    enriched.len(),
-                    batch_data_ids.len(),
-                    "enrich must return its input events, in order"
-                );
-                all_events.extend(
-                    enriched
-                        .into_iter()
-                        .zip(batch_data_ids)
-                        .map(|(event, data_id)| AttributedEvent { event, data_id }),
-                );
-            }
-            Err(e) => {
-                // The batch's events are dropped: unenriched events carry none
-                // of the entity nodes and edges this pass exists to produce, so
-                // persisting them would leave a half-cognified item behind.
-                for (chunk_id, document_id) in chunk_ids
-                    .iter()
-                    .zip(chunk_documents.iter())
-                    .filter(|(chunk_id, _)| !extraction_failed_chunks.contains(chunk_id))
-                {
-                    warn!(
-                        data_id = %document_id,
-                        chunk_id = %chunk_id,
-                        "temporal entity enrichment failed for the batch this chunk fed: {e}"
-                    );
-                    failures.record_error(
-                        StageFailure {
-                            stage: FailureStage::TemporalEnrichment,
-                            data_id: *document_id,
-                            chunk_id: Some(*chunk_id),
-                            error: e.to_string(),
-                            fails_item: true,
-                        },
-                        &e,
-                    );
-                }
-                batch_failed = true;
-            }
-        }
-
-        if batch_failed && failure_policy.stop == FailureStop::FailFast {
-            aborted_at = Some((batch_idx + 1) * batch_size);
-            break;
-        }
-    }
-
-    // ── The abort-time partition ────────────────────────────────────────────
-    // At the moment of a FailFast abort nothing has been persisted — the loop
-    // above accumulates every batch's events in memory and the first write of
-    // any kind happens in `add_temporal_data_points`. So "keep the results for
-    // the other files" is not a matter of not-deleting; it takes deliberately
-    // persisting the finished work before stopping. Files partition three ways:
-    //
-    //   complete  — every one of its chunks was attempted, none failed
-    //               extraction, and every batch it fed was enriched.
-    //               Persisted below, and marked complete when the run ends.
-    //   failed    — at least one of its chunks failed either pass. Not
-    //               persisted, left unmarked.
-    //   unreached — chunks never dispatched. Not persisted, left unmarked.
-    //
-    // Only complete files are persisted, which is what keeps items
-    // all-or-nothing. Failed and unreached files are indistinguishable to the
-    // next run and both are simply redone.
-    //
-    // Under `RunToEnd` there is no partition and no filtering: the run persists
-    // normally and the item-scoped sweep removes the failed files'
-    // contributions afterwards, so one deletion path serves both cases.
-    //
-    // Temporal needs no `complete_documents` set of its own: events are the
-    // only thing this stage produces, and every one of them names its file, so
-    // dropping the excluded files' events *is* the partition.
-    if let Some(first_unreached) = aborted_at {
-        for chunk in non_dlt_chunks.iter().skip(first_unreached) {
-            failures.mark_unreached(chunk.document_id);
-        }
-
-        if failure_policy.scope != RollbackScope::FailedItems {
-            return Err(CognifyError::RunFailed {
-                report: Box::new(failures),
-            });
-        }
-
-        let excluded: HashSet<Uuid> = failures
-            .failed_items()
-            .iter()
-            .chain(failures.unreached_items().iter())
-            .copied()
-            .collect();
-        all_events.retain(|attributed| !excluded.contains(&attributed.data_id));
-    }
-
-    info!(
-        "Temporal event extraction complete: {} total events",
-        all_events.len()
-    );
-
-    Ok(ExtractedTemporalEvents {
-        events: all_events,
-        dataset_id: input.dataset_id,
-        user_id: input.user_id,
-        tenant_id: input.tenant_id,
-        failures,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Temporal Task 4: add_temporal_data_points
-// ---------------------------------------------------------------------------
-
-/// One temporal artifact and the data items that produced it.
-///
-/// Temporal nodes are content-addressed — an event by its name, a timestamp by
-/// its instant, an entity by [`Entity::id_for`] — so one physical node routinely
-/// has several producers. Ownership is one row per (artifact, producing data
-/// item), which is what makes the node removable only when its *last* owning
-/// file goes.
-struct TemporalNodeOwner {
-    node_type: String,
-    label: Option<String>,
-    /// The node payload, exactly as the graph store received it.
-    attributes: serde_json::Value,
-    /// The vector collections a sweep must clear for this node. Only `Event`
-    /// has one: temporal indexes `Event.name` and nothing else, so claiming
-    /// `["name"]` on an entity node would make a temporal sweep delete an
-    /// `Entity_name` point a *standard* run wrote.
-    indexed_fields: &'static [&'static str],
-    /// Insertion-ordered and deduplicated.
-    data_ids: Vec<Uuid>,
-}
-
-/// One temporal edge and the data items that produced it. Same shape, same
-/// reason, as [`TemporalNodeOwner`].
-struct TemporalEdgeOwner {
-    properties: HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
-    data_ids: Vec<Uuid>,
-}
-
-/// Note that `data_id` produced the node `node_id`, creating the owner record
-/// on first sight and appending the producer on every later one.
-fn record_temporal_node_owner(
-    owners: &mut BTreeMap<Uuid, TemporalNodeOwner>,
-    node_id: Uuid,
-    node_type: &str,
-    label: Option<String>,
-    attributes: serde_json::Value,
-    indexed_fields: &'static [&'static str],
-    data_id: Uuid,
-) {
-    let owner = owners.entry(node_id).or_insert_with(|| TemporalNodeOwner {
-        node_type: node_type.to_string(),
-        label,
-        attributes,
-        indexed_fields,
-        data_ids: Vec::new(),
-    });
-    if !owner.data_ids.contains(&data_id) {
-        owner.data_ids.push(data_id);
-    }
-}
-
-/// The same, for an edge keyed on its sanitized triplet.
-fn record_temporal_edge_owner(
-    owners: &mut BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
-    source_id: Uuid,
-    relationship_name: &str,
-    target_id: Uuid,
-    properties: &HashMap<std::borrow::Cow<'static, str>, serde_json::Value>,
-    data_id: Uuid,
-) {
-    let owner = owners
-        .entry((source_id, relationship_name.to_string(), target_id))
-        .or_insert_with(|| TemporalEdgeOwner {
-            properties: properties.clone(),
-            data_ids: Vec::new(),
-        });
-    if !owner.data_ids.contains(&data_id) {
-        owner.data_ids.push(data_id);
-    }
-}
-
-/// Turn the accumulated owner maps into ownership rows — one per (artifact,
-/// producing data item).
-///
-/// Modelled on [`dlt_provenance_rows`], the other site that builds rows from
-/// raw `serde_json` node payloads rather than from `DataPoint`s. The one thing
-/// it does differently: the relationship name is sanitized before it is hashed,
-/// because a temporal relationship comes straight from the LLM and NUL bytes
-/// are stripped on the way into Postgres. Hashing the raw text would key the
-/// ledger on text no store holds, and the sweep would then miss the edge.
-fn temporal_provenance_rows(
-    id: LedgerIdentity,
-    node_owners: &BTreeMap<Uuid, TemporalNodeOwner>,
-    edge_owners: &BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
-) -> (
-    Vec<cognee_database::GraphNode>,
-    Vec<cognee_database::GraphEdge>,
-) {
-    use cognee_database::{GraphEdge, GraphNode};
-
-    let mut prov_nodes: Vec<GraphNode> = Vec::new();
-    for (node_id, owner) in node_owners {
-        for data_id in &owner.data_ids {
-            prov_nodes.push(GraphNode {
-                id: provenance_node_id(id.tenant_id, id.user_id, id.dataset_id, *data_id, *node_id),
-                slug: *node_id,
-                user_id: id.user_id,
-                data_id: *data_id,
-                dataset_id: id.dataset_id,
-                pipeline_run_id: id.pipeline_run_id,
-                label: owner.label.clone(),
-                node_type: owner.node_type.clone(),
-                indexed_fields: json!(owner.indexed_fields),
-                attributes: Some(owner.attributes.clone()),
-                created_at: Utc::now(),
-            });
-        }
-    }
-
-    let mut prov_edges: Vec<GraphEdge> = Vec::new();
-    for ((source_id, relationship_name, target_id), owner) in edge_owners {
-        let edge_text = sanitize_string(relationship_name.clone());
-        let attributes = if owner.properties.is_empty() {
-            None
-        } else {
-            Some(serde_json::Value::Object(
-                owner
-                    .properties
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.clone()))
-                    .collect(),
-            ))
-        };
-        for data_id in &owner.data_ids {
-            prov_edges.push(GraphEdge {
-                id: provenance_edge_id(
-                    id.tenant_id,
-                    id.user_id,
-                    id.dataset_id,
-                    *data_id,
-                    *source_id,
-                    &edge_text,
-                    *target_id,
-                ),
-                slug: triplet_slug(*source_id, &edge_text, *target_id),
-                user_id: id.user_id,
-                data_id: *data_id,
-                dataset_id: id.dataset_id,
-                pipeline_run_id: id.pipeline_run_id,
-                source_node_id: *source_id,
-                destination_node_id: *target_id,
-                relationship_name: edge_text.clone(),
-                label: None,
-                attributes: attributes.clone(),
-                created_at: Utc::now(),
-            });
-        }
-    }
-
-    (prov_nodes, prov_edges)
-}
-
-/// Record ownership of the temporal artifacts a run is about to write, in one
-/// transaction, before the graph or the vector store sees any of them.
-async fn record_temporal_ownership(
-    db: &dyn RelationalDb,
-    id: LedgerIdentity,
-    node_owners: &BTreeMap<Uuid, TemporalNodeOwner>,
-    edge_owners: &BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner>,
-) -> Result<(), CognifyError> {
-    let (prov_nodes, prov_edges) = temporal_provenance_rows(id, node_owners, edge_owners);
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
-    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        info!(
-            "Recorded ownership of {} temporal nodes and {} temporal edges before writing them",
-            prov_nodes.len(),
-            prov_edges.len()
-        );
-    }
-    Ok(())
-}
-
-/// Persist temporal events to graph and vector databases (Temporal Task 4).
-///
-/// Mirrors the Python `add_data_points` stage in the temporal pipeline.
-///
-/// For each [`AttributedEvent`]:
-/// 1. Creates an `Event` graph node with a deterministic UUID5 ID.
-/// 2. For `event.at` — creates a `Timestamp` graph node and an `at` edge.
-/// 3. For `event.during` — creates `Timestamp` nodes for from/to, an `Interval`
-///    node, and `during` / `time_from` / `time_to` edges (Python-compatible layout).
-/// 4. For each [`EventAttribute`] — creates or looks up an entity graph node
-///    and adds a typed edge from the `Event` to the entity.
-/// 5. Embeds `event.name` and indexes to the `Event_name` vector collection.
-///
-/// Every one of those artifacts is claimed in the ownership ledger *before* the
-/// first store write, so a failure part-way through leaves rows a sweep can
-/// find rather than artifacts nothing can name. Discovering what the run is
-/// about to write is pure computation — the loop below builds the entire
-/// payload in memory — so the ledger write drops in between the build and the
-/// first `add_nodes_raw` with no restructuring.
-pub async fn add_temporal_data_points(
-    events: &ExtractedTemporalEvents,
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: &dyn RelationalDb,
-    pipeline_run_id: Option<Uuid>,
-) -> Result<CognifyResult, CognifyError> {
-    if events.events.is_empty() {
-        info!("No temporal events to persist.");
-        return Ok(CognifyResult {
-            failures: events.failures.clone(),
-            pipeline_run_id,
-            ..CognifyResult::empty()
-        });
-    }
-
-    let mut graph_nodes: Vec<serde_json::Value> = Vec::new();
-    let mut graph_edges: Vec<EdgeData> = Vec::new();
-
-    // Deduplicate event nodes across producers: two files describing the same
-    // event address the same node id, and pushing it twice would embed and
-    // index the same `Event_name` point twice. The ownership rows below
-    // deduplicate the artifact and keep both producers, so the payload has to
-    // agree.
-    let mut seen_event_ids: HashSet<Uuid> = HashSet::new();
-    // Deduplicate entity nodes across events to avoid redundant graph inserts.
-    let mut seen_entity_ids: HashSet<Uuid> = HashSet::new();
-    // Deduplicate edges: (source_id, target_id, relationship_name)
-    let mut seen_edge_keys: HashSet<(String, String, String)> = HashSet::new();
-
-    let mut event_ids: Vec<Uuid> = Vec::new();
-    let mut event_names: Vec<String> = Vec::new();
-
-    // The producer sets the ledger is written from. Recorded *outside* the
-    // `seen_*` guards above: a second occurrence of an artifact is precisely a
-    // second producer, and the guards exist only to keep the graph payload from
-    // repeating itself.
-    let mut node_owners: BTreeMap<Uuid, TemporalNodeOwner> = BTreeMap::new();
-    let mut edge_owners: BTreeMap<(Uuid, String, Uuid), TemporalEdgeOwner> = BTreeMap::new();
-
-    for attributed in &events.events {
-        let event = &attributed.event;
-        let data_id = attributed.data_id;
-
-        // ── Event node ──────────────────────────────────────────────────────
-        let event_id = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("event:{}", event.name).as_bytes(),
-        );
-
-        let mut event_node = json!({
-            "id": event_id.to_string(),
-            "data_type": "Event",
-            "name": event.name,
-        });
-        if let Some(desc) = &event.description {
-            event_node["description"] = json!(desc);
-        }
-        if let Some(loc) = &event.location {
-            event_node["location"] = json!(loc);
-        }
-        record_temporal_node_owner(
-            &mut node_owners,
-            event_id,
-            "Event",
-            Some(event.name.clone()),
-            event_node.clone(),
-            &["name"],
-            data_id,
-        );
-        if seen_event_ids.insert(event_id) {
-            event_ids.push(event_id);
-            event_names.push(event.name.clone());
-            graph_nodes.push(event_node);
-        }
-
-        // ── Timestamp for event.at ──────────────────────────────────────────
-        if let Some(ts) = &event.at {
-            let ts_id = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                format!("timestamp:{}", ts.time_at).as_bytes(),
-            );
-            let ts_node = json!({
-                "id": ts_id.to_string(),
-                "data_type": "Timestamp",
-                "time_at": ts.time_at,
-                "timestamp_str": ts.timestamp_str,
-                "year": ts.year,
-                "month": ts.month,
-                "day": ts.day,
-                "hour": ts.hour,
-                "minute": ts.minute,
-                "second": ts.second,
-            });
-            record_temporal_node_owner(
-                &mut node_owners,
-                ts_id,
-                "Timestamp",
-                None,
-                ts_node.clone(),
-                &[],
-                data_id,
-            );
-            graph_nodes.push(ts_node);
-
-            let props = build_edge_props(&event_id.to_string(), &ts_id.to_string(), "at");
-            record_temporal_edge_owner(&mut edge_owners, event_id, "at", ts_id, &props, data_id);
-            let edge_key = (event_id.to_string(), ts_id.to_string(), "at".to_string());
-            if seen_edge_keys.insert(edge_key) {
-                graph_edges.push((
-                    event_id.to_string(),
-                    ts_id.to_string(),
-                    "at".to_string(),
-                    props,
-                ));
-            }
-        }
-
-        // ── Interval for event.during ───────────────────────────────────────
-        if let Some(interval) = &event.during {
-            let ts_from = &interval.time_from;
-            let ts_to = &interval.time_to;
-
-            let ts_from_id = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                format!("timestamp:{}", ts_from.time_at).as_bytes(),
-            );
-            let ts_to_id = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                format!("timestamp:{}", ts_to.time_at).as_bytes(),
-            );
-            let interval_id = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                format!("interval:{}:{}", ts_from.time_at, ts_to.time_at).as_bytes(),
-            );
-
-            let ts_from_node = json!({
-                "id": ts_from_id.to_string(),
-                "data_type": "Timestamp",
-                "time_at": ts_from.time_at,
-                "timestamp_str": ts_from.timestamp_str,
-                "year": ts_from.year,
-                "month": ts_from.month,
-                "day": ts_from.day,
-                "hour": ts_from.hour,
-                "minute": ts_from.minute,
-                "second": ts_from.second,
-            });
-            let ts_to_node = json!({
-                "id": ts_to_id.to_string(),
-                "data_type": "Timestamp",
-                "time_at": ts_to.time_at,
-                "timestamp_str": ts_to.timestamp_str,
-                "year": ts_to.year,
-                "month": ts_to.month,
-                "day": ts_to.day,
-                "hour": ts_to.hour,
-                "minute": ts_to.minute,
-                "second": ts_to.second,
-            });
-            let interval_node = json!({
-                "id": interval_id.to_string(),
-                "data_type": "Interval",
-            });
-            for (node_id, node_type, node) in [
-                (ts_from_id, "Timestamp", &ts_from_node),
-                (ts_to_id, "Timestamp", &ts_to_node),
-                (interval_id, "Interval", &interval_node),
-            ] {
-                record_temporal_node_owner(
-                    &mut node_owners,
-                    node_id,
-                    node_type,
-                    None,
-                    node.clone(),
-                    &[],
-                    data_id,
-                );
-            }
-            graph_nodes.push(ts_from_node);
-            graph_nodes.push(ts_to_node);
-            graph_nodes.push(interval_node);
-
-            // Event -[during]-> Interval, Interval -[time_from|time_to]-> Timestamp
-            for (source_id, relationship_name, target_id) in [
-                (event_id, "during", interval_id),
-                (interval_id, "time_from", ts_from_id),
-                (interval_id, "time_to", ts_to_id),
-            ] {
-                let props = build_edge_props(
-                    &source_id.to_string(),
-                    &target_id.to_string(),
-                    relationship_name,
-                );
-                record_temporal_edge_owner(
-                    &mut edge_owners,
-                    source_id,
-                    relationship_name,
-                    target_id,
-                    &props,
-                    data_id,
-                );
-                let edge_key = (
-                    source_id.to_string(),
-                    target_id.to_string(),
-                    relationship_name.to_string(),
-                );
-                if seen_edge_keys.insert(edge_key) {
-                    graph_edges.push((
-                        source_id.to_string(),
-                        target_id.to_string(),
-                        relationship_name.to_string(),
-                        props,
-                    ));
-                }
-            }
-        }
-
-        // ── Entity attribute nodes and edges ────────────────────────────────
-        for attr in &event.attributes {
-            // Python temporal path: `Entity.id_for(attribute.entity)`
-            // (add_entities_to_event.py:39). Was a bare `entity:{name}` hash with
-            // no normalization and no class prefix.
-            let entity_id = Entity::id_for(&attr.entity);
-
-            let entity_node = json!({
-                "id": entity_id.to_string(),
-                "data_type": attr.entity_type,
-                "name": attr.entity,
-            });
-            record_temporal_node_owner(
-                &mut node_owners,
-                entity_id,
-                &attr.entity_type,
-                Some(attr.entity.clone()),
-                entity_node.clone(),
-                &[],
-                data_id,
-            );
-            if seen_entity_ids.insert(entity_id) {
-                graph_nodes.push(entity_node);
-            }
-
-            let props = build_edge_props(
-                &event_id.to_string(),
-                &entity_id.to_string(),
-                &attr.relationship,
-            );
-            record_temporal_edge_owner(
-                &mut edge_owners,
-                event_id,
-                &attr.relationship,
-                entity_id,
-                &props,
-                data_id,
-            );
-            let rel_key = (
-                event_id.to_string(),
-                entity_id.to_string(),
-                attr.relationship.clone(),
-            );
-            if seen_edge_keys.insert(rel_key) {
-                graph_edges.push((
-                    event_id.to_string(),
-                    entity_id.to_string(),
-                    attr.relationship.clone(),
-                    props,
-                ));
-            }
-        }
-    }
-
-    // ── Ownership first ─────────────────────────────────────────────────────
-    // Everything above is pure computation; nothing has left this function yet.
-    // The ledger goes in before the graph and vector writes so that no temporal
-    // artifact can exist without a row naming the run that created it.
-    record_temporal_ownership(
-        db,
-        LedgerIdentity::new(
-            events.tenant_id,
-            events.user_id,
-            events.dataset_id,
-            pipeline_run_id,
-        ),
-        &node_owners,
-        &edge_owners,
-    )
-    .await?;
-
-    // Persist nodes and edges to graph DB.
-    if !graph_nodes.is_empty() {
-        let node_count = graph_nodes.len();
-        graph_db
-            .add_nodes_raw(graph_nodes)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} temporal graph nodes", node_count);
-    }
-
-    if !graph_edges.is_empty() {
-        let edge_count = graph_edges.len();
-        graph_db
-            .add_edges(&graph_edges)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} temporal graph edges", edge_count);
-    }
-
-    // ── Vector indexing: Event.name ──────────────────────────────────────────
-    let mut indexed_fields = IndexedFieldsStats::default();
-
-    if !event_ids.is_empty() {
-        let dimension = embedding_engine.dimension();
-
-        if !vector_db
-            .has_collection("Event", "name")
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
-        {
-            vector_db
-                .create_collection("Event", "name", dimension)
-                .await
-                .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-        }
-
-        let name_strs: Vec<&str> = event_names.iter().map(String::as_str).collect();
-        let vectors = embedding_engine
-            .embed(&name_strs)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
-
-        let points: Vec<VectorPoint> = event_ids
-            .iter()
-            .zip(event_names.iter())
-            .zip(vectors.iter())
-            .map(|((id, name), vector)| {
-                let mut point = VectorPoint::new(*id, vector.clone())
-                    .with_metadata("type", json!("Event"))
-                    .with_metadata("field", json!("name"))
-                    .with_metadata("name", json!(name))
-                    .with_metadata("dataset_id", json!(events.dataset_id.to_string()));
-                if let Some(uid) = events.user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = events.tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
-            })
-            .collect();
-
-        vector_db
-            .index_points("Event", "name", &points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-
-        indexed_fields.record("Event", "name", event_ids.len());
-        info!("Indexed {} event names in vector DB", event_ids.len());
-    }
-
-    Ok(CognifyResult {
-        chunks: vec![],
-        entities: vec![],
-        edges: vec![],
-        summaries: vec![],
-        edge_types: vec![],
-        embeddings: vec![],
-        embedding_count: 0,
-        indexed_fields,
-        documents_for_dlt: vec![],
-        already_completed: false,
-        prior_pipeline_run_id: None,
-        pipeline_run_id,
-        failures: events.failures.clone(),
-    })
 }
 
 /// Resolve the retrieval text for an edge, mirroring Python's
@@ -3866,7 +2903,9 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 ///   back.
 /// * Since the adapter-side fold landed (#256) nothing errors, but only one
 ///   occurrence survives on every backend and `number_of_edges` then holds just
-///   that one spelling's share of the count instead of the total.
+///   that one spelling's share of the count instead of the total. (The vector
+///   payload no longer stores the count since SDK-1039; the `EdgeType` still
+///   carries it, as Python's does.)
 ///
 /// So the fold happens here, at the producer, where the counts are still
 /// available to add up. This mirrors the `first_seen` collapse in
@@ -3924,28 +2963,6 @@ where
     }
 
     folded
-}
-
-/// Build minimal edge properties for graph storage.
-fn build_edge_props(
-    source_id: &str,
-    target_id: &str,
-    relationship_name: &str,
-) -> HashMap<std::borrow::Cow<'static, str>, serde_json::Value> {
-    let mut props = HashMap::new();
-    props.insert(
-        std::borrow::Cow::Borrowed("source_node_id"),
-        json!(source_id),
-    );
-    props.insert(
-        std::borrow::Cow::Borrowed("target_node_id"),
-        json!(target_id),
-    );
-    props.insert(
-        std::borrow::Cow::Borrowed("relationship_name"),
-        json!(relationship_name),
-    );
-    props
 }
 
 // ---------------------------------------------------------------------------
@@ -4553,7 +3570,10 @@ pub async fn cognify(
             [dataset_id],
             cognee_models::dataset_scope::with_dataset(
                 dataset_id,
-                cognify_in_scope(
+                // Boxed: the run's future is large, and inline it made every
+                // caller's future (remember, improve's cognify-backed stages)
+                // overflow a 2 MiB thread stack in debug builds.
+                Box::pin(cognify_in_scope(
                     data_items,
                     dataset_id,
                     user_id,
@@ -4569,7 +3589,7 @@ pub async fn cognify(
                     thread_pool,
                     ontology_resolver,
                     config,
-                ),
+                )),
             ),
         )
         .await
@@ -4629,189 +3649,95 @@ async fn cognify_in_scope(
         effective_config.chunk_size()
     );
 
-    // ── Qualification gate (gap 08-08, locked decision 3) ───────────────────
-    // Python-parity `check_pipeline_run_qualification`: read the latest
-    // `pipeline_runs` row for `(dataset_id, pipeline_name)` and decide whether
-    // to proceed, short-circuit, or reject.
+    // ── Serialization (Python `run_pipeline_per_dataset`) ───────────────────
+    // Concurrent runs on one dataset are serialized by the per-dataset lock:
+    // a second cognify of the same dataset waits for the first instead of
+    // being refused, and different datasets run in parallel. Python takes
+    // `get_dataset_lock(dataset.id)` around the whole per-dataset run and has
+    // had no run-history gate since `dc0b4ad6a` ("concurrent runs are kept
+    // safe by the per-dataset lock, not by this check"); the cache gate, the
+    // `AlreadyRunning` refusal and the database claim are gone with it.
+    // Already-processed items are skipped per item by the completion markers
+    // below, not by the dataset's run history.
     //
-    // The two verdicts are gated differently, on purpose:
-    //
-    // * `AlreadyCompleted` short-circuits ONLY when the caller opted into the
-    //   pipeline cache. Python guards this layer behind `if use_pipeline_cache:`
-    //   in `run_pipeline_per_dataset` (`modules/pipelines/operations/pipeline.py`)
-    //   and every public entry point passes `use_pipeline_cache=False`, so
-    //   upstream a repeat cognify always re-runs. Short-circuiting
-    //   unconditionally made every cognify after the first a silent no-op, so a
-    //   dataset could never take a second wave of data. `dataset_resolver`
-    //   already gates its own dataset-level skip on this same flag.
-    //
-    // * `AlreadyRunning` still rejects regardless of the flag. Python can put
-    //   this behind the flag because `run_pipeline_per_dataset` serializes on
-    //   `get_dataset_lock(dataset.id)` — its own comment reads "concurrent runs
-    //   are kept safe by the per-dataset lock, not by this check". Rust has no
-    //   such lock, so this row check is the closest equivalent available: it
-    //   rejects a run that has already reached `Started`, which covers the
-    //   common case of re-invoking cognify while a long run is in flight, and
-    //   keeps a stale `Started` row from being silently ignored.
-    //
-    //   By itself this row check is NOT serialization: it and the `Started`
-    //   write in `pipeline::execute` (`crates/core/src/pipeline.rs:916-923`)
-    //   are separate operations, so two callers entering between them would
-    //   both observe the pre-run state and both proceed. What actually
-    //   serializes runs is the exclusive-run claim taken below; this check
-    //   stays because it is the cheaper path (no write) for the common case of
-    //   a run already visibly in flight, and because it is what reports a
-    //   stale `Started` row rather than silently ignoring it.
-    //
-    //   For calibration against the reference: Python's lock is an
-    //   `asyncio.Lock` held in a module-level dict
-    //   (`infrastructure/locks/dataset_lock.py`), so it serializes within a
-    //   single process only. The claim below is a database row, so it also
-    //   excludes concurrent runs across processes.
-    let pipeline_name: &str = if effective_config.temporal_cognify {
-        "temporal-cognify"
-    } else {
-        COGNIFY_PIPELINE_STAMP_NAME
-    };
-    // The prior completed run, kept whichever way the gate goes: when the
-    // completion markers below turn out to cover every data item, the no-op
-    // result reports that run's id exactly as a cache hit would.
-    let mut prior_completed: Option<Uuid> = None;
-    match check_pipeline_run_qualification(pipeline_run_repo.as_ref(), dataset_id, pipeline_name)
-        .await
-        .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
-    {
-        Qualification::AlreadyCompleted(prior)
-            if effective_config.use_pipeline_cache
-                && !rollback::run_info_has_outstanding_failures(prior.run_info.as_ref()) =>
-        {
-            info!(
-                dataset_id = %dataset_id,
-                pipeline_run_id = %prior.pipeline_run_id,
-                "cognify: dataset already completed; short-circuiting (pipeline cache hit)"
-            );
-            return Ok(CognifyResult::already_completed(prior.pipeline_run_id));
-        }
-        // Cache off (the default), or a run that completed with files still
-        // outstanding: neither stops this one. A tolerant run that swept and
-        // listed its failed files is not a cache hit — the next run has work to
-        // do, and the completion markers tell it exactly which files.
-        Qualification::AlreadyCompleted(prior) => {
-            prior_completed = Some(prior.pipeline_run_id);
-        }
-        Qualification::AlreadyRunning(_prior) => {
-            return Err(CognifyError::PipelineAlreadyRunning {
-                pipeline_name: pipeline_name.to_string(),
-                dataset_id,
-            });
-        }
-        Qualification::Proceed => {}
-    }
+    // The lock is in-process, as in Python; `add` and `delete` take it from
+    // the same registry. A killed process is recovered at the next startup
+    // from the run's ownership marker (`cognee_delete::recover_stale_pipeline_runs`).
+    let pipeline_name: &str = COGNIFY_PIPELINE_STAMP_NAME;
+    DatasetLocks::global()
+        .hold([dataset_id], async {
+            // ── Empty-document short-circuit ────────────────────────────────────────
+            // Preserved from the pre-executor path: a caller passing zero documents
+            // gets back an empty result without paying for pipeline / context
+            // construction or a no-op LLM round-trip.
+            if data_items.is_empty() {
+                return Ok(CognifyResult::empty());
+            }
 
-    // ── Exclusive-run claim ─────────────────────────────────────────────────
-    // The `AlreadyRunning` verdict above only catches a run that already wrote
-    // its `Started` row; that write and the read above are separate
-    // operations, so two callers entering within the window between them would
-    // both observe the pre-run state and both proceed. This claim closes the
-    // window — the insert *is* the contended operation, so exactly one caller
-    // holds `(dataset_id, pipeline_name)` at a time. It also excludes
-    // concurrent runs across processes, which Python's in-process
-    // `asyncio.Lock` (`infrastructure/locks/dataset_lock.py`) does not.
-    //
-    // Deliberately NOT cleared by the startup orphan sweep wherever more than
-    // one process can share the database: claims are cross-process, so one
-    // instance restarting must not drop another live instance's claim. There
-    // a claim a killed process left behind is recovered by the staleness
-    // window below, or by an explicit `pipeline-unblock --clear`.
-    //
-    // The one exception is a deployment that asserts a single process per
-    // database (`Settings::resolved_single_process` — in-memory SQLite, or an
-    // explicit `COGNEE_SINGLE_PROCESS=1`): there every claim alive at startup
-    // was written by a dead incarnation of the starting process, so
-    // `release_all_pipeline_run_claims` sweeps them, alongside the orphaned
-    // `pipeline_runs` row the gate above would otherwise keep refusing on.
-    let claim_repo = Arc::clone(&pipeline_run_repo);
-    let claim_id = Uuid::new_v4();
-    if !claim_repo
-        .try_claim_pipeline_run(dataset_id, pipeline_name, claim_id, CLAIM_STALE_AFTER)
-        .await
-        .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
-    {
-        return Err(CognifyError::PipelineAlreadyRunning {
-            pipeline_name: pipeline_name.to_string(),
-            dataset_id,
-        });
-    }
+            // ── Completion markers: skip what an earlier run finished ───────────
+            // `incremental_loading` (default on) finally means something here.
+            // Python skips per item inside `run_tasks_data_item_incremental`; Rust
+            // skips for the dataset, before the pipeline is built, so a skipped
+            // item is never classified, never chunked and never sent to an LLM.
+            let data_items = if effective_config.incremental_loading {
+                rollback::drop_already_complete(&*database, dataset_id, data_items).await?
+            } else {
+                data_items
+            };
+            if data_items.is_empty() {
+                // Everything this dataset holds was cognified by an earlier run.
+                // Re-cognifying a complete dataset is a no-op — the behaviour
+                // change `incremental_loading` has been promising all along.
+                info!(
+                    dataset_id = %dataset_id,
+                    "cognify: every data item is already cognified; nothing to do"
+                );
+                let mut result = CognifyResult::empty();
+                result.already_completed = true;
+                // The latest completed run, so the no-op names the run that did
+                // the work.
+                result.prior_pipeline_run_id = match pipeline_run_repo
+                    .get_pipeline_run_by_dataset(dataset_id, pipeline_name)
+                    .await
+                    .map_err(|e| CognifyError::DatabaseError(e.to_string()))?
+                {
+                    Some(run) if matches!(run.status, PipelineRunStatus::Completed) => {
+                        Some(run.pipeline_run_id)
+                    }
+                    _ => None,
+                };
+                // Python still runs the pipeline over the dataset and skips each
+                // completed item inside it, so the second run has its own
+                // STARTED / COMPLETED pair. Rust skips before building the
+                // pipeline; the pair is written here.
+                result.pipeline_run_id = Some(
+                    record_run_without_work(
+                        &pipeline_run_repo,
+                        pipeline_name,
+                        user_id,
+                        tenant_id,
+                        dataset_id,
+                        effective_config.run_ownership_dir.as_deref(),
+                    )
+                    .await?,
+                );
+                return Ok(result);
+            }
+            // The items this run is responsible for: what it marks complete on
+            // success, and what its run record names.
+            let processed_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
 
-    // Everything past the claim runs inside this block so the release below is
-    // reached on every exit path, `?` included. `Drop` cannot await, so an RAII
-    // guard is not an option.
-    let outcome: Result<CognifyResult, CognifyError> = async {
-        // ── Empty-document short-circuit ────────────────────────────────────────
-        // Preserved from the pre-executor path: a caller passing zero documents
-        // gets back an empty result without paying for pipeline / context
-        // construction or a no-op LLM round-trip.
-        if data_items.is_empty() {
-            return Ok(CognifyResult::empty());
-        }
-
-        // Selects the pipeline below, and skips the DLT teardown. It no longer
-        // gates the marker filter: both branches run under Python's one
-        // `cognify_pipeline` marker key, so a dataset either branch completed
-        // is a no-op for the other — which is exactly what Python does, since
-        // its temporal cognify runs under the same pipeline name.
-        let is_temporal = effective_config.temporal_cognify;
-
-        // ── Completion markers: skip what an earlier run finished ───────────
-        // `incremental_loading` (default on) finally means something here.
-        // Python skips per item inside `run_tasks_data_item_incremental`; Rust
-        // skips for the dataset, before the pipeline is built, so a skipped
-        // item is never classified, never chunked and never sent to an LLM.
-        let data_items = if effective_config.incremental_loading {
-            rollback::drop_already_complete(&*database, dataset_id, data_items).await?
-        } else {
-            data_items
-        };
-        if data_items.is_empty() {
-            // Everything this dataset holds was cognified by an earlier run.
-            // Re-cognifying a complete dataset is a no-op — the behaviour
-            // change `incremental_loading` has been promising all along.
-            info!(
-                dataset_id = %dataset_id,
-                "cognify: every data item is already cognified; nothing to do"
-            );
-            let mut result = CognifyResult::empty();
-            result.already_completed = true;
-            result.prior_pipeline_run_id = prior_completed;
-            return Ok(result);
-        }
-        // The items this run is responsible for: what it marks complete on
-        // success, and what its run record names.
-        let processed_ids: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
-
-        // ── Branch: temporal vs. standard pipeline ──────────────────────────────
-        // LIB-06-04: both branches now route through `pipeline::execute`. The
-        // selection happens *before* `execute()` per locked Decision 2 — temporal
-        // is a distinct `Pipeline` with its own task DAG. Per locked option (a)
-        // (user decision 2026-05-15), the shared tasks
-        // (`make_classify_documents_task`, `make_extract_chunks_task`) stamp
-        // `Document` / `DocumentChunk` DataPoints with
-        // `source_pipeline = COGNIFY_PIPELINE_STAMP_NAME` on both
-        // branches; the temporal pipeline keeps its distinct identity at the
-        // `pipeline_runs` row level via `build_temporal_cognify_pipeline`'s
-        // `with_name("temporal-cognify")`.
-        let pipeline = if is_temporal {
-            build_temporal_cognify_pipeline(
-                Arc::clone(&storage),
-                Arc::clone(&graph_db),
-                Arc::clone(&vector_db),
-                Arc::clone(&embedding_engine),
-                Arc::clone(&llm),
-                Arc::clone(&database),
-                effective_config.clone(),
-            )
-        } else {
-            build_cognify_pipeline(
+            // ── The pipeline ────────────────────────────────────────────────────
+            // One pipeline, as in Python: the event-graph `temporal_cognify`
+            // variant is gone (SDK-1039, Python SDK-1115). Default cognify writes
+            // dates as `Timestamp` nodes, which TEMPORAL search reranks by.
+            //
+            // The run's ownership marker (Python `pipeline_run_ownership()` in
+            // `run_tasks`): held for the run's lifetime and recorded in the
+            // `STARTED` row, so startup recovery can prove a run abandoned. Marked
+            // closed once the run reached a terminal status; a process that dies
+            // mid-run leaves it behind, with its OS lock released.
+            let mut pipeline = build_cognify_pipeline(
                 Arc::clone(&storage),
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
@@ -4820,129 +3746,144 @@ async fn cognify_in_scope(
                 Arc::clone(&database),
                 Arc::clone(&ontology_resolver),
                 effective_config.clone(),
-            )
-        };
+            );
 
-        // The executor re-derives `PipelineRunInfo.pipeline_id` from
-        // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
-        // through `PipelineContext` as the placeholder.
-        let pipeline_ctx = PipelineContext {
-            pipeline_id: pipeline.id,
-            pipeline_name: pipeline.name.clone().unwrap_or_default(),
-            user_id,
-            tenant_id,
-            dataset_id: Some(dataset_id),
-            current_data: None,
-            run_id: None,
-            user_email: user_email.clone(),
-            provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        };
+            // The executor re-derives `PipelineRunInfo.pipeline_id` from
+            // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
+            // through `PipelineContext` as the placeholder.
+            let pipeline_ctx = PipelineContext {
+                pipeline_id: pipeline.id,
+                pipeline_name: pipeline.name.clone().unwrap_or_default(),
+                user_id,
+                tenant_id,
+                dataset_id: Some(dataset_id),
+                current_data: None,
+                run_id: None,
+                user_email: user_email.clone(),
+                provenance_visited: Arc::new(std::sync::Mutex::new(
+                    std::collections::HashSet::new(),
+                )),
+            };
 
-        let (_cancel_handle, ctx) = TaskContextBuilder::new()
-            .thread_pool(thread_pool)
-            .database(Arc::clone(&database))
-            .graph_db(Arc::clone(&graph_db))
-            .vector_db(Arc::clone(&vector_db))
-            .pipeline_context(pipeline_ctx)
-            .build()
-            .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
-        let ctx = Arc::new(ctx);
+            let (_cancel_handle, ctx) = TaskContextBuilder::new()
+                .thread_pool(thread_pool)
+                .database(Arc::clone(&database))
+                .graph_db(Arc::clone(&graph_db))
+                .vector_db(Arc::clone(&vector_db))
+                .pipeline_context(pipeline_ctx)
+                .build()
+                .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
+            let ctx = Arc::new(ctx);
 
-        let input = CognifyInput {
-            data_items,
-            dataset_id,
-            user_id,
-            tenant_id,
-        };
-        let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
+            let input = CognifyInput {
+                data_items,
+                dataset_id,
+                user_id,
+                tenant_id,
+            };
+            let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
 
-        // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the four-state
-        // `pipeline_runs` trail through the caller-supplied repository.
-        // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
-        // pass a `SeaOrmPipelineRunRepository` to surface rows in the
-        // `/api/v1/activity/pipeline-runs` endpoint.
-        //
-        // Wrapped in `RunIdCapturingWatcher` so the run id is in hand on every
-        // exit path. The executor mints it internally and hands it to tasks
-        // through a cloned context, so a run that *fails* leaves no result to
-        // read it from — and a sweep with no run to select on would silently
-        // remove nothing.
-        let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
-        // One cognify run is one bulk load for the vector store: a backend
-        // may defer per-row ANN index maintenance until the scope ends. The
-        // hint never changes results, so a failure to open or close the scope
-        // is logged, not returned (the rows are written either way).
-        //
-        // Held as a `BulkLoadGuard` rather than a `begin` / `end` pair around
-        // the await, because this future does not always run to completion:
-        // an HTTP caller can disconnect, a caller can wrap the run in
-        // `tokio::time::timeout` or race it in a `select!`, and a panic in the
-        // executor unwinds straight past a trailing statement. A missed close
-        // leaves a counting backend's scope depth above zero forever, and from
-        // then on every collection it defers loses its ANN index permanently.
-        // The guard's `Drop` closes the scope synchronously on those paths and
-        // leaves the deferred maintenance to the next load or to `close()`.
-        let bulk = match BulkLoadGuard::begin(vector_db.as_ref()).await {
-            Ok(guard) => Some(guard),
-            Err(e) => {
-                warn!(error = %e, "cognify: vector store rejected the bulk-load scope");
-                None
+            // Decision 11 (gap 08-07): `DbPipelineWatcher` persists the
+            // `pipeline_runs` trail through the caller-supplied repository.
+            // Embedded callers pass `NoopPipelineRunRepository`; CLI / HTTP callers
+            // pass a `SeaOrmPipelineRunRepository` to surface rows in the
+            // `/api/v1/activity/pipeline-runs` endpoint.
+            //
+            // Wrapped in `RunIdCapturingWatcher` so the run id is in hand on every
+            // exit path. The executor mints it internally and hands it to tasks
+            // through a cloned context, so a run that *fails* leaves no result to
+            // read it from — and a sweep with no run to select on would silently
+            // remove nothing.
+            let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
+            // One cognify run is one bulk load for the vector store: a backend
+            // may defer per-row ANN index maintenance until the scope ends. The
+            // hint never changes results, so a failure to open or close the scope
+            // is logged, not returned (the rows are written either way).
+            //
+            // Held as a `BulkLoadGuard` rather than a `begin` / `end` pair around
+            // the await, because this future does not always run to completion:
+            // an HTTP caller can disconnect, a caller can wrap the run in
+            // `tokio::time::timeout` or race it in a `select!`, and a panic in the
+            // executor unwinds straight past a trailing statement. A missed close
+            // leaves a counting backend's scope depth above zero forever, and from
+            // then on every collection it defers loses its ANN index permanently.
+            // The guard's `Drop` closes the scope synchronously on those paths and
+            // leaves the deferred maintenance to the next load or to `close()`.
+            let bulk = match BulkLoadGuard::begin(vector_db.as_ref()).await {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    warn!(error = %e, "cognify: vector store rejected the bulk-load scope");
+                    None
+                }
+            };
+            // Taken right before the run, so no early return above strands a
+            // marker that no row names.
+            let mut ownership = effective_config
+                .run_ownership_dir
+                .as_deref()
+                .map(cognee_core::RunOwnership::acquire);
+            pipeline.recovery_lock = ownership
+                .as_ref()
+                .and_then(cognee_core::RunOwnership::token);
+            let executed = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
+                .await
+                .map_err(unwrap_execution_error);
+            // Whichever way it ended, the executor wrote the run's terminal row
+            // (or never started one), so there is nothing left to recover. When
+            // that write failed the run is still `STARTED`: the marker stays so
+            // startup recovery can retire it (Python closes it only after
+            // `log_pipeline_run_complete` / `_error` returned,
+            // `run_tasks.py:342,403`).
+            if let Some(ownership) = ownership.as_mut()
+                && !watcher.terminal_write_failed()
+            {
+                ownership.mark_closed();
             }
-        };
-        let executed = cognee_core::pipeline::execute(&pipeline, inputs, ctx, &watcher)
-            .await
-            .map_err(unwrap_execution_error);
-        if let Some(bulk) = bulk
-            && let Err(e) = bulk.finish().await
-        {
-            warn!(error = %e, "cognify: vector store failed to finish its bulk load");
-        }
-
-        // ── The policy layer ────────────────────────────────────────────────
-        // Everything from here on is `rollback`'s decision: which scope to
-        // sweep, which items to mark complete, and what the run record says.
-        let run_ctx = rollback::RunContext {
-            database: Arc::clone(&database),
-            graph_db: Arc::clone(&graph_db),
-            vector_db: Arc::clone(&vector_db),
-            repo: Arc::clone(&pipeline_run_repo),
-            dataset_id,
-            pipeline_run_id: watcher.run_id(),
-            pipeline_id: watcher.pipeline_id(),
-            pipeline_name,
-            processed: processed_ids,
-            config: &effective_config,
-        };
-
-        let outputs = match executed {
-            Ok(outputs) => outputs,
-            Err(e) => {
-                // The executor already wrote the `ERRORED` row on its way out.
-                rollback::on_run_failed(&run_ctx, &e, true).await;
-                return Err(e);
+            if let Some(bulk) = bulk
+                && let Err(e) = bulk.finish().await
+            {
+                warn!(error = %e, "cognify: vector store failed to finish its bulk load");
             }
-        };
 
-        // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
-        // outside the executor.
-        //
-        // LIB-06-04: skip DLT FK extraction on the temporal branch — temporal
-        // does not propagate `documents_for_dlt` (and Python's temporal cognify
-        // does not run DLT teardown either).
-        //
-        // The teardown's own artifacts get ownership rows like everything else
-        // the run wrote, so a sweep can reach them. It takes the run id from
-        // the result because it runs outside the executor and never sees a
-        // `TaskContext`.
-        //
-        // The watcher has already written `COMPLETED` by now, so a failure
-        // here needs a further `ERRORED` row of its own — `on_run_failed`
-        // appends one. Without it a swept run would be left looking complete,
-        // and would then be a pipeline-cache hit for a dataset whose artifacts
-        // are gone.
-        let after_completion = async {
-            let result = extract_cognify_outputs(outputs)?;
-            if !is_temporal {
+            // ── The policy layer ────────────────────────────────────────────────
+            // Everything from here on is `rollback`'s decision: which scope to
+            // sweep, which items to mark complete, and what the run record says.
+            let run_ctx = rollback::RunContext {
+                database: Arc::clone(&database),
+                graph_db: Arc::clone(&graph_db),
+                vector_db: Arc::clone(&vector_db),
+                repo: Arc::clone(&pipeline_run_repo),
+                dataset_id,
+                pipeline_run_id: watcher.run_id(),
+                pipeline_id: watcher.pipeline_id(),
+                pipeline_name,
+                processed: processed_ids,
+                config: &effective_config,
+            };
+
+            let outputs = match executed {
+                Ok(outputs) => outputs,
+                Err(e) => {
+                    // The executor already wrote the `ERRORED` row on its way out.
+                    rollback::on_run_failed(&run_ctx, &e, true).await;
+                    return Err(e);
+                }
+            };
+
+            // Decision 5: post-pipeline teardown — `extract_dlt_fk_edges` stays
+            // outside the executor.
+            //
+            // The teardown's own artifacts get ownership rows like everything else
+            // the run wrote, so a sweep can reach them. It takes the run id from
+            // the result because it runs outside the executor and never sees a
+            // `TaskContext`.
+            //
+            // The watcher has already written `COMPLETED` by now, so a failure
+            // here needs a further `ERRORED` row of its own — `on_run_failed`
+            // appends one. Without it a swept run would be left looking complete
+            // although its artifacts are gone.
+            let after_completion = async {
+                let result = extract_cognify_outputs(outputs)?;
                 extract_dlt_fk_edges(
                     &result.chunks,
                     &result.documents_for_dlt,
@@ -4951,37 +3892,89 @@ async fn cognify_in_scope(
                     LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
                 )
                 .await?;
+                Ok::<CognifyResult, CognifyError>(result)
             }
-            Ok::<CognifyResult, CognifyError>(result)
-        }
-        .await;
+            .await;
 
-        match after_completion {
-            Ok(result) => {
-                rollback::on_run_completed(&run_ctx, &result.failures).await;
-                Ok(result)
+            match after_completion {
+                Ok(result) => {
+                    rollback::on_run_completed(&run_ctx, &result.failures).await;
+                    Ok(result)
+                }
+                Err(e) => {
+                    rollback::on_run_failed(&run_ctx, &e, false).await;
+                    Err(e)
+                }
             }
-            Err(e) => {
-                rollback::on_run_failed(&run_ctx, &e, false).await;
-                Err(e)
-            }
-        }
-    }
-    .await;
-
-    if let Err(e) = claim_repo
-        .release_pipeline_run_claim(dataset_id, pipeline_name, claim_id)
+        })
         .await
-    {
-        // The run is over either way, and an unreleased claim is reclaimed as
-        // stale rather than lost, so this must not mask the outcome.
-        warn!(
-            dataset_id = %dataset_id,
-            pipeline_name = %pipeline_name,
-            "failed to release the pipeline-run claim (it will age out): {e}"
-        );
-    }
+}
 
+/// Write the `STARTED` / `COMPLETED` pair of a run that found every data item
+/// already cognified, and return its run id.
+///
+/// The rows are what the executor's watcher writes for a run: the `STARTED`
+/// row carries the run's `recovery_lock` when `ownership_dir` is set, as
+/// every Python run does (`run_tasks.py:96`), and `COMPLETED` is `{}`; the
+/// marker is removed once the pair is written. A failed `COMPLETED` write is a
+/// failed run, as in the executor and in Python (`run_tasks.py`): the run is
+/// closed with an `ERRORED` row and the error is returned (the marker stays
+/// only if that write failed too, for startup recovery to retire the run). Nothing was
+/// done in this run, so there is nothing to roll back.
+async fn record_run_without_work(
+    repo: &Arc<dyn PipelineRunRepository>,
+    pipeline_name: &str,
+    user_id: Option<Uuid>,
+    tenant_id: Option<Uuid>,
+    dataset_id: Uuid,
+    ownership_dir: Option<&std::path::Path>,
+) -> Result<Uuid, CognifyError> {
+    use cognee_core::pipeline::{
+        PipelineRunInfo, PipelineRunStatus as CoreStatus, PipelineWatcher,
+    };
+    use cognee_core::pipeline_run_registry::DbPipelineWatcher;
+
+    let watcher = DbPipelineWatcher::new(Arc::clone(repo));
+    let mut ownership = ownership_dir.map(cognee_core::RunOwnership::acquire);
+    let now = chrono::Utc::now();
+    let mut run = PipelineRunInfo {
+        run_id: Uuid::new_v4(),
+        pipeline_id: cognee_core::pipeline::deterministic_pipeline_id(
+            Some(pipeline_name),
+            user_id,
+            Some(dataset_id),
+        )
+        .unwrap_or_else(Uuid::new_v4),
+        pipeline_name: pipeline_name.to_string(),
+        user_id,
+        tenant_id,
+        dataset_id: Some(dataset_id),
+        status: CoreStatus::Started,
+        started_at: now,
+        completed_at: None,
+        recovery_lock: ownership
+            .as_ref()
+            .and_then(cognee_core::RunOwnership::token),
+    };
+    watcher.on_pipeline_run_started(&run).await;
+    run.status = CoreStatus::Completed;
+    run.completed_at = Some(chrono::Utc::now());
+    let completed = watcher.on_pipeline_run_completed(&run, 0).await;
+    let outcome = match completed {
+        Ok(()) => Ok(run.run_id),
+        Err(e) => {
+            run.status = CoreStatus::Errored;
+            watcher.on_pipeline_run_errored(&run, &e.0).await;
+            Err(CognifyError::Execute(format!(
+                "the run's COMPLETED record could not be written: {e}"
+            )))
+        }
+    };
+    if let Some(ownership) = ownership.as_mut()
+        && !watcher.terminal_write_failed()
+    {
+        ownership.mark_closed();
+    }
     outcome
 }
 
@@ -5021,7 +4014,7 @@ pub(crate) fn unwrap_execution_error(e: cognee_core::pipeline::ExecutionError) -
 /// Returns [`CognifyError::OutputTypeMismatch`] when the downcast fails — a
 /// programmer error indicating the pipeline's last task does not emit
 /// `CognifyResult`. Mirrors `cognee_ingestion::pipeline::extract_data_outputs`
-/// (LIB-06-01) and `cognee_cognify::memify::extract_memify_outputs` (LIB-06-02).
+/// (LIB-06-01).
 fn extract_cognify_outputs(outputs: Vec<Arc<dyn Value>>) -> Result<CognifyResult, CognifyError> {
     let mut first = outputs
         .into_iter()
@@ -5944,8 +4937,7 @@ async fn generate_embeddings(
 
     if !chunks.is_empty() {
         let chunk_texts: Vec<_> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let chunk_vectors = engine
-            .embed(&chunk_texts)
+        let chunk_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &chunk_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -5961,8 +4953,7 @@ async fn generate_embeddings(
 
     if !entities.is_empty() {
         let entity_names: Vec<_> = entities.iter().map(|e| e.entity.name.as_str()).collect();
-        let entity_vectors = engine
-            .embed(&entity_names)
+        let entity_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &entity_names)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -5978,8 +4969,7 @@ async fn generate_embeddings(
 
     if !summaries.is_empty() {
         let summary_texts: Vec<_> = summaries.iter().map(|s| s.text.as_str()).collect();
-        let summary_vectors = engine
-            .embed(&summary_texts)
+        let summary_vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &summary_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -6016,8 +5006,7 @@ async fn reuse_or_embed(
     let fresh = if missing_texts.is_empty() {
         Vec::new()
     } else {
-        engine
-            .embed(&missing_texts)
+        cognee_embedding::embed_in_batches(engine.as_ref(), &missing_texts)
             .await
             .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?
     };
@@ -6036,6 +5025,43 @@ async fn reuse_or_embed(
         .collect()
 }
 
+/// A document's display name, as Python's chunkers stamp it on
+/// `DocumentChunk.document_name`: `name or basename(raw_data_location)`
+/// (`TextChunker.py:18`).
+fn document_display_name(doc: &Document) -> &str {
+    if !doc.name.is_empty() {
+        return &doc.name;
+    }
+    doc.raw_data_location
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(doc.raw_data_location.as_str())
+}
+
+/// The `IndexSchema` reference scalars a custom (dynamic) model carries as its
+/// own properties. Python copies them with `getattr(data_point, name, None)`
+/// (`LanceDBAdapter.py:1696-1701`), so a custom model that declares e.g. a
+/// `document_id` field gets it in the payload; any other model gets `null`.
+fn dynamic_index_refs(properties: &serde_json::Map<String, serde_json::Value>) -> IndexRefs<'_> {
+    let uuid = |key: &str| {
+        properties
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| Uuid::parse_str(s).ok())
+    };
+    let text = |key: &str| properties.get(key).and_then(serde_json::Value::as_str);
+    IndexRefs {
+        document_id: uuid("document_id"),
+        document_name: text("document_name"),
+        chunk_index: properties
+            .get("chunk_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok()),
+        source_chunk_id: uuid("source_chunk_id"),
+        external_metadata: text("external_metadata"),
+    }
+}
+
 /// Index data points in vector database.
 ///
 /// Every collection is written in windows of
@@ -6050,17 +5076,12 @@ async fn reuse_or_embed(
 async fn index_data_points(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
-    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
-    edges: &[GraphEdgePair],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
-    config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
 ) -> Result<IndexedFieldsStats, CognifyError> {
     // Each collection used to be embedded, built and written in one piece, so
@@ -6081,17 +5102,12 @@ async fn index_data_points(
     let indexed = index_data_points_windowed(
         chunks,
         entities,
-        timestamps,
         summaries,
         documents,
-        edges,
         edge_types,
         dataset_id,
-        user_id,
-        tenant_id,
         engine,
         Arc::clone(&vector_db),
-        config,
         precomputed_embeddings,
         window,
     )
@@ -6102,130 +5118,6 @@ async fn index_data_points(
         warn!(error = %e, "index_data_points: vector store failed to finish its bulk load");
     }
     indexed
-}
-
-/// Write `triplets` to the `Triplet`/`text` collection in windows, copying
-/// each one's `source_*` provenance from the [`EdgeType`] its edge's retrieval
-/// text keys. `edges` are the edges the triplets were built from.
-async fn index_triplet_points(
-    triplets: &[Triplet],
-    edges: &[GraphEdgePair],
-    edge_types: &[EdgeType],
-    engine: &Arc<dyn EmbeddingEngine>,
-    vector_db: &Arc<dyn VectorDB>,
-    window: usize,
-) -> Result<(), CognifyError> {
-    if !vector_db
-        .has_collection("Triplet", "text")
-        .await
-        .map_err(|e| CognifyError::VectorDBError(e.to_string()))?
-    {
-        vector_db
-            .create_collection("Triplet", "text", engine.dimension())
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-    }
-
-    // Index the EdgeType DataPoints so each triplet payload can
-    // inherit its originating edge's provenance (`source_*`) keys per
-    // gap-05/08 §4.4. Triplet itself has no embedded `DataPoint`, so we
-    // narrow the dump to just the five `source_*` keys to avoid
-    // colliding with Triplet's own flat fields (id, type, etc.).
-    //
-    // EdgeTypes are now keyed on each edge's *retrieval text*
-    // (`edge_retrieval_text`: nonblank `edge_text`, else
-    // `relationship_name`) to match Python's `generate_edge_id`, but a
-    // Triplet only carries the bare `relationship_name`. We therefore
-    // map each triplet's (source, target, relationship) tuple to its
-    // edge's retrieval text via the source edges, then look up the
-    // EdgeType by that text — so the provenance copy survives the
-    // Part-3 keying change even when edges carry a description.
-    //
-    // The lookup is keyed on the EdgeType's **derived point id**, not
-    // on its `relationship_name`, because `build_edge_types` folds
-    // spellings that normalize alike onto one DataPoint (SDK-778):
-    // only one of `"is a"` / `"Is A"` / `"is_a"` survives into
-    // `edge_types`, so a raw-text key would miss for every edge that
-    // spelled the relation differently from the survivor and silently
-    // drop that triplet's `source_*` provenance. Routing both sides
-    // through `deterministic_id` makes the lookup follow the same
-    // collapse the writer applied.
-    let edge_type_by_id: std::collections::HashMap<Uuid, &EdgeType> =
-        edge_types.iter().map(|et| (et.base.id, et)).collect();
-    let edge_text_by_triple: std::collections::HashMap<(Uuid, Uuid, &str), String> = edges
-        .iter()
-        .map(|e| {
-            (
-                (
-                    e.source_entity_id,
-                    e.target_entity_id,
-                    e.relationship_name.as_str(),
-                ),
-                edge_retrieval_text(e),
-            )
-        })
-        .collect();
-
-    announce_index_write(vector_db, "Triplet", "text", triplets.len()).await?;
-    for triplet_window in triplets.chunks(window) {
-        let triplet_texts: Vec<_> = triplet_window.iter().map(|t| t.text.as_str()).collect();
-        let triplet_vectors = engine
-            .embed(&triplet_texts)
-            .await
-            .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
-
-        let triplet_points: Vec<VectorPoint> = triplet_window
-            .iter()
-            .zip(triplet_vectors)
-            .map(|(triplet, vector)| {
-                let mut point = VectorPoint::new(triplet.id, vector)
-                    .with_metadata("type", json!("Triplet"))
-                    .with_metadata("field", json!("text"))
-                    // The embedded text itself, as Python's Triplet
-                    // payload carries it: TripletRetriever renders
-                    // its context from this key.
-                    .with_metadata("text", json!(triplet.text.clone()))
-                    .with_metadata("source_id", json!(triplet.source_entity_id.to_string()))
-                    .with_metadata("target_id", json!(triplet.target_entity_id.to_string()))
-                    .with_metadata("relationship", json!(triplet.relationship_name.clone()));
-
-                // Triplet special case (gap-05/08 §4.4): copy only the
-                // five `source_*` keys from the originating EdgeType's
-                // DataPoint, so Triplet's own flat fields are not
-                // overwritten.
-                let edge_type = edge_text_by_triple
-                    .get(&(
-                        triplet.source_entity_id,
-                        triplet.target_entity_id,
-                        triplet.relationship_name.as_str(),
-                    ))
-                    .filter(|text| !text.is_empty())
-                    .and_then(|text| edge_type_by_id.get(&EdgeType::deterministic_id(text)));
-                if let Some(edge_type) = edge_type {
-                    for (k, v) in edge_type.base.vector_metadata() {
-                        if matches!(
-                            k.as_str(),
-                            "source_pipeline"
-                                | "source_task"
-                                | "source_user"
-                                | "source_node_set"
-                                | "source_content_hash"
-                        ) {
-                            point = point.with_metadata(k, v);
-                        }
-                    }
-                }
-                point
-            })
-            .collect();
-
-        vector_db
-            .index_points("Triplet", "text", &triplet_points)
-            .await
-            .map_err(|e| CognifyError::VectorDBError(e.to_string()))?;
-    }
-
-    Ok(())
 }
 
 /// Announce `points` points to `data_type`/`field_name`, the total the
@@ -6248,17 +5140,12 @@ async fn announce_index_write(
 async fn index_data_points_windowed(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
-    timestamps: &[TimestampNode],
     summaries: &[TextSummary],
     documents: &[Document],
-    edges: &[GraphEdgePair],
     edge_types: &[EdgeType],
     dataset_id: Uuid,
-    user_id: Option<Uuid>,
-    tenant_id: Option<Uuid>,
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
-    config: &CognifyConfig,
     precomputed_embeddings: &[Embedding],
     window: usize,
 ) -> Result<IndexedFieldsStats, CognifyError> {
@@ -6276,6 +5163,13 @@ async fn index_data_points_windowed(
     let precomputed: std::collections::HashMap<Uuid, &[f32]> = precomputed_embeddings
         .iter()
         .map(|e| (e.data_point_id, e.vector.as_slice()))
+        .collect();
+
+    // Display names of the chunks' documents, as Python's chunkers stamp
+    // `DocumentChunk.document_name` (`name or basename(raw_data_location)`).
+    let document_names: HashMap<Uuid, &str> = documents
+        .iter()
+        .map(|doc| (doc.base.id, document_display_name(doc)))
         .collect();
 
     // 1. Index DocumentChunk.text field
@@ -6301,32 +5195,26 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(chunk, vector)| {
-                    let mut point = VectorPoint::new(chunk.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    //    Provides `type`, `belongs_to_set`, all source_* keys, etc.
-                    for (k, v) in chunk.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row. The text is moved into the
+                    // payload as the one copy we have to make (SDK-507).
+                    // `external_metadata` stays null: Rust chunks do not carry
+                    // their document's metadata yet (SDK-1057).
+                    let refs = IndexRefs {
+                        document_id: Some(chunk.document_id),
+                        document_name: document_names.get(&chunk.document_id).copied(),
+                        chunk_index: Some(chunk.chunk_index),
+                        ..IndexRefs::default()
+                    };
+                    VectorPoint {
+                        id: chunk.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &chunk.base,
+                            chunk.text.clone(),
+                            &refs,
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("text"))
-                        // `json!(expr)` routes a non-literal through `to_value`,
-                        // which serialises the clone into a *second* String before
-                        // dropping the first. Constructing the node directly moves
-                        // the one copy we have to make (SDK-507).
-                        .with_metadata("text", serde_json::Value::String(chunk.text.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()))
-                        .with_metadata("document_id", json!(chunk.document_id.to_string()))
-                        .with_metadata("chunk_index", json!(chunk.chunk_index));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6366,49 +5254,20 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(entity, vector)| {
-                    let mut point = VectorPoint::new(entity.entity.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in entity.entity.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row: `text` is the name. The
+                    // entity's type and description are not in it (D1: Python
+                    // shows a description only for fact-reviewed entities, read
+                    // from the graph, never from the payload).
+                    VectorPoint {
+                        id: entity.entity.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &entity.entity.base,
+                            entity.entity.name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    //    `text` is the indexed value, as Python's `IndexSchema`
-                    //    writes it for every collection (`text=getattr(dp,
-                    //    index_field)`). `name` lives on the outer `Entity`, not
-                    //    the base, so step 1 never carries it; without `text` the
-                    //    hybrid retriever has nothing to call the entity but its id.
-                    point = point
-                        .with_metadata("field", json!("name"))
-                        .with_metadata(
-                            "text",
-                            serde_json::Value::String(entity.entity.name.clone()),
-                        )
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    // An untyped entity (blank extracted type) has no type name.
-                    if let Some(entity_type) = &entity.entity_type {
-                        point = point.with_metadata("entity_type", json!(entity_type.name.clone()));
-                    }
-                    // `description` diverges from Python, whose `IndexSchema` row
-                    // carries only `text`. The hybrid retriever renders it as the
-                    // line under `### {name}` — a slot the prompt template keeps
-                    // but neither SDK filled, so an entity's description reached
-                    // the prompt only as repeated per-chunk "Document chunk
-                    // mentions …" bullets (Python) or not at all (Rust). Skipped
-                    // when it merely repeats the name, as an ontology
-                    // individual's does.
-                    let description = entity.entity.description.trim();
-                    if !description.is_empty() && description != entity.entity.name.trim() {
-                        point = point.with_metadata("description", json!(description));
-                    }
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6447,35 +5306,22 @@ async fn index_data_points_windowed(
                 .await?;
             for type_window in unique_entity_types.chunks(window) {
                 let type_names: Vec<_> = type_window.iter().map(|et| et.name.as_str()).collect();
-                let vectors = engine
-                    .embed(&type_names)
+                let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &type_names)
                     .await
                     .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
                 let points: Vec<VectorPoint> = type_window
                     .iter()
                     .zip(vectors)
-                    .map(|(et, vector)| {
-                        let mut point = VectorPoint::new(et.base.id, vector);
-
-                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                        for (k, v) in et.base.vector_metadata() {
-                            point = point.with_metadata(k, v);
-                        }
-
-                        // 2. Context-specific keys not present on the DataPoint.
-                        //    `text` as for `Entity` above: Python's `IndexSchema`.
-                        point = point
-                            .with_metadata("field", json!("name"))
-                            .with_metadata("text", serde_json::Value::String(et.name.clone()))
-                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                        if let Some(uid) = user_id {
-                            point = point.with_metadata("user_id", json!(uid.to_string()));
-                        }
-                        if let Some(tid) = tenant_id {
-                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                        }
-                        point
+                    .map(|(et, vector)| VectorPoint {
+                        id: et.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &et.base,
+                            et.name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     })
                     .collect();
 
@@ -6513,33 +5359,22 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(summary, vector)| {
-                    let mut point = VectorPoint::new(summary.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in summary.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row; `source_chunk_id` pairs the
+                    // summary with its chunk in hybrid search.
+                    let refs = IndexRefs {
+                        source_chunk_id: summary.source_chunk_id,
+                        ..IndexRefs::default()
+                    };
+                    VectorPoint {
+                        id: summary.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &summary.base,
+                            summary.text.clone(),
+                            &refs,
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("text"))
-                        // See the chunk-text note above — one copy, not two.
-                        .with_metadata("text", serde_json::Value::String(summary.text.clone()))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(made_from) = summary.made_from {
-                        point = point.with_metadata("chunk_id", json!(made_from.to_string()));
-                    }
-                    if let Some(source_chunk_id) = summary.source_chunk_id {
-                        point = point
-                            .with_metadata("source_chunk_id", json!(source_chunk_id.to_string()));
-                    }
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6551,21 +5386,6 @@ async fn index_data_points_windowed(
 
         stats.record("TextSummary", "text", summaries.len());
         info!("Indexed {} summaries", summaries.len());
-    }
-
-    // 4. Index triplets (if enabled in config)
-    if config.embed_triplets && !edges.is_empty() && !entities.is_empty() {
-        use crate::triplet_creation::create_triplets_from_graph_with_timestamps;
-
-        let triplets = create_triplets_from_graph_with_timestamps(entities, timestamps, edges);
-
-        if !triplets.is_empty() {
-            index_triplet_points(&triplets, edges, edge_types, &engine, &vector_db, window).await?;
-            stats.triplet_count = triplets.len();
-            info!("Indexed {} triplets", triplets.len());
-        }
-    } else if config.embed_triplets {
-        info!("Triplet embedding enabled but no edges/entities to index");
     }
 
     // 5. Index EdgeType.relationship_name field
@@ -6593,8 +5413,7 @@ async fn index_data_points_windowed(
                 .iter()
                 .map(|et| et.relationship_name.as_str())
                 .collect();
-            let vectors = engine
-                .embed(&names)
+            let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &names)
                 .await
                 .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -6602,26 +5421,17 @@ async fn index_data_points_windowed(
                 .iter()
                 .zip(vectors)
                 .map(|(et, vector)| {
-                    let mut point = VectorPoint::new(et.base.id, vector);
-
-                    // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                    for (k, v) in et.base.vector_metadata() {
-                        point = point.with_metadata(k, v);
+                    // Python's `IndexSchema` row: the retrieval text is `text`.
+                    VectorPoint {
+                        id: et.base.id,
+                        vector,
+                        metadata: index_schema_payload(
+                            &et.base,
+                            et.relationship_name.clone(),
+                            &IndexRefs::default(),
+                            Some(dataset_id),
+                        ),
                     }
-
-                    // 2. Context-specific keys not present on the DataPoint.
-                    point = point
-                        .with_metadata("field", json!("relationship_name"))
-                        .with_metadata("relationship_name", json!(et.relationship_name.clone()))
-                        .with_metadata("number_of_edges", json!(et.number_of_edges))
-                        .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                    if let Some(uid) = user_id {
-                        point = point.with_metadata("user_id", json!(uid.to_string()));
-                    }
-                    if let Some(tid) = tenant_id {
-                        point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                    }
-                    point
                 })
                 .collect();
 
@@ -6667,8 +5477,7 @@ async fn index_data_points_windowed(
             announce_index_write(&vector_db, type_name, "name", docs.len()).await?;
             for doc_window in docs.chunks(window) {
                 let names: Vec<&str> = doc_window.iter().map(|d| d.name.as_str()).collect();
-                let vectors = engine
-                    .embed(&names)
+                let vectors = cognee_embedding::embed_in_batches(engine.as_ref(), &names)
                     .await
                     .map_err(|e| CognifyError::EmbeddingError(e.to_string()))?;
 
@@ -6676,25 +5485,22 @@ async fn index_data_points_windowed(
                     .iter()
                     .zip(vectors)
                     .map(|(doc, vector)| {
-                        let mut point = VectorPoint::new(doc.base.id, vector);
-
-                        // 1. Full DataPoint dump (Python parity — see gap-05/08).
-                        for (k, v) in doc.base.vector_metadata() {
-                            point = point.with_metadata(k, v);
+                        // Python's `IndexSchema` row: `text` is the name, and
+                        // `external_metadata` is the document's own JSON text.
+                        let refs = IndexRefs {
+                            external_metadata: doc.external_metadata.as_deref(),
+                            ..IndexRefs::default()
+                        };
+                        VectorPoint {
+                            id: doc.base.id,
+                            vector,
+                            metadata: index_schema_payload(
+                                &doc.base,
+                                doc.name.clone(),
+                                &refs,
+                                Some(dataset_id),
+                            ),
                         }
-
-                        // 2. Context-specific keys not present on the DataPoint.
-                        point = point
-                            .with_metadata("field", json!("name"))
-                            .with_metadata("name", json!(doc.name.clone()))
-                            .with_metadata("dataset_id", json!(dataset_id.to_string()));
-                        if let Some(uid) = user_id {
-                            point = point.with_metadata("user_id", json!(uid.to_string()));
-                        }
-                        if let Some(tid) = tenant_id {
-                            point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                        }
-                        point
                     })
                     .collect();
 
@@ -6724,14 +5530,15 @@ async fn index_data_points_windowed(
 pub const CLASSIFY_DOCUMENTS_TASK_NAME: &str = "classify_documents";
 pub const EXTRACT_CHUNKS_TASK_NAME: &str = "extract_chunks_from_documents";
 pub const EXTRACT_GRAPH_TASK_NAME: &str = "extract_graph_from_data";
-pub const SUMMARIZE_TEXT_TASK_NAME: &str = "summarize_text";
-/// Name of the fused **pipeline stage** that runs both of the two above,
-/// concurrently — [`make_extract_graph_and_summarize_task`].
+/// Name of the fused **pipeline stage** that runs graph extraction and
+/// summarization concurrently — [`make_extract_graph_and_summarize_task`].
 ///
 /// Matches the name of the single Python task it ports
 /// (`cognify.py:350-375`), which is also why both halves' `*_TASK_RANK`
-/// constants are 3. It names the *stage*; the two constants above still name
-/// what each half writes to `DataPoint.source_task`, and those are unchanged.
+/// constants are 3. It is also what `DataPoint.source_task` carries on every
+/// `TextSummary`: Python's `run_tasks_base._stamp_provenance` stamps the
+/// yielded summaries with the merged task's name, while Entity and EntityType
+/// keep [`EXTRACT_GRAPH_TASK_NAME`] (stamped inside `extract_graph_from_data`).
 pub const EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME: &str = "extract_graph_and_summarize";
 pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
 
@@ -6813,19 +5620,6 @@ pub const ADD_DATA_POINTS_TASK_RANK: i32 = 4;
 /// by [`build_cognify_pipeline`], and the value the visualization's
 /// operations catalog matches on to mark a stage as observed.
 pub const COGNIFY_PIPELINE_STAMP_NAME: &str = "cognify_pipeline";
-
-/// How long an exclusive-run claim stays valid without being released, after
-/// which another run may reclaim it — see
-/// [`PipelineRunRepository::try_claim_pipeline_run`].
-///
-/// Deliberately generous. Reclaiming too eagerly is the worse failure: it
-/// re-admits a concurrent run into a legitimately long one (a multi-gigabyte
-/// cognify runs for hours), which is exactly what the claim exists to prevent.
-/// The cost of being generous is that a claim left by a killed process blocks
-/// that dataset until it ages out — recoverable by resetting the dataset's
-/// pipeline-run state, and no worse than the stale `Started` row such a crash
-/// already leaves behind.
-pub const CLAIM_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// Resolve the user label for in-body stamping from a [`TaskContext`].
 ///
@@ -7109,17 +5903,17 @@ pub fn make_extract_graph_task_with_rank(
             }
             // Backend-produced summaries never pass through
             // `make_summarize_text_task_with_rank`, so their stamp has to
-            // happen here. `source_task` is deliberately the *summarization*
-            // task name, not this one: the cross-SDK provenance parity harness
-            // keys `TextSummary` off `"summarize_text"`, and both halves of the
-            // fused stage share one rank (see
+            // happen here. `source_task` is the fused stage's name, as in
+            // Python (`run_tasks_base._stamp_provenance` stamps the yielded
+            // summaries with `extract_graph_and_summarize`), and both halves
+            // of the fused stage share one rank (see
             // `make_extract_graph_and_summarize_task_with_rank`), so the `rank`
             // this factory already has is the right one.
             for summary in &mut graph_data.backend_summaries {
                 stamp_provenance(
                     &mut summary.base,
                     COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
+                    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
                     user_label.as_deref(),
                     rank,
                 );
@@ -7165,12 +5959,13 @@ pub fn make_extract_graph_task_with_rank(
 /// without that caveat; it is withdrawn. If the sibling is not extraction,
 /// leave `graph_backend` unset on the config this task is built from.
 ///
-/// In-body provenance stamping: stamps every emitted `TextSummary`
-/// with `source_task = "summarize_text"`. Nothing else is stamped here: the
-/// carried-forward chunks, documents and entities this used to walk all belong
-/// to the sibling branch now, and every one of those stamps was already an
-/// idempotent no-op — upstream stages had filled the same fields in, under the
-/// same pipeline name, the same user label and the same rank 3.
+/// In-body provenance stamping: stamps every emitted `TextSummary` with
+/// `source_task = "extract_graph_and_summarize"`, as Python does. Nothing
+/// else is stamped here: the carried-forward chunks, documents and entities
+/// this used to walk all belong to the sibling branch now, and every one of
+/// those stamps was already an idempotent no-op — upstream stages had filled
+/// the same fields in, under the same pipeline name, the same user label and
+/// the same rank 3.
 pub fn make_summarize_text_task(
     llm: Arc<dyn Llm>,
     config: CognifyConfig,
@@ -7195,7 +5990,7 @@ pub fn make_summarize_text_task_with_rank(
                 stamp_provenance(
                     &mut summary.base,
                     COGNIFY_PIPELINE_STAMP_NAME,
-                    SUMMARIZE_TEXT_TASK_NAME,
+                    EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
                     user_label.as_deref(),
                     rank,
                 );
@@ -7290,9 +6085,9 @@ fn merge_graph_and_summaries(
 /// It is also what the `topological_rank` constants have always claimed: both
 /// halves are rank **3** precisely because Python has one stage here, and
 /// [`CLASSIFY_DOCUMENTS_TASK_RANK`] documents why. The stamps stay split —
-/// entities keep `source_task = "extract_graph_from_data"` and summaries keep
-/// `"summarize_text"`, which is what the cross-SDK provenance parity harness
-/// asserts.
+/// entities keep `source_task = "extract_graph_from_data"` and summaries are
+/// stamped `"extract_graph_and_summarize"` (the stage's name), which is what
+/// the cross-SDK provenance parity harness asserts.
 ///
 /// # Concurrency cost
 ///
@@ -7534,8 +6329,7 @@ pub fn make_add_data_points_task_with_rank(
 /// Build a [`LoaderRegistry`] with the default text/pdf/csv loaders plus any
 /// feature-gated media loaders that have the required handles available.
 ///
-/// Centralized here so both [`build_cognify_pipeline`] and
-/// [`build_temporal_cognify_pipeline`] stay in sync.
+/// Used by [`build_cognify_pipeline`].
 // `llm` is consumed only by the image loader and `config` only by the audio
 // loader; when neither feature is enabled both are genuinely unused.
 #[cfg_attr(
@@ -7620,121 +6414,6 @@ pub fn build_cognify_pipeline(
         ADD_DATA_POINTS_TASK_NAME,
     )
     .with_name(COGNIFY_PIPELINE_STAMP_NAME)
-    .build()
-}
-
-/// Build a [`TypedTask`] that extracts temporal events from chunks via LLM.
-pub fn make_extract_temporal_events_task(
-    llm: Arc<dyn Llm>,
-    config: CognifyConfig,
-) -> TypedTask<ExtractedChunks, ExtractedTemporalEvents> {
-    TypedTask::async_fn(move |input: &ExtractedChunks, _ctx| {
-        let input = input.clone();
-        let llm = Arc::clone(&llm);
-        let config = config.clone();
-        Box::pin(async move {
-            extract_temporal_events(&input, llm, &config)
-                .await
-                .map(Box::new)
-                .map_err(Into::into)
-        })
-    })
-}
-
-/// Build a [`TypedTask`] that persists temporal events to graph and vector DBs.
-///
-/// `db` is non-optional: the stage records ownership of every artifact before
-/// it writes one, and the run id comes from the task context so those rows name
-/// the run a sweep would select on.
-pub fn make_add_temporal_data_points_task(
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    db: Arc<dyn RelationalDb>,
-    failure_policy: FailurePolicy,
-) -> TypedTask<ExtractedTemporalEvents, CognifyResult> {
-    TypedTask::async_fn(move |input: &ExtractedTemporalEvents, ctx| {
-        let input = input.clone();
-        let graph_db = Arc::clone(&graph_db);
-        let vector_db = Arc::clone(&vector_db);
-        let embedding_engine = Arc::clone(&embedding_engine);
-        let db = Arc::clone(&db);
-        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
-        Box::pin(async move {
-            let result = add_temporal_data_points(
-                &input,
-                graph_db,
-                vector_db,
-                embedding_engine,
-                &*db,
-                pipeline_run_id,
-            )
-            .await?;
-            // The same end-of-run gate as the standard branch, over the
-            // failures the chunking and temporal extraction stages handed down.
-            if result.failures.is_fatal(&failure_policy) {
-                return Err(Box::new(CognifyError::RunFailed {
-                    report: Box::new(result.failures),
-                }) as cognee_core::TaskError);
-            }
-            Ok(Box::new(result))
-        })
-    })
-}
-
-/// Build a complete temporal cognify [`Pipeline`]:
-/// [`CognifyInput`] → classify → chunk → extract_temporal_events → add_temporal_data_points → [`CognifyResult`].
-///
-/// This pipeline runs instead of the standard cognify pipeline when
-/// `CognifyConfig::temporal_cognify` is `true`. It mirrors the Python
-/// `get_temporal_tasks()` pipeline that replaces the default stages with
-/// event/timestamp extraction and temporal graph construction.
-pub fn build_temporal_cognify_pipeline(
-    storage: Arc<dyn StorageTrait>,
-    graph_db: Arc<dyn GraphDBTrait>,
-    vector_db: Arc<dyn VectorDB>,
-    embedding_engine: Arc<dyn EmbeddingEngine>,
-    llm: Arc<dyn Llm>,
-    // Non-optional for the same reason [`build_cognify_pipeline`]'s is: the
-    // temporal persistence stage records ownership of every artifact before it
-    // writes one, so a databaseless temporal pipeline is a shape that cannot be
-    // built.
-    db: Arc<dyn RelationalDb>,
-    config: CognifyConfig,
-) -> Pipeline {
-    let loader_registry = Arc::new(build_loader_registry(&llm, &config));
-    PipelineBuilder::new_with_task(
-        "temporal-cognify",
-        make_classify_documents_task(config.failure_policy()),
-    )
-    .with_first_task_name(CLASSIFY_DOCUMENTS_TASK_NAME)
-    .add_task_named(
-        make_extract_chunks_task(
-            storage,
-            config.chunk_size(),
-            config.token_counter_kind.clone(),
-            config.token_count_mode,
-            Some(Arc::clone(&db)),
-            loader_registry,
-            config.failure_policy(),
-        ),
-        EXTRACT_CHUNKS_TASK_NAME,
-    )
-    .add_task_named(
-        make_extract_temporal_events_task(llm, config.clone()),
-        "extract_temporal_events",
-    )
-    .add_task_named(
-        make_add_temporal_data_points_task(
-            graph_db,
-            vector_db,
-            embedding_engine,
-            db,
-            config.failure_policy(),
-        ),
-        "add_temporal_data_points",
-    )
-    .with_name("temporal-cognify")
     .build()
 }
 
@@ -7912,47 +6591,6 @@ mod tests {
             survivors.iter().next().map(String::as_str),
             Some("IS_A"),
             "the survivor must be the lexicographically first spelling"
-        );
-    }
-
-    /// The triplet-provenance lookup in `generate_embeddings` must survive the
-    /// fold.
-    ///
-    /// That lookup maps a triplet's edge back to the `EdgeType` whose `source_*`
-    /// keys it inherits. It used to key on `EdgeType::relationship_name`, which
-    /// was safe only while *every* spelling had its own DataPoint. Once
-    /// `build_edge_types` collapses them, a raw-text key misses for every edge
-    /// that spelled the relation differently from the survivor, and the
-    /// triplet's provenance is silently dropped. Keying on the derived id
-    /// instead makes the lookup follow the same collapse — which is what this
-    /// pins.
-    #[test]
-    fn every_edge_text_resolves_to_its_folded_edge_type() {
-        let dataset = Uuid::new_v4();
-        let texts = ["Alice knows Bob", "alice knows bob", "ALICE KNOWS BOB"];
-        let edge_types = build_edge_types(texts.iter().map(|t| t.to_string()), dataset);
-        assert_eq!(edge_types.len(), 1, "all three spellings share one id");
-
-        let by_id: HashMap<Uuid, &EdgeType> =
-            edge_types.iter().map(|et| (et.base.id, et)).collect();
-        let by_text: HashMap<&str, &EdgeType> = edge_types
-            .iter()
-            .map(|et| (et.relationship_name.as_str(), et))
-            .collect();
-
-        for text in texts {
-            assert!(
-                by_id.contains_key(&EdgeType::deterministic_id(text)),
-                "id-keyed lookup must resolve {text:?} to the folded EdgeType"
-            );
-        }
-        // The old raw-text key resolves only the surviving spelling — the other
-        // two would silently lose their provenance.
-        assert_eq!(
-            texts.iter().filter(|t| by_text.contains_key(**t)).count(),
-            1,
-            "raw-text keying is expected to miss after the fold; that is why \
-             the lookup was moved onto the derived id"
         );
     }
 
@@ -9485,7 +8123,6 @@ mod tests {
         )];
 
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default(); // embed_triplets = false
 
         // 2 chunks + 2 entities + 1 summary = 5 texts.
         let embeddings = generate_embeddings(&chunks, &entities, &summaries, engine_dyn.clone())
@@ -9497,17 +8134,12 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
-            &[],
             &summaries,
             &[],
             &[],
-            &[],
             dataset_id,
-            None,
-            None,
             engine_dyn,
             vector,
-            &config,
             &embeddings,
         )
         .await
@@ -9659,6 +8291,65 @@ mod tests {
         (chunks, entities, summaries, documents)
     }
 
+    /// SDK-1039 P7 (extraction-v-01): the engine's configured batch size drives
+    /// how cognify batches embedding requests, whatever the index window is.
+    #[tokio::test]
+    async fn index_data_points_embeds_in_batches_of_the_engine_batch_size() {
+        use cognee_embedding::{EmbeddingResult, MockEmbeddingEngine};
+
+        struct BatchRecorder {
+            inner: MockEmbeddingEngine,
+            sizes: std::sync::Mutex<Vec<usize>>,
+        }
+        #[async_trait::async_trait]
+        impl EmbeddingEngine for BatchRecorder {
+            async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+                // lock poison is unrecoverable
+                self.sizes.lock().expect("lock").push(texts.len());
+                self.inner.embed(texts).await
+            }
+            fn dimension(&self) -> usize {
+                self.inner.dimension()
+            }
+            fn batch_size(&self) -> usize {
+                self.inner.batch_size()
+            }
+            fn max_sequence_length(&self) -> usize {
+                self.inner.max_sequence_length()
+            }
+        }
+
+        let (chunks, entities, summaries, documents) = windowing_fixture();
+        let recorder = Arc::new(BatchRecorder {
+            inner: MockEmbeddingEngine::with_batch_size(8, 3),
+            sizes: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine: Arc<dyn EmbeddingEngine> = recorder.clone();
+        // A window far larger than the batch size: only the batch size may cut.
+        index_data_points_windowed(
+            &chunks,
+            &entities,
+            &summaries,
+            &documents,
+            &[],
+            Uuid::new_v4(),
+            engine,
+            Arc::new(RecordingVectorDb::new()),
+            &[],
+            1000,
+        )
+        .await
+        .unwrap();
+
+        let sizes = recorder.sizes.lock().expect("lock").clone();
+        assert!(!sizes.is_empty());
+        assert!(
+            sizes.iter().all(|n| (1..=3).contains(n)),
+            "every embed() call carries at most the engine batch size, got {sizes:?}"
+        );
+        assert!(sizes.contains(&3), "full batches are used: {sizes:?}");
+    }
+
     /// SDK-507: a collection is embedded and written in windows, each
     /// collection announced once with its whole size first — and what lands
     /// in the store is exactly what one call per collection wrote.
@@ -9668,27 +8359,21 @@ mod tests {
 
         let (chunks, entities, summaries, documents) = windowing_fixture();
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
         let run = |window: usize| {
-            let (chunks, entities, summaries, documents, config) =
-                (&chunks, &entities, &summaries, &documents, &config);
+            let (chunks, entities, summaries, documents) =
+                (&chunks, &entities, &summaries, &documents);
             async move {
                 let store = Arc::new(RecordingVectorDb::new());
                 let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
                 index_data_points_windowed(
                     chunks,
                     entities,
-                    &[],
                     summaries,
                     documents,
                     &[],
-                    &[],
                     dataset_id,
-                    None,
-                    None,
                     engine,
                     store.clone(),
-                    config,
                     &[],
                     window,
                 )
@@ -9746,9 +8431,18 @@ mod tests {
         ];
         for (data_type, field, ids) in stored {
             for id in ids {
-                let a = windowed.inner.get_payload(data_type, field, id);
+                // `created_at` / `updated_at` are the write time, as in Python's
+                // `IndexSchema`, so they differ between the two runs.
+                let untimed = |payload: Option<HashMap<String, serde_json::Value>>| {
+                    payload.map(|mut p| {
+                        p.remove("created_at");
+                        p.remove("updated_at");
+                        p
+                    })
+                };
+                let a = untimed(windowed.inner.get_payload(data_type, field, id));
                 assert!(a.is_some(), "{data_type}_{field} {id} was not written");
-                assert_eq!(a, whole.inner.get_payload(data_type, field, id));
+                assert_eq!(a, untimed(whole.inner.get_payload(data_type, field, id)));
             }
         }
     }
@@ -9765,17 +8459,12 @@ mod tests {
         index_data_points(
             &chunks,
             &entities,
-            &[],
             &summaries,
             &documents,
             &[],
-            &[],
             Uuid::new_v4(),
-            None,
-            None,
             Arc::new(MockEmbeddingEngine::new(8)),
             store.clone(),
-            &CognifyConfig::default(),
             &[],
         )
         .await
@@ -9791,11 +8480,12 @@ mod tests {
         assert!(!log.contains(&"abandon".to_string()));
     }
 
-    // The TextSummary vector payload must carry both `chunk_id` (back-compat)
-    // and the new `source_chunk_id` key with identical string values, so the
-    // hybrid pairing algorithm can join a summary hit to its source chunk.
+    // The TextSummary vector payload carries `source_chunk_id`, so the hybrid
+    // pairing algorithm can join a summary hit to its source chunk. The old
+    // Rust-only `chunk_id` copy is gone (SDK-1039): Python's `IndexSchema` row
+    // has no such key, and nothing reads it.
     #[tokio::test]
-    async fn summary_payload_carries_chunk_id_and_source_chunk_id() {
+    async fn summary_payload_carries_source_chunk_id_only() {
         use cognee_embedding::MockEmbeddingEngine;
         use cognee_vector::MockVectorDB;
 
@@ -9817,7 +8507,6 @@ mod tests {
         let summary_id = summaries[0].base.id;
 
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
 
         let embeddings = generate_embeddings(&chunks, &[], &summaries, engine_dyn.clone())
             .await
@@ -9826,17 +8515,12 @@ mod tests {
         index_data_points(
             &chunks,
             &[],
-            &[],
             &summaries,
             &[],
             &[],
-            &[],
             dataset_id,
-            None,
-            None,
             engine_dyn,
             vector,
-            &config,
             &embeddings,
         )
         .await
@@ -9847,9 +8531,8 @@ mod tests {
             .expect("summary point must be indexed");
 
         let expected = json!(chunk_id.to_string());
-        assert_eq!(payload.get("chunk_id"), Some(&expected));
         assert_eq!(payload.get("source_chunk_id"), Some(&expected));
-        assert_eq!(payload.get("chunk_id"), payload.get("source_chunk_id"));
+        assert!(!payload.contains_key("chunk_id"), "{payload:?}");
     }
 
     // Entity and EntityType vector payloads carry the indexed name as `text`,
@@ -9877,14 +8560,9 @@ mod tests {
             &[],
             &[],
             &[],
-            &[],
-            &[],
             Uuid::new_v4(),
-            None,
-            None,
             engine,
             vector,
-            &CognifyConfig::default(),
             &embeddings,
         )
         .await
@@ -9899,6 +8577,233 @@ mod tests {
             .get_payload("EntityType", "name", type_id)
             .expect("entity type point must be indexed");
         assert_eq!(type_payload.get("text"), Some(&json!("Generic")));
+    }
+
+    /// Rows a real Python run stored, one per collection (see the fixture
+    /// directory's README). The pgvector dump is the full `IndexSchema` dump,
+    /// `metadata` included, which is what the payload builder emits before an
+    /// adapter applies its own write rules.
+    fn python_index_schema_rows() -> serde_json::Map<String, serde_json::Value> {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/index_schema/python_pgvector_payloads.json"
+        ))
+        .unwrap();
+        fixture["collections"].as_object().unwrap().clone()
+    }
+
+    fn json_kind(value: &serde_json::Value) -> &'static str {
+        match value {
+            serde_json::Value::Null => "null",
+            serde_json::Value::Bool(_) => "bool",
+            serde_json::Value::Number(_) => "number",
+            serde_json::Value::String(_) => "string",
+            serde_json::Value::Array(_) => "array",
+            serde_json::Value::Object(_) => "object",
+        }
+    }
+
+    /// SDK-1039 part B: every cognify index site writes Python's stored
+    /// `IndexSchema` row — the same key set, `null` where Python has `null`, the
+    /// same IndexSchema defaults — plus only the documented Rust-only keys.
+    #[tokio::test]
+    async fn every_index_site_writes_python_index_schema_rows() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let mock = Arc::new(MockVectorDB::new());
+        let vector: Arc<dyn VectorDB> = mock.clone();
+
+        let doc_id = Uuid::new_v4();
+        let document =
+            test_document_with_metadata(doc_id, Some(r#"{"source": "fixture"}"#.to_string()));
+        let mut chunk = test_chunk(Uuid::new_v4(), doc_id, "Alice works at Acme.");
+        // Provenance the pipeline stamps on the source point; IndexSchema rows
+        // carry their defaults instead.
+        chunk.base.source_pipeline = Some("cognify_pipeline".into());
+        chunk.base.source_task = Some("extract_chunks_from_documents".into());
+        chunk.base.topological_rank = Some(2);
+        chunk.base.version = 4;
+        chunk.base.importance_weight = Some(0.7);
+        chunk.base.belongs_to_set = Some(vec![
+            json!({"id": Uuid::new_v4().to_string(), "name": "fixture_set", "type": "NodeSet"}),
+        ]);
+        let entities = vec![test_entity("Alice", Uuid::new_v4())];
+        let mut summary = TextSummary::new(
+            chunk.base.id,
+            "Alice is employed by Acme.".to_string(),
+            None,
+            "mock-model".to_string(),
+        );
+        summary.base.importance_weight = Some(0.7);
+        let mut document = document;
+        document.base.importance_weight = Some(0.7);
+        let dataset_id = Uuid::new_v4();
+        let edge_type = EdgeType::new_deterministic("works_at", Some(dataset_id));
+
+        index_data_points(
+            std::slice::from_ref(&chunk),
+            &entities,
+            std::slice::from_ref(&summary),
+            std::slice::from_ref(&document),
+            std::slice::from_ref(&edge_type),
+            dataset_id,
+            engine,
+            vector,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let ids = [
+            ("DocumentChunk_text", chunk.base.id),
+            ("Entity_name", entities[0].entity.base.id),
+            (
+                "EntityType_name",
+                entities[0].entity_type.as_ref().unwrap().base.id,
+            ),
+            ("TextSummary_text", summary.base.id),
+            ("EdgeType_relationship_name", edge_type.base.id),
+            ("TextDocument_name", doc_id),
+        ];
+        let python = python_index_schema_rows();
+        assert_eq!(python.len(), ids.len(), "a collection is not covered");
+
+        for (collection, id) in ids {
+            let (data_type, field) = collection.split_once('_').unwrap();
+            let rust = mock
+                .get_payload(data_type, field, id)
+                .unwrap_or_else(|| panic!("{collection} was not written"));
+            let py = python[collection].as_object().unwrap();
+
+            let mut rust_keys: Vec<&str> = rust.keys().map(String::as_str).collect();
+            rust_keys.sort_unstable();
+            let mut expected: Vec<&str> = py
+                .keys()
+                .map(String::as_str)
+                .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS.iter().copied())
+                .collect();
+            expected.sort_unstable();
+            assert_eq!(rust_keys, expected, "{collection}: key set");
+            assert_eq!(rust["dataset_id"], json!(dataset_id.to_string()));
+
+            for (key, py_value) in py {
+                // Rust chunks do not carry their document's external metadata
+                // yet (SDK-1057), so the chunk row has `null` there.
+                if collection == "DocumentChunk_text" && key == "external_metadata" {
+                    assert_eq!(rust[key], serde_json::Value::Null);
+                    continue;
+                }
+                assert_eq!(
+                    json_kind(&rust[key]),
+                    json_kind(py_value),
+                    "{collection}.{key}: {} vs Python {py_value}",
+                    rust[key]
+                );
+            }
+            // The IndexSchema defaults, and the values copied from fixtures
+            // built alike on both sides (importance 0.7 on the document, chunk
+            // and summary; the 0.5 default elsewhere).
+            for key in [
+                "type",
+                "version",
+                "topological_rank",
+                "ontology_valid",
+                "ontology_uri",
+                "source_pipeline",
+                "source_task",
+                "source_node_set",
+                "source_user",
+                "source_content_hash",
+                "feedback_weight",
+                "metadata",
+                "chunk_index",
+                "belongs_to_set",
+                "importance_weight",
+            ] {
+                assert_eq!(rust[key], py[key], "{collection}.{key}");
+            }
+        }
+
+        let row = |collection: &str, id: Uuid| {
+            let (data_type, field) = collection.split_once('_').unwrap();
+            mock.get_payload(data_type, field, id).unwrap()
+        };
+        let chunk_row = row("DocumentChunk_text", chunk.base.id);
+        assert_eq!(chunk_row["text"], json!("Alice works at Acme."));
+        assert_eq!(chunk_row["document_id"], json!(doc_id.to_string()));
+        assert_eq!(chunk_row["document_name"], json!("test.txt"));
+        assert_eq!(
+            row("EdgeType_relationship_name", edge_type.base.id)["text"],
+            json!("works_at")
+        );
+        assert_eq!(
+            row("TextSummary_text", summary.base.id)["source_chunk_id"],
+            json!(chunk.base.id.to_string())
+        );
+        let document_row = row("TextDocument_name", doc_id);
+        assert_eq!(document_row["text"], json!("test.txt"));
+        assert_eq!(
+            document_row["external_metadata"],
+            json!(r#"{"source": "fixture"}"#)
+        );
+    }
+
+    /// The dynamic (custom graph model) site writes the same row: the model's
+    /// own properties are not merged in, and a reference scalar it declares is
+    /// copied as Python's `getattr` would.
+    #[tokio::test]
+    async fn dynamic_model_rows_are_index_schema_rows() {
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let engine: Arc<dyn EmbeddingEngine> = Arc::new(MockEmbeddingEngine::new(8));
+        let mock = Arc::new(MockVectorDB::new());
+        let vector: Arc<dyn VectorDB> = mock.clone();
+
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("Person", None);
+        base.source_task = Some("extract_graph_from_data".into());
+        let mut properties = serde_json::Map::new();
+        properties.insert("name".into(), json!("Alice"));
+        properties.insert("age".into(), json!(42));
+        properties.insert("document_id".into(), json!(doc_id.to_string()));
+        let node = DynamicDataPoint {
+            occurrence_id: Uuid::new_v4(),
+            base,
+            properties,
+            property_strs: BTreeMap::new(),
+            index_fields: vec!["name".into()],
+            transparent: false,
+        };
+        let dataset_id = Uuid::new_v4();
+        let mut stats = IndexedFieldsStats::default();
+        index_dynamic_graph_points(
+            &[&node],
+            dataset_id,
+            &engine,
+            &vector,
+            &CognifyConfig::default(),
+            &mut stats,
+        )
+        .await
+        .unwrap();
+
+        let row = mock.get_payload("Person", "name", node.base.id).unwrap();
+        let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        let mut expected: Vec<&str> = cognee_models::INDEX_SCHEMA_KEYS
+            .iter()
+            .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS)
+            .copied()
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        assert_eq!(row["text"], json!("Alice"));
+        assert_eq!(row["type"], json!("IndexSchema"));
+        assert_eq!(row["source_task"], serde_json::Value::Null);
+        assert_eq!(row["document_id"], json!(doc_id.to_string()));
+        assert!(!row.contains_key("age"));
     }
 
     // Prints a before/after embedding-work comparison for a realistic fixture.
@@ -9933,7 +8838,6 @@ mod tests {
 
         let overlap = chunks.len() + entities.len() + summaries.len();
         let dataset_id = Uuid::new_v4();
-        let config = CognifyConfig::default();
 
         // Runs generate_embeddings + index_data_points on one counting engine
         // and returns (embed calls, texts embedded). `reuse = false` passes an
@@ -9944,7 +8848,6 @@ mod tests {
             entities: &[GraphNodePair],
             summaries: &[TextSummary],
             dataset_id: Uuid,
-            config: &CognifyConfig,
         ) -> (usize, usize) {
             let engine = Arc::new(MockEmbeddingEngine::new(8));
             let engine_dyn: Arc<dyn EmbeddingEngine> = engine.clone();
@@ -9957,17 +8860,12 @@ mod tests {
             index_data_points(
                 chunks,
                 entities,
-                &[],
                 summaries,
                 &[],
                 &[],
-                &[],
                 dataset_id,
-                None,
-                None,
                 engine_dyn,
                 vector,
-                config,
                 precomputed,
             )
             .await
@@ -9976,9 +8874,9 @@ mod tests {
         }
 
         let (before_calls, before_texts) =
-            measure(false, &chunks, &entities, &summaries, dataset_id, &config).await;
+            measure(false, &chunks, &entities, &summaries, dataset_id).await;
         let (after_calls, after_texts) =
-            measure(true, &chunks, &entities, &summaries, dataset_id, &config).await;
+            measure(true, &chunks, &entities, &summaries, dataset_id).await;
 
         println!(
             "\n  Embedding work per cognify ({} chunks / {} entities / {} summaries):",
@@ -10026,15 +8924,8 @@ mod tests {
         .expect("seed dataset");
     }
 
-    fn url_metadata(url: &str, final_url: &str, title: &str) -> String {
-        json!({
-            "source": "url",
-            "url": url,
-            "final_url": final_url,
-            "content_type": "text/html",
-            "title": title,
-        })
-        .to_string()
+    fn url_metadata(source_uri: &str) -> String {
+        json!({"_cognee": {"source_uri": source_uri}}).to_string()
     }
 
     #[tokio::test]
@@ -10113,7 +9004,6 @@ mod tests {
             Some(Uuid::new_v4()),
             &CognifyConfig {
                 retain_embeddings: true,
-                embed_triplets: true,
                 ..CognifyConfig::default()
             },
         )
@@ -10195,23 +9085,14 @@ mod tests {
                 && row.label.as_deref() == Some("contains")
         }));
 
-        let triplet_id = Triplet::new(
-            company_id,
-            person_id,
-            "employees".to_string(),
-            String::new(),
-        )
-        .id;
-        let triplet = vector_db
-            .get_payload("Triplet", "text", triplet_id)
-            .expect("dynamic relationship should be searchable as a triplet");
-        assert_eq!(
-            triplet.get("text"),
-            Some(&json!(format!("Acme-›{employees_text}-›Alice")))
-        );
+        // Python no longer writes `Triplet_text` (SDK-1115): no triplet
+        // collection, whatever the graph holds.
         assert!(
-            triplet.contains_key("source_task"),
-            "provenance copied from the EdgeType"
+            !vector_db
+                .has_collection("Triplet", "text")
+                .await
+                .expect("collection lookup"),
+            "cognify must not write a Triplet collection"
         );
     }
 
@@ -10615,10 +9496,18 @@ mod tests {
                 "{data_type}_{field}"
             );
         }
+        // The same rows either way, up to their write time.
+        let untimed = |payload: Option<HashMap<String, serde_json::Value>>| {
+            payload.map(|mut p| {
+                p.remove("created_at");
+                p.remove("updated_at");
+                p
+            })
+        };
         for chunk in &chunks {
             assert_eq!(
-                dropped_store.get_payload("DocumentChunk", "text", chunk.base.id),
-                kept_store.get_payload("DocumentChunk", "text", chunk.base.id),
+                untimed(dropped_store.get_payload("DocumentChunk", "text", chunk.base.id)),
+                untimed(kept_store.get_payload("DocumentChunk", "text", chunk.base.id)),
             );
         }
     }
@@ -10751,11 +9640,7 @@ mod tests {
         let final_url = "https://Example.com/path?q=1";
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/start",
-                final_url,
-                "Example title",
-            )),
+            Some(url_metadata(final_url)),
         )];
         let chunks = vec![test_chunk(chunk_id, doc_id, "Visible page content")];
 
@@ -10782,10 +9667,7 @@ mod tests {
             page.get("url").and_then(|v| v.as_str()),
             Some("https://example.com/path?q=1")
         );
-        assert_eq!(
-            page.get("title").and_then(|v| v.as_str()),
-            Some("Example title")
-        );
+        assert!(!page.contains_key("title"), "add does not parse the page");
         assert_eq!(
             page.get("content").and_then(|v| v.as_str()),
             Some("Visible page content")
@@ -10818,11 +9700,7 @@ mod tests {
         let long_text = "a".repeat(650);
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/long",
-                "https://example.com/long",
-                "Long",
-            )),
+            Some(url_metadata("https://example.com/long")),
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, &long_text)];
 
@@ -10857,11 +9735,14 @@ mod tests {
             test_document_with_metadata(Uuid::new_v4(), Some("{not valid json".to_string()));
         let non_url_doc = test_document_with_metadata(
             Uuid::new_v4(),
-            Some(json!({"source": "dlt", "url": "https://example.com"}).to_string()),
+            Some(
+                json!({"source": "dlt", "_cognee": {"source_uri": "file:///tmp/a.csv"}})
+                    .to_string(),
+            ),
         );
         let bad_url_doc = test_document_with_metadata(
             Uuid::new_v4(),
-            Some(json!({"source": "url", "final_url": "not a url"}).to_string()),
+            Some(json!({"_cognee": {"source_uri": "not a url"}}).to_string()),
         );
         let chunks = vec![
             test_chunk(Uuid::new_v4(), doc_with_invalid_json.base.id, "a"),
@@ -10891,11 +9772,7 @@ mod tests {
         let doc_id = Uuid::new_v4();
         let documents = vec![test_document_with_metadata(
             doc_id,
-            Some(url_metadata(
-                "https://example.com/idempotent",
-                "https://example.com/idempotent",
-                "Idempotent",
-            )),
+            Some(url_metadata("https://example.com/idempotent")),
         )];
         let chunks = vec![test_chunk(Uuid::new_v4(), doc_id, "content")];
 
@@ -10923,11 +9800,7 @@ mod tests {
             chunks: vec![test_chunk(Uuid::new_v4(), doc_id, "content")],
             documents: vec![test_document_with_metadata(
                 doc_id,
-                Some(url_metadata(
-                    "https://example.com/wired",
-                    "https://example.com/wired",
-                    "Wired",
-                )),
+                Some(url_metadata("https://example.com/wired")),
             )],
             dataset_id: Uuid::new_v4(),
             user_id: None,
@@ -11283,7 +10156,7 @@ mod tests {
         );
         assert_eq!(
             out.summaries[0].base.source_task.as_deref(),
-            Some(SUMMARIZE_TEXT_TASK_NAME)
+            Some(EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME)
         );
         assert_eq!(
             out.entities[0].entity.base.topological_rank,
@@ -12589,10 +11462,12 @@ mod tests {
             );
         }
 
+        // The Entity_name row is Python's `IndexSchema` row: the name as
+        // `text`, and no description (SDK-1039, D1).
         let payload = vector
             .get_payload("Entity", "name", entity_id)
             .expect("Entity_name row");
-        assert_eq!(payload["description"], json!("A curious girl."));
+        assert!(!payload.contains_key("description"), "{payload:?}");
     }
 
     /// A semantic edge's ledger row must hash the *sanitized* relationship
@@ -12601,8 +11476,7 @@ mod tests {
     /// sweep would miss it. `provenance_edge_ids_derive_from_sanitized_text`
     /// pins the formula; this pins the *call site* — that the rows
     /// `add_data_points` really writes went through `sanitize_string` before
-    /// the hash saw them. The temporal twin is
-    /// `temporal_edge_rows_hash_sanitized_relationship_names`.
+    /// the hash saw them.
     #[tokio::test]
     async fn semantic_edge_rows_hash_sanitized_relationship_names() {
         use cognee_database::ops::graph_storage::get_edges_by_dataset;
@@ -13087,729 +11961,6 @@ mod tests {
         assert!(result.chunks.iter().any(|chunk| chunk.document_id == c));
     }
 
-    // ── Temporal: ownership rows, collected failures, the partition ──────
-
-    /// The narrowest LLM the temporal stage is satisfied by, with a switch for
-    /// failing either pass. Dispatches on the system prompt, the way the
-    /// integration fixtures do.
-    ///
-    /// Each chunk yields one event named after the chunk's first word and
-    /// described by the chunk text itself — which is what puts a failure marker
-    /// into the *enrichment* prompt as well as the extraction one, so both
-    /// passes can be failed from the same fixture text.
-    struct TemporalTestLlm {
-        fail_extraction: Vec<String>,
-        fail_enrichment: Vec<String>,
-    }
-
-    impl TemporalTestLlm {
-        fn failing_extraction(markers: &[&str]) -> Self {
-            Self {
-                fail_extraction: markers.iter().map(|m| (*m).to_string()).collect(),
-                fail_enrichment: Vec::new(),
-            }
-        }
-
-        fn failing_enrichment(markers: &[&str]) -> Self {
-            Self {
-                fail_extraction: Vec::new(),
-                fail_enrichment: markers.iter().map(|m| (*m).to_string()).collect(),
-            }
-        }
-
-        fn failing_both(extraction: &[&str], enrichment: &[&str]) -> Self {
-            Self {
-                fail_extraction: extraction.iter().map(|m| (*m).to_string()).collect(),
-                fail_enrichment: enrichment.iter().map(|m| (*m).to_string()).collect(),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Llm for TemporalTestLlm {
-        async fn generate(
-            &self,
-            _messages: Vec<cognee_llm::Message>,
-            _options: Option<cognee_llm::GenerationOptions>,
-        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
-            unreachable!("the temporal stage only uses structured output")
-        }
-
-        async fn create_structured_output_with_messages_raw(
-            &self,
-            messages: Vec<cognee_llm::Message>,
-            _json_schema: &serde_json::Value,
-            _options: Option<cognee_llm::GenerationOptions>,
-        ) -> cognee_llm::LlmResult<serde_json::Value> {
-            let content = |role: cognee_llm::MessageRole| -> String {
-                messages
-                    .iter()
-                    .filter(|message| message.role == role)
-                    .map(|message| message.content.as_str())
-                    .collect()
-            };
-            let system_prompt = content(cognee_llm::MessageRole::System);
-            let user_prompt = content(cognee_llm::MessageRole::User);
-            let hits =
-                |markers: &[String]| markers.iter().any(|m| user_prompt.contains(m.as_str()));
-
-            if system_prompt.contains("extracting highly granular stream events") {
-                if hits(&self.fail_extraction) {
-                    return Err(cognee_llm::LlmError::RateLimitExceeded(
-                        "simulated 429 on temporal extraction".to_string(),
-                    ));
-                }
-                let head = user_prompt.split_whitespace().next().unwrap_or("Unnamed");
-                return Ok(json!({
-                    "events": [{
-                        "name": format!("{head} event"),
-                        "description": user_prompt,
-                        "time_from": { "year": 2020 },
-                        "time_to": null,
-                        "location": null
-                    }]
-                }));
-            }
-            if system_prompt.contains("extracting highly granular entities from events") {
-                if hits(&self.fail_enrichment) {
-                    return Err(cognee_llm::LlmError::RateLimitExceeded(
-                        "simulated 429 on temporal enrichment".to_string(),
-                    ));
-                }
-                let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&user_prompt)
-                    .ok()
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|entry| {
-                        entry
-                            .get("event_name")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .collect();
-                return Ok(json!({
-                    "events": names
-                        .into_iter()
-                        .map(|name| json!({
-                            "event_name": name,
-                            "attributes": [
-                                { "entity": "Alice", "entity_type": "person", "relationship": "subject" }
-                            ]
-                        }))
-                        .collect::<Vec<_>>()
-                }));
-            }
-            unreachable!("the temporal stage issues no other prompt")
-        }
-
-        fn model(&self) -> &str {
-            "temporal-test-llm"
-        }
-    }
-
-    /// One event with a single entity attribute, attributed to `data_id`.
-    fn attributed_event(name: &str, relationship: &str, data_id: Uuid) -> AttributedEvent {
-        AttributedEvent {
-            event: TemporalEvent {
-                name: name.to_string(),
-                description: Some(format!("Description of {name}")),
-                location: None,
-                at: Some(cognee_models::CognifyTimestamp {
-                    time_at: 1_577_836_800_000,
-                    timestamp_str: "2020-01-01T00:00:00".to_string(),
-                    year: 2020,
-                    month: 1,
-                    day: 1,
-                    hour: 0,
-                    minute: 0,
-                    second: 0,
-                }),
-                during: None,
-                attributes: vec![cognee_models::EventAttribute {
-                    entity: "Alice".to_string(),
-                    entity_type: "person".to_string(),
-                    relationship: relationship.to_string(),
-                }],
-            },
-            data_id,
-        }
-    }
-
-    fn temporal_input(
-        dataset_id: Uuid,
-        user_id: Option<Uuid>,
-        events: Vec<AttributedEvent>,
-    ) -> ExtractedTemporalEvents {
-        ExtractedTemporalEvents {
-            events,
-            dataset_id,
-            user_id,
-            tenant_id: None,
-            failures: FailureReport::default(),
-        }
-    }
-
-    /// `n` single-chunk files, the *i*-th carrying `texts[i]`.
-    fn temporal_files(dataset_id: Uuid, texts: &[&str]) -> (ExtractedChunks, Vec<Uuid>) {
-        let doc_ids: Vec<Uuid> = texts.iter().map(|_| Uuid::new_v4()).collect();
-        let chunks = doc_ids
-            .iter()
-            .zip(texts)
-            .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
-            .collect();
-        let documents = doc_ids
-            .iter()
-            .map(|doc_id| test_document_with_metadata(*doc_id, None))
-            .collect();
-        (
-            ExtractedChunks {
-                chunks,
-                documents,
-                dataset_id,
-                user_id: Some(Uuid::new_v4()),
-                tenant_id: None,
-                failures: FailureReport::default(),
-            },
-            doc_ids,
-        )
-    }
-
-    /// The temporal persistence stage claims everything it is about to write
-    /// *before* the graph sees any of it: with the graph write failing, the
-    /// stage returns `Err` and the ownership rows are there anyway.
-    ///
-    /// This is the test that fails against the previous ordering, where
-    /// temporal wrote nodes, edges and `Event_name` points and never touched
-    /// the relational database at all — so a failed temporal run left artifacts
-    /// nothing could find and a temporal sweep removed nothing while reporting
-    /// success.
-    #[tokio::test]
-    async fn add_temporal_data_points_records_ownership_before_the_graph_write() {
-        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_vector::MockVectorDB;
-
-        let dataset_id = Uuid::new_v4();
-        let db = ledger_db(dataset_id).await;
-        let graph = Arc::new(cognee_graph::MockGraphDB::new());
-        graph.set_add_nodes_error("graph is down");
-
-        let data_id = Uuid::new_v4();
-        let input = temporal_input(
-            dataset_id,
-            Some(Uuid::new_v4()),
-            vec![attributed_event("Alice joins Acme", "subject", data_id)],
-        );
-
-        let result = add_temporal_data_points(
-            &input,
-            graph.clone(),
-            Arc::new(MockVectorDB::new()),
-            Arc::new(MockEmbeddingEngine::new(8)),
-            &db,
-            Some(Uuid::new_v4()),
-        )
-        .await;
-
-        assert!(result.is_err(), "the failing graph write must surface");
-        assert_eq!(graph.node_count(), 0, "no artifact reached the graph");
-
-        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
-        // Event + Timestamp + the attribute's entity.
-        assert_eq!(
-            nodes.len(),
-            3,
-            "every temporal node is claimed even though the write failed: {nodes:?}"
-        );
-        let event_row = nodes
-            .iter()
-            .find(|row| row.node_type == "Event")
-            .expect("the Event node is claimed");
-        assert_eq!(
-            event_row.indexed_fields,
-            json!(["name"]),
-            "the Event row names the one vector collection temporal writes, so a sweep clears it"
-        );
-        for row in nodes.iter().filter(|row| row.node_type != "Event") {
-            assert_eq!(
-                row.indexed_fields,
-                json!([]),
-                "temporal indexes no vectors for {}, so its sweep must not delete any",
-                row.node_type
-            );
-        }
-
-        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
-        // `at` to the timestamp, and `subject` to the entity.
-        assert_eq!(edges.len(), 2, "both temporal edges are claimed: {edges:?}");
-    }
-
-    /// Every temporal ownership row names the run that created the artifact,
-    /// which is what a sweep selects on.
-    #[tokio::test]
-    async fn temporal_ownership_rows_carry_the_run_id() {
-        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_vector::MockVectorDB;
-
-        let dataset_id = Uuid::new_v4();
-        let db = ledger_db(dataset_id).await;
-        let run_id = Uuid::new_v4();
-        let input = temporal_input(
-            dataset_id,
-            Some(Uuid::new_v4()),
-            vec![attributed_event(
-                "Alice joins Acme",
-                "subject",
-                Uuid::new_v4(),
-            )],
-        );
-
-        add_temporal_data_points(
-            &input,
-            Arc::new(cognee_graph::MockGraphDB::new()),
-            Arc::new(MockVectorDB::new()),
-            Arc::new(MockEmbeddingEngine::new(8)),
-            &db,
-            Some(run_id),
-        )
-        .await
-        .expect("temporal persistence must succeed");
-
-        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
-        assert!(!nodes.is_empty());
-        assert!(nodes.iter().all(|row| row.pipeline_run_id == Some(run_id)));
-        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
-        assert!(!edges.is_empty());
-        assert!(edges.iter().all(|row| row.pipeline_run_id == Some(run_id)));
-    }
-
-    /// A temporal run that identified no user still writes the ledger, owned by
-    /// the configured default user — and the row id is derived from that
-    /// resolved user, not from a placeholder the delete path could never
-    /// reproduce.
-    #[tokio::test]
-    async fn temporal_ownership_rows_use_the_default_user_when_none_is_identified() {
-        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_vector::MockVectorDB;
-
-        let dataset_id = Uuid::new_v4();
-        let data_id = Uuid::new_v4();
-        let db = ledger_db(dataset_id).await;
-        let input = temporal_input(
-            dataset_id,
-            None,
-            vec![attributed_event("Alice joins Acme", "subject", data_id)],
-        );
-
-        add_temporal_data_points(
-            &input,
-            Arc::new(cognee_graph::MockGraphDB::new()),
-            Arc::new(MockVectorDB::new()),
-            Arc::new(MockEmbeddingEngine::new(8)),
-            &db,
-            None,
-        )
-        .await
-        .expect("a missing user is not an error");
-
-        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
-        assert!(!nodes.is_empty());
-        assert!(
-            nodes
-                .iter()
-                .all(|row| row.user_id == DEFAULT_LEDGER_USER_ID),
-            "the rows resolve to the default ledger user"
-        );
-        let row = &nodes[0];
-        assert_eq!(
-            row.id,
-            provenance_node_id(None, DEFAULT_LEDGER_USER_ID, dataset_id, data_id, row.slug)
-        );
-    }
-
-    /// Temporal events are content-addressed by name, so two files describing
-    /// the same event share one graph node — and that node needs one ownership
-    /// row per producing file, or sweeping the first file would delete a node
-    /// the second still references.
-    #[tokio::test]
-    async fn an_event_two_files_produced_gets_one_row_per_file() {
-        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_vector::MockVectorDB;
-
-        let dataset_id = Uuid::new_v4();
-        let db = ledger_db(dataset_id).await;
-        let first = Uuid::new_v4();
-        let second = Uuid::new_v4();
-        let input = temporal_input(
-            dataset_id,
-            Some(Uuid::new_v4()),
-            vec![
-                attributed_event("Alice joins Acme", "subject", first),
-                attributed_event("Alice joins Acme", "subject", second),
-            ],
-        );
-
-        let vector = Arc::new(MockVectorDB::new());
-        add_temporal_data_points(
-            &input,
-            Arc::new(cognee_graph::MockGraphDB::new()),
-            Arc::clone(&vector) as Arc<dyn VectorDB>,
-            Arc::new(MockEmbeddingEngine::new(8)),
-            &db,
-            Some(Uuid::new_v4()),
-        )
-        .await
-        .expect("temporal persistence must succeed");
-
-        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
-        let event_rows: Vec<_> = nodes
-            .iter()
-            .filter(|row| row.node_type == "Event")
-            .collect();
-        assert_eq!(event_rows.len(), 2, "one row per producing file");
-        assert_eq!(
-            event_rows[0].slug, event_rows[1].slug,
-            "and both name the same physical node"
-        );
-        assert_eq!(
-            event_rows
-                .iter()
-                .map(|row| row.data_id)
-                .collect::<std::collections::BTreeSet<_>>(),
-            [first, second].into_iter().collect()
-        );
-
-        // The payload agrees with the ledger: one artifact, one vector point.
-        assert_eq!(
-            vector
-                .collection_size("Event", "name")
-                .await
-                .expect("collection size"),
-            1,
-            "the shared event is embedded and indexed once, not once per producer"
-        );
-    }
-
-    /// A temporal relationship name comes straight from the LLM, and NUL bytes
-    /// are stripped on the way into Postgres. The row id and slug must be
-    /// derived from the sanitized text, or the ledger would key the edge on
-    /// text no store holds and the sweep would miss it. The standard path's
-    /// `provenance_edge_ids_derive_from_sanitized_text` pins the same rule.
-    #[tokio::test]
-    async fn temporal_edge_rows_hash_sanitized_relationship_names() {
-        use cognee_database::ops::graph_storage::get_edges_by_dataset;
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_vector::MockVectorDB;
-
-        let dataset_id = Uuid::new_v4();
-        let db = ledger_db(dataset_id).await;
-        let data_id = Uuid::new_v4();
-        let user_id = Uuid::new_v4();
-        let dirty = "sub\u{0}ject";
-        let clean = "subject";
-
-        let input = temporal_input(
-            dataset_id,
-            Some(user_id),
-            vec![attributed_event("Alice joins Acme", dirty, data_id)],
-        );
-        add_temporal_data_points(
-            &input,
-            Arc::new(cognee_graph::MockGraphDB::new()),
-            Arc::new(MockVectorDB::new()),
-            Arc::new(MockEmbeddingEngine::new(8)),
-            &db,
-            None,
-        )
-        .await
-        .expect("temporal persistence must succeed");
-
-        let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
-        let row = edges
-            .iter()
-            .find(|row| row.relationship_name == clean)
-            .expect("the relationship is stored sanitized");
-        assert_eq!(
-            row.id,
-            provenance_edge_id(
-                None,
-                user_id,
-                dataset_id,
-                data_id,
-                row.source_node_id,
-                clean,
-                row.destination_node_id,
-            )
-        );
-        assert_eq!(
-            row.slug,
-            triplet_slug(row.source_node_id, clean, row.destination_node_id)
-        );
-        // The load-bearing half: stripping the NUL actually changes the hash,
-        // so hashing the raw text could not slip through as a no-op.
-        assert_ne!(
-            row.id,
-            provenance_edge_id(
-                None,
-                user_id,
-                dataset_id,
-                data_id,
-                row.source_node_id,
-                dirty,
-                row.destination_node_id,
-            )
-        );
-    }
-
-    /// `RunToEnd` records the failing chunk and keeps the rest. Before this the
-    /// temporal extractor warned and returned an empty `Vec`, so a run whose
-    /// every call 429'd returned `Ok` with no events and no report at all.
-    #[tokio::test]
-    async fn temporal_extraction_collects_a_chunk_failure_instead_of_propagating() {
-        let dataset_id = Uuid::new_v4();
-        let (input, docs) = temporal_files(
-            dataset_id,
-            &["Alice works at Acme.", "Bob FAILMARKER breaks here."],
-        );
-
-        let config = CognifyConfig::default()
-            .with_data_per_batch(1)
-            .with_failure_stop(FailureStop::RunToEnd);
-        let result = extract_temporal_events(
-            &input,
-            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
-            &config,
-        )
-        .await
-        .expect("RunToEnd collects rather than propagates");
-
-        assert!(
-            result
-                .events
-                .iter()
-                .all(|attributed| attributed.data_id == docs[0]),
-            "the good file's events survive"
-        );
-        assert!(!result.events.is_empty());
-        assert_eq!(result.failures.entries().len(), 1);
-        let entry = &result.failures.entries()[0];
-        assert_eq!(entry.stage, FailureStage::TemporalExtraction);
-        assert_eq!(entry.data_id, docs[1]);
-        assert!(
-            entry.chunk_id.is_some(),
-            "temporal extraction fails at chunk granularity"
-        );
-    }
-
-    /// The abort-time partition, temporal edition: three single-chunk files,
-    /// the second failing. Under `FailFast` + `FailedItems` only the complete
-    /// file's events are carried forward; the failed and never-reached files
-    /// are left for the next run.
-    #[tokio::test]
-    async fn temporal_extraction_fail_fast_keeps_only_the_complete_file() {
-        let dataset_id = Uuid::new_v4();
-        let (input, docs) = temporal_files(
-            dataset_id,
-            &[
-                "Alice works at Acme.",
-                "Bob FAILMARKER breaks here.",
-                "Carol also works at Acme.",
-            ],
-        );
-
-        let config = CognifyConfig::default()
-            .with_data_per_batch(1)
-            .with_rollback_scope(RollbackScope::FailedItems);
-        let result = extract_temporal_events(
-            &input,
-            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
-            &config,
-        )
-        .await
-        .expect("FailedItems keeps the complete files");
-
-        assert!(!result.events.is_empty());
-        assert!(
-            result
-                .events
-                .iter()
-                .all(|attributed| attributed.data_id == docs[0]),
-            "only the complete file's events are persisted"
-        );
-        assert_eq!(
-            result
-                .failures
-                .failed_items()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-            [docs[1]]
-        );
-        assert_eq!(
-            result
-                .failures
-                .unreached_items()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-            [docs[2]],
-            "the third file's chunk was never dispatched"
-        );
-    }
-
-    /// The same abort under the default `WholeRun` scope carries nothing
-    /// forward — the partition must not run on the fatal path.
-    #[tokio::test]
-    async fn temporal_extraction_fail_fast_whole_run_propagates() {
-        let dataset_id = Uuid::new_v4();
-        let (input, docs) = temporal_files(
-            dataset_id,
-            &["Alice works at Acme.", "Bob FAILMARKER breaks here."],
-        );
-
-        let config = CognifyConfig::default().with_data_per_batch(1);
-        let err = extract_temporal_events(
-            &input,
-            Arc::new(TemporalTestLlm::failing_extraction(&["FAILMARKER"])),
-            &config,
-        )
-        .await
-        .expect_err("the default scope still aborts the run");
-
-        let CognifyError::RunFailed { report } = err else {
-            panic!("expected RunFailed, got: {err:?}");
-        };
-        assert_eq!(
-            report.failed_items().iter().copied().collect::<Vec<_>>(),
-            [docs[1]]
-        );
-    }
-
-    /// The second unguarded site. Enrichment runs once per *batch*, so its
-    /// failure is recorded against every chunk that fed the batch — otherwise a
-    /// single call covering most of a run would contribute almost nothing to
-    /// the chunk failure ratio, and a `FailedItems` run could "complete" having
-    /// swept most of the dataset. The batch's events are dropped: an event
-    /// without attributes carries none of the entity graph this pass exists to
-    /// produce.
-    #[tokio::test]
-    async fn temporal_enrichment_failure_fails_its_batchs_items() {
-        let dataset_id = Uuid::new_v4();
-        let (input, docs) = temporal_files(
-            dataset_id,
-            &[
-                "Alice works at Acme.",
-                "Bob FAILMARKER breaks here.",
-                "Carol also works at Acme.",
-            ],
-        );
-
-        // Two chunks per batch: the first batch covers A and B, and B's marker
-        // rides into the enrichment prompt on its event description.
-        let config = CognifyConfig::default()
-            .with_data_per_batch(2)
-            .with_failure_stop(FailureStop::RunToEnd);
-        let result = extract_temporal_events(
-            &input,
-            Arc::new(TemporalTestLlm::failing_enrichment(&["FAILMARKER"])),
-            &config,
-        )
-        .await
-        .expect("RunToEnd collects rather than propagates");
-
-        assert_eq!(
-            result.failures.entries().len(),
-            2,
-            "one failure per chunk in the failed batch, not one for the batch"
-        );
-        assert!(result.failures.entries().iter().all(|entry| entry.stage
-            == FailureStage::TemporalEnrichment
-            && entry.chunk_id.is_some()));
-        assert_eq!(
-            result
-                .failures
-                .failed_items()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-            {
-                let mut expected = [docs[0], docs[1]];
-                expected.sort();
-                expected.to_vec()
-            },
-            "both files that fed the batch fail; the third is untouched"
-        );
-        assert!(
-            !result.events.is_empty()
-                && result
-                    .events
-                    .iter()
-                    .all(|attributed| attributed.data_id == docs[2]),
-            "only the surviving batch's events are carried forward"
-        );
-    }
-
-    /// A chunk that already failed extraction is not charged again when the
-    /// enrichment call for its batch fails too. It is one failed chunk, not
-    /// two — and the chunk failure ratio is what the double count would
-    /// distort.
-    #[tokio::test]
-    async fn a_chunk_that_failed_extraction_is_not_charged_twice() {
-        let dataset_id = Uuid::new_v4();
-        let (input, docs) = temporal_files(
-            dataset_id,
-            &["Alice works at Acme.", "Bob EXTFAIL breaks here."],
-        );
-
-        // Both chunks in one batch. B's extraction fails; the enrichment call
-        // over what survives then fails on A's description.
-        let config = CognifyConfig::default()
-            .with_data_per_batch(2)
-            .with_failure_stop(FailureStop::RunToEnd);
-        let result = extract_temporal_events(
-            &input,
-            Arc::new(TemporalTestLlm::failing_both(&["EXTFAIL"], &["Alice"])),
-            &config,
-        )
-        .await
-        .expect("RunToEnd collects rather than propagates");
-
-        assert_eq!(
-            result.failures.total(),
-            2,
-            "one failure per chunk, not one per chunk per pass"
-        );
-        let stages: Vec<FailureStage> = result
-            .failures
-            .entries()
-            .iter()
-            .map(|entry| entry.stage)
-            .collect();
-        assert!(stages.contains(&FailureStage::TemporalExtraction));
-        assert!(stages.contains(&FailureStage::TemporalEnrichment));
-        assert_eq!(
-            result
-                .failures
-                .failed_items()
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-            {
-                let mut expected = [docs[0], docs[1]];
-                expected.sort();
-                expected.to_vec()
-            }
-        );
-        assert!(
-            result.events.is_empty(),
-            "the failed batch's events are dropped"
-        );
-    }
-
     /// The end-of-run gate reads the policy, not the report alone: the same
     /// failures error the run under `WholeRun` and complete it under
     /// `FailedItems` below the threshold.
@@ -13883,95 +12034,6 @@ mod tests {
                         .is_some_and(|e| matches!(e, CognifyError::RunFailed { .. })),
                     "the task must return the typed error so cognify() can recover it"
                 );
-            }
-        }
-    }
-
-    /// The temporal branch carries its own copy of the end-of-run gate, over
-    /// the report the chunking stage handed down. Same fixture as
-    /// `fatality_gate_defers_to_the_policy`, so the two branches stay honest
-    /// about meaning the same thing by "fatal".
-    #[tokio::test]
-    async fn temporal_fatality_gate_defers_to_the_policy() {
-        use cognee_core::TypedTask;
-        use cognee_embedding::MockEmbeddingEngine;
-        use cognee_models::TemporalEvent;
-        use cognee_test_utils::test_task_context;
-        use cognee_vector::MockVectorDB;
-
-        let (_, ctx, _db) = test_task_context().await;
-        let dataset_id = Uuid::new_v4();
-        let ledger = Arc::new(ledger_db(dataset_id).await);
-
-        // One failed item out of four, one failed chunk out of 60 — under the
-        // 5 % default threshold.
-        let mut failures = FailureReport::default();
-        failures.note_totals(4, 60);
-        failures.record(StageFailure {
-            stage: FailureStage::Chunking,
-            data_id: Uuid::new_v4(),
-            chunk_id: None,
-            error: "boom".to_string(),
-            fails_item: true,
-        });
-
-        let input = ExtractedTemporalEvents {
-            events: vec![AttributedEvent {
-                event: TemporalEvent {
-                    name: "Acme was founded".to_string(),
-                    description: None,
-                    location: None,
-                    at: None,
-                    during: None,
-                    attributes: vec![],
-                },
-                data_id: Uuid::new_v4(),
-            }],
-            dataset_id,
-            user_id: Some(Uuid::new_v4()),
-            tenant_id: None,
-            failures,
-        };
-
-        for (config, should_fail) in [
-            (CognifyConfig::default(), true),
-            (
-                CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
-                false,
-            ),
-        ] {
-            let task = make_add_temporal_data_points_task(
-                Arc::new(cognee_graph::MockGraphDB::new()),
-                Arc::new(MockVectorDB::new()),
-                Arc::new(MockEmbeddingEngine::new(8)),
-                ledger.clone(),
-                config.failure_policy(),
-            );
-            let TypedTask::Async(run) = task else {
-                panic!("add_temporal_data_points task should be async");
-            };
-            let outcome = run(&input, ctx.clone()).await;
-            assert_eq!(
-                outcome.is_err(),
-                should_fail,
-                "scope {:?} must {} the temporal run",
-                config.rollback_scope,
-                if should_fail { "fail" } else { "complete" }
-            );
-            match outcome {
-                Err(e) => assert!(
-                    e.downcast_ref::<CognifyError>()
-                        .is_some_and(|e| matches!(e, CognifyError::RunFailed { .. })),
-                    "the task must return the typed error so cognify() can recover it"
-                ),
-                // The report has to be the chunking stage's, not a fresh
-                // default: a forwarding regression would surface as an empty
-                // one here while every other assertion still passed.
-                Ok(result) => assert_eq!(
-                    result.failures.entries().len(),
-                    1,
-                    "the chunk stage's report reaches the result"
-                ),
             }
         }
     }
@@ -14124,22 +12186,8 @@ mod tests {
         let doc_a = Uuid::new_v4();
         let doc_b = Uuid::new_v4();
         let documents = vec![
-            test_document_with_metadata(
-                doc_a,
-                Some(url_metadata(
-                    "https://example.com/a",
-                    "https://example.com/a",
-                    "A",
-                )),
-            ),
-            test_document_with_metadata(
-                doc_b,
-                Some(url_metadata(
-                    "https://example.com/b",
-                    "https://example.com/b",
-                    "B",
-                )),
-            ),
+            test_document_with_metadata(doc_a, Some(url_metadata("https://example.com/a"))),
+            test_document_with_metadata(doc_b, Some(url_metadata("https://example.com/b"))),
         ];
         let chunks = vec![
             test_chunk(Uuid::new_v4(), doc_a, "first"),

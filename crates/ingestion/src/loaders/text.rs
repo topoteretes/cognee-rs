@@ -1,4 +1,4 @@
-//! Text file loader -- UTF-8 decode with BOM stripping.
+//! Text file loader -- strict UTF-8 decode; a BOM is kept, as Python does.
 //!
 //! Handles `document_type = "text"`. Relocates the logic previously
 //! hard-coded at `crates/cognify/src/tasks.rs:166-167`.
@@ -10,21 +10,15 @@ use super::{DocumentLoader, LoaderError, LoaderOutput};
 
 /// Loader for plain-text documents.
 ///
-/// Decodes raw bytes as UTF-8, stripping the BOM (byte-order mark) if
-/// present. Returns [`LoaderOutput::Text`] for downstream paragraph
+/// Decodes raw bytes as UTF-8. A BOM (byte-order mark) is kept as a leading
+/// U+FEFF: Python's `text_loader` opens the file with `encoding="utf-8"`, not
+/// `utf-8-sig` (`text_loader.py:82`), which does not drop it. Returns [`LoaderOutput::Text`] for downstream paragraph
 /// chunking.
 pub struct TextLoader;
 
 #[async_trait]
 impl DocumentLoader for TextLoader {
     async fn extract(&self, bytes: &[u8], _doc: &Document) -> Result<LoaderOutput, LoaderError> {
-        // Strip UTF-8 BOM if present (0xEF 0xBB 0xBF)
-        let bytes = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-            &bytes[3..]
-        } else {
-            bytes
-        };
-
         let text = String::from_utf8(bytes.to_vec())
             .map_err(|e| LoaderError::InvalidUtf8(e.to_string()))?;
 
@@ -74,14 +68,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bom_is_stripped() {
+    async fn bom_is_kept() {
         let loader = TextLoader;
         let doc = make_test_doc();
         let mut input = vec![0xEF, 0xBB, 0xBF];
         input.extend_from_slice(b"hello");
         let result = loader.extract(&input, &doc).await.unwrap();
         match result {
-            LoaderOutput::Text(s) => assert_eq!(s, "hello"),
+            LoaderOutput::Text(s) => assert_eq!(s, "\u{feff}hello"),
             _ => panic!("expected LoaderOutput::Text"),
         }
     }

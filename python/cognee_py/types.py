@@ -94,9 +94,6 @@ class CognifyOpts(TypedDict, total=False):
     #: Accepted but inert on the default chunking path: no chunker reads it, so it changes no chunk boundary (Python's DefaultChunkEngine does consume it, but that engine is unreachable). Only validation reads it, rejecting overlap >= chunk size. Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs.
     chunk_overlap: int
     summarization: bool
-    temporal_cognify: bool
-    #: Index ``"source → relation → target"`` triplet embeddings.
-    triplet: bool
 
 
 class SearchOpts(TypedDict, total=False):
@@ -145,18 +142,9 @@ class RememberOpts(TypedDict, total=False):
     """Options accepted by :meth:`Cognee.remember`."""
 
     session_id: str
+    # Run ``improve()`` after the remember (default ``True``, as in Python).
     self_improvement: bool
     tenant: str
-
-
-class MemifyOpts(TypedDict, total=False):
-    """Options accepted by :meth:`Cognee.memify`."""
-
-    triplet_batch_size: int
-    node_type_filter: str
-    node_name_filter: list[str]
-    #: ``"AND"`` or ``"OR"``
-    node_name_filter_operator: str
 
 
 class ImproveOpts(TypedDict, total=False):
@@ -166,8 +154,10 @@ class ImproveOpts(TypedDict, total=False):
     """
 
     dataset_name: str  # required — missing raises CogneeValidationError at runtime
+    # UUID of a dataset the caller already resolved (possibly shared with it),
+    # as Python's ``improve(dataset=<UUID>)``.
+    dataset_id: str
     session_ids: list[str]
-    node_name: list[str]
     feedback_alpha: float
     tenant: str
 
@@ -289,12 +279,11 @@ class UpdateResult(TypedDict):
     """Result of :meth:`Cognee.update` (snake_case view).
 
     The native method returns the same data with camelCase keys
-    (``deletedDataId``, ``deleteResult``, ``newData``, ``cognifyResult``).
+    (``dataId``, ``deleteResult``, ``cognifyResult``).
     """
 
-    deleted_data_id: str
+    data_id: str
     delete_result: Any
-    new_data: list[Any]
     cognify_result: Any
 
 
@@ -310,21 +299,6 @@ class PruneResult(TypedDict):
     vector_pruned: bool
     metadata_pruned: bool
     cache_pruned: bool
-
-
-class MemifyResult(TypedDict):
-    """Result of :meth:`Cognee.memify` (snake_case view).
-
-    The native method returns the same data with camelCase keys
-    (``tripletCount``, ``indexedCount``, ``batchCount``,
-    ``alreadyCompleted``, ``priorPipelineRunId``).
-    """
-
-    triplet_count: int
-    indexed_count: int
-    batch_count: int
-    already_completed: bool
-    prior_pipeline_run_id: str | None
 
 
 class ImproveStageResult(TypedDict):
@@ -372,7 +346,6 @@ __all__ = [
     "SearchOpts",
     "RecallOpts",
     "RememberOpts",
-    "MemifyOpts",
     "ImproveOpts",
     "ForgetTarget",
     "UpdateOpts",
@@ -387,7 +360,6 @@ __all__ = [
     "ForgetResult",
     "UpdateResult",
     "PruneResult",
-    "MemifyResult",
     "ImproveResult",
     "ImproveStageResult",
 ]

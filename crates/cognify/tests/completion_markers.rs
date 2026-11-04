@@ -24,10 +24,7 @@ use std::sync::Arc;
 
 use cognee_cognify::{FailureStop, RollbackScope};
 use cognee_test_utils::MockLlm;
-use rollback_harness::{
-    CountingLlm, Harness, TemporalFixtureLlm, canned_graph_response, extraction_config,
-    temporal_config,
-};
+use rollback_harness::{CountingLlm, Harness, canned_graph_response, extraction_config};
 
 /// A clean LLM: canned graph responses, no failing markers.
 fn clean_llm(files: usize) -> Arc<dyn cognee_llm::Llm> {
@@ -241,11 +238,10 @@ async fn an_earlier_runs_marker_survives_a_later_runs_failure() {
     );
 }
 
-/// A run that completed with files still outstanding is not a pipeline-cache
-/// hit. The cache would otherwise skip the dataset entirely and the failed
-/// file would never be redone.
+/// A run that completed with files still outstanding leaves them unmarked, so
+/// the next run redoes exactly those files and skips the rest.
 #[tokio::test]
-async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failures() {
+async fn a_run_that_completed_with_outstanding_failures_is_redone_for_exactly_those_files() {
     let mut harness = Harness::new().await;
     let first = harness.add_file("Alice works at Acme.").await;
     let bad = harness.add_file("Bob FAILMARKER breaks here.").await;
@@ -253,7 +249,6 @@ async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failur
     let items = [first, bad, last];
 
     let tolerant = extraction_config()
-        .with_pipeline_cache(true)
         .with_failure_stop(FailureStop::RunToEnd)
         .with_rollback_scope(RollbackScope::FailedItems)
         .with_chunk_failure_ratio_threshold(0.5);
@@ -263,9 +258,9 @@ async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failur
         .expect("the tolerant run completes below the ratio");
     assert_eq!(first_run.failures.failed_items().len(), 1);
 
-    // Same items, cache on. The dataset's latest run says COMPLETED, but it
-    // also says a file is outstanding — so this must run, and must process
-    // exactly the file that failed.
+    // Same items. The dataset's latest run says COMPLETED, but a file is
+    // outstanding — so this must run, and must process exactly the file that
+    // failed.
     let second_run = harness
         .run_over(&tolerant, &items, clean_llm(3))
         .await
@@ -273,7 +268,7 @@ async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failur
 
     assert!(
         !second_run.already_completed,
-        "a completed-with-failures run is not a cache hit"
+        "a completed-with-failures run leaves work to do"
     );
     assert_eq!(
         second_run.chunks.len(),
@@ -287,55 +282,4 @@ async fn the_pipeline_cache_does_not_short_circuit_a_run_with_outstanding_failur
             .all(|chunk| chunk.document_id == bad)
     );
     assert!(harness.is_marked(bad).await);
-}
-
-/// Temporal marks and skips exactly like a standard run.
-///
-/// This reverses what the previous commit pinned, deliberately. Python's
-/// temporal cognify runs under `pipeline_name="cognify_pipeline"` — the same
-/// string as its standard branch, one `pipeline_executor_func` call for both —
-/// so Python writes and reads one set of markers on both branches. Rust now
-/// matches, which is also what makes the sweep's marker-clearing phase
-/// meaningful for a temporal run instead of a guaranteed no-op.
-///
-/// The user-visible consequence, which the release notes state: a `cognify()`
-/// followed by a temporal `cognify()` over the same dataset is a no-op, and the
-/// other way round. Callers who want both graphs over one dataset set
-/// `with_incremental_loading(false)`.
-#[tokio::test]
-async fn a_temporal_run_marks_and_skips_like_a_standard_one() {
-    let mut harness = Harness::new().await;
-    let only = harness.add_file("Alice joined Acme in 2020.").await;
-
-    let config = temporal_config();
-    harness
-        .run_over(&config, &[only], Arc::new(TemporalFixtureLlm::new()))
-        .await
-        .expect("the temporal run completes");
-
-    assert!(
-        harness.is_marked(only).await,
-        "a completed temporal run marks the items it finished"
-    );
-
-    // Second wave over the same dataset: nothing left to do, and no LLM spend.
-    let second_llm = Arc::new(TemporalFixtureLlm::new());
-    let second_run = harness
-        .run_over(
-            &config,
-            &[only],
-            Arc::clone(&second_llm) as Arc<dyn cognee_llm::Llm>,
-        )
-        .await
-        .expect("the second temporal run is a no-op");
-
-    assert!(
-        second_run.already_completed,
-        "re-cognifying a complete dataset is a no-op on the temporal branch too"
-    );
-    assert_eq!(
-        second_llm.call_count(),
-        0,
-        "a skipped item is never sent to an LLM"
-    );
 }

@@ -2504,69 +2504,6 @@
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
   },
-  "cognify.data_per_batch <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- -1": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "cognify.data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "cognify.data_per_batch <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "cognify.data_per_batch <- [1]": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- false": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- null": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- true": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
-  "cognify.data_per_batch <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "cognify.data_per_batch"
-  },
   "cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },
@@ -2941,6 +2878,70 @@
     "err": "TypeMismatch",
     "key": "cognify.rollback_scope"
   },
+  "cognify.stale_run_recovery_min_age_seconds <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 0": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 0
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 1": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 1
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 5000000000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 5000000000
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- 70000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 70000
+    }
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
+  "cognify.stale_run_recovery_min_age_seconds <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.stale_run_recovery_min_age_seconds"
+  },
   "cognify.token_counter <- \"\"": {
     "ok": {}
   },
@@ -3062,69 +3063,6 @@
   "cognify.tolerate_summarization_failures <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "cognify.tolerate_summarization_failures"
-  },
-  "data_per_batch <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- -1": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "data_per_batch <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "data_per_batch <- [1]": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- false": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- null": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- true": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
-  },
-  "data_per_batch <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "data_per_batch"
   },
   "data_root_directory <- \"\"": {
     "ok": {
@@ -4321,6 +4259,69 @@
     "err": "TypeMismatch",
     "key": "embedding.max_completion_tokens"
   },
+  "embedding.max_concurrent_data_points <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "embedding.max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "embedding.max_concurrent_data_points <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "embedding.max_concurrent_data_points <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
+  "embedding.max_concurrent_data_points <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding.max_concurrent_data_points"
+  },
   "embedding.max_sequence_length <- \"\"": {
     "err": "TypeMismatch",
     "key": "embedding.max_sequence_length"
@@ -4572,69 +4573,6 @@
   "embedding.ollama.huggingface_tokenizer <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "embedding.ollama.huggingface_tokenizer"
-  },
-  "embedding.onnx.batch_size <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- -1": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "embedding.onnx.batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "embedding.onnx.batch_size <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "embedding.onnx.batch_size <- [1]": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- false": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- null": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- true": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
-  },
-  "embedding.onnx.batch_size <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "embedding.onnx.batch_size"
   },
   "embedding.onnx.model_path <- \"\"": {
     "ok": {}
@@ -5449,6 +5387,69 @@
     "err": "TypeMismatch",
     "key": "embedding_max_completion_tokens"
   },
+  "embedding_max_concurrent_data_points <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- -1": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "embedding_max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "embedding_max_concurrent_data_points <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "embedding_max_concurrent_data_points <- [1]": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- false": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- null": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- true": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
+  "embedding_max_concurrent_data_points <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "embedding_max_concurrent_data_points"
+  },
   "embedding_max_sequence_length <- \"\"": {
     "err": "TypeMismatch",
     "key": "embedding_max_sequence_length"
@@ -5701,69 +5702,6 @@
   "embedding_model_path <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "embedding_model_path"
-  },
-  "embedding_onnx_batch_size <- \"\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"1\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"s\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- \"true\"": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- -1": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "embedding_onnx_batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "embedding_onnx_batch_size <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "embedding_onnx_batch_size <- [1]": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- false": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- null": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- true": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
-  },
-  "embedding_onnx_batch_size <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "embedding_onnx_batch_size"
   },
   "embedding_provider <- \"\"": {
     "ok": {
@@ -16120,75 +16058,6 @@
   "session_ttl_seconds <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "session_ttl_seconds"
-  },
-  "single_process <- \"\"": {
-    "ok": {}
-  },
-  "single_process <- \"1\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "single_process <- \"s\"": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- \"true\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "single_process <- -1": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- 0": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- 1": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "single_process <- 1.5": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- 5000000000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- 70000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- [1]": {
-    "err": "TypeMismatch",
-    "key": "single_process"
-  },
-  "single_process <- false": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "single_process <- null": {
-    "ok": {}
-  },
-  "single_process <- true": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "single_process <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "single_process"
   },
   "skip_connection_test <- \"\"": {
     "err": "TypeMismatch",

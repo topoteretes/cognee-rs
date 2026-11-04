@@ -29,7 +29,6 @@
     "test": "jest --config jest.config.js",
     "example": "ts-node examples/remember-recall.ts",
     "example:add-cognify-search": "ts-node examples/add-cognify-search.ts",
-    "example:memify": "ts-node examples/memify-recall.ts",
     "example:datasets": "ts-node examples/datasets.ts",
     "example:sessions": "ts-node examples/sessions.ts",
     "example:config": "ts-node examples/config.ts",

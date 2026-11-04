@@ -26,8 +26,6 @@ import type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeForgetTarget,
@@ -40,7 +38,6 @@ import type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -220,40 +217,6 @@ export interface CogneeSessionObject {
 }
 
 /**
- * Notebooks sub-object type.
- *
- * Mirrors Python's `cognee.notebooks` sub-object (see `python/src/sdk_admin.rs`).
- * All operations forward to the corresponding `native.cognee*Notebook` functions.
- */
-export interface CogneeNotebookObject {
-  /**
-   * Return all notebooks owned by this handle's user.
-   */
-  list(): Promise<CogneeNotebook[]>;
-  /**
-   * Create a new notebook.
-   *
-   * @param name      Display name for the notebook.
-   * @param cells     Initial cells array (default empty).
-   * @param deletable Whether the notebook can be deleted (default `true`).
-   */
-  create(name: string, cells?: unknown, deletable?: boolean): Promise<CogneeNotebook>;
-  /**
-   * Apply a partial update to an existing notebook.
-   *
-   * Returns the updated notebook, or `null` if no notebook with the given `id`
-   * exists for this owner.
-   */
-  update(id: string, patch: { name?: string; cells?: unknown }): Promise<CogneeNotebook | null>;
-  /**
-   * Delete a notebook by ID.
-   *
-   * Returns `true` if a row was removed, `false` if not found.
-   */
-  delete(id: string): Promise<boolean>;
-}
-
-/**
  * Users sub-object type.
  *
  * Exposes user- and pipeline-run-management operations that Python surfaces on
@@ -268,24 +231,6 @@ export interface CogneeUserObject {
    * returned by `c.ownerId()`.
    */
   getOrCreateDefault(): Promise<CogneeUser>;
-  /**
-   * Reset the pipeline-run status for a single pipeline within a dataset.
-   *
-   * Unblocks a dataset that is stuck in the "running" state so it can be
-   * re-cognified. Equivalent to Python's `reset_pipeline_run_status`.
-   *
-   * @param datasetId    UUID of the dataset.
-   * @param pipelineName Name of the pipeline (e.g. `"cognify_pipeline"`).
-   */
-  resetPipelineRunStatus(datasetId: string, pipelineName: string): Promise<void>;
-  /**
-   * Reset the pipeline-run status for **all** pipelines in a dataset.
-   *
-   * Equivalent to Python's `reset_dataset_pipeline_run_status`.
-   *
-   * @param datasetId UUID of the dataset.
-   */
-  resetDatasetPipelineRunStatus(datasetId: string): Promise<void>;
 }
 
 /**
@@ -317,9 +262,6 @@ export class Cognee {
 
   /** Session management operations. */
   readonly sessions: CogneeSessionObject;
-
-  /** Notebook management operations. */
-  readonly notebooks: CogneeNotebookObject;
 
   /** User and pipeline-run management operations. */
   readonly users: CogneeUserObject;
@@ -435,19 +377,9 @@ export class Cognee {
                           native.cogneeDeleteFeedback(h, sessionId, qaId, opts),
     };
 
-    // ── notebooks sub-object ─────────────────────────────────────────────────
-    this.notebooks = {
-      list:   ()                  => native.cogneeListNotebooks(h),
-      create: (name, cells, del)  => native.cogneeCreateNotebook(h, name, cells, del),
-      update: (id, patch)         => native.cogneeUpdateNotebook(h, id, patch),
-      delete: (id)                => native.cogneeDeleteNotebook(h, id),
-    };
-
     // ── users sub-object ─────────────────────────────────────────────────────
     this.users = {
       getOrCreateDefault:             ()                           => native.cogneeGetOrCreateDefaultUser(h),
-      resetPipelineRunStatus:         (datasetId, pipelineName)   => native.cogneeResetPipelineRunStatus(h, datasetId, pipelineName),
-      resetDatasetPipelineRunStatus:  (datasetId)                 => native.cogneeResetDatasetPipelineRunStatus(h, datasetId),
     };
   }
 
@@ -577,7 +509,7 @@ export class Cognee {
   /**
    * Search the knowledge graph.
    *
-   * `opts.searchType` defaults to `"HYBRID_COMPLETION"`. All 15
+   * `opts.searchType` defaults to `"HYBRID_COMPLETION"`. All 17
    * SCREAMING_SNAKE_CASE variants are supported.
    */
   async search(
@@ -613,7 +545,8 @@ export class Cognee {
   /**
    * Composite add+cognify with optional graph-improvement pass.
    *
-   * `opts.selfImprovement` triggers a memify pass after cognify.
+   * `opts.selfImprovement` (default `true`, as in Python) runs `improve()` after
+   * cognify (or on the session) and reports it as `result.improve`.
    * `opts.sessionId` switches to session-memory mode (no graph writes).
    */
   async remember(
@@ -647,21 +580,8 @@ export class Cognee {
   }
 
   /**
-   * Index triplet embeddings from the existing knowledge graph.
-   *
-   * Idempotent (re-runnable). Enables `SearchType::TripletCompletion`.
-   */
-  async memify(opts?: CogneeMemifyOptions): Promise<CogneeMemifyResult> {
-    try {
-      return await native.cogneeMemify(this._handle, opts);
-    } catch (e) {
-      throw wrapNativeError(e);
-    }
-  }
-
-  /**
-   * Run the four-stage session-graph bridge pipeline:
-   * session collection → memify → feedback integration → edge synchronisation.
+   * Run the session-graph bridge pipeline: feedback integration → session
+   * persistence and distillation → edge synchronisation.
    */
   async improve(opts: CogneeImproveOptions): Promise<CogneeImproveResult> {
     try {

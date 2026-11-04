@@ -47,7 +47,6 @@ class SearchType(str, Enum):
     GRAPH_COMPLETION_CONTEXT_EXTENSION = "GRAPH_COMPLETION_CONTEXT_EXTENSION"
     GRAPH_COMPLETION_DECOMPOSITION = "GRAPH_COMPLETION_DECOMPOSITION"
     GRAPH_SUMMARY_COMPLETION = "GRAPH_SUMMARY_COMPLETION"
-    TRIPLET_COMPLETION = "TRIPLET_COMPLETION"
     RAG_COMPLETION = "RAG_COMPLETION"
     CHUNKS = "CHUNKS"
     SUMMARIES = "SUMMARIES"
@@ -69,9 +68,8 @@ from cognee_py._native import (
     CogneeConfig,
     # SDK datasets sub-object
     CogneeDatasets,
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     CogneeSessions,
-    CogneeNotebooks,
     # SDK-tier exceptions (CogneeError hierarchy)
     CogneeError,
     CogneeComponentError,
@@ -188,9 +186,8 @@ __all__ = [
     "CogneeConfig",
     # SDK datasets sub-object
     "CogneeDatasets",
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     "CogneeSessions",
-    "CogneeNotebooks",
     # SDK-tier exceptions
     "CogneeError",
     "CogneeComponentError",

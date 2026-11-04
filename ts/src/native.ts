@@ -16,8 +16,6 @@ import type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeForgetTarget,
@@ -30,7 +28,6 @@ import type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -50,8 +47,6 @@ export type {
   CogneeRememberOptions,
   CogneeRememberResult,
   CogneeMemoryEntry,
-  CogneeMemifyOptions,
-  CogneeMemifyResult,
   CogneeImproveOptions,
   CogneeImproveResult,
   CogneeImproveStage,
@@ -65,7 +60,6 @@ export type {
   CogneeData,
   CogneeDeleteResult,
   CogneeUser,
-  CogneeNotebook,
   CogneeSessionQAEntry,
   CogneeVisualizeOptions,
 } from "./types";
@@ -150,20 +144,16 @@ export interface NativeBindings {
     opts?: CogneeRecallOptions
   ): Promise<CogneeRecallResult>;
 
-  // Memory ops (Phase 5): remember / remember_entry / memify / improve.
+  // Memory ops (Phase 5): remember / remember_entry / improve.
   //
   // `cogneeRemember` is a one-call add+cognify+optional-improve composite.
-  // opts.selfImprovement triggers a memify pass after cognify.
+  // opts.selfImprovement (default true) runs improve() after cognify.
   // opts.sessionId switches to session-memory mode (no graph writes).
   //
   // `cogneeRememberEntry` stores a typed MemoryEntry in a session. The
   // `entry` discriminated union supports "qa", "trace", and "feedback" types.
   //
-  // `cogneeMemify` indexes triplet embeddings from the existing knowledge graph.
-  // NOTE: extraction_tasks, enrichment_tasks, custom_data fields in MemifyConfig
-  // are closures and cannot be passed from JS.
-  //
-  // `cogneeImprove` runs the four-stage session-graph bridge pipeline.
+  // `cogneeImprove` runs the session-graph bridge pipeline.
   cogneeRemember(
     handle: NativeBox,
     dataInput: CogneeDataInput | CogneeDataInput[],
@@ -177,10 +167,6 @@ export interface NativeBindings {
     sessionId: string,
     opts?: { tenant?: string }
   ): Promise<CogneeRememberResult>;
-  cogneeMemify(
-    handle: NativeBox,
-    opts?: CogneeMemifyOptions
-  ): Promise<CogneeMemifyResult>;
   cogneeImprove(
     handle: NativeBox,
     opts: CogneeImproveOptions
@@ -230,34 +216,8 @@ export interface NativeBindings {
   ): Promise<CogneeDeleteResult>;
   cogneeDeleteAllDatasets(handle: NativeBox): Promise<CogneeDeleteResult[]>;
 
-  // Pipeline-run resets (Phase 5).
-  cogneeResetPipelineRunStatus(
-    handle: NativeBox,
-    datasetId: string,
-    pipelineName: string
-  ): Promise<void>;
-  cogneeResetDatasetPipelineRunStatus(
-    handle: NativeBox,
-    datasetId: string
-  ): Promise<void>;
-
   // Default user (Phase 5).
   cogneeGetOrCreateDefaultUser(handle: NativeBox): Promise<CogneeUser>;
-
-  // Notebooks (Phase 5).
-  cogneeListNotebooks(handle: NativeBox): Promise<CogneeNotebook[]>;
-  cogneeCreateNotebook(
-    handle: NativeBox,
-    name: string,
-    cells?: unknown,
-    deletable?: boolean
-  ): Promise<CogneeNotebook>;
-  cogneeUpdateNotebook(
-    handle: NativeBox,
-    id: string,
-    patch: { name?: string; cells?: unknown }
-  ): Promise<CogneeNotebook | null>;
-  cogneeDeleteNotebook(handle: NativeBox, id: string): Promise<boolean>;
 
   // Session ops (Phase 5).
   cogneeGetSession(

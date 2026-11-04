@@ -18,7 +18,7 @@ use cognee::api::improve::{
     REASON_NO_SESSION_IDS, StageStatus, improve,
 };
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
@@ -44,7 +44,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -72,7 +71,6 @@ async fn make_harness() -> Harness {
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -85,7 +83,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -113,7 +110,6 @@ async fn improve_with_sessions_records_every_stage_in_order() {
         dataset_name: "ds_with_sessions".to_string(),
         dataset_id: None,
         session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: None,
@@ -130,12 +126,8 @@ async fn improve_with_sessions_records_every_stage_in_order() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         dataset_locks: None,
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -179,7 +171,6 @@ async fn improve_without_sessions_skips_every_stage() {
         dataset_name: "ds_no_sess".to_string(),
         dataset_id: None,
         session_ids: None,
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: None,
@@ -196,12 +187,8 @@ async fn improve_without_sessions_skips_every_stage() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         dataset_locks: None,
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -240,7 +227,6 @@ async fn improve_waits_for_a_held_session_then_runs_every_stage() {
         dataset_name: "ds_locked".to_string(),
         dataset_id: None,
         session_ids: Some(vec![session_id.to_string()]),
-        node_name: None,
         owner_id: owner,
         tenant_id: None,
         feedback_alpha: None,
@@ -257,12 +243,8 @@ async fn improve_waits_for_a_held_session_then_runs_every_stage() {
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         dataset_locks: None,
         cognify_config: &config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,

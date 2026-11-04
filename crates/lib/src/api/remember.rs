@@ -1,7 +1,7 @@
 //! One-call add + cognify + optional improve -- `remember()`.
 //!
-//! Composition of `add()` -> `cognify()` -> optionally `improve()` (via `memify`),
-//! with session-mode support.
+//! Composition of `add()` -> `cognify()` -> optionally `improve()`, with
+//! session-mode support.
 //!
 //! Equivalent to Python's `cognee.api.v1.remember.remember()`.
 
@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cognee_cognify::cognify;
-use cognee_cognify::{CognifyConfig, CognifyResult, MemifyConfig, MemifyResult, run_memify};
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb, SessionLifecycleDb};
+use cognee_cognify::{CognifyConfig, CognifyResult};
+use cognee_database::{PipelineRunRepository, RelationalDb, SessionLifecycleDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -27,7 +27,87 @@ use uuid::Uuid;
 
 use super::auto_improve_debounce::session_improve_due;
 use super::error::ApiError;
-use super::improve::{ImproveConfig, ImproveParams, improve};
+use super::improve::{ImproveConfig, ImproveParams, ImproveResult, improve};
+
+// ---------------------------------------------------------------------------
+// Host admission for automatic improves
+// ---------------------------------------------------------------------------
+
+/// What the admission check is told about the automatic improve `remember()`
+/// would run (Python passes the same as keyword arguments to its check,
+/// `cognee/modules/improve/admission.py`).
+#[derive(Debug, Clone)]
+pub struct AutoImproveContext {
+    /// The user the improve would run as.
+    pub owner_id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub dataset_name: String,
+    /// Id of the dataset it would improve.
+    pub dataset_id: Option<Uuid>,
+    /// The session that was written, for the session bridge; `None` for the
+    /// improve that follows a permanent remember.
+    pub session_id: Option<String>,
+    /// The session ids the improve would bridge into the graph (empty when
+    /// none).
+    pub session_ids: Vec<String>,
+}
+
+/// The check a host registers to veto an automatic improve before it starts:
+/// `None` allows it, `Some(reason)` skips it with a short machine-readable
+/// reason such as `"insufficient_credits"`.
+pub type AutoImproveAdmission = Arc<
+    dyn Fn(
+            AutoImproveContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+static AUTO_IMPROVE_ADMISSION: std::sync::RwLock<Option<AutoImproveAdmission>> =
+    std::sync::RwLock::new(None);
+
+/// Register the check `remember()` consults before an automatic improve
+/// (Python `register_auto_improve_admission`). One check per process: a later
+/// registration replaces the earlier one. An explicit `improve()` call is never
+/// gated.
+pub fn register_auto_improve_admission(check: AutoImproveAdmission) {
+    // lock poison is unrecoverable
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    let mut slot = AUTO_IMPROVE_ADMISSION
+        .write()
+        .expect("auto-improve admission lock poisoned");
+    *slot = Some(check);
+}
+
+/// Remove the registered check; every automatic improve is allowed again.
+pub fn clear_auto_improve_admission() {
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    let mut slot = AUTO_IMPROVE_ADMISSION
+        .write()
+        .expect("auto-improve admission lock poisoned");
+    *slot = None;
+}
+
+/// Ask the registered check whether an automatic improve may start: its skip
+/// reason, or `None` when the improve may run (nothing registered, the check
+/// allowed it, or it answered with an empty reason, which Python treats as no
+/// usable answer and allows).
+pub async fn auto_improve_skip_reason(context: AutoImproveContext) -> Option<String> {
+    #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
+    let check = AUTO_IMPROVE_ADMISSION
+        .read()
+        .expect("auto-improve admission lock poisoned")
+        .clone()?;
+    let reason = check(context).await?;
+    if reason.trim().is_empty() {
+        warn!(
+            "improve: auto-improve admission check returned an empty reason, allowing the improve"
+        );
+        return None;
+    }
+    info!("remember: automatic improve skipped by the host admission check ({reason})");
+    Some(reason)
+}
 
 /// Status of a remember operation.
 ///
@@ -39,7 +119,7 @@ use super::improve::{ImproveConfig, ImproveParams, improve};
 /// wire parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RememberStatus {
-    /// Pipeline has been initiated/started but has not yet finished.
+    /// Pipeline has started but has not yet finished.
     ///
     /// Currently unused by the synchronous SDK [`remember`] (which always
     /// returns a terminal state). Exists for symmetry with
@@ -62,7 +142,7 @@ impl From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus {
     fn from(s: cognee_core::pipeline::PipelineRunStatus) -> Self {
         use cognee_core::pipeline::PipelineRunStatus;
         match s {
-            PipelineRunStatus::Initiated | PipelineRunStatus::Started => Self::Started,
+            PipelineRunStatus::Started => Self::Started,
             PipelineRunStatus::Completed => Self::Completed,
             PipelineRunStatus::Errored => Self::Errored,
         }
@@ -111,8 +191,34 @@ pub struct RememberResult {
     pub entry_id: Option<String>,
     #[serde(skip)]
     pub cognify_result: Option<CognifyResult>,
-    #[serde(skip)]
-    pub memify_result: Option<MemifyResult>,
+    /// The `ImproveResult` of the automatic `improve()` that followed the
+    /// remember (`self_improvement=true`), one entry per stage with its status
+    /// (Python `RememberResult.improve`). `None` when no improve ran: it was
+    /// turned off, declined by the admission check (see
+    /// [`Self::improve_skipped`]), it failed outright (see
+    /// [`Self::improve_error`]), or (session mode) it runs detached in the
+    /// background ([`Self::improve_launched`]). Serialized only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improve: Option<ImproveResult>,
+    /// Why the automatic improve failed, when it did: the error `improve()`
+    /// returned, or the errored stages of the result it returned. The remember
+    /// itself succeeded in that case: [`Self::status`] is unchanged and
+    /// [`Self::error`] stays `None`. Serialized only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improve_error: Option<String>,
+    /// Why the step after the completed cognify run failed (Python
+    /// `after_run_error`: the vector-store compaction or the document structure
+    /// pass). Rust has no such step, so this is always `None`; the field keeps
+    /// the result's shape equal to Python's. Serialized only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_run_error: Option<String>,
+    /// Why the automatic improve was not started, when the host's admission
+    /// check declined it ([`register_auto_improve_admission`]): a short
+    /// machine-readable reason such as `"insufficient_credits"`. The data was
+    /// stored as usual and [`Self::improve`] stays `None`. Serialized only when
+    /// set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improve_skipped: Option<String>,
     /// Session mode: the automatic improve was launched as a detached
     /// background task (Python's `RememberResult._task` being set). `false`
     /// when it is off, debounced, or the improve settings are invalid. Await
@@ -176,6 +282,18 @@ impl fmt::Display for RememberResult {
         if let Some(ref e) = self.error {
             write!(f, ", error={e:?}")?;
         }
+        if let Some(ref improve) = self.improve {
+            write!(f, ", improve={:?}", improve.status().as_str())?;
+        }
+        if let Some(ref e) = self.improve_error {
+            write!(f, ", improve_error={e:?}")?;
+        }
+        if let Some(ref e) = self.after_run_error {
+            write!(f, ", after_run_error={e:?}")?;
+        }
+        if let Some(ref e) = self.improve_skipped {
+            write!(f, ", improve_skipped={e:?}")?;
+        }
         write!(f, ")")
     }
 }
@@ -201,17 +319,20 @@ fn auto_improve_config(
 /// **Permanent Memory Mode** (no `session_id`):
 /// 1. `add()` to ingest data.
 /// 2. `cognify()` to extract knowledge graph.
-/// 3. If `self_improvement=true` and `improve_config.auto_enabled`, `memify()`
-///    to enrich with triplet embeddings. `IMPROVE_AUTO_ENABLED=false` is the
-///    kill switch on both paths, as in Python (`remember.py`:
-///    `self_improvement and auto_improve_enabled()`).
+/// 3. If `self_improvement=true` and `improve_config.auto_enabled`, `improve()`
+///    on the dataset (as Python's `remember(self_improvement=True)` does;
+///    memify is not involved). `IMPROVE_AUTO_ENABLED=false` is the kill switch
+///    on both paths, as in Python (`remember.py`:
+///    `self_improvement and auto_improve_enabled()`). A host admission check
+///    ([`register_auto_improve_admission`]) may decline it first; its reason
+///    is reported as `improve_skipped`.
 ///
 /// **Session Memory Mode** (with `session_id`):
 /// 1. Convert data inputs to text.
 /// 2. Store in session cache as Q&A entry.
 /// 3. If `self_improvement=true` and `improve_config` allows it
-///    (`auto_enabled`, then the debounce of `debounce_entries` /
-///    `debounce_seconds`), launch `improve(session_ids=[session_id])` as a
+///    (`auto_enabled`, then the host admission check, then the debounce of
+///    `debounce_entries` / `debounce_seconds`), launch `improve(session_ids=[session_id])` as a
 ///    **detached** background task in the process-wide
 ///    [`BackgroundTasks`](crate::BackgroundTasks) registry, as Python does.
 ///    Its failures are logged, never returned. A short-lived host drains the
@@ -243,7 +364,6 @@ pub async fn remember(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
@@ -299,7 +419,6 @@ pub async fn remember(
             db,
             session_store,
             session_manager,
-            checkpoint_store,
             ontology_resolver,
             cognify_config,
             improve_config,
@@ -314,11 +433,13 @@ pub async fn remember(
     // The same kill switch as the session path: an explicit
     // `self_improvement = true` does not override `auto_enabled = false`, and
     // invalid improve settings skip the self-improvement, never the ingestion.
-    let self_improvement = auto_improve_config(self_improvement, improve_config).is_some();
+    let improve_config = auto_improve_config(self_improvement, improve_config);
     remember_permanent_blocking(
         data,
         dataset_name,
-        self_improvement,
+        improve_config,
+        personalization,
+        auto_feedback,
         owner_id,
         tenant_id,
         &add_pipeline,
@@ -328,6 +449,8 @@ pub async fn remember(
         vector_db,
         embedding_engine,
         db,
+        session_store,
+        session_manager,
         ontology_resolver,
         &cognify_config,
         start,
@@ -347,14 +470,18 @@ struct PermanentOutcome {
     items_processed: usize,
     content_hash: Option<String>,
     cognify_result: CognifyResult,
-    memify_result: Option<MemifyResult>,
+    improve: Option<ImproveResult>,
+    improve_error: Option<String>,
+    improve_skipped: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_permanent_inner(
     data: Vec<DataInput>,
     dataset_name: &str,
-    self_improvement: bool,
+    improve_config: Option<ImproveConfig>,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     add_pipeline: &AddPipeline,
@@ -364,9 +491,35 @@ async fn run_permanent_inner(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<dyn RelationalDb>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
 ) -> Result<PermanentOutcome, ApiError> {
+    // Host admission, asked before any work starts and only when an improve
+    // would otherwise run (Python `remember.py:2033-2047`). The data is stored
+    // either way.
+    let mut improve_config = improve_config;
+    let mut improve_skipped = None;
+    if improve_config.is_some() {
+        improve_skipped = auto_improve_skip_reason(AutoImproveContext {
+            owner_id,
+            tenant_id,
+            dataset_name: dataset_name.to_string(),
+            dataset_id: Some(cognee_ingestion::generate_dataset_id(
+                dataset_name,
+                owner_id,
+                tenant_id,
+            )),
+            session_id: None,
+            session_ids: Vec::new(),
+        })
+        .await;
+        if improve_skipped.is_some() {
+            improve_config = None;
+        }
+    }
+
     let data_items = add_pipeline
         .add(data, dataset_name, owner_id, tenant_id)
         .await
@@ -398,11 +551,6 @@ async fn run_permanent_inner(
     // Python's unauthenticated-run behaviour.
     let user_email: Option<String> = None;
 
-    // Clone the optional DB handle so memify (which now requires it per
-    // LIB-06 Decision 1) can still reach the relational connection after
-    // cognify consumes its copy.
-    let db_for_memify = db.clone();
-
     // LIB-06-03: `cognify()` now requires `Arc<dyn RelationalDb>` and an
     // `Arc<dyn CpuPool>` (Decision 1).
     let database = db
@@ -414,76 +562,81 @@ async fn run_permanent_inner(
     );
 
     // Cognify.
-    // Gap 08-07: persist the four-state `pipeline_runs` trail through the
+    // Gap 08-07: persist the `pipeline_runs` trail through the
     // real SeaORM repo when a database is available; embedded callers fall
     // back to the no-op repo.
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&database).pipeline_runs();
-    let cognify_result = cognify(
+    // Boxed, as is the improve below: their futures are large, and inline
+    // they would make `remember()`'s own future overflow a 2 MiB thread
+    // stack in debug builds.
+    let cognify_result = Box::pin(cognify(
         data_items,
         dataset_id,
         Some(owner_id),
         user_email,
         tenant_id,
-        llm,
-        storage,
+        Arc::clone(&llm),
+        Arc::clone(&storage),
         Arc::clone(&graph_db),
         Arc::clone(&vector_db),
         Arc::clone(&embedding_engine),
         database,
         Arc::clone(&pipeline_run_repo),
         thread_pool,
-        ontology_resolver,
+        Arc::clone(&ontology_resolver),
         cognify_config,
-    )
+    ))
     .await
     .map_err(|e| ApiError::Cognify(e.to_string()))?;
 
-    // Optional self-improvement via memify.
-    let memify_result = if self_improvement {
-        let config = MemifyConfig::default();
-        match db_for_memify {
-            Some(database) => match cognee_core::RayonThreadPool::with_default_threads() {
-                Ok(pool) => {
-                    let thread_pool: Arc<dyn cognee_core::CpuPool> = Arc::new(pool);
-                    let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
-                        Arc::clone(&database).pipeline_runs();
-                    match run_memify(
-                        Arc::clone(&graph_db),
-                        Arc::clone(&vector_db),
-                        Arc::clone(&embedding_engine),
-                        thread_pool,
-                        database,
-                        pipeline_run_repo,
-                        Some(dataset_id),
-                        Some(owner_id),
-                        tenant_id,
-                        &config,
-                    )
-                    .await
-                    {
-                        Ok(r) => Some(r),
-                        Err(e) => {
-                            warn!("memify phase failed (non-fatal): {e}");
-                            None
-                        }
-                    }
+    // Optional self-improvement via improve() on the dataset, as Python's
+    // `remember(self_improvement=True)` does. Failures are non-fatal: the
+    // data is already stored, so the error is reported on the result.
+    let mut improve_result = None;
+    let mut improve_error = None;
+    if let Some(config) = improve_config {
+        match Box::pin(improve(ImproveParams {
+            dataset_name: dataset_name.to_string(),
+            dataset_id: None,
+            session_ids: None,
+            owner_id,
+            tenant_id,
+            feedback_alpha: None,
+            config,
+            personalization,
+            auto_feedback,
+            llm,
+            storage,
+            graph_db,
+            vector_db,
+            embedding_engine,
+            ontology_resolver,
+            db,
+            session_store,
+            session_manager,
+            add_pipeline: Some(add_pipeline),
+            dataset_locks: None,
+            cognify_config,
+            build_global_context_index: false,
+            build_truth_subspace: false,
+            run_in_background: false,
+        }))
+        .await
+        {
+            Ok(r) => {
+                improve_error = r.error_text();
+                if let Some(error) = &improve_error {
+                    warn!("remember: self-improvement reported errors (non-fatal): {error}");
                 }
-                Err(e) => {
-                    warn!("memify phase skipped (non-fatal): rayon pool init: {e}");
-                    None
-                }
-            },
-            None => {
-                warn!(
-                    "memify phase skipped: a relational database connection is required by the \
-                     LIB-06 executor-routed memify"
-                );
-                None
+                improve_result = Some(r);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                warn!("remember: improve failed (non-fatal): {msg}");
+                improve_error = Some(msg);
             }
         }
-    } else {
-        None
-    };
+    }
 
     Ok(PermanentOutcome {
         dataset_id,
@@ -492,7 +645,9 @@ async fn run_permanent_inner(
         items_processed,
         content_hash: content_hash_first,
         cognify_result,
-        memify_result,
+        improve: improve_result,
+        improve_error,
+        improve_skipped,
     })
 }
 
@@ -500,7 +655,9 @@ async fn run_permanent_inner(
 async fn remember_permanent_blocking(
     data: Vec<DataInput>,
     dataset_name: &str,
-    self_improvement: bool,
+    improve_config: Option<ImproveConfig>,
+    personalization: cognee_search::PreferenceConfig,
+    auto_feedback: bool,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     add_pipeline: &AddPipeline,
@@ -510,6 +667,8 @@ async fn remember_permanent_blocking(
     vector_db: Arc<dyn VectorDB>,
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: Option<Arc<dyn RelationalDb>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    session_manager: Option<Arc<SessionManager>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: &CognifyConfig,
     start: Instant,
@@ -517,7 +676,9 @@ async fn remember_permanent_blocking(
     let outcome = run_permanent_inner(
         data,
         dataset_name,
-        self_improvement,
+        improve_config,
+        personalization,
+        auto_feedback,
         owner_id,
         tenant_id,
         add_pipeline,
@@ -527,6 +688,8 @@ async fn remember_permanent_blocking(
         vector_db,
         embedding_engine,
         db,
+        session_store,
+        session_manager,
         ontology_resolver,
         cognify_config,
     )
@@ -548,7 +711,10 @@ async fn remember_permanent_blocking(
         entry_type: None,
         entry_id: None,
         cognify_result: Some(outcome.cognify_result),
-        memify_result: outcome.memify_result,
+        improve: outcome.improve,
+        improve_error: outcome.improve_error,
+        after_run_error: None,
+        improve_skipped: outcome.improve_skipped,
         improve_launched: false,
     })
 }
@@ -576,7 +742,6 @@ async fn remember_session(
     db: Option<Arc<dyn RelationalDb>>,
     session_store: Option<Arc<dyn SessionStore>>,
     session_manager: Option<Arc<SessionManager>>,
-    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     cognify_config: Arc<CognifyConfig>,
     improve_config: Option<ImproveConfig>,
@@ -622,7 +787,9 @@ async fn remember_session(
         Err(e) => return Err(e.into()),
     }
 
-    let improve_launched = launch_session_auto_improve(SessionAutoImprove {
+    // Gate, host admission (asked inside, so every launcher is gated),
+    // debounce, then the detached improve.
+    let launch = launch_session_auto_improve(SessionAutoImprove {
         dataset_name: dataset_name.to_string(),
         dataset_id: None,
         session_id: session_id.to_string(),
@@ -641,7 +808,6 @@ async fn remember_session(
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         add_pipeline,
         cognify_config,
     })
@@ -663,8 +829,11 @@ async fn remember_session(
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        memify_result: None,
-        improve_launched,
+        improve: None,
+        improve_error: None,
+        after_run_error: None,
+        improve_skipped: launch.skipped,
+        improve_launched: launch.launched,
     })
 }
 
@@ -714,24 +883,35 @@ pub struct SessionAutoImprove {
     pub session_store: Option<Arc<dyn SessionStore>>,
     /// Session manager (also the debounce state).
     pub session_manager: Option<Arc<SessionManager>>,
-    /// Checkpoint store (stage watermarks).
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// Add pipeline of the cognify-backed stages (and its dataset locks).
     pub add_pipeline: Arc<AddPipeline>,
     /// Cognify configuration of the cognify-backed stages.
     pub cognify_config: Arc<CognifyConfig>,
 }
 
+/// What [`launch_session_auto_improve`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionAutoImproveLaunch {
+    /// The improve was launched as a detached background task.
+    pub launched: bool,
+    /// The host admission check's reason for declining the improve
+    /// ([`register_auto_improve_admission`]); `launched` is then `false`. The
+    /// caller reports it as `RememberResult.improve_skipped`.
+    pub skipped: Option<String>,
+}
+
 /// The automatic improve of a session `remember()` — Python's session
-/// branch after `_add_to_session`: gate (`self_improvement` and
-/// `improve.auto_enabled`), debounce, then `improve(session_ids=[session])`
-/// as a **detached** task in the process-wide background registry
-/// ([`crate::wait_for_background_tasks`] drains it). Its failures are logged,
-/// never returned. `true` when the improve was launched.
+/// branch: gate (`self_improvement` and `improve.auto_enabled`), the host
+/// admission check (`remember.py:2025-2047`, asked before the debounce so a
+/// declined improve does not spend the debounce window), debounce, then
+/// `improve(session_ids=[session])` as a **detached** task in the
+/// process-wide background registry ([`crate::wait_for_background_tasks`]
+/// drains it). Its failures are logged, never returned.
 ///
 /// [`remember`] calls this after storing the entry; a host that stores the
-/// session entry itself (the HTTP server) calls it the same way.
-pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
+/// session entry itself (the HTTP server) calls it the same way and gets the
+/// same admission check.
+pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> SessionAutoImproveLaunch {
     let SessionAutoImprove {
         dataset_name,
         dataset_id,
@@ -751,7 +931,6 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
         db,
         session_store,
         session_manager,
-        checkpoint_store,
         add_pipeline,
         cognify_config,
     } = request;
@@ -760,14 +939,33 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
         if self_improvement {
             debug!("remember: automatic improve disabled or unavailable");
         }
-        return false;
+        return SessionAutoImproveLaunch::default();
     };
+    // Host admission, asked only when the improve would otherwise run: the
+    // entry stays stored, the improve is skipped with the host's reason.
+    let skipped = auto_improve_skip_reason(AutoImproveContext {
+        owner_id,
+        tenant_id,
+        dataset_name: dataset_name.clone(),
+        dataset_id: Some(dataset_id.unwrap_or_else(|| {
+            cognee_ingestion::generate_dataset_id(&dataset_name, owner_id, tenant_id)
+        })),
+        session_id: Some(session_id.clone()),
+        session_ids: vec![session_id.clone()],
+    })
+    .await;
+    if skipped.is_some() {
+        return SessionAutoImproveLaunch {
+            launched: false,
+            skipped,
+        };
+    }
     // Debounce: bridge only after enough new entries or enough time since the
     // last automatic improve of this session. The default thresholds fire
     // every time and read nothing.
     let user_id = owner_id.to_string();
     if !session_improve_due(session_manager.as_deref(), &config, &user_id, &session_id).await {
-        return false;
+        return SessionAutoImproveLaunch::default();
     }
 
     // Detached, as Python's `asyncio.create_task(_session_improve())`: the
@@ -777,7 +975,6 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             dataset_name,
             dataset_id,
             session_ids: Some(vec![session_id.clone()]),
-            node_name: None,
             owner_id,
             tenant_id,
             feedback_alpha: None,
@@ -794,13 +991,9 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             session_store,
             session_manager,
             add_pipeline: Some(add_pipeline.as_ref()),
-            checkpoint_store,
             // The add pipeline's registry, else the process-wide one.
             dataset_locks: None,
             cognify_config: &cognify_config,
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: None,
             build_global_context_index: false,
             build_truth_subspace: false,
             run_in_background: false,
@@ -827,7 +1020,10 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> bool {
             ),
         }
     });
-    true
+    SessionAutoImproveLaunch {
+        launched: true,
+        skipped: None,
+    }
 }
 
 /// Dispatch a typed [`MemoryEntry`] to the appropriate `SessionManager`
@@ -1069,7 +1265,10 @@ pub async fn remember_entry(
         entry_type: Some(entry_type_str.to_string()),
         entry_id,
         cognify_result: None,
-        memify_result: None,
+        improve: None,
+        improve_error: None,
+        after_run_error: None,
+        improve_skipped: None,
         improve_launched: false,
     })
 }
@@ -1158,10 +1357,6 @@ mod tests {
         // Exhaustive match — adding a variant to PipelineRunStatus forces
         // this test to be updated.
         assert_eq!(
-            RememberStatus::from(PipelineRunStatus::Initiated),
-            RememberStatus::Started
-        );
-        assert_eq!(
             RememberStatus::from(PipelineRunStatus::Started),
             RememberStatus::Started
         );
@@ -1240,9 +1435,16 @@ mod tests {
         let obj = v.as_object().expect("object");
         assert!(obj.contains_key("status"));
         assert!(obj.contains_key("dataset_name"));
-        // cognify_result / memify_result are #[serde(skip)]
+        // cognify_result is #[serde(skip)]; the improve fields appear only when set
         assert!(!obj.contains_key("cognify_result"));
-        assert!(!obj.contains_key("memify_result"));
+        for absent in [
+            "improve",
+            "improve_error",
+            "after_run_error",
+            "improve_skipped",
+        ] {
+            assert!(!obj.contains_key(absent), "{absent}");
+        }
     }
 
     #[test]
@@ -1269,7 +1471,10 @@ mod tests {
             entry_type: None,
             entry_id: None,
             cognify_result: None,
-            memify_result: None,
+            improve: None,
+            improve_error: None,
+            after_run_error: None,
+            improve_skipped: None,
             improve_launched: false,
         }
     }

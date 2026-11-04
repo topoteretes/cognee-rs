@@ -414,11 +414,9 @@ void cg_sdk_add(const CgSdk*        sdk,
  *                      unaffected. Only validation reads it, rejecting
  *                      overlap >= chunk size. Kept for API compat.)
  *   "summarization"  — boolean
- *   "temporalCognify"— boolean
- *   "triplet"        — boolean
  *   "graphSchema"    — a custom graph model's JSON Schema, as an object or a
  *                      JSON string (alias "graphModel"); {} means the
- *                      default KnowledgeGraph. Not with temporalCognify.
+ *                      default KnowledgeGraph.
  *   "graphSpec"      — the same model in the spec DSL (Python's
  *                      GraphSchemaSpec), as an object or a JSON string,
  *                      compiled into a graphSchema. Not with graphSchema.
@@ -488,8 +486,8 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *       "searchResponse": null | {...}     // SearchResponse or null
  *     }
  *
- * SearchType strings (SCREAMING_SNAKE_CASE — all 18 valid values):
- *   SUMMARIES, CHUNKS, RAG_COMPLETION, TRIPLET_COMPLETION, GRAPH_COMPLETION,
+ * SearchType strings (SCREAMING_SNAKE_CASE — all 17 valid values):
+ *   SUMMARIES, CHUNKS, RAG_COMPLETION, GRAPH_COMPLETION,
  *   GRAPH_COMPLETION_DECOMPOSITION, GRAPH_SUMMARY_COMPLETION, CYPHER,
  *   NATURAL_LANGUAGE, GRAPH_COMPLETION_COT, GRAPH_COMPLETION_CONTEXT_EXTENSION,
  *   FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, CHUNKS_LEXICAL,
@@ -579,18 +577,19 @@ void cg_sdk_recall(const CgSdk*        sdk,
 
 /* ── Memory ops (Phase 6) ─────────────────────────────────────────────────── */
 /*
- * All four ops are async (D4, R1): the callback fires on a tokio worker
+ * All three ops are async (D4, R1): the callback fires on a tokio worker
  * thread, never synchronously from the initiating call.
  *
  * Wire shapes (camelCase, D3):
  *
  *   CogneeDataInput — same discriminated union as cg_sdk_add (see above).
  *
- *   RememberResult — JSON object (fields vary; cognify_result/memify_result
- *     are skipped in serialisation via #[serde(skip)]).
- *
- *   MemifyResult — {"tripletCount":N,"indexedCount":N,"batchCount":N,
- *                    "alreadyCompleted":bool,"priorPipelineRunId":null|"<uuid>"}
+ *   RememberResult — JSON object, snake_case (fields vary; cognify_result is
+ *     skipped in serialisation via #[serde(skip)]). When the automatic improve
+ *     ran it carries "improve" (an ImproveResult in snake_case, with
+ *     "duration_ms" per stage); "improve_error" and "improve_skipped" appear
+ *     only when set. A session-mode improve runs in the background, so its
+ *     result is not reported.
  *
  *   ImproveResult — {"datasetId":null|"<uuid>","datasetName":"…",
  *                    "sessionIds":[…],"stages":[ImproveStage…],
@@ -601,11 +600,6 @@ void cg_sdk_recall(const CgSdk*        sdk,
  *   ImproveStage  — {"stage":"…","status":"completed"|"already_completed"|
  *                    "skipped"|"errored","reason":null|"…","error":null|"…",
  *                    "counts":{"…":N},"durationMs":N}
- *
- * NOTE: MemifyTask callbacks (extraction_tasks / enrichment_tasks) are not
- * exposed in v1 (TS parity scope).  Reserved post-parity extension:
- *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
- *   exceeds TS parity; record in STATUS decision log when Phase 6 lands.
  */
 
 /**
@@ -614,8 +608,8 @@ void cg_sdk_recall(const CgSdk*        sdk,
  * inputs_json   — CogneeDataInput object or array (required).
  * dataset_name  — target dataset name (required).
  * opts_json     — NULL or JSON object with optional keys:
- *                 "sessionId" (string), "selfImprovement" (bool),
- *                 "tenant" (UUID string).
+ *                 "sessionId" (string), "selfImprovement" (bool, default
+ *                 true), "tenant" (UUID string).
  *
  * result_json on success: RememberResult JSON object.
  *
@@ -663,32 +657,14 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
                             void*               user_data);
 
 /**
- * Run the memify pipeline: create triplet embeddings for all graph edges
- * and index them in the vector DB.  Idempotent.
- *
- * opts_json — NULL or JSON object with optional fields:
- *   "tripletBatchSize" (integer), "nodeTypeFilter" (string),
- *   "nodeNameFilter" (string array), "nodeNameFilterOperator" (string).
- *
- * result_json on success: MemifyResult JSON object (see wire shape above).
- *
- * @param sdk       A valid CgSdk*.
- * @param opts_json NULL or null-terminated UTF-8 JSON options object.
- * @param callback  Called exactly once with the result.
- * @param user_data Forwarded to callback unchanged.
- */
-void cg_sdk_memify(const CgSdk*        sdk,
-                   const char*         opts_json,
-                   CgSdkResultCallback callback,
-                   void*               user_data);
-
-/**
  * Apply graph improvement based on session feedback.
  *
  * opts_json — required JSON object with:
  *   "datasetName" (string, required),
+ *   "datasetId"   (UUID string, optional: a dataset the caller already
+ *                  resolved, possibly shared with it, as Python's
+ *                  improve(dataset=<UUID>)),
  *   "sessionIds"  (string array, optional),
- *   "nodeName"    (string array, optional),
  *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
  *   "tenant"      (UUID string, optional).
  *
@@ -715,8 +691,8 @@ void cg_sdk_improve(const CgSdk*        sdk,
  *
  *   ForgetResult  — {"target":"…","deleteResult":{…}}
  *
- *   UpdateResult  — {"deletedDataId":"<uuid>","deleteResult":{…},
- *                    "newData":[…],"cognifyResult":{…}|null}
+ *   UpdateResult  — {"dataId":"<uuid>","deleteResult":{…},
+ *                    "cognifyResult":{…}|null}
  *
  *   PruneResult   — {"dataPruned":bool,"graphPruned":bool,"vectorPruned":bool,
  *                    "metadataPruned":bool,"cachePruned":bool}
@@ -899,14 +875,13 @@ void cg_sdk_delete_all_datasets(const CgSdk*        sdk,
                                  CgSdkResultCallback callback,
                                  void*               user_data);
 
-/* ── Admin / session / pipeline-run / user / notebook ops (Phase 6) ──────── */
+/* ── Admin / session / pipeline-run / user ops (Phase 6) ───────────────── */
 /*
  * All ops are async (D4, R1).
  *
  * Wire shapes (camelCase, D3):
  *   SessionQAEntry — JSON object with session QA history fields.
  *   User           — JSON object with user fields.
- *   Notebook       — JSON object with notebook fields.
  *   bool results   → "true" | "false" (D9 strict JSON bool).
  *   void results   → "null" (D9).
  */
@@ -958,32 +933,6 @@ void cg_sdk_delete_feedback(const CgSdk*        sdk,
                               void*               user_data);
 
 /**
- * Reset the pipeline run status for a specific pipeline within a dataset.
- *
- * dataset_id    — UUID string (C string).
- * pipeline_name — pipeline name (C string).
- *
- * result_json on success: "null" (D9 — void op).
- */
-void cg_sdk_reset_pipeline_run_status(const CgSdk*        sdk,
-                                       const char*         dataset_id,
-                                       const char*         pipeline_name,
-                                       CgSdkResultCallback callback,
-                                       void*               user_data);
-
-/**
- * Reset all pipeline run statuses for a dataset.
- *
- * dataset_id — UUID string (C string).
- *
- * result_json on success: "null" (D9 — void op).
- */
-void cg_sdk_reset_dataset_pipeline_run_status(const CgSdk*        sdk,
-                                               const char*         dataset_id,
-                                               CgSdkResultCallback callback,
-                                               void*               user_data);
-
-/**
  * Get or create the default user account.
  *
  * result_json on success: User JSON object.
@@ -991,57 +940,6 @@ void cg_sdk_reset_dataset_pipeline_run_status(const CgSdk*        sdk,
 void cg_sdk_get_or_create_default_user(const CgSdk*        sdk,
                                         CgSdkResultCallback callback,
                                         void*               user_data);
-
-/**
- * List all notebooks for the current owner.
- *
- * result_json on success: JSON array of Notebook objects.
- */
-void cg_sdk_list_notebooks(const CgSdk*        sdk,
-                            CgSdkResultCallback callback,
-                            void*               user_data);
-
-/**
- * Create a new notebook.
- *
- * name       — notebook name (required, non-null).
- * cells_json — NULL (interpreted as []) or a JSON array of cells.
- * deletable  — non-zero = true, zero = false.
- *
- * result_json on success: Notebook JSON object.
- */
-void cg_sdk_create_notebook(const CgSdk*        sdk,
-                              const char*         name,
-                              const char*         cells_json,
-                              int                 deletable,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
-
-/**
- * Update a notebook's name and/or cells.
- *
- * id         — UUID string (C string).
- * patch_json — JSON object with optional "name" (string) and/or "cells" (array).
- *
- * result_json on success: Notebook JSON object, or "null" (D9) if not found.
- */
-void cg_sdk_update_notebook(const CgSdk*        sdk,
-                              const char*         id,
-                              const char*         patch_json,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
-
-/**
- * Delete a notebook by UUID.
- *
- * id — UUID string (C string).
- *
- * result_json on success: "true" if deleted, "false" if not found (D9).
- */
-void cg_sdk_delete_notebook(const CgSdk*        sdk,
-                              const char*         id,
-                              CgSdkResultCallback callback,
-                              void*               user_data);
 
 /* ── Config surface (Phase 3, D7) ─────────────────────────────────────────── */
 /*
@@ -1193,11 +1091,6 @@ CgErrorCode cg_sdk_config_get(const CgSdk* sdk, char** out_json);
  *
  *   cg_sdk_visualize_to_file result — quoted JSON string of the written path:
  *                                   "\"/absolute/path/graph_visualization.html\""
- *
- * NOTE: MemifyTask callbacks (CgMemifyTaskFn) are not exposed in v1 (TS parity
- * scope).  Reserved post-parity extension:
- *   CgMemifyTaskFn + cg_sdk_memify_with_tasks(…) — ABI can carry it but it
- *   exceeds TS parity; record in STATUS when Phase 6 lands.
  */
 
 /**

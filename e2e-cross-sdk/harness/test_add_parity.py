@@ -1,13 +1,25 @@
 """Tests that the ``add`` operation produces identical output in both SDKs.
 
 All tests in this file are **deterministic** — they compare MD5 hashes,
-UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
-or API key is required.
+dataset UUID5 IDs, filenames, metadata fields, and stored file bytes.  No LLM
+or API key is required. The one exception is
+``test_add_public_url_ingests_same_page_in_both``, which needs outbound
+network access to a public page and skips when there is none (SDK-1039 D9).
+
+Data ids are NOT compared across SDKs: both mint a random ``uuid4`` for a new
+``data`` row and dedup by ``(content_hash, dataset_id, owner_id, tenant_id)``
+(Python ``cognee/tasks/ingestion/ingest_data.py:364-389`` with
+``identify_many``; ``get_unique_data_id``'s uuid5 is used only by dlt sources
+and code_repo). The tests check that shape instead (SDK-1039 D7).
 """
 
 import json
-from contextlib import contextmanager
+import os
+import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
 
 from helpers import (
     open_db,
@@ -62,20 +74,6 @@ class _UrlFixtureHandler(BaseHTTPRequestHandler):
         pass
 
 
-@contextmanager
-def local_url_fixture():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _UrlFixtureHandler)
-    try:
-        import threading
-
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        yield f"http://127.0.0.1:{server.server_port}/page.html"
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 def _json_metadata(row):
     raw = row.get("external_metadata")
     assert raw, f"expected external_metadata in row: {row}"
@@ -105,18 +103,33 @@ def test_add_text_content_hash_matches(both_added):
 # ── Data ID ──────────────────────────────────────────────────────────────────
 
 
-def test_add_text_data_id_matches(both_added):
-    """With synced user_id + tenant_id, data.id must be identical (UUID5)."""
+def _uuid_version(value) -> int:
+    return uuid.UUID(str(value)).version
+
+
+def test_add_text_data_id_is_dataset_scoped_uuid4(both_added):
+    """Both SDKs give a new data row a random uuid4 owned by its dataset.
+
+    Replaces the old cross-SDK ``data.id`` equality check, whose premise (a
+    uuid5 of content + owner + tenant) Python no longer has: ``ingest_data``
+    mints ``uuid4()`` for a new row and stores its dataset in
+    ``data.dataset_id`` (SDK-1039 D7).
+    """
     py_ws, rust_ws, *_ = both_added
 
-    py_data = query_data(open_db(python_db_path(py_ws)))
-    rust_data = query_data(open_db(rust_db_path(rust_ws)))
-
-    assert py_data[0]["id"] == rust_data[0]["id"], (
-        f"data.id mismatch:\n"
-        f"  Python: {py_data[0]['id']}\n"
-        f"  Rust:   {rust_data[0]['id']}"
-    )
+    for sdk, db in (("Python", python_db_path(py_ws)), ("Rust", rust_db_path(rust_ws))):
+        conn = open_db(db)
+        data = query_data(conn)
+        datasets = {d["name"]: d["id"] for d in query_datasets(conn)}
+        conn.close()
+        assert len(data) == 1, f"{sdk}: expected 1 data row, got {len(data)}"
+        assert _uuid_version(data[0]["id"]) == 4, (
+            f"{sdk}: data.id {data[0]['id']} is not a uuid4"
+        )
+        assert data[0].get("dataset_id") == datasets[DATASET_NAME], (
+            f"{sdk}: data.dataset_id {data[0].get('dataset_id')!r} is not the id of "
+            f"'{DATASET_NAME}' ({datasets[DATASET_NAME]!r})"
+        )
 
 
 # ── Name ─────────────────────────────────────────────────────────────────────
@@ -187,14 +200,14 @@ def test_add_dataset_id_matches(both_added):
 
 
 def test_add_junction_row_count(both_added):
-    """dataset_data junction table must have the same number of rows."""
+    """Both SDKs must record the same number of dataset memberships."""
     py_ws, rust_ws, *_ = both_added
 
     py_junctions = query_dataset_data(open_db(python_db_path(py_ws)))
     rust_junctions = query_dataset_data(open_db(rust_db_path(rust_ws)))
 
     assert len(py_junctions) == len(rust_junctions), (
-        f"dataset_data row count mismatch:\n"
+        f"dataset membership count mismatch:\n"
         f"  Python: {len(py_junctions)}\n"
         f"  Rust:   {len(rust_junctions)}"
     )
@@ -228,76 +241,253 @@ def test_add_stored_file_content_matches(both_added):
 # ── URL inputs ───────────────────────────────────────────────────────────────
 
 
-def test_add_url_metadata_locations_and_hash_match(tmp_path):
-    """Both SDKs ingest a local URL into matching extracted/raw artifacts."""
+def _url_add_both(tmp_path, url, dataset):
+    """Run ``add <url>`` in both SDKs; return (py_ws, rust_ws, py_result, rust_result)."""
     py_ws = tmp_path / "python_url"
     rust_ws = tmp_path / "rust_url"
     py_ws.mkdir()
     rust_ws.mkdir()
-    dataset = "url_parity"
 
-    with local_url_fixture() as url:
-        py_result = run_python_cli(py_ws, ["add", url, "-d", dataset], check=False)
-        assert py_result.returncode == 0, (
-            f"Python URL add failed:\n{py_result.stdout}\n{py_result.stderr}"
-        )
-
+    py_result = run_python_cli(py_ws, ["add", url, "-d", dataset], check=False)
+    if py_result.returncode == 0:
         py_conn = open_db(python_db_path(py_ws))
-        py_data = query_data(py_conn)
+        py_owner = query_datasets(py_conn)[0]["owner_id"]
+        py_tenant = query_datasets(py_conn)[0].get("tenant_id")
+        py_conn.close()
+    else:
+        py_owner, py_tenant = None, None
+
+    write_rust_config(rust_ws, **({"user_id": str(py_owner)} if py_owner else {}))
+    rust_args = ["add", url, "-d", dataset]
+    if py_tenant:
+        rust_args.extend(["--tenant-id", str(py_tenant)])
+    rust_result = run_rust_cli(rust_ws, rust_args, check=False)
+    return py_ws, rust_ws, py_result, rust_result
+
+
+def _data_rows(workspace, db_path_fn):
+    path = db_path_fn(workspace)
+    if not path.exists():
+        return []
+    conn = open_db(path)
+    try:
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='data'"
+        ).fetchone() is None:
+            return []
+        return query_data(conn)
+    finally:
+        conn.close()
+
+
+def test_add_loopback_url_rejected_by_both(tmp_path):
+    """Both SDKs refuse a loopback URL, and neither stores anything for it.
+
+    SDK-1039 D9. Both SDKs block loopback/private hosts with no bypass:
+    Python ``cognee/tasks/web_scraper/ssrf_protection.py:53-70``
+    (``SSRFProtectionError``, ``URL host ... points to a non-public address``;
+    the only switch is ``ALLOW_HTTP_REQUESTS=false``, which disables all
+    fetching) and Rust ``crates/ingestion/src/url_crawler/fetcher.rs``
+    (``URL targets a blocked address``; private hosts are allowed only under
+    ``cfg(test)``). The fixture is a real server on 127.0.0.1, so a rejection
+    is the policy and not a connection failure: the server must see no request.
+    """
+    hits = []
+
+    class _Counting(_UrlFixtureHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            super().do_GET()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Counting)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/page.html"
+        py_ws, rust_ws, py_result, rust_result = _url_add_both(
+            tmp_path, url, "url_rejection"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    py_out = f"{py_result.stdout}\n{py_result.stderr}"
+    rust_out = f"{rust_result.stdout}\n{rust_result.stderr}"
+
+    assert py_result.returncode != 0, f"Python accepted a loopback URL:\n{py_out}"
+    assert rust_result.returncode != 0, f"Rust accepted a loopback URL:\n{rust_out}"
+    # Same reason on both sides: a policy rejection of a non-public address.
+    assert "SSRFProtectionError" in py_out or "non-public address" in py_out, py_out
+    assert "blocked address" in rust_out, rust_out
+    # Neither SDK reached the server, and neither stored a data row.
+    assert hits == [], f"a loopback URL was fetched: {hits}"
+    assert _data_rows(py_ws, python_db_path) == []
+    assert _data_rows(rust_ws, rust_db_path) == []
+
+
+def _file_add_both(tmp_path, filename, file_bytes, dataset):
+    """Run ``add <file>`` named ``filename`` in both SDKs, without asserting success.
+
+    Returns ``(py_ws, rust_ws, py_result, rust_result)``.
+    """
+    py_ws = tmp_path / "python_file"
+    rust_ws = tmp_path / "rust_file"
+    py_ws.mkdir()
+    rust_ws.mkdir()
+    py_file = py_ws / filename
+    rust_file = rust_ws / filename
+    py_file.write_bytes(file_bytes)
+    rust_file.write_bytes(file_bytes)
+
+    py_result = run_python_cli(py_ws, ["add", str(py_file), "-d", dataset], check=False)
+    py_owner = py_tenant = None
+    if py_result.returncode == 0:
+        py_conn = open_db(python_db_path(py_ws))
         py_owner = query_datasets(py_conn)[0]["owner_id"]
         py_tenant = query_datasets(py_conn)[0].get("tenant_id")
         py_conn.close()
 
-        write_rust_config(rust_ws, user_id=str(py_owner))
-        rust_args = ["add", url, "-d", dataset]
-        if py_tenant:
-            rust_args.extend(["--tenant-id", str(py_tenant)])
-        rust_result = run_rust_cli(rust_ws, rust_args, check=False)
-        assert rust_result.returncode == 0, (
-            f"Rust URL add failed:\n{rust_result.stdout}\n{rust_result.stderr}"
+    write_rust_config(rust_ws, **({"user_id": str(py_owner)} if py_owner else {}))
+    rust_args = ["add", str(rust_file), "-d", dataset]
+    if py_tenant:
+        rust_args.extend(["--tenant-id", str(py_tenant)])
+    rust_result = run_rust_cli(rust_ws, rust_args, check=False)
+    return py_ws, rust_ws, py_result, rust_result
+
+
+_LOADER_ROUTING_FIELDS = (
+    "loader_engine",
+    "original_extension",
+    "original_mime_type",
+    "extension",
+    "mime_type",
+)
+
+
+def test_add_text_with_unknown_extension_routes_by_content(tmp_path):
+    """UTF-8 text named ``notes.conf`` is plain text in both SDKs (SDK-1039 P20).
+
+    Python ``guess_file_type`` sniffs the bytes (``.conf`` is not in the
+    short-circuit list), finds no magic number and reports ``text/plain`` /
+    ``txt``; ``LoaderEngine.get_loader`` then lets ``text_loader`` claim it
+    through the sniffed extension, and the row stores the sniffed
+    ``original_extension`` / ``original_mime_type``.
+    """
+    py_ws, rust_ws, py_result, rust_result = _file_add_both(
+        tmp_path, "notes.conf", b"key = value\nother = thing\n", "routing_conf"
+    )
+    assert py_result.returncode == 0, f"Python add failed:\n{py_result.stderr}"
+    assert rust_result.returncode == 0, f"Rust add failed:\n{rust_result.stderr}"
+    py_row = _data_rows(py_ws, python_db_path)[0]
+    rust_row = _data_rows(rust_ws, rust_db_path)[0]
+    for field in _LOADER_ROUTING_FIELDS:
+        assert py_row.get(field) == rust_row.get(field), (
+            f"{field} mismatch:\n  Python: {py_row.get(field)!r}\n  Rust:   {rust_row.get(field)!r}"
         )
+    assert rust_row["loader_engine"] == "text_loader"
+    assert rust_row["original_extension"] == "txt"
+    assert rust_row["original_mime_type"] == "text/plain"
 
-    py_conn = open_db(python_db_path(py_ws))
-    rust_conn = open_db(rust_db_path(rust_ws))
-    py_row = query_data(py_conn)[0]
-    rust_row = query_data(rust_conn)[0]
-    py_conn.close()
-    rust_conn.close()
 
-    assert py_row["content_hash"] == rust_row["content_hash"]
-    assert py_row["raw_content_hash"] == rust_row["raw_content_hash"]
-    assert py_row["extension"] == rust_row["extension"] == "txt"
-    assert py_row["mime_type"] == rust_row["mime_type"] == "text/plain"
-    assert py_row["original_extension"] == rust_row["original_extension"] == "html"
-    assert py_row["original_mime_type"] == rust_row["original_mime_type"] == "text/html"
-    assert py_row["loader_engine"] == rust_row["loader_engine"] == "beautiful_soup_loader"
-    assert py_row["raw_data_location"].endswith(".txt")
-    assert rust_row["raw_data_location"].endswith(".txt")
-    assert py_row["original_data_location"].endswith(".html")
-    assert rust_row["original_data_location"].endswith(".html")
+# A real (valid) PNG: the sniffer must recognise it.
+_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
+    b"\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
-    py_extracted = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
-    rust_extracted = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
-    assert py_extracted == rust_extracted
-    extracted_text = py_extracted.decode()
-    assert "Cross SDK URL heading" in extracted_text
-    assert "Local URL fixture body for add parity." in extracted_text
-    assert "<html>" not in extracted_text
-    assert "window.secret" not in extracted_text
+
+def test_add_png_named_txt_fails_in_both(tmp_path):
+    """PNG bytes named ``.txt`` fail the add in both SDKs (SDK-1039 P20, D15).
+
+    ``.txt`` short-circuits the sniffer (``guess_file_type.py:63-66``), so
+    ``text_loader`` gets the bytes and raises ``UnreadableFileContentError``
+    (``text_loader.py:81-95``). Rust's text loader rejects non-UTF-8 the same
+    way, and no blob is stored.
+    """
+    py_ws, rust_ws, py_result, rust_result = _file_add_both(
+        tmp_path, "image.txt", _PNG_BYTES, "routing_png_txt"
+    )
+    assert py_result.returncode != 0, "Python accepted PNG bytes named .txt"
+    assert rust_result.returncode != 0, (
+        f"Rust accepted PNG bytes named .txt:\n{rust_result.stdout}"
+    )
+    assert _data_rows(py_ws, python_db_path) == []
+    assert _data_rows(rust_ws, rust_db_path) == []
+
+
+_PUBLIC_URL = "https://example.com/"
+
+
+def _public_network_available():
+    import socket
+
+    try:
+        with socket.create_connection(("example.com", 443), timeout=5):
+            return True
+    except OSError:
+        return False
+
+
+def test_add_public_url_ingests_same_page_in_both(tmp_path):
+    """Both SDKs fetch the same public URL and store the page the same way.
+
+    Needs outbound network access; skips cleanly when there is none
+    (SDK-1039 D9). The fixture is a public page because both SDKs refuse
+    loopback/private hosts (see the rejection test above).
+
+    Python (1d3ed15, ``save_data_item_to_storage.py:82-89``) stores the raw
+    HTML as a plain-text document (``text_loader``), hashes the HTML, and
+    records ``external_metadata._cognee.source_uri``. Rust follows it for URL
+    adds (SDK-1039 P19, D14); only local ``.html`` files differ.
+    """
+    if not _public_network_available():
+        pytest.skip("no outbound network access to example.com:443")
+
+    py_ws, rust_ws, py_result, rust_result = _url_add_both(
+        tmp_path, _PUBLIC_URL, "url_parity"
+    )
+    assert py_result.returncode == 0, (
+        f"Python URL add failed:\n{py_result.stdout}\n{py_result.stderr}"
+    )
+    assert rust_result.returncode == 0, (
+        f"Rust URL add failed:\n{rust_result.stdout}\n{rust_result.stderr}"
+    )
+
+    py_rows = _data_rows(py_ws, python_db_path)
+    rust_rows = _data_rows(rust_ws, rust_db_path)
+    assert len(py_rows) == len(rust_rows) == 1
+    py_row, rust_row = py_rows[0], rust_rows[0]
+
+    content_hash = py_row["content_hash"]
+    assert rust_row["content_hash"] == content_hash
+    assert rust_row["raw_content_hash"] == py_row["raw_content_hash"]
+    for row in (py_row, rust_row):
+        assert row["loader_engine"] == "text_loader"
+        assert (row["extension"], row["mime_type"]) == ("txt", "text/plain")
+        assert (row["original_extension"], row["original_mime_type"]) == (
+            "txt",
+            "text/plain",
+        )
+        assert row["name"] == f"text_{content_hash}"
+        assert os.path.basename(row["raw_data_location"]) == f"text_{content_hash}.txt"
+        assert (
+            os.path.basename(row["original_data_location"])
+            == f"text_{content_hash}.html"
+        )
+    assert rust_row["data_size"] == py_row["data_size"]
 
     py_raw = read_stored_file(py_ws / ".data_storage", py_row["original_data_location"])
     rust_raw = read_stored_file(rust_ws / ".data_storage", rust_row["original_data_location"])
-    assert py_raw == rust_raw == _URL_FIXTURE_HTML
+    assert py_raw == rust_raw, "the two SDKs stored different bytes for the same page"
+    assert b"Example Domain" in py_raw
+    # ``raw_data_location`` holds the same HTML, read by ``text_loader``.
+    assert read_stored_file(
+        py_ws / ".data_storage", py_row["raw_data_location"]
+    ) == read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
 
-    py_meta = _json_metadata(py_row)
-    rust_meta = _json_metadata(rust_row)
-    for key in ("source", "url", "final_url", "content_type", "title"):
-        assert py_meta.get(key) == rust_meta.get(key), (
-            f"URL metadata mismatch for {key}: py={py_meta} rust={rust_meta}"
-        )
-    assert py_meta["source"] == "url"
-    assert py_meta["content_type"] == "text/html; charset=utf-8"
-    assert py_meta["title"] == "Cross SDK URL Fixture"
+    expected = {"_cognee": {"source_uri": _PUBLIC_URL}}
+    assert _json_metadata(py_row) == expected
+    assert _json_metadata(rust_row) == expected
 
 
 # ── Deduplication ────────────────────────────────────────────────────────────
@@ -335,7 +525,11 @@ def test_add_deduplication(python_add_result, synced_rust_workspace):
 
 
 def test_add_multiple_items(python_add_result, synced_rust_workspace):
-    """Adding 2 different texts must produce 2 data rows with matching IDs."""
+    """Adding 2 different texts produces 2 dataset-scoped rows in both SDKs.
+
+    The rows hold the same contents (content hashes) in both SDKs; their ids
+    are each SDK's own uuid4 and are not compared (SDK-1039 D7).
+    """
     py_ws, owner_id, tenant_id = python_add_result
     rust_ws, _, _ = synced_rust_workspace
 
@@ -361,35 +555,33 @@ def test_add_multiple_items(python_add_result, synced_rust_workspace):
         rust_args.extend(["--tenant-id", tenant_id])
     run_rust_cli(rust_ws, rust_args)
 
-    # Query only the multi_test dataset's data via junction table
+    # Query only the multi_test dataset's data. Both SDKs keep membership in
+    # data.dataset_id (Python alembic d6e8f0a2b4c6; Rust
+    # m20261028_000001_dataset_scoped_data).
+    query = (
+        f"SELECT d.* FROM data d "
+        f"JOIN datasets ds ON d.dataset_id = ds.id "
+        f"WHERE ds.name = '{ds}' ORDER BY d.name"
+    )
     py_conn = open_db(python_db_path(py_ws))
     rust_conn = open_db(rust_db_path(rust_ws))
-
-    py_data = query_rows(
-        py_conn,
-        f"SELECT d.* FROM data d "
-        f"JOIN dataset_data dd ON d.id = dd.data_id "
-        f"JOIN datasets ds ON dd.dataset_id = ds.id "
-        f"WHERE ds.name = '{ds}' ORDER BY d.name",
-    )
-    rust_data = query_rows(
-        rust_conn,
-        f"SELECT d.* FROM data d "
-        f"JOIN dataset_data dd ON d.id = dd.data_id "
-        f"JOIN datasets ds ON dd.dataset_id = ds.id "
-        f"WHERE ds.name = '{ds}' ORDER BY d.name",
-    )
+    py_data = query_rows(py_conn, query)
+    rust_data = query_rows(rust_conn, query)
     py_conn.close()
     rust_conn.close()
 
     assert len(py_data) == 2, f"Python: expected 2 data rows, got {len(py_data)}"
     assert len(rust_data) == 2, f"Rust: expected 2 data rows, got {len(rust_data)}"
 
-    # IDs should match (same content, same user, same tenant)
-    py_ids = sorted(d["id"] for d in py_data)
-    rust_ids = sorted(d["id"] for d in rust_data)
-    assert py_ids == rust_ids, (
-        f"data IDs mismatch for multi-item add:\n"
-        f"  Python: {py_ids}\n"
-        f"  Rust:   {rust_ids}"
+    py_hashes = sorted(d["content_hash"] for d in py_data)
+    rust_hashes = sorted(d["content_hash"] for d in rust_data)
+    assert py_hashes == rust_hashes, (
+        f"content hashes mismatch for multi-item add:\n"
+        f"  Python: {py_hashes}\n"
+        f"  Rust:   {rust_hashes}"
     )
+    for sdk, rows in (("Python", py_data), ("Rust", rust_data)):
+        assert len({d["id"] for d in rows}) == 2, f"{sdk}: the two rows share an id"
+        assert all(_uuid_version(d["id"]) == 4 for d in rows), (
+            f"{sdk}: data ids are not uuid4: {[d['id'] for d in rows]}"
+        )

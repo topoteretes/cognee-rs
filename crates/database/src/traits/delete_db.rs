@@ -9,9 +9,24 @@ use crate::types::{DatabaseError, GraphEdge, GraphNode};
 #[async_trait]
 pub trait DeleteDb: Send + Sync {
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
+    /// The canonical row id of `data_id` in `dataset_id`: the exact id, else
+    /// the row whose `legacy_id` it is (Python's `resolve_data_id`).
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError>;
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError>;
+    /// How many datasets hold the row `data_id`: 1 while its `dataset_id`
+    /// is set, 0 once it is detached (rows are dataset-scoped).
     async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError>;
+    /// The dataset that holds `data_id` (empty when detached or missing).
     async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
+    /// How many `Data` rows reference `location` as their raw or original
+    /// data location. Rows of the same content in several datasets share one
+    /// content-addressed file, so the file is removed only when no row
+    /// references it (Python `remove_data_file_if_unreferenced`).
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError>;
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError>;
     /// Count the number of data items linked to a dataset without loading them.
@@ -79,14 +94,14 @@ pub trait DeleteDb: Send + Sync {
     /// Delete all `pipeline_runs` rows for a given dataset.
     ///
     /// Needed for data-scoped deletion where the dataset itself is not deleted
-    /// (FK cascade does not fire) but the pipeline cache should be invalidated.
+    /// (FK cascade does not fire) but its run history no longer describes it.
     async fn delete_pipeline_runs_by_dataset(&self, dataset_id: Uuid)
     -> Result<u64, DatabaseError>;
 
     /// Clear `pipeline_status` JSON entries keyed by `dataset_id` from all
-    /// `Data` records linked to that dataset.
+    /// `Data` records of that dataset.
     ///
-    /// Must be called while junction rows still exist.
+    /// Must be called before the rows are detached from the dataset.
     async fn clear_pipeline_status_for_dataset(
         &self,
         dataset_id: Uuid,
@@ -219,6 +234,14 @@ impl DeleteDb for DatabaseConnection {
         data::get_data(self, id).await
     }
 
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        data::resolve_data_id(self, dataset_id, data_id).await
+    }
+
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
         data::delete_data(self, id).await
     }
@@ -229,6 +252,10 @@ impl DeleteDb for DatabaseConnection {
 
     async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
         data::list_datasets_for_data(self, data_id).await
+    }
+
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
+        data::count_data_location_references(self, location).await
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {

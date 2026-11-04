@@ -4,6 +4,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
+use crate::ops::data::DataRowRefresh;
 use crate::ops::{data, datasets, pipeline_runs};
 use crate::types::{DatabaseError, PipelineRunStatus};
 
@@ -57,7 +58,35 @@ pub trait IngestDb: Send + Sync {
 
     async fn get_data(&self, id: Uuid) -> Result<Option<Data>, DatabaseError>;
 
+    /// The row holding `content_hash` in `dataset_id` for `owner_id` and
+    /// `tenant_id` (strict tenant equality), if any. This is the ingest
+    /// dedup lookup — Python's `identify_many`: rows are dataset-scoped, so
+    /// the same content in another dataset, or added by another owner, is
+    /// not a match.
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError>;
+
+    /// Resolve a caller-supplied data id to the canonical row id in
+    /// `dataset_id`: the exact id, else the row whose `legacy_id` it is
+    /// (Python's `resolve_data_id`). `None` when the id is unknown there.
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError>;
+
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError>;
+
+    /// Write the whole row `d` (matched by `d.id`) and stamp `updated_at`.
+    /// Used by a pinned add (`update()`), which refreshes the row in place the
+    /// way Python's `ingest_data` merges it. A missing row is
+    /// [`DatabaseError::NotFound`].
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError>;
 
     /// Set the `node_set` and `external_metadata` columns of an existing Data
     /// record (and stamp `updated_at`), leaving every other column as it is.
@@ -81,6 +110,22 @@ pub trait IngestDb: Send + Sync {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError>;
 
+    /// Rewrite the columns Python's `ingest_data` update branch rewrites on a
+    /// re-add of an existing row: name, locations, extensions, mime types,
+    /// loader engine, hashes, size, label (only when given), `node_set` and
+    /// `external_metadata`; stamps `updated_at`. Every other column, notably
+    /// `pipeline_status`, is left as it is. Returns the `updated_at` written.
+    /// A missing row is [`DatabaseError::NotFound`].
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &DataRowRefresh,
+    ) -> Result<DateTime<Utc>, DatabaseError>;
+
+    /// Make `dataset_id` the owning dataset of the existing row `data_id`
+    /// (`data.dataset_id`). Rows are dataset-scoped: a row of another dataset
+    /// is refused. The ingest pipeline does not need it (it creates rows with
+    /// their dataset); it serves callers that build `Data` rows themselves.
     async fn attach_data_to_dataset(
         &self,
         dataset_id: Uuid,
@@ -138,8 +183,30 @@ impl IngestDb for DatabaseConnection {
         data::get_data(self, id).await
     }
 
+    async fn find_data_in_dataset(
+        &self,
+        dataset_id: Uuid,
+        content_hash: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Option<Data>, DatabaseError> {
+        data::find_data_in_dataset(self, dataset_id, content_hash, owner_id, tenant_id).await
+    }
+
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        data::resolve_data_id(self, dataset_id, data_id).await
+    }
+
     async fn create_data(&self, d: Data) -> Result<Data, DatabaseError> {
         data::create_data(self, d).await
+    }
+
+    async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
+        data::update_data(self, d).await
     }
 
     async fn update_data_node_set(
@@ -149,6 +216,14 @@ impl IngestDb for DatabaseConnection {
         external_metadata: Option<&str>,
     ) -> Result<DateTime<Utc>, DatabaseError> {
         data::update_data_node_set(self, data_id, node_set, external_metadata).await
+    }
+
+    async fn refresh_data_row(
+        &self,
+        data_id: Uuid,
+        refresh: &DataRowRefresh,
+    ) -> Result<DateTime<Utc>, DatabaseError> {
+        data::refresh_data_row(self, data_id, refresh).await
     }
 
     async fn attach_data_to_dataset(

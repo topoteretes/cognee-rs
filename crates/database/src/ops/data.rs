@@ -4,15 +4,15 @@ use chrono::{DateTime, SubsecRound, Utc};
 use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, sea_query::Expr,
 };
 use tracing::{Span, instrument, warn};
 use uuid::Uuid;
 
 use crate::conversions::map_sea_err;
 use crate::database_system_label;
-use crate::entities::{data, dataset, dataset_data};
+use crate::entities::{data, dataset};
 use crate::types::DatabaseError;
 use crate::uuid_hex;
 
@@ -54,6 +54,130 @@ pub async fn get_data(db: &DatabaseConnection, id: Uuid) -> Result<Option<Data>,
         if result.is_some() { 1i64 } else { 0i64 },
     );
     Ok(result)
+}
+
+/// Resolve a caller-supplied data id to the canonical row id in a dataset —
+/// Python's `resolve_data_id` (`cognee/modules/data/methods/resolve_data_id.py`).
+///
+/// Users hold data ids in external mappings, so every id ever issued keeps
+/// resolving: the exact id wins (the normal case: ids survive updates and the
+/// dataset-scoping backfill); on a miss the id is matched against `legacy_id`,
+/// the recorded original of a row whose identity forked when a pre-scoping
+/// shared row was split per dataset. Both lookups are dataset-scoped, not
+/// owner-scoped. Returns `None` when the id is unknown in `dataset_id`.
+#[instrument(
+    name = "cognee.db.relational.data.resolve_data_id",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn resolve_data_id(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+    data_id: Uuid,
+) -> Result<Option<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let dataset_hex = uuid_hex::to_hex(dataset_id);
+    let exact = data::Entity::find()
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.eq(dataset_hex.clone()))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+    if let Some(row) = exact {
+        return Ok(Some(Data::from(row).id));
+    }
+    let legacy = data::Entity::find()
+        .filter(data::Column::LegacyId.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.eq(dataset_hex))
+        .order_by_asc(data::Column::CreatedAt)
+        .order_by_asc(data::Column::Id)
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+    Ok(legacy.map(|row| Data::from(row).id))
+}
+
+/// The row holding `content_hash` in `dataset_id` for `owner_id` and
+/// `tenant_id`, if any — Python's `identify` / `identify_many`
+/// (`cognee/modules/ingestion/identify_many.py`): dedup is a lookup scoped to
+/// `(dataset, owner, tenant)`, with strict tenant equality (`None` matches only
+/// a tenant-less row). When duplicates exist the oldest row wins.
+#[instrument(
+    name = "cognee.db.relational.data.find_data_in_dataset",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn find_data_in_dataset(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+    content_hash: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Result<Option<Data>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let tenant_filter = match tenant_id {
+        Some(tenant_id) => data::Column::TenantId.eq(uuid_hex::to_hex(tenant_id)),
+        None => data::Column::TenantId.is_null(),
+    };
+    let result = data::Entity::find()
+        .filter(data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .filter(data::Column::ContentHash.eq(content_hash))
+        .filter(data::Column::OwnerId.eq(uuid_hex::to_hex(owner_id)))
+        .filter(tenant_filter)
+        .order_by_asc(data::Column::CreatedAt)
+        .order_by_asc(data::Column::Id)
+        .one(db)
+        .await
+        .map_err(map_sea_err)?
+        .map(Data::from);
+    Span::current().record(
+        COGNEE_DB_ROW_COUNT,
+        if result.is_some() { 1i64 } else { 0i64 },
+    );
+    Ok(result)
+}
+
+/// How many `Data` rows reference `location` as their `raw_data_location` or
+/// `original_data_location`.
+///
+/// Stored files are content-addressed (`text_<content_hash>.txt`), so the
+/// dataset-scoped rows of the same content in several datasets share one
+/// file. The delete path removes a file only once no row references it —
+/// Python's `remove_data_file_if_unreferenced`
+/// (`SqlAlchemyAdapter.py`, `delete_data_entity`).
+#[instrument(
+    name = "cognee.db.relational.data.count_data_location_references",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn count_data_location_references(
+    db: &DatabaseConnection,
+    location: &str,
+) -> Result<usize, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let count: u64 = data::Entity::find()
+        .filter(
+            Condition::any()
+                .add(data::Column::RawDataLocation.eq(location))
+                .add(data::Column::OriginalDataLocation.eq(location)),
+        )
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
+    Ok(count as usize)
 }
 
 #[instrument(
@@ -143,6 +267,105 @@ pub async fn update_data_node_set(
     Ok(updated_at)
 }
 
+/// The columns Python's `ingest_data` update branch rewrites on a re-add of
+/// an existing row (`ingest_data.py` ~470-545), minus the ones the dedup
+/// lookup already fixes (`content_hash`, `owner_id`, `tenant_id`,
+/// `dataset_id`). `label` is only written when `Some` (Python: "absent means
+/// leave unchanged").
+#[derive(Debug, Clone)]
+pub struct DataRowRefresh {
+    pub name: String,
+    pub raw_data_location: String,
+    pub original_data_location: String,
+    pub extension: String,
+    pub mime_type: String,
+    pub original_extension: Option<String>,
+    pub original_mime_type: Option<String>,
+    pub loader_engine: Option<String>,
+    pub raw_content_hash: Option<String>,
+    pub data_size: i64,
+    pub label: Option<String>,
+    pub node_set: Option<String>,
+    pub external_metadata: Option<String>,
+}
+
+/// Rewrite the re-add columns of `data_id` (see [`DataRowRefresh`]) and stamp
+/// `updated_at`, leaving every other column (`token_count`, `last_accessed`,
+/// `pipeline_status`, ...) as it is: a targeted update, like
+/// [`update_data_node_set`], so a concurrent cognify or search write survives.
+///
+/// Returns the `updated_at` written. A missing row is
+/// [`DatabaseError::NotFound`].
+#[instrument(
+    name = "cognee.db.relational.data.refresh_data_row",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn refresh_data_row(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    refresh: &DataRowRefresh,
+) -> Result<DateTime<Utc>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let updated_at = Utc::now().trunc_subsecs(6);
+    let mut update = data::Entity::update_many()
+        .col_expr(data::Column::Name, Expr::value(refresh.name.clone()))
+        .col_expr(
+            data::Column::RawDataLocation,
+            Expr::value(refresh.raw_data_location.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalDataLocation,
+            Expr::value(refresh.original_data_location.clone()),
+        )
+        .col_expr(
+            data::Column::Extension,
+            Expr::value(refresh.extension.clone()),
+        )
+        .col_expr(
+            data::Column::MimeType,
+            Expr::value(refresh.mime_type.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalExtension,
+            Expr::value(refresh.original_extension.clone()),
+        )
+        .col_expr(
+            data::Column::OriginalMimeType,
+            Expr::value(refresh.original_mime_type.clone()),
+        )
+        .col_expr(
+            data::Column::LoaderEngine,
+            Expr::value(refresh.loader_engine.clone()),
+        )
+        .col_expr(
+            data::Column::RawContentHash,
+            Expr::value(refresh.raw_content_hash.clone()),
+        )
+        .col_expr(data::Column::DataSize, Expr::value(refresh.data_size))
+        .col_expr(data::Column::NodeSet, Expr::value(refresh.node_set.clone()))
+        .col_expr(
+            data::Column::ExternalMetadata,
+            Expr::value(refresh.external_metadata.clone()),
+        )
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)));
+    if let Some(label) = &refresh.label {
+        update = update.col_expr(data::Column::Label, Expr::value(Some(label.clone())));
+    }
+    let result = update
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
+    Ok(updated_at)
+}
+
 #[instrument(
     name = "cognee.db.relational.data.count_data_dataset_links",
     level = "info",
@@ -158,8 +381,11 @@ pub async fn count_data_dataset_links(
     data_id: Uuid,
 ) -> Result<usize, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let count: u64 = dataset_data::Entity::find()
-        .filter(dataset_data::Column::DataId.eq(uuid_hex::to_hex(data_id)))
+    // Rows are dataset-scoped: a row has one membership (its `dataset_id`),
+    // or none once a delete has detached it.
+    let count: u64 = data::Entity::find()
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .filter(data::Column::DatasetId.is_not_null())
         .count(db)
         .await
         .map_err(map_sea_err)?;
@@ -445,16 +671,15 @@ fn pipeline_status_dataset_key_variants(dataset_id: Uuid) -> [String; 2] {
 }
 
 /// Clear `pipeline_status` JSON entries keyed by the given `dataset_id`
-/// from all `Data` records linked to that dataset via the `dataset_data`
-/// junction table.
+/// from all `Data` records of that dataset (`data.dataset_id`).
 ///
 /// Tolerates both key encodings — see
 /// [`pipeline_status_dataset_key_variants`].
 ///
 /// This mirrors the Python cleanup in `delete_dataset.py` lines 33-54.
-/// Must be called **before** the junction rows are removed (before
-/// `detach_data_from_dataset` or `delete_dataset`), since the junction is
-/// needed to find related `Data` records.
+/// Must be called **before** the rows are detached
+/// (`detach_data_from_dataset` clears `data.dataset_id`), since the column is
+/// how the dataset's `Data` records are found.
 ///
 /// Returns the number of `Data` records whose `pipeline_status` was modified.
 #[instrument(
@@ -472,39 +697,21 @@ pub async fn clear_pipeline_status_for_dataset(
     dataset_id: Uuid,
 ) -> Result<usize, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    // Find all data IDs linked to this dataset via the junction table
-    let junction_rows = dataset_data::Entity::find()
-        .filter(dataset_data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+    // The dataset's rows, in one query on the indexed `data.dataset_id`.
+    // Updates stay per-row because each row's pipeline_status JSON is mutated
+    // independently, and only rows that actually change are written back.
+    let models = data::Entity::find()
+        .filter(data::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
         .all(db)
         .await
         .map_err(map_sea_err)?;
-
-    let data_ids: Vec<String> = junction_rows.into_iter().map(|j| j.data_id).collect();
-    if data_ids.is_empty() {
+    if models.is_empty() {
         Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(0);
     }
 
     let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
     let mut updated_count = 0usize;
-
-    // Read the linked Data rows in chunks instead of one find per id (N reads).
-    // Chunking keeps each `IN (...)` under the driver's bound-variable cap
-    // (SQLite ~32766, Postgres 65535) — mirroring `PROVENANCE_INSERT_BATCH` in
-    // graph_storage — so a dataset with more items than the cap can't overflow.
-    // Updates stay per-row because each row's pipeline_status JSON is mutated
-    // independently, and only rows that actually change are written back.
-    const READ_CHUNK: usize = 500;
-    let mut models = Vec::with_capacity(data_ids.len());
-    for chunk in data_ids.chunks(READ_CHUNK) {
-        models.extend(
-            data::Entity::find()
-                .filter(data::Column::Id.is_in(chunk.to_vec()))
-                .all(db)
-                .await
-                .map_err(map_sea_err)?,
-        );
-    }
 
     for model in models {
         let Some(ref status_json) = model.pipeline_status else {
@@ -644,16 +851,23 @@ pub async fn list_datasets_for_data(
     data_id: Uuid,
 ) -> Result<Vec<Dataset>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
-    let pairs = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
-        .find_with_related(dataset::Entity)
-        .all(db)
+    // A dataset-scoped row has at most one dataset: the one in its
+    // `dataset_id` column, when that dataset still exists.
+    let dataset_id = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
+        .one(db)
         .await
-        .map_err(map_sea_err)?;
-    let datasets: Vec<Dataset> = pairs
-        .into_iter()
-        .flat_map(|(_, ds_list)| ds_list)
-        .map(Dataset::from)
-        .collect();
+        .map_err(map_sea_err)?
+        .and_then(|row| row.dataset_id);
+    let datasets: Vec<Dataset> = match dataset_id {
+        Some(dataset_id) => dataset::Entity::find_by_id(dataset_id)
+            .one(db)
+            .await
+            .map_err(map_sea_err)?
+            .into_iter()
+            .map(Dataset::from)
+            .collect(),
+        None => Vec::new(),
+    };
     Span::current().record(COGNEE_DB_ROW_COUNT, datasets.len() as i64);
     Ok(datasets)
 }

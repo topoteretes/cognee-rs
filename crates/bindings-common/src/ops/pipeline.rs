@@ -87,8 +87,6 @@ pub const COGNIFY_OPT_KEYS: &[&str] = &[
     "chunkSize",
     "chunkOverlap",
     "summarization",
-    "temporalCognify",
-    "triplet",
     "graphBackend",
     "extractor",
     "graphSchema",
@@ -187,12 +185,6 @@ pub fn apply_cognify_opts(
     }
     if let Some(b) = opt_bool(opts, "summarization")? {
         cfg = cfg.with_summarization(b);
-    }
-    if let Some(b) = opt_bool(opts, "temporalCognify")? {
-        cfg = cfg.with_temporal_cognify(b);
-    }
-    if let Some(b) = opt_bool(opts, "triplet")? {
-        cfg = cfg.with_triplet_embeddings(b);
     }
     let schema = match (
         opt_value(opts, "graphSchema"),
@@ -364,8 +356,9 @@ pub async fn cognify_config_with_graph_backend(
 /// (the duplicate branch returns the pre-existing row). We therefore cannot
 /// infer dedup from an empty result the way the plan assumed. Instead the caller
 /// pre-scans the dataset's existing data ids and partitions the returned items
-/// into newly-added vs deduplicated by id membership (`Data` ids are
-/// content-addressed UUID5, so a re-added identical payload yields the same id).
+/// into newly-added vs deduplicated by id membership (a re-added identical
+/// payload dedups onto the dataset's existing row, so it keeps that row's id;
+/// a new row gets a fresh `uuid4`).
 pub fn add_result_json(
     newly_added: &[Data],
     duplicates: &[Data],

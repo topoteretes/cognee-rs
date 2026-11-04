@@ -98,17 +98,22 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             cognee::core::RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
-        // Gap 08-07: persist the four-state `pipeline_runs` trail through
+        // Gap 08-07: persist the `pipeline_runs` trail through
         // both phases.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
 
+        // Run-ownership markers for startup recovery, as every Python run holds.
+        let run_ownership_dir = cm.settings().run_ownership_dir();
         let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
             .with_thread_pool(thread_pool_for_add)
             .with_graph_db(graph_db_for_add)
             .with_vector_db(vector_db_for_add)
             .with_database(Arc::clone(&database))
-            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo));
+            .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
+            .with_run_ownership_dir(run_ownership_dir)
+            // Python runs its image and audio loaders at `add`.
+            .with_loader_registry(cm.add_loader_registry().await);
 
         let inputs = args
             .data

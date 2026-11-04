@@ -213,3 +213,90 @@ async fn delete_user_with_no_datasets_succeeds_with_zero_deletions() {
         "no data should be deleted for a new owner"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: the shared-file reference count runs AFTER the row delete
+//
+// Python `delete_data_entity` commits the row delete, then
+// `remove_data_file_if_unreferenced` counts. Two rows of the same content (in
+// two datasets) share one stored file; when a concurrent delete removes the
+// sibling row as this one goes, the count must see both gone and remove the
+// file. Counting before the delete saw the sibling and leaked the file. A
+// SQLite trigger stands in for the concurrent deleter: it removes the sibling
+// the moment the row under test is deleted.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn shared_file_is_removed_when_sibling_row_goes_concurrently() {
+    use sea_orm::{ConnectionTrait, Statement};
+
+    let (db, storage) = setup().await;
+    let owner_id = Uuid::new_v4();
+    let location = storage.store(b"shared bytes", "shared.txt").await.unwrap();
+
+    let mut ids = Vec::new();
+    for name in ["ds_a", "ds_b"] {
+        let dataset = Dataset::new(name.to_string(), owner_id, None, Uuid::new_v4());
+        let dataset_id = dataset.id;
+        database::ops::datasets::create_dataset(&db, dataset)
+            .await
+            .unwrap();
+        let data_id = Uuid::new_v4();
+        let data = Data::builder(
+            data_id,
+            "shared.txt",
+            &location,
+            "file://shared.txt",
+            "txt",
+            "text/plain",
+            "same_hash",
+            owner_id,
+        )
+        .dataset_id(dataset_id)
+        .build();
+        database::ops::data::create_data(&db, data).await.unwrap();
+        database::ops::datasets::attach_data_to_dataset(&db, dataset_id, data_id)
+            .await
+            .unwrap();
+        ids.push(data_id);
+    }
+    let (first, second) = (ids[0], ids[1]);
+
+    let hex = |id: Uuid| cognee_database::uuid_hex::to_hex(id);
+    db.execute(Statement::from_string(
+        db.get_database_backend(),
+        format!(
+            "CREATE TRIGGER concurrent_sibling_delete AFTER DELETE ON data \
+             WHEN old.id = '{}' BEGIN DELETE FROM data WHERE id = '{}'; END",
+            hex(first),
+            hex(second)
+        ),
+    ))
+    .await
+    .unwrap();
+
+    let svc = DeleteService::new(
+        storage.clone() as Arc<dyn StorageTrait>,
+        db.clone() as Arc<dyn DeleteDb>,
+    );
+    let result = svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Data {
+                owner_id,
+                data_id: first,
+                dataset_name: Some("ds_a".to_string()),
+                delete_dataset_if_empty: false,
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("delete succeeds");
+
+    assert_eq!(result.deleted_data, 1);
+    assert!(
+        !storage.exists(&location).await.unwrap(),
+        "no row references the file any more, so it must be removed"
+    );
+}

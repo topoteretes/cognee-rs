@@ -17,7 +17,7 @@ use std::sync::Arc;
 use cognee::api::ImproveConfig;
 use cognee::api::remember::{RememberResult, RememberStatus, remember};
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
@@ -26,7 +26,7 @@ use cognee_ontology::{NoOpOntologyResolver, OntologyResolver};
 use cognee_session::{FsSessionStore, SessionManager, SessionStore};
 use cognee_storage::{LocalStorage, StorageTrait};
 use cognee_test_utils::MockLlm;
-use cognee_vector::MockVectorDB;
+use cognee_vector::{MockVectorDB, VectorDB};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -72,7 +72,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -102,7 +101,6 @@ async fn make_harness() -> Harness {
     let ontology: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -115,12 +113,20 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
 fn mock_llm() -> Arc<dyn cognee_llm::Llm> {
     Arc::new(MockLlm::empty())
+}
+
+/// An LLM that can serve a full permanent-mode cognify: an empty extracted
+/// graph for every chunk and a canned summary.
+fn cognify_llm() -> Arc<dyn cognee_llm::Llm> {
+    Arc::new(
+        MockLlm::new(vec![r#"{"nodes":[],"edges":[]}"#.to_string(); 8])
+            .with_summary_response(r#"{"summary":"s","description":"d"}"#.to_string()),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +151,10 @@ fn remember_result_has_no_inner_field_in_json() {
         entry_type: None,
         entry_id: None,
         cognify_result: None,
-        memify_result: None,
+        improve: None,
+        improve_error: None,
+        after_run_error: None,
+        improve_skipped: None,
         improve_launched: false,
     };
     let json = r.to_dict();
@@ -180,7 +189,6 @@ async fn remember_session_returns_session_stored() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -220,7 +228,6 @@ async fn remember_session_self_improvement_detached() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -235,4 +242,87 @@ async fn remember_session_self_improvement_detached() {
     assert!(result.done());
     assert!(result.improve_launched);
     assert!(cognee::wait_for_background_tasks(None).await);
+}
+
+/// SDK-1039 P3: permanent mode with `self_improvement=true` runs `improve()`
+/// on the dataset (as Python does), not memify. The improve result is
+/// attached to the `RememberResult`.
+#[tokio::test]
+async fn remember_permanent_self_improvement_runs_improve() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    let result = remember(
+        vec![DataInput::Text("Alice works at Acme.".to_string())],
+        "ds_permanent_improve",
+        None,
+        /* self_improvement= */ true,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        cognify_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+        Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
+        false,
+    )
+    .await
+    .expect("permanent remember with self-improvement");
+
+    assert_eq!(result.status, RememberStatus::Completed);
+    assert!(result.error.is_none(), "improve error: {:?}", result.error);
+    assert!(
+        result.improve.is_some(),
+        "self_improvement=true must run improve()"
+    );
+    // improve() has no memify/triplet stage (SDK-1115), so nothing wrote the
+    // `Triplet_text` collection.
+    let improve = result.improve.as_ref().expect("improve ran");
+    assert!(
+        !improve.stages.iter().any(|stage| stage.stage == "memify"),
+        "improve must not report a memify stage: {:?}",
+        improve.stage_summary()
+    );
+    assert!(
+        !h.vector_db
+            .has_collection("Triplet", "text")
+            .await
+            .expect("has_collection"),
+        "remember(self_improvement) must not write Triplet_text"
+    );
+
+    // Without self-improvement no improve run is attached.
+    let result = remember(
+        vec![DataInput::Text("Bob works at Initech.".to_string())],
+        "ds_permanent_no_improve",
+        None,
+        /* self_improvement= */ false,
+        owner,
+        None,
+        Arc::clone(&h.add_pipeline),
+        cognify_llm(),
+        Arc::clone(&h.storage),
+        h.graph_db.clone() as Arc<_>,
+        h.vector_db.clone() as Arc<_>,
+        h.embedding_engine.clone() as Arc<_>,
+        Some(h.db.clone()),
+        Some(Arc::clone(&h.session_store)),
+        Some(Arc::clone(&h.session_manager)),
+        Arc::clone(&h.ontology),
+        Arc::new(CognifyConfig::default()),
+        Some(ImproveConfig::default()),
+        cognee::search::PreferenceConfig::default(),
+        false,
+    )
+    .await
+    .expect("permanent remember without self-improvement");
+    assert!(result.improve.is_none());
 }

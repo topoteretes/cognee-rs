@@ -38,7 +38,6 @@ fn ok_spec(name: &str) -> RunSpec {
         pipeline_name: name.to_string(),
         user_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
     }
 }
 
@@ -114,7 +113,6 @@ async fn two_subscribers_see_same_events() {
         pipeline_name: "two_subs".to_string(),
         user_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
     };
 
     // Run inline in a separate task so subscribers can receive concurrently.
@@ -186,7 +184,6 @@ async fn subscribe_before_register_sees_events() {
         pipeline_name: "early_sub".to_string(),
         user_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
     };
 
     let reg_clone = Arc::clone(&registry);
@@ -245,7 +242,6 @@ async fn abort_emits_errored_event() {
         pipeline_name: "abort_pipe".to_string(),
         user_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
     };
 
     // Background task that never finishes.
@@ -293,7 +289,6 @@ async fn shutdown_aborts_inflight_runs() {
         pipeline_name: "shutdown_pipe".to_string(),
         user_id: None,
         dataset_id: None,
-        data_ids: Vec::new(),
     };
 
     let (_keep, rx) = tokio::sync::oneshot::channel::<()>();

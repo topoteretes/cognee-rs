@@ -413,7 +413,37 @@ async fn from_entities_writes_only_changed_nodes_and_deletes_the_rest() {
         )
         .await
         .unwrap();
-    assert_eq!(root_point[0].metadata["is_root"], json!(true));
+    assert!(!root_point[0].metadata.contains_key("is_root"));
+    // Every point's key set is Python's stored IndexSchema row (the golden
+    // fixture) plus only the documented Rust-only keys.
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/index_schema/python_pgvector_payloads.json"
+    ))
+    .unwrap();
+    let mut expected_keys: Vec<String> = fixture["collections"]["TextSummary_text"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .chain(
+            cognee_models::RUST_ONLY_PAYLOAD_KEYS
+                .iter()
+                .map(|k| k.to_string()),
+        )
+        .collect();
+    expected_keys.sort();
+    let all_ids: Vec<Uuid> = written.iter().map(|s| s.base.id).collect();
+    let points = h
+        .vector
+        .retrieve(GlobalContextSummary::TYPE, "text", &all_ids)
+        .await
+        .unwrap();
+    assert_eq!(points.len(), all_ids.len());
+    for point in &points {
+        let mut keys: Vec<String> = point.metadata.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, expected_keys);
+    }
     assert_eq!(root_point[0].metadata["text"], json!(texts[2]));
 
     // Ownership rows name the dataset, so deleting it removes the index.

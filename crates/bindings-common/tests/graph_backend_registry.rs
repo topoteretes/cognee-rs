@@ -298,7 +298,7 @@ async fn opts_without_a_graph_backend_are_untouched() {
         Value::Null,
         json!({}),
         json!({ "graphBackend": null }),
-        json!({ "chunkSize": 1234, "summarization": false, "triplet": true }),
+        json!({ "chunkSize": 1234, "summarization": false }),
     ] {
         let cfg = cognify_config_with_opts(&svc, &opts)
             .await

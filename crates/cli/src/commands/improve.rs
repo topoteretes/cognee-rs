@@ -43,12 +43,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
     } else {
         Some(args.session_id.clone())
     };
-    let node_name = if args.node_name.is_empty() {
-        None
-    } else {
-        Some(args.node_name.clone())
-    };
-
     crate::teardown::run_command(Arc::clone(&cm), async {
         // `graph_extraction.backend`, resolved before any side effect: an
         // unregistered kind is an error, never a silent LLM-extractor run.
@@ -96,7 +90,9 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_thread_pool(thread_pool)
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
-        .with_database(Arc::clone(&database));
+        .with_database(Arc::clone(&database))
+        // Python runs its image and audio loaders at `add`.
+        .with_loader_registry(cm.add_loader_registry().await);
 
         let session_store: Arc<dyn SessionStore> = cm
             .session_store()
@@ -107,7 +103,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             SessionManager::new(Arc::clone(&session_store))
                 .with_feedback_llm_timeout(feedback_llm_timeout),
         );
-        let checkpoint_store = Arc::clone(&database).checkpoints();
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
@@ -115,16 +110,12 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             dataset_name: dataset_name.clone(),
             dataset_id: None,
             session_ids,
-            node_name,
             owner_id,
             tenant_id,
             feedback_alpha: args.feedback_alpha,
             config: improve_config,
             personalization,
             auto_feedback,
-            extraction_tasks: None,
-            enrichment_tasks: None,
-            data: None,
             build_global_context_index: false,
             build_truth_subspace: false,
             run_in_background: false,
@@ -138,7 +129,6 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             session_store: Some(session_store),
             session_manager: Some(session_manager),
             add_pipeline: Some(&add_pipeline),
-            checkpoint_store: Some(checkpoint_store),
             // The add pipeline's registry (none here), else the process-wide one.
             dataset_locks: None,
             cognify_config: &cognify_config,

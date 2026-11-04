@@ -177,12 +177,10 @@ one `sdk_*.rs` shim file):
 
 | Java accessor | Ops (from `bindings-common`) |
 |---|---|
-| top-level | `warm`, `add`, `cognify`, `addAndCognify`, `search`, `recall`, `memify`, `remember`, `improve`, `forget`, `update`, `prune*` |
+| top-level | `warm`, `add`, `cognify`, `addAndCognify`, `search`, `recall`, `remember`, `improve`, `forget`, `update`, `prune*` |
 | `cognee.datasets()` | `list`, `listData`, `has`, `status`, `empty`, `deleteData`, `deleteAll` |
-| `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback`, `getGraphContext`, `setGraphContext` |
-| `cognee.notebooks()` | `list`, `create`, `update`, `delete` |
+| `cognee.sessions()` | `get`, `addFeedback`, `deleteFeedback` |
 | `cognee.users()` | `getOrCreateDefault` |
-| `cognee.admin()` | `resetPipelineRunStatus`, `resetDatasetPipelineRunStatus` |
 | `cognee.config()` | `set`, `setStr`, bulk setters ×4, `get` |
 | static | `setupLogging`, `initOtlp`, `initTelemetry`, `version` |
 
@@ -192,8 +190,7 @@ Conventions:
   (callers use `.join()` — matches the TS Promise decision).
 - `T` is a typed record/POJO deserialized from the op's JSON (e.g.
   `SearchResult`, `CogneeDataset`, `DatasetStatus`), not raw JSON strings —
-  but keep a `raw()` escape hatch if a payload is open-ended (e.g. notebook
-  cells).
+  but keep a `raw()` escape hatch if a payload is open-ended.
 - Optional parameters: Java overloads for the common cases + an `Options`
   builder object serialized to the same JSON `opts` shape the other bindings
   send. Do not invent new option keys; reuse the exact keys from
@@ -374,8 +371,8 @@ java/
    `CONFIG_TYPE_MISMATCH` test.
 3. **Core ops:** `warm`, `add`, `cognify`, `search`, `addAndCognify` with the
    full async upcall machinery (§6) — this phase de-risks everything else.
-4. **Remaining op groups:** datasets, sessions, memory (`memify`/`remember`/
-   `improve`/`forget`/`update`), notebooks/users/admin, visualization,
+4. **Remaining op groups:** datasets, sessions, memory (`remember`/
+   `improve`/`forget`/`update`), users/admin, visualization,
    logging/telemetry statics.
 5. **Typed results + polish:** POJOs/records for all payloads, Javadoc,
    examples, README.

@@ -751,14 +751,12 @@ impl Fixture {
 }
 
 /// The config the sweep runs under. Summarization on, so the `TextSummary`
-/// node and `TextSummary_text` collection are exercised too; triplet indexing
-/// on, so `Triplet_text` is.
+/// node and `TextSummary_text` collection are exercised too.
 fn full_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)
         .with_chunks_per_batch(1)
         .with_summarization(true)
-        .with_triplet_embeddings(true)
 }
 
 const FIXTURE_TEXT: &str = "Alice works at Acme. Acme builds tools.";
@@ -814,7 +812,7 @@ async fn census_of_the_writes_one_run_performs() {
 /// is what tells the reader they did.
 const NODE_WRITES: usize = 5;
 const EDGE_WRITES: usize = 2;
-const INDEX_WRITES: usize = 7;
+const INDEX_WRITES: usize = 6;
 
 /// `RollbackScope::Nothing` — the sweep is disabled, so I1 can only be
 /// upheld by the order the stages write in.
@@ -1077,167 +1075,8 @@ async fn proof_of_detection_a_row_naming_no_run_is_not_ownership() {
 }
 
 // ---------------------------------------------------------------------------
-// The temporal branch
-// ---------------------------------------------------------------------------
-
-const TEMPORAL_TEXT: &str = "Alice joined Acme in 2020.";
-
-/// Interrupt a temporal write and return the audit plus the write log.
-async fn interrupt_temporal(trip: Trip, config: &CognifyConfig) -> (I1Audit, usize, Vec<String>) {
-    let fixture = Fixture::new(trip.clone(), &[TEMPORAL_TEXT]).await;
-    let _ = fixture
-        .run_with_llm(
-            config,
-            Arc::new(rollback_harness::TemporalFixtureLlm::new()),
-        )
-        .await;
-    let (reached, log) = match trip {
-        Trip::NodeWrite(_) => (fixture.log.node_writes().len(), fixture.log.node_writes()),
-        Trip::EdgeWrite(_) => (fixture.log.edge_writes().len(), fixture.log.edge_writes()),
-        Trip::IndexPoints(_) => (fixture.log.index_writes().len(), fixture.log.index_writes()),
-        Trip::Never => (0, Vec::new()),
-    };
-    (fixture.audit().await, reached, log)
-}
-
-/// The temporal pipeline writes through its own persistence stage, with its
-/// own ledger call. Census it, then interrupt every one of its writes.
-#[tokio::test]
-async fn interrupting_any_temporal_write_preserves_i1() {
-    let config = rollback_harness::temporal_config()
-        .with_rollback_scope(cognee_cognify::RollbackScope::Nothing);
-
-    let (audit, _, _) = interrupt_temporal(Trip::Never, &config).await;
-    audit.assert_holds("after an uninterrupted temporal run");
-
-    let census = Fixture::new(Trip::Never, &[TEMPORAL_TEXT]).await;
-    census
-        .run_with_llm(
-            &config,
-            Arc::new(rollback_harness::TemporalFixtureLlm::new()),
-        )
-        .await
-        .expect("uninterrupted temporal run");
-    let nodes = census.log.node_writes();
-    let edges = census.log.edge_writes();
-    let index = census.log.index_writes();
-    println!("temporal node writes: {nodes:#?}");
-    println!("temporal edge writes: {edges:#?}");
-    println!("temporal index writes: {index:#?}");
-    assert!(
-        !nodes.is_empty() && !edges.is_empty() && !index.is_empty(),
-        "the temporal fixture must reach all three kinds of store write"
-    );
-
-    for nth in 1..=nodes.len() {
-        let (audit, reached, log) = interrupt_temporal(Trip::NodeWrite(nth), &config).await;
-        assert!(
-            reached >= nth,
-            "temporal node write #{nth} unreached: {log:?}"
-        );
-        audit.assert_holds(&format!(
-            "with temporal node write #{nth} failing ({log:?})"
-        ));
-    }
-    for nth in 1..=edges.len() {
-        let (audit, reached, log) = interrupt_temporal(Trip::EdgeWrite(nth), &config).await;
-        assert!(
-            reached >= nth,
-            "temporal edge write #{nth} unreached: {log:?}"
-        );
-        audit.assert_holds(&format!(
-            "with temporal edge write #{nth} failing ({log:?})"
-        ));
-    }
-    for nth in 1..=index.len() {
-        let (audit, reached, log) = interrupt_temporal(Trip::IndexPoints(nth), &config).await;
-        assert!(
-            reached >= nth,
-            "temporal index write #{nth} unreached: {log:?}"
-        );
-        audit.assert_holds(&format!(
-            "with temporal index write #{nth} failing ({log:?})"
-        ));
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The other pipelines that write to the stores
 // ---------------------------------------------------------------------------
-
-/// `memify()` writes `Triplet_text` vector points straight from the graph, and
-/// `improve()`'s truth-subspace stage writes `TruthCentroid_vector` points —
-/// neither writes an ownership row of its own.
-///
-/// This runs memify over the stores a real cognify run left behind and audits
-/// the result. Whether memify's points are *incidentally* claimed depends
-/// entirely on whether every edge it read has a cognify ownership row that
-/// happens to yield the same `Triplet` id; nothing structural connects the two.
-/// The assertion below therefore records what is actually true today, with the
-/// list of anything unclaimed spelled out, so a change either way is visible.
-#[tokio::test]
-async fn memify_writes_are_only_incidentally_covered_by_the_cognify_ledger() {
-    use cognee_cognify::memify::{MemifyConfig, memify};
-
-    let fixture = Fixture::new(Trip::Never, &[FIXTURE_TEXT]).await;
-    fixture.run(&full_config()).await.expect("cognify run");
-    fixture
-        .audit()
-        .await
-        .assert_holds("after the cognify run that seeds the graph");
-
-    let before = fixture.audit().await.vector_points.len();
-
-    let thread_pool: Arc<dyn cognee_core::CpuPool> =
-        Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("RayonThreadPool"));
-    memify(
-        Arc::clone(&fixture.graph_db) as Arc<dyn GraphDBTrait>,
-        Arc::clone(&fixture.vector_db) as Arc<dyn VectorDB>,
-        Arc::new(MockEmbeddingEngine::new(8)),
-        thread_pool,
-        fixture.db.clone(),
-        Arc::new(cognee_database::NoopPipelineRunRepository::new()),
-        Some(fixture.dataset_id),
-        Some(fixture.owner_id),
-        None,
-        &MemifyConfig::default(),
-    )
-    .await
-    .expect("memify over the cognify graph");
-
-    let audit = fixture.audit().await;
-    assert!(
-        audit.vector_points.len() > before,
-        "memify must have written vector points for this test to say anything"
-    );
-
-    let violations = audit.violations();
-    println!(
-        "memify left {} artifact(s) with no ownership row:\n{}",
-        violations.len(),
-        violations
-            .iter()
-            .map(|v| format!("  - {}", v.0))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-
-    // memify writes no ownership rows at all: the `nodes`/`edges` ledger is
-    // exactly what the cognify run left. Pinning that is the point — it is the
-    // difference between "structurally enforced" and "happens to hold".
-    let ledger_runs: HashSet<Option<Uuid>> = audit
-        .ledger_nodes
-        .iter()
-        .map(|row| row.pipeline_run_id)
-        .chain(audit.ledger_edges.iter().map(|row| row.pipeline_run_id))
-        .collect();
-    assert_eq!(
-        ledger_runs.len(),
-        1,
-        "memify must not have added ownership rows under a run of its own; if \
-         it now does, this test is the place to say so: {ledger_runs:?}"
-    );
-}
 
 /// Write sites that the ownership ledger does **not** cover at all.
 ///
@@ -1426,9 +1265,7 @@ async fn interrupting_any_dlt_write_preserves_i1() {
 /// own, and this is what interrupts it.
 fn url_metadata() -> String {
     serde_json::json!({
-        "source": "url",
-        "final_url": "https://example.com/alice",
-        "title": "Alice at Acme"
+        "_cognee": {"source_uri": "https://example.com/alice"}
     })
     .to_string()
 }

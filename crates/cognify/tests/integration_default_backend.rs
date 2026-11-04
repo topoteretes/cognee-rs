@@ -165,9 +165,7 @@ async fn test_default_backend_add_cognify_search_delete() {
     );
 
     // ── Step 5: Cognify ──────────────────────────────────────────────────────
-    let config = CognifyConfig::default()
-        .with_summarization(true)
-        .with_triplet_embeddings(false);
+    let config = CognifyConfig::default().with_summarization(true);
 
     let dataset = ops::datasets::get_dataset_by_name_in_tenant(
         &database,

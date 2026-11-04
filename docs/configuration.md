@@ -686,7 +686,8 @@ each key is accepted as an alias, shown in brackets.
 | `EMBEDDING_API_KEY` (falls back to `LLM_API_KEY`) | `embedding.api_key` (`embedding_api_key`) | _(empty)_ |
 | `EMBEDDING_MAX_SEQUENCE_LENGTH` | `embedding.max_sequence_length` (`embedding_max_sequence_length`) | `512` (local ONNX/fastembed only; remote providers use `EMBEDDING_MAX_COMPLETION_TOKENS`) |
 | `EMBEDDING_MAX_COMPLETION_TOKENS` | `embedding.max_completion_tokens` (`embedding_max_completion_tokens`) | `8191` (input-token limit of a remote embedding API; the embedding term of the chunk-size auto-calculation for remote providers) |
-| `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `36` (texts per embedding request; raise for providers that allow larger batches. The OpenAI-compatible engine also dispatches up to 8 sub-batches concurrently) |
+| `EMBEDDING_BATCH_SIZE` | `embedding.batch_size` (`embedding_batch_size`) | `32` (texts per embedding request, Python's `embedding_batch_size`, and also the local ONNX/fastembed inference batch, as in Python's fastembed engine; cognify cuts every index window into batches of this size. 32 is the most that Text Embeddings Inference accepts per request; raise it for providers that allow larger batches) |
+| `EMBEDDING_MAX_CONCURRENT_DATA_POINTS` | `embedding.max_concurrent_data_points` (`embedding_max_concurrent_data_points`) | `150` (data points allowed in flight to the embedder, Python's `embedding_max_concurrent_data_points`; concurrent batches = `max(1, max_concurrent_data_points / batch_size)`, i.e. 4 by default. Cognify keeps that many batches in flight. The OpenAI-compatible and Bedrock Cohere engines read this key; Bedrock Titan spends it on its one-text requests inside a batch, so it runs one batch at a time; the Ollama engine stays sequential; the local ONNX engine reads it too; the mock engine uses the default 150) |
 | `EMBEDDING_RATE_LIMIT_ENABLED` / `_REQUESTS` / `_INTERVAL` | `embedding.rate_limit_*` (`embedding_rate_limit_*`) | `false` / `60` / `60` |
 | `MOCK_EMBEDDING` | `embedding.mock` (`mock_embedding`) | _(empty)_. `true`/`1`/`yes`/`deterministic` select the mock engine with deterministic SHA-256-derived vectors; `zero` selects all-zero vectors (cosine KNN then returns nothing) |
 
@@ -697,7 +698,6 @@ is compiled in:
 |---|---|---|---|
 | `EMBEDDING_MODEL_PATH` / `COGNEE_E2E_EMBED_MODEL_PATH` | `embedding.onnx.model_path` (`embedding_model_path`) | `onnx` / `fastembed` (`onnx` feature) | _(empty: `<cache_root_directory>/models/BGE-Small-v1.5-model_quantized.onnx`)_ |
 | `EMBEDDING_TOKENIZER_PATH` / `COGNEE_E2E_TOKENIZER_PATH` | `embedding.onnx.tokenizer_path` (`embedding_tokenizer_path`) | `onnx` / `fastembed` | _(empty: `<cache_root_directory>/models/bge-small-tokenizer.json`)_ |
-| `EMBEDDING_ONNX_BATCH_SIZE` | `embedding.onnx.batch_size` (`embedding_onnx_batch_size`) | `onnx` / `fastembed` | `32` (inference batch size; independent of `embedding.batch_size`. Lower it under memory pressure on edge devices) |
 | `EMBEDDING_API_VERSION` | `embedding.openai_compatible.api_version` (`embedding_api_version`) | `openai` / `openai_compatible` (Azure `api-version`) | _(unset)_ |
 | `HUGGINGFACE_TOKENIZER` | `embedding.ollama.huggingface_tokenizer` (`huggingface_tokenizer`) | `ollama` | _(unset)_ |
 | `AWS_*` | `aws.*` | `bedrock` (`bedrock` feature) | see [Bedrock](#bedrock-llm_providerbedrock) |
@@ -890,137 +890,57 @@ registered as `sqlite` (feature `sqlite`) and `postgres` / `postgresql` (feature
 | `DB_NAME` | `relational.name` (`db_name`) | `cognee_db` |
 | `DB_USERNAME` / `DB_PASSWORD` | `relational.username` / `relational.password` (`db_username` / `db_password`) | _(empty)_ |
 | `DB_SSLMODE` (else derived from `DATABASE_CONNECT_ARGS`) | `db_sslmode` | _(empty)_ |
-| `COGNEE_SINGLE_PROCESS` | `single_process` | _(unset — see below; effectively off)_ |
 
 For `postgres` the URL is built from the connection parts; otherwise `relational.url`
-is used verbatim. `db_sslmode` and `single_process` stay cognee-wide `Settings` keys:
-the TLS mode is appended to every Postgres URL cognee builds (relational, pgvector
-and the Postgres graph), and `single_process` gates startup recovery.
+is used verbatim. `db_sslmode` stays a cognee-wide `Settings` key: the TLS mode is
+appended to every Postgres URL cognee builds (relational, pgvector and the
+Postgres graph).
 
-### `single_process` / `COGNEE_SINGLE_PROCESS` — does one process own this database?
+### Serialization and recovery of pipeline runs
 
-**In practice this is an opt-in: startup recovery does nothing until you turn
-it on.** The setting is tri-state, and the derived answer is only ever useful
-in the negative:
+Rust follows Python (`dc0b4ad6a`, `modules/cognify/recovery.py`); there is
+nothing to turn on.
 
-| value | meaning |
-|---|---|
-| unset / `null` | derive it — see below |
-| `true` (`1`, `yes`, `on`) | one process owns this database; enable startup recovery |
-| any other non-blank value | explicitly not; leave everything alone |
+| Env var | Key | Purpose | Default |
+|---|---|---|---|
+| `COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS` | `cognify.stale_run_recovery_min_age_seconds` | startup recovery's age floor: a `STARTED` run younger than this is treated as live (Python's variable of the same name) | `3600` |
 
-`null` restores the derived answer the way it does for `chunk_size`. The env
-var is parsed by the same code as the config key, so the two cannot disagree —
-a blank or whitespace-only value means "derive", not `false`, and `1` / `0`
-mean what `true` / `false` mean whether they arrive as a string, a JSON number
-or a shell value.
+- **No run-history gate.** A `cognify` is never refused or short-circuited
+  because of the dataset's `pipeline_runs` rows: not by a `COMPLETED` row (the
+  pipeline cache, `use_pipeline_cache`, and its reset API are gone), not by a
+  `STARTED` row (`PipelineAlreadyRunning`, the exclusive-run claim and
+  `cognee-cli pipeline-unblock` are gone). Already-processed items are skipped
+  one by one by the [completion markers](#completion-markers-and-incremental-loading).
+  A stored `DATASET_PROCESSING_INITIATED` row (old writers; Python keeps the
+  enum value too) is read back as `INITIATED` and gates nothing.
+- **A per-dataset lock serializes runs.** `cognify`, `add` and `delete` on one
+  dataset take the same in-process lock (`cognee_core::DatasetLocks::global()`),
+  so a second `cognify` of a dataset **waits** for the first and then proceeds.
+  Different datasets run in parallel. Like Python's `get_dataset_lock`, the lock
+  is per process: two processes on one database are not serialized by it.
+- **A killed run is recovered at startup.** A `cognify` or `add` run records
+  `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an OS file lock
+  on `<system_root>/pipeline_run_locks/<token>/owner.lock`. The OS drops the lock
+  when the process dies, however it dies. At startup — on the first operation
+  per relational database per process for the bindings, via
+  `cognee_delete::recover_stale_pipeline_runs` for any other caller — each run
+  whose newest row is still `STARTED` (even when a newer run of the same
+  pipeline has completed on the dataset since), that is older than
+  `cognify.stale_run_recovery_min_age_seconds`, whose dataset no run of this
+  process holds the lock of, whose marker can be claimed without blocking, and
+  whose dataset still exists, is **rolled back** (a `cognify` run's graph and
+  vector artifacts, scoped to that run in its dataset; other pipelines have
+  nothing to roll back, as in Python's `ROLLBACK_HANDLERS`) and then **closed**
+  with an `ERRORED` row whose `run_info` is
+  `{"error": "AbandonedPipelineRunError: …"}`. A row without a marker, or whose
+  marker is locked by a live process, cannot be proven abandoned and is left
+  alone, so recovery is safe with any number of processes on the database. A
+  rollback that fails, or a run whose dataset is gone, stays `STARTED`. A
+  finished run removes its marker.
 
-#### Which surfaces read it
-
-Not every entry point runs startup recovery, so not every entry point consults
-this setting. Assert it the way your deployment is actually started:
-
-| how you run cognee | how to assert it | what happens |
-|---|---|---|
-| a binding — Python, JS, C API, Java/Android | `set_config("single_process", true)`, `ConfigManager::set_single_process(true)`, or `COGNEE_SINGLE_PROCESS=1` | recovery runs on the first operation |
-| `cognee-http-server` | `COGNEE_SINGLE_PROCESS=1` **only** | recovery runs at server startup |
-| `cognee-cli cognify` / `memify` | — | **no startup recovery at all**; use `cognee-cli pipeline-unblock --clear` |
-
-The two gaps are deliberate, not oversights:
-
-- The HTTP server never loads the `cognee config` file (that file is CLI-only —
-  see [Precedence](#precedence)) and builds no
-  `Settings`, so `cognee config set single_process true` cannot reach it. Its
-  environment is the only channel there is.
-- The CLI runs no sweep on any command. Every invocation is its own process,
-  and two concurrent `cognee-cli cognify` runs against one SQLite file are
-  exactly the case the claim exists to catch — so sweeping on each invocation
-  would be the wrong default even where this setting says it is safe.
-  `cognee-cli pipeline-unblock --clear` is the supported way to clear a wedged
-  dataset from the CLI, and it clears both gates.
-
-#### Set it before the first operation
-
-The setting is read **once per relational database per process**, on the first
-operation that opens that database. Flipping it on afterwards is ignored for
-the rest of that process's life — deliberately: by then the process may have
-runs of its own in flight, whose rows and claims a sweep cannot tell apart
-from a dead predecessor's, and rolling those back would delete a live run's
-graph artifacts. A binding that notices the flip logs a `WARN` saying so;
-restart to recover a dataset that is already wedged.
-
-The derivation resolves `true` for **only an in-memory SQLite URL**
-(`sqlite::memory:`, `?mode=memory`) and `false` for everything else — Postgres,
-and **file-backed SQLite including the shipped default
-`sqlite:./cognee.db?mode=rwc`**, which every cognee process started in that
-directory opens. Since an in-memory database dies with its process, it can
-never hold a leftover from a dead run, so the derived `true` gives the sweep
-nothing to do. The derivation earns its place through the `false` half, which
-is what stops a SQLite *file* from being mistaken for a private one.
-
-#### What asserting it turns on
-
-Startup recovery for a run killed mid-flight — SIGKILL, an OOM kill, Android
-killing the app process. A run that fails while its process is alive cleans up
-after itself; a killed one leaves three things behind, in the order recovery
-deals with them:
-
-1. **What it had already written** into the graph and vector stores, recorded
-   in the ownership ledger against its `pipeline_run_id`. A live failure rolls
-   this back through the same `RunSweeper` the `forget` path uses; a killed
-   process never reaches that code, so the artifacts survive attributed to a
-   run that will never finish, and no later sweep selects them again.
-2. **The `pipeline_runs` row left at `Started`** — read first by the run gate
-   and **never** expiring.
-3. **The exclusive-run claim** on `(dataset, pipeline)` — released only by its
-   holder, otherwise expiring 24 h later.
-
-The order matters: retiring the status row is what makes the dataset runnable
-again, so it happens *after* the rollback, never before. (Python does the same
-— `cognify_rollback_handler` runs ahead of the status reset in
-`modules/cognify/recovery.py`.) The rollback is scoped strictly to the dead
-run in its own dataset; it is never a blanket delete, and artifacts another
-run also claims are kept.
-
-With one process per database, all three leftovers present at startup belong
-to a dead predecessor, so all three are cleared and the dataset is runnable
-again. With more than one, any of them may belong to a live peer, so nothing
-is touched and the claim keeps excluding concurrent runs across processes
-exactly as before.
-
-A rollback that fails is logged and the status row is retired anyway. The
-ownership rows survive as the record of what still needs deleting, whereas
-leaving the status row would wedge the dataset permanently — that gate never
-expires, and for an embedded consumer this is the only thing that clears it.
-
-##### A divergence from Python worth knowing about
-
-Retiring an orphan writes a **new `Errored` row** in Rust, where Python's
-recovery resets the run to `INITIATED`. Both resolve to "you may run" at the
-gate, and both are recorded rather than deleted, so nothing downstream
-behaves differently — but a status poller does see different things after the
-same crash: on Rust the run reads as a *failed build*, on Python as one that
-*never started*. Rust's answer is the truthful one (the run did start, and it
-did not finish) and it keeps the new-row-per-transition audit trail intact, so
-it is deliberate. Note that Rust's own `reset_pipeline_run_status` API writes
-`INITIATED`, matching Python; only the orphan sweep differs.
-
-#### Who needs to set it
-
-Any single-process deployment on a **file-backed** database: an Android app, a
-desktop app, a one-process service, a CLI-only setup. The URL cannot show this
-— the very same URL is what two `cognee-cli` invocations, or an HTTP server
-restarting beside a running CLI, would use, and sweeping there would delete a
-live sibling's claim and admit the concurrent run the claim exists to prevent.
-
-Without the opt-in nothing regresses; you simply keep today's behaviour. The
-claim still ages out after 24 h, and the orphaned row is still cleared by
-`cognee-cli pipeline-unblock --clear` or by an HTTP-server restart. What you
-do not get either way is the artifact rollback: nothing but this recovery ever
-removes what a killed run wrote, so those nodes stay in the graph.
-
-Set it to `false` to refuse the recovery outright — useful to pin the safe
-behaviour in a config file so a later environment change cannot switch it on.
+Differences from Python: there is no periodic re-check inside the library (a
+long-running server calls `recover_stale_pipeline_runs` itself on an
+interval), and recovery sends no `Pipeline Run Errored` telemetry event.
 
 ## Chunking & tokenizer
 
@@ -1063,7 +983,6 @@ prompt and the summary schema:
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
 | `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
-| `COGNEE_DATA_PER_BATCH` | `cognify.data_per_batch` (`data_per_batch`) | data items per temporal-cognify batch (Python's `data_per_batch` parameter, which has no env var); `0` keeps the default | `20` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
@@ -1147,7 +1066,6 @@ boundary its own loop offers, and only one of them is the first failed file:
 |---|---|---|---|
 | Chunking | the file that failed | — | one file |
 | Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
-| Temporal extraction | the batch that contained the failure | `data_per_batch` | **20 files** |
 | Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
 
 The extraction row is the one to read twice. 2000 is Python's own default
@@ -1193,7 +1111,7 @@ variant is reachable only in code, via
 `CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
 configuration surface because what it leaves behind is permanent. A run that
 wrote graph edges and then died before the vector stage leaves those edges in
-the graph with no `Triplet_text` and no `EdgeType_relationship_name` point. The
+the graph with no `EdgeType_relationship_name` point. The
 retry does not repair them: the completion marker is unset, so the item is
 processed again, but `retrieve_existing_edges` finds the orphaned edges and
 expansion skips every edge already in the graph — so no row and no vector is
@@ -1237,8 +1155,6 @@ choice — with one exception.
 | Chunking | data item | Collected; the item fails and contributes neither chunks nor a `Document` |
 | Graph extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
 | Summarization | chunk | **Configurable.** Default: the item fails (Python parity). With tolerance on: recorded separately, never fails the item or the run, never counts toward the ratio |
-| Temporal event extraction | chunk | Collected; the item fails. Ratio-checked under `FailedItems` |
-| Temporal entity enrichment | chunk | Collected. One LLM call covers a whole batch, so the failure is recorded against **every chunk that fed the batch** and the batch's events are dropped — an event with no attributes carries none of the entity graph the pass exists to produce |
 | Persistence — graph, vector or ledger writes, and embeddings | run | Always fatal, under every combination |
 
 `tolerate_summarization_failures` governs **fatality only**. Either way the
@@ -1275,32 +1191,21 @@ one: they are not classified, not chunked, and never sent to an LLM.
 Three consequences worth stating plainly:
 
 - **Re-cognifying an already-complete dataset is a no-op.** The call returns
-  `Ok` with `already_completed = true` and empty payloads. This is a behaviour
-  change: before this, every cognify re-processed everything.
+  `Ok` with `already_completed = true` and empty payloads, and writes its own
+  `STARTED` / `COMPLETED` pair. This is a behaviour change: before this, every
+  cognify re-processed everything.
 - **A failed run marks nothing**, and a sweep clears the markers of every item
   it rolled back, so the next run redoes exactly the work that was lost.
-- **A run that completed with failures outstanding is not a pipeline-cache
-  hit**, even with `use_pipeline_cache` on — the next run has the failed files
-  to redo.
+- **A run that completed with failures outstanding leaves those files
+  unmarked**, so the next run has exactly the failed files to redo.
 
-**A divergence from Python worth knowing on a shared database.** A fully
-skipped Rust run writes no `pipeline_runs` rows at all: the marker check runs
-before the pipeline is built, so there is no `INITIATED` / `STARTED` /
-`COMPLETED` trail for that call, and nothing appears under
-`GET /api/v1/activity/pipeline-runs`. Python reaches the same end state by a
-different route — `run_tasks` logs the run start before it looks at any item
+**The run trail.** A fully skipped Rust run still writes a `STARTED` /
+`COMPLETED` pair (`{}` on both, a fresh `pipeline_run_id`), as Python does:
+`run_tasks` logs the run start before it looks at any item
 (`operations/run_tasks.py`), and each item then yields
 `PipelineRunAlreadyCompleted` from inside the open run
-(`operations/run_tasks_data_item.py`) — so a repeat cognify leaves a complete
-run trail there. The two SDKs agree on what a repeat run *did* (nothing) and
-disagree on whether it is visible as a run.
-
-**Temporal runs share the markers.** Both branches write and read the one
-`cognify_pipeline` key, which is what Python does — its temporal cognify runs
-under the same `pipeline_name`. The consequence is user-visible: a `cognify()`
-followed by a temporal `cognify()` over the same dataset is a **no-op**, and the
-other way round. Callers who want both graphs over one dataset must set
-`with_incremental_loading(false)`.
+(`operations/run_tasks_data_item.py`). Rust skips the items before it builds
+the pipeline, so the pair is written by the cognify entry point itself.
 
 Set `with_incremental_loading(false)` to restore the previous behaviour and
 reprocess everything on every run.
@@ -1656,10 +1561,10 @@ Pass the schema per call instead, as below.
 treats an omitted or empty `graph_model`. Every entry point runs
 `CognifyConfig::validate` before any side effect, so an invalid value (an
 unknown attachment, an attachment without a schema, a schema that does not
-compile, a schema with `temporal_cognify`, a `graph_backend` or the `cascade`
-strategy) fails with a validation error. The binding opts are type-checked as
-a whole: a wrongly-typed value for any known cognify option is an error, and an
-unknown key is logged as a warning — Python forwards unknown `cognify()`
+compile, a schema with a `graph_backend` or the `cascade` strategy) fails
+with a validation error. The binding opts are type-checked as a whole: a
+wrongly-typed value for any known cognify option is an error, and an unknown
+key is logged as a warning — Python forwards unknown `cognify()`
 keywords into the LLM call instead of raising. See
 [the custom graph schema guide](guides/custom-graph-schema.md).
 
@@ -2235,7 +2140,7 @@ without `LLM_API_KEY` (and so without a working LLM) reports none.
 ## HTTP server
 
 The server binary is not part of this repository. It reads its own env surface
-(host/port, auth, body limits, pipeline registry, notebooks, health probes),
+(host/port, auth, body limits, pipeline registry, health probes),
 which is documented with the server rather than here; see
 [tools/http-server.md](tools/http-server.md). Note that the `HYBRID_COMPLETION`
 tuning knobs are **not** part of the HTTP wire surface — see
@@ -2257,7 +2162,7 @@ and the CLI use.
   section**, canonical or alias (see [Component config sections](#component-config-sections)).
   An unknown key follows [strict mode](#unknown-keys-and-strict-mode). `get(key)`
   reads any of them. A JSON `null` clears the optional
-  settings (`chunk_size`, `llm_temperature`, `single_process`,
+  settings (`chunk_size`, `llm_temperature`,
   `summarization_schema`). Setting `system_root_directory` also moves the graph
   and vector paths derived from the old root.
 * **Typed setters** for the common keys, in the families `set_llm_*`,

@@ -74,8 +74,6 @@ public final class Native {
     public static native void rememberEntry(long handle, String entryJson, String datasetName,
             String sessionId, String optsJson, CompletableFuture<String> future);
 
-    public static native void memify(long handle, String optsJson, CompletableFuture<String> future);
-
     public static native void improve(long handle, String optsJson, CompletableFuture<String> future);
 
     // data ops
@@ -108,18 +106,6 @@ public final class Native {
             CompletableFuture<String> future);
     // users / admin
     public static native void getOrCreateDefaultUser(long handle, CompletableFuture<String> future);
-    public static native void resetPipelineRunStatus(long handle, String datasetId,
-            String pipelineName, CompletableFuture<String> future);
-    public static native void resetDatasetPipelineRunStatus(long handle, String datasetId,
-            CompletableFuture<String> future);
-    // notebooks
-    public static native void listNotebooks(long handle, CompletableFuture<String> future);
-    public static native void createNotebook(long handle, String name, String cellsJson,
-            boolean deletable, CompletableFuture<String> future);
-    public static native void updateNotebook(long handle, String id, String patchJson,
-            CompletableFuture<String> future);
-    public static native void deleteNotebook(long handle, String id,
-            CompletableFuture<String> future);
 
     // visualization
     public static native void visualize(long handle, String optsJson,

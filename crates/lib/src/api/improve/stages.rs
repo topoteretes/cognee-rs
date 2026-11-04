@@ -16,7 +16,7 @@ use cognee_cognify::{
     persist_sessions_in_knowledge_graph,
 };
 use cognee_core::CpuPool;
-use cognee_database::{CheckpointStore, PipelineRunRepository, RelationalDb};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::{AddParams, AddPipeline};
@@ -223,12 +223,6 @@ pub(crate) trait StageExecutor {
 
     /// Run the stage. Never fails: an error is an `errored` result.
     fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send;
-
-    /// Record that this run wrote to the dataset's graph, once, right after
-    /// the first stage that may have (see [`super::watermark`]). Best effort.
-    fn record_graph_write(&mut self) -> impl Future<Output = ()> + Send {
-        std::future::ready(())
-    }
 }
 
 /// The stages of one real `improve()` run, over the run's inputs.
@@ -261,8 +255,6 @@ pub(crate) struct ImproveStages<'a> {
     pub session_store: Option<Arc<dyn SessionStore>>,
     pub session_manager: Option<Arc<SessionManager>>,
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Where the stage watermarks live.
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     pub cognify_config: &'a CognifyConfig,
 }
 
@@ -310,20 +302,6 @@ impl StageExecutor for ImproveStages<'_> {
             }
             _ => None,
         }
-    }
-
-    async fn record_graph_write(&mut self) {
-        let Some(db) = self.db.clone() else {
-            return;
-        };
-        let dataset_id = match self.dataset_id().await {
-            Ok(id) => id,
-            Err(e) => {
-                warn!("improve: could not resolve the dataset to record its graph write: {e}");
-                return;
-            }
-        };
-        super::watermark::record_graph_write(&*db.pipeline_runs(), dataset_id).await;
     }
 
     async fn run(&mut self, stage: StageKind) -> StageRun {
@@ -433,6 +411,7 @@ impl ImproveStages<'_> {
         let persisted = persist_sessions_in_knowledge_graph(
             &self.session_ids,
             &self.dataset_name,
+            self.dataset_id,
             self.owner_id,
             self.tenant_id,
             Arc::clone(store),
@@ -546,8 +525,11 @@ impl ImproveStages<'_> {
         let (Some(pipeline), Some(database)) = (self.add_pipeline, self.db.clone()) else {
             return Err("add pipeline and relational database are required".into());
         };
+        // The caller-resolved dataset (possibly shared with the caller) is the
+        // add's target; by name the add would only see the caller's own.
         let add_params = AddParams {
             node_set: Some(vec![AGENT_TRACE_FEEDBACKS_NODE_SET.to_string()]),
+            dataset_id: self.dataset_id,
             ..Default::default()
         };
         let data_rows = pipeline
@@ -735,6 +717,7 @@ impl ImproveStages<'_> {
         let r = distill_sessions_in_knowledge_graph(
             &self.session_ids,
             &self.dataset_name,
+            self.dataset_id,
             self.owner_id,
             self.tenant_id,
             Arc::clone(store),
@@ -824,14 +807,7 @@ impl ImproveStages<'_> {
                 // Rust has no notion of whether datasets share one graph here,
                 // so every dataset's runs count (Python narrows that to the
                 // dataset under backend access control).
-                !has_dataset_changed_since_last_improve(
-                    self.checkpoint_store.as_deref(),
-                    runs.as_deref(),
-                    KIND,
-                    id,
-                    true,
-                )
-                .await
+                !has_dataset_changed_since_last_improve(runs.as_deref(), KIND, id, true).await
             }
             None => false,
         };
@@ -845,7 +821,7 @@ impl ImproveStages<'_> {
         };
         let stamp = match (dataset_id, result.status) {
             (Some(id), StageStatus::Completed | StageStatus::AlreadyCompleted) => {
-                Some(StageStamp::new(KIND, id, started_at))
+                Some(StageStamp::new(KIND, id, result.status, started_at))
             }
             _ => None,
         };

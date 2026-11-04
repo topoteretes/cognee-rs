@@ -33,8 +33,12 @@ touch ../.env                         # stub required by docker-compose env_file
 # glibc, and the binaries fail to start in the harness (Debian Trixie,
 # glibc 2.41) on any newer host.
 
-# Telemetry parity (no LLM):
-docker compose -f docker-compose.yml run --rm e2e-telemetry
+# Telemetry parity (no LLM). `-p` gives it fresh volumes: the test clears
+# /captures/all.jsonl, which it mounts read-only, so a capture left in the
+# shared `telemetry-captures` volume by an earlier run fails it with
+# "Read-only file system" (CI always starts from an empty volume):
+docker compose -p e2e-telemetry-$$ -f docker-compose.yml run --rm e2e-telemetry
+docker compose -p e2e-telemetry-$$ -f docker-compose.yml down -v
 
 # COGX import contract (no LLM):
 docker compose -f docker-compose.yml run --rm \
@@ -46,6 +50,26 @@ docker compose -f docker-compose.yml run --rm \
   -e OPENAI_TOKEN=sk-... -e LLM_PROVIDER=openai e2e-tests \
   pytest -vs /harness/test_provenance_parity.py --tb=short
 ```
+
+## Python pin
+
+The Python side is the `topoteretes/cognee` commit pinned in
+`.github/workflows/http-parity.yml` (the `Checkout cognee` step), checked out
+as the `cognee/` sibling of this repository. Locally, check out the same SHA
+next to `cognee-rust/`. The Rust SDK follows Python's post-SDK-1115 state (no
+triplet embedding, no `TRIPLET_COMPLETION`, no memify), so the pin must be at
+or after that change.
+
+Two things about the current Python that the harness accounts for:
+
+- **Python's graph lives in the graph store only.** On Ladybug, Python keeps
+  node provenance in the graph and does not write the relational `nodes` /
+  `edges` rollback ledger, so those tables stay empty after cognify. Read
+  Python's nodes and edges with `helpers.python_graph(workspace)`, never with
+  `query_nodes` / `query_edges` on Python's SQLite. Rust's relational tables
+  are still read directly.
+- **Python's CHUNKS / SUMMARIES results are vector payloads** (`IndexSchema`
+  dumps whose content is `text`), not `search_result` wrappers.
 
 ## What this harness does and does not prove
 
@@ -63,7 +87,7 @@ passed, it means those five did.
 
 **The CLI/DB comparison is the strong kind.** `test_*_parity`, `test_cross_*`
 and `test_readd_*` shell out to both CLIs and compare SQLite state directly,
-with exact equality on content hashes, UUIDs and row counts — there is no
+with exact equality on content hashes, dataset UUIDs and row counts — there is no
 tolerance/ignore list anywhere in that path. (The HTTP lane that left compared
 JSON responses through an ignore set that stripped every `id` field; that
 weaker shape is gone from this repo along with it.)
@@ -74,6 +98,11 @@ weaker shape is gone from this repo along with it.)
   `owner_id`/`tenant_id` out of Python's SQLite and passes them to the Rust CLI,
   so UUID5 agreement proves the hash function agrees on identical inputs — not
   that both sides derive the same inputs.
+- **Data ids are random in both SDKs.** A new `data` row gets a `uuid4` and
+  dedup is a lookup by `(content_hash, dataset_id, owner_id, tenant_id)`
+  (Python `ingest_data.py:364-389`), so `data.id` is never compared across SDKs;
+  the tests compare content hashes, dataset membership and the uuid4 shape
+  instead (SDK-1039 D7).
 - **"Both absent" scores as agreement.** Tests that accept a missing result on
   both sides convert *neither side implements this* into a pass. Prefer
   `xfail(strict=True)` keyed to a tracked gap.

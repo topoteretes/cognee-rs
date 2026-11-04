@@ -1,7 +1,7 @@
 //! High-level API functions for Cognee-Rust.
 //!
 //! These are the top-level convenience functions that compose the lower-level
-//! pipeline primitives (add, cognify, search, delete, memify) into
+//! pipeline primitives (add, cognify, search, delete) into
 //! user-friendly operations matching the Python SDK.
 //!
 //! - [`forget`] -- Unified deletion API
@@ -16,8 +16,6 @@ pub mod datasets;
 pub mod error;
 pub mod forget;
 pub mod improve;
-pub mod notebooks;
-pub mod pipeline_runs;
 pub mod prune;
 pub mod recall;
 pub mod remember;
@@ -33,15 +31,16 @@ pub use improve::{
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_SESSION_IDS,
     REASON_OPT_IN_DISABLED, StageKind, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE, improve,
 };
-pub use pipeline_runs::{reset_dataset_pipeline_run_status, reset_pipeline_run_status};
 pub use prune::{PruneResult, PruneTarget, prune_data, prune_system, prune_system_with_storage};
 pub use recall::{
     RecallItem, RecallOptions, RecallResult, RecallScope, RecallSource, ScopeInput,
     normalize_scope, recall,
 };
 pub use remember::{
-    RememberItemInfo, RememberResult, RememberStatus, SessionAutoImprove,
-    launch_session_auto_improve, remember, remember_entry,
+    AutoImproveAdmission, AutoImproveContext, RememberItemInfo, RememberResult, RememberStatus,
+    SessionAutoImprove, SessionAutoImproveLaunch, auto_improve_skip_reason,
+    clear_auto_improve_admission, launch_session_auto_improve, register_auto_improve_admission,
+    remember, remember_entry,
 };
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

@@ -18,6 +18,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`remember` reports its automatic improve as Python does (SDK-1039).**
+  - `RememberResult::improve_result` (formerly `#[serde(skip)]`) is renamed
+    `improve` and serializes the `ImproveResult`; `improve_error`,
+    `after_run_error` and `improve_skipped` are new. Each is serialized only
+    when set. A failed improve (the error `improve()` returned, or its errored
+    stages, as Python's `_improve_error_text`) is reported on `improve_error`
+    and no longer on `error`. A session-mode improve runs detached, so `improve`
+    stays `None` there (`improve_launched`).
+  - **`selfImprovement` now defaults to `true` in every binding** (Python's
+    `self_improvement=True`); pass `false` to keep the old behaviour.
+  - New `register_auto_improve_admission` / `clear_auto_improve_admission`: a
+    host check that can decline the automatic improve with a reason, reported as
+    `RememberResult::improve_skipped` (Python's admission hook).
+    `launch_session_auto_improve` asks it too, so a host that launches a
+    session improve itself is gated the same way; it now returns a
+    `SessionAutoImproveLaunch` (`launched`, and the check's `skipped` reason)
+    instead of `bool`.
+  - The bindings' improve opts accept `datasetId` (a UUID string), as
+    Python's `improve(dataset=<UUID>)`: the improve targets that dataset,
+    possibly one shared with the caller, instead of looking `datasetName` up
+    among the caller's own datasets. A non-string or malformed id is an error.
+
 - **`cognee-search`: recall notes a graph that is not built instead of
   searching it.** As Python's recall does, a graph-only recall first reads
   `pipeline_runs` for the datasets the caller can read. When no graph was ever
@@ -105,10 +127,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Item | Before | After |
   |---|---|---|
   | `cognee-session` improve lock | `try_acquire_improve_lock(session_id) -> bool`, `release_improve_lock`, `ImproveLockGuard` (a concurrent improve of the session skipped) | `acquire_improve_lock_many(&keys) -> ImproveClaim` (waits; released on drop) and `improve_lock_keys(sessions, user)` (`session:{user}:{session}`) |
-  | `ImproveParams` | — | `+ dataset_locks`, `+ checkpoint_store` reads the stage watermarks (struct literals must set them) |
+  | `ImproveParams` | — | `+ dataset_locks` (struct literals must set it) |
   | `DatasetLocks` | per-host registries only | `DatasetLocks::global()`, the process-wide registry: the default of `AddPipeline::new` and `DeleteService::new` (was none), and of `improve` |
   | `cognee_cognify::tasks::cognify`, `memify` | took no dataset lock | hold the dataset in `DatasetLocks::global()` for the run (re-entrant for a caller holding it there), as Python's `dataset_lock` |
-  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`; the Initiated resets skip them) when a pipeline-run repo is wired |
+  | `DeleteService` | wrote no row for a data-item delete | records a `forget` `pipeline_runs` row on every dataset it touched (`FORGET_PIPELINE_NAME`, `CHANGE_RECORD_PIPELINE_NAMES`) when a pipeline-run repo is wired |
   | `improve()` | wrote no row of its own | records one `improve` row (`IMPROVE_WRITE_PIPELINE_NAME`) after its first stage that may have written to the graph |
 
   `global_context_index` is `already_completed` (`no_writes_since_last_improve`)
@@ -153,6 +175,370 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statistics are removed, as in
   Python: `record_override`, `override_counts_snapshot`,
   `clear_override_counts` and the `query_router_stats` module.
+
+- **`data_per_batch` and `EMBEDDING_ONNX_BATCH_SIZE` are removed; ONNX batches
+  by `embedding.batch_size` (SDK-1039).** `data_per_batch`
+  (`cognify.data_per_batch`, `COGNEE_DATA_PER_BATCH`,
+  `CognifyConfig::data_per_batch` / `with_data_per_batch`) was read by no stage;
+  Python's value is a per-call argument with no config or env name, so the key
+  only invited settings Rust ignored. `embedding.onnx.batch_size`
+  (`EMBEDDING_ONNX_BATCH_SIZE`) is gone: Python's fastembed engine is built
+  with the single `EMBEDDING_BATCH_SIZE`, and the Rust ONNX engine now does the
+  same (inference batch = `embedding.batch_size`), and also honours
+  `embedding.max_concurrent_data_points` for its in-flight batches. Setting a
+  removed key is now an unknown-key error / ignored env var. This also removes
+  a direct environment read from `cognee-embedding`.
+
+- **The pipeline-cache gate, the reset API and the `AlreadyRunning` gate are
+  gone; runs are serialized by a per-dataset lock and a killed run is recovered
+  at startup (SDK-1039, Python `dc0b4ad6a`).** Python removed
+  `use_pipeline_cache`, `reset_pipeline_run_status` and
+  `reset_dataset_pipeline_run_status` with no shim and relies on its
+  per-dataset lock, its per-item incremental skip and
+  `modules/cognify/recovery.py`. Rust now does the same:
+  - Removed: `CognifyConfig::use_pipeline_cache` / `with_pipeline_cache`;
+    `cognee::api::{reset_pipeline_run_status, reset_dataset_pipeline_run_status}`
+    and their wrappers in the Python, TypeScript (`users.resetPipelineRunStatus`,
+    `users.resetDatasetPipelineRunStatus`), Java and C bindings
+    (`cg_sdk_reset_*`); `run_info_for_initiated`; the `qualification` module
+    (`Qualification`, `check_pipeline_run_qualification`);
+    `CognifyError::PipelineAlreadyRunning`; the exclusive-run claim
+    (`PipelineRunRepository::{try_claim_pipeline_run, release_pipeline_run_claim,
+    get_pipeline_run_claim, try_release_pipeline_run_claim,
+    release_all_pipeline_run_claims}`, `PipelineRunClaim`, `CLAIM_STALE_AFTER`
+    and the `pipeline_run_claims` table, dropped by a new migration);
+    `PipelineRunRepository::reset_orphans` and
+    `DefaultPipelineRunRegistry::new_with_orphan_reset`; the
+    `cognee-cli pipeline-unblock` command; and the **`single_process` setting**
+    (`COGNEE_SINGLE_PROCESS`, `Settings::single_process`,
+    `ConfigManager::{set,clear}_single_process`, `cognee_database::*single_process*`),
+    whose only job was to gate the unscoped startup sweep that the ownership
+    markers below replace.
+  - **A failed terminal `COMPLETED` write fails the run (Python `run_tasks.py`,
+    where `log_pipeline_run_complete` sits inside the `try`).**
+    `PipelineWatcher::on_pipeline_run_completed` now returns
+    `Result<(), WatcherError>`; on `Err`, `execute` reports the new
+    `ExecutionError::RunRecordFailed`, writes the `ERRORED` row and the caller
+    rolls the run back like any failed one. The run stays `STARTED` (marker kept
+    for startup recovery) only if the `ERRORED` write fails too. Custom
+    watchers return `Ok(())`.
+  - A second `cognify` of a dataset **waits** on the dataset's lock
+    (`cognee_core::DatasetLocks::global()`, shared with `add` and `delete`)
+    instead of failing with `PipelineAlreadyRunning`. Re-cognifying a complete
+    dataset still skips every item, and now writes its own `STARTED` /
+    `COMPLETED` pair, as Python's run does.
+  - A `cognify` or `add` run writes `{"recovery_lock": "<token>"}` in its `STARTED` row and holds an
+    OS file lock on `<system_root>/pipeline_run_locks/<token>/owner.lock`
+    (`cognee_core::RunOwnership`; `Pipeline::recovery_lock`,
+    `PipelineRunInfo::recovery_lock`, `CognifyConfig::run_ownership_dir`,
+    `run_info_for_started(Option<Uuid>)`, `AddPipeline::with_run_ownership_dir`,
+    `Settings::run_ownership_dir`). `cognee_delete::recover_stale_pipeline_runs`
+    (replacing `sweep_orphaned_run_artifacts`) rolls back and closes an
+    abandoned run with `{"error": "AbandonedPipelineRunError: …"}`, only when it
+    can claim the marker, so it is safe with any number of processes; it is
+    keyed by the run, so a run abandoned before a newer run completed on the
+    dataset is still closed, and a run whose dataset is gone is left alone, as
+    in Python. Its age floor is the new key
+    `cognify.stale_run_recovery_min_age_seconds`
+    (`COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, default `3600`, as in Python).
+    The bindings run it once per database per process, at the first operation.
+    `PipelineRunRepository::list_orphan_runs` became `list_unterminated_runs`.
+  - `DATASET_PROCESSING_INITIATED` rows written by older versions are still read
+    (Python keeps the enum value too) and gate nothing.
+  - Closed-side callers (HTTP server) must call `recover_stale_pipeline_runs`,
+    drop `new_with_orphan_reset` and `COGNEE_SINGLE_PROCESS`, and pass
+    `DatasetLocks::global()` to their `add` / `delete` wiring.
+
+- **Improve stage stamps live in the operation row's `run_info`, and
+  `graph_sync_checkpoints` is gone (SDK-1039).** Python keeps a stage's
+  watermark on the `improve` operation's `pipeline_runs` row, as
+  `run_info[<stage>] = {"status", "started_at"}`
+  (`cognee/modules/improve/graph_changes.py:46-48`, read by
+  `last_improve_watermark`, `:66-97`), and has no checkpoint table. Rust now
+  does the same.
+
+  | Item | Before | After |
+  |---|---|---|
+  | Stage stamp storage | `graph_sync_checkpoints` row `improve_stage:{stage}:{dataset_id}` | the run's `improve` `pipeline_runs` operation row (`user_id` the owner) whose `run_info` holds `{stage: {status, started_at}}`; only a `Completed` row is read as a watermark |
+| `improve()` change record | one `improve` row after the first stage that may have written to the graph | one `improve` operation row per run, written when it ends (`record_improve_operation`): `Completed` (Python `succeeded`), `Errored` (Python `failed`, keeps its stamps, never a watermark), none when every stage skipped (Python `noop`). As in Python every improve row but the stamped one counts as a change (`graph_changes.py:128-143`) |
+  | `ImproveParams`, `cognee::api::remember`, `RememberRequest`, `CogneeServices` | `checkpoint_store` | **removed** |
+  | `cognee_database` | `CheckpointStore`, `SeaOrmCheckpointStore`, `RelationalDb::checkpoints()`, `ops::checkpoint`, the `graph_sync_checkpoint` entity | **removed** |
+  | `PipelineRunRepository` | `count_runs_created_after(since, dataset, exclude_names)` | `+ exclude_run_ids` (the stamped row itself is not a change); `+ latest_stamped_run(dataset, name, key)` |
+  | `stage_watermark_key(stage, dataset_id)` | `improve_stage:{stage}:{dataset_id}` | `stage_watermark_key(stage)` is the stage name (the `run_info` key) |
+  | Migration | | `m20261031_000001_improve_stamps_to_run_info` moves each existing `improve_stage:*` row into an `improve` row and drops the table, so a stage is not rerun because of the upgrade |
+
+- **`update()` keeps the data id, and legacy data ids resolve (SDK-1039).**
+  As in Python (`update.py`, `resolve_data_id`): the id passed to `update()` is
+  resolved in the dataset (the exact id, else the `legacy_id` a row got when
+  the dataset-scoping migration forked it from a row shared by several
+  datasets; an id that resolves to nothing is `ApiError::UpdateTargetNotFound`,
+  HTTP 404, and never creates a document). The row is then **refreshed in
+  place** instead of replaced: the document's graph and vector memory is
+  dropped (memory-only forget), the replacement is added pinned to the same id
+  (`AddParams::pinned_id`: no content-hash lookup, the row's name, locations,
+  extensions, MIME types, loader, hashes, size and metadata are rewritten,
+  metadata and node set as a PATCH, the cognify marker cleared when the content
+  changed; a row of another dataset is refused), and the document is cognified.
+  `update()` takes exactly one replacement item, and the bindings'
+  `incrementalLoading` option of `update` now defaults to `true`, as Python's
+  (the re-cognify covers the whole dataset, as `cognify(datasets=[dataset_id])`
+  does in Python, and skips the other items already cognified). The
+  metadata PATCH follows Python's `merge_existing_row_metadata`: an item with
+  no metadata (a plain text, file or URL) keeps the stored keys and only
+  refreshes `_cognee.source_uri`, an explicit `{}` clears them, an object
+  replaces them. `UpdateResult` is now
+  `{ data_id, delete_result, cognify_result }`: `deleted_data_id` and
+  `new_data` are gone (the bindings' `deletedDataId` / `newData` become
+  `dataId`). Replacement content equal to another row's leaves two rows, as in
+  Python. Delete by a legacy id (`DataInDataset`, and `Data` with a dataset
+  name) resolves it the same way, and `DeleteResult::data_id` reports the
+  resolved id. The `IngestDb` / `DeleteDb` traits gain `resolve_data_id`
+  (`IngestDb` also `update_data`), and `ProcessedInput` gains `pinned_id`.
+  New `cognee-cli update <data> --data-id <UUID> -d <dataset>` drives it
+  (Python has no CLI verb for it; `--ontology-file` as in `cognify`).
+  The dataset-scoping migration now clears the cognify marker of the rows it
+  forks, so the next cognify rebuilds them under their new ids (it cannot
+  reach the graph and vector stores: the old memory is dropped by deleting or
+  updating the item, which the repointed ledger finds under the new id).
+- **`add` routes loaders by the file's content, as Python does (SDK-1039).**
+  The bytes are sniffed (new `infer` dependency, the counterpart of Python's
+  `filetype`; `.txt`, `.csv`, `.md`, `.json`, `.xml` and `.yaml` are not
+  sniffed, and unrecognised bytes are plain text; only the first 8192 bytes are
+  read, and a type is named as `filetype` 1.2.0 names it, so an `.m4a` is
+  `audio/mp4` and an `.ico` is `image/x-icon`, which no loader claims, as in
+  Python), and the loader is the first,
+  in Python's priority order, that accepts the name's extension or the sniffed
+  extension together with the sniffed MIME type. The `data` row stores the
+  **sniffed** `original_extension` / `original_mime_type`. So a PNG named
+  `.jpg` goes to `image_loader` and is recorded as `png` / `image/png`, and UTF-8 text named `notes.conf` is `text_loader`,
+  `txt` / `text/plain`. An image routed to `image_loader` whose NAME has no
+  image extension (for example a PNG with no extension) fails with
+  `IngestionError::ImageMimeTypeUndetermined`, because Python's vision call
+  takes the MIME type from the name (`native_adapter.py:633-638`). **Breaking:** non-UTF-8 bytes routed to the text loader
+  (for example a PNG named `.txt`) now fail the add, as Python's
+  `UnreadableFileContentError` does, instead of being stored as a
+  `text_<hash>.bin` blob, and a file no loader claims (for example a `.zip`)
+  fails with `IngestionError::NoLoaderForFile` (Python: "No loader found")
+  instead of falling back to the text loader. **Differences kept:** a local
+  `.html` file still goes to the HTML text extractor and keeps its `html` /
+  `text/html` metadata (D14), and Rust has no `code_loader`, so source files
+  are read by the text loader.
+
+- **URL add stores the raw page and `external_metadata` is Python's (SDK-1039).**
+  `add` of an `http(s)` URL that returns HTML now stores the page as Python's
+  `text_loader` does: the fetched HTML is kept whole (`original_data_location`
+  `text_<md5(html)>.html`), `raw_data_location` is `text_<md5(html)>.txt` with
+  the same HTML, `content_hash` is the MD5 of the page, `loader_engine` is
+  `text_loader`, and `extension` / `original_extension` are `txt`
+  (`text/plain`). The text is no longer extracted at add time, and the
+  `source` / `url` / `final_url` / `content_type` / `title` metadata keys are
+  gone: every file or URL add writes `external_metadata`
+  `{"_cognee": {"source_uri": <url or absolute file:// URI>}}` merged over the
+  item's own metadata (an explicit `source_uri` in the item wins), and a text
+  add writes `{}` instead of NULL. `Document.external_metadata` is formatted
+  like Python's `json.dumps(..., indent=4)` (four spaces, non-ASCII escaped)
+  and is `{}` for a row without metadata. `UrlMetadata` loses `title` and
+  `raw_bytes`. WebPage/WebSite provenance nodes are now derived from an
+  `http(s)` `_cognee.source_uri` and no longer carry a `title`. **Documented
+  difference:** a local `.html` file keeps Rust's text extraction
+  (`beautiful_soup_loader`); Python chunks the raw HTML for it. A fetched
+  page is decoded like httpx's `Response.text`: with the Content-Type
+  `charset` (UTF-8 otherwise), undecodable bytes replaced instead of failing
+  the add.
+
+- **The notebooks feature is removed (SDK-1039).** Python removed
+  `cognee/modules/notebooks` and both bundled tutorials in `52bcc7494`. Rust
+  follows: gone are the `cognee::api::notebooks` module and its
+  `list_notebooks` / `create_notebook` / `update_notebook` / `delete_notebook`
+  / `NotebookError` re-exports; `cognee_database`'s `NotebookDb`, `Notebook`,
+  `NotebookUpdatePatch`, the `notebook` entity, `ops::notebooks` and the
+  tutorial seeder (`seed_tutorials_if_first_call`, `TUTORIAL_BASICS_ID`,
+  `TUTORIAL_PYTHON_DEV_ID`) with its bundled `assets/notebooks/tutorials`;
+  `NotebookDb` as a `RelationalDb` supertrait; and the binding surfaces —
+  Python `cognee.notebooks` / `CogneeNotebooks`, TS `c.notebooks` /
+  `CogneeNotebook` / `CogneeNotebookObject` and the `cognee*Notebook(s)`
+  natives, Java `notebooks()` / `CogneeNotebooks` / `CogneeNotebook`, and the
+  C API's `cg_sdk_{list,create,update,delete}_notebook(s)`. The `notebooks`
+  table stays: like Python, whose migration chain creates it and never drops
+  it, the baseline migration keeps creating it and nothing reads it.
+- **Delete counts a legacy `Triplet_text` point only when it exists
+  (SDK-1039).** The delete preview and the delete run both counted one
+  `Triplet_text` point per deleted edge, whether or not the point existed;
+  cognify no longer writes them (SDK-1115), so both overcounted. Both now look
+  the points up (`VectorDB::retrieve`) and count, and delete, only those found.
+  With per-dataset storage the dataset's own store is dropped whole and cannot
+  be probed, so no `Triplet_text` point is counted there, previewed or run.
+  The legacy cleanup is best-effort, as Python's is: a failed `Triplet_text`
+  lookup or delete is a warning on the result and counts no point, instead
+  of failing the delete.
+- **The event-graph `temporal_cognify` pipeline is removed (SDK-1039).**
+  Python deprecated `temporal_cognify` and ignores it (cognee 1.6.2 was the
+  last release in which it built the event graph); by the SDK-1115 rule Rust
+  goes straight to the post-removal state, with no shim. Default cognify
+  already writes dates as `Timestamp` nodes, and TEMPORAL search reranks by
+  them, so TEMPORAL needs no special cognify. Removed:
+  `CognifyConfig::temporal_cognify` / `with_temporal_cognify`, the CLI's
+  `--temporal-cognify` flag (now an unknown argument), the bindings'
+  `temporalCognify` option (now an unknown key, warned about and ignored, as
+  Python warns and ignores it; also gone from the Python `CognifyOpts`, TS
+  `CogneeCognifyOptions`, Java `CognifyOptions` and C header docs),
+  `build_temporal_cognify_pipeline`, `extract_temporal_events`,
+  `add_temporal_data_points`, their `make_*_task` factories,
+  `ExtractedTemporalEvents`, `AttributedEvent`, the
+  `cognee_cognify::temporal_extraction` module (`TemporalEventExtractor`,
+  `TemporalEntityEnricher`), `FailureStage::{TemporalExtraction,
+  TemporalEnrichment}`, and `cognee_models::{TemporalEvent, EventAttribute,
+  CognifyTimestamp, CognifyInterval, to_cognify_timestamp}` with the public
+  `cognee_models::temporal_event` module (`RawExtractedTimestamp`, which
+  TEMPORAL search uses for the question's window, stays at the crate root).
+  `graph_schema` together with the flag is no longer a validation error.
+  `cognee-cli pipeline-unblock --pipeline` knows only `cognify_pipeline`.
+  `data_per_batch` was kept at that point and has since been removed. A dataset an older build cognified with the flag keeps `Event` nodes
+  that nothing reads (TEMPORAL answers on it with plain hybrid results);
+  rebuild it with a memory-only forget and a fresh cognify, as Python advises.
+  The store-wide wipe still lists the legacy `Event_name` collection.
+
+- **`TextSummary.source_task` is `extract_graph_and_summarize` (SDK-1039).**
+  Summaries were stamped `summarize_text`; Python stamps them with the merged
+  task's name (`run_tasks_base._stamp_provenance`, `cognify.py:643-653`).
+  Entity and EntityType keep `extract_graph_from_data`. The
+  `SUMMARIZE_TEXT_TASK_NAME` constant is removed; use
+  `EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME`. Already-stored nodes keep their old
+  stamp.
+- **Pipeline runs write Python's lifecycle and `run_info` (SDK-1039).** A run
+  writes `DATASET_PROCESSING_STARTED`, then `…_COMPLETED` or `…_ERRORED`; the
+  `DATASET_PROCESSING_INITIATED` row is gone, as in Python `dc0b4ad6a`. `run_info`
+  no longer carries the run's data items (Python `a88402500`, COG-6089):
+  STARTED and COMPLETED are `{}`, ERRORED is `{"error": …}` (a tolerantly completed cognify run no longer adds a
+  Rust-only `cognify_failures` key; its failures are in the returned report). The
+  orphan sweep's ERRORED row is `{"error": <reason>}` instead of
+  `{"reason": …}`. Migration `m20261029_000001_drop_run_info_data` strips the
+  `data` key from stored rows, as Python's alembic `b7e4c2a9d6f1` does. Deleting
+  a dataset or forgetting its memory no longer appends `INITIATED` reset rows.
+  API: `cognee_core::PipelineRunStatus::Initiated`,
+  `PipelineWatcher::on_pipeline_run_initiated`, `PipelineRunInfo::data_ids`,
+  `RunSpec::data_ids` and `pipeline_run_registry::{data_info, run_info_for_running}`
+  are removed (`DeleteService::with_pipeline_run_repo` stays: it now wires only
+  the delete's `forget` change row);
+  `run_info_for_errored` takes only the error, and `run_info_for_started` /
+  `run_info_for_completed` are new. The stored-row enum keeps `Initiated` to
+  read old rows, and the explicit `reset_pipeline_run_status` re-arm API (for
+  the opt-in pipeline cache) still writes it. A caller that sets
+  `CognifyConfig::use_pipeline_cache` must now call
+  `reset_dataset_pipeline_run_status` itself after a dataset delete or a
+  memory-only forget, or the next cognify of that dataset is a cache hit.
+
+- **`data` rows are dataset-scoped, with `uuid4` ids, as in Python (SDK-1039).**
+  A new `data` row gets a random `uuid4` id (it was
+  `uuid5(content_hash, owner, tenant)`), and its dataset is the new
+  `data.dataset_id` column. Re-adding content reuses the row that holds the same
+  `content_hash` in the same dataset for the same owner and tenant (Python's
+  `identify_many`); the same content in another dataset is another row, and a
+  re-add after delete gets a new id. The `dataset_data` membership table is
+  retired: migration `m20261028_000001_dataset_scoped_data` adds
+  `data.dataset_id` and `data.legacy_id`, stamps every row from its memberships
+  and drops the table, as Python's alembic `d6e8f0a2b4c6` does. A row shared by
+  several datasets is split: the oldest membership keeps the id; every other
+  dataset gets a uuid4 copy with `legacy_id` = the original id, and its `nodes`
+  and `edges` ledger rows are repointed to the copy. Stop every writer before
+  upgrading (not an online migration). Rust now reads a Python-written database's
+  membership. `cognee_ingestion::generate_data_id` is removed; `Data` gains
+  `dataset_id` and `legacy_id`; `IngestDb` gains `find_data_in_dataset` and
+  `DeleteDb` gains `count_data_location_references` (a stored file shared by
+  several rows is deleted with its last row); `attach_data_to_dataset` now
+  stamps `data.dataset_id` and refuses a row of another dataset.
+
+- **Embedding batch size defaults to 32 and drives batching (SDK-1039).**
+  `embedding.batch_size` (`EMBEDDING_BATCH_SIZE`) drops from 36 to 32, Python's
+  `embedding_batch_size`, because Text Embeddings Inference rejects more than 32
+  inputs per request. Cognify now cuts every embedding call into batches of the
+  engine's batch size (`cognee_embedding::embed_in_batches`). New key
+  `embedding.max_concurrent_data_points` (`EMBEDDING_MAX_CONCURRENT_DATA_POINTS`,
+  default 150) bounds the batches in flight at
+  `max(1, max_concurrent_data_points / batch_size)`, replacing the fixed 8 of the
+  OpenAI-compatible and Bedrock engines; Ollama stays sequential. The dead
+  `CognifyConfig.embedding_batch_size` field and `with_embedding_batch_size`
+  builder are removed (they were never read; set `embedding.batch_size`).
+  `EmbeddingConfig` and `EmbeddingInputs` gain `max_concurrent_data_points`.
+
+- **Vector payloads have Python's `IndexSchema` shape (SDK-1039).** Every row
+  cognify and `edge-reindex` write is built by the new
+  `cognee_models::index_schema_payload`: `id`, `text` (the indexed value; EdgeType
+  and Document rows now carry it too), `document_id`, `document_name`,
+  `chunk_index`, `source_chunk_id`, `importance_weight` (copied from the source
+  point), `external_metadata`, `belongs_to_set` (node-set names), the base fields
+  at their IndexSchema defaults (`type = "IndexSchema"`, `version = 1`,
+  `topological_rank = 0`, `source_* = null`, …) and `metadata`, plus one
+  Rust-only key, `dataset_id`. Absent values are `null`, not omitted. The LanceDB
+  adapter no longer stores the `metadata` key, as Python's LanceDB adapter does;
+  pgvector keeps it. Dropped keys: `field`, `user_id`, `tenant_id`, Entity
+  `entity_type` and `description`, TextSummary `chunk_id`, EdgeType
+  `relationship_name` and `number_of_edges`, Document `name`, and a custom
+  model's own properties. `DataPoint::vector_metadata()` and
+  `EdgeReindexOptions::{user_id, tenant_id}` are removed. Hybrid search no longer
+  shows an entity description line, as Python does for every entity whose facts
+  were not reviewed. Rows written by earlier versions stay readable (no
+  migration): facts fall back to `relationship_name`, and an old `description`
+  key is ignored.
+
+- **Cognify no longer embeds triplets (SDK-1039).** Python stopped writing the
+  `Triplet_text` collection in SDK-1115, so `CognifyConfig::embed_triplets`,
+  `CognifyConfig::with_triplet_embeddings`, `IndexedFieldsStats::triplet_count`,
+  the `triplet` cognify option of every binding (Python, TS, Java, C; an unknown
+  option is only warned about, so existing callers keep running) and the
+  `cognee_cognify::triplet_creation` module (`create_triplets_from_graph`,
+  `create_triplets_from_graph_with_timestamps`) are removed. `cognee_models::Triplet`
+  stays, and so does the delete-side cleanup: deleting data still removes the
+  legacy `Triplet_text` rows an earlier version wrote, and search on a database
+  that holds one keeps working.
+
+- **`remember(self_improvement=true)` runs `improve()`, not memify (SDK-1039).**
+  In permanent mode the self-improvement step now calls `improve()` on the
+  dataset, as Python's `remember` does; session mode already did.
+  `RememberResult::memify_result` is replaced by `RememberResult::improve_result`
+  (`Option<ImproveResult>`, not serialised), and an `improve()` failure is
+  reported in `RememberResult::error` instead of being logged and dropped.
+
+- **Public memify and improve stage 3 are removed (SDK-1039).** Python deprecated
+  `cognee.memify`, `POST /api/v1/memify` and the memify CLI in SDK-1115 and
+  removes them in the next release; Rust goes straight to the removed state,
+  with no shim. Gone: the `cognee-cli memify` command, `cognee::run_memify`,
+  `MemifyConfig`, `MemifyTask`, `MemifyResult`, `MemifyError`,
+  `build_memify_index_only_pipeline` and the triplet extract/index tasks, the
+  memify binding ops (`memify` in Python, TS, Java, `cg_sdk_memify` in C and
+  their option/result types), `ApiError::Memify`, the improve "memify" stage
+  (stage 3; the global-context-index stage is now stage 3 and sync stays stage
+  4), `ImproveResult::memify_result` (and `memifyResult` on the binding wire
+  shape), the `memify` entry of the schema view's operation catalog, and the
+  `memify_pipeline` name from `cognee-cli pipeline-unblock` (it now knows
+  `cognify_pipeline` and `temporal-cognify`).
+
+  `improve()` also drops the options that only scoped or fed memify:
+  `ImproveParams::{node_name, extraction_tasks, enrichment_tasks, data}`, the CLI
+  `improve --node-name` flag, and the `nodeName` option of every binding. Over
+  REST, a client that still sends them is ignored, as in Python (pydantic
+  `extra="ignore"`). The `cognee_cognify::memify` module keeps its name but only
+  holds the improve stages (feedback weights, session persist, distill,
+  truth subspace, session sync). `cognee_models::Triplet` and the delete-side
+  cleanup of legacy `Triplet_text` rows stay.
+
+  **Migration.** Remove `memify` calls; cognify and `improve()` cover what they
+  did for search (triplet search itself was removed with `TRIPLET_COMPLETION`).
+
+- **`TRIPLET_COMPLETION` and `TripletRetriever` are removed (SDK-1039).**
+  Python deprecated triplet search in SDK-1115 and removes it in the next
+  release; Rust goes straight to the removed state, with no
+  `TRIPLET_COMPLETION → GRAPH_COMPLETION` alias. `SearchType::TripletCompletion`,
+  `cognee_search::TripletRetriever` and its `SearchBuilder` registration are
+  gone, and the Python, TS, Java and C `SearchType` lists drop the value
+  (17 search types remain). `"TRIPLET_COMPLETION"` is now an unknown search
+  type everywhere: serde/`SearchRequest` deserialization, the binding
+  `parse_search_type` (validation error) and the CLI `--query-type` (invalid
+  value). A database that still holds a `Triplet_text` vector collection keeps
+  serving every other search type.
+
+  **Migration.** Use `GRAPH_COMPLETION` (what Python's deprecation shim answers
+  with) or `HYBRID_COMPLETION`.
 
 - **Delete lock hook, search scoping accessor, pipeline-runs listing +
   `pipeline_runs.user_id`.** Python serializes deletes against pipeline runs
@@ -326,10 +712,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outright, as in Python: graphs built only by temporal cognify now get plain
   hybrid answers. The window prompt is Python's `QUERY_INTERVAL_PROMPT`, which
   reads no clock. An LLM or transport failure during window extraction now
-  fails the search, as in Python, instead of silently falling back; a window
-  with out-of-range calendar fields (month 13, year 0) still falls back to plain
-  hybrid with reason `invalid_interval`, where Python's `QueryInterval`
-  validation raises and fails the search. Other behaviour that follows
+  fails the search, as in Python, instead of silently falling back; so does a
+  window with out-of-range calendar fields (month 13, year 0), which Python's
+  `QueryTime` validation rejects. A date that does not exist (`2021-02-29`)
+  falls back with reason `invalid_interval`, as in Python. Other behaviour that follows
   Python: an empty graph returns an empty context (not `NotFound`), batches are
   rejected, and `search.triplet_neighbor_cap` no longer applies to TEMPORAL
   (`search.hybrid` does).
@@ -377,8 +763,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   halves remain separately available for a caller who wants to fuse one of them
   against a different sibling, via the new `TypedTask::try_parallel` in
   `cognee-core`. Provenance is unaffected: entities still stamp
-  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"`,
-  both at `topological_rank` 3.
+  `source_task = "extract_graph_from_data"` and summaries `"summarize_text"`
+  (changed to `"extract_graph_and_summarize"` in SDK-1039), both at
+  `topological_rank` 3.
 
   Three behavioural consequences, all three shared with Python: the stage's
   peak in-flight LLM calls is now the sum of the two `max_parallel_extractions`
@@ -676,6 +1063,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now round-trip Python's `used_session_context_ids`, including a relational
   schema migration, so only guidance proven to have been served can be rated.
 
+- **`add` takes images and audio, as Python does (SDK-1039).** The CLI, the
+  bindings and `ComponentManager::add_loader_registry()` give the add pipeline
+  the image loader (vision LLM) and the audio loader (Whisper, when the LLM
+  provider has a transcriber), so `add photo.png` / `add speech.wav` no longer
+  fail with "Unsupported document type at ingest". As in Python 1d3ed15, the
+  stored file is the description or transcript `text_<md5(raw)>.txt`
+  (`extension` `txt`, `mime_type` `text/plain`, `raw_content_hash` its MD5,
+  `loader_engine` `image_loader` / `audio_loader`) and `original_data_location`
+  keeps the raw file. New API: `AddPipeline::with_loader_registry`,
+  `LoaderRegistry::register_image_loader` / `register_audio_loader`,
+  `process_input_with_loaders`, `make_process_input_task_with_loaders`. An
+  `AddPipeline` built without a registry keeps the default loaders and still
+  rejects images and audio. As Python's image loader does, `add` also sends
+  `.jpeg`, `.jpe` and `.tiff` files to the image loader. Before this change
+  they were stored as raw blobs.
+
 - **`LLM_STRUCTURED_OUTPUT_MODE=json_schema` — constrained decoding on
   OpenAI-compatible endpoints, with a demotion ladder.** The adapter can now send
   `response_format: {"type": "json_schema", "json_schema": {"strict": true,
@@ -817,6 +1220,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Delete counts an `EdgeType` point only when it exists, once (SDK-1039).**
+  The delete preview counted one `EdgeType_relationship_name` point per
+  text-bearing edge and the dataset run counted the requested ids, so both
+  overcounted (edges sharing a retrieval text are one point; the point may be
+  absent) and disagreed when the collection was missing (preview N, run 0).
+  Both now look the distinct point ids up (`VectorDB::retrieve`) and count, and
+  delete, only those found. A point several deleted datasets share (a `User`
+  or `All` delete) counts once in the preview, as the run deletes it once. A
+  failed probe fails the run and counts 0 in the preview. With per-dataset
+  storage each dataset's store is dropped whole and cannot be probed, so both
+  count each dataset's distinct ids.
+
+- **`cognee-cognify`: the graph-extraction request is Python's (SDK-1039).**
+  Default cognify sent a different request from Python's, and Rust wrote
+  Timestamp nodes irregularly (0 in four of five captured runs, where the
+  model's own answer held none). The system prompt is now Python's
+  `generate_graph_prompt.txt` from `1d3ed15` byte for byte (it includes
+  `71d702212`, and the Rust-only "Node Descriptions" paragraph is gone), and the
+  model-facing `KnowledgeGraph` schema carries Python's text: the field
+  descriptions are removed, except `Edge.description`, and the struct
+  descriptions and titles are Python's. The structured-output replay cassettes
+  were re-recorded because their hash includes the prompt and the schema. The
+  prompt no longer reminds the model that `Node.description` is required (issue
+  #66); `Node.description` stays required in the schema, and a non-strict
+  provider that omits it goes through the adapter's corrective retry. Rust's default structured-output mode is still a forced tool
+  call; Python's `strict` `json_schema` request is the opt-in
+  `LLM_STRUCTURED_OUTPUT_MODE=json_schema`.
 - **`cognee-cognify`: temporal LLM failures are no longer silent.** Both temporal
   passes caught their own errors and returned `Ok`:
   `TemporalEventExtractor::extract_events` warned and returned an empty `Vec`,

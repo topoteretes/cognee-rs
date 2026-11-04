@@ -30,6 +30,7 @@ sha2.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 mime_guess.workspace = true
+infer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -43,6 +44,7 @@ toml = { workspace = true, optional = true }
 texting_robots = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
 pdfium-render = { workspace = true, optional = true }
 pdfium-auto = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
@@ -59,7 +61,7 @@ pdf-pdfium = ["dep:pdfium-render", "dep:pdfium-auto"]
 pdf-pure-rust = ["dep:pdf-extract"]
 csv-loader = ["dep:csv"]
 # HTML file loading + URL crawling/ingestion (shared scraper/toml machinery).
-html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util"]
+html-loader = ["dep:scraper", "dep:toml", "dep:texting_robots", "dep:reqwest", "dep:url", "dep:futures-util", "dep:encoding_rs"]
 unstructured-xlsx = ["dep:calamine"]
 unstructured-docx = ["dep:quick-xml", "dep:zip"]
 unstructured-pptx = ["dep:quick-xml", "dep:zip"]
@@ -79,6 +81,11 @@ audio-loader = ["dep:cognee-llm"]
 # then fails with the feature to pass rather than reporting a green zero.
 # Every other test target here is still auto-discovered; listing these does not
 # opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+[[test]]
+name = "image_audio_add_loaders"
+path = "tests/image_audio_add_loaders.rs"
+required-features = ["image-loader", "audio-loader"]
+
 [[test]]
 name = "html_extraction"
 path = "tests/html_extraction.rs"

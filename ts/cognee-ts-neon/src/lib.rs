@@ -70,10 +70,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeSearch", sdk_retrieval::cognee_search)?;
     cx.export_function("cogneeRecall", sdk_retrieval::cognee_recall)?;
 
-    // Memory ops (Phase 5): remember / remember_entry / memify / improve.
+    // Memory ops (Phase 5): remember / remember_entry / improve.
     cx.export_function("cogneeRemember", sdk_memory::cognee_remember)?;
     cx.export_function("cogneeRememberEntry", sdk_memory::cognee_remember_entry)?;
-    cx.export_function("cogneeMemify", sdk_memory::cognee_memify)?;
     cx.export_function("cogneeImprove", sdk_memory::cognee_improve)?;
 
     // Data ops (Phase 5): forget / update / prune.
@@ -94,23 +93,11 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
         sdk_datasets::cognee_delete_all_datasets,
     )?;
 
-    // Admin / session / pipeline-run / user / notebook ops (Phase 5).
-    cx.export_function(
-        "cogneeResetPipelineRunStatus",
-        sdk_admin::cognee_reset_pipeline_run_status,
-    )?;
-    cx.export_function(
-        "cogneeResetDatasetPipelineRunStatus",
-        sdk_admin::cognee_reset_dataset_pipeline_run_status,
-    )?;
+    // Admin / session / user ops (Phase 5).
     cx.export_function(
         "cogneeGetOrCreateDefaultUser",
         sdk_admin::cognee_get_or_create_default_user,
     )?;
-    cx.export_function("cogneeListNotebooks", sdk_admin::cognee_list_notebooks)?;
-    cx.export_function("cogneeCreateNotebook", sdk_admin::cognee_create_notebook)?;
-    cx.export_function("cogneeUpdateNotebook", sdk_admin::cognee_update_notebook)?;
-    cx.export_function("cogneeDeleteNotebook", sdk_admin::cognee_delete_notebook)?;
     cx.export_function("cogneeGetSession", sdk_admin::cognee_get_session)?;
     cx.export_function("cogneeAddFeedback", sdk_admin::cognee_add_feedback)?;
     cx.export_function("cogneeDeleteFeedback", sdk_admin::cognee_delete_feedback)?;

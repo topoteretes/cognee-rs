@@ -97,8 +97,8 @@ impl MockVectorDB {
     /// `(data_type, field_name)` collection, or `None` if the collection
     /// or point is unknown.
     ///
-    /// Used by provenance-payload regression tests (gap 05-10) to verify
-    /// the full DataPoint dump round-trips through `index_points`.
+    /// Used by payload-shape tests to read back exactly what an index site
+    /// wrote, with no adapter write rules in between.
     pub fn get_payload(
         &self,
         data_type: &str,

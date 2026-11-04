@@ -18,7 +18,7 @@ the public docs — single source of truth:
 
 - **[docs/architecture.md](../docs/architecture.md)** — workspace tree, crate
   breakdown, architecture patterns, key dependencies, `cargo doc` guide.
-- **[docs/operations.md](../docs/operations.md)** — what `add`/`cognify`/`memify`/`search` and the lifecycle ops do.
+- **[docs/operations.md](../docs/operations.md)** — what `add`/`cognify`/`search` and the lifecycle ops do.
 - **[docs/configuration.md](../docs/configuration.md)** — full env-var / `Settings` / `ConfigManager` reference.
 - **[docs/tools/](../docs/tools/README.md)** — CLI, bindings, pluggable backends (the HTTP server and its docs are not part of this repository).
 - **[docs/README.md](../docs/README.md)** — documentation hub / index.

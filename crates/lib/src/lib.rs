@@ -35,10 +35,11 @@ pub mod core {
 /// Data ingestion (add) pipeline.
 pub mod add {
     pub use cognee_ingestion::{
-        AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, ProcessedInput,
-        build_add_pipeline, build_add_pipeline_with_acl, generate_data_id, generate_dataset_id,
+        AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, LoaderRegistry,
+        ProcessedInput, build_add_pipeline, build_add_pipeline_with_acl, generate_dataset_id,
         make_persist_data_task, make_persist_data_task_with_acl, make_process_input_task,
-        persist_data, persist_data_with_acl, persist_data_with_acl_and_locks, process_input,
+        make_process_input_task_with_loaders, persist_data, persist_data_with_acl,
+        persist_data_with_acl_and_locks, process_input, process_input_with_loaders,
     };
 }
 
@@ -165,9 +166,6 @@ pub mod error;
 /// Product-analytics telemetry.
 pub mod telemetry;
 
-pub use api::notebooks::{
-    NotebookError, create_notebook, delete_notebook, list_notebooks, update_notebook,
-};
 pub use api::{DatasetDb, DatasetError, DatasetManager};
 pub use background_tasks::{
     BackgroundTasks, pending_background_tasks, spawn_background_task, wait_for_background_tasks,
@@ -197,7 +195,6 @@ pub mod prelude {
         recall, remember, update,
     };
     pub use crate::cognify::{CognifyConfig, cognify};
-    pub use crate::cognify::{MemifyConfig, MemifyResult, run_memify};
     pub use crate::core::{
         AsyncRuntime, CancellationHandle, CancellationToken, CpuPool, CpuPoolExt, ExecutionError,
         NoopWatcher, Pipeline, PipelineWatcher, ProgressToken, RayonThreadPool, RetryDelay,

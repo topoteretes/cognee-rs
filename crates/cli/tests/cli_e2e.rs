@@ -73,7 +73,7 @@ fn config_value(config_home: &TempDir, key: &str) -> serde_json::Value {
 ///
 /// Only `api_key`, `api_url` and `llm_model` are required; the two embedding
 /// paths are optional. A named struct rather than a tuple both for
-/// `clippy::type_complexity` and to match `LlmEnv` in `cli_memify.rs`.
+/// `clippy::type_complexity`.
 struct LiveCliEnv {
     api_key: String,
     api_url: String,
@@ -833,6 +833,59 @@ fn delete_all_preview_and_force_execution() {
         .success();
 }
 
+/// A CLI dataset delete records its `forget` change row in `pipeline_runs`
+/// (Python's forget operation row), which improve's stage watermarks count as
+/// a change; no `INITIATED` reset row is written.
+#[test]
+fn delete_records_a_forget_row() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+
+    config_set(
+        &config_home,
+        workdir.path(),
+        "default_user_id",
+        "\"00000000-0000-0000-0000-000000000000\"",
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .args(["add", "forget me", "--dataset-name", "forget_ds"])
+        .assert()
+        .success();
+    make_cmd_in(&config_home, workdir.path())
+        .args(["delete", "--dataset-name", "forget_ds", "--force"])
+        .assert()
+        .success();
+
+    let conn = Connection::open(&db_file_path).expect("open sqlite database");
+    let count = |sql: &str| -> i64 {
+        conn.query_row(sql, [], |row| row.get(0))
+            .expect("count pipeline_runs rows")
+    };
+    assert_eq!(
+        count("SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_name = 'forget'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM pipeline_runs WHERE status = 'DATASET_PROCESSING_INITIATED'"),
+        0
+    );
+}
+
 #[test]
 fn cognify_without_datasets_fails_with_explicit_message() {
     let config_home = TempDir::new().expect("temp dir should be created");
@@ -1345,8 +1398,7 @@ fn edge_reindex_rejects_a_zero_limit() {
         .stderr(predicate::str::contains("0").and(predicate::str::contains("not in")));
 }
 
-/// `run-sequence` refuses `vector-reindex`, the same way it refuses
-/// `pipeline-unblock`: an HNSW build over an existing collection runs for an
+/// `run-sequence` refuses `vector-reindex`: an HNSW build over an existing collection runs for an
 /// unbounded time and that time lands on the following step's measurement,
 /// which is the one thing a sequence file exists to produce.
 ///
@@ -1663,10 +1715,9 @@ fn edge_reindex_rejects_a_cursor_that_skips_everything() {
 // ---------------------------------------------------------------------------
 // SDK-501 follow-on — the cognify failure summary an operator can act on
 //
-// `cognify()` already records, durably, exactly which documents failed: the
-// `FailureReport` on the `Ok` result, and the same numbers persisted under
-// `pipeline_runs.run_info.cognify_failures`. Until this summary existed the CLI
-// read neither, so a tolerantly-completed run over a large corpus reported only
+// `cognify()` already records exactly which documents failed: the
+// `FailureReport` on the `Ok` result. Until this summary existed the CLI
+// did not read it, so a tolerantly-completed run over a large corpus reported only
 // "Cognify completed." and the operator had no way to learn what was missing.
 //
 // These cases drive `format_failure_summary` directly rather than a live run:
@@ -1990,11 +2041,6 @@ fn cognify_rejects_invalid_graph_schema_flags() {
             "Cannot read --graph-schema",
         ),
         (
-            "cognify",
-            vec!["--graph-schema", valid, "--temporal-cognify"],
-            "not supported with temporal_cognify",
-        ),
-        (
             "add-and-cognify",
             vec!["some text", "--chunk-attachment", "direct"],
             "chunk_attachment requires graph_schema",
@@ -2041,6 +2087,28 @@ fn cognify_rejects_invalid_graph_schema_flags() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("invalid value 'everything'"));
+}
+
+/// The event-graph pipeline and its flag are gone (SDK-1039): Python ignores
+/// `temporal_cognify` since 1.6.3, and Rust removed it outright, so the flag
+/// is an unknown argument rather than a silent no-op.
+#[test]
+fn cognify_rejects_the_removed_temporal_cognify_flag() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    for command in ["cognify", "add-and-cognify"] {
+        let mut cmd = make_cmd_in(&config_home, workdir.path());
+        cmd.arg(command);
+        if command == "add-and-cognify" {
+            cmd.arg("some text");
+        }
+        cmd.arg("--temporal-cognify")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "unexpected argument '--temporal-cognify'",
+            ));
+    }
 }
 
 /// A valid `--graph-schema` / `--chunk-attachment` reaches the run: the

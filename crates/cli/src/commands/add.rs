@@ -49,11 +49,13 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
 
-        // Gap 08-07: persist the four-state `pipeline_runs` trail so CLI
+        // Gap 08-07: persist the `pipeline_runs` trail so CLI
         // add shows up in `/api/v1/activity/pipeline-runs`.
         let pipeline_run_repo: Arc<dyn PipelineRunRepository> =
             Arc::clone(&database).pipeline_runs();
 
+        // Run-ownership markers for startup recovery, as every Python run holds.
+        let run_ownership_dir = cm.settings().run_ownership_dir();
         let pipeline = AddPipeline::new(
             storage,
             Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
@@ -62,7 +64,10 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)
         .with_database(database)
-        .with_pipeline_run_repo(pipeline_run_repo);
+        .with_pipeline_run_repo(pipeline_run_repo)
+        .with_run_ownership_dir(run_ownership_dir)
+        // Python runs its image and audio loaders at `add`.
+        .with_loader_registry(cm.add_loader_registry().await);
 
         let inputs = args
             .data

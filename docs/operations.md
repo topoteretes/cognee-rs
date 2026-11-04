@@ -2,7 +2,7 @@
 
 What cognee-rust *does*. The primary surface is the **memory API** —
 **`remember`**, **`recall`**, **`improve`**, **`forget`** — four high-level
-operations that compose the lower-level pipeline (`add → cognify → memify →
+operations that compose the lower-level pipeline (`add → cognify →
 search`). Every operation is reachable from each interface (CLI, language
 bindings, HTTP server) — see [tools/](tools/README.md). API/type detail lives in
 rustdoc (`cargo doc --no-deps --open`); this page is the conceptual map.
@@ -38,7 +38,7 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   `ops::lifecycle::wait_for_background_tasks`). A detached task that panics is
   logged at `error`.
 - **Permanent graph memory** — omit `--session-id` and the input is persisted as
-  permanent, graph-backed memory. Its self-improvement pass (memify) follows
+  permanent, graph-backed memory. Its self-improvement pass (`improve()`) follows
   the same gate: off when `improve.auto_enabled` is off or an `improve.*`
   setting is invalid, as Python's `self_improvement and auto_improve_enabled()`.
 
@@ -54,8 +54,7 @@ preposition before an absolute date → `TEMPORAL`, anything else →
 rules search that finds nothing, is retried as `HYBRID_COMPLETION`. With no
 LLM API key, recall still routes: `CHUNKS_LEXICAL` and `CODING_RULES` run as
 they are, and any other routed type falls back to `HYBRID_COMPLETION`; it and an
-explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION`, `RAG_COMPLETION` or
-`TRIPLET_COMPLETION` return
+explicit `HYBRID_COMPLETION`, `GRAPH_COMPLETION` or `RAG_COMPLETION` return
 their context instead of an answer (`only_context`). No rule routes to
 `CYPHER` or `NATURAL_LANGUAGE`; requested explicitly with
 `ALLOW_CYPHER_QUERY=false`, they are refused. When no graph was ever built for
@@ -82,7 +81,10 @@ Stages named in `improve.stages_disabled` (`IMPROVE_STAGES_DISABLED`, a
 comma-separated list) are skipped first, with `disabled_by_config`; an unknown
 name, or the fatal `persist_session_qa`, makes the configuration invalid and
 the run fails before any stage. `feedback_alpha` defaults to
-`improve.feedback_alpha` (0.1).
+`improve.feedback_alpha` (0.1). Triplet enrichment (memify) is gone, as in
+Python (SDK-1115), and so are the deprecated custom-task and scoping options
+(`extraction_tasks`, `enrichment_tasks`, `data`, `node_name`, `node_type`,
+`vector_db_config`, `graph_db_config`); over REST they are ignored.
 
 The run fails open — a failed stage is recorded and the next one runs —
 except that a failure in `persist_session_qa` (losing session Q&A would be data
@@ -143,8 +145,8 @@ later one skipping; runs on different datasets and sessions do not wait. The
 dataset lock is Python's one `dataset_lock` registry: `cognee_core::DatasetLocks::global()`
 is the default of `add` (`AddPipeline`), dataset-scoped deletes
 (`DeleteService`) and `improve` (`ImproveParams::dataset_locks`, else the add
-pipeline's registry, else the global one), and `cognify` and `memify` always
-hold it for their run, so in one process those writers queue per dataset. A
+pipeline's registry, else the global one), and `cognify` always
+holds it for its run, so in one process those writers queue per dataset. A
 host with its own registry wires it into the add pipeline, the delete service
 and `improve`; the HTTP server shares the global one. The stages' own adds and
 cognifies re-enter the improve's hold. A dataset that does not exist yet is
@@ -181,9 +183,11 @@ when no `pipeline_runs` row other than a `search`, a `recall` or a host's
 `forget` row on every dataset it touched, and an improve run whose stage may
 have written to the graph (anything but the index itself, unless its write
 counts say it wrote nothing) records one `improve` row, so both count as
-changes, as in Python. A run that did not end `errored` stamps the stage's start in the
-checkpoint store (`improve_stage:{stage}:{dataset_id}`); without a checkpoint
-store or a relational database, or on any error reading them, the stage runs.
+changes, as in Python. A run that did not end `errored` stamps the stage's start in the `run_info` of
+its `improve` operation row (`{"global_context_index": {"status", "started_at"}}`),
+where Python keeps it (`graph_changes.py`); the newest such row is the
+watermark, and the row itself is not a change. Without a relational database,
+a stamp, or on any error reading them, the stage runs.
 rustdoc: `api::improve`.
 
 ### forget
@@ -205,8 +209,11 @@ raw data ──add──▶ stored + deduplicated ──cognify──▶ knowled
 
 Streams input, computes a content hash, deduplicates, and persists the data plus
 metadata. Accepts text, file paths, and HTTP(S) URLs (fetched and routed by MIME
-type). Deterministic UUID5 IDs make the same content + owner reproducible across
-SDKs. Pipeline: [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
+type). As in Python, `data` rows are dataset-scoped: a new row gets a random
+`uuid4` id, and re-adding content dedups only within the same dataset, owner
+and tenant (by content hash), so the same content in two datasets is two rows.
+Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
+[`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
 
 ### cognify (knowledge-graph extraction)
 
@@ -216,19 +223,20 @@ summarize** (conditional) — one fused stage running both concurrently over the
 same chunks, matching Python's `extract_graph_and_summarize` → **add data
 points** (six vector collections + provenance to the relational DB) →
 **extract DLT FK edges**. Configurable via `CognifyConfig`
-(chunk strategy, custom prompts/schemas, temporal mode). Pipeline:
+(chunk strategy, custom prompts/schemas). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
-Dates come out of the default extraction too, with no separate temporal
-pipeline: a node the LLM types `Timestamp` whose name is an absolute time
-(`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes a shared
-`Timestamp` graph node — one per normalized time string, carrying
-`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its
-`precision` — that `*_at` edges point at and every chunk naming it `contains`.
-Timestamps are not embedded. A name that does not parse stays an ordinary
-entity. Year-less dates in the text ("27 April", "four weeks later") are
-resolved against the last stated year earlier in the document and handed to the
-default prompt as normalization hints; a custom prompt receives none.
+Dates come out of the default extraction, with no separate temporal pipeline
+(Rust's event-graph `temporal_cognify` was removed in SDK-1039; Python ignores
+the flag since 1.6.3): a node the LLM types `Timestamp` whose name is an
+absolute time (`1867`, `1969-07`, `23 March 1947`, `from 1803 to 1815`) becomes
+a shared `Timestamp` graph node — one per normalized time string, carrying
+`time_at`/`time_until` (ms since the epoch, UTC, half-open) and its `precision`
+— that `*_at` edges point at and every chunk naming it `contains`. Timestamps
+are not embedded. A name that does not parse stays an ordinary entity. Year-less
+dates in the text ("27 April", "four weeks later") are resolved against the last
+stated year earlier in the document and handed to the default prompt as
+normalization hints; a custom prompt receives none.
 
 An extracted entity's id derives from its **name** (`Entity.id_for(name)`), as in
 Python, so the same name from two chunks or documents is one node; several nodes
@@ -278,8 +286,7 @@ The abort point is a *batch* boundary, not a file boundary, and how much work
 `FailFast` actually saves depends on how big that batch is. Graph extraction
 stops after the batch that contained the failure — `chunks_per_batch`, default
 2000, so a dataset under 2000 chunks is one batch and every extraction call is
-dispatched before the failure is noticed. Temporal extraction stops after
-`data_per_batch`, default 20 files. Summarization has no batch loop: it stops
+dispatched before the failure is noticed. Summarization has no batch loop: it stops
 dispatching as soon as a fatal failure comes back, but the calls already in
 flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
 `FailFast` is an upper bound on wasted spend, not a promise of none — see
@@ -304,11 +311,6 @@ One caveat. **Cancellation is swept**, unlike Python — though there is no
 caller-facing cancel handle on `cognify()` today, and simply dropping the future
 runs no sweep at all.
 
-All of the above applies to the **temporal** pipeline too: it records ownership
-of its events, timestamps, intervals and entity nodes before it writes them, its
-two LLM passes collect failures rather than swallowing them, and a failed
-temporal run converges the same way.
-
 #### Re-cognifying is now incremental — a behaviour change
 
 `incremental_loading` is on by default and now does what it says. A successful
@@ -323,24 +325,14 @@ re-processing everything on every call will see it "stop doing anything"; set
 run marks nothing, and a sweep clears the markers of whatever it rolled back, so
 the next run redoes exactly the work that was lost.
 
-Both branches share one marker key, matching Python, so **a `cognify()` and a
-temporal `cognify()` over the same dataset are no-ops for each other**. Turn
-incremental loading off to build both graphs over one dataset.
-
-### memify (graph enrichment)
-
-Standalone, idempotent enrichment: reads the existing graph, builds `Triplet`
-objects from every edge (`"source → relationship → target"`), embeds them, and
-indexes them into the `Triplet`/`text` vector collection for
-`SearchType::TripletCompletion`. Pipeline:
-[`cognee-cognify`](../crates/cognify/) (`memify()`).
+The markers live under Python's one `cognify_pipeline` key.
 
 ### search (retrieval)
 
-Unified orchestration across 18 retrieval strategies selected by `SearchType`
+Unified orchestration across 17 retrieval strategies selected by `SearchType`
 ([`crates/search/src/types/search_type.rs`](../crates/search/src/types/search_type.rs)):
 `GraphCompletion`, `GraphCompletionCot`, `GraphCompletionContextExtension`,
-`GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `TripletCompletion`, `RagCompletion`, `Chunks`,
+`GraphCompletionDecomposition`, `GraphSummaryCompletion`, `GraphReport`, `RagCompletion`, `Chunks`,
 `Summaries`, `Temporal`, `Cypher`, `NaturalLanguage`, `FeelingLucky`, `Feedback`,
 `CodingRules`, `ChunksLexical`, `HybridCompletion` (default; combines vector search over
 chunks/summaries/entities/edge-facts and
@@ -420,9 +412,9 @@ and the same cut plain hybrid uses keeps `top_k`. With nothing to rerank by it
 answers with the plain hybrid result and records why: `empty_graph`,
 `no_time_constraint` / `invalid_interval` (no window), `no_temporal_match`,
 `no_candidate_overlap` (`TemporalHybridRetriever::retrieve` returns these
-diagnostics with the context). The `Timestamp` nodes are default cognify's; the
-`Event` nodes of the separate temporal-cognify pipeline are not read, so such a
-graph gets plain hybrid answers, as in Python.
+diagnostics with the context). The `Timestamp` nodes are default cognify's. A
+graph an older build wrote with the removed event-graph pipeline holds `Event`
+nodes nothing reads, so it gets plain hybrid answers, as in Python.
 
 ## Additional operations
 
@@ -431,7 +423,7 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | Operation | What it does | rustdoc |
 |---|---|---|
 | **delete** | Cascading removal of data/datasets across relational → graph → vector → file storage (with dry-run preview). | [`cognee-delete`](../crates/delete/) `DeleteService` |
-| **update** | Re-ingest changed data and re-cognify the affected subset. | `api::update` |
+| **update** | Replace one document and re-cognify it. The document **keeps its `data_id`** (a pre-fork `legacy_id` resolves to the row it forked into; an unknown id is a 404): its memory is dropped, the row is re-added pinned to the same id, and cognify rebuilds it. | `api::update` |
 | **prune** | Reset system or all state (`prune_system` / `prune_data`). | `api::prune` |
 | **visualize** | Render the graph to a single-file d3.js HTML page (Graph / Schema / Memory / Semantic tabs + inspector). | [`cognee-visualization`](../crates/visualization/) |
 | **export** | Write the graph as a COGX archive — the portable format Python cognee re-imports, locally or by uploading the packed `.cogx.tar.gz` to its remember endpoint. | [`cognee-migration`](../crates/migration/) |
@@ -447,7 +439,6 @@ These live in the [`cognee`](../crates/lib/) `api` module (and `DatasetManager`)
 | add | `cognee-cli add` | `POST /api/v1/add` | `add()` |
 | cognify | `cognee-cli cognify` | `POST /api/v1/cognify` | `cognify()` |
 | add + cognify | `cognee-cli add-and-cognify` | _(two calls)_ | — |
-| memify | `cognee-cli memify` | `POST /api/v1/memify` | `memify()` |
 | search | `cognee-cli search` | `POST /api/v1/search` | `search()` |
 | delete | `cognee-cli delete` | `POST /api/v1/delete` | `delete*()` |
 | update | _(via run-sequence)_ | `POST /api/v1/update` | `update()` |

@@ -365,20 +365,24 @@ async fn propose_lessons(
 /// Does this search result's `belongs_to_set` metadata mark it as a
 /// `session_learnings` document?
 ///
-/// NodeSet entries are JSON objects `{"id","name","type":"NodeSet"}` (built by
-/// `classify_documents`), **not** bare strings — a result matches when any
-/// element's `"name"` equals [`DISTILLATE_NODE_SET`]. Bare-string dataset-id
-/// entries from base `DataPoint` constructors simply won't match.
+/// A result matches when any entry names [`DISTILLATE_NODE_SET`]. Cognify's
+/// payloads hold node-set names as bare strings, as Python's `IndexSchema`
+/// rows do (`cognee_models::index_schema_payload`, SDK-1039); rows written
+/// before then, and this stage's own points, hold NodeSet objects
+/// `{"id","name","type":"NodeSet"}`, matched by their `"name"`. A dataset-id
+/// string never equals the node-set name, so it never matches.
 fn belongs_to_session_learnings(metadata: &HashMap<String, Value>) -> bool {
     metadata
         .get("belongs_to_set")
         .and_then(|v| v.as_array())
         .is_some_and(|arr| {
             arr.iter().any(|el| {
-                el.as_object()
-                    .and_then(|o| o.get("name"))
-                    .and_then(|n| n.as_str())
-                    == Some(DISTILLATE_NODE_SET)
+                let name = match el {
+                    Value::String(name) => Some(name.as_str()),
+                    Value::Object(object) => object.get("name").and_then(Value::as_str),
+                    _ => None,
+                };
+                name == Some(DISTILLATE_NODE_SET)
             })
         })
 }
@@ -643,6 +647,7 @@ pub fn render_lesson_document(
 async fn publish_distilled_lessons(
     session_id: &str,
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     accepted: &[WrittenLesson],
@@ -666,6 +671,7 @@ async fn publish_distilled_lessons(
 
     let params = AddParams {
         node_set: Some(distillate_node_set(session_id)),
+        dataset_id,
         ..Default::default()
     };
     let inputs: Vec<DataInput> = documents.iter().cloned().map(DataInput::Text).collect();
@@ -680,17 +686,22 @@ async fn publish_distilled_lessons(
         ));
     }
 
-    let dataset_id = match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
-        &*database,
-        dataset_name,
-        owner_id,
-        tenant_id,
-    )
-    .await
-    {
-        Ok(Some(ds)) => ds.id,
-        Ok(None) => return Err(DistillError::DatasetNotFound(dataset_name.to_string())),
-        Err(e) => return Err(DistillError::Ingestion(e.to_string())),
+    let dataset_id = match dataset_id {
+        // A caller-resolved dataset (possibly owned by another user): used as
+        // is, never re-resolved by name among the caller's own.
+        Some(id) => id,
+        None => match cognee_database::IngestDb::get_dataset_by_name_in_tenant(
+            &*database,
+            dataset_name,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        {
+            Ok(Some(ds)) => ds.id,
+            Ok(None) => return Err(DistillError::DatasetNotFound(dataset_name.to_string())),
+            Err(e) => return Err(DistillError::Ingestion(e.to_string())),
+        },
     };
 
     cognify(
@@ -728,6 +739,7 @@ async fn publish_distilled_lessons(
 pub async fn distill_session(
     session_id: &str,
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     session_store: Arc<dyn SessionStore>,
@@ -787,6 +799,7 @@ pub async fn distill_session(
     let (documents, dataset_id) = publish_distilled_lessons(
         session_id,
         dataset_name,
+        dataset_id,
         owner_id,
         tenant_id,
         &accepted,
@@ -822,6 +835,7 @@ pub async fn distill_session(
 pub async fn distill_sessions_in_knowledge_graph(
     session_ids: &[String],
     dataset_name: &str,
+    dataset_id: Option<Uuid>,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     session_store: Arc<dyn SessionStore>,
@@ -843,6 +857,7 @@ pub async fn distill_sessions_in_knowledge_graph(
         match distill_session(
             sid,
             dataset_name,
+            dataset_id,
             owner_id,
             tenant_id,
             Arc::clone(&session_store),
@@ -1001,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn belongs_to_session_learnings_matches_nodeset_object_not_bare_string() {
+    fn belongs_to_session_learnings_matches_the_node_set_name() {
         // Bare-string dataset-id entry (base DataPoint constructor) → no match.
         let mut bare = HashMap::new();
         bare.insert(
@@ -1009,6 +1024,14 @@ mod tests {
             serde_json::json!(["some-dataset-uuid"]),
         );
         assert!(!belongs_to_session_learnings(&bare));
+
+        // Node-set name as a bare string (IndexSchema payloads, SDK-1039) → match.
+        let mut name = HashMap::new();
+        name.insert(
+            "belongs_to_set".to_string(),
+            serde_json::json!(["other", "session_learnings"]),
+        );
+        assert!(belongs_to_session_learnings(&name));
 
         // NodeSet object with matching name → match.
         let mut obj = HashMap::new();

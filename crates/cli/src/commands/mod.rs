@@ -16,12 +16,11 @@ pub mod edge_reindex;
 pub mod export;
 pub mod forget;
 pub mod improve;
-pub mod memify;
-pub mod pipeline_unblock;
 pub mod recall;
 pub mod remember;
 pub mod run_sequence;
 pub mod search;
+pub mod update;
 pub mod vector_reindex;
 #[cfg(feature = "visualization")]
 pub mod visualize;
@@ -36,7 +35,7 @@ use crate::error::CliError;
 
 /// Parse an optional `--tenant-id` flag — the one parser every command
 /// (`add`, `remember`, `improve`, `forget`, `search`, `recall`, `cognify`,
-/// `memify`, `add-and-cognify`, `pipeline-unblock`, `delete`) uses.
+/// `add-and-cognify`, `delete`) uses.
 ///
 /// The tenant is applied by strict equality wherever a dataset is looked up
 /// (search/recall scoping, `forget --dataset-name`): data written with
@@ -57,8 +56,7 @@ pub fn parse_tenant_id(raw: Option<&str>) -> Result<Option<uuid::Uuid>, CliError
 /// is the default model); a spec file is compiled into a schema by
 /// [`cognee::cognify::graph_schema_from_spec_value`] (clap rejects both flags
 /// together). The schema is compiled by `CognifyConfig::validate`, which also
-/// rejects `--chunk-attachment` without `--graph-schema` and either with
-/// `--temporal-cognify`.
+/// rejects `--chunk-attachment` without `--graph-schema`.
 pub(crate) fn apply_graph_schema_args(
     mut cfg: cognee::cognify::CognifyConfig,
     args: &crate::cli::GraphSchemaArgs,
@@ -119,10 +117,10 @@ pub(crate) fn validate_cognify_config(
 /// - the graph and vector backends — without them a deletion drops relational
 ///   rows only, which for the benchmark would turn a populated-dataset delete
 ///   into a metadata-row delete;
-/// - the pipeline-runs repository — without it a deletion writes no fresh
-///   `INITIATED` row. That only changes behaviour for a caller that enabled
-///   `CognifyConfig::use_pipeline_cache`: since the cache became opt-in, a
-///   `COMPLETED` row no longer short-circuits the default re-cognify path.
+/// - the pipeline-runs repository — without it a deletion writes no `forget`
+///   change row (Python's forget operation row), so an improve stage
+///   watermark would not see the delete. A deletion writes no `INITIATED`
+///   reset row (Python stopped writing one in `dc0b4ad6a`).
 pub(crate) async fn build_delete_service(
     cm: &Arc<ComponentManager>,
 ) -> Result<DeleteService, CliError> {

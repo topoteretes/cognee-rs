@@ -15,7 +15,7 @@ all three; search reads across them.
 | Store | Role | Crate | Default backend |
 |---|---|---|---|
 | **Relational** | Document tracking, deduplication, provenance/lineage, sessions | [`cognee-database`](../crates/database/) | SQLite via SeaORM (Postgres supported) |
-| **Vector** | Semantic similarity over embeddings (chunks, entities, summaries, triplets) | [`cognee-vector`](../crates/vector/) | LanceDB embedded (brute-force on Android / `:memory:`; pgvector via feature) |
+| **Vector** | Semantic similarity over embeddings (chunks, entities, summaries, edge types) | [`cognee-vector`](../crates/vector/) | LanceDB embedded (brute-force on Android / `:memory:`; pgvector via feature) |
 | **Graph** | Entity relationships — the knowledge graph itself | [`cognee-graph`](../crates/graph/) | Embedded Ladybug |
 
 Backend selection and connection settings are covered in
@@ -33,8 +33,12 @@ provenance fields (`source_pipeline`, `source_task`, `source_node_set`,
 `source_content_hash`). Typed graph nodes — `Entity`, `EntityType`, `EdgeType`,
 `DocumentChunk`, etc. — embed a DataPoint as their `base`, exposed through the
 `HasDataPoint` trait so provenance stamping can walk any node uniformly. When a
-DataPoint is indexed, its serialized form becomes the vector-store payload
-(`vector_metadata()`), keeping the on-disk shape comparable to Python's.
+DataPoint is indexed, its vector-store payload has the shape of Python's
+`IndexSchema` (`index_schema_payload()`): the indexed `text`, a few reference
+scalars (`document_id`, `chunk_index`, `source_chunk_id`, …) and the base fields
+at their IndexSchema defaults, plus the Rust-only `dataset_id` that
+dataset-scoped search filters on. LanceDB stores it without the `metadata` key,
+as Python's LanceDB adapter does; pgvector keeps it.
 Python's serialization and versioning helpers are mirrored as `to_json_string()`
 / `from_json()`, `to_dict()` / `from_dict()` and `update_version()` (bumps
 `version` and refreshes `updated_at`).
@@ -62,7 +66,6 @@ events. The concrete pipelines are:
 |---|---|---|
 | **add** | ingest → hash → dedup → persist | [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`) |
 | **cognify** | classify → chunk → extract → summarize → index → FK edges | [`cognee-cognify`](../crates/cognify/) (`cognify()`) |
-| **memify** | read graph → build triplets → embed → index | [`cognee-cognify`](../crates/cognify/) (`memify()`) |
 | **search** | route query → retrieve → (optionally) complete | [`cognee-search`](../crates/search/) (`SearchOrchestrator`) |
 
 Pipeline orchestration primitives (`PipelineWatcher`, `ExecStatusManager`,
@@ -133,11 +136,10 @@ realized** in Rust today:
   and propagated to derived DataPoints as `source_node_set`); the pipeline
   executor can attach `node_set` provenance to task outputs (`Tagged` /
   `TaggedMeta` in [`cognee-core`](../crates/core/)).
-- **Scoping memify** — memify enrichment can be restricted to a subset of the
-  graph by node *type* and node *name* via `--node-type` / `--node-name`
-  (`MemifyConfig::with_node_type_filter` / `with_node_name_filter`, backed by the
-  graph trait's `get_nodeset_subgraph`). The internal `persist_sessions` step
-  tags cached session data with a fixed node set.
+- **Scoping** — a graph subset can be selected by node *type* and node *name*
+  (the graph trait's `get_nodeset_subgraph`, used by search's node-name filter).
+  The internal `persist_sessions` step tags cached session data with a fixed
+  node set.
 
 Note: this is type/name-based subgraph filtering rather than a fully general
 named-node-set query surface; treat node sets as a tagging-and-scoping primitive,
@@ -159,7 +161,10 @@ via cognify's `--ontology-file`; see [configuration.md](configuration.md).
 
 **Loaders** handle file-format reading at ingest: a loader registry dispatches by
 MIME type / extension to per-format loaders (text, PDF, CSV, HTML, image, audio,
-and the `unstructured` office formats), most behind feature flags. **Chunkers**
+and the `unstructured` office formats), most behind feature flags. As in Python,
+they run at `add`, which stores the extracted text (an image's vision-LLM
+description, an audio file's transcript) and keeps the source file in
+`original_data_location`. **Chunkers**
 then segment a document into token-bounded pieces through a word → sentence →
 paragraph hierarchy, sizing chunks with a pluggable `TokenCounter`
 (`WordCounter`, or the feature-gated HuggingFace / tiktoken counters).

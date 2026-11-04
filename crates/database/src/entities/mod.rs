@@ -3,7 +3,6 @@
 pub mod data;
 pub mod dataset;
 pub mod dataset_configuration;
-pub mod dataset_data;
 pub mod dataset_database;
 pub mod query;
 pub mod result_log;
@@ -13,18 +12,11 @@ pub mod edge;
 pub mod graph_metrics;
 pub mod node;
 pub mod pipeline_run;
-pub mod pipeline_run_claim;
 pub mod pipeline_run_payload_field;
 pub mod task_run;
 
-// Graph sync checkpoints (Stage 4 of improve()):
-pub mod graph_sync_checkpoint;
-
 // P6 sync_operations (cloud sync state):
 pub mod sync_operation;
-
-// P7 notebooks:
-pub mod notebook;
 
 // LIB-03 session lifecycle (consumed by LIB-05's `SessionLifecycleDb`):
 pub mod session_model_usage;

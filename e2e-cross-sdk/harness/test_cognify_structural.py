@@ -11,9 +11,12 @@ from helpers import (
     COUNT_TOLERANCE,
     open_db,
     query_data,
+    distinct_graph_edges,
+    distinct_graph_nodes,
     query_nodes,
     query_edges,
     python_db_path,
+    python_graph,
     rust_db_path,
 )
 from conftest import requires_openai
@@ -24,11 +27,11 @@ from conftest import requires_openai
 
 @requires_openai
 
-def test_cognify_produces_nodes(both_cognified):
+def test_cognify_produces_nodes(both_cognified_json_schema):
     """Both SDKs must produce at least one node after cognify."""
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
-    py_nodes = query_nodes(open_db(python_db_path(py_ws)))
+    py_nodes = python_graph(py_ws)[0]
     rust_nodes = query_nodes(open_db(rust_db_path(rust_ws)))
 
     assert len(py_nodes) > 0, "Python produced zero nodes"
@@ -37,11 +40,11 @@ def test_cognify_produces_nodes(both_cognified):
 
 @requires_openai
 
-def test_cognify_produces_edges(both_cognified):
+def test_cognify_produces_edges(both_cognified_json_schema):
     """Both SDKs must produce at least one edge after cognify."""
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
-    py_edges = query_edges(open_db(python_db_path(py_ws)))
+    py_edges = python_graph(py_ws)[1]
     rust_edges = query_edges(open_db(rust_db_path(rust_ws)))
 
     assert len(py_edges) > 0, "Python produced zero edges"
@@ -50,15 +53,15 @@ def test_cognify_produces_edges(both_cognified):
 
 @requires_openai
 
-def test_cognify_node_count_within_tolerance(both_cognified):
+def test_cognify_node_count_within_tolerance(both_cognified_json_schema):
     """Node counts should be within 50% of each other.
 
     LLM extraction is non-deterministic, so we allow wide tolerance.
     """
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
-    py_count = len(query_nodes(open_db(python_db_path(py_ws))))
-    rust_count = len(query_nodes(open_db(rust_db_path(rust_ws))))
+    py_count = len(python_graph(py_ws)[0])
+    rust_count = len(distinct_graph_nodes(query_nodes(open_db(rust_db_path(rust_ws)))))
 
     avg = (py_count + rust_count) / 2
     diff = abs(py_count - rust_count)
@@ -74,12 +77,12 @@ def test_cognify_node_count_within_tolerance(both_cognified):
 
 @requires_openai
 
-def test_cognify_edge_count_within_tolerance(both_cognified):
+def test_cognify_edge_count_within_tolerance(both_cognified_json_schema):
     """Edge counts should be within 50% of each other."""
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
-    py_count = len(query_edges(open_db(python_db_path(py_ws))))
-    rust_count = len(query_edges(open_db(rust_db_path(rust_ws))))
+    py_count = len(python_graph(py_ws)[1])
+    rust_count = len(distinct_graph_edges(query_edges(open_db(rust_db_path(rust_ws)))))
 
     avg = (py_count + rust_count) / 2
     diff = abs(py_count - rust_count)
@@ -98,11 +101,11 @@ def test_cognify_edge_count_within_tolerance(both_cognified):
 
 @requires_openai
 
-def test_cognify_node_types_overlap(both_cognified):
+def test_cognify_node_types_overlap(both_cognified_json_schema):
     """The sets of node types should overlap (Jaccard similarity > 0.3)."""
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
-    py_types = {n["type"] for n in query_nodes(open_db(python_db_path(py_ws))) if n.get("type")}
+    py_types = {n["type"] for n in python_graph(py_ws)[0] if n.get("type")}
     rust_types = {n["type"] for n in query_nodes(open_db(rust_db_path(rust_ws))) if n.get("type")}
 
     if not py_types and not rust_types:
@@ -122,13 +125,13 @@ def test_cognify_node_types_overlap(both_cognified):
 
 @requires_openai
 
-def test_cognify_updates_token_count(both_cognified):
+def test_cognify_updates_token_count(both_cognified_json_schema):
     """Python should set token_count > 0 after cognify.
 
     Note: Rust currently does not write token_count back to the data table
     via the CLI path (tracked as a known gap).
     """
-    py_ws, rust_ws = both_cognified
+    py_ws, rust_ws = both_cognified_json_schema
 
     py_data = query_data(open_db(python_db_path(py_ws)))
 

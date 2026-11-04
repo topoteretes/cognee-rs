@@ -75,7 +75,6 @@ Fully-annotated runnable examples are available in the [`examples/`](examples/) 
 |---|---|---|
 | [`remember-recall.ts`](examples/remember-recall.ts) | `npm run example` | High-level remember → recall pipeline |
 | [`add-cognify-search.ts`](examples/add-cognify-search.ts) | `npm run example:add-cognify-search` | Lower-level add → cognify → search pipeline |
-| [`memify-recall.ts`](examples/memify-recall.ts) | `npm run example:memify` | Triplet embeddings (memify) + session recall |
 | [`datasets.ts`](examples/datasets.ts) | `npm run example:datasets` | Dataset listing, status, deletion |
 | [`sessions.ts`](examples/sessions.ts) | `npm run example:sessions` | QA history and feedback |
 | [`config.ts`](examples/config.ts) | `npm run example:config` | Programmatic config (LLM / embedding / DBs) |
@@ -157,7 +156,6 @@ await c.cognify("my-dataset");
 await c.cognify("my-dataset", {
   chunkSize: 512,
   summarization: true,
-  triplet: true,       // also index triplet embeddings (enables TripletCompletion search)
 });
 
 // With a custom graph model (its JSON Schema, as an object or a JSON string)
@@ -213,8 +211,8 @@ const result = await c.search("summarise recent events", {
 });
 ```
 
-All 18 search types are supported (SCREAMING_SNAKE_CASE):
-`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`,
+All 17 search types are supported (SCREAMING_SNAKE_CASE):
+`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`,
 `GRAPH_COMPLETION_DECOMPOSITION`, `GRAPH_SUMMARY_COMPLETION`, `CYPHER`,
 `NATURAL_LANGUAGE`, `GRAPH_COMPLETION_COT`, `GRAPH_COMPLETION_CONTEXT_EXTENSION`,
 `FEELING_LUCKY`, `FEEDBACK`, `TEMPORAL`, `CODING_RULES`, `CHUNKS_LEXICAL`,
@@ -239,18 +237,9 @@ Composite add + cognify with an optional improvement pass.
 
 ```ts
 await c.remember({ type: "text", text: "…" }, "my-dataset", {
-  selfImprovement: true,   // run memify after cognify
+  selfImprovement: true,   // run improve() after cognify (the default)
   sessionId: "session-id", // session-only mode (no graph writes)
 });
-```
-
-### memify
-
-Index triplet embeddings from the existing knowledge graph.
-Enables `TripletCompletion` search. Idempotent.
-
-```ts
-await c.memify();
 ```
 
 ### improve
@@ -299,33 +288,11 @@ await c.sessions.addFeedback("session-uuid", "qa-uuid", "Great answer!", 5);
 await c.sessions.deleteFeedback("session-uuid", "qa-uuid");
 ```
 
-## Notebooks
-
-```ts
-// List all notebooks for the current user.
-const notebooks = await c.notebooks.list();
-
-// Create a new notebook with optional cells and deletability flag.
-const nb = await c.notebooks.create("My Notes", [], true);
-
-// Partially update a notebook (name, cells, or both).
-const updated = await c.notebooks.update(nb.id, { name: "Renamed Notes" });
-
-// Delete a notebook — returns true if a row was removed.
-const removed = await c.notebooks.delete(nb.id);
-```
-
-## Users and pipeline-run admin
+## Users
 
 ```ts
 // Resolve (or lazily create) the default user for this handle.
 const user = await c.users.getOrCreateDefault();
-
-// Unblock a dataset stuck in "running" state so it can be re-cognified.
-await c.users.resetPipelineRunStatus(datasetId, "cognify_pipeline");
-
-// Reset all pipeline-run statuses for a dataset at once.
-await c.users.resetDatasetPipelineRunStatus(datasetId);
 ```
 
 ## Data lifecycle

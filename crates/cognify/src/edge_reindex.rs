@@ -22,8 +22,9 @@
 //! The rollback sweeper does not cover it either: `RunSweeper` is reached only
 //! from `rollback::on_run_failed`, whose production callers are both in-process
 //! error paths — a SIGKILL runs neither, so every `RollbackScope` collapses to
-//! the same end state. `reset_orphans` only rewrites `pipeline_runs` rows, and
-//! a library/CLI process never calls it. The ownership-ledger row written
+//! the same end state. Startup recovery (`recover_stale_pipeline_runs`) rolls
+//! back a killed run's ledger-attributed artifacts, but never the edge/vector
+//! gap this module repairs. The ownership-ledger row written
 //! before the graph write makes an orphan *findable*, not repaired.
 //!
 //! # Relationship to Python
@@ -115,9 +116,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
-use cognee_models::EdgeType;
+use cognee_models::{EdgeType, IndexRefs, index_schema_payload};
 use cognee_vector::{VectorDB, VectorPoint};
-use serde_json::json;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -164,12 +164,6 @@ pub struct EdgeReindexOptions {
     /// `EdgeType(relationship_name=text, number_of_edges=count)` with no dataset
     /// at all (`index_graph_edges.py:49-52`).
     pub dataset_id: Option<Uuid>,
-
-    /// Owner stamped on written points. Metadata only, like `dataset_id`.
-    pub user_id: Option<Uuid>,
-
-    /// Tenant stamped on written points. Metadata only, like `dataset_id`.
-    pub tenant_id: Option<Uuid>,
 
     /// Resume point: skip every retrieval text less than or equal to this one.
     ///
@@ -247,8 +241,7 @@ pub async fn reindex_edge_types(
     };
 
     // The whole-graph read, exactly as Python's repair does it
-    // (`index_graph_edges.py:79-80`) and as memify's `extract_triplets`
-    // already does in this crate. `GraphDBTrait` exposes no paginated or
+    // (`index_graph_edges.py:79-80`). `GraphDBTrait` exposes no paginated or
     // streaming edge accessor, so this materialises every edge; the resume
     // cursor below bounds the *embedding* work, which is the part that costs
     // money, but not this read. Streaming it needs a new trait method on all
@@ -324,8 +317,9 @@ pub async fn reindex_edge_types(
     // counts — so that no batch can carry the same id twice. pgvector writes a
     // batch as one multi-row `INSERT ... ON CONFLICT (id) DO UPDATE`, which
     // Postgres rejects outright when a row repeats (SQLSTATE 21000); the other
-    // backends would not error but would silently keep only one of them, with
-    // `number_of_edges` holding just that text's share of the count.
+    // backends would not error but would silently keep only one of them. The
+    // summed count is `EdgeType.number_of_edges`, as Python computes it; like
+    // Python's `IndexSchema` row, the vector payload does not store it.
     let mut first_seen: HashMap<Uuid, usize> = HashMap::new();
     let mut keyed: Vec<(String, Uuid, i32)> = Vec::with_capacity(counts_by_text.len());
     for (text, (id, count)) in counts_by_text {
@@ -443,24 +437,16 @@ pub async fn reindex_edge_types(
                 let mut edge_type = EdgeType::new_deterministic(text, options.dataset_id);
                 edge_type.set_count(*count);
 
-                let mut point = VectorPoint::new(*id, vector);
-                for (k, v) in edge_type.base.vector_metadata() {
-                    point = point.with_metadata(k, v);
+                VectorPoint {
+                    id: *id,
+                    vector,
+                    metadata: index_schema_payload(
+                        &edge_type.base,
+                        edge_type.relationship_name.clone(),
+                        &IndexRefs::default(),
+                        options.dataset_id,
+                    ),
                 }
-                point = point
-                    .with_metadata("field", json!(EDGE_TYPE_FIELD))
-                    .with_metadata("relationship_name", json!(edge_type.relationship_name))
-                    .with_metadata("number_of_edges", json!(edge_type.number_of_edges));
-                if let Some(did) = options.dataset_id {
-                    point = point.with_metadata("dataset_id", json!(did.to_string()));
-                }
-                if let Some(uid) = options.user_id {
-                    point = point.with_metadata("user_id", json!(uid.to_string()));
-                }
-                if let Some(tid) = options.tenant_id {
-                    point = point.with_metadata("tenant_id", json!(tid.to_string()));
-                }
-                point
             })
             .collect();
 

@@ -116,6 +116,31 @@ fn validate_points(
     Ok(())
 }
 
+/// Payload key LanceDB does not store: the `IndexSchema` `metadata` map
+/// (`{"index_fields": ["text"]}`).
+///
+/// Python's LanceDB adapter builds its table schema with
+/// `_build_data_point_schema(exclude_fields=["metadata"])`
+/// (`LanceDBAdapter.py:1780-1816`), so its stored rows never carry the key,
+/// while its pgvector adapter keeps it. The payload builders always emit it
+/// (`cognee_models::index_schema_payload`); this adapter drops it on write, as
+/// Python's does (SDK-1039, decision D2).
+const UNSTORED_PAYLOAD_KEY: &str = "metadata";
+
+/// A payload as this adapter stores it: every key but [`UNSTORED_PAYLOAD_KEY`].
+/// Serialises the borrowed map in place rather than cloning it to remove a key.
+struct StoredPayload<'a>(&'a HashMap<String, serde_json::Value>);
+
+impl serde::Serialize for StoredPayload<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(
+            self.0
+                .iter()
+                .filter(|(key, _)| key.as_str() != UNSTORED_PAYLOAD_KEY),
+        )
+    }
+}
+
 /// Build one `RecordBatch` from points already checked by [`validate_points`].
 ///
 /// `metadata_overrides` replaces the metadata of the points it names, which is
@@ -140,7 +165,11 @@ fn points_to_batch(
     let metadata_array = StringArray::from(
         points
             .iter()
-            .map(|p| serde_json::to_string(metadata_overrides.get(&p.id).unwrap_or(&p.metadata)))
+            .map(|p| {
+                serde_json::to_string(&StoredPayload(
+                    metadata_overrides.get(&p.id).unwrap_or(&p.metadata),
+                ))
+            })
             .collect::<Result<Vec<_>, _>>()?,
     );
 
@@ -822,6 +851,97 @@ mod tests {
             members.contains(&dataset_a.to_string()) && members.contains(&dataset_b.to_string()),
             "expected both datasets in membership, got {members:?}"
         );
+    }
+
+    /// SDK-1039 D2: Python's LanceDB rows have no `metadata` key, so this
+    /// adapter drops the `IndexSchema` `metadata` map on write — on the merge
+    /// path (an existing row) and the plain one alike — and keeps every other key.
+    #[tokio::test]
+    async fn index_points_does_not_store_the_metadata_key() {
+        let (adapter, _dir) = fresh_adapter().await;
+        adapter
+            .create_collection("DocumentChunk", "text", 3)
+            .await
+            .unwrap();
+        let id = Uuid::new_v4();
+        let p = VectorPoint::new(id, vec![1.0, 0.0, 0.0])
+            .with_metadata("text", json!("hello"))
+            .with_metadata("type", json!("IndexSchema"))
+            .with_metadata("metadata", json!({"index_fields": ["text"]}))
+            .with_metadata("dataset_id", json!(Uuid::new_v4().to_string()));
+
+        for _ in 0..2 {
+            adapter
+                .index_points("DocumentChunk", "text", std::slice::from_ref(&p))
+                .await
+                .unwrap();
+            let stored = adapter
+                .retrieve("DocumentChunk", "text", &[id])
+                .await
+                .unwrap();
+            assert_eq!(stored.len(), 1);
+            let payload = &stored[0].metadata;
+            assert!(!payload.contains_key("metadata"), "{payload:?}");
+            assert_eq!(payload.get("text"), Some(&json!("hello")));
+            assert_eq!(payload.get("type"), Some(&json!("IndexSchema")));
+            assert!(payload.contains_key("dataset_id"));
+        }
+    }
+
+    /// Golden check against rows a real Python run stored (SDK-1039, part B):
+    /// a payload built by `index_schema_payload` for each cognify collection
+    /// lands in LanceDB with exactly Python's LanceDB key set, plus the
+    /// Rust-only `dataset_id`.
+    #[tokio::test]
+    async fn stored_index_schema_rows_match_python_lancedb_rows() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../cognify/tests/fixtures/index_schema/python_lancedb_payloads.json"
+        ))
+        .unwrap();
+        let collections = fixture["collections"].as_object().unwrap();
+        assert!(!collections.is_empty());
+
+        let (adapter, _dir) = fresh_adapter().await;
+        for (collection, python_row) in collections {
+            let (data_type, field) = collection.split_once('_').unwrap();
+            adapter
+                .create_collection(data_type, field, 3)
+                .await
+                .unwrap();
+            let source = cognee_models::DataPoint::new(data_type, None);
+            let payload = cognee_models::index_schema_payload(
+                &source,
+                "text".to_string(),
+                &cognee_models::IndexRefs::default(),
+                Some(Uuid::new_v4()),
+            );
+            let point = VectorPoint {
+                id: source.id,
+                vector: vec![1.0, 0.0, 0.0],
+                metadata: payload,
+            };
+            adapter
+                .index_points(data_type, field, std::slice::from_ref(&point))
+                .await
+                .unwrap();
+
+            let stored = adapter
+                .retrieve(data_type, field, &[source.id])
+                .await
+                .unwrap();
+            let mut stored_keys: Vec<&str> =
+                stored[0].metadata.keys().map(String::as_str).collect();
+            stored_keys.sort_unstable();
+            let mut python_keys: Vec<&str> = python_row
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .chain(cognee_models::RUST_ONLY_PAYLOAD_KEYS.iter().copied())
+                .collect();
+            python_keys.sort_unstable();
+            assert_eq!(stored_keys, python_keys, "{collection}");
+        }
     }
 
     #[tokio::test]

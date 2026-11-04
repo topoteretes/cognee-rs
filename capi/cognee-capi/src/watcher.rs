@@ -173,11 +173,16 @@ impl PipelineWatcher for VtableWatcher {
         }
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, output_count: usize) {
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        output_count: usize,
+    ) -> Result<(), cognee_core::WatcherError> {
         if let Some(f) = self.vtable.on_run_completed {
             let rid = uuid_to_c(run.run_id);
             unsafe { f(self.state, rid.as_ptr(), output_count) };
         }
+        Ok(())
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {

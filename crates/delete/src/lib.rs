@@ -7,25 +7,24 @@
 //! permission-checked wrapper), plus [`RunSweeper`] — the same artifact
 //! deletion path selected by *pipeline run* rather than by dataset, which is
 //! how a failed cognify run is rolled back — and
-//! [`sweep_orphaned_run_artifacts`], which applies that same rollback at
-//! startup to the runs a killed process never got to fail.
+//! [`recover_stale_pipeline_runs`], which applies that same rollback at
+//! startup to the runs a killed process never got to fail (Python's
+//! `cognee/modules/cognify/recovery.py`).
 
 mod authorized;
 mod startup_recovery;
 mod sweep;
 
 pub use authorized::AuthorizedDeleteService;
-pub use startup_recovery::{OrphanArtifactSweep, sweep_orphaned_run_artifacts};
+pub use startup_recovery::{
+    ABANDONED_RUN_ERROR, DEFAULT_STALE_RUN_MIN_AGE, RecoveryReport, recover_stale_pipeline_runs,
+};
 pub use sweep::{RunSweeper, SweepOutcome, SweepScope};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use cognee_core::dataset_locks::DatasetLocks;
-use cognee_core::pipeline_run_registry::{
-    ids::{pipeline_id, pipeline_run_id},
-    run_info_for_initiated,
-};
 use cognee_database::{
     DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
     PipelineRunStatus,
@@ -51,6 +50,15 @@ impl DeleteScope {
     }
 }
 
+/// The resolved item id of a single-item delete ([`DeleteResult::data_id`]).
+fn resolved_data_id(request: &DeleteRequest, targets: &ResolvedDeleteTargets) -> Option<Uuid> {
+    if request.scope.is_data_item() {
+        targets.candidate_data_ids.first().copied()
+    } else {
+        None
+    }
+}
+
 /// Map a `DeleteScope` variant to a human-readable label matching Python's
 /// `COGNEE_FORGET_TARGET` values.
 fn scope_label(scope: &DeleteScope) -> &'static str {
@@ -70,6 +78,15 @@ fn mode_label(mode: &DeleteMode) -> &'static str {
     }
 }
 
+/// The legacy `Triplet_text` collection, as `(data_type, field_name)`.
+/// Cognify no longer writes it (SDK-1115); delete still clears it.
+const TRIPLET_DATA_TYPE: &str = "Triplet";
+const TRIPLET_FIELD: &str = "text";
+
+/// The `EdgeType_relationship_name` collection, as `(data_type, field_name)`.
+const EDGE_TYPE_DATA_TYPE: &str = "EdgeType";
+const EDGE_TYPE_FIELD: &str = "relationship_name";
+
 /// Fallback vector collections used when `list_collections()` returns an empty
 /// list (e.g. backends that do not implement dynamic discovery). The store-wide
 /// wipe adds every collection the ownership ledger names to these, which is
@@ -80,7 +97,10 @@ const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("EntityType", "name"),
     ("TextSummary", "text"),
     ("EdgeType", "relationship_name"),
-    ("Triplet", "text"),
+    (TRIPLET_DATA_TYPE, TRIPLET_FIELD),
+    // Legacy: written only by the removed `temporal_cognify` event pipeline
+    // (SDK-1039). Kept so a wipe still clears what older builds wrote, as
+    // `Triplet_text` is.
     ("Event", "name"),
 ];
 
@@ -211,6 +231,13 @@ pub struct DeleteResult {
     pub deleted_search_queries: usize,
     pub pruned_sessions: bool,
     pub warnings: Vec<String>,
+    /// The canonical id of the item a single-item delete (`Data` /
+    /// `DataInDataset`) acted on: the row id the requested id resolved to,
+    /// which differs from the request when a pre-fork `legacy_id` was passed
+    /// (Python's delete receipt reports the resolved `data_id`). `None` for
+    /// every other scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_id: Option<Uuid>,
 }
 
 #[derive(Debug, Error)]
@@ -269,6 +296,7 @@ impl std::ops::AddAssign for DeleteResult {
             deleted_search_queries,
             pruned_sessions,
             warnings,
+            data_id,
         } = rhs;
         self.deleted_datasets += deleted_datasets;
         self.deleted_dataset_links += deleted_dataset_links;
@@ -286,6 +314,7 @@ impl std::ops::AddAssign for DeleteResult {
         self.deleted_search_queries += deleted_search_queries;
         self.pruned_sessions |= pruned_sessions;
         self.warnings.extend(warnings);
+        self.data_id = self.data_id.or(data_id);
     }
 }
 
@@ -324,7 +353,8 @@ impl std::ops::AddAssign for DeletePreview {
 /// operation), on every dataset it touched.
 pub const FORGET_PIPELINE_NAME: &str = "forget";
 
-/// The Initiated resets of a dataset delete skip these rows.
+/// The change-record pipelines (`forget`, `improve`): rows that mark a write,
+/// not a runnable pipeline.
 pub use cognee_database::pipelines::CHANGE_RECORD_PIPELINE_NAMES;
 
 struct ResolvedDeleteTargets {
@@ -419,19 +449,8 @@ impl DeleteService {
         self
     }
 
-    /// Wire a [`PipelineRunRepository`] so the dataset-scoped delete path
-    /// writes a fresh `INITIATED` row for every `(dataset_id, pipeline_name)`
-    /// pair before tearing the dataset down. This matches Python's prune
-    /// chain, which fires `reset_dataset_pipeline_run_status` so a future
-    /// re-cognify is not short-circuited by
-    /// `check_pipeline_run_qualification` (task 08-08).
-    ///
-    /// Since the pipeline cache became opt-in, that short-circuit only applies
-    /// to callers that set `CognifyConfig::use_pipeline_cache`; the fresh row
-    /// is still written for parity and for those callers.
-    ///
-    /// When unset (default for back-compat / mock paths) the reset is a
-    /// no-op.
+    /// Wire a [`PipelineRunRepository`] so a delete records its `forget`
+    /// change row (see `record_forget`). Unset, no row is written.
     pub fn with_pipeline_run_repo(mut self, repo: Arc<dyn PipelineRunRepository>) -> Self {
         self.pipeline_run_repo = Some(repo);
         self
@@ -773,11 +792,12 @@ impl DeleteService {
         }
 
         // ------------------------------------------------------------------
-        // Phase 0: Pipeline status cleanup (while junction rows still exist)
+        // Phase 0: Pipeline status cleanup (while rows are still attached)
         // ------------------------------------------------------------------
         // Clear pipeline_status JSON entries for datasets about to be deleted.
-        // This must run before junction rows (dataset_data) are removed, since
-        // the junction is needed to find related Data records.
+        // This must run before the rows are detached (`data.dataset_id`
+        // cleared), since that column is how the dataset's Data records are
+        // found.
 
         for dataset in &targets.datasets_to_delete {
             let count = self
@@ -792,19 +812,9 @@ impl DeleteService {
                 })?;
             cleared_pipeline_statuses += count;
 
-            // Python parity: writing a fresh `INITIATED` row for every
-            // pipeline registered against this dataset invalidates any prior
-            // `COMPLETED` row so a future re-cognify is not short-circuited
-            // by `check_pipeline_run_qualification` (task 08-08) — which since
-            // the cache became opt-in only affects callers that set
-            // `CognifyConfig::use_pipeline_cache`. The rows
-            // outlive the dataset itself — once the FK is dropped (gap 08-01)
-            // the orphans are harmless and surface in
-            // `list_recent_with_attribution` with `dataset_name = None`.
-            // See [docs/telemetry/08/05-reset-helpers.md §4.3] for the
-            // orphan-row decision.
-            self.reset_dataset_pipeline_run_status(dataset.owner_id, dataset.id)
-                .await?;
+            // No `INITIATED` reset row: Python's forget stopped writing one in
+            // `dc0b4ad6a`. Per-item completion markers, cleared above, are
+            // what lets a re-add be cognified again.
         }
 
         // For data-scoped deletion, clear pipeline_status for each affected
@@ -905,9 +915,9 @@ impl DeleteService {
             deleted_links += 1;
         }
 
-        // For data-scoped deletion, invalidate the pipeline cache for each
-        // affected dataset after detaching. This ensures re-running cognify
-        // will reprocess the dataset since its data composition has changed.
+        // For data-scoped deletion, drop the `pipeline_runs` history of each
+        // affected dataset after detaching: those rows described a dataset
+        // composition that no longer exists.
         if request.scope.is_data_item() {
             let mut invalidated_datasets: HashSet<Uuid> = HashSet::new();
             for (dataset_id, _) in &targets.links_to_detach {
@@ -958,20 +968,62 @@ impl DeleteService {
                 DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
             })?;
 
-            if let Some(data) = data {
-                match self.storage.delete(&data.raw_data_location).await {
+            // The row goes first, so the reference count below sees the
+            // deletion: two concurrent deletes of rows sharing one stored
+            // file cannot each count the other and both keep it (Python
+            // `delete_data_entity` commits before
+            // `remove_data_file_if_unreferenced`).
+            self.database.delete_data(*data_id).await.map_err(|error| {
+                DeleteError::Runtime(format!("Failed to delete data {data_id}: {error}"))
+            })?;
+            deleted_data += 1;
+
+            // Stored files are content-addressed, so the rows of the same
+            // content in other datasets share them: remove each location
+            // only once no row references it any more. Python removes
+            // `raw_data_location` and then `original_data_location`, each
+            // separately (`SqlAlchemyAdapter.delete_data_entity`); since
+            // add runs the loader, the two differ for an image, audio or
+            // HTML input.
+            let Some(data) = data else { continue };
+            let mut locations = vec![(data.raw_data_location.clone(), false)];
+            if data.original_data_location != data.raw_data_location {
+                locations.push((data.original_data_location.clone(), true));
+            }
+            for (location, is_original) in locations {
+                // A location outside the storage root is the user's own
+                // file or an external URL and is never touched (Python
+                // `remove_data_file_if_unreferenced`).
+                if is_original && !self.is_storage_managed(&location) {
+                    continue;
+                }
+                let references = self
+                    .database
+                    .count_data_location_references(&location)
+                    .await
+                    .map_err(|error| {
+                        DeleteError::Runtime(format!(
+                            "Failed to count references to the file of data {data_id}: {error}"
+                        ))
+                    })?;
+                if references > 0 {
+                    continue;
+                }
+                match self.storage.delete(&location).await {
                     Ok(()) => {
                         deleted_storage += 1;
                     }
+                    // Python logs a warning for either location
+                    // (`remove_data_file_if_unreferenced`).
                     Err(StorageError::NotFound(_)) => {
                         warn!(
                             data_id = %data.id,
-                            location = %data.raw_data_location,
+                            location = %location,
                             "storage file already missing"
                         );
                         warnings.push(format!(
                             "Storage file already missing for data {} at '{}'",
-                            data.id, data.raw_data_location
+                            data.id, location
                         ));
                     }
                     Err(error) => {
@@ -982,11 +1034,6 @@ impl DeleteService {
                     }
                 }
             }
-
-            self.database.delete_data(*data_id).await.map_err(|error| {
-                DeleteError::Runtime(format!("Failed to delete data {data_id}: {error}"))
-            })?;
-            deleted_data += 1;
         }
 
         info!(
@@ -1128,7 +1175,38 @@ impl DeleteService {
             deleted_search_queries,
             pruned_sessions,
             warnings,
+            data_id: resolved_data_id(request, &targets),
         })
+    }
+
+    /// Whether `location` lives under this service's storage root, so the
+    /// delete path may remove it. Mirrors the data-root test of Python's
+    /// `remove_data_file_if_unreferenced`: a user's own local file, an
+    /// external URL (`s3://`, `http://`) or an inline marker (`text://`) is
+    /// never removed.
+    fn is_storage_managed(&self, location: &str) -> bool {
+        let path_str = location.strip_prefix("file://").unwrap_or(location);
+        if path_str.contains("://") {
+            return false;
+        }
+        let base = self.storage.base_path();
+        if base.is_empty() {
+            // A backend without a filesystem root (mock, S3-backed) keys
+            // its files by bare location.
+            return true;
+        }
+        let path = std::path::Path::new(path_str);
+        if !path.is_absolute() {
+            // A plain relative storage key.
+            return true;
+        }
+        let base = std::path::Path::new(base);
+        let base = if base.is_absolute() {
+            base.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(base)
+        };
+        path.starts_with(base)
     }
 
     async fn execute_memory_only(
@@ -1209,7 +1287,7 @@ impl DeleteService {
             }
         } else {
             // Dataset (and All): mirror Python's per-record all-pipeline key
-            // removal, then reset cognify run status at the dataset level.
+            // removal. No `INITIATED` reset row (Python `dc0b4ad6a`).
             for dataset in &targets.datasets_to_delete {
                 self.database
                     .clear_pipeline_status_for_dataset(dataset.id)
@@ -1220,9 +1298,6 @@ impl DeleteService {
                             dataset.name
                         ))
                     })?;
-
-                self.reset_cognify_pipeline_run_status(dataset.owner_id, dataset.id)
-                    .await?;
             }
         }
 
@@ -1250,6 +1325,7 @@ impl DeleteService {
             deleted_search_queries: 0,
             pruned_sessions: false,
             warnings,
+            data_id: resolved_data_id(request, targets),
         })
     }
 
@@ -1264,9 +1340,9 @@ impl DeleteService {
     /// Record the delete as a `forget` row on every dataset it touched — the
     /// change Python's `forget()` records as its operation row. A watermarked
     /// improve stage counts every non-read row written after its stamp, so a
-    /// delete must leave one: a data-item delete writes no other row, and a
-    /// dataset delete's Initiated resets are skipped when one is already
-    /// pending. `None` (scope `All`) records one dataset-less row.
+    /// delete must leave one: a delete writes no other `pipeline_runs` row (no
+    /// `INITIATED` reset, as in Python). `None` (scope `All`) records one
+    /// dataset-less row.
     ///
     /// Best effort: the delete already happened, and a missed row only costs
     /// a stale index until the next write, so a failure is logged.
@@ -1312,114 +1388,6 @@ impl DeleteService {
             )
             .collect()
     }
-
-    /// Internal Python-parity helper invoked from the dataset-deletion
-    /// path. Walks every distinct `pipeline_name` registered against
-    /// `dataset_id` and writes a fresh `INITIATED` row for each (skipping
-    /// pipelines already at `INITIATED`).
-    ///
-    /// No-op when no [`PipelineRunRepository`] was supplied via
-    /// [`Self::with_pipeline_run_repo`]; this keeps mock-only test paths
-    /// working without forcing them to wire a repo.
-    async fn reset_dataset_pipeline_run_status(
-        &self,
-        owner_id: Uuid,
-        dataset_id: Uuid,
-    ) -> Result<(), DeleteError> {
-        let Some(repo) = self.pipeline_run_repo.as_ref() else {
-            return Ok(());
-        };
-
-        let runs = repo
-            .get_pipeline_runs_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
-        for run in runs {
-            if matches!(run.status, PipelineRunStatus::Initiated) {
-                // Python skips runs already pending to avoid duplicate rows.
-                continue;
-            }
-            // Change records, not pipelines a re-run could be short-circuited
-            // by: nothing to reset.
-            if CHANGE_RECORD_PIPELINE_NAMES.contains(&run.pipeline_name.as_str()) {
-                continue;
-            }
-            let name = run.pipeline_name;
-            let pid = pipeline_id(owner_id, dataset_id, &name);
-            let prid = pipeline_run_id(pid, dataset_id);
-            repo.log_pipeline_run(
-                prid,
-                pid,
-                &name,
-                Some(dataset_id),
-                PipelineRunStatus::Initiated,
-                Some(run_info_for_initiated()),
-            )
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to reset pipeline '{name}' for dataset {dataset_id}: {e}"
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Like [`reset_dataset_pipeline_run_status`] but only resets the specified
-    /// pipeline by name. Used by memory-only forget to reset `cognify_pipeline`
-    /// without touching `add_pipeline` — matching Python's
-    /// `reset_dataset_pipeline_run_status(pipeline_names=["cognify_pipeline"])`.
-    async fn reset_cognify_pipeline_run_status(
-        &self,
-        owner_id: Uuid,
-        dataset_id: Uuid,
-    ) -> Result<(), DeleteError> {
-        let Some(repo) = self.pipeline_run_repo.as_ref() else {
-            return Ok(());
-        };
-
-        let runs = repo
-            .get_pipeline_runs_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to list pipeline runs for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
-        for run in runs {
-            if run.pipeline_name != "cognify_pipeline" {
-                continue;
-            }
-            if matches!(run.status, PipelineRunStatus::Initiated) {
-                continue;
-            }
-            let name = run.pipeline_name;
-            let pid = pipeline_id(owner_id, dataset_id, &name);
-            let prid = pipeline_run_id(pid, dataset_id);
-            repo.log_pipeline_run(
-                prid,
-                pid,
-                &name,
-                Some(dataset_id),
-                PipelineRunStatus::Initiated,
-                Some(run_info_for_initiated()),
-            )
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to reset cognify pipeline for dataset {dataset_id}: {e}"
-                ))
-            })?;
-        }
-        Ok(())
-    }
-
     // ==================================================================
     // Graph/vector cleanup helpers
     // ==================================================================
@@ -1578,7 +1546,10 @@ impl DeleteService {
                         "Failed to drop the storage of dataset {dataset_id}: {e}"
                     ))
                 })?;
-            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+            // The dataset's own vector store is gone and was never reachable
+            // from here, so no legacy `Triplet_text` point is counted; the
+            // preview counts the same way.
+            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
             graph_node_count += gn;
             vector_point_count += vp;
         } else {
@@ -2015,6 +1986,12 @@ impl DeleteService {
         let mut vector_points = 0usize;
         let mut prov_nodes = 0usize;
         let mut prov_edges = 0usize;
+        let shared_store = if self.dataset_storage.is_some() {
+            None
+        } else {
+            self.vector_db.as_ref()
+        };
+        let mut shared_edges: Vec<GraphEdge> = Vec::new();
 
         for dataset in &targets.datasets_to_delete {
             let nodes = self
@@ -2041,10 +2018,27 @@ impl DeleteService {
 
             prov_nodes += nodes.len();
             prov_edges += edges.len();
-            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
-            graph_nodes += gn;
-            vector_points += vp;
+            match shared_store {
+                // One shared store: the datasets' edge points are probed
+                // together below, so a point two of them name counts once,
+                // as the run (one dataset after another) deletes it once.
+                Some(_) => {
+                    let (gn, vp) = ledger_node_counts(&nodes);
+                    graph_nodes += gn;
+                    vector_points += vp;
+                    shared_edges.extend(edges);
+                }
+                // Per-dataset storage: the dataset's points live in its own
+                // store, which execution drops whole without probing it (see
+                // `cleanup_dataset`).
+                None => {
+                    let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
+                    graph_nodes += gn;
+                    vector_points += vp;
+                }
+            }
         }
+        vector_points += ledger_edge_point_count(shared_store, &shared_edges).await;
 
         Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
     }
@@ -2154,6 +2148,12 @@ impl DeleteService {
                     .await?,
             ),
             None => None,
+        };
+
+        // In a named dataset, a pre-fork id resolves to the row it forked into.
+        let data_id = match &named_dataset {
+            Some(dataset) => self.resolve_data_id_in(dataset.id, data_id).await?,
+            None => data_id,
         };
 
         let data = self.database.get_data(data_id).await.map_err(|error| {
@@ -2274,6 +2274,24 @@ impl DeleteService {
         })
     }
 
+    /// `data_id` resolved in `dataset_id` (exact id, else `legacy_id`); an id
+    /// unknown in the dataset stays as given, so the missing-row handling of
+    /// the callers still applies.
+    async fn resolve_data_id_in(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Uuid, DeleteError> {
+        Ok(self
+            .database
+            .resolve_data_id(dataset_id, data_id)
+            .await
+            .map_err(|error| {
+                DeleteError::Runtime(format!("Failed to resolve data {data_id}: {error}"))
+            })?
+            .unwrap_or(data_id))
+    }
+
     /// The dataset `dataset_name` of `owner_id` in `tenant_id` (strict
     /// equality, `None` ⇔ tenant-less; `get_dataset_ids.py:29-34@37f788bd2`),
     /// or a validation error naming it.
@@ -2368,6 +2386,9 @@ impl DeleteService {
         delete_dataset_if_empty: bool,
     ) -> Result<ResolvedDeleteTargets, DeleteError> {
         let dataset = self.dataset_by_id(dataset_id).await?;
+        // Every id ever issued keeps resolving: the exact id, else the
+        // recorded original (`legacy_id`) of a row forked from a shared one.
+        let data_id = self.resolve_data_id_in(dataset.id, data_id).await?;
         let data = self.database.get_data(data_id).await.map_err(|error| {
             DeleteError::Runtime(format!("Failed to fetch data {data_id}: {error}"))
         })?;
@@ -2535,36 +2556,146 @@ pub(crate) async fn delete_graph_artifacts(
     }
 }
 
-/// Delete vector points based on provenance nodes and edges.
-/// Returns `(count, warnings)`.
-///
-/// `edges` drives the `Triplet_text` points, whose id is one-to-one with the
-/// edge (source, text, target). The `EdgeType_relationship_name` points are
-/// passed in separately as `edge_type_ids`, because their id is *many*-to-one
-/// over edges: deciding which of them a caller may delete needs an exclusivity
-/// check over the retrieval text, which is the caller's to make.
 /// The graph nodes and vector points a dataset's ledger rows account for:
 /// what a dataset delete reports, previewed or executed.
-fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, usize) {
-    // Unique node slugs = graph nodes to delete
+///
+/// `store` is the vector store the edge points are probed in (see
+/// [`ledger_edge_point_count`]); `None` for a dataset whose own databases are
+/// dropped whole and cannot be probed from here.
+async fn ledger_artifact_counts(
+    store: Option<&Arc<dyn VectorDB>>,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+) -> (usize, usize) {
+    let (graph_nodes, node_points) = ledger_node_counts(nodes);
+    (
+        graph_nodes,
+        node_points + ledger_edge_point_count(store, edges).await,
+    )
+}
+
+/// The graph nodes (unique slugs) and the node vector points (one per
+/// indexed field) the ledger `nodes` account for.
+fn ledger_node_counts(nodes: &[GraphNode]) -> (usize, usize) {
     let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
-    // Count vector points from indexed_fields
     let node_points: usize = nodes
         .iter()
         .map(|node| parse_indexed_fields(&node.indexed_fields).len())
         .sum();
-    // Each edge contributes a Triplet point, plus an EdgeType point only when
-    // it has a retrieval text — the same predicate `delete_vector_artifacts`
-    // uses, so the preview cannot promise a point the execution will not
-    // delete.
-    let edge_points = edges.len()
-        + edges
-            .iter()
-            .filter(|edge| edge_type_vector_id(edge).is_some())
-            .count();
-    (unique_slugs.len(), node_points + edge_points)
+    (unique_slugs.len(), node_points)
 }
 
+/// The `EdgeType_relationship_name` and legacy `Triplet_text` points the
+/// ledger `edges` account for.
+///
+/// With a `store`, a point counts only when it exists, once however many
+/// edges name it ([`existing_edge_type_vector_ids`],
+/// [`existing_triplet_vector_ids`]): what the run deletes. A failed probe
+/// counts none and logs a warning; the preview stays available, while the
+/// run then fails on `EdgeType` and skips `Triplet_text` (best-effort, as in
+/// Python). With no store (a dataset whose own databases are dropped whole)
+/// the distinct `EdgeType` ids of text-bearing edges are counted, and no
+/// `Triplet_text` point.
+async fn ledger_edge_point_count(store: Option<&Arc<dyn VectorDB>>, edges: &[GraphEdge]) -> usize {
+    let Some(vector_db) = store else {
+        return edges
+            .iter()
+            .filter_map(edge_type_vector_id)
+            .collect::<BTreeSet<Uuid>>()
+            .len();
+    };
+    let edge_type_points = match existing_edge_type_vector_ids(vector_db, edges).await {
+        Ok(ids) => ids.len(),
+        Err(error) => {
+            warn!("{error}; counting no EdgeType points");
+            0
+        }
+    };
+    // Cognify no longer writes `Triplet_text` points (SDK-1115), so most
+    // edges have none.
+    let triplet_points = match existing_triplet_vector_ids(vector_db, edges).await {
+        Ok(ids) => ids.len(),
+        Err(error) => {
+            warn!("{error}; counting no legacy Triplet_text points");
+            0
+        }
+    };
+    edge_type_points + triplet_points
+}
+
+/// The legacy `Triplet_text` point ids of `edges` that exist in `vector_db`,
+/// without duplicates.
+///
+/// Cognify stopped writing `Triplet_text` (SDK-1115), as Python did, but a
+/// store built before then may still hold it, so deleting an edge still drops
+/// its point (Python `delete_from_graph_and_vector.py:99-113`,
+/// `provenance_delete_planner.py:113-122`). Only the points found here are
+/// deleted and counted, so neither the preview nor the run reports a point
+/// that was never written. A missing collection has none.
+///
+/// The error is a message, not a [`DeleteError`]: the legacy cleanup is
+/// best-effort, as Python's is (it swallows any `Triplet_text` failure), so
+/// callers degrade it to a warning instead of failing the delete.
+async fn existing_triplet_vector_ids(
+    vector_db: &Arc<dyn VectorDB>,
+    edges: &[GraphEdge],
+) -> Result<Vec<Uuid>, String> {
+    let candidates: BTreeSet<Uuid> = edges.iter().map(triplet_vector_id).collect();
+    existing_vector_ids(vector_db, TRIPLET_DATA_TYPE, TRIPLET_FIELD, candidates).await
+}
+
+/// The `EdgeType_relationship_name` point ids of `edges` that exist in
+/// `vector_db`, without duplicates.
+///
+/// The id is per retrieval text ([`edge_type_vector_id`]), so edges sharing a
+/// text name one point, and a point is absent when the collection is missing
+/// or the edge was never indexed. Both the delete preview and the run count
+/// this set, so they agree and neither reports a point that is not there.
+async fn existing_edge_type_vector_ids(
+    vector_db: &Arc<dyn VectorDB>,
+    edges: &[GraphEdge],
+) -> Result<Vec<Uuid>, String> {
+    let candidates: BTreeSet<Uuid> = edges.iter().filter_map(edge_type_vector_id).collect();
+    existing_vector_ids(vector_db, EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, candidates).await
+}
+
+/// The members of `candidates` that exist as points of `data_type_field`.
+/// A missing collection has none. One probe, no duplicates.
+async fn existing_vector_ids(
+    vector_db: &Arc<dyn VectorDB>,
+    data_type: &str,
+    field_name: &str,
+    candidates: BTreeSet<Uuid>,
+) -> Result<Vec<Uuid>, String> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let exists = vector_db
+        .has_collection(data_type, field_name)
+        .await
+        .map_err(|e| format!("Failed to check vector collection {data_type}_{field_name}: {e}"))?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let candidates: Vec<Uuid> = candidates.into_iter().collect();
+    let found = vector_db
+        .retrieve(data_type, field_name, &candidates)
+        .await
+        .map_err(|e| format!("Failed to look up vector points in {data_type}_{field_name}: {e}"))?;
+    let found: BTreeSet<Uuid> = found.into_iter().map(|result| result.id).collect();
+    Ok(found.into_iter().collect())
+}
+
+/// Delete vector points based on provenance nodes and edges.
+/// Returns `(count, warnings)`.
+///
+/// `edges` drives the legacy `Triplet_text` points, whose id is one-to-one
+/// with the edge (source, text, target); only the points that exist are
+/// deleted and counted ([`existing_triplet_vector_ids`]). The
+/// `EdgeType_relationship_name` points are passed in separately as
+/// `edge_type_ids`, because their id is *many*-to-one over edges: deciding
+/// which of them a caller may delete needs an exclusivity check over the
+/// retrieval text, which is the caller's to make.
 pub(crate) async fn delete_vector_artifacts(
     vector_db: Option<&Arc<dyn VectorDB>>,
     nodes: &[GraphNode],
@@ -2588,19 +2719,41 @@ pub(crate) async fn delete_vector_artifacts(
             }
         }
 
-        // Edges contribute to EdgeType_relationship_name and Triplet_text.
-        for edge_type_id in edge_type_ids {
+        // Edges contribute to EdgeType_relationship_name and, for legacy
+        // stores, Triplet_text.
+        // Only the points that exist are deleted and counted, once each.
+        let edge_type_candidates: BTreeSet<Uuid> = edge_type_ids.iter().copied().collect();
+        let existing_edge_type_ids = existing_vector_ids(
+            vector_db,
+            EDGE_TYPE_DATA_TYPE,
+            EDGE_TYPE_FIELD,
+            edge_type_candidates,
+        )
+        .await
+        .map_err(DeleteError::VectorCleanup)?;
+        if !existing_edge_type_ids.is_empty() {
             by_collection
-                .entry(("EdgeType".to_string(), "relationship_name".to_string()))
+                .entry((EDGE_TYPE_DATA_TYPE.to_string(), EDGE_TYPE_FIELD.to_string()))
                 .or_default()
-                .push(*edge_type_id);
+                .extend(existing_edge_type_ids);
         }
 
-        for edge in edges {
+        // Best-effort, as in Python: a failed probe or delete of the legacy
+        // collection is a warning, never a failed delete.
+        let triplet_ids = match existing_triplet_vector_ids(vector_db, edges).await {
+            Ok(ids) => ids,
+            Err(error) => {
+                warnings.push(format!(
+                    "{error}; legacy Triplet_text points were not cleaned up"
+                ));
+                Vec::new()
+            }
+        };
+        if !triplet_ids.is_empty() {
             by_collection
-                .entry(("Triplet".to_string(), "text".to_string()))
+                .entry((TRIPLET_DATA_TYPE.to_string(), TRIPLET_FIELD.to_string()))
                 .or_default()
-                .push(triplet_vector_id(edge));
+                .extend(triplet_ids);
         }
 
         for ((data_type, field_name), ids) in &by_collection {
@@ -2618,15 +2771,21 @@ pub(crate) async fn delete_vector_artifacts(
                 })?;
 
             if exists {
-                vector_db
-                    .delete_points(data_type, field_name, ids)
-                    .await
-                    .map_err(|e| {
-                        DeleteError::VectorCleanup(format!(
+                let deleted = vector_db.delete_points(data_type, field_name, ids).await;
+                match deleted {
+                    Ok(_) => total_deleted += ids.len(),
+                    Err(e) if data_type == TRIPLET_DATA_TYPE && field_name == TRIPLET_FIELD => {
+                        warnings.push(format!(
+                            "Failed to delete vector points from {data_type}_{field_name}: {e}; \
+                             legacy Triplet_text points were not cleaned up"
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(DeleteError::VectorCleanup(format!(
                             "Failed to delete vector points from {data_type}_{field_name}: {e}"
-                        ))
-                    })?;
-                total_deleted += ids.len();
+                        )));
+                    }
+                }
             }
         }
 
@@ -2983,41 +3142,53 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn shared_data_not_deleted_while_linked_to_another_dataset() {
-        let (svc, storage, db) = make_service().await;
-        let owner = Uuid::new_v4();
-
-        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
+    /// Two datasets, each with its own dataset-scoped row of the same
+    /// content, both pointing at one content-addressed stored file (as the
+    /// rows of a Python-compatible file store do). Returns the rows' ids and
+    /// the shared location.
+    async fn seed_same_content_in_two_datasets(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner: Uuid,
+        names: [&str; 2],
+    ) -> ([Uuid; 2], [Uuid; 2], String) {
         let location = storage
             .store(b"shared content", "shared.txt")
             .await
             .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
+        let mut dataset_ids = [Uuid::nil(); 2];
+        let mut data_ids = [Uuid::nil(); 2];
+        for (i, name) in names.into_iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            dataset_ids[i] = ds.id;
+            ops::datasets::create_dataset(db, ds).await.unwrap();
+            data_ids[i] = Uuid::new_v4();
+            let data = Data::builder(
+                data_ids[i],
+                "shared.txt",
+                location.clone(),
+                "file://shared.txt",
+                "txt",
+                "text/plain",
+                "shared_hash",
+                owner,
+            )
+            .dataset_id(dataset_ids[i])
+            .build();
+            ops::data::create_data(db, data).await.unwrap();
+        }
+        (dataset_ids, data_ids, location)
+    }
+
+    /// Rows are dataset-scoped: deleting a dataset deletes its own row and
+    /// leaves the other dataset's row of the same content alone, and the
+    /// content-addressed file they share stays while that row references it.
+    #[tokio::test]
+    async fn shared_data_not_deleted_while_linked_to_another_dataset() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, [row1, row2], location) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["dataset1", "dataset2"]).await;
 
         let result = svc
             .execute(&DeleteRequest {
@@ -3033,83 +3204,234 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        assert_eq!(
-            result.deleted_data, 0,
-            "data must not be deleted while still linked to dataset2"
+        assert_eq!(result.deleted_data, 1, "dataset1's own row is deleted");
+        assert!(ops::data::get_data(&db, row1).await.unwrap().is_none());
+        assert!(
+            ops::data::get_data(&db, row2).await.unwrap().is_some(),
+            "dataset2's row must survive"
         );
-
-        let data_still_there = ops::data::get_data(&db, data_id).await.unwrap();
-        assert!(data_still_there.is_some(), "data record must survive");
+        assert!(
+            storage.exists(&location).await.unwrap(),
+            "the shared file stays while dataset2's row references it"
+        );
     }
 
+    /// The shared file goes with the last row that references it (Python
+    /// `remove_data_file_if_unreferenced`).
     #[tokio::test]
     async fn data_deleted_when_last_dataset_link_removed() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
+        let (_, [_, row2], location) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["dataset1", "dataset2"]).await;
 
-        let ds1 = Dataset::new("dataset1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("dataset2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
-        let location = storage
-            .store(b"shared content", "shared.txt")
-            .await
-            .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
-
-        svc.execute(&DeleteRequest {
-            scope: DeleteScope::Dataset {
-                owner_id: owner,
-                dataset_name: "dataset1".to_string(),
-                tenant_id: None,
-            },
-            mode: DeleteMode::Soft,
-            memory_only: false,
-        })
-        .await
-        .expect("delete dataset1");
-
-        let result = svc
-            .execute(&DeleteRequest {
+        for name in ["dataset1", "dataset2"] {
+            svc.execute(&DeleteRequest {
                 scope: DeleteScope::Dataset {
                     owner_id: owner,
-                    dataset_name: "dataset2".to_string(),
+                    dataset_name: name.to_string(),
                     tenant_id: None,
                 },
                 mode: DeleteMode::Soft,
                 memory_only: false,
             })
             .await
-            .expect("delete dataset2");
+            .expect("delete dataset");
+        }
 
-        assert_eq!(
-            result.deleted_data, 1,
-            "data must be deleted when last link is removed"
+        assert!(ops::data::get_data(&db, row2).await.unwrap().is_none());
+        assert!(
+            !storage.exists(&location).await.unwrap(),
+            "the file is removed with its last reference"
         );
+    }
 
-        let data_gone = ops::data::get_data(&db, data_id).await.unwrap();
-        assert!(data_gone.is_none(), "data record must be gone");
+    /// Seed one row per dataset whose raw location is the derived text and
+    /// whose original is the uploaded image/audio, as `add` stores them.
+    /// `shared_original` makes both rows point at one original.
+    async fn seed_derived_rows(
+        db: &cognee_database::DatabaseConnection,
+        storage: &MockStorage,
+        owner: Uuid,
+        names: &[&str],
+        shared_original: bool,
+    ) -> (Vec<Uuid>, Vec<String>, Vec<String>) {
+        let mut ids = vec![];
+        let mut raws = vec![];
+        let mut originals = vec![];
+        let shared = storage.store(b"image bytes", "image.png").await.unwrap();
+        for (i, name) in names.iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            let ds_id = ds.id;
+            ops::datasets::create_dataset(db, ds).await.unwrap();
+            let raw = storage
+                .store(format!("description {i}").as_bytes(), "text_x.txt")
+                .await
+                .unwrap();
+            let original = if shared_original {
+                shared.clone()
+            } else {
+                storage.store(b"image bytes", "image.png").await.unwrap()
+            };
+            let id = Uuid::new_v4();
+            let data = Data::builder(
+                id,
+                "image.png",
+                raw.clone(),
+                original.clone(),
+                "txt",
+                "text/plain",
+                format!("hash{i}"),
+                owner,
+            )
+            .dataset_id(ds_id)
+            .build();
+            ops::data::create_data(db, data).await.unwrap();
+            ids.push(id);
+            raws.push(raw);
+            originals.push(original);
+        }
+        (ids, raws, originals)
+    }
+
+    async fn delete_dataset_named(svc: &DeleteService, owner: Uuid, name: &str) -> DeleteResult {
+        svc.execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: name.to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("delete dataset")
+    }
+
+    /// An image/audio add stores the derived text as `raw_data_location` and
+    /// the upload as `original_data_location`; delete removes both files
+    /// (Python `delete_data_entity`, `SqlAlchemyAdapter.py:437-450`).
+    #[tokio::test]
+    async fn delete_removes_derived_text_and_original_upload() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, raws, originals) = seed_derived_rows(&db, &storage, owner, &["ds"], false).await;
+
+        let result = delete_dataset_named(&svc, owner, "ds").await;
+
+        assert_eq!(result.deleted_storage_files, 2);
+        assert!(!storage.exists(&raws[0]).await.unwrap());
+        assert!(!storage.exists(&originals[0]).await.unwrap());
+    }
+
+    /// A second row sharing the original keeps it until its own delete.
+    #[tokio::test]
+    async fn delete_keeps_original_another_row_references() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let (_, raws, originals) =
+            seed_derived_rows(&db, &storage, owner, &["ds1", "ds2"], true).await;
+
+        delete_dataset_named(&svc, owner, "ds1").await;
+        assert!(!storage.exists(&raws[0]).await.unwrap());
+        assert!(
+            storage.exists(&originals[0]).await.unwrap(),
+            "the original stays while ds2's row references it"
+        );
+        assert!(storage.exists(&raws[1]).await.unwrap());
+
+        delete_dataset_named(&svc, owner, "ds2").await;
+        assert!(!storage.exists(&originals[0]).await.unwrap());
+    }
+
+    /// An original outside the storage root (the user's own file, a URL) is
+    /// never removed.
+    #[tokio::test]
+    async fn delete_never_touches_original_outside_storage() {
+        let (svc, storage, db) = make_service().await;
+        let owner = Uuid::new_v4();
+        let ds = Dataset::new("ds".to_string(), owner, None, Uuid::new_v4());
+        let ds_id = ds.id;
+        ops::datasets::create_dataset(&db, ds).await.unwrap();
+        let raw = storage.store(b"text", "t.txt").await.unwrap();
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "a",
+            raw.clone(),
+            "https://example.com/a.png",
+            "txt",
+            "text/plain",
+            "h",
+            owner,
+        )
+        .dataset_id(ds_id)
+        .build();
+        ops::data::create_data(&db, data).await.unwrap();
+
+        let result = delete_dataset_named(&svc, owner, "ds").await;
+
+        assert_eq!(result.deleted_storage_files, 1);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(!storage.exists(&raw).await.unwrap());
+    }
+
+    /// On a filesystem backend the stored locations are absolute `file://`
+    /// URIs: an original under the storage root is removed with the derived
+    /// text, one outside it (the user's own file) is kept.
+    #[tokio::test]
+    async fn delete_on_local_storage_removes_managed_original_only() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let db = Arc::new(db);
+        let storage = Arc::new(cognee_storage::LocalStorage::new(root.path().to_path_buf()));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        let owner = Uuid::new_v4();
+        let uri = |key: &str| format!("file://{}", root.path().join(key).display());
+        let user_file = outside.path().join("photo.png");
+        std::fs::write(&user_file, b"user bytes").unwrap();
+
+        let mut files = vec![];
+        for (i, name) in ["managed", "user"].iter().enumerate() {
+            let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
+            let ds_id = ds.id;
+            ops::datasets::create_dataset(&db, ds).await.unwrap();
+            let raw = uri(&storage.store(b"description", "text_x.txt").await.unwrap());
+            let original = if i == 0 {
+                uri(&storage.store(b"image bytes", "image.png").await.unwrap())
+            } else {
+                format!("file://{}", user_file.display())
+            };
+            let data = Data::builder(
+                Uuid::new_v4(),
+                "image.png",
+                raw.clone(),
+                original.clone(),
+                "txt",
+                "text/plain",
+                format!("hash{i}"),
+                owner,
+            )
+            .dataset_id(ds_id)
+            .build();
+            ops::data::create_data(&db, data).await.unwrap();
+            files.push((raw, original));
+        }
+
+        let result = delete_dataset_named(&svc, owner, "managed").await;
+        assert_eq!(result.deleted_storage_files, 2);
+        assert!(!storage.exists(&files[0].0).await.unwrap());
+        assert!(!storage.exists(&files[0].1).await.unwrap());
+
+        let result = delete_dataset_named(&svc, owner, "user").await;
+        assert_eq!(result.deleted_storage_files, 1);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert!(!storage.exists(&files[1].0).await.unwrap());
+        assert!(user_file.exists(), "the user's own file is never removed");
     }
 
     #[tokio::test]
@@ -3421,7 +3743,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_all_reports_provenance_backed_graph_and_vector_counts() {
-        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
         let owner = Uuid::new_v4();
         let (dataset_id, data_id) =
             seed_dataset_with_data(&db, &storage, owner, "all_counts_ds").await;
@@ -3440,6 +3762,22 @@ mod tests {
 
         let edge_slug = Uuid::new_v4();
         seed_provenance_edges(&db, dataset_id, data_id, owner, &[edge_slug], "knows").await;
+        // The edge's EdgeType point exists; only existing points count.
+        vector_db
+            .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                EDGE_TYPE_DATA_TYPE,
+                EDGE_TYPE_FIELD,
+                &[cognee_vector::VectorPoint::new(
+                    EdgeType::deterministic_id("knows"),
+                    vec![1.0, 0.0, 0.0],
+                )],
+            )
+            .await
+            .unwrap();
 
         let request = DeleteRequest {
             scope: DeleteScope::All,
@@ -3449,7 +3787,10 @@ mod tests {
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
         assert_eq!(preview.graph_nodes_to_delete, 2);
-        assert_eq!(preview.vector_points_to_delete, 6);
+        // 2 nodes x 2 indexed fields + 1 EdgeType point. The edge has no
+        // `Triplet_text` point (cognify no longer writes them), so none is
+        // counted.
+        assert_eq!(preview.vector_points_to_delete, 5);
         assert_eq!(preview.provenance_nodes_to_delete, 2);
         assert_eq!(preview.provenance_edges_to_delete, 1);
 
@@ -3600,7 +3941,7 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        // Each edge contributes 1 point to EdgeType and 1 to Triplet = 2
+        // The edge's EdgeType point plus its seeded legacy Triplet point = 2
         assert_eq!(result.deleted_vector_points, 2);
         assert_eq!(
             vector_db
@@ -3622,8 +3963,10 @@ mod tests {
     ///
     /// A malformed extraction can yield an edge with a blank relationship name
     /// and no `edge_text`; cognify writes no `EdgeType` DataPoint for it, so
-    /// neither side may claim one. The counters are asserted equal *and*
-    /// pinned to 1 — equality alone would also hold if both sides counted 2.
+    /// neither side may claim one. Nor does it have a `Triplet_text` point:
+    /// cognify no longer writes them (SDK-1115), and none was seeded. The
+    /// counters are asserted equal *and* pinned to 0 — equality alone would
+    /// also hold if both sides counted a point that does not exist.
     #[tokio::test]
     async fn preview_and_execution_agree_on_an_edge_with_no_retrieval_text() {
         let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
@@ -3641,14 +3984,628 @@ mod tests {
 
         let preview = svc.preview(&request).await.expect("preview should succeed");
         assert_eq!(
-            preview.vector_points_to_delete, 1,
-            "only the Triplet point exists for a textless edge"
+            preview.vector_points_to_delete, 0,
+            "a textless edge with no legacy Triplet point has no vector point"
         );
 
         let result = svc.execute(&request).await.expect("execute should succeed");
         assert_eq!(
             result.deleted_vector_points, preview.vector_points_to_delete,
             "the preview must not promise an EdgeType point the sweep never issues"
+        );
+    }
+
+    /// Seed `count` provenance edges named `relationship_name` and return them,
+    /// so a test can derive each edge's legacy `Triplet_text` point id.
+    async fn seed_edges_returning(
+        db: &cognee_database::DatabaseConnection,
+        dataset_id: Uuid,
+        data_id: Uuid,
+        owner_id: Uuid,
+        count: usize,
+        relationship_name: &str,
+    ) -> Vec<GraphEdge> {
+        let edges: Vec<GraphEdge> = (0..count)
+            .map(|_| GraphEdge {
+                id: Uuid::new_v4(),
+                slug: Uuid::new_v4(),
+                user_id: owner_id,
+                data_id,
+                dataset_id,
+                pipeline_run_id: None,
+                source_node_id: Uuid::new_v4(),
+                destination_node_id: Uuid::new_v4(),
+                relationship_name: relationship_name.to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            })
+            .collect();
+        ops::graph_storage::upsert_edges(db, &edges).await.unwrap();
+        edges
+    }
+
+    /// Index a legacy `Triplet_text` point for each of `edges`.
+    async fn seed_legacy_triplet_points(vector_db: &MockVectorDB, edges: &[GraphEdge]) {
+        vector_db
+            .create_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD, 3)
+            .await
+            .unwrap();
+        let points: Vec<cognee_vector::VectorPoint> = edges
+            .iter()
+            .map(|edge| {
+                cognee_vector::VectorPoint::new(triplet_vector_id(edge), vec![0.0, 1.0, 0.0])
+            })
+            .collect();
+        vector_db
+            .index_points(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &points)
+            .await
+            .unwrap();
+    }
+
+    /// A dataset delete counts a legacy `Triplet_text` point only when it
+    /// exists — in the preview and in the run (SDK-1039 part E).
+    ///
+    /// Three edges, of which only one still has a `Triplet_text` point: the
+    /// old code counted one point per edge in both places. The edges have no
+    /// retrieval text, so no `EdgeType` point muddies the count.
+    #[tokio::test]
+    async fn dataset_delete_counts_only_existing_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "legacy_triplet_ds").await;
+        let edges = seed_edges_returning(&db, dataset_id, data_id, owner, 3, "").await;
+        seed_legacy_triplet_points(&vector_db, &edges[..1]).await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "legacy_triplet_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(
+            preview.vector_points_to_delete, 1,
+            "only the one existing Triplet point counts"
+        );
+
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(
+            result.deleted_vector_points, preview.vector_points_to_delete,
+            "preview and run must count the same Triplet points"
+        );
+        assert_eq!(
+            vector_db
+                .collection_size(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
+                .await
+                .unwrap(),
+            0,
+            "the existing legacy Triplet point must still be deleted"
+        );
+    }
+
+    /// How the `EdgeType` store is seeded for the count tests below.
+    #[derive(Clone, Copy)]
+    enum EdgeTypeStore {
+        /// No `EdgeType_relationship_name` collection.
+        NoCollection,
+        /// The collection exists but holds no point.
+        EmptyCollection,
+        /// The collection holds the point of the edges' shared text.
+        PointPresent,
+    }
+
+    /// Three text-bearing edges sharing one retrieval text, deleted through
+    /// `scope_for(owner)`: returns `(previewed, deleted, points left)`.
+    async fn edge_type_counts(
+        store: EdgeTypeStore,
+        all_scope: bool,
+    ) -> (usize, usize, Option<usize>) {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "edge_type_count_ds").await;
+        seed_edges_returning(&db, dataset_id, data_id, owner, 3, "is_a").await;
+        if !matches!(store, EdgeTypeStore::NoCollection) {
+            vector_db
+                .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+                .await
+                .unwrap();
+        }
+        if matches!(store, EdgeTypeStore::PointPresent) {
+            let point = cognee_vector::VectorPoint::new(
+                EdgeType::deterministic_id("is_a"),
+                vec![1.0, 0.0, 0.0],
+            );
+            vector_db
+                .index_points(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, &[point])
+                .await
+                .unwrap();
+        }
+        let scope = if all_scope {
+            DeleteScope::All
+        } else {
+            DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "edge_type_count_ds".to_string(),
+                tenant_id: None,
+            }
+        };
+        let request = DeleteRequest {
+            scope,
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        let left = vector_db
+            .collection_size(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD)
+            .await
+            .ok();
+        (
+            preview.vector_points_to_delete,
+            result.deleted_vector_points,
+            left,
+        )
+    }
+
+    /// Text-bearing edges with no `EdgeType` collection: nothing to delete,
+    /// so the preview and the run both report 0 (they used to say 3 and 0).
+    #[tokio::test]
+    async fn edge_type_count_is_zero_without_the_collection() {
+        for all_scope in [false, true] {
+            let (previewed, deleted, _) =
+                edge_type_counts(EdgeTypeStore::NoCollection, all_scope).await;
+            assert_eq!((previewed, deleted), (0, 0), "all_scope={all_scope}");
+        }
+    }
+
+    /// Three edges sharing one text are one point: preview == run == 1, and
+    /// the point is gone.
+    #[tokio::test]
+    async fn edge_type_count_dedups_edges_sharing_a_text() {
+        for all_scope in [false, true] {
+            let (previewed, deleted, left) =
+                edge_type_counts(EdgeTypeStore::PointPresent, all_scope).await;
+            assert_eq!((previewed, deleted), (1, 1), "all_scope={all_scope}");
+            // The whole-store wipe drops the collection instead (no size).
+            assert!(matches!(left, Some(0) | None), "all_scope={all_scope}");
+        }
+    }
+
+    /// The collection exists but the point was never written: 0 == 0.
+    #[tokio::test]
+    async fn edge_type_count_is_zero_when_the_point_is_absent() {
+        for all_scope in [false, true] {
+            let (previewed, deleted, _) =
+                edge_type_counts(EdgeTypeStore::EmptyCollection, all_scope).await;
+            assert_eq!((previewed, deleted), (0, 0), "all_scope={all_scope}");
+        }
+    }
+
+    /// Two datasets whose edges share one retrieval text share one point in
+    /// the shared store. Deleting both (`User` previews them together and
+    /// runs them one by one; `All` reports the counted set) counts it once.
+    #[tokio::test]
+    async fn edge_type_point_shared_by_two_datasets_counts_once() {
+        for all_scope in [false, true] {
+            let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+            let owner = Uuid::new_v4();
+            for name in ["shared_text_a", "shared_text_b"] {
+                let (dataset_id, data_id) =
+                    seed_dataset_with_data(&db, &storage, owner, name).await;
+                seed_edges_returning(&db, dataset_id, data_id, owner, 2, "is_a").await;
+            }
+            vector_db
+                .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+                .await
+                .unwrap();
+            vector_db
+                .index_points(
+                    EDGE_TYPE_DATA_TYPE,
+                    EDGE_TYPE_FIELD,
+                    &[cognee_vector::VectorPoint::new(
+                        EdgeType::deterministic_id("is_a"),
+                        vec![1.0, 0.0, 0.0],
+                    )],
+                )
+                .await
+                .unwrap();
+            let scope = if all_scope {
+                DeleteScope::All
+            } else {
+                DeleteScope::User {
+                    owner_id: owner,
+                    tenant_id: None,
+                }
+            };
+            let request = DeleteRequest {
+                scope,
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            };
+            let preview = svc.preview(&request).await.expect("preview should succeed");
+            let result = svc.execute(&request).await.expect("execute should succeed");
+            assert_eq!(
+                (
+                    preview.vector_points_to_delete,
+                    result.deleted_vector_points
+                ),
+                (1, 1),
+                "all_scope={all_scope}"
+            );
+        }
+    }
+
+    /// A [`DatasetStorageLifecycle`] whose drops always succeed.
+    struct DroppingStorage;
+
+    #[async_trait::async_trait]
+    impl DatasetStorageLifecycle for DroppingStorage {
+        async fn drop_dataset_storage(
+            &self,
+            _dataset_id: Uuid,
+        ) -> Result<bool, cognee_database::DatabaseError> {
+            Ok(true)
+        }
+        async fn drop_all_dataset_storage(&self) -> Result<usize, cognee_database::DatabaseError> {
+            Ok(0)
+        }
+    }
+
+    /// Per-dataset storage: each dataset's store is dropped whole, unprobed,
+    /// so each counts its distinct `EdgeType` ids: three edges sharing a text
+    /// are one point per dataset, and two datasets are two stores (2 == 2).
+    #[tokio::test]
+    async fn per_dataset_storage_counts_distinct_edge_type_ids_per_dataset() {
+        let (svc, storage, db, _graph_db, _vector_db) = make_service_with_graph_vector().await;
+        let svc = svc.with_dataset_storage(Arc::new(DroppingStorage));
+        let owner = Uuid::new_v4();
+        for name in ["own_store_a", "own_store_b"] {
+            let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, name).await;
+            seed_edges_returning(&db, dataset_id, data_id, owner, 3, "is_a").await;
+        }
+        let request = DeleteRequest {
+            scope: DeleteScope::User {
+                owner_id: owner,
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (2, 2)
+        );
+    }
+
+    /// The data-scoped run counts an `EdgeType` point only when it exists:
+    /// absent → 0 (it used to report the requested id), present → 1 and gone.
+    #[tokio::test]
+    async fn data_scoped_run_counts_only_an_existing_edge_type_point() {
+        for present in [false, true] {
+            let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+            let owner = Uuid::new_v4();
+            let (dataset_id, data_id) =
+                seed_dataset_with_data(&db, &storage, owner, "data_edge_type_ds").await;
+            seed_edges_returning(&db, dataset_id, data_id, owner, 2, "is_a").await;
+            vector_db
+                .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+                .await
+                .unwrap();
+            if present {
+                vector_db
+                    .index_points(
+                        EDGE_TYPE_DATA_TYPE,
+                        EDGE_TYPE_FIELD,
+                        &[cognee_vector::VectorPoint::new(
+                            EdgeType::deterministic_id("is_a"),
+                            vec![1.0, 0.0, 0.0],
+                        )],
+                    )
+                    .await
+                    .unwrap();
+            }
+            let request = DeleteRequest {
+                scope: DeleteScope::DataInDataset {
+                    dataset_id,
+                    data_id,
+                    delete_dataset_if_empty: false,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            };
+            let result = svc.execute(&request).await.expect("execute should succeed");
+            assert_eq!(
+                result.deleted_vector_points,
+                usize::from(present),
+                "present={present}"
+            );
+            let left = vector_db
+                .collection_size(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD)
+                .await
+                .unwrap();
+            assert_eq!(left, 0, "present={present}");
+        }
+    }
+
+    /// A failed `EdgeType` probe fails the run (the point cannot be deleted
+    /// unseen) and degrades the preview to counting none, with no error.
+    #[tokio::test]
+    async fn edge_type_probe_failure_fails_the_run_and_zeroes_the_preview() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "probe_fail_ds").await;
+        seed_edges_returning(&db, dataset_id, data_id, owner, 1, "is_a").await;
+        vector_db
+            .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+            .await
+            .unwrap();
+        vector_db.set_retrieve_error("injected retrieve failure");
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "probe_fail_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let preview = svc.preview(&request).await.expect("preview degrades");
+        assert_eq!(preview.vector_points_to_delete, 0);
+        let error = svc.execute(&request).await.expect_err("run must fail");
+        assert!(
+            matches!(&error, DeleteError::VectorCleanup(msg) if msg.contains("EdgeType_relationship_name")),
+            "{error:?}"
+        );
+    }
+
+    /// With no `Triplet_text` collection at all — every store cognify writes
+    /// now — a dataset delete counts no Triplet point, previewed or run.
+    #[tokio::test]
+    async fn dataset_delete_without_triplet_collection_counts_no_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "no_triplet_ds").await;
+        seed_edges_returning(&db, dataset_id, data_id, owner, 2, "").await;
+        assert!(
+            !vector_db
+                .has_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD)
+                .await
+                .unwrap()
+        );
+
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "no_triplet_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(
+            preview.vector_points_to_delete, 0,
+            "textless edges with no Triplet collection have no vector point"
+        );
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_vector_points, 0);
+    }
+
+    /// The store-wide delete counts through the same ledger helper, so an
+    /// existing legacy `Triplet_text` point is counted once, and a missing one
+    /// not at all, in both the preview and the run.
+    #[tokio::test]
+    async fn delete_all_counts_only_existing_triplet_points() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) =
+            seed_dataset_with_data(&db, &storage, owner, "all_legacy_triplet_ds").await;
+        let edges = seed_edges_returning(&db, dataset_id, data_id, owner, 2, "").await;
+        seed_legacy_triplet_points(&vector_db, &edges[1..]).await;
+
+        let request = DeleteRequest {
+            scope: DeleteScope::All,
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let preview = svc.preview(&request).await.expect("preview should succeed");
+        assert_eq!(preview.vector_points_to_delete, 1);
+        let result = svc.execute(&request).await.expect("execute should succeed");
+        assert_eq!(result.deleted_vector_points, 1);
+    }
+
+    /// A store whose legacy `Triplet_text` lookup (`fail_retrieve`) or delete
+    /// (`fail_delete`) fails; every other collection works.
+    struct FailingTripletVectorDb {
+        inner: MockVectorDB,
+        fail_retrieve: bool,
+        fail_delete: bool,
+    }
+
+    impl FailingTripletVectorDb {
+        fn is_triplet(data_type: &str, field_name: &str) -> bool {
+            data_type == TRIPLET_DATA_TYPE && field_name == TRIPLET_FIELD
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl VectorDB for FailingTripletVectorDb {
+        async fn create_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            dimension: usize,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner
+                .create_collection(data_type, field_name, dimension)
+                .await
+        }
+        async fn has_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<bool> {
+            self.inner.has_collection(data_type, field_name).await
+        }
+        async fn index_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            points: &[cognee_vector::VectorPoint],
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner.index_points(data_type, field_name, points).await
+        }
+        async fn search_similar(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            query: &[f32],
+            limit: usize,
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            self.inner
+                .search_similar(data_type, field_name, query, limit)
+                .await
+        }
+        async fn delete_collection(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<()> {
+            self.inner.delete_collection(data_type, field_name).await
+        }
+        async fn delete_points(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            point_ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<()> {
+            if self.fail_delete && Self::is_triplet(data_type, field_name) {
+                return Err(cognee_vector::VectorDBError::StorageError(
+                    "injected delete failure".to_string(),
+                ));
+            }
+            self.inner
+                .delete_points(data_type, field_name, point_ids)
+                .await
+        }
+        async fn retrieve(
+            &self,
+            data_type: &str,
+            field_name: &str,
+            ids: &[Uuid],
+        ) -> cognee_vector::VectorDBResult<Vec<cognee_vector::SearchResult>> {
+            if self.fail_retrieve && Self::is_triplet(data_type, field_name) {
+                return Err(cognee_vector::VectorDBError::StorageError(
+                    "injected retrieve failure".to_string(),
+                ));
+            }
+            self.inner.retrieve(data_type, field_name, ids).await
+        }
+        async fn collection_size(
+            &self,
+            data_type: &str,
+            field_name: &str,
+        ) -> cognee_vector::VectorDBResult<usize> {
+            self.inner.collection_size(data_type, field_name).await
+        }
+    }
+
+    /// The legacy `Triplet_text` cleanup is best-effort, as in Python
+    /// (`delete_from_graph_and_vector.py:108-113` swallows any exception): a
+    /// failed lookup or delete leaves a warning, counts no point, and does
+    /// not fail the delete or keep the other collections from being cleaned.
+    #[tokio::test]
+    async fn a_failing_triplet_cleanup_is_a_warning_not_an_error() {
+        let edge = GraphEdge {
+            id: Uuid::new_v4(),
+            slug: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            data_id: Uuid::new_v4(),
+            dataset_id: Uuid::new_v4(),
+            pipeline_run_id: None,
+            source_node_id: Uuid::new_v4(),
+            destination_node_id: Uuid::new_v4(),
+            relationship_name: String::new(),
+            label: None,
+            attributes: None,
+            created_at: chrono::Utc::now(),
+        };
+        let edge_type_id = Uuid::new_v4();
+        for (fail_retrieve, fail_delete) in [(true, false), (false, true)] {
+            let store = FailingTripletVectorDb {
+                inner: MockVectorDB::new(),
+                fail_retrieve,
+                fail_delete,
+            };
+            seed_legacy_triplet_points(&store.inner, std::slice::from_ref(&edge)).await;
+            store
+                .create_collection("EdgeType", "relationship_name", 3)
+                .await
+                .unwrap();
+            store
+                .index_points(
+                    "EdgeType",
+                    "relationship_name",
+                    &[cognee_vector::VectorPoint::new(
+                        edge_type_id,
+                        vec![1.0, 0.0, 0.0],
+                    )],
+                )
+                .await
+                .unwrap();
+            let store: Arc<dyn VectorDB> = Arc::new(store);
+
+            let (deleted, warnings) = delete_vector_artifacts(
+                Some(&store),
+                &[],
+                std::slice::from_ref(&edge),
+                &[edge_type_id],
+            )
+            .await
+            .expect("a Triplet_text failure must not fail the delete");
+            assert_eq!(
+                deleted, 1,
+                "only the EdgeType point is deleted (retrieve {fail_retrieve}, delete {fail_delete})"
+            );
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(warnings[0].contains("Triplet_text"), "{warnings:?}");
+            assert_eq!(
+                store
+                    .collection_size("EdgeType", "relationship_name")
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        let store: Arc<dyn VectorDB> = Arc::new(FailingTripletVectorDb {
+            inner: MockVectorDB::new(),
+            fail_retrieve: true,
+            fail_delete: false,
+        });
+        store
+            .create_collection(TRIPLET_DATA_TYPE, TRIPLET_FIELD, 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            ledger_artifact_counts(Some(&store), &[], std::slice::from_ref(&edge)).await,
+            (0, 0),
+            "a failed lookup counts no Triplet point, as the run deletes none"
         );
     }
 
@@ -5093,6 +6050,59 @@ mod tests {
         assert!(matches!(err, DeleteError::Validation(_)), "{err:?}");
     }
 
+    /// SDK-1039 P21. A pre-fork id (the `legacy_id` of a forked row) resolves
+    /// in the dataset: the delete acts on the forked row and its receipt
+    /// reports the resolved id, as Python's does. From another dataset the
+    /// legacy id resolves to nothing and no row is touched.
+    #[tokio::test]
+    async fn data_in_dataset_resolves_a_legacy_id_and_reports_the_resolved_id() {
+        let (svc, storage, db, acl) = make_authorized_service().await;
+        let owner = Uuid::new_v4();
+        let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, "fork_ds").await;
+        let (other_dataset, _) = seed_dataset_with_data(&db, &storage, owner, "other_ds").await;
+        mock_grant_all_perms(&acl, owner, dataset_id).await;
+        mock_grant_all_perms(&acl, owner, other_dataset).await;
+
+        let legacy = Uuid::new_v4();
+        let mut row = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        row.legacy_id = Some(legacy);
+        ops::data::update_data(&db, row).await.unwrap();
+
+        let request = |dataset_id| DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id,
+                data_id: legacy,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        // In the other dataset the legacy id is unknown: the missing-row path
+        // runs and nothing is detached.
+        let result = svc
+            .execute(&request(other_dataset), owner, None)
+            .await
+            .expect("an unknown id is the missing-row path");
+        assert_eq!(result.deleted_dataset_links, 0);
+        assert!(
+            ops::data::get_data(&db, data_id).await.unwrap().is_some(),
+            "the forked row is untouched"
+        );
+
+        let result = svc
+            .execute(&request(dataset_id), owner, None)
+            .await
+            .expect("the legacy id resolves in the fork's dataset");
+        assert_eq!(result.deleted_dataset_links, 1);
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(
+            result.data_id,
+            Some(data_id),
+            "the receipt names the resolved id"
+        );
+    }
+
     #[tokio::test]
     async fn authorized_delete_fails_without_permission() {
         use cognee_database::AclDb;
@@ -5771,44 +6781,18 @@ mod tests {
         // the data survives deletion.
     }
 
+    /// Deleting a dataset clears the status of its own rows only. A row of
+    /// another dataset whose `pipeline_status` names both datasets (as a row
+    /// forked by the dataset-scoping migration does) is not touched, as in
+    /// Python, where `delete_dataset` reaches only `Data.dataset_id` rows.
     #[tokio::test]
     async fn test_dataset_deletion_clears_pipeline_status_data_survives() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
+        let ([ds1_id, ds2_id], [_, row2], _) =
+            seed_same_content_in_two_datasets(&db, &storage, owner, ["ps_ds1", "ps_ds2"]).await;
 
-        // Create two datasets sharing one data item
-        let ds1 = Dataset::new("ps_ds1".to_string(), owner, None, Uuid::new_v4());
-        let ds2 = Dataset::new("ps_ds2".to_string(), owner, None, Uuid::new_v4());
-        let ds1_id = ds1.id;
-        let ds2_id = ds2.id;
-        ops::datasets::create_dataset(&db, ds1).await.unwrap();
-        ops::datasets::create_dataset(&db, ds2).await.unwrap();
-
-        let location = storage
-            .store(b"shared content", "shared.txt")
-            .await
-            .unwrap();
-        let data_id = Uuid::new_v4();
-        let data = Data::builder(
-            data_id,
-            "shared.txt",
-            location,
-            "file://shared.txt",
-            "txt",
-            "text/plain",
-            "shared_hash",
-            owner,
-        )
-        .build();
-        ops::data::create_data(&db, data).await.unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds1_id, data_id)
-            .await
-            .unwrap();
-        ops::datasets::attach_data_to_dataset(&db, ds2_id, data_id)
-            .await
-            .unwrap();
-
-        // Set pipeline_status with entries for both datasets
+        // Both rows carry status entries for both datasets.
         let ds1_hex = cognee_database::uuid_hex::to_hex(ds1_id);
         let ds2_hex = cognee_database::uuid_hex::to_hex(ds2_id);
         let status_json = serde_json::json!({
@@ -5817,12 +6801,18 @@ mod tests {
                 ds2_hex.clone(): "DATA_ITEM_PROCESSING_COMPLETED"
             }
         });
-        let data_record = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
-        let updated_data = Data {
-            pipeline_status: Some(status_json.to_string()),
-            ..data_record
-        };
-        ops::data::update_data(&db, updated_data).await.unwrap();
+        for dataset_id in [ds1_id, ds2_id] {
+            for row in ops::datasets::get_dataset_data(&db, dataset_id)
+                .await
+                .unwrap()
+            {
+                let updated_data = Data {
+                    pipeline_status: Some(status_json.to_string()),
+                    ..row
+                };
+                ops::data::update_data(&db, updated_data).await.unwrap();
+            }
+        }
 
         // Delete dataset 1 only
         let result = svc
@@ -5839,33 +6829,21 @@ mod tests {
             .expect("execute should succeed");
 
         assert_eq!(result.deleted_datasets, 1);
-        assert_eq!(
-            result.deleted_data, 0,
-            "data should survive because it's still linked to ds2"
-        );
+        assert_eq!(result.deleted_data, 1, "ps_ds1's own row is deleted");
         assert_eq!(result.cleared_pipeline_statuses, 1);
 
-        // Verify pipeline_status: ds1 entry should be removed, ds2 entry should remain
-        let data_after = ops::data::get_data(&db, data_id).await.unwrap().unwrap();
+        // ps_ds2's row survives with its status as it was.
+        let data_after = ops::data::get_data(&db, row2).await.unwrap().unwrap();
         let status_after: serde_json::Value =
             serde_json::from_str(data_after.pipeline_status.as_deref().unwrap_or("{}")).unwrap();
-        let cognify_obj = status_after
-            .get("cognify_pipeline")
-            .and_then(|v| v.as_object())
-            .expect("cognify_pipeline should still exist");
-
-        assert!(
-            !cognify_obj.contains_key(&ds1_hex),
-            "ds1 entry should be removed from pipeline_status"
-        );
-        assert!(
-            cognify_obj.contains_key(&ds2_hex),
-            "ds2 entry should remain in pipeline_status"
+        assert_eq!(
+            status_after, status_json,
+            "another dataset's row is untouched"
         );
     }
 
     #[tokio::test]
-    async fn test_data_deletion_invalidates_pipeline_cache() {
+    async fn test_data_deletion_removes_the_datasets_pipeline_runs() {
         let (svc, storage, db) = make_service().await;
         let owner = Uuid::new_v4();
         let (dataset_id, data_id) =
@@ -5926,7 +6904,7 @@ mod tests {
                 .unwrap();
         assert!(
             status_after.is_none(),
-            "pipeline run should be invalidated after data deletion"
+            "the dataset's pipeline run history should be removed with the data"
         );
     }
 
@@ -7303,99 +8281,47 @@ mod tests {
         );
     }
 
-    /// The delete path *recomputes* the `Triplet` point id from the ledger
-    /// row; cognify *wrote* that point from the extracted graph. Nothing but
-    /// this test holds the two formulas together, and a recompute that drifts
-    /// issues a delete for a point that was never written while the real one
-    /// survives forever — the failure mode this corner of the crate exists to
-    /// prevent.
+    /// The delete path *recomputes* the legacy `Triplet` point id from the
+    /// ledger row. Cognify no longer writes `Triplet_text` (SDK-1115), but
+    /// databases written by earlier versions still hold those rows, and a
+    /// recompute that drifts from `Triplet::new` would issue a delete for a
+    /// point that was never written while the real one survives forever.
     ///
-    /// Asserted against a triplet cognify itself builds, not against the
-    /// formula restated here, so the two crates cannot drift apart silently.
-    /// `triplet_creation::test_triplet_with_edge_text_property` pins the same
-    /// identity from the writing side; this is the deleting side of that pair.
+    /// The ledger row is the shape cognify's `semantic_edge_provenance_rows`
+    /// writes for a non-`contains` edge: `relationship_name` holds the
+    /// relationship name, never the description, and the description rides
+    /// along in `attributes.edge_text`. The description stays out of the id.
     #[test]
-    fn triplet_vector_id_recomputes_the_point_cognify_wrote() {
-        use cognee_cognify::triplet_creation::create_triplets_from_graph;
-        use cognee_cognify::{GraphEdgePair, GraphNodePair};
-        use cognee_models::{DataPoint, Entity, EntityType};
+    fn triplet_vector_id_recomputes_the_legacy_triplet_point_id() {
+        let source = Uuid::new_v4();
+        let target = Uuid::new_v4();
 
-        fn node(name: &str) -> GraphNodePair {
-            GraphNodePair {
-                entity: Entity {
-                    base: DataPoint::new("Entity", None),
-                    name: name.to_string(),
-                    is_a: None,
-                    description: format!("description of {name}"),
-                },
-                entity_type: Some(EntityType {
-                    base: DataPoint::new("EntityType", None),
-                    name: "Generic".to_string(),
-                    description: "Generic type".to_string(),
-                }),
-            }
-        }
-
-        /// The ledger row cognify's `semantic_edge_provenance_rows` writes for
-        /// a non-`contains` edge: `relationship_name` holds the relationship
-        /// name — never the description — and the description rides along in
-        /// `attributes.edge_text`.
-        fn ledger_row(edge: &GraphEdgePair) -> GraphEdge {
-            GraphEdge {
+        for edge_text in ["employed by since 2019", ""] {
+            let row = GraphEdge {
                 id: Uuid::new_v4(),
                 slug: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
                 data_id: Uuid::new_v4(),
                 dataset_id: Uuid::new_v4(),
                 pipeline_run_id: None,
-                source_node_id: edge.source_entity_id,
-                destination_node_id: edge.target_entity_id,
-                relationship_name: edge.relationship_name.clone(),
-                label: Some(edge.relationship_name.clone()),
-                attributes: serde_json::to_value(&edge.properties).ok(),
+                source_node_id: source,
+                destination_node_id: target,
+                relationship_name: "works_at".to_string(),
+                label: Some("works_at".to_string()),
+                attributes: Some(serde_json::json!({ "edge_text": edge_text })),
                 created_at: chrono::Utc::now(),
-            }
+            };
+            assert_eq!(
+                triplet_vector_id(&row),
+                Triplet::new(
+                    source,
+                    target,
+                    "works_at".to_string(),
+                    "any text".to_string()
+                )
+                .id,
+                "the delete must name the point `Triplet::new` derived (edge_text={edge_text:?})"
+            );
         }
-
-        let alice = node("Alice");
-        let acme = node("Acme");
-        let nodes = [alice.clone(), acme.clone()];
-
-        let mut described =
-            GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
-        described.add_property("edge_text", "employed by since 2019");
-
-        let written = create_triplets_from_graph(&nodes, std::slice::from_ref(&described));
-        assert_eq!(written.len(), 1);
-        assert!(
-            written[0].text.contains("employed by since 2019"),
-            "the description reaches the embedded text — otherwise the twin \
-             assertion below proves nothing"
-        );
-        assert_eq!(
-            triplet_vector_id(&ledger_row(&described)),
-            written[0].id,
-            "the delete must name the Triplet point cognify actually wrote for \
-             a described edge"
-        );
-
-        // Twin: the same edge without a description. Cognify keys it on the
-        // relationship name, and the delete path — which only ever sees that
-        // name in the ledger column — must land on the same point for both.
-        let mut bare = GraphEdgePair::new(alice.entity.base.id, acme.entity.base.id, "works_at");
-        bare.add_property("edge_text", "");
-
-        let undescribed = create_triplets_from_graph(&nodes, std::slice::from_ref(&bare));
-        assert_eq!(undescribed.len(), 1);
-        assert_eq!(
-            triplet_vector_id(&ledger_row(&bare)),
-            undescribed[0].id,
-            "and the point cognify wrote for an undescribed edge"
-        );
-        assert_eq!(
-            written[0].id, undescribed[0].id,
-            "a described and an undescribed edge between the same endpoints \
-             key one point: the description stays out of the id on both sides"
-        );
     }
 }

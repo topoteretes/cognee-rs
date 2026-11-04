@@ -52,7 +52,6 @@ public final class Cognee implements AutoCloseable {
     private CogneeDatasets datasets;
     private CogneeSessions sessions;
     private CogneeUsers users;
-    private CogneeNotebooks notebooks;
 
     /** The synchronous configuration surface. */
     public synchronized CogneeConfig config() {
@@ -80,12 +79,6 @@ public final class Cognee implements AutoCloseable {
     public synchronized CogneeUsers users() {
         if (users == null) users = new CogneeUsers(this);
         return users;
-    }
-
-    /** The notebook-management surface. */
-    public synchronized CogneeNotebooks notebooks() {
-        if (notebooks == null) notebooks = new CogneeNotebooks(this);
-        return notebooks;
     }
 
     /** Construct from environment/default settings. */
@@ -307,19 +300,6 @@ public final class Cognee implements AutoCloseable {
         dispatchVoid(h -> Native.rememberEntry(h, ai.cognee.internal.Json.toJson(entry),
                 datasetName, sessionId, optsJson, f));
         return f.thenApply(json -> new RememberResult(ai.cognee.internal.Json.tree(json)));
-    }
-
-    // --- memify ---
-    /** Index triplet embeddings from the existing graph (enables triplet search). */
-    public CompletableFuture<MemifyResult> memify(MemifyOptions opts) {
-        CompletableFuture<String> f = new CompletableFuture<>();
-        dispatchVoid(h -> Native.memify(h, Options.jsonOf(opts), f));
-        return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, MemifyResult.class));
-    }
-
-    /** Index triplet embeddings with default options. */
-    public CompletableFuture<MemifyResult> memify() {
-        return memify(null);
     }
 
     // --- improve ---

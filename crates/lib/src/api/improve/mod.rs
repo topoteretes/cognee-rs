@@ -38,7 +38,7 @@ use std::time::Instant;
 
 use cognee_cognify::CognifyConfig;
 use cognee_core::DatasetLocks;
-use cognee_database::{CheckpointStore, RelationalDb};
+use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use super::error::ApiError;
 use stages::{GraphCapabilities, ImproveStages, StageExecutor, StageRun};
-use watermark::{StageStamp, save_stamps};
+use watermark::{StageStamp, record_improve_operation};
 
 pub use config::{
     DEFAULT_FEEDBACK_ALPHA, ImproveConfig, ImproveConfigError, parse_stages_disabled,
@@ -94,9 +94,6 @@ pub struct ImproveParams<'a> {
     /// Session ids that feed the session stages. `None` or empty skips them
     /// with `no_session_ids`; empty ids are dropped.
     pub session_ids: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115): it only scoped the removed triplet
-    /// stage and the deprecated custom tasks. Ignored.
-    pub node_name: Option<Vec<String>>,
     /// Owner UUID under which graph/session reads and writes are scoped.
     pub owner_id: Uuid,
     /// Optional tenant UUID for multi-tenant deployments.
@@ -119,14 +116,6 @@ pub struct ImproveParams<'a> {
     /// ([`Settings::auto_feedback_enabled`](crate::config::Settings::auto_feedback_enabled)):
     /// gates `extract_agent_context` (`auto_feedback_disabled`).
     pub auto_feedback: bool,
-
-    /// Deprecated in Python (SDK-1115): custom extraction tasks, which Python
-    /// runs as a trailing `custom_tasks` stage. Not supported; ignored.
-    pub extraction_tasks: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
-    pub enrichment_tasks: Option<Vec<String>>,
-    /// Deprecated in Python (SDK-1115), as `extraction_tasks`. Ignored.
-    pub data: Option<String>,
 
     /// Opt in to the `global_context_index` stage (Python's
     /// `build_global_context_index`). Default `false`.
@@ -162,10 +151,6 @@ pub struct ImproveParams<'a> {
     pub session_manager: Option<Arc<SessionManager>>,
     /// Add pipeline (borrowed). Required by the cognify-backed stages.
     pub add_pipeline: Option<&'a AddPipeline>,
-    /// Checkpoint store of the stage watermarks
-    /// (`improve_stage:{stage}:{dataset_id}`). Without one a watermarked stage
-    /// always runs.
-    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// The dataset lock registry the run holds its dataset in, for its whole
     /// length. `None` uses the add pipeline's registry
     /// ([`AddPipeline::dataset_locks`]) and, without one, the process-wide
@@ -233,44 +218,6 @@ fn skip_stages(result: &mut ImproveResult, stages: &[StageKind], reason: &str) {
     );
 }
 
-/// Counts that say how much a stage wrote: when a stage reports any of them,
-/// it wrote iff one is positive.
-const WRITE_COUNTS: [&str; 10] = [
-    "entries_applied",
-    "sessions_persisted",
-    "windows",
-    "lessons",
-    "documents",
-    "edges_written",
-    "edges_pruned",
-    "text_lines_added",
-    "anchors",
-    "nodes_scored",
-];
-
-/// Whether `stage` may have written to the dataset's graph — what makes the
-/// run a change for the watermarked stages (Python counts every non-noop
-/// improve). Conservative: an errored stage may have written part of its
-/// data, and a completed one without a write count is assumed to have
-/// written. `global_context_index` is the watermark's own writer, and a
-/// skipped or `already_completed` stage wrote nothing.
-fn stage_may_have_written(stage: StageKind, result: &StageResult) -> bool {
-    if stage == StageKind::GlobalContextIndex {
-        return false;
-    }
-    match result.status {
-        StageStatus::Errored => true,
-        StageStatus::Completed => {
-            let mut counts = WRITE_COUNTS
-                .iter()
-                .filter_map(|key| result.counts.get(*key))
-                .peekable();
-            counts.peek().is_none() || counts.any(|n| *n > 0)
-        }
-        StageStatus::AlreadyCompleted | StageStatus::Skipped => false,
-    }
-}
-
 /// One [`StageResult`] per stage, in order — Python's `execute_stages`
 /// (`cognee/api/v1/improve/improve.py:242-280`).
 ///
@@ -292,7 +239,6 @@ async fn execute_stages<E: StageExecutor>(
     result: &mut ImproveResult,
     stamps: &mut Vec<StageStamp>,
 ) -> LoopEnd {
-    let mut graph_write_recorded = false;
     for (index, &stage) in stages.iter().enumerate() {
         let run = match gate_reason(stage, has_sessions, stages_disabled, executor) {
             Some(reason) => StageRun::from(StageResult::skipped(stage.name(), reason)),
@@ -322,10 +268,6 @@ async fn execute_stages<E: StageExecutor>(
                 error = run.result.error.as_deref().unwrap_or(""),
                 "improve: stage errored"
             );
-        }
-        if !graph_write_recorded && stage_may_have_written(stage, &run.result) {
-            executor.record_graph_write().await;
-            graph_write_recorded = true;
         }
         let error = run.result.error.clone();
         stamps.extend(run.stamp);
@@ -389,16 +331,11 @@ async fn run_improve(
     session_ids: Vec<String>,
 ) -> Result<ImproveResult, ApiError> {
     let ImproveParams {
-        dataset_name,
+        mut dataset_name,
         dataset_id,
         session_ids: _,
         // Deprecated options (SDK-1115), ignored as Python ignores them
         // without custom tasks.
-        node_name: _,
-        extraction_tasks: _,
-        enrichment_tasks: _,
-        data: _,
-        checkpoint_store,
         dataset_locks,
         owner_id,
         tenant_id,
@@ -430,6 +367,20 @@ async fn run_improve(
         .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
     let feedback_alpha = validate_feedback_alpha(feedback_alpha.unwrap_or(config.feedback_alpha))
         .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+
+    // A dataset named by id is resolved once, as Python's `improve(dataset=<UUID>)`
+    // does, and every stage then targets that id: the by-name lookups only see
+    // the owner's own datasets, so a dataset another user shared with the
+    // caller would be recreated under the caller. An id naming no dataset is
+    // an error (Python's `load_or_create_datasets` raises for a UUID matching
+    // none), and the stored name replaces the caller's.
+    if let (Some(id), Some(db)) = (dataset_id, db.as_ref()) {
+        let dataset = cognee_database::IngestDb::get_dataset(&**db, id)
+            .await
+            .map_err(|e| ApiError::Improve(format!("dataset lookup failed for '{id}': {e}")))?
+            .ok_or_else(|| ApiError::Improve(format!("dataset '{id}' not found")))?;
+        dataset_name = dataset.name;
+    }
 
     let mut result = ImproveResult::new(dataset_name.clone(), session_ids.clone());
     result.background = run_in_background;
@@ -506,7 +457,6 @@ async fn run_improve(
                 session_store,
                 session_manager,
                 add_pipeline,
-                checkpoint_store,
                 cognify_config,
             };
             let mut stamps = Vec::new();
@@ -517,14 +467,6 @@ async fn run_improve(
                 &mut stages,
                 &mut result,
                 &mut stamps,
-            )
-            .await;
-            // An errored run invalidates its stamps (Python marks its row
-            // `failed`): a stage after the stamping one may have half-written.
-            save_stamps(
-                stages.checkpoint_store.as_deref(),
-                result.status() == ImproveStatus::Errored,
-                &stamps,
             )
             .await;
             result.dataset_id = match stages.dataset_id {
@@ -539,6 +481,17 @@ async fn run_improve(
                 .await
                 .unwrap_or(None),
             };
+            // The run's `improve` operation row, carrying the stages' stamps
+            // (Python `record_operation("improve")`, `improve.py:230-233, 271-279, 312`).
+            let runs = stages.db.clone().map(|db| db.pipeline_runs());
+            record_improve_operation(
+                runs.as_deref(),
+                owner_id,
+                result.dataset_id,
+                result.status(),
+                &stamps,
+            )
+            .await;
             end
         })
         .await;
@@ -582,7 +535,6 @@ mod tests {
     struct Scripted {
         scripts: HashMap<StageKind, Script>,
         calls: Vec<&'static str>,
-        graph_writes: usize,
     }
 
     impl Scripted {
@@ -605,11 +557,6 @@ mod tests {
                 Script::Gate(reason) => Some(reason),
                 _ => None,
             }
-        }
-
-        fn record_graph_write(&mut self) -> impl Future<Output = ()> + Send {
-            self.graph_writes += 1;
-            std::future::ready(())
         }
 
         fn run(&mut self, stage: StageKind) -> impl Future<Output = StageRun> + Send {
@@ -861,49 +808,6 @@ mod tests {
             result.stages[2].reason.as_deref(),
             Some(REASON_BUDGET_EXHAUSTED)
         );
-    }
-
-    // Python counts every non-noop improve as a change to the dataset. A run
-    // records its graph write once, after the first stage that may have
-    // written; a run in which only the index ran records none.
-    #[tokio::test]
-    async fn a_run_records_one_graph_write_after_its_first_writing_stage() {
-        let mut executor = Scripted::default();
-        run_loop(&mut executor, true, &[]).await;
-        assert_eq!(executor.graph_writes, 1);
-
-        // Without sessions only the graph stages run; with review_conflicts
-        // off, that is the index, which is not a write.
-        let mut executor = Scripted::default();
-        run_loop(&mut executor, false, &["review_conflicts"]).await;
-        assert_eq!(executor.graph_writes, 0);
-    }
-
-    #[test]
-    fn a_stage_wrote_when_its_write_counts_say_so() {
-        let fw = StageKind::FeedbackWeights;
-        let completed = || StageResult::completed("feedback_weights");
-        assert!(stage_may_have_written(fw, &completed()));
-        assert!(!stage_may_have_written(
-            fw,
-            &completed().with_counts([("sessions", 1), ("entries_applied", 0)])
-        ));
-        assert!(stage_may_have_written(
-            fw,
-            &completed().with_counts([("entries_applied", 2)])
-        ));
-        assert!(stage_may_have_written(
-            fw,
-            &StageResult::errored("feedback_weights", "boom")
-        ));
-        assert!(!stage_may_have_written(
-            fw,
-            &StageResult::skipped("feedback_weights", "no_session_ids")
-        ));
-        assert!(!stage_may_have_written(
-            StageKind::GlobalContextIndex,
-            &StageResult::completed("global_context_index")
-        ));
     }
 
     // A budget signal on a stage that did not error is not an exhaustion.

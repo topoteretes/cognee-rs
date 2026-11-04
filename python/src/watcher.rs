@@ -75,7 +75,11 @@ impl PipelineWatcher for PyWatcherBridge {
         });
     }
 
-    async fn on_pipeline_run_completed(&self, run: &PipelineRunInfo, output_count: usize) {
+    async fn on_pipeline_run_completed(
+        &self,
+        run: &PipelineRunInfo,
+        output_count: usize,
+    ) -> Result<(), cognee_core::WatcherError> {
         crate::gil::attach_best_effort("on_run_completed", |py| {
             if let Ok(true) = self.inner.bind(py).hasattr("on_run_completed") {
                 let _ = self.inner.call_method1(
@@ -85,6 +89,7 @@ impl PipelineWatcher for PyWatcherBridge {
                 );
             }
         });
+        Ok(())
     }
 
     async fn on_pipeline_run_errored(&self, run: &PipelineRunInfo, error: &str) {

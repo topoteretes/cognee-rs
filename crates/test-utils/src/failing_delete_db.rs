@@ -33,6 +33,14 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::get_data(self.inner.as_ref(), id).await
     }
 
+    async fn resolve_data_id(
+        &self,
+        dataset_id: Uuid,
+        data_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        DeleteDb::resolve_data_id(self.inner.as_ref(), dataset_id, data_id).await
+    }
+
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
         DeleteDb::delete_data(self.inner.as_ref(), id).await
     }
@@ -43,6 +51,10 @@ impl DeleteDb for FailingDeleteDb {
 
     async fn list_datasets_for_data(&self, data_id: Uuid) -> Result<Vec<Dataset>, DatabaseError> {
         DeleteDb::list_datasets_for_data(self.inner.as_ref(), data_id).await
+    }
+
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
+        DeleteDb::count_data_location_references(self.inner.as_ref(), location).await
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {

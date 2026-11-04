@@ -28,8 +28,9 @@ use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
 use cognee_cognify::CognifyConfig;
 use cognee_core::DatasetLocks;
-use cognee_database::CheckpointStore;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{
+    DatabaseConnection, IngestDb, RelationalDb, StampedRun, connect, initialize,
+};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::{GraphDBTrait, MockGraphDB};
 use cognee_ingestion::AddPipeline;
@@ -139,7 +140,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -170,8 +170,6 @@ async fn make_harness() -> Harness {
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
-
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -184,7 +182,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -201,7 +198,6 @@ fn params<'a>(
         dataset_name: dataset_name.to_string(),
         dataset_id: None,
         session_ids,
-        node_name: None,
         owner_id: Uuid::new_v4(),
         tenant_id: None,
         feedback_alpha: None,
@@ -218,12 +214,8 @@ fn params<'a>(
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
         add_pipeline: Some(&h.add_pipeline),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         dataset_locks: None,
         cognify_config: config,
-        extraction_tasks: None,
-        enrichment_tasks: None,
-        data: None,
         build_global_context_index: false,
         build_truth_subspace: false,
         run_in_background: false,
@@ -688,6 +680,172 @@ async fn improve_reports_distilled_lessons() {
     );
 }
 
+/// A caller that already resolved (and authorized) the dataset passes its id,
+/// as Python's `improve(dataset=<UUID>)`: every session-fed stage (session
+/// Q&A, agent trace feedback, distilled lessons) adds into
+/// that dataset even though another user owns it, and nothing is created
+/// under the caller (a by-name add would have made a same-named one).
+#[tokio::test]
+async fn improve_with_dataset_id_targets_a_dataset_the_caller_does_not_own() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "shared_ds_session";
+    let shared = create_dataset(&h, "shared_ds", Uuid::new_v4()).await;
+    let mut p = params(
+        &h,
+        &config,
+        "shared_ds",
+        Some(vec![session_id.to_string()]),
+        schema_llm(false),
+    );
+    p.dataset_id = Some(shared);
+    let caller = p.owner_id;
+    seed_qa(&h, caller, session_id).await;
+    // A trace step with feedback, so the trace stage adds into the dataset too.
+    h.session_manager
+        .add_agent_trace_step(
+            &caller.to_string(),
+            Some(session_id),
+            "search",
+            "success",
+            "",
+            "",
+            serde_json::json!({}),
+            None,
+            "",
+            false,
+        )
+        .await
+        .unwrap();
+    let r = improve(p).await.unwrap();
+
+    assert_eq!(r.dataset_id, Some(shared));
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    assert_eq!(persist.counts.get("sessions_persisted"), Some(&1));
+    let traces = stage(&r, "persist_agent_traces");
+    assert_eq!(traces.status, StageStatus::Completed, "{traces:?}");
+    assert_eq!(traces.counts.get("windows"), Some(&1));
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Completed, "{distill:?}");
+    assert!(distill.counts["documents"] > 0, "{distill:?}");
+
+    let in_shared = cognee_database::DeleteDb::get_dataset_data(&*h.db, shared)
+        .await
+        .unwrap();
+    assert!(
+        !in_shared.is_empty(),
+        "the session text and lessons land in the shared dataset"
+    );
+    let callers_own = cognee_database::DeleteDb::list_datasets_by_owner(&*h.db, caller)
+        .await
+        .unwrap();
+    assert!(
+        callers_own.is_empty(),
+        "no dataset is created under the caller: {callers_own:?}"
+    );
+}
+
+/// A [`SchemaDispatchLlm`] whose cognify summarization fails after
+/// `ok_summaries` calls: the session persist (one summary) succeeds, then the
+/// distill stage's publish-and-cognify fails.
+struct FailingSummaryLlm {
+    inner: SchemaDispatchLlm,
+    ok_summaries: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl cognee_llm::Llm for FailingSummaryLlm {
+    async fn generate(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+    ) -> Result<GenerationResponse, LlmError> {
+        self.inner.generate(messages, options).await
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        messages: Vec<Message>,
+        json_schema: &Value,
+        options: Option<GenerationOptions>,
+    ) -> Result<Value, LlmError> {
+        let schema = json_schema.to_string();
+        let is_summary = !schema.contains("why_learned")
+            && !schema.contains("working_statement")
+            && !schema.contains("environment_facts")
+            && schema.contains("summary");
+        if is_summary {
+            use std::sync::atomic::Ordering;
+            let left = self.ok_summaries.load(Ordering::SeqCst);
+            if left == 0 {
+                return Err(LlmError::ApiError("summary budget exhausted".to_string()));
+            }
+            self.ok_summaries.store(left - 1, Ordering::SeqCst);
+        }
+        self.inner
+            .create_structured_output_with_messages_raw(messages, json_schema, options)
+            .await
+    }
+
+    fn model(&self) -> &str {
+        "failing-summary"
+    }
+}
+
+/// Python reports `distill_sessions` errored when a session's distillation
+/// fails, keeping the last error and the failure count (`DistillSessionsStage.run`,
+/// `cognee/modules/improve/stages.py`), and the run's status follows.
+#[tokio::test]
+async fn improve_reports_a_distill_failure_as_an_errored_stage() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let session_id = "distill_fail_session";
+    let llm: Arc<dyn cognee_llm::Llm> = Arc::new(FailingSummaryLlm {
+        inner: SchemaDispatchLlm {
+            accepted_statement: "TerraScout indexes data nightly.".to_string(),
+            curator_out_of_budget: false,
+            agent_lessons_fail: false,
+        },
+        ok_summaries: std::sync::atomic::AtomicUsize::new(1),
+    });
+    let p = params(
+        &h,
+        &config,
+        "ds_distill_fail",
+        Some(vec![session_id.to_string()]),
+        llm,
+    );
+    seed_qa(&h, p.owner_id, session_id).await;
+    let r = improve(p).await.unwrap();
+
+    let persist = stage(&r, "persist_session_qa");
+    assert_eq!(persist.status, StageStatus::Completed, "{persist:?}");
+    let distill = stage(&r, "distill_sessions");
+    assert_eq!(distill.status, StageStatus::Errored, "{distill:?}");
+    assert!(
+        distill.error.is_some(),
+        "the last error is kept: {distill:?}"
+    );
+    assert_eq!(distill.counts.get("sessions_failed"), Some(&1));
+    assert_eq!(r.status(), ImproveStatus::Errored);
+}
+
+/// An explicit dataset id that names no dataset is an error, not a silent run
+/// against a dataset created by name (Python `load_or_create_datasets` raises
+/// for a UUID matching no dataset).
+#[tokio::test]
+async fn improve_with_an_unknown_dataset_id_is_an_error() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let mut p = params(&h, &config, "ds_unknown_id", None, mock_llm());
+    p.dataset_id = Some(Uuid::new_v4());
+    let err = improve(p)
+        .await
+        .expect_err("an unknown dataset id must fail");
+    assert!(err.to_string().contains("not found"), "{err}");
+}
+
 /// An exhausted LLM budget in a non-fatal stage ends the run there: the
 /// stage is errored and every later stage is skipped `budget_exhausted`,
 /// without an error (Python `test_improve_budget_exhaustion.py`).
@@ -1091,6 +1249,20 @@ async fn log_write(h: &Harness, dataset_id: Uuid) {
 /// A completed `global_context_index` stamps its start; the next run with no
 /// write since reports `already_completed`; a write makes it run again
 /// (Python `GlobalContextIndexStage`, `graph_changes.py`).
+/// The stamp the `global_context_index` stage left on the dataset's improve
+/// operation row (`run_info["global_context_index"]`).
+async fn stamp_of(h: &Harness, dataset_id: Uuid) -> Option<StampedRun> {
+    Arc::clone(&h.db)
+        .pipeline_runs()
+        .latest_stamped_run(
+            dataset_id,
+            IMPROVE_WRITE_PIPELINE_NAME,
+            stage_watermark_key(StageKind::GlobalContextIndex),
+        )
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn global_context_index_is_already_completed_without_writes_since_last_improve() {
     let h = make_harness().await;
@@ -1109,15 +1281,11 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
         stage(&first, "global_context_index").status,
         StageStatus::Completed
     );
-    let stamp = h
-        .checkpoint_store
-        .load(&stage_watermark_key(
-            StageKind::GlobalContextIndex,
-            dataset_id,
-        ))
-        .await
-        .unwrap();
-    assert!(stamp.is_some(), "a completed run stamps the stage");
+    let stamped = stamp_of(&h, dataset_id).await;
+    let stamped = stamped.expect("a completed run stamps the stage");
+    // Python's stamp, on the improve operation row: `{status, started_at}`.
+    assert_eq!(stamped.stamp["status"], "completed");
+    assert!(stamped.stamp["started_at"].is_string());
 
     let second = run().await.unwrap();
     let gci = stage(&second, "global_context_index");
@@ -1203,8 +1371,8 @@ async fn a_data_item_delete_invalidates_the_global_context_index() {
     );
 }
 
-/// Python counts every non-noop improve as a change. A run whose stage wrote
-/// to the graph records an `improve` row, so the next run rebuilds; a host's
+/// Python counts every non-noop improve as a change. Another run's `improve`
+/// operation row makes the next run rebuild; a host's
 /// own `improve_pipeline` row (the HTTP server's) does not count, so repeated
 /// index-only runs stay `already_completed`.
 #[tokio::test]
@@ -1257,7 +1425,7 @@ async fn an_improve_that_wrote_invalidates_the_index_and_a_host_row_does_not() {
     assert_eq!(
         stage(&run(None).await.unwrap(), "global_context_index").status,
         StageStatus::Completed,
-        "an improve that wrote is a change"
+        "another improve is a change"
     );
 }
 
@@ -1281,15 +1449,10 @@ async fn an_errored_run_does_not_stamp_the_stage() {
         StageStatus::Errored
     );
     assert_eq!(r.status(), ImproveStatus::Errored);
-    let stamp = h
-        .checkpoint_store
-        .load(&stage_watermark_key(
-            StageKind::GlobalContextIndex,
-            dataset_id,
-        ))
-        .await
-        .unwrap();
-    assert!(stamp.is_none(), "an errored run saves no stamp");
+    assert!(
+        stamp_of(&h, dataset_id).await.is_none(),
+        "an errored run saves no stamp"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,14 +1677,13 @@ async fn a_background_improve_returns_at_once_and_runs_after_the_holder() {
         db: Some(h.db.clone()),
         session_store: Some(Arc::clone(&h.session_store)),
         session_manager: Some(Arc::clone(&h.session_manager)),
-        checkpoint_store: Some(h.checkpoint_store.clone() as Arc<_>),
         add_pipeline: Arc::new(locked_add_pipeline(&h, &DatasetLocks::global())),
         cognify_config: Arc::new(CognifyConfig::default()),
     });
-    let launched = tokio::time::timeout(SHORT, launch)
+    let launch = tokio::time::timeout(SHORT, launch)
         .await
         .expect("the launch returns at once");
-    assert!(launched);
+    assert!(launch.launched);
     assert!(
         !cognee::wait_for_background_tasks(Some(SHORT)).await,
         "the improve waits for the holder"

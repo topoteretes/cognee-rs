@@ -12,8 +12,8 @@ use crate::error::CliError;
 #[cfg(feature = "visualization")]
 use super::visualize;
 use super::{
-    add, add_and_cognify, cognify, config, delete, export, forget, improve, memify, recall,
-    remember, search,
+    add, add_and_cognify, cognify, config, delete, export, forget, improve, recall, remember,
+    search, update,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -28,19 +28,14 @@ fn dispatch(command: Commands, cm: &Arc<ComponentManager>) -> Result<(), CliErro
         Commands::Add(args) => add::run(args, Arc::clone(cm)),
         Commands::Cognify(args) => cognify::run(args, Arc::clone(cm)),
         Commands::AddAndCognify(args) => add_and_cognify::run(args, Arc::clone(cm)),
-        Commands::Memify(args) => memify::run(args, Arc::clone(cm)),
         Commands::Search(args) => search::run(args, Arc::clone(cm)),
         Commands::Remember(args) => remember::run(args, Arc::clone(cm)),
         Commands::Recall(args) => recall::run(args, Arc::clone(cm)),
         Commands::Forget(args) => forget::run(args, Arc::clone(cm)),
+        Commands::Update(args) => update::run(args, Arc::clone(cm)),
         Commands::Improve(args) => improve::run(args, Arc::clone(cm)),
         Commands::Delete(args) => delete::run(args, Arc::clone(cm)),
         Commands::Export(args) => export::run(args, Arc::clone(cm)),
-        // Operator triage, not a pipeline step: a sequence that pauses to
-        // ask a human whether a claim's holder is dead is not a sequence.
-        Commands::PipelineUnblock(_) => Err(CliError::Validation(
-            "pipeline-unblock is not allowed inside run-sequence".to_string(),
-        )),
         // Store maintenance, not a pipeline step. A sequence is a scripted
         // add/cognify/search workload replayed with per-step timings, and an
         // HNSW build over an existing collection takes an unbounded amount of

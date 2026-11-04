@@ -11,6 +11,7 @@
 
 mod content_hasher;
 pub mod dataset_locks;
+mod file_type;
 mod id_generation;
 mod loader_registry;
 pub mod loaders;
@@ -23,14 +24,16 @@ pub mod url_resolver;
 
 pub use content_hasher::{ContentHasher, HashAlgorithm};
 pub use dataset_locks::{DatasetLockGuard, DatasetLocks, lock_dataset_identity};
-pub use id_generation::{generate_data_id, generate_dataset_id};
+pub use id_generation::generate_dataset_id;
 pub use loader_registry::get_loader_name;
 pub use loaders::{DocumentLoader, LoaderError, LoaderOutput, LoaderRegistry};
 pub use pipeline::{
     AddParams, AddPipeline, IngestionError, ProcessedInput, build_add_pipeline,
     build_add_pipeline_with_acl, make_persist_data_task, make_persist_data_task_with_acl,
-    make_process_input_task, persist_data, persist_data_with_acl, persist_data_with_acl_and_locks,
-    process_input, validate_add_inputs, validate_item_node_set, validate_node_set_names,
+    make_process_input_task, make_process_input_task_with_loaders, persist_data,
+    persist_data_with_acl, persist_data_with_acl_and_locks, process_input,
+    process_input_preferring, process_input_with_loaders, validate_add_inputs,
+    validate_item_node_set, validate_node_set_names,
 };
 // `UrlMetadata`/`ResolvedUrlInput` are plain data types and stay always-on so
 // `pipeline.rs` signatures compile without the feature; `resolve_url_input`

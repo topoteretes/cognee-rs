@@ -12,7 +12,7 @@
 //!
 //! Permanent-mode end-to-end tests (which require a full cognify pipeline)
 //! are covered by the per-stage integration tests in `cognee-cognify`
-//! (`memify_persist_sessions`, `e2e_full_pipeline_memify`, etc.). Here we
+//! (`memify_persist_sessions`, etc.). Here we
 //! exercise the orchestration surface using mock backends.
 
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use cognee::api::ImproveConfig;
 use cognee::api::remember::{RememberItemInfo, RememberStatus, remember};
 use cognee_cognify::CognifyConfig;
-use cognee_database::{DatabaseConnection, IngestDb, SeaOrmCheckpointStore, connect, initialize};
+use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
 use cognee_embedding::MockEmbeddingEngine;
 use cognee_graph::MockGraphDB;
 use cognee_ingestion::AddPipeline;
@@ -45,7 +45,6 @@ struct Harness {
     ontology: Arc<dyn OntologyResolver>,
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
-    checkpoint_store: Arc<SeaOrmCheckpointStore>,
 }
 
 async fn make_harness() -> Harness {
@@ -78,8 +77,6 @@ async fn make_harness() -> Harness {
     let session_store: Arc<dyn SessionStore> = Arc::new(FsSessionStore::new(sess_dir.path()));
     let session_manager = Arc::new(SessionManager::new(Arc::clone(&session_store)));
 
-    let checkpoint_store = Arc::new(SeaOrmCheckpointStore::new(Arc::clone(&db)));
-
     Harness {
         _temp: temp,
         _sess_dir: sess_dir,
@@ -92,7 +89,6 @@ async fn make_harness() -> Harness {
         ontology,
         session_store,
         session_manager,
-        checkpoint_store,
     }
 }
 
@@ -127,7 +123,6 @@ async fn remember_session_stores_qa_entry() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -183,7 +178,6 @@ async fn remember_session_with_caching_off_succeeds_without_storing() {
         Some(h.db.clone()),
         Some(Arc::clone(&store)),
         Some(manager),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -229,7 +223,6 @@ async fn remember_session_self_improvement_runs_in_background() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -270,7 +263,6 @@ async fn remember_session_requires_session_store() {
         Some(h.db.clone()),
         /* session_store */ None,
         /* session_manager */ None,
-        None,
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -306,7 +298,6 @@ async fn display_and_to_dict_on_session_result() {
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         Some(ImproveConfig::default()),
@@ -333,9 +324,18 @@ async fn display_and_to_dict_on_session_result() {
         obj.get("dataset_name").and_then(|v| v.as_str()),
         Some("ds_display")
     );
-    // cognify_result, memify_result are #[serde(skip)] — absent.
+    // cognify_result is #[serde(skip)]; the improve fields (Python `to_dict`)
+    // appear only when set, and the old `improve_result` name is gone.
     assert!(!obj.contains_key("cognify_result"));
-    assert!(!obj.contains_key("memify_result"));
+    for absent in [
+        "improve_result",
+        "improve",
+        "improve_error",
+        "after_run_error",
+        "improve_skipped",
+    ] {
+        assert!(!obj.contains_key(absent), "{absent}");
+    }
     // inner is gone from the struct entirely.
     assert!(!obj.contains_key("inner"));
 }
@@ -387,7 +387,6 @@ async fn remember_turn(
         Some(h.db.clone()),
         Some(Arc::clone(&h.session_store)),
         Some(Arc::clone(&h.session_manager)),
-        Some(h.checkpoint_store.clone() as Arc<_>),
         Arc::clone(&h.ontology),
         Arc::new(CognifyConfig::default()),
         improve_config,

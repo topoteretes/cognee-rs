@@ -213,56 +213,24 @@ def run_python_cli(
             f"asyncio.run(main())\n"
         )
     elif command == "cognify":
-        # Parse: cognify -d <dataset_name> [--temporal-cognify]
+        # Parse: cognify -d <dataset_name>. There is no temporal flag: Python
+        # deprecated and ignores `temporal_cognify`, Rust removed it (SDK-1039).
         dataset_name = None
-        temporal_cognify = False
         i = 1
         while i < len(args):
             if args[i] in ("-d", "--datasets") and i + 1 < len(args):
                 dataset_name = args[i + 1]
                 i += 2
-            elif args[i] == "--temporal-cognify":
-                temporal_cognify = True
-                i += 1
             else:
                 i += 1
 
         ds_arg = f"[{dataset_name!r}]" if dataset_name else "None"
-        temporal_arg = "True" if temporal_cognify else "False"
         script = (
             f"import asyncio, cognee\n"
             f"cognee.config.data_root_directory({str(py_storage)!r})\n"
             f"cognee.config.system_root_directory({str(py_system)!r})\n"
             f"async def main():\n"
-            f"    await cognee.cognify(datasets={ds_arg}, temporal_cognify={temporal_arg})\n"
-            f"    print('OK')\n"
-            f"asyncio.run(main())\n"
-        )
-    elif command == "memify":
-        # Parse: memify -d <dataset_name> [--node-name <name> ...]
-        dataset_name = None
-        node_names: list[str] = []
-        i = 1
-        while i < len(args):
-            if args[i] in ("-d", "--datasets", "--dataset-name") and i + 1 < len(args):
-                dataset_name = args[i + 1]
-                i += 2
-            elif args[i] in ("--node-name",) and i + 1 < len(args):
-                node_names.append(args[i + 1])
-                i += 2
-            else:
-                i += 1
-
-        ds_arg = f"{dataset_name!r}" if dataset_name else "'main_dataset'"
-        node_name_arg = f"{node_names!r}" if node_names else "None"
-        # Invoke cognee.memify() with the existing graph as the enrichment
-        # source. Default extraction/enrichment tasks are used.
-        script = (
-            f"import asyncio, cognee\n"
-            f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-            f"cognee.config.system_root_directory({str(py_system)!r})\n"
-            f"async def main():\n"
-            f"    await cognee.memify(dataset={ds_arg}, node_name={node_name_arg})\n"
+            f"    await cognee.cognify(datasets={ds_arg})\n"
             f"    print('OK')\n"
             f"asyncio.run(main())\n"
         )
@@ -288,41 +256,40 @@ def run_python_cli(
             else:
                 i += 1
 
-        # Python SDK: cognee.prune.prune_data() removes all data,
-        # cognee.prune.prune_system(metadata=True) removes system tables.
-        # For --all we call both; for dataset-scoped we call prune_data
-        # with the dataset filter.
+        # Mirror Python's own `cognee-cli delete`
+        # (cognee/cli/commands/delete_command.py): `--all` is
+        # `datasets.delete_all()`, `--dataset-name` is `datasets.empty_dataset()`
+        # on the dataset of that name. The harness used to call
+        # `prune.prune_data()` + `prune.prune_system(metadata=True)` instead,
+        # which wipes the relational database (later queries hit "no such
+        # table: data") and has no dataset-scoped form at all
+        # (`prune_data()` takes no arguments), so neither matched what a Python
+        # user's delete does.
         if delete_all:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data()\n"
-                f"    await cognee.prune.prune_system(metadata=True)\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
-            )
+            body = "    await cognee.datasets.delete_all()\n"
         elif dataset_name:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data(dataset_name={dataset_name!r})\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
+            body = (
+                "    from cognee.modules.data.methods import get_datasets_by_name\n"
+                "    from cognee.modules.users.methods import get_default_user\n"
+                "    user = await get_default_user()\n"
+                f"    found = await get_datasets_by_name({dataset_name!r}, user_id=user.id)\n"
+                "    if not found:\n"
+                f"        raise SystemExit('no dataset named {dataset_name}')\n"
+                "    await cognee.datasets.empty_dataset(dataset_id=found[0].id, user=user)\n"
             )
         else:
-            script = (
-                f"import asyncio, cognee\n"
-                f"cognee.config.data_root_directory({str(py_storage)!r})\n"
-                f"cognee.config.system_root_directory({str(py_system)!r})\n"
-                f"async def main():\n"
-                f"    await cognee.prune.prune_data()\n"
-                f"    print('OK')\n"
-                f"asyncio.run(main())\n"
+            raise ValueError(
+                "Python delete needs --all or --dataset-name, as Python's CLI does"
             )
+        script = (
+            f"import asyncio, cognee\n"
+            f"cognee.config.data_root_directory({str(py_storage)!r})\n"
+            f"cognee.config.system_root_directory({str(py_system)!r})\n"
+            f"async def main():\n"
+            f"{body}"
+            f"    print('OK')\n"
+            f"asyncio.run(main())\n"
+        )
     elif command == "search":
         # Parse: search <query> -t <TYPE> -d <dataset> -k <top_k>
         query_text = args[1]
@@ -350,7 +317,9 @@ def run_python_cli(
         # ``cognee.search`` returns one of several shapes depending on whether
         # backend access control is enabled, whether ``verbose=True``, and
         # (for single-dataset CHUNKS/SUMMARIES) whether a list-of-lists gets
-        # unwrapped.  We flatten everything to a list of strings here so the
+        # unwrapped. CHUNKS/SUMMARIES now come back as the stored vector
+        # payload itself (an ``IndexSchema`` dump), whose content is
+        # ``text``. We flatten everything to a list of strings here so the
         # parity tests can do substring / len assertions uniformly.
         script = (
             f"import asyncio, json, cognee\n"
@@ -358,7 +327,7 @@ def run_python_cli(
             f"cognee.config.system_root_directory({str(py_system)!r})\n"
             f"def _extract(item):\n"
             f"    if isinstance(item, dict):\n"
-            f"        return item.get('search_result') or item.get('text_result') or item.get('context_result')\n"
+            f"        return item.get('search_result') or item.get('text_result') or item.get('context_result') or item.get('text')\n"
             f"    return item\n"
             f"async def main():\n"
             f"    results = await cognee.search(\n"
@@ -516,36 +485,15 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
     """Dataset membership as ``[{"dataset_id": ..., "data_id": ...}]``.
 
-    The two SDKs model membership differently, so this cannot be one query:
+    Both SDKs keep membership on a ``data.dataset_id`` column, so a ``data``
+    row belongs to exactly one dataset: Python since alembic
+    ``d6e8f0a2b4c6_backfill_dataset_scoped_data_drop_dataset_data``, Rust since
+    ``m20261028_000001_dataset_scoped_data`` (SDK-1039). Both migrations drop
+    the old ``dataset_data`` junction table. A database written before either
+    migration ran may still carry it, which is why both shapes are read.
 
-    * **Rust** keeps the ``dataset_data`` junction table, so a ``data`` row is
-      dataset-agnostic and may be linked to several datasets.
-    * **Python** retired that table (alembic
-      ``d6e8f0a2b4c6_backfill_dataset_scoped_data_drop_dataset_data``) and moved
-      membership onto a ``data.dataset_id`` column, so a ``data`` row belongs to
-      exactly one dataset.
-
-    Selecting from ``dataset_data`` unconditionally — which is what this helper
-    did — raises ``sqlite3.OperationalError: no such table: dataset_data``
-    against any current Python database. Its three callers therefore errored out
-    before reaching an assertion, and reported no parity verdict at all.
-
-    Detecting the schema rather than the SDK is what keeps this correct for
-    the cross-read tests, where one SDK opens a database the other one wrote —
-    but detection alone is not enough, because the two shapes are not mutually
-    exclusive. Rust's baseline migration creates ``dataset_data`` with
-    ``.if_not_exists()`` and Rust's ``data`` entity has no ``dataset_id``
-    column, so a Python-written database that Rust has since opened carries
-    **both**: Python's rows in ``data.dataset_id`` and an empty (or partial)
-    ``dataset_data``. Preferring the junction table there would report ``[]``
-    and silently drop Python's membership. Both shapes are therefore read and
-    unioned whenever both are present.
-
-    Note that the row *counts* legitimately differ once the same bytes are added
-    to two datasets: Python yields two ``data`` rows and Rust one row with two
-    junction links. That divergence is real (see
-    ``docs/roadmap/python-parity-audit.md`` §1.1); this helper only makes it
-    observable instead of masking it behind an error.
+    Both shapes are read and unioned whenever both are present, so a database
+    that one SDK wrote and the other has not migrated yet is still read whole.
     """
     rows: list[dict] = []
     if _table_exists(conn, "dataset_data"):
@@ -565,11 +513,26 @@ def query_dataset_membership(conn: sqlite3.Connection) -> list[dict]:
 query_dataset_data = query_dataset_membership
 
 
+def _with_graph_id(row: dict) -> dict:
+    """Expose the graph node id of a relational ``nodes`` row as ``graph_id``.
+
+    The relational ``nodes`` table is a provenance ledger: one row per
+    (dataset, data item, graph node), so ``nodes.id`` is a ledger id (Rust:
+    ``provenance_node_id(tenant, user, dataset, data_id, node_id)``) and never
+    equals the id the node has in the graph. The graph id, the one edges refer
+    to and the one Python's graph engine returns, is ``nodes.slug``. Compare
+    SDKs and join edges on ``graph_id``, never on ``id``.
+    """
+    row["graph_id"] = _normalize_uuid(row.get("slug") or row.get("id"))
+    return row
+
+
 def query_nodes(conn: sqlite3.Connection) -> list[dict]:
     # Rust uses "node_type", Python uses "type". Use * and sort in Python.
     rows = query_rows(conn, "SELECT * FROM nodes")
     # Normalize: expose "type" key regardless of actual column name
     for r in rows:
+        _with_graph_id(r)
         if "node_type" in r and "type" not in r:
             r["type"] = r["node_type"]
         elif "type" in r and "node_type" not in r:
@@ -592,7 +555,7 @@ def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
     ).fetchall()
     result = []
     for r in rows:
-        d = dict(r)
+        d = _with_graph_id(dict(r))
         # Normalise: always expose both "type" and "node_type" keys
         if "node_type" in d and "type" not in d:
             d["type"] = d["node_type"]
@@ -602,10 +565,109 @@ def query_nodes_by_type(conn: sqlite3.Connection, node_type: str) -> list[dict]:
     return result
 
 
+def distinct_graph_nodes(nodes: list[dict]) -> list[dict]:
+    """One node per distinct ``graph_id``.
+
+    Rust's relational ``nodes`` table is a per-(dataset, data item) ledger, so
+    a node shared by several items has several rows; Python's graph engine
+    returns each node once. Count and compare graph nodes through this.
+    """
+    seen: dict[str, dict] = {}
+    for n in nodes:
+        seen.setdefault(n.get("graph_id") or n.get("id"), n)
+    return list(seen.values())
+
+
+def distinct_graph_edges(edges: list[dict]) -> list[dict]:
+    """One edge per distinct (source, destination, relationship) triple.
+
+    Same reason as :func:`distinct_graph_nodes`: Rust's ``edges`` table is a
+    ledger with one row per owning data item.
+    """
+    seen: dict[tuple, dict] = {}
+    for e in edges:
+        key = (
+            _normalize_uuid(e.get("source_node_id")),
+            _normalize_uuid(e.get("destination_node_id")),
+            e.get("relationship_name"),
+        )
+        seen.setdefault(key, e)
+    return list(seen.values())
+
+
 def query_edges(conn: sqlite3.Connection) -> list[dict]:
     rows = query_rows(conn, "SELECT * FROM edges")
     rows.sort(key=lambda r: r.get("relationship_name", ""))
     return rows
+
+
+_GRAPH_START = ">>>GRAPH<<<"
+_GRAPH_END = ">>>END<<<"
+
+
+def python_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
+    """Read Python cognee's graph through its own graph engine.
+
+    Returns ``(nodes, edges)`` in the shape ``query_nodes`` / ``query_edges``
+    give for a relational store, so a test compares the two SDKs with one code
+    path:
+
+    * a node is ``{"id", "graph_id", "type", "node_type", "label",
+      **properties}``, with ``id`` normalised as ``query_rows`` does and
+      ``graph_id`` equal to ``id`` (see ``_with_graph_id``);
+    * an edge is ``{"source_node_id", "destination_node_id",
+      "relationship_name", **properties}``.
+
+    Why not the relational ``nodes`` / ``edges`` tables: Python writes those
+    only as the rollback ledger of a graph backend that cannot hold provenance
+    itself. On Ladybug (``GRAPH_DATABASE_PROVIDER=kuzu`` here)
+    ``add_data_points`` marks the empty graph as provenance-carrying and skips
+    the ledger (``mark_graph_provenance_if_empty`` in
+    ``cognee/tasks/storage/add_data_points.py``), so after cognify those tables
+    are empty and every Python-side node or edge count read from them was 0.
+    """
+    script = (
+        "import asyncio, json\n"
+        "from cognee.infrastructure.databases.graph import get_graph_engine\n"
+        "async def main():\n"
+        "    engine = await get_graph_engine()\n"
+        "    nodes, edges = await engine.get_graph_data()\n"
+        "    out = {\n"
+        "        'nodes': [{'id': str(i), **(p or {})} for i, p in nodes],\n"
+        "        'edges': [{'source_node_id': str(s), 'destination_node_id': str(t),\n"
+        "                   'relationship_name': r, **(p or {})} for s, t, r, p in edges],\n"
+        "    }\n"
+        f"    print({_GRAPH_START!r} + json.dumps(out, default=str) + {_GRAPH_END!r})\n"
+        "asyncio.run(main())\n"
+    )
+    result = run_python_script(workdir, script, check=False)
+    out = result.stdout
+    start, end = out.find(_GRAPH_START), out.find(_GRAPH_END)
+    if result.returncode != 0 or start == -1 or end < start:
+        raise RuntimeError(
+            f"Reading Python's graph failed (exit {result.returncode}):\n"
+            f"--- stdout ---\n{out}\n--- stderr ---\n{result.stderr}"
+        )
+    graph = json.loads(out[start + len(_GRAPH_START) : end])
+
+    nodes = []
+    for n in graph["nodes"]:
+        n["id"] = _normalize_uuid(n["id"])
+        # A graph engine returns graph ids, so the ledger caveat does not apply.
+        n["graph_id"] = n["id"]
+        n.setdefault("type", None)
+        n["node_type"] = n["type"]
+        n.setdefault("label", n.get("name"))
+        nodes.append(n)
+    nodes.sort(key=lambda r: (r.get("type") or "", r.get("label") or ""))
+
+    edges = []
+    for e in graph["edges"]:
+        e["source_node_id"] = _normalize_uuid(e["source_node_id"])
+        e["destination_node_id"] = _normalize_uuid(e["destination_node_id"])
+        edges.append(e)
+    edges.sort(key=lambda r: r.get("relationship_name") or "")
+    return nodes, edges
 
 
 # ── DB path resolvers ────────────────────────────────────────────────────────
@@ -724,25 +786,6 @@ def parse_rust_search_output(stdout: str, *, query_type: str) -> list[str]:
 
     # CHUNKS / SUMMARIES / other list-shaped outputs: one item per line.
     return lines
-
-
-def run_python_memify(
-    workdir: Path,
-    dataset: str,
-    *,
-    node_names: Optional[list[str]] = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess:
-    """Run ``cognee.memify()`` via the Python SDK on *dataset* in *workdir*.
-
-    Mirrors the ``memify`` CLI subcommand on the Rust side:
-    ``run_rust_cli(workdir, ["memify", "-d", dataset])``.
-    """
-    args = ["memify", "-d", dataset]
-    if node_names:
-        for n in node_names:
-            args.extend(["--node-name", n])
-    return run_python_cli(workdir, args, check=check)
 
 
 def run_python_search(

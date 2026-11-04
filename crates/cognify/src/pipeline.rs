@@ -46,8 +46,7 @@ pub struct CognifyResult {
 
     /// Documents needed by the post-pipeline
     /// [`crate::tasks::extract_dlt_fk_edges`] teardown step. Populated by the
-    /// final task in [`crate::tasks::build_cognify_pipeline`]; empty in the
-    /// temporal branch (which does not run DLT FK extraction). The matching
+    /// final task in [`crate::tasks::build_cognify_pipeline`]. The matching
     /// chunk list reuses the existing [`Self::chunks`] field.
     ///
     /// Not serialised — internal teardown carrier, not part of the public
@@ -57,11 +56,10 @@ pub struct CognifyResult {
     /// `true` when this run had nothing left to do. All other fields are
     /// empty.
     ///
-    /// Two paths set it: the `check_pipeline_run_qualification`
-    /// short-circuit (latest `pipeline_runs` row `COMPLETED` and the pipeline
-    /// cache opted in), and — since completion markers went live — a run whose
-    /// every data item an earlier run had already cognified. Both mean the same
-    /// thing to a caller, which is why they share the flag.
+    /// Set when every data item of the dataset was already cognified by an
+    /// earlier run (the completion markers cover it). Python skips such items
+    /// one by one inside the run; Rust skips them before building the
+    /// pipeline, so the run writes no rows of its own.
     ///
     /// CLI prints "already complete" when set; HTTP-server returns
     /// `200 OK` with `status = "PipelineRunAlreadyCompleted"`. See doc 08-08
@@ -138,10 +136,6 @@ pub struct IndexedFieldsStats {
     ///
     /// E.g. `"DocumentChunk_text" -> 42`, `"Entity_name" -> 7`.
     pub field_counts: HashMap<String, usize>,
-
-    /// Number of triplets indexed (triplets are not standard DataPoints,
-    /// so they are tracked separately).
-    pub triplet_count: usize,
 }
 
 impl IndexedFieldsStats {

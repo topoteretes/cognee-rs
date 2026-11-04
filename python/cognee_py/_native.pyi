@@ -521,57 +521,6 @@ class CogneeSessions:
         ...
 
 # ---------------------------------------------------------------------------
-# CogneeNotebooks
-# ---------------------------------------------------------------------------
-
-class CogneeNotebooks:
-    """Notebook management sub-object.
-
-    Accessible as ``cognee.notebooks`` on every :class:`Cognee` instance::
-
-        nbs = await cognee.notebooks.list()
-        nb  = await cognee.notebooks.create("My Notebook")
-        await cognee.notebooks.delete(nb["id"])
-    """
-
-    async def list(self) -> list[dict[str, Any]]:
-        """List all notebooks for the current owner.
-
-        Returns a list of ``Notebook`` dicts (each has ``"id"`` and ``"name"``).
-        """
-        ...
-
-    async def create(
-        self,
-        name: str,
-        cells: Optional[list[Any]] = None,
-        deletable: bool = True,
-    ) -> dict[str, Any]:
-        """Create a new notebook.
-
-        *cells* defaults to an empty list.  ``deletable`` is forced to
-        ``True`` (Python-library parity).
-        Returns the created ``Notebook`` dict.
-        """
-        ...
-
-    async def update(
-        self, id: str, patch: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
-        """Update a notebook's ``name`` and/or ``cells``.
-
-        Returns the updated ``Notebook`` dict, or ``None`` if not found.
-        """
-        ...
-
-    async def delete(self, id: str) -> bool:
-        """Delete a notebook by UUID.
-
-        Returns ``True`` if deleted, ``False`` if not found.
-        """
-        ...
-
-# ---------------------------------------------------------------------------
 # Cognee — the main SDK handle
 # ---------------------------------------------------------------------------
 
@@ -601,11 +550,6 @@ class Cognee:
     @property
     def sessions(self) -> CogneeSessions:
         """Session management surface for this handle."""
-        ...
-
-    @property
-    def notebooks(self) -> CogneeNotebooks:
-        """Notebook management surface for this handle."""
         ...
 
     async def warm(self) -> None:
@@ -692,7 +636,7 @@ class Cognee:
 
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``tenant``, ``chunkSize``, ``chunkOverlap``, ``summarization``,
-        ``temporalCognify``, ``triplet``, ``graphSchema`` (a custom graph
+        ``graphSchema`` (a custom graph
         model's JSON Schema, as a dict or a JSON string; alias ``graphModel``),
         ``graphSpec`` (the same model in the spec DSL, as a dict or a JSON
         string; see :func:`graph_spec_to_json_schema`) and
@@ -791,8 +735,8 @@ class Cognee:
     ) -> dict[str, Any]:
         """Replace a data item with new content and re-cognify.
 
-        Returns a dict with camelCase keys: ``deletedDataId``, ``deleteResult``,
-        ``newData``, ``cognifyResult``.
+        Returns a dict with camelCase keys: ``dataId`` (the document's id,
+        unchanged by the update), ``deleteResult``, ``cognifyResult``.
         """
         ...
 
@@ -828,7 +772,8 @@ class Cognee:
     ) -> Any:
         """One-call add + cognify + optional self-improvement.
 
-        Accepted *opts* keys: ``sessionId``, ``selfImprovement``, ``tenant``
+        Accepted *opts* keys: ``sessionId``, ``selfImprovement`` (default
+        ``True``, as in Python), ``tenant``
         (``snake_case`` spellings accepted too).
         Returns the ``RememberResult`` as a dict.
         """
@@ -845,18 +790,6 @@ class Cognee:
 
         *entry* is a discriminated-union dict with a ``"type"`` key:
         ``"qa"``, ``"trace"``, or ``"feedback"``.
-        """
-        ...
-
-    async def memify(
-        self,
-        opts: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        """Build triplet embeddings over the entire knowledge graph.
-
-        Idempotent.  Returns a dict with camelCase keys: ``tripletCount``,
-        ``indexedCount``, ``batchCount``, ``alreadyCompleted``,
-        ``priorPipelineRunId``.
         """
         ...
 
@@ -901,24 +834,6 @@ class Cognee:
         ...
 
     # -- Admin ----------------------------------------------------------------
-
-    async def reset_pipeline_run_status(
-        self,
-        dataset_id: str,
-        pipeline_name: str,
-    ) -> None:
-        """Reset the run status for a specific pipeline within a dataset.
-
-        Raises :exc:`CogneeValidationError` if *dataset_id* is not a valid UUID.
-        """
-        ...
-
-    async def reset_dataset_pipeline_run_status(self, dataset_id: str) -> None:
-        """Reset all pipeline run statuses for a dataset.
-
-        Raises :exc:`CogneeValidationError` if *dataset_id* is not a valid UUID.
-        """
-        ...
 
     async def get_or_create_default_user(self) -> dict[str, Any]:
         """Get or create the default user account.

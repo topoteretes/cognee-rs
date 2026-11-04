@@ -29,9 +29,6 @@ struct RunSlot {
     finished_at: Option<DateTime<Utc>>,
     abort_handle: Option<tokio::task::AbortHandle>,
     meta: RunHandle,
-    /// Carried from `RunSpec.data_ids`. Surfaced into
-    /// `pipeline_runs.run_info["data"]` by the direct DB writes below.
-    data_ids: Vec<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,84 +75,6 @@ impl DefaultPipelineRunRegistry {
         registry
     }
 
-    /// Create a new registry and reset orphan rows on startup.
-    ///
-    /// Calls `repo.reset_orphans("server_restart_orphan")` once before
-    /// returning, per §12 of the spec (crash & restart recovery). That covers
-    /// the *status-row* gate: a row left at `Initiated`/`Started` by a killed
-    /// process, which `check_pipeline_run_qualification` would otherwise read
-    /// as a run still in flight.
-    ///
-    /// `sweep_claims` additionally drops every row in `pipeline_run_claims`,
-    /// which is the *second* gate and the one with no other recovery path from
-    /// an embedded consumer. Pass `true` **only** where the deployment asserts
-    /// one process per relational database (see `Settings::resolved_single_process`
-    /// / `COGNEE_SINGLE_PROCESS`): only then is every claim present at startup
-    /// known to belong to a dead predecessor rather than a live peer, whose
-    /// claim this would silently drop — re-admitting the concurrent run the
-    /// claim exists to prevent. With `false` the claim behaves exactly as
-    /// before: released by its holder, or reclaimed once it ages out.
-    ///
-    /// Both steps run before the registry exists, so no run of this process
-    /// can have taken a claim yet.
-    ///
-    /// # What this deliberately does *not* do
-    ///
-    /// It does not roll back what those killed runs wrote into the graph and
-    /// vector stores. That is `cognee_delete::sweep_orphaned_run_artifacts`,
-    /// and it must run **before** this call: retiring the status row is what
-    /// makes the dataset runnable again, so doing it first opens a window in
-    /// which a fresh run starts while the rollback is still deleting the dead
-    /// run's nodes.
-    ///
-    /// It is not called from here because it cannot be — `cognee-delete`
-    /// depends on `cognee-core`, so the dependency cannot be inverted.
-    /// `PipelineRunRepository::list_orphan_runs` exists precisely so a caller
-    /// that can see both crates (`cognee-http-server`,
-    /// `cognee-bindings-common`) can interleave them in the right order; see
-    /// `AppState::build_with_db_and_backends` for the shape.
-    ///
-    /// They are also attempted **independently**. A dataset wedged by a kill
-    /// is refused by both gates at once, so clearing one and skipping the
-    /// other leaves it wedged either way; letting a transient failure on the
-    /// first suppress the second would turn a recoverable database blip into
-    /// exactly the outcome this is here to prevent. Each outcome is logged on
-    /// its own, and the first error is returned once both have been tried.
-    pub async fn new_with_orphan_reset(
-        repo: Arc<dyn PipelineRunRepository>,
-        cfg: RegistryConfig,
-        sweep_claims: bool,
-    ) -> Result<Arc<Self>, RegistryError> {
-        let orphan_reset = repo.reset_orphans("server_restart_orphan").await;
-        match &orphan_reset {
-            Ok(reset) if *reset > 0 => tracing::warn!(
-                reset,
-                "startup retired pipeline-run rows left in flight by a previous process"
-            ),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("startup orphan-run reset failed: {e}"),
-        }
-
-        let claim_sweep = if sweep_claims {
-            repo.release_all_pipeline_run_claims("startup_sweep_single_process")
-                .await
-        } else {
-            Ok(0)
-        };
-        match &claim_sweep {
-            Ok(released) if *released > 0 => tracing::warn!(
-                released,
-                "startup released pipeline-run claims left by a previous process"
-            ),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("startup pipeline-run claim sweep failed: {e}"),
-        }
-
-        orphan_reset?;
-        claim_sweep?;
-        Ok(Self::new(repo, cfg))
-    }
-
     /// Fetch the accumulated payload for a run. Returns an empty map if the
     /// run has no payload events; returns `Err` only on DB failure.
     pub async fn get_payload(
@@ -169,12 +88,11 @@ impl DefaultPipelineRunRegistry {
     /// per-run broadcast channel for `run_id`.
     ///
     /// Used by the HTTP cognify boxed-future path (and any analogous caller)
-    /// to surface the `check_pipeline_run_qualification` short-circuit to
-    /// WebSocket subscribers — see gap 08-08 §4.5 and locked decision 13.
-    /// The short-circuit happens inside the convenience `cognify(...)`
-    /// before `pipeline::execute` runs, so the executor's watcher events do
-    /// not fire; this method bridges that gap by publishing directly to the
-    /// slot.
+    /// to surface a cognify that found every data item already cognified
+    /// (`CognifyResult::already_completed`) to WebSocket subscribers. That
+    /// no-op happens inside the convenience `cognify(...)` before
+    /// `pipeline::execute` runs, so the executor's watcher events do not
+    /// fire; this method bridges that gap by publishing directly to the slot.
     ///
     /// Returns `true` if the run slot exists and the event was sent (or
     /// dropped because no subscribers were attached); `false` if the slot is
@@ -306,7 +224,6 @@ impl DefaultPipelineRunRegistry {
             // Placeholder exists — update its metadata but keep the senders so
             // subscribers attached before the producer don't lose events.
             existing.meta = meta.clone();
-            existing.data_ids = spec.data_ids.clone();
             // Reset phase to Pending in case the placeholder was never set.
             let _ = existing.phase_tx.send(RunPhase::Pending);
             return meta;
@@ -321,7 +238,6 @@ impl DefaultPipelineRunRegistry {
             finished_at: None,
             abort_handle: None,
             meta: meta.clone(),
-            data_ids: spec.data_ids.clone(),
         };
 
         runs.insert(run_id, slot);
@@ -379,18 +295,16 @@ impl DefaultPipelineRunRegistry {
 
         // Log the STARTED row (best-effort).
         let runs_read = self.runs.read().await;
-        let slot_snapshot = runs_read
-            .get(&run_id)
-            .map(|s| (s.meta.clone(), s.data_ids.clone()));
+        let slot_snapshot = runs_read.get(&run_id).map(|s| s.meta.clone());
         drop(runs_read);
 
-        if let Some((m, data_ids)) = &slot_snapshot {
+        if let Some(m) = &slot_snapshot {
             // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only — intentionally NOT the
             // {user}{name}{dataset} pipeline_id from ids::pipeline_id. Replacing it would
             // change the stored pipeline_run_log shape. See task 04 §5b.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
-            // Python parity: STARTED writes `{"data": data_info(data)}`.
-            let run_info = Some(super::run_info_for_running(data_ids));
+            // Python parity: STARTED carries no data items (COG-6089).
+            let run_info = Some(super::run_info_for_started(None));
             let result = self
                 .repo
                 .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
@@ -417,21 +331,20 @@ impl DefaultPipelineRunRegistry {
         };
 
         // Log the terminal row (best-effort).
-        if let Some((m, data_ids)) = &slot_snapshot {
+        if let Some(m) = &slot_snapshot {
             // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only — intentionally NOT the
             // {user}{name}{dataset} pipeline_id from ids::pipeline_id.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, m.pipeline_name.as_bytes());
             let (db_status, run_info) = match &phase {
                 RunPhase::Completed => (
                     DbStatus::Completed,
-                    // Python parity: COMPLETED writes `{"data": data_info(data)}`.
-                    Some(super::run_info_for_running(data_ids)),
+                    // Python parity: COMPLETED writes `{}`.
+                    Some(super::run_info_for_completed()),
                 ),
                 RunPhase::Errored { message } => (
                     DbStatus::Errored,
-                    // Python parity: ERRORED writes
-                    // `{"data": data_info(data), "error": str(e)}`.
-                    Some(super::run_info_for_errored(data_ids, message)),
+                    // Python parity: ERRORED writes `{"error": str(e)}`.
+                    Some(super::run_info_for_errored(message)),
                 ),
                 _ => (DbStatus::Errored, None),
             };
@@ -498,7 +411,6 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         let pipeline_name = spec.pipeline_name.clone();
         let dataset_id = spec.dataset_id;
         let user_id = spec.user_id;
-        let data_ids = spec.data_ids.clone();
 
         // We can't easily move `self` or an `Arc<Self>` into the task without
         // exposing the internal state. Instead, replicate the inline run logic
@@ -506,11 +418,11 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         let join_handle = tokio::spawn({
             let pipeline_name_clone = pipeline_name.clone();
             async move {
-                // Emit STARTED — Python parity: `{"data": data_info(data)}`.
+                // Emit STARTED — Python parity: no data items (COG-6089).
                 // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only.
                 let pipeline_id =
                     Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name_clone.as_bytes());
-                let started_run_info = Some(super::run_info_for_running(&data_ids));
+                let started_run_info = Some(super::run_info_for_started(None));
                 let result = repo
                     .log_pipeline_run_entry(cognee_database::PipelineRunEntry {
                         pipeline_run_id: run_id,
@@ -538,14 +450,13 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                 let (db_status, run_info) = match &phase {
                     RunPhase::Completed => (
                         DbStatus::Completed,
-                        // Python parity: COMPLETED writes `{"data": data_info(data)}`.
-                        Some(super::run_info_for_running(&data_ids)),
+                        // Python parity: COMPLETED writes `{}`.
+                        Some(super::run_info_for_completed()),
                     ),
                     RunPhase::Errored { message } => (
                         DbStatus::Errored,
-                        // Python parity: ERRORED writes
-                        // `{"data": data_info(data), "error": str(e)}`.
-                        Some(super::run_info_for_errored(&data_ids, message)),
+                        // Python parity: ERRORED writes `{"error": str(e)}`.
+                        Some(super::run_info_for_errored(message)),
                     ),
                     _ => (DbStatus::Errored, None),
                 };
@@ -697,7 +608,6 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
                         finished_at: None,
                         abort_handle: None,
                         meta: placeholder_meta,
-                        data_ids: Vec::new(),
                     });
                     let mut order = self
                         .eviction_order
@@ -738,31 +648,6 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
         Some(slot.phase_tx.borrow().clone())
     }
 
-    /// # Known limitation: the aborted run's exclusive claim leaks
-    ///
-    /// `handle.abort()` drops the run's future at its next await point, so the
-    /// `release_pipeline_run_claim` that `cognee_cognify::cognify` performs
-    /// after its work block never executes — `Drop` cannot await, so there is
-    /// no RAII fallback. The `pipeline_run_claims` row therefore survives
-    /// until it ages out (`CLAIM_STALE_AFTER`, a day), and since the only
-    /// caller of `abort` is [`Self::shutdown`], which the HTTP server runs on
-    /// SIGTERM, a rolling restart with a background cognify in flight wedges
-    /// that dataset for up to 24 h. `cognee-cli pipeline-unblock --clear`
-    /// clears it, and so does a restart where `COGNEE_SINGLE_PROCESS` is
-    /// asserted.
-    ///
-    /// Not fixed here, because the contained version is wrong in two ways.
-    /// The registry does not know the `claim_id` (it is a function-local in
-    /// `cognify`), so it would have to read the claim and then delete it —
-    /// reintroducing exactly the TOCTOU that
-    /// `PipelineRunRepository::try_release_pipeline_run_claim` is holder-scoped
-    /// to prevent, and stomping a new holder's claim if the old one had aged
-    /// out in between. And the registry's `pipeline_name` is the caller's
-    /// (`"cognify_pipeline"`), whereas a temporal run claims under
-    /// `"temporal-cognify"`, so the release would silently miss that case. The
-    /// correct fix carries the claim id out of `cognify` into the run slot so
-    /// `abort` can release the exact token it knows about; that is a
-    /// cross-crate change and belongs in its own PR.
     async fn abort(&self, run_id: Uuid) -> Result<(), RegistryError> {
         let (abort_handle, event_tx, phase_tx) = {
             let runs = self.runs.read().await;
@@ -781,14 +666,13 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
 
         // Optionally write an ERRORED row.
         if self.cfg.abort_writes_errored_row {
-            let (pipeline_name, dataset_id, data_ids, user_id) = {
+            let (pipeline_name, dataset_id, user_id) = {
                 let runs = self.runs.read().await;
                 runs.get(&run_id)
                     .map(|s| {
                         (
                             s.meta.pipeline_name.clone(),
                             s.meta.dataset_id,
-                            s.data_ids.clone(),
                             s.meta.user_id,
                         )
                     })
@@ -796,10 +680,9 @@ impl PipelineRunRegistry for DefaultPipelineRunRegistry {
             };
             // NOTE (task 04 §5b): uuid5(OID, pipeline_name) only.
             let pipeline_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, pipeline_name.as_bytes());
-            // Python parity: ERRORED writes
-            // `{"data": data_info(data), "error": str(e)}`. For aborts the
-            // error message is the literal "abort".
-            let run_info = Some(super::run_info_for_errored(&data_ids, "abort"));
+            // Python parity: ERRORED writes `{"error": str(e)}`. For aborts
+            // the error message is the literal "abort".
+            let run_info = Some(super::run_info_for_errored("abort"));
             let result = self
                 .repo
                 .log_pipeline_run_entry(cognee_database::PipelineRunEntry {

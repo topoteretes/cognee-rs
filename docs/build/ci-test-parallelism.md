@@ -111,8 +111,7 @@ when its assertions depend on real embeddings:
   the answer contains "germany"/"netherlands"; `search_after_partial_delete`
   expects a query to match a specific doc. Deterministic vectors don't cluster
   semantically, so these fail (even at record time). Also `integration_embeddings`.
-- **Non-deterministic query derivation** — `e2e_full_pipeline_memify` and
-  `integration_default_backend` build their search query from `entities[0]`,
+- **Non-deterministic query derivation** — `integration_default_backend` build their search query from `entities[0]`,
   whose order isn't stable; the query (and thus the retrieval-augmented prompt)
   varies between record and replay → cassette miss.
 - **HTTP-server e2e** (`test_cognify_blocking`, `test_ontology_cognify_search_e2e`)

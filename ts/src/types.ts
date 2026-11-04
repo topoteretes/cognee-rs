@@ -31,13 +31,10 @@ export interface CogneeCognifyOptions {
   /** Accepted but inert on the default chunking path: no chunker reads it, so it changes no chunk boundary (Python's DefaultChunkEngine does consume it, but that engine is unreachable). Only validation reads it, rejecting overlap >= chunk size. Kept for API compatibility; see CognifyConfig::chunk_overlap in crates/cognify/src/config.rs. */
   chunkOverlap?: number;
   summarization?: boolean;
-  temporalCognify?: boolean;
-  /** Index `"source → relation → target"` triplet embeddings. */
-  triplet?: boolean;
   /**
    * A custom graph model's JSON Schema (an object, or a string holding one),
    * extracted instead of the default `KnowledgeGraph` — Python's `graph_model`.
-   * `{}` means the default model. Not supported with `temporalCognify`; see
+   * `{}` means the default model; see
    * docs/guides/custom-graph-schema.md for the schema contract.
    */
   graphSchema?: Record<string, unknown> | string;
@@ -161,6 +158,10 @@ export interface CogneeDataRecord {
   data_size: number;
   last_accessed: string | null;
   importance_weight: number | null;
+  /** Owning dataset: rows are dataset-scoped, as in Python. */
+  dataset_id: string | null;
+  /** Pre-scoping id of a row split off a shared legacy row by migration. */
+  legacy_id: string | null;
 }
 
 /**
@@ -195,12 +196,11 @@ export interface CogneeCognifyResult {
 // Phase 4 types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** All 18 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
+/** All 17 search type wire names (SCREAMING_SNAKE_CASE, matching Rust serde). */
 export type SearchTypeString =
   | "SUMMARIES"
   | "CHUNKS"
   | "RAG_COMPLETION"
-  | "TRIPLET_COMPLETION"
   | "GRAPH_COMPLETION"
   | "GRAPH_COMPLETION_DECOMPOSITION"
   | "GRAPH_SUMMARY_COMPLETION"
@@ -445,7 +445,7 @@ export interface CogneeRecallResult {
 export interface CogneeRememberOptions {
   /** Session ID — switches to session-memory mode (no graph writes). */
   sessionId?: string;
-  /** Run a memify pass after cognify (default false). */
+  /** Run `improve()` after cognify, or on the session in session mode (default true, as in Python). */
   selfImprovement?: boolean;
   /** Tenant UUID string (multi-tenant scoping). */
   tenant?: string;
@@ -521,6 +521,35 @@ export interface CogneeRememberResult {
   entry_type: string | null;
   /** Typed-entry id from the session manager; `null` on the file/text path. */
   entry_id: string | null;
+  /**
+   * The automatic `improve()` that followed the remember, when it ran. Absent
+   * when it was turned off, declined (`improve_skipped`), failed
+   * (`improve_error`), or (session mode) is running in the background.
+   */
+  improve?: CogneeRememberImprove;
+  /** Why the automatic improve failed; the remember itself succeeded. Present only when set. */
+  improve_error?: string;
+  /** Why a host admission check declined the automatic improve. Present only when set. */
+  improve_skipped?: string;
+}
+
+/** Python's `ImproveResult` as nested in a `CogneeRememberResult` (snake_case). */
+export interface CogneeRememberImprove {
+  dataset_id: string | null;
+  dataset_name: string;
+  session_ids: string[];
+  stages: Array<{
+    stage: string;
+    status: "completed" | "already_completed" | "skipped" | "errored";
+    reason: string | null;
+    error: string | null;
+    counts: Record<string, number>;
+    duration_ms: number;
+  }>;
+  background: boolean;
+  finished: boolean;
+  error: string | null;
+  status: "completed" | "errored" | "skipped" | "running";
 }
 
 /** A typed memory entry for `cogneeRememberEntry`. */
@@ -552,29 +581,12 @@ export type CogneeMemoryEntry =
       feedbackScore?: number;
     };
 
-/** Options accepted by `cogneeMemify`. */
-export interface CogneeMemifyOptions {
-  tripletBatchSize?: number;
-  nodeTypeFilter?: string;
-  nodeNameFilter?: string[];
-  nodeNameFilterOperator?: string;
-}
-
-/** Result of `cogneeMemify`. Hand-built from `MemifyResult` (not Serialize). */
-export interface CogneeMemifyResult {
-  tripletCount: number;
-  indexedCount: number;
-  batchCount: number;
-  alreadyCompleted: boolean;
-  priorPipelineRunId: string | null;
-}
-
 /** Options accepted by `cogneeImprove`. */
 export interface CogneeImproveOptions {
   datasetName: string;
+  /** UUID of a dataset the caller already resolved (possibly shared with it), as Python's `improve(dataset=<UUID>)`. */
+  datasetId?: string;
   sessionIds?: string[];
-  /** Deprecated: scoped the removed memify stage; ignored. */
-  nodeName?: string[];
   feedbackAlpha?: number;
   tenant?: string;
 }
@@ -651,9 +663,9 @@ export interface CogneeUpdateOptions {
 
 /** Result of `cogneeUpdate`. Hand-built JSON. */
 export interface CogneeUpdateResult {
-  deletedDataId: string;
+  /** The document's id, unchanged by the update. */
+  dataId: string;
   deleteResult: CogneeDeleteResultDetail;
-  newData: CogneeDataRecord[];
   cognifyResult: CogneeCognifyResult | null;
 }
 
@@ -714,21 +726,6 @@ export interface CogneeUser {
   tenant_id: string | null;
   created_at: string;
   updated_at: string | null;
-}
-
-/**
- * A notebook row. Mirrors `cognee_database::Notebook` (Serialize, snake_case fields).
- *
- * `cells` is a JSON array of notebook cells; its inner shape is opaque and
- * defined by the application layer.
- */
-export interface CogneeNotebook {
-  id: string;
-  owner_id: string;
-  name: string;
-  cells: unknown[];
-  deletable: boolean;
-  created_at: string;
 }
 
 /**

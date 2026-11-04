@@ -212,7 +212,6 @@ export {
   type CogneeConfigObject,
   type CogneeDatasetObject,
   type CogneeSessionObject,
-  type CogneeNotebookObject,
   type CogneeUserObject,
 } from "./cognee";
 

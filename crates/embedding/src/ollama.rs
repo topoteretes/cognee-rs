@@ -115,7 +115,7 @@ impl OllamaEmbeddingEngine {
             endpoint,
             model: config.model.clone(),
             dimensions: config.dimensions,
-            batch_size: config.batch_size,
+            batch_size: config.effective_batch_size(),
             max_completion_tokens: config.max_completion_tokens,
         })
     }
@@ -350,6 +350,12 @@ impl EmbeddingEngine for OllamaEmbeddingEngine {
         self.batch_size
     }
 
+    /// Ollama's `embed` chunks by `batch_size` sequentially, so callers do not
+    /// add concurrency on top.
+    fn max_concurrent_batches(&self) -> usize {
+        1
+    }
+
     fn max_sequence_length(&self) -> usize {
         self.max_completion_tokens
     }
@@ -477,6 +483,7 @@ mod tests {
             api_version: None,
             max_completion_tokens: 8191,
             batch_size: 10,
+            max_concurrent_data_points: 150,
             mock: false,
             mock_mode: Default::default(),
             #[cfg(feature = "onnx")]
@@ -745,21 +752,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embed_does_not_panic_on_zero_batch_size() {
+    async fn embed_normalises_a_zero_batch_size_to_the_default() {
         let mut server = mockito::Server::new_async().await;
-        // Each element becomes its own single-item batch (chunks(1)).
+        // Python's `if not embedding_batch_size: = 32`: both texts fit one
+        // request, no single-item fan-out and no `chunks(0)` panic.
         let batch = server
             .mock("POST", "/api/embed")
             .match_body(mockito::Matcher::Regex(r#""input":\["#.to_string()))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"embeddings":[[1.0,0.0]]}"#)
-            .expect(2)
+            .with_body(r#"{"embeddings":[[1.0,0.0],[0.0,1.0]]}"#)
+            .expect(1)
             .create_async()
             .await;
 
         let config = EmbeddingConfig {
             batch_size: 0,
+            max_concurrent_data_points: 150,
             ..config_for(&server.url())
         };
         let engine = OllamaEmbeddingEngine::new(&config).unwrap();

@@ -101,19 +101,19 @@ Every async op returns a `CompletableFuture<T>`. The generated
 | Lifecycle | `warm()`, `ownerId()`, `close()` |
 | Ingest / extract | `add(...)`, `cognify(...)`, `addAndCognify(...)` |
 | Retrieval | `search(query[, SearchOptions])`, `recall(query[, RecallOptions])` |
-| Memory | `remember(...)`, `rememberEntry(...)`, `memify([MemifyOptions])`, `improve(ImproveOptions)` |
+| Memory | `remember(...)`, `rememberEntry(...)`, `improve(ImproveOptions)` |
 | Data lifecycle | `forget(ForgetTarget[, tenant])`, `update(...)`, `pruneData()`, `pruneSystem([PruneSystemOptions])` |
 | Visualization | `visualize([VisualizeOptions])`, `visualizeToFile(VisualizeOptions)` |
-| Sub-surfaces | `datasets()`, `sessions()`, `users()`, `notebooks()`, `config()` |
+| Sub-surfaces | `datasets()`, `sessions()`, `users()`, `config()` |
 | Module statics | `Cognee.setupLogging([Map])`, `Cognee.initOtlp([Map])`, `Cognee.setTelemetryEnabled(boolean)`, `Cognee.isTelemetryEnabled()`, `Cognee.initTelemetry()`, `Cognee.version()` |
 
 Inputs are built with the `DataInput` factories: `DataInput.text(String)`,
 `DataInput.file(String path)`, `DataInput.url(String)`, and
 `DataInput.binary(byte[] bytes, String name)`. Per-op options use fluent
 builders (`SearchOptions`, `CognifyOptions`, `RecallOptions`, …); pass `null`
-(or use the no-option overloads) to accept defaults. All 15 `SearchType` values
+(or use the no-option overloads) to accept defaults. All 17 `SearchType` values
 are supported (SCREAMING_SNAKE_CASE, e.g. `GRAPH_COMPLETION`, `SUMMARIES`,
-`CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`, `CYPHER`, …).
+`CHUNKS`, `RAG_COMPLETION`, `CYPHER`, …).
 
 Structured results whose payloads are open-ended (`SearchResponse`,
 `RecallResult`, `ForgetResult`, …) expose the parsed Jackson tree via `raw()`

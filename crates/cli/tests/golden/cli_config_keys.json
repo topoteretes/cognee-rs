@@ -22,13 +22,13 @@
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
-    "cognify.data_per_batch",
     "cognify.extraction_strategy",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
     "cognify.max_chunk_failure_ratio",
     "cognify.raise_incremental_loading_errors",
     "cognify.rollback_scope",
+    "cognify.stale_run_recovery_min_age_seconds",
     "cognify.token_counter",
     "cognify.tolerate_summarization_failures",
     "data_root_directory",
@@ -44,11 +44,11 @@
     "embedding.dimensions",
     "embedding.endpoint",
     "embedding.max_completion_tokens",
+    "embedding.max_concurrent_data_points",
     "embedding.max_sequence_length",
     "embedding.mock",
     "embedding.model",
     "embedding.ollama.huggingface_tokenizer",
-    "embedding.onnx.batch_size",
     "embedding.onnx.model_path",
     "embedding.onnx.tokenizer_path",
     "embedding.openai_compatible.api_version",
@@ -159,7 +159,6 @@
     "session.store",
     "session.ttl_seconds",
     "session_search_mode",
-    "single_process",
     "skip_connection_test",
     "skip_preflight",
     "storage.backend",
@@ -225,7 +224,6 @@
     "strict_config",
     "skip_preflight",
     "skip_connection_test",
-    "single_process",
     "llm.provider",
     "llm.model",
     "llm.api_key",
@@ -261,6 +259,7 @@
     "embedding.endpoint",
     "embedding.api_key",
     "embedding.batch_size",
+    "embedding.max_concurrent_data_points",
     "embedding.max_sequence_length",
     "embedding.max_completion_tokens",
     "embedding.rate_limit_enabled",
@@ -309,7 +308,7 @@
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
-    "cognify.data_per_batch",
+    "cognify.stale_run_recovery_min_age_seconds",
     "cognify.extraction_strategy",
     "cognify.cascade_rounds",
     "improve.auto_enabled",
@@ -359,7 +358,6 @@
     "aws.bearer_token",
     "embedding.onnx.model_path",
     "embedding.onnx.tokenizer_path",
-    "embedding.onnx.batch_size",
     "embedding.ollama.huggingface_tokenizer",
     "embedding.openai_compatible.api_version"
   ],
@@ -2439,57 +2437,6 @@
   "set cognify.chunks_per_batch <- {\"a\":1}": {
     "err": true
   },
-  "set cognify.data_per_batch <- \"\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"1\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"s\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- \"true\"": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- -1": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "set cognify.data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "set cognify.data_per_batch <- 1.5": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 5000000000": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "set cognify.data_per_batch <- [1]": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- false": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- null": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- true": {
-    "err": true
-  },
-  "set cognify.data_per_batch <- {\"a\":1}": {
-    "err": true
-  },
   "set cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },
@@ -2796,6 +2743,59 @@
   "set cognify.rollback_scope <- {\"a\":1}": {
     "err": true
   },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"1\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"s\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- \"true\"": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- -1": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 0": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 0
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 1": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 1
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 1.5": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 5000000000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 5000000000
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- 70000": {
+    "ok": {
+      "cognify.stale_run_recovery_min_age_seconds": 70000
+    }
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- [1]": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- false": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- null": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- true": {
+    "err": true
+  },
+  "set cognify.stale_run_recovery_min_age_seconds <- {\"a\":1}": {
+    "err": true
+  },
   "set cognify.token_counter <- \"\"": {
     "ok": {}
   },
@@ -2892,57 +2892,6 @@
     }
   },
   "set cognify.tolerate_summarization_failures <- {\"a\":1}": {
-    "err": true
-  },
-  "set data_per_batch <- \"\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"1\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"s\"": {
-    "err": true
-  },
-  "set data_per_batch <- \"true\"": {
-    "err": true
-  },
-  "set data_per_batch <- -1": {
-    "err": true
-  },
-  "set data_per_batch <- 0": {
-    "ok": {
-      "cognify.data_per_batch": 0
-    }
-  },
-  "set data_per_batch <- 1": {
-    "ok": {
-      "cognify.data_per_batch": 1
-    }
-  },
-  "set data_per_batch <- 1.5": {
-    "err": true
-  },
-  "set data_per_batch <- 5000000000": {
-    "err": true
-  },
-  "set data_per_batch <- 70000": {
-    "ok": {
-      "cognify.data_per_batch": 70000
-    }
-  },
-  "set data_per_batch <- [1]": {
-    "err": true
-  },
-  "set data_per_batch <- false": {
-    "err": true
-  },
-  "set data_per_batch <- null": {
-    "err": true
-  },
-  "set data_per_batch <- true": {
-    "err": true
-  },
-  "set data_per_batch <- {\"a\":1}": {
     "err": true
   },
   "set data_root_directory <- \"\"": {
@@ -3924,6 +3873,57 @@
   "set embedding.max_completion_tokens <- {\"a\":1}": {
     "err": true
   },
+  "set embedding.max_concurrent_data_points <- \"\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"1\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"s\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- \"true\"": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- -1": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "set embedding.max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "set embedding.max_concurrent_data_points <- 1.5": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 5000000000": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "set embedding.max_concurrent_data_points <- [1]": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- false": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- null": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- true": {
+    "err": true
+  },
+  "set embedding.max_concurrent_data_points <- {\"a\":1}": {
+    "err": true
+  },
   "set embedding.max_sequence_length <- \"\"": {
     "err": true
   },
@@ -4130,57 +4130,6 @@
     "err": true
   },
   "set embedding.ollama.huggingface_tokenizer <- {\"a\":1}": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"1\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"s\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- \"true\"": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- -1": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "set embedding.onnx.batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "set embedding.onnx.batch_size <- 1.5": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 5000000000": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "set embedding.onnx.batch_size <- [1]": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- false": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- null": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- true": {
-    "err": true
-  },
-  "set embedding.onnx.batch_size <- {\"a\":1}": {
     "err": true
   },
   "set embedding.onnx.model_path <- \"\"": {
@@ -4848,6 +4797,57 @@
   "set embedding_max_completion_tokens <- {\"a\":1}": {
     "err": true
   },
+  "set embedding_max_concurrent_data_points <- \"\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"1\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"s\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- \"true\"": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- -1": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 0": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 0
+    }
+  },
+  "set embedding_max_concurrent_data_points <- 1": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 1
+    }
+  },
+  "set embedding_max_concurrent_data_points <- 1.5": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 5000000000": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- 70000": {
+    "ok": {
+      "embedding.max_concurrent_data_points": 70000
+    }
+  },
+  "set embedding_max_concurrent_data_points <- [1]": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- false": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- null": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- true": {
+    "err": true
+  },
+  "set embedding_max_concurrent_data_points <- {\"a\":1}": {
+    "err": true
+  },
   "set embedding_max_sequence_length <- \"\"": {
     "err": true
   },
@@ -5054,57 +5054,6 @@
     "err": true
   },
   "set embedding_model_path <- {\"a\":1}": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"1\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"s\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- \"true\"": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- -1": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 0": {
-    "ok": {
-      "embedding.onnx.batch_size": 0
-    }
-  },
-  "set embedding_onnx_batch_size <- 1": {
-    "ok": {
-      "embedding.onnx.batch_size": 1
-    }
-  },
-  "set embedding_onnx_batch_size <- 1.5": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 5000000000": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- 70000": {
-    "ok": {
-      "embedding.onnx.batch_size": 70000
-    }
-  },
-  "set embedding_onnx_batch_size <- [1]": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- false": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- null": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- true": {
-    "err": true
-  },
-  "set embedding_onnx_batch_size <- {\"a\":1}": {
     "err": true
   },
   "set embedding_provider <- \"\"": {
@@ -13581,73 +13530,6 @@
   "set session_ttl_seconds <- {\"a\":1}": {
     "err": true
   },
-  "set single_process <- \"\"": {
-    "ok": {}
-  },
-  "set single_process <- \"1\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- \"s\"": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- \"true\"": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- -1": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 0": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 1": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- 1.5": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 5000000000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- 70000": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- [1]": {
-    "err": true
-  },
-  "set single_process <- false": {
-    "ok": {
-      "single_process": false
-    }
-  },
-  "set single_process <- null": {
-    "ok": {}
-  },
-  "set single_process <- true": {
-    "ok": {
-      "single_process": true
-    }
-  },
-  "set single_process <- {\"a\":1}": {
-    "err": true
-  },
   "set skip_connection_test <- \"\"": {
     "err": true
   },
@@ -15608,13 +15490,6 @@
       "relational.port": 1
     }
   },
-  "unset cognify.data_per_batch": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
   "unset cognify.extraction_strategy": {
     "ok": {
       "chunk_size": 7,
@@ -15657,6 +15532,13 @@
       "relational.port": 1
     }
   },
+  "unset cognify.stale_run_recovery_min_age_seconds": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset cognify.token_counter": {
     "ok": {
       "chunk_size": 7,
@@ -15665,13 +15547,6 @@
     }
   },
   "unset cognify.tolerate_summarization_failures": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset data_per_batch": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -15810,6 +15685,13 @@
       "relational.port": 1
     }
   },
+  "unset embedding.max_concurrent_data_points": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset embedding.max_sequence_length": {
     "ok": {
       "chunk_size": 7,
@@ -15832,13 +15714,6 @@
     }
   },
   "unset embedding.ollama.huggingface_tokenizer": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset embedding.onnx.batch_size": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -15936,6 +15811,13 @@
       "relational.port": 1
     }
   },
+  "unset embedding_max_concurrent_data_points": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset embedding_max_sequence_length": {
     "ok": {
       "chunk_size": 7,
@@ -15958,13 +15840,6 @@
     }
   },
   "unset embedding_model_path": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset embedding_onnx_batch_size": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -17124,13 +16999,6 @@
     }
   },
   "unset session_ttl_seconds": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset single_process": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

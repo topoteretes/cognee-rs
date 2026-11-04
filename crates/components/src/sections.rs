@@ -311,9 +311,15 @@ config_section! {
         pub api_key: String = String::new() => {
             env: ["EMBEDDING_API_KEY", "LLM_API_KEY"], alias: ["embedding_api_key"], secret: true,
         },
-        /// Texts per embedding request.
-        pub batch_size: u32 = 36 => {
+        /// Texts per embedding request (Python's `embedding_batch_size`).
+        pub batch_size: u32 = 32 => {
             env: ["EMBEDDING_BATCH_SIZE"], alias: ["embedding_batch_size"], secret: false,
+        },
+        /// Data points allowed in flight to the embedder; concurrent batches
+        /// are `max(1, max_concurrent_data_points / batch_size)` (Python's
+        /// `embedding_max_concurrent_data_points`).
+        pub max_concurrent_data_points: u32 = 150 => {
+            env: ["EMBEDDING_MAX_CONCURRENT_DATA_POINTS"], alias: ["embedding_max_concurrent_data_points"], secret: false,
         },
         /// Maximum input tokens per text for the local ONNX provider
         /// (`onnx`/`fastembed`): it truncates input and is the embedding term
@@ -374,11 +380,6 @@ config_section! {
         /// `<cache_root_directory>/models/bge-small-tokenizer.json`.
         pub tokenizer_path: String = String::new() => {
             env: ["EMBEDDING_TOKENIZER_PATH", "COGNEE_E2E_TOKENIZER_PATH"], alias: ["embedding_tokenizer_path"], secret: false,
-        },
-        /// Inference batch size (leading tensor dimension), independent of
-        /// `embedding.batch_size`.
-        pub batch_size: u32 = 32 => {
-            env: ["EMBEDDING_ONNX_BATCH_SIZE"], alias: ["embedding_onnx_batch_size"], secret: false,
         },
     }
 }
@@ -808,10 +809,12 @@ config_section! {
         pub chunks_per_batch: u32 = 2000 => {
             env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
         },
-        /// Data items per batch in temporal cognify (Python's `data_per_batch`
-        /// parameter); 0 uses the default, 20.
-        pub data_per_batch: u32 = 20 => {
-            env: ["COGNEE_DATA_PER_BATCH"], alias: ["data_per_batch"], secret: false,
+        /// Startup recovery's age floor in seconds (Python's
+        /// `STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, `cognify/recovery.py:34`): a
+        /// `STARTED` run younger than this is treated as live and never
+        /// recovered. Eligibility only; the run's ownership marker is the proof.
+        pub stale_run_recovery_min_age_seconds: u64 = 3600 => {
+            env: ["COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS"], alias: [], secret: false,
         },
         /// Graph extraction strategy: `single_pass` (default; one LLM call per
         /// chunk) or `cascade` (Python's multi-round

@@ -88,10 +88,6 @@ impl PipelineRunRepository for FailingRepo {
         Ok(Vec::new())
     }
 
-    async fn reset_orphans(&self, _reason: &str) -> Result<u64, DatabaseError> {
-        Ok(0)
-    }
-
     async fn set_payload_field(
         &self,
         _run_id: Uuid,

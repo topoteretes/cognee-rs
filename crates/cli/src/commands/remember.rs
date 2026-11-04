@@ -40,7 +40,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         ));
     }
 
-    // `--no-improve` flips the default-on self-improvement (memify) pass.
+    // `--no-improve` flips the default-on self-improvement (`improve`) pass.
     let self_improvement = !args.no_improve;
 
     let inputs = args
@@ -106,7 +106,9 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             .with_thread_pool(thread_pool)
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database)),
+            .with_database(Arc::clone(&database))
+            // Python runs its image and audio loaders at `add`.
+            .with_loader_registry(cm.add_loader_registry().await),
         );
 
         // Session backing store/manager are only required by session-mode
@@ -149,7 +151,6 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             Some(Arc::clone(&database)),
             Some(session_store),
             Some(session_manager),
-            None,
             ontology_resolver,
             cognify_config,
             improve_config,

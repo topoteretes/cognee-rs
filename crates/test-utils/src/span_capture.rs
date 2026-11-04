@@ -106,8 +106,9 @@ type SpanStore = Arc<Mutex<Vec<CapturedSpan>>>;
 /// the span it just left may still be held by that worker thread, and neither
 /// it nor any of its parents has closed yet. A test that snapshots at that
 /// moment saw everything except the outermost spans it cared about, which is
-/// exactly what made `tutorial_seeder_emits_span` (and, more rarely, three of
-/// its siblings) flake on a busy CI runner — topoteretes/cognee-rs#109.
+/// exactly what made the since-removed `tutorial_seeder_emits_span` (and, more
+/// rarely, three of its siblings) flake on a busy CI runner —
+/// topoteretes/cognee-rs#109.
 /// Recording on creation and writing later `Span::record` values through to the
 /// stored entry removes the dependence on close ordering entirely: the entry is
 /// in the store before the instrumented call can return.

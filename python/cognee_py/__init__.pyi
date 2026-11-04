@@ -22,9 +22,8 @@ from cognee_py._native import (
     CogneeConfig as CogneeConfig,
     # SDK datasets sub-object
     CogneeDatasets as CogneeDatasets,
-    # SDK sessions / notebooks sub-objects
+    # SDK sessions sub-object
     CogneeSessions as CogneeSessions,
-    CogneeNotebooks as CogneeNotebooks,
     # SDK-tier exceptions
     CogneeError as CogneeError,
     CogneeComponentError as CogneeComponentError,
@@ -80,7 +79,6 @@ class SearchType(str, Enum):
     GRAPH_COMPLETION_CONTEXT_EXTENSION: str
     GRAPH_COMPLETION_DECOMPOSITION: str
     GRAPH_SUMMARY_COMPLETION: str
-    TRIPLET_COMPLETION: str
     RAG_COMPLETION: str
     CHUNKS: str
     SUMMARIES: str

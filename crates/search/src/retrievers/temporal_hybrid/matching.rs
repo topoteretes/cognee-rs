@@ -31,9 +31,9 @@ pub(crate) const QUERY_INTERVAL_PROMPT: &str =
     include_str!("../../utils/prompts/query_interval.txt");
 
 /// The window the LLM extracts from a question. Port of Python's
-/// `QueryInterval` (`cognee/tasks/temporal_graph/models.py`): each side is a
-/// set of UTC calendar fields (`year` required, the rest defaulting to the
-/// start of their unit), or `null` when that side is open.
+/// `QueryInterval` (`cognee/modules/retrieval/temporal_hybrid/models.py:20-22`):
+/// each side is a set of UTC calendar fields (`year` required, the rest
+/// defaulting to the start of their unit), or `null` when that side is open.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct QueryInterval {
     #[serde(default)]
@@ -56,21 +56,41 @@ pub(crate) enum ExtractedWindow {
     NoWindow(TemporalFallbackReason),
 }
 
+/// Check one boundary against the field bounds of Python's `QueryTime`
+/// (`cognee/modules/retrieval/temporal_hybrid/models.py`): year 1..=9999,
+/// month 1..=12, day 1..=31, hour 0..=23, minute and second 0..=59. Pydantic
+/// enforces them while parsing the structured output, so a value outside them
+/// never reaches `extract_query_interval` in Python: the LLM call raises and
+/// the search fails.
+fn check_field_bounds(side: &str, fields: &RawExtractedTimestamp) -> Result<(), SearchError> {
+    let checks = [
+        ("year", i64::from(fields.year), 1, 9999),
+        ("month", i64::from(fields.month), 1, 12),
+        ("day", i64::from(fields.day), 1, 31),
+        ("hour", i64::from(fields.hour), 0, 23),
+        ("minute", i64::from(fields.minute), 0, 59),
+        ("second", i64::from(fields.second), 0, 59),
+    ];
+    for (name, value, min, max) in checks {
+        if !(min..=max).contains(&value) {
+            return Err(SearchError::LlmError(format!(
+                "query interval {side}.{name} = {value} is outside {min}..={max}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// One boundary as a UTC instant: `Ok(None)` for an open side, `Err(())` for
-/// calendar fields that name no real moment (`2021-02-29`, year 0, month 13).
-/// Python's `datetime(**fields, tzinfo=utc)` raises `ValueError` for the
-/// in-range-but-impossible ones; for the out-of-range ones see
-/// [`classify_interval`].
+/// calendar fields that name no real moment (`2021-02-29`). Python's
+/// `datetime(**fields, tzinfo=utc)` raises `ValueError` for these;
+/// out-of-range fields never get this far (see [`check_field_bounds`]).
 fn boundary_datetime(
     boundary: Option<&RawExtractedTimestamp>,
 ) -> Result<Option<DateTime<Utc>>, ()> {
     let Some(fields) = boundary else {
         return Ok(None);
     };
-    // Python's model bounds the year to 1..=9999.
-    if !(1..=9999).contains(&fields.year) {
-        return Err(());
-    }
     NaiveDate::from_ymd_opt(
         i32::from(fields.year),
         u32::from(fields.month),
@@ -88,33 +108,39 @@ fn boundary_datetime(
 }
 
 /// Classify an extracted interval. Port of the second half of Python's
-/// `extract_query_interval`: both sides open is `no_time_constraint`; an
-/// impossible date, or a start at or after the end, is `invalid_interval`.
+/// `extract_query_interval`: both sides open is `no_time_constraint`; a date
+/// that does not exist (`2021-02-29`), or a start at or after the end, is
+/// `invalid_interval`.
 ///
-/// Deliberate divergence: calendar fields outside their range (month 13,
-/// day 32, hour 24, year 0 or above 9999) also land here as
-/// `invalid_interval`, so the search falls back to plain hybrid. In Python
-/// they never reach this step: `QueryInterval`'s `Timestamp` bounds every field
-/// with `ge`/`le` (`cognee/tasks/temporal_graph/models.py`), pydantic rejects
-/// the structured output, and the search fails. Only dates whose fields are
-/// each in range but do not exist together (`2021-02-29`) are
-/// `invalid_interval` on both sides. A malformed window from the model is a
-/// question without a usable date, not a provider outage, so Rust keeps
-/// answering it.
-pub(crate) fn classify_interval(interval: &QueryInterval) -> ExtractedWindow {
+/// Calendar fields outside their range (month 13, day 32, hour 24, year 0 or
+/// above 9999) are an error, not a fallback: in Python `QueryInterval`'s
+/// `QueryTime` bounds every field with `ge`/`le`
+/// (`cognee/modules/retrieval/temporal_hybrid/models.py`), pydantic rejects
+/// the structured output, and the search fails like any other LLM failure.
+pub(crate) fn classify_interval(interval: &QueryInterval) -> Result<ExtractedWindow, SearchError> {
+    for (side, boundary) in [
+        ("starts_at", &interval.starts_at),
+        ("ends_at", &interval.ends_at),
+    ] {
+        if let Some(fields) = boundary {
+            check_field_bounds(side, fields)?;
+        }
+    }
     let (Ok(start), Ok(end)) = (
         boundary_datetime(interval.starts_at.as_ref()),
         boundary_datetime(interval.ends_at.as_ref()),
     ) else {
-        return ExtractedWindow::NoWindow(TemporalFallbackReason::InvalidInterval);
+        return Ok(ExtractedWindow::NoWindow(
+            TemporalFallbackReason::InvalidInterval,
+        ));
     };
-    match (start, end) {
+    Ok(match (start, end) {
         (None, None) => ExtractedWindow::NoWindow(TemporalFallbackReason::NoTimeConstraint),
         (Some(start), Some(end)) if start >= end => {
             ExtractedWindow::NoWindow(TemporalFallbackReason::InvalidInterval)
         }
         (start, end) => ExtractedWindow::Window { start, end },
-    }
+    })
 }
 
 /// Ask the LLM for the question's window. Port of Python's
@@ -139,7 +165,7 @@ pub(crate) async fn extract_query_interval(
         )
         .await
         .map_err(|error| SearchError::LlmError(error.to_string()))?;
-    Ok(classify_interval(&interval))
+    classify_interval(&interval)
 }
 
 /// A window boundary in ms since the epoch. Port of `to_epoch_ms`.
@@ -302,14 +328,48 @@ mod tests {
                 interval(Some(fields(2021, 2, 29)), None),
                 NoWindow(InvalidInterval),
             ),
-            (
-                interval(Some(fields(0, 1, 1)), None),
-                NoWindow(InvalidInterval),
-            ),
         ];
         for (input, expected) in cases {
-            assert_eq!(classify_interval(&input), expected, "{input:?}");
+            assert_eq!(classify_interval(&input).unwrap(), expected, "{input:?}");
         }
+    }
+
+    /// Python's `QueryTime` bounds every field with `ge`/`le`, so an
+    /// out-of-range value fails the search instead of falling back.
+    #[test]
+    fn classify_interval_rejects_out_of_range_fields() {
+        let raw = |value: serde_json::Value| -> RawExtractedTimestamp {
+            serde_json::from_value(value).unwrap()
+        };
+        let bad = [
+            json!({"year": 0}),
+            json!({"year": 10000}),
+            json!({"year": 2020, "month": 0}),
+            json!({"year": 2020, "month": 13}),
+            json!({"year": 2020, "day": 0}),
+            json!({"year": 2020, "day": 32}),
+            json!({"year": 2020, "hour": 24}),
+            json!({"year": 2020, "minute": 60}),
+            json!({"year": 2020, "second": 60}),
+        ];
+        for value in bad {
+            for as_start in [true, false] {
+                let boundary = Some(raw(value.clone()));
+                let input = if as_start {
+                    interval(boundary, None)
+                } else {
+                    interval(None, boundary)
+                };
+                assert!(
+                    matches!(classify_interval(&input), Err(SearchError::LlmError(_))),
+                    "{value} should fail the search"
+                );
+            }
+        }
+        // Edge values that are in range still classify.
+        let edge = raw(json!({"year": 9999, "month": 12, "day": 31, "hour": 23,
+            "minute": 59, "second": 59}));
+        assert!(classify_interval(&interval(Some(edge), None)).is_ok());
     }
 
     #[test]
@@ -318,7 +378,7 @@ mod tests {
             serde_json::from_value(json!({"starts_at": null, "ends_at": {"year": 1965}})).unwrap();
         assert!(parsed.starts_at.is_none());
         assert_eq!(
-            classify_interval(&parsed),
+            classify_interval(&parsed).unwrap(),
             ExtractedWindow::Window {
                 start: None,
                 end: Some(utc(1965, 1, 1)),
@@ -326,7 +386,7 @@ mod tests {
         );
         let empty: QueryInterval = serde_json::from_value(json!({})).unwrap();
         assert_eq!(
-            classify_interval(&empty),
+            classify_interval(&empty).unwrap(),
             ExtractedWindow::NoWindow(TemporalFallbackReason::NoTimeConstraint)
         );
     }

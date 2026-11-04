@@ -107,7 +107,6 @@ credentials.
 | Script | Run command | What it covers |
 |---|---|---|
 | [`add_cognify_search.py`](examples/add_cognify_search.py) | `python examples/add_cognify_search.py` | Core add → cognify → search pipeline |
-| [`memify_recall.py`](examples/memify_recall.py) | `python examples/memify_recall.py` | Triplet embeddings (memify) + session recall |
 | [`datasets.py`](examples/datasets.py) | `python examples/datasets.py` | Dataset listing, status, deletion |
 | [`sessions.py`](examples/sessions.py) | `python examples/sessions.py` | QA history and feedback |
 | [`config.py`](examples/config.py) | `python examples/config.py` | Programmatic config (LLM / embedding / DBs) |
@@ -252,8 +251,8 @@ result = await cognee.search(
 )
 ```
 
-All 18 search types are supported (via `SearchType` enum):
-`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`, `TRIPLET_COMPLETION`,
+All 17 search types are supported (via `SearchType` enum):
+`GRAPH_COMPLETION`, `SUMMARIES`, `CHUNKS`, `RAG_COMPLETION`,
 `GRAPH_COMPLETION_DECOMPOSITION`, `GRAPH_SUMMARY_COMPLETION`, `CYPHER`,
 `NATURAL_LANGUAGE`, `GRAPH_COMPLETION_COT`, `GRAPH_COMPLETION_CONTEXT_EXTENSION`,
 `FEELING_LUCKY`, `FEEDBACK`, `TEMPORAL`, `CODING_RULES`, `CHUNKS_LEXICAL`,
@@ -282,15 +281,6 @@ await cognee.remember(
     "my-dataset",
     {"self_improvement": True},
 )
-```
-
-#### memify
-
-Index triplet embeddings from the existing knowledge graph.
-Enables `TripletCompletion` search. Idempotent.
-
-```python
-await cognee.memify()
 ```
 
 #### remember_entry
@@ -371,45 +361,13 @@ await cognee.sessions.add_feedback("session-uuid", "qa-uuid", "Great answer!", 5
 await cognee.sessions.delete_feedback("session-uuid", "qa-uuid")
 ```
 
-### Notebooks
-
-```python
-notebooks = await cognee.notebooks.list()
-for nb in notebooks:
-    print(nb["id"], nb["name"])
-
-# Create a new notebook (cells defaults to empty list; deletable is always True)
-nb = await cognee.notebooks.create("My Notebook")
-nb = await cognee.notebooks.create("My Notebook", cells=[...])
-
-# Update a notebook's name and/or cells
-nb = await cognee.notebooks.update(notebook_id, {"name": "New Name"})
-nb = await cognee.notebooks.update(notebook_id, {"cells": [...]})
-
-# Delete by UUID — returns True if deleted, False if not found
-deleted = await cognee.notebooks.delete(notebook_id)
-```
-
-`cognee.notebooks` is a `CogneeNotebooks` sub-object accessible on every `Cognee`
-instance. `notebook_id` is a UUID string.
-
-### Users and pipeline-run admin
+### Users
 
 ```python
 # Get or create the default user account
 user = await cognee.get_or_create_default_user()
 print(user["id"], user["email"])
-
-# Reset the pipeline run status for a specific pipeline within a dataset
-await cognee.reset_pipeline_run_status(dataset_id, pipeline_name)
-
-# Reset all pipeline run statuses for a dataset
-await cognee.reset_dataset_pipeline_run_status(dataset_id)
 ```
-
-`dataset_id` is a UUID string. `pipeline_name` is the pipeline name string.
-Both reset methods return `None` on success and raise `CogneeValidationError` if
-`dataset_id` is not a valid UUID.
 
 ### Data lifecycle
 
@@ -423,7 +381,7 @@ await cognee.forget({"kind": "dataset", "dataset": {"name": "my-dataset"}})
 # Forget everything
 await cognee.forget({"kind": "all"})
 
-# Replace a data item (delete → re-add → re-cognify)
+# Replace a data item: it keeps its id (forget memory → pinned re-add → re-cognify)
 await cognee.update("old-data-uuid", {"type": "text", "text": "updated content"}, "my-dataset")
 
 # Remove all files from storage (metadata DB untouched)

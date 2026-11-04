@@ -15,9 +15,11 @@ from helpers import (
     open_db,
     query_data,
     query_datasets,
+    distinct_graph_nodes,
     query_nodes,
     query_edges,
     python_db_path,
+    python_graph,
     rust_db_path,
     run_python_cli,
     run_rust_cli,
@@ -135,13 +137,14 @@ def test_shared_entity_delete_parity(tmp_path):
     py_conn = open_db(py_db)
     py_datasets = query_datasets(py_conn)
     py_data = query_data(py_conn)
-    py_nodes = query_nodes(py_conn)
+    # Python on Ladybug keeps its nodes in the graph only (helpers.python_graph).
+    py_nodes = python_graph(py_ws)[0]
     py_conn.close()
 
     rust_conn = open_db(rust_db)
     rust_datasets = query_datasets(rust_conn)
     rust_data = query_data(rust_conn)
-    rust_nodes = query_nodes(rust_conn)
+    rust_nodes = distinct_graph_nodes(query_nodes(rust_conn))
     rust_conn.close()
 
     # At least dataset_b should survive

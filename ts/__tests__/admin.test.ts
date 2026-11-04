@@ -1,6 +1,5 @@
 /**
- * Admin ops — getOrCreateDefaultUser / resetPipelineRunStatus /
- *             resetDatasetPipelineRunStatus.
+ * Admin ops — getOrCreateDefaultUser.
  *
  * All tests are Tier-A: no LLM / no network calls.
  * Config follows the same pattern as other test files:
@@ -96,66 +95,6 @@ describe("admin ops (Tier-A — no LLM)", () => {
       } finally {
         cleanup(h1.tmpDir);
         cleanup(h2.tmpDir);
-      }
-    });
-  });
-
-  // ── resetPipelineRunStatus ────────────────────────────────────────────────
-
-  describe("resetPipelineRunStatus", () => {
-    it("completes without error for a known dataset", async () => {
-      const h = makeTempHandle("admin_reset_pr@example.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        // Add data to create a dataset first.
-        await native.cogneeAdd(
-          h.handle,
-          { type: "text", text: "pipeline run status reset test" },
-          "admin_pr_ds"
-        );
-        const datasets = await native.cogneeListDatasets(h.handle);
-        const ds = datasets.find(
-          (d: { name: string }) => d.name === "admin_pr_ds"
-        );
-        expect(ds).toBeDefined();
-
-        await expect(
-          native.cogneeResetPipelineRunStatus(
-            h.handle,
-            ds!.id,
-            "cognify_pipeline"
-          )
-        ).resolves.toBeUndefined();
-      } finally {
-        cleanup(h.tmpDir);
-      }
-    });
-  });
-
-  // ── resetDatasetPipelineRunStatus ─────────────────────────────────────────
-
-  describe("resetDatasetPipelineRunStatus", () => {
-    it("completes without error (no pipeline runs to reset)", async () => {
-      const h = makeTempHandle("admin_reset_ds_pr@example.com");
-      await native.cogneeWarm(h.handle);
-      try {
-        await native.cogneeAdd(
-          h.handle,
-          { type: "text", text: "dataset pipeline run status reset test" },
-          "admin_ds_pr_ds"
-        );
-        const datasets = await native.cogneeListDatasets(h.handle);
-        const ds = datasets.find(
-          (d: { name: string }) => d.name === "admin_ds_pr_ds"
-        );
-        expect(ds).toBeDefined();
-
-        // With no pipeline runs this is a no-op — must not throw.
-        await expect(
-          native.cogneeResetDatasetPipelineRunStatus(h.handle, ds!.id)
-        ).resolves.toBeUndefined();
-      } finally {
-        cleanup(h.tmpDir);
       }
     });
   });
