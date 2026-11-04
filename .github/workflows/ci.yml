@@ -128,7 +128,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -418,7 +418,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -590,7 +590,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -727,7 +727,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -1452,7 +1452,7 @@ jobs:
       # of unused system packages as the other jobs gives back ~10 GB of headroom
       # and prevents the "Disk full?" linker crash seen when the runner fills up.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -1567,7 +1567,7 @@ jobs:
       # unused system packages as the other jobs (~10 GB headroom) to avoid the
       # "No space left on device" failure when building lbug's rlib.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true

@@ -94,9 +94,9 @@ jobs:
           token: ${{ secrets.RELEASE_PAT }}
 
       - name: Free disk space
-        # Pinned to a full commit SHA (v1.3.1) rather than @main for supply-chain
+        # Local composite action rather than a third-party one, for supply-chain
         # safety on this token-bearing publish workflow.
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true

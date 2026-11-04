@@ -73,7 +73,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
@@ -180,7 +180,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
         with:
           tool-cache: false
           android: true
