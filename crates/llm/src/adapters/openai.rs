@@ -3466,6 +3466,8 @@ fn audio_mime_type(format: &str) -> &'static str {
         "mp4" | "m4a" => "audio/mp4",
         "wav" => "audio/wav",
         "webm" => "audio/webm",
+        "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
         // validate_audio_format ensures only the above values reach here
         _ => "application/octet-stream",
     }
@@ -4675,5 +4677,7 @@ mod tests {
         assert_eq!(audio_mime_type("m4a"), "audio/mp4");
         assert_eq!(audio_mime_type("wav"), "audio/wav");
         assert_eq!(audio_mime_type("webm"), "audio/webm");
+        assert_eq!(audio_mime_type("flac"), "audio/flac");
+        assert_eq!(audio_mime_type("ogg"), "audio/ogg");
     }
 }

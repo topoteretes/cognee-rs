@@ -1205,6 +1205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`cognee-llm`: `flac` and `ogg` audio are transcribed.** The Whisper format
+  whitelist left out two formats the OpenAI transcription API and Python's
+  audio loader accept, so both failed with `Unsupported audio format`.
+
 - **Delete counts an `EdgeType` point only when it exists, once (SDK-1039).**
   The delete preview counted one `EdgeType_relationship_name` point per
   text-bearing edge and the dataset run counted the requested ids, so both
