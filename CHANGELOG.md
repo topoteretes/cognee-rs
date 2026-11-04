@@ -42,7 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with all the recall's datasets, before the first. On a note it does not
   search: it answers the note when the graph is the one source, nothing next
   to others, and reports the plan's `search_type()`, `auto_routed()` and
-  `empty_response()`. A skipped search sets `cognee.recall.warmup_shortcircuit`
+  `empty_response()`. A search it runs itself goes through
+  `GraphPlan::search_with_fallback`, which retries a failed routed pick as
+  the fallback as `run_graph` does, with `only_context(caller)` on the
+  request. A skipped search sets `cognee.recall.warmup_shortcircuit`
   and `cognee.recall.warmup_state` on the span `warmup_note` is given. A
   typed `recall()` scope runs a repeated source once (`dedupe_scopes`, shared
   with `normalize_scope`); `Auto` stays, so `[auto, graph]` is not graph-only.

@@ -524,9 +524,9 @@ pub async fn run_graph(
         owner: owner_id,
         decision,
         routed_rule,
-        fallback,
+        ..
     } = *plan;
-    let mut search_type = decision.search_type;
+    let search_type = decision.search_type;
     let auto_routed = routed_rule.is_some();
 
     // Under per-dataset storage an unfiltered graph search covers the datasets
@@ -547,7 +547,7 @@ pub async fn run_graph(
     }
 
     let caller_only_context = options.and_then(|o| o.only_context);
-    let mut request = SearchRequest {
+    let request = SearchRequest {
         query_text: query_text.to_string(),
         search_type,
         top_k: Some(top_k),
@@ -576,26 +576,14 @@ pub async fn run_graph(
         summarize_context: None,
     };
 
-    // The router picked something other than the fallback, so the fallback is
-    // still untried and may replace this result.
-    let routed_guess = routed_rule.is_some() && search_type != ROUTER_FALLBACK_TYPE;
-    let mut response = match search_orchestrator.search(&request).await {
-        Err(SearchError::UnsupportedSearchType(rejected)) if routed_guess => {
-            info!(
-                ?rejected,
-                "recall: routed search type is not supported; retrying as the fallback"
-            );
-            switch_to(&mut request, fallback, caller_only_context);
-            search_orchestrator.search(&request).await?
-        }
-        result => result?,
-    };
-    if routed_guess && RETRY_ON_EMPTY.contains(&request.search_type) && is_empty(&response.result) {
-        info!(search_type = ?request.search_type, "recall: routed search found nothing; retrying as the fallback");
-        switch_to(&mut request, fallback, caller_only_context);
-        response = search_orchestrator.search(&request).await?;
-    }
-    search_type = request.search_type;
+    let (response, search_type) = plan
+        .search_with_fallback(
+            request,
+            caller_only_context,
+            |request| async move { search_orchestrator.search(&request).await },
+            |response: &SearchResponse| is_empty(&response.result),
+        )
+        .await?;
     span.record(COGNEE_SEARCH_TYPE, format!("{search_type:?}").as_str());
 
     let items: Vec<RecallItem> = match &response.result {
@@ -736,9 +724,54 @@ impl GraphPlan {
         self.routed_rule.is_some()
     }
 
+    /// The `only_context` a search on this plan sends: the caller's, forced
+    /// on when no LLM can write the answer.
+    pub fn only_context(&self, caller: Option<bool>) -> Option<bool> {
+        search_only_context(caller, self.decision)
+    }
+
     /// What a search that does not run reports: no items, over no dataset.
     pub fn empty_response(&self) -> SearchResponse {
         empty_graph_response(self.search_type())
+    }
+
+    /// Runs `search` on `request`, which carries the plan's type, and retries
+    /// as the fallback when the router's pick fails: a type the backend
+    /// rejects, or a lexical or rules search that `found_nothing` judges
+    /// empty. An explicit type is never retried. Returns the result and the
+    /// type that answered.
+    pub async fn search_with_fallback<T, F, Fut>(
+        &self,
+        mut request: SearchRequest,
+        caller_only_context: Option<bool>,
+        mut search: F,
+        found_nothing: impl Fn(&T) -> bool,
+    ) -> Result<(T, SearchType), SearchError>
+    where
+        F: FnMut(SearchRequest) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SearchError>>,
+    {
+        // The router picked something other than the fallback, so the
+        // fallback is still untried and may replace this result.
+        let routed_guess =
+            self.routed_rule.is_some() && self.decision.search_type != ROUTER_FALLBACK_TYPE;
+        let mut result = match search(request.clone()).await {
+            Err(SearchError::UnsupportedSearchType(rejected)) if routed_guess => {
+                info!(
+                    ?rejected,
+                    "recall: routed search type is not supported; retrying as the fallback"
+                );
+                switch_to(&mut request, self.fallback, caller_only_context);
+                search(request.clone()).await?
+            }
+            result => result?,
+        };
+        if routed_guess && RETRY_ON_EMPTY.contains(&request.search_type) && found_nothing(&result) {
+            info!(search_type = ?request.search_type, "recall: routed search found nothing; retrying as the fallback");
+            switch_to(&mut request, self.fallback, caller_only_context);
+            result = search(request.clone()).await?;
+        }
+        Ok((result, request.search_type))
     }
 
     /// Recall's warm-up guard: a note on the graph's state when none of the
