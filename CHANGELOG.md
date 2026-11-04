@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Cell values (`external_metadata.column_values`) | ignored | one shared `DltColumn` node per unique (table, column, value), embedded into `DltColumn_properties`, with an edge named after the column |
   | Graph completion (`SEARCH_COLLECTIONS`) | no DLT rows | also searches `DltRow_text` |
   | `DocumentChunk` serialization | no `name` | optional `name` (set only on DLT rows) |
+  | `SchemaTable.description` / `row_count_estimate` | `DLT-ingested relational table 'X' from database 'db'.` / none | Python's `Relational table 'X' from db with N rows, loaded through dlt.` (N counts the rows of the cognified batch) / `N` |
   | `cognee_cognify::extract_dlt_fk_edges` | `(chunks, documents, graph_db, db, id)` | `(documents, chunks, graph_db, vector_db, embedding_engine, db, id)` |
 
   The hybrid chunk lane reads `DltRow_text` whenever it exists, and the entity

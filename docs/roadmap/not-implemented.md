@@ -76,8 +76,9 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
   `DltColumn` cell-value nodes (`DltColumn_properties`) from documents whose `external_metadata`
   says `source: "dlt"`. Not ported: running dlt itself (`ingest_dlt_source`, connectors, the
   manifest-based `DltSourceDocument` with one data item per source), `Timestamp` edges from
-  temporal cells (`dlt_temporal`), and the per-source table scoping, primary key and row count
-  Python records on `SchemaTable`; `document_name` on the `DltRow_text` payload; `DltRow`,
+  temporal cells (`dlt_temporal`), and the per-source table scoping Python records on `SchemaTable`; `document_name`, `source_chunk_id` and `external_metadata` on the `DltRow_text` payload
+  (the last is SDK-1057); the `SchemaTable` primary key (its row count and Python's
+  description wording are written, counting the rows of the batch cognified); `DltRow`,
   `DltColumn`, `SchemaTable` and `SchemaRelationship` colors and stages in the visualization
   (Python colors `DltRow` `#0DFF00`; Rust renders these nodes with the default color and stage).
   Cell values that Python and serde_json render differently (floats such as `1e20`) can get a

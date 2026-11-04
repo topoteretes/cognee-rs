@@ -3039,6 +3039,8 @@ pub async fn extract_dlt_fk_edges(
     let mut tables_seen: HashMap<String, DltTableMeta> = HashMap::new();
     let mut dlt_doc_meta: HashMap<Uuid, serde_json::Value> = HashMap::new();
     let mut fk_defs_seen: HashSet<(String, String, String, String)> = HashSet::new();
+    // Rows of each table in this batch (Python's `row_count`).
+    let mut dlt_row_counts: HashMap<String, i64> = HashMap::new();
 
     for doc in &dlt_docs {
         let ext_metadata = match &doc.external_metadata {
@@ -3056,6 +3058,13 @@ pub async fn extract_dlt_fk_edges(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        if !table_name.is_empty() {
+            dlt_row_counts
+                .entry(table_name.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+        }
 
         if !table_name.is_empty() && !tables_seen.contains_key(&table_name) {
             tables_seen.insert(
@@ -3099,6 +3108,7 @@ pub async fn extract_dlt_fk_edges(
         let fk_str =
             serde_json::to_string(&table_meta.foreign_keys).unwrap_or_else(|_| "[]".to_string());
 
+        let row_count = dlt_row_counts.get(table_name).copied().unwrap_or(0);
         let table_node = SchemaTableNode {
             id: id.to_string(),
             name: table_name.clone(),
@@ -3106,10 +3116,16 @@ pub async fn extract_dlt_fk_edges(
             primary_key: None,
             foreign_keys: fk_str,
             sample_rows: "[]".to_string(),
-            row_count_estimate: None,
+            row_count_estimate: Some(row_count),
+            // Python's wording (`dlt_schema_graph.py`), embedded into
+            // `SchemaTable_description`.
             description: format!(
-                "DLT-ingested relational table '{}' from database '{}'.",
-                table_name, table_meta.dlt_db_name
+                "Relational table '{table_name}'{} with {row_count} rows, loaded through dlt.",
+                if table_meta.dlt_db_name.is_empty() {
+                    String::new()
+                } else {
+                    format!(" from {}", table_meta.dlt_db_name)
+                }
             ),
             data_type: "SchemaTable".to_string(),
         };
@@ -12672,8 +12688,6 @@ mod tests {
         );
     }
 
-    /// One DLT row document as the ingestion produces it: the row's table, key,
-    /// foreign keys, references and cell values in `external_metadata`.
     /// The `DltRow` chunk each non-blank document would produce.
     fn dlt_chunks(documents: &[Document]) -> Vec<DocumentChunk> {
         documents
@@ -12691,6 +12705,8 @@ mod tests {
             .collect()
     }
 
+    /// One DLT row document as the ingestion produces it: the row's table, key,
+    /// foreign keys, references and cell values in `external_metadata`.
     fn dlt_row_document(doc_id: Uuid, metadata: serde_json::Value) -> Document {
         let mut base = DataPoint::new("DltRowDocument", None);
         base.id = doc_id;
@@ -12777,6 +12793,20 @@ mod tests {
         };
         assert!(has(&order_row, &table("orders"), "is_row_of"));
         assert!(has(&customer_row, &table("customers"), "is_row_of"));
+        // Python's `SchemaTable.description`, with the table's row count.
+        let (nodes, _) = graph.get_graph_data().await.expect("graph data");
+        let description = |name: &str| {
+            let id = table(name);
+            nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .and_then(|(_, data)| data.get("description").and_then(|d| d.as_str()))
+                .map(str::to_string)
+        };
+        assert_eq!(
+            description("orders").as_deref(),
+            Some("Relational table 'orders' from shop with 1 rows, loaded through dlt.")
+        );
         assert!(
             has(
                 &order_row,
