@@ -1,0 +1,92 @@
+name: Free disk space
+description: >-
+  Reclaim disk on GitHub-hosted ubuntu runners. Inline replacement for the
+  vanished third-party jlumbroso/free-disk-space action; the boolean inputs
+  mirror its inputs. Needs the repo checked out earlier in the job so the
+  local action can be resolved.
+
+inputs:
+  android:
+    description: Delete /usr/local/lib/android (SDK/NDK). Keep it off for jobs that cross-compile for Android.
+    default: 'true'
+  dotnet:
+    description: Delete /usr/share/dotnet.
+    default: 'true'
+  haskell:
+    description: Delete /opt/ghc and /usr/local/.ghcup.
+    default: 'true'
+  large-packages:
+    description: apt-remove the large preinstalled packages (llvm, dotnet, php, mysql, mongodb, azure/google cloud CLIs, chrome, firefox, ...).
+    default: 'true'
+  docker-images:
+    description: Prune all docker images.
+    default: 'true'
+  tool-cache:
+    description: Delete $AGENT_TOOLSDIRECTORY (the hosted toolcache). Only for jobs that run no setup-* action.
+    default: 'true'
+  swap-storage:
+    description: swapoff and delete /mnt/swapfile (frees the runner's second disk, not /).
+    default: 'true'
+  extra-packages:
+    description: Extra whitespace-separated apt patterns to remove, tolerantly, in their own apt call (beyond large-packages).
+    default: ''
+  extra-paths:
+    description: Extra whitespace-separated paths (globs allowed) to rm -rf. Only for paths no dpkg package owns.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      env:
+        IN_ANDROID: ${{ inputs.android }}
+        IN_DOTNET: ${{ inputs.dotnet }}
+        IN_HASKELL: ${{ inputs.haskell }}
+        IN_LARGE_PACKAGES: ${{ inputs.large-packages }}
+        IN_DOCKER_IMAGES: ${{ inputs.docker-images }}
+        IN_TOOL_CACHE: ${{ inputs.tool-cache }}
+        IN_SWAP_STORAGE: ${{ inputs.swap-storage }}
+        IN_EXTRA_PACKAGES: ${{ inputs.extra-packages }}
+        IN_EXTRA_PATHS: ${{ inputs.extra-paths }}
+      run: |
+        echo '--- disk before ---'; df -h /
+
+        if [ "$IN_DOTNET" = true ]; then sudo rm -rf /usr/share/dotnet || true; fi
+        if [ "$IN_ANDROID" = true ]; then sudo rm -rf /usr/local/lib/android || true; fi
+        if [ "$IN_HASKELL" = true ]; then sudo rm -rf /opt/ghc /usr/local/.ghcup || true; fi
+        if [ "$IN_TOOL_CACHE" = true ]; then
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+        fi
+        if [ "$IN_SWAP_STORAGE" = true ]; then
+          # Only unlink the swapfile once it is no longer active; unlinking a
+          # live swapfile would not free its space.
+          if sudo swapoff -a; then
+            sudo rm -f /mnt/swapfile || true
+          else
+            echo "::warning::swapoff failed; leaving /mnt/swapfile in place"
+          fi
+        fi
+
+        if [ "$IN_LARGE_PACKAGES" = true ]; then
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri || true
+          # Separate call: a name that is not installed must not cancel the
+          # rest. The regex covers google-cloud-cli (ubuntu-24.04) and the
+          # older google-cloud-sdk, plus their component packages.
+          sudo apt-get remove -y '^google-cloud-.*' || true
+        fi
+        if [ -n "$IN_EXTRA_PACKAGES" ]; then
+          # shellcheck disable=SC2086
+          sudo apt-get remove -y $IN_EXTRA_PACKAGES || true
+        fi
+        if [ "$IN_LARGE_PACKAGES" = true ] || [ -n "$IN_EXTRA_PACKAGES" ]; then
+          sudo apt-get autoremove -y || true; sudo apt-get clean || true
+        fi
+
+        if [ -n "$IN_EXTRA_PATHS" ]; then
+          # shellcheck disable=SC2086
+          sudo rm -rf $IN_EXTRA_PATHS || true
+        fi
+        if [ "$IN_DOCKER_IMAGES" = true ]; then sudo docker image prune --all --force || true; fi
+
+        echo '--- disk after ---'; df -h /
