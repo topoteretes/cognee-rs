@@ -42,8 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with all the recall's datasets, before the first. On a note it does not
   search: it answers the note when the graph is the one source, nothing next
   to others, and reports the plan's `search_type()`, `auto_routed()` and
-  `empty_response()`. A typed `recall()` scope runs a repeated source once,
-  and the `Auto` sentinel next to real sources is none.
+  `empty_response()`. A skipped search sets `cognee.recall.warmup_shortcircuit`
+  and `cognee.recall.warmup_state` on the span `warmup_note` is given. A
+  typed `recall()` scope runs a repeated source once (`dedupe_scopes`, shared
+  with `normalize_scope`); `Auto` stays, so `[auto, graph]` is not graph-only.
 
 - **`cognee-search`: recall routing honours what the deployment can run.** As
   Python's router does on `dev` (SDK-751, cognee `5ae7523fb`; v1.6.5 still

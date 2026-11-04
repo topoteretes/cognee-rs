@@ -232,15 +232,28 @@ async fn next_to_another_source_a_cold_graph_contributes_nothing() {
 }
 
 #[tokio::test]
-async fn a_repeated_source_or_the_auto_sentinel_beside_one_runs_it_once() {
+async fn a_repeated_scope_runs_once_and_auto_beside_graph_is_not_graph_only() {
     let fixture = Fixture::new().await;
     let orchestrator = fixture.orchestrator(WarmupConfig::default());
     use RecallScope::{Auto, Graph};
     // A repeated `Auto` is auto mode, which without a session is the graph.
-    for scope in [vec![Auto, Graph], vec![Graph, Graph], vec![Auto, Auto]] {
+    for scope in [vec![Graph, Graph], vec![Auto, Auto]] {
         let result = fixture.recall(&orchestrator, scope.clone(), None).await;
         assert_eq!(statuses(&result.items), ["memory_warming_up"], "{scope:?}");
     }
+    // `Auto` next to `Graph` is skipped, but the scope is not graph-only,
+    // so a cold graph contributes nothing.
+    let result = fixture.recall(&orchestrator, vec![Auto, Graph], None).await;
+    assert!(result.items.is_empty(), "{:?}", result.items);
+
+    fixture
+        .log_cognify(PipelineRunStatus::Completed, None)
+        .await;
+    let result = fixture
+        .recall(&orchestrator, vec![Graph, Graph], None)
+        .await;
+    let answers = result.items.iter().filter(|i| i.content == json!("answer"));
+    assert_eq!(answers.count(), 1, "searched once: {:?}", result.items);
 }
 
 #[tokio::test]
@@ -377,6 +390,9 @@ async fn a_non_uuid_caller_with_a_dataset_filter_is_refused() {
     assert!(error.to_string().contains("UUID user_id"), "{error}");
 }
 
+/// A deliberate divergence: Python resolves a missing user to the default
+/// user and probes, but `recall()` has no default user, so without an owner
+/// there is nothing to scope the probe by.
 #[tokio::test]
 async fn without_an_owner_a_cold_graph_is_searched_not_noted() {
     let fixture = Fixture::new().await;

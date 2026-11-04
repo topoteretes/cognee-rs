@@ -18,7 +18,10 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::graph_warmup::{ReadinessState, WarmupProbe};
-use crate::observability::{COGNEE_RECALL_ROUTE_RULE, COGNEE_SEARCH_TYPE};
+use crate::observability::{
+    COGNEE_RECALL_ROUTE_RULE, COGNEE_RECALL_WARMUP_SHORTCIRCUIT, COGNEE_RECALL_WARMUP_STATE,
+    COGNEE_SEARCH_TYPE,
+};
 use crate::types::SearchError;
 use crate::{
     ROUTER_FALLBACK_TYPE, RouteDecision, SearchOrchestrator, SearchRequest, SearchResponse,
@@ -111,8 +114,8 @@ impl RecallScope {
     /// expanding `"all"` (`entries.py`).
     pub const ALL: &'static [Self] = &[Self::Graph, Self::Session, Self::Trace];
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn as_wire(&self) -> &'static str {
+    /// The scope's wire name, as `normalize_scope` accepts it.
+    pub fn as_wire(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Graph => "graph",
@@ -169,6 +172,16 @@ impl From<Vec<String>> for ScopeInput {
     fn from(v: Vec<String>) -> Self {
         ScopeInput::Many(v)
     }
+}
+
+/// A scope list with each repeat dropped, first occurrence kept
+/// (`entries.py:108-115`). `Auto` is kept like any other scope.
+pub fn dedupe_scopes(scopes: impl IntoIterator<Item = RecallScope>) -> Vec<RecallScope> {
+    let mut seen = HashSet::new();
+    scopes
+        .into_iter()
+        .filter(|scope| seen.insert(*scope))
+        .collect()
 }
 
 /// Normalize the recall ``scope`` parameter to a concrete source list,
@@ -250,17 +263,10 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
         return Ok(RecallScope::ALL.to_vec());
     }
 
-    // Order-preserving dedup (`entries.py:108-115`).
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut out: Vec<RecallScope> = Vec::with_capacity(raw.len());
-    for s in &raw {
-        if seen.insert(s.as_str())
-            && let Some(scope) = RecallScope::from_wire(s)
-        {
-            out.push(scope);
-        }
-    }
-    Ok(out)
+    // Every name is valid here, so each maps to its scope.
+    Ok(dedupe_scopes(
+        raw.iter().filter_map(|s| RecallScope::from_wire(s)),
+    ))
 }
 
 /// A single recall result item.
@@ -748,12 +754,16 @@ impl GraphPlan {
     ///
     /// `None` without a probe: with the short-circuit off, for a caller
     /// asking for `only_context` (who expects context, not a note), or
-    /// without an owner to scope by.
+    /// without an owner to scope by. Python resolves a missing user to the
+    /// default user and probes; this layer has no default user, so a cold
+    /// graph is searched instead. The CLI, the bindings and the HTTP server
+    /// always pass a caller.
     pub async fn warmup_note(
         &self,
         search_orchestrator: &SearchOrchestrator,
         datasets: Option<&[String]>,
         dataset_ids: Option<&[Uuid]>,
+        span: &tracing::Span,
         options: Option<&RecallOptions>,
     ) -> Result<Option<RecallItem>, SearchError> {
         let Some(warmup) = search_orchestrator.graph_warmup() else {
@@ -776,6 +786,8 @@ impl GraphPlan {
             state = probe.state.as_str(),
             "recall: the graph is not built; skipping the search"
         );
+        span.record(COGNEE_RECALL_WARMUP_SHORTCIRCUIT, true);
+        span.record(COGNEE_RECALL_WARMUP_STATE, probe.state.as_str());
         Ok(Some(warmup_marker(&probe, warmup.config().threshold)))
     }
 }

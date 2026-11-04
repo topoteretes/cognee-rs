@@ -21,7 +21,7 @@ use cognee_search::observability::{
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
 use cognee_search::recall_scope::{
-    has_dataset_filter, plan_graph, run_graph, search_session, search_trace,
+    dedupe_scopes, has_dataset_filter, plan_graph, run_graph, search_session, search_trace,
 };
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
@@ -91,19 +91,9 @@ pub async fn recall(
         // reach this function.
         Some(v) if v.is_empty() => vec![RecallScope::Auto],
         // A repeated source runs once, as `normalize_scope` dedupes the wire
-        // form, and next to real sources the `Auto` sentinel is none.
-        Some(v) => {
-            let mut seen = std::collections::HashSet::new();
-            let unique: Vec<RecallScope> = v.into_iter().filter(|s| seen.insert(*s)).collect();
-            if unique.len() > 1 {
-                unique
-                    .into_iter()
-                    .filter(|s| *s != RecallScope::Auto)
-                    .collect()
-            } else {
-                unique
-            }
-        }
+        // form. `Auto` stays: next to real sources it is skipped, but the
+        // scope is then not graph-only.
+        Some(v) => dedupe_scopes(v),
     };
 
     let auto_mode = normalized.as_slice() == [RecallScope::Auto];
@@ -121,10 +111,11 @@ pub async fn recall(
         (normalized, false)
     };
 
-    // Comma-joined source names, mirroring Python's `span_scope` (`recall.py:388`).
+    // Comma-joined source names, `auto` included, mirroring Python's
+    // `span_scope` (`recall.py:388`).
     let span_scope: String = sources
         .iter()
-        .filter_map(|s| s.as_source().map(|src| src.as_str()))
+        .map(RecallScope::as_wire)
         .collect::<Vec<_>>()
         .join(",");
 
@@ -155,6 +146,8 @@ pub async fn recall(
         "cognee.recall.top_k" = top_k,
         { cognee_search::observability::COGNEE_SEARCH_TYPE } = field::Empty,
         { cognee_search::observability::COGNEE_RECALL_ROUTE_RULE } = field::Empty,
+        { cognee_search::observability::COGNEE_RECALL_WARMUP_SHORTCIRCUIT } = field::Empty,
+        { cognee_search::observability::COGNEE_RECALL_WARMUP_STATE } = field::Empty,
         { COGNEE_RECALL_SOURCE } = field::Empty,
         { COGNEE_RESULT_COUNT } = field::Empty,
         { COGNEE_SESSION_ENTRY_COUNT } = field::Empty,
@@ -209,6 +202,7 @@ pub async fn recall(
                         search_orchestrator,
                         datasets.as_deref(),
                         dataset_ids.as_deref(),
+                        &span,
                         options.as_ref(),
                     )
                     .await

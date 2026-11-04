@@ -658,7 +658,8 @@ impl SearchOrchestrator {
 
     /// [`Self::assess_memory_readiness`] for the datasets a recall by
     /// `requester` names. They are checked and resolved as a search does, so
-    /// a denied id or unknown names fail here, before probing. `dataset_ids`
+    /// a denied id or unknown names fail here, before probing; any other
+    /// failure of that check reads as warm, leaving it to the search. `dataset_ids`
     /// wins over `datasets`; naming neither covers what the caller may read.
     pub async fn assess_recall_readiness(
         &self,
@@ -667,9 +668,23 @@ impl SearchOrchestrator {
         datasets: Option<&[String]>,
         dataset_ids: Option<&[uuid::Uuid]>,
     ) -> Result<WarmupProbe, SearchError> {
-        let resolved = self
+        let resolved = match self
             .authorize_and_resolve_datasets(Some(requester), tenant, datasets, dataset_ids)
-            .await?;
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(
+                error @ (SearchError::PermissionDenied(_)
+                | SearchError::DatasetNotFound(_)
+                | SearchError::InvalidInput(_)),
+            ) => return Err(error),
+            // Any other failure turns the guard off: the search makes the
+            // real check, and reports it.
+            Err(error) => {
+                tracing::warn!(%error, "recall warm-up: dataset check failed; skipping the guard");
+                return Ok(WarmupProbe::warm());
+            }
+        };
         let targets = resolved.or_else(|| {
             dataset_ids
                 .filter(|ids| !ids.is_empty())
