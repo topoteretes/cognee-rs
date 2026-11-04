@@ -87,6 +87,11 @@ path = "tests/image_audio_add_loaders.rs"
 required-features = ["image-loader", "audio-loader"]
 
 [[test]]
+name = "audio_readd"
+path = "tests/audio_readd.rs"
+required-features = ["audio-loader"]
+
+[[test]]
 name = "html_extraction"
 path = "tests/html_extraction.rs"
 required-features = ["html-loader"]

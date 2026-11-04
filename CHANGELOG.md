@@ -1024,6 +1024,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Re-adding audio reuses its stored transcript.** The audio loader calls a
+  paid model at `add`, and running it again can change the text. A re-add of
+  the same content into the same dataset (the row `persist_data` deduplicates
+  against) now reuses the transcript when the audio loader wrote it and it is
+  still in storage, also when no transcriber is configured any more, so
+  sequential re-adds transcribe the file once. A transcript that is gone, or a
+  row that holds raw audio (as a URL add stores it), is transcribed again and
+  the re-add points the row at the new file. A storage error while checking
+  transcribes again instead of failing the add. Two concurrent adds of the same
+  new file can still both transcribe it.
+
 - **Concurrent session-turn execution parity (SDK-1045).** Eligible built-in
   RAG, graph, and hybrid completions now overlap turn analysis with retrieval
   and answering, serialize turns per user/session identity, and retain
