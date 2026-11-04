@@ -1325,8 +1325,9 @@ non-null keys named by `external_metadata_keys` are returned and rendered as
 `key: value` lines above a passage. Missing, malformed, and non-object values
 produce `external_metadata: null` and do not fail search. This PR is a consumer
 only: SDK-1057 owns copying metadata to normal chunk and DLT vector payloads
-(the `DltRow_text` payload otherwise has Python's shape, so the projection
-needs no change once it lands).
+(the `DltRow_text` payload carries Python's `IndexSchema` keys apart from
+`document_name`, plus Rust-only `name`, `cut_type` and `chunk_size`, so the
+projection needs no change once it lands).
 Existing datasets need re-cognification after that producer lands; there is no
 backfill or migration in SDK-1045.
 

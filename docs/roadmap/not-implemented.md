@@ -77,7 +77,11 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
   says `source: "dlt"`. Not ported: running dlt itself (`ingest_dlt_source`, connectors, the
   manifest-based `DltSourceDocument` with one data item per source), `Timestamp` edges from
   temporal cells (`dlt_temporal`), and the per-source table scoping, primary key and row count
-  Python records on `SchemaTable`. Datasets cognified before DLT rows moved to `DltRow_text` need
+  Python records on `SchemaTable`; `document_name` on the `DltRow_text` payload; `DltRow`,
+  `DltColumn`, `SchemaTable` and `SchemaRelationship` colors and stages in the visualization
+  (Python colors `DltRow` `#0DFF00`; Rust renders these nodes with the default color and stage).
+  Cell values that Python and serde_json render differently (floats such as `1e20`) can get a
+  different `DltColumn` id; booleans are rendered `True` / `False` as Python does. Datasets cognified before DLT rows moved to `DltRow_text` need
   a re-cognify; there is no migration.
 - **No Rust entry point deletes a single session, so the turn lock has no production caller.**
   Python takes `session_turn_lock` in its `delete_session` lifecycle function (behind

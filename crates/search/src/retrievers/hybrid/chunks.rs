@@ -27,7 +27,7 @@ use crate::types::{SearchError, SearchItem};
 use crate::utils::results::{display_value, payload_matches_node_filter, result_id};
 
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
-pub(crate) const DLT_ROW_TYPE: &str = "DltRow";
+pub(crate) use cognee_models::DLT_ROW_TYPE;
 const TEXT_SUMMARY_TYPE: &str = "TextSummary";
 const TEXT_FIELD: &str = "text";
 

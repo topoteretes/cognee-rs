@@ -77,7 +77,7 @@ const SEARCH_COLLECTIONS: [(&str, &str); 7] = [
     ("DocumentChunk", "text"),
     // DLT rows live in their own collection: chunk search is documents-only,
     // but graph completion covers row text too (Python parity).
-    ("DltRow", "text"),
+    (cognee_models::DLT_ROW_TYPE, "text"),
     ("EdgeType", "relationship_name"),
     ("Triplet", "text"),
 ];
