@@ -548,11 +548,15 @@ impl ComponentManager {
     /// transcript. Pass the result to
     /// [`AddPipeline::with_loader_registry`](cognee_ingestion::AddPipeline::with_loader_registry).
     ///
-    /// Never fails: adding text needs no LLM, so an LLM or transcriber that
-    /// cannot be built only leaves its loader out (logged), and an image or
-    /// audio input then fails as an unsupported document type. A keyless LLM
-    /// is still registered; its calls fail with "LLM API key is not set.", as
-    /// Python's image loader fails without a key.
+    /// Never fails: adding text needs no LLM, so an LLM that cannot be built
+    /// only leaves the image loader out (logged), and an image input then fails
+    /// as an unsupported document type. A keyless LLM is still registered; its
+    /// calls fail with "LLM API key is not set.", as Python's image loader
+    /// fails without a key. Audio follows the same rule: a provider without
+    /// transcription leaves the audio loader out, and a transcriber that cannot
+    /// be built (no API key, say) is replaced by one that fails with the build
+    /// error, so a text `add` stays quiet while an audio input says what is
+    /// missing.
     pub async fn add_loader_registry(&self) -> Arc<cognee_ingestion::LoaderRegistry> {
         #[allow(unused_mut, reason = "mutated only with the media-loader features")]
         let mut registry = cognee_ingestion::LoaderRegistry::default_registry();
@@ -572,7 +576,7 @@ impl ComponentManager {
                 );
             }
             Err(error) => {
-                tracing::warn!(%error, "no transcriber, so `add` cannot transcribe audio");
+                registry.register_audio_loader(Arc::new(UnavailableTranscriber(error.to_string())))
             }
         }
         Arc::new(registry)
@@ -928,6 +932,32 @@ fn apply_local_embedding(ctx: &mut cognee_components::BackendBuildContext) {
     ctx.embedding.endpoint = None;
     ctx.embedding.api_key = None;
     ctx.embedding_dimensions = dimensions as usize;
+}
+
+/// Stands in for a transcriber that could not be built, so that only an audio
+/// input fails, with the reason.
+#[cfg(feature = "audio-loader")]
+struct UnavailableTranscriber(String);
+
+#[cfg(feature = "audio-loader")]
+#[async_trait]
+impl Transcriber for UnavailableTranscriber {
+    async fn transcribe_audio(
+        &self,
+        _audio: &[u8],
+        _format: &str,
+        _language_hint: Option<&str>,
+        _prompt_hint: Option<&str>,
+    ) -> cognee_llm::LlmResult<cognee_llm::TranscriptionOutput> {
+        Err(cognee_llm::LlmError::ConfigError(format!(
+            "audio needs a transcriber, which could not be built: {}",
+            self.0
+        )))
+    }
+
+    fn transcription_model(&self) -> &str {
+        ""
+    }
 }
 
 #[cfg(test)]
@@ -1439,6 +1469,44 @@ mod tests {
         let registry = cm.add_loader_registry().await;
         assert!(registry.get("text").is_some());
         assert!(registry.get("audio").is_none());
+    }
+
+    /// A provider with transcription but no API key gets an audio loader whose
+    /// transcriber fails with the build error, so an audio input names what is
+    /// missing instead of reporting an unsupported document type.
+    #[cfg(feature = "audio-loader")]
+    #[tokio::test]
+    async fn a_transcriber_that_cannot_be_built_fails_audio_with_the_reason() {
+        let settings = Settings {
+            sections: [(
+                "llm.provider".to_string(),
+                serde_json::json!("openai".to_string()),
+            )]
+            .into(),
+            ..Settings::default()
+        };
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        let reason = cm
+            .transcriber()
+            .await
+            .err()
+            .expect("no key, no transcriber");
+        let registry = cm.add_loader_registry().await;
+        assert!(
+            registry.get("audio").is_some(),
+            "audio is routed to a loader that explains the failure"
+        );
+
+        let error = UnavailableTranscriber(reason.to_string())
+            .transcribe_audio(b"audio", "mp3", None, None)
+            .await
+            .expect_err("only an audio input fails");
+        let message = error.to_string();
+        assert!(message.contains("audio needs a transcriber"), "{message}");
+        assert!(
+            message.contains("llm_api_key must be configured"),
+            "{message}"
+        );
     }
 
     #[tokio::test]

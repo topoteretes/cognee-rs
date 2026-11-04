@@ -1209,6 +1209,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whitelist left out two formats the OpenAI transcription API and Python's
   audio loader accept, so both failed with `Unsupported audio format`.
 
+- **An audio `add` without a usable transcriber says why.** When the provider
+  transcribes but its transcriber cannot be built (no API key, say),
+  `ComponentManager::add_loader_registry` registers an audio loader that fails
+  with the build error, as a keyless LLM already does for images. An audio
+  input now fails with `audio needs a transcriber, which could not be built:
+  llm_api_key must be configured` instead of `Unsupported document type at
+  ingest: audio`; text adds stay quiet. A provider without transcription still
+  leaves the audio loader out.
+
 - **Delete counts an `EdgeType` point only when it exists, once (SDK-1039).**
   The delete preview counted one `EdgeType_relationship_name` point per
   text-bearing edge and the dataset run counted the requested ids, so both
