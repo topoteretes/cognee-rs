@@ -67,7 +67,9 @@ pub use improve_lock::{ImproveClaim, acquire_improve_lock_many, improve_lock_key
 pub use session_manager::SessionManager;
 pub use session_store::{SessionQAUpdate, SessionStore};
 pub use turn_lock::lock_session_turn;
-pub use types::{SessionContext, SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
+pub use types::{
+    SessionContext, SessionQAEntry, SessionTraceStep, UsedGraphElementIds, qa_entry_uuid,
+};
 pub use watermark::{
     SESSION_DISTILL_FIELD, SESSION_DISTILL_STATE_ID_PREFIX, SESSION_DISTILL_STATE_KIND,
     SESSION_PERSIST_STATE_ID, SESSION_PERSIST_STATE_KIND, SESSION_PERSIST_WATERMARK,

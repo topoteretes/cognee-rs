@@ -11,9 +11,11 @@ use crate::context_builder::ActiveContextSelection;
 /// (case and hyphenation normalized), or a deterministic v5 UUID of the raw
 /// text when it is not a UUID. Stable across reads, so the id a caller got
 /// from an entry always addresses that same entry in `update_qa_entry` /
-/// `delete_qa_entry` (a random fallback would never match).
-#[cfg(any(feature = "fs", feature = "redis"))]
-pub(crate) fn qa_entry_uuid(raw: &str) -> Uuid {
+/// `delete_qa_entry` (a random fallback would never match). Also the key of
+/// [`build_implicit_rating_map`](crate::build_implicit_rating_map), so a
+/// feedback row's `referenced_qa_ids` match an entry however the id was
+/// written.
+pub fn qa_entry_uuid(raw: &str) -> Uuid {
     Uuid::parse_str(raw).unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes()))
 }
 

@@ -56,10 +56,15 @@ pub struct PreferenceUpdateResult {
 ///
 /// Unlike Python's unfiltered `build_rating_map`, only rows with
 /// `kind == "feedback"` count (the shared reader's filter); other rows are ignored.
+///
+/// Keys are the hyphenated lowercase form of the id the session stores read a
+/// `qa_id` back as ([`cognee_session::qa_entry_uuid`]), i.e.
+/// `SessionQAEntry::id.to_string()`, so an uppercase or non-UUID `qa_id`
+/// still finds its turn.
 pub fn build_rating_map(feedback_rows: &[SessionContextRow]) -> HashMap<String, i32> {
     build_implicit_rating_map(feedback_rows)
         .into_iter()
-        .map(|(qa_id, (rating, _))| (qa_id, rating))
+        .map(|(qa_id, (rating, _))| (qa_id.to_string(), rating))
         .collect()
 }
 
@@ -583,7 +588,7 @@ mod tests {
                 row(json!(5), json!(["qa-1"])),
                 row(json!(2), json!(["qa-1"]))
             ]),
-            HashMap::from([("qa-1".to_string(), 2)])
+            HashMap::from([(cognee_session::qa_entry_uuid("qa-1").to_string(), 2)])
         );
         assert!(
             build_rating_map(&[

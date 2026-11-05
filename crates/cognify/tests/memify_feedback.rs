@@ -24,6 +24,7 @@ use cognee_graph::{
 };
 use cognee_session::{
     FsSessionStore, SessionManager, SessionQAUpdate, SessionStore, UsedGraphElementIds,
+    qa_entry_uuid,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -723,6 +724,26 @@ impl Rows {
             .unwrap();
     }
 
+    /// Rewrite the stored `qa_id` of `qa_id` to `foreign`, as a foreign writer
+    /// (Python accepts any caller-supplied `qa_id`) would have stored it.
+    /// Returns the id the store now reads the entry back as.
+    fn rewrite_qa_id(&self, qa_id: &str, foreign: &str) -> String {
+        let path = self
+            ._dir
+            .path()
+            .join(&self.user_id)
+            .join(format!("{SESSION}.json"));
+        let mut entries: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry["qa_id"] == json!(qa_id))
+            .unwrap();
+        entry["qa_id"] = json!(foreign);
+        std::fs::write(&path, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        qa_entry_uuid(foreign).to_string()
+    }
+
     async fn run(&self, graph: &dyn GraphDBTrait, alpha: f64) -> FeedbackApplyResult {
         apply_feedback_weights_pipeline(
             &[SESSION.to_string()],
@@ -798,6 +819,55 @@ async fn implicit_rating_moves_weights_at_half_alpha() {
     assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("implicit"));
     assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SCORE_KEY], json!(5));
     assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+}
+
+/// An implicit rating of a row whose `qa_id` was written by a foreign writer
+/// finds it however either side spelled the id; the bookkeeping is saved.
+async fn assert_foreign_qa_id_gets_its_implicit_rating(
+    foreign: impl Fn(&str) -> String,
+    referenced: impl Fn(&str) -> String,
+) {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    let stored = foreign(&qa);
+    let read_back = rows.rewrite_qa_id(&qa, &stored);
+    rows.implicit_rating(&referenced(&stored), 5).await;
+
+    let result = rows.run(&graph, 0.1).await;
+
+    assert_eq!((result.processed, result.applied), (1, 1), "{stored}");
+    approx(node_weight(&graph, "n1").await, 0.525);
+    let meta = rows.meta(&read_back).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("implicit"));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+
+    // Done: a second run neither re-collects nor moves it again.
+    let again = rows.run(&graph, 0.1).await;
+    assert_eq!(again.processed, 0);
+    approx(node_weight(&graph, "n1").await, 0.525);
+}
+
+#[tokio::test]
+async fn implicit_rating_finds_an_uppercase_uuid_qa_id() {
+    // Stored uppercase, referenced uppercase.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_uppercase, str::to_string).await;
+    // Stored uppercase, referenced in the canonical lowercase spelling.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_uppercase, str::to_lowercase).await;
+    // Stored lowercase, referenced uppercase and without hyphens.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_string, |id| {
+        id.to_uppercase().replace('-', "")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn implicit_rating_finds_a_non_uuid_qa_id_written_by_python() {
+    assert_foreign_qa_id_gets_its_implicit_rating(
+        |_| "qa-python-turn-1".to_string(),
+        str::to_string,
+    )
+    .await;
 }
 
 #[tokio::test]

@@ -10,8 +10,10 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::context_entry::{FEEDBACK_ENTRY_KIND, SessionContextRow};
+use crate::types::qa_entry_uuid;
 
 /// A 1-5 rating from a JSON integer (a bool or a float is no rating).
 pub fn valid_rating(value: Option<&Value>) -> Option<i32> {
@@ -25,7 +27,14 @@ pub fn valid_rating(value: Option<&Value>) -> Option<i32> {
 /// qa id -> `(rating, feedback text)` from the `kind == "feedback"` rows of
 /// `rows` (oldest first), the latest row winning. The text is the row's
 /// trimmed `raw_text`, empty when absent.
-pub fn build_implicit_rating_map(rows: &[SessionContextRow]) -> HashMap<String, (i32, String)> {
+///
+/// Each referenced id is keyed by [`qa_entry_uuid`], the id the stores read a
+/// `qa_id` back as, so the map is looked up with
+/// [`SessionQAEntry::id`](crate::SessionQAEntry::id) and matches however the id was written: an
+/// uppercase or non-hyphenated UUID, or a foreign non-UUID id. Python keys by
+/// the raw string; its stores hand the same raw string back, so both sides
+/// agree on which entry a row rates.
+pub fn build_implicit_rating_map(rows: &[SessionContextRow]) -> HashMap<Uuid, (i32, String)> {
     let mut ratings = HashMap::new();
     for row in rows {
         if row.get("kind").and_then(Value::as_str) != Some(FEEDBACK_ENTRY_KIND) {
@@ -47,7 +56,7 @@ pub fn build_implicit_rating_map(rows: &[SessionContextRow]) -> HashMap<String, 
             .filter_map(Value::as_str)
             .filter(|id| !id.is_empty())
         {
-            ratings.insert(qa_id.to_string(), (rating, text.clone()));
+            ratings.insert(qa_entry_uuid(qa_id), (rating, text.clone()));
         }
     }
     ratings
@@ -78,7 +87,7 @@ mod tests {
         ];
         assert_eq!(
             build_implicit_rating_map(&rows),
-            HashMap::from([("q1".to_string(), (2, "no".to_string()))])
+            HashMap::from([(qa_entry_uuid("q1"), (2, "no".to_string()))])
         );
     }
 
@@ -106,6 +115,27 @@ mod tests {
         let rows = [row(
             json!({"kind": "feedback", "referenced_qa_rating": 4, "referenced_qa_ids": ["q"]}),
         )];
-        assert_eq!(build_implicit_rating_map(&rows)["q"], (4, String::new()));
+        assert_eq!(
+            build_implicit_rating_map(&rows)[&qa_entry_uuid("q")],
+            (4, String::new())
+        );
+    }
+
+    #[test]
+    fn ids_are_keyed_by_the_id_the_stores_read_back() {
+        let lower = "6f1c2c1e-9a4b-4f7e-8c3d-2b1a0e9d8c7b";
+        let rows = [
+            row(json!({"kind": "feedback", "referenced_qa_rating": 5,
+                "referenced_qa_ids": [lower.to_uppercase(), "qa-python-1"]})),
+            row(json!({"kind": "feedback", "referenced_qa_rating": 1,
+                "referenced_qa_ids": [lower.replace('-', "")]})),
+        ];
+        let ratings = build_implicit_rating_map(&rows);
+        assert_eq!(ratings.len(), 2);
+        assert_eq!(ratings[&Uuid::parse_str(lower).unwrap()].0, 1);
+        assert_eq!(
+            ratings[&Uuid::new_v5(&Uuid::NAMESPACE_OID, b"qa-python-1")].0,
+            5
+        );
     }
 }

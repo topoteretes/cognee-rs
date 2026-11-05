@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `kind = "feedback"` session-context rows (`referenced_qa_rating` /
     `referenced_qa_ids`, latest row wins) and moves the elements at
     `alpha * 0.5`; an explicit `feedback_score` still wins. The reader is shared
-    with `update_user_preferences` (`cognee_session::build_implicit_rating_map`).
+    with `update_user_preferences` (`cognee_session::build_implicit_rating_map`,
+    keyed by the newly public `cognee_session::qa_entry_uuid`, so a
+    `referenced_qa_ids` entry matches its turn however the `qa_id` is spelled:
+    uppercase or non-hyphenated UUID, or a foreign non-UUID id).
   - Each row records `feedback_weights_applied_node_ids` / `_edge_ids` /
     `_score` / `_source`, `feedback_weights_attempts` and
     `feedback_weights_pruned_ids` (only this stage's keys are written). A retry

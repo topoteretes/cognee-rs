@@ -27,11 +27,23 @@
 //!    batch: its bookkeeping is persisted first, the row counts as skipped and
 //!    is retried on the next run.
 //!
-//! A QA entry's id is its `qa_id`. The stores keep Python's `uuid4` strings.
-//! A foreign writer's non-UUID `qa_id` reads back as a deterministic v5 UUID
-//! of the raw text, and every store matches `update_qa` on that parsed or
-//! derived id, so the bookkeeping of such a row (and of an uppercase or
-//! non-hyphenated UUID) is saved like any other.
+//! A QA entry's id is its `qa_id`, read back through
+//! [`cognee_session::qa_entry_uuid`]: the UUID it parses to (case and
+//! hyphenation normalized), or a deterministic v5 UUID of the raw text when a
+//! foreign writer (Python accepts any caller-supplied `qa_id`) stored a
+//! non-UUID. Feedback rows' `referenced_qa_ids` are keyed the same way
+//! ([`build_implicit_rating_map`]), so an implicit rating finds its entry
+//! however either side wrote the id.
+//!
+//! Saving the bookkeeping depends on the store. The file and Redis stores
+//! match `update_qa_entry` on that same parsed or derived id, so a row with a
+//! non-UUID or uppercase `qa_id` is saved like any other. The relational
+//! store only ever writes ids it generated (simple-format UUIDs, so any UUID
+//! spelling addresses them) and does not apply that derivation: a non-UUID id
+//! put in its table by another writer reads back as the nil UUID, so its
+//! bookkeeping update matches no row and fails with
+//! [`FeedbackError::MetadataNotUpdated`] (the row is retried every run, and
+//! its pending elements move again each time).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -199,7 +211,7 @@ fn is_already_applied(metadata: Option<&HashMap<String, Value>>) -> bool {
 /// explicit one (Python `resolve_feedback`).
 pub fn resolve_feedback(
     entry: &SessionQAEntry,
-    implicit_ratings: &HashMap<String, (i32, String)>,
+    implicit_ratings: &HashMap<Uuid, (i32, String)>,
 ) -> Option<(i32, FeedbackSource, Option<String>)> {
     let score = entry.feedback_score.map(i64::from).map(Value::from);
     if let Some(explicit) = valid_rating(score.as_ref()) {
@@ -209,7 +221,7 @@ pub fn resolve_feedback(
             entry.feedback_text.clone(),
         ));
     }
-    let (rating, text) = implicit_ratings.get(&entry.id.to_string())?;
+    let (rating, text) = implicit_ratings.get(&entry.id)?;
     Some((
         *rating,
         FeedbackSource::Implicit,
