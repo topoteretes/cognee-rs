@@ -401,3 +401,114 @@ async fn a_failure_after_deltas_ends_the_stream_with_one_sanitised_error() {
     assert!(!message.contains("127.0.0.1"), "{message}");
     assert_eq!(*status, None, "a network failure has no HTTP status");
 }
+
+/// Run one streamed answer against a mock that answers `content_type` and
+/// `body` to the `stream: true` request; no retries.
+async fn stream_once(
+    content_type: &str,
+    body: &str,
+) -> (
+    cognee_llm::LlmResult<cognee_llm::GenerationResponse>,
+    Vec<StreamEvent>,
+) {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/chat/completions")
+            .json_body_includes(r#"{"stream": true}"#);
+        then.status(200)
+            .header("content-type", content_type)
+            .body(body);
+    });
+    let llm = adapter(&server, true).with_min_retry_elapsed(std::time::Duration::ZERO);
+    let sink = Arc::new(TokenSink::new());
+    let result = with_token_sink(Arc::clone(&sink), async {
+        promote_answer_lane(generate_answer(&llm, user_msg(), None)).await
+    })
+    .await;
+    // A failure before any delta leaves the sink open for its creator (see
+    // `a_failure_before_any_delta_leaves_the_sink_to_its_creator`): there is
+    // nothing to drain then.
+    let events = if sink.is_closed() {
+        drain(&sink).await
+    } else {
+        Vec::new()
+    };
+    (result, events)
+}
+
+#[tokio::test]
+async fn a_provider_ignoring_stream_true_is_parsed_as_json_not_an_empty_answer() {
+    let body = r#"{"id":"x","object":"chat.completion","created":0,"model":"gpt-4o-mini",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"Whole answer"},
+        "finish_reason":"stop"}],
+        "usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#;
+    let (result, events) = stream_once("application/json", body).await;
+    let response = result.unwrap();
+    assert_eq!(response.content, "Whole answer");
+    assert_eq!(response.usage.unwrap().total_tokens, 3);
+    // The consumer still sees the text, as one delta.
+    assert_eq!(deltas(&events), vec!["Whole answer"]);
+}
+
+#[tokio::test]
+async fn a_json_error_body_to_a_streaming_request_is_a_failure() {
+    let (result, _) =
+        stream_once("application/json", r#"{"error":{"message":"overloaded"}}"#).await;
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("overloaded"), "{error}");
+}
+
+#[tokio::test]
+async fn an_in_stream_error_chunk_is_a_failure_not_a_partial_answer() {
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+        "data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (result, events) = stream_once("text/event-stream", body).await;
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("upstream exploded"), "{error}");
+    // The consumer got one sanitised error, not a final answer.
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Error { .. })),
+        "{events:?}"
+    );
+    assert!(!events.contains(&StreamEvent::AnswerDone), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_finish_reason_error_chunk_is_a_failure() {
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (result, _) = stream_once("text/event-stream", body).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn a_finished_stream_without_done_is_accepted_like_the_openai_sdk() {
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n",
+    );
+    let (result, events) = stream_once("text/event-stream", body).await;
+    assert_eq!(result.unwrap().content, "Hello");
+    assert_eq!(deltas(&events), vec!["Hel", "lo"]);
+}
+
+#[tokio::test]
+async fn a_stream_closed_before_any_finish_is_a_truncation_failure() {
+    let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n";
+    let (result, events) = stream_once("text/event-stream", body).await;
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("ended before the answer finished"),
+        "{error}"
+    );
+    assert!(!events.contains(&StreamEvent::AnswerDone), "{events:?}");
+}

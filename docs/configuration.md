@@ -379,6 +379,17 @@ sessionless, sequential, `only_context` and structured-output answers send zero
 deltas, and `include_references` citations are appended after the answer so they
 are never deltas. Deltas are a preview; the returned payload is authoritative.
 
+How the streamed body is read: an in-stream `{"error": ...}` chunk or a
+`finish_reason: "error"` fails the attempt (as the OpenAI SDK under litellm
+does) and is retried, the sink getting a `reset`; a body that closes with
+neither `[DONE]` nor any `finish_reason` is treated as truncated and retried
+(Python accepts any clean close; a close after a `finish_reason` without
+`[DONE]` is accepted here too); a read timeout counts as an overload for the
+pacer, like a send timeout; and a provider that ignores `stream: true` and
+answers JSON (non-`text/event-stream` `Content-Type`) is parsed as the blocking
+response, its text pushed as one delta. `llm.debug_requests` also logs the
+folded streamed response.
+
 A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
 `llm_fallback_*`) is configurable programmatically (no env binding) but not used
 yet (SDK-1070). `MOCK_LLM` + cassettes power the offline
