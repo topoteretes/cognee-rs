@@ -1,4 +1,7 @@
 use super::concurrent_session::{self, SessionSearchMode};
+use super::conversational_query::{
+    MAX_CONVERSATIONAL_QUERY_CHARS, build_conversational_query, normalize_query,
+};
 use crate::graph_warmup::{CacheKey, GraphWarmup, WarmupProbe};
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
 use crate::orchestration::search_history::{
@@ -22,48 +25,49 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-fn conversational_query(session: &SessionContext, query: &str) -> Option<String> {
-    (!session.formatted_history.trim().is_empty()).then(|| {
-        format!(
-            "Recent conversation:\n{}\n\nCurrent question:\n{}",
-            session.formatted_history, query
-        )
-    })
+/// What [`SearchOrchestrator::load_turn_snapshot`] reads.
+struct TurnSnapshot {
+    session: SessionContext,
+    entries: Vec<cognee_session::SessionQAEntry>,
+    rows: Vec<cognee_session::SessionContextRow>,
 }
 
+/// Retrieve for a session turn the way Python's concurrent turn does: the raw
+/// question and, when the last two turns give it something to add, a bounded
+/// conversational rewrite, merged by the retriever
+/// ([`SearchRetriever::merge_session_contexts`]). The rewrite lane is skipped
+/// when it would be the raw question again. A failed lane fails open to the
+/// other; only both failing is an error, the raw lane's.
 async fn retrieve_session_context(
     retriever: &crate::retrievers::SearchRetrieverRef,
     query: &str,
     session: &SessionContext,
     params: &SearchParams,
 ) -> Result<SearchContext, SearchError> {
-    let Some(conversational) = conversational_query(session, query) else {
-        return retriever.get_context(query, params).await;
-    };
-    let (raw, contextual) = tokio::join!(
+    let conversational =
+        build_conversational_query(query, &session.recent_qas, MAX_CONVERSATIONAL_QUERY_CHARS);
+    if conversational.is_empty() || conversational == normalize_query(query) {
+        // A lone lane still goes through the merge, which trims it to top_k.
+        let raw = retriever.get_context(query, params).await?;
+        return Ok(retriever.merge_session_contexts(Some(raw), None, params));
+    }
+    let (raw, conversational) = tokio::join!(
         retriever.get_context(query, params),
         retriever.get_context(&conversational, params)
     );
-    let mut merged = match (raw, contextual) {
-        (Ok(mut raw), Ok(contextual)) => {
-            raw.extend(contextual);
-            raw
+    let (raw, conversational) = match (raw, conversational) {
+        (Ok(raw), Ok(conversational)) => (Some(raw), Some(conversational)),
+        (Ok(raw), Err(error)) => {
+            tracing::warn!(%error, "conversational session retrieval lane failed open");
+            (Some(raw), None)
         }
-        (Ok(raw), Err(error)) | (Err(error), Ok(raw)) => {
-            tracing::warn!(%error, "one session retrieval lane failed open");
-            raw
+        (Err(error), Ok(conversational)) => {
+            tracing::warn!(%error, "raw session retrieval lane failed open");
+            (None, Some(conversational))
         }
         (Err(error), Err(_)) => return Err(error),
     };
-    let mut seen = std::collections::HashSet::new();
-    merged.retain(|item| {
-        let key = item
-            .id
-            .map(|id| format!("id:{id}"))
-            .unwrap_or_else(|| format!("payload:{}", item.payload));
-        seen.insert(key)
-    });
-    Ok(merged)
+    Ok(retriever.merge_session_contexts(raw, conversational, params))
 }
 
 /// Fire-and-forget product analytics event for the start of a search.
@@ -1059,7 +1063,7 @@ impl SearchOrchestrator {
             let session_id = request.session_id.as_deref().ok_or_else(|| {
                 SearchError::InvalidInput("concurrent session search requires a session".into())
             })?;
-            let _turn_guard = concurrent_session::lock(user_id, session_id).await;
+            let _turn_guard = cognee_session::lock_session_turn(user_id, session_id).await;
             let (response, finalize) = self
                 .run_concurrent_session_turn(request, &retriever, search_type, auto_feedback)
                 .await?;
@@ -1269,36 +1273,17 @@ impl SearchOrchestrator {
             let user = request.user_id.ok_or_else(|| {
                 SearchError::InvalidInput("concurrent session search requires a user".into())
             })?;
-            fanout_turn_guard = Some(concurrent_session::lock(user, &session_id).await);
+            fanout_turn_guard = Some(cognee_session::lock_session_turn(user, &session_id).await);
             let user_id = request.user_id.map(|id| id.to_string());
-            let (entries, rows, (guidance, served_context_ids)) = tokio::join!(
-                manager.get_session(Some(&session_id), user_id.as_deref()),
-                manager.get_session_context_entries(Some(&session_id), user_id.as_deref()),
-                self.session_guidance(request, &request.query_text)
-            );
-            let entries = entries.unwrap_or_default();
-            let rows = rows.unwrap_or_default();
-            let history_start = entries.len().saturating_sub(manager.history_limit());
-            let history_entries = &entries[history_start..];
-            fanout_session = Some(SessionContext {
-                session_id: Some(session_id.clone()),
-                history: history_entries
-                    .iter()
-                    .flat_map(|entry| {
-                        [
-                            Message::user(&entry.question),
-                            Message::assistant(&entry.answer),
-                        ]
-                    })
-                    .collect(),
-                formatted_history: SessionManager::format_entries(history_entries),
-                guidance,
-                served_context_ids,
-            });
-            fanout_served_context_ids = fanout_session
-                .as_ref()
-                .map(|session| session.served_context_ids.clone())
-                .unwrap_or_default();
+            let TurnSnapshot {
+                session,
+                entries,
+                rows,
+            } = self
+                .load_turn_snapshot(&manager, request, &session_id, user_id.as_deref())
+                .await;
+            fanout_served_context_ids = session.served_context_ids.clone();
+            fanout_session = Some(session);
             fanout_commit_snapshot = Some((
                 Arc::clone(&manager),
                 session_id.clone(),
@@ -1781,31 +1766,13 @@ impl SearchOrchestrator {
         // Snapshot every cache value before either lane starts.  In
         // particular, analysis must not perform a second `get_session` after
         // the answer lane has begun (Python's `load_turn_context` invariant).
-        let (entries, rows, (guidance, served_context_ids)) = tokio::join!(
-            manager.get_session(Some(session_id), user_id.as_deref()),
-            manager.get_session_context_entries(Some(session_id), user_id.as_deref()),
-            self.session_guidance(request, &request.query_text)
-        );
-        let entries = entries.unwrap_or_default();
-        let rows = rows.unwrap_or_default();
-        let history_start = entries.len().saturating_sub(manager.history_limit());
-        let history_entries = &entries[history_start..];
-        let history = history_entries
-            .iter()
-            .flat_map(|entry| {
-                [
-                    Message::user(&entry.question),
-                    Message::assistant(&entry.answer),
-                ]
-            })
-            .collect();
-        let session = SessionContext {
-            session_id: Some(session_id.to_owned()),
-            history,
-            formatted_history: SessionManager::format_entries(history_entries),
-            guidance,
-            served_context_ids,
-        };
+        let TurnSnapshot {
+            session,
+            entries,
+            rows,
+        } = self
+            .load_turn_snapshot(manager, request, session_id, user_id.as_deref())
+            .await;
 
         let analysis_lane = async {
             if auto_feedback {
@@ -1976,6 +1943,48 @@ impl SearchOrchestrator {
         .await;
     }
 
+    /// Everything one concurrent turn reads from the session cache, in one
+    /// pass: the completion history, the last two Q&A turns (the analysis's
+    /// previous turn and the conversational retrieval's context, Python's
+    /// `get_session(last_n=2)`: the whole session is never loaded), the
+    /// context rows and the guidance. A failed read is an empty one, so the
+    /// turn still answers without session extras.
+    async fn load_turn_snapshot(
+        &self,
+        manager: &SessionManager,
+        request: &SearchRequest,
+        session_id: &str,
+        user_id: Option<&str>,
+    ) -> TurnSnapshot {
+        let (history, recent, rows, (guidance, served_context_ids)) = tokio::join!(
+            manager.load_history_both(Some(session_id), user_id),
+            manager.get_latest_session_entries(
+                Some(session_id),
+                user_id,
+                concurrent_session::RECENT_QA_TURNS
+            ),
+            manager.get_session_context_entries(Some(session_id), user_id),
+            self.session_guidance(request, &request.query_text)
+        );
+        let (history, formatted_history) = history.unwrap_or_default();
+        let entries = recent.unwrap_or_default();
+        TurnSnapshot {
+            session: SessionContext {
+                session_id: Some(session_id.to_owned()),
+                history,
+                formatted_history,
+                recent_qas: entries
+                    .iter()
+                    .map(|entry| (entry.question.clone(), entry.answer.clone()))
+                    .collect(),
+                guidance,
+                served_context_ids,
+            },
+            entries,
+            rows: rows.unwrap_or_default(),
+        }
+    }
+
     /// The session layer a completion carries: the conversation history and,
     /// when the retriever serves guidance (`with_guidance`), the turn's
     /// guidance. Read-only: the served entries are stamped by
@@ -2001,6 +2010,7 @@ impl SearchOrchestrator {
                 session_id: Some(session_id.clone()),
                 history,
                 formatted_history,
+                recent_qas: Vec::new(),
                 guidance,
                 served_context_ids,
             }
@@ -2592,7 +2602,9 @@ mod tests {
         // may escape when analysis routes the turn to an acknowledgement.
         let query_seen = retriever.query_seen.lock().unwrap().clone();
         assert!(query_seen.as_deref().is_some_and(|query| {
-            query == "No, use X." || query.ends_with("Current question:\nNo, use X.")
+            query == "No, use X."
+                || (query.starts_with("Prior user: old question")
+                    && query.ends_with("Current user request: No, use X."))
         }));
         assert!(matches!(
             result.result,
@@ -2618,6 +2630,456 @@ mod tests {
                     .and_then(serde_json::Value::as_i64)
                     == Some(2)
         }));
+    }
+
+    /// The lanes the merge hook was handed, as result ids.
+    type MergeInputs = (Option<Vec<String>>, Option<Vec<String>>);
+
+    /// Records every retrieval query and what the merge hook was handed.
+    struct LaneRecordingRetriever {
+        queries: std::sync::Mutex<Vec<String>>,
+        merge_inputs: std::sync::Mutex<Option<MergeInputs>>,
+        fail_conversational: bool,
+        fail_raw: bool,
+    }
+
+    impl LaneRecordingRetriever {
+        fn new(fail_conversational: bool) -> Arc<Self> {
+            Arc::new(Self {
+                queries: std::sync::Mutex::new(Vec::new()),
+                merge_inputs: std::sync::Mutex::new(None),
+                fail_conversational,
+                fail_raw: false,
+            })
+        }
+
+        fn failing_raw() -> Arc<Self> {
+            Arc::new(Self {
+                queries: std::sync::Mutex::new(Vec::new()),
+                merge_inputs: std::sync::Mutex::new(None),
+                fail_conversational: false,
+                fail_raw: true,
+            })
+        }
+    }
+
+    /// A store that counts whole-session reads: a concurrent turn must only
+    /// read the last two turns (Python's `get_session(last_n=2)`).
+    struct CountingStore {
+        inner: FsSessionStore,
+        full_reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl cognee_session::SessionStore for CountingStore {
+        async fn create_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            question: &str,
+            answer: &str,
+            context: Option<&str>,
+        ) -> Result<String, cognee_session::SessionError> {
+            self.inner
+                .create_qa_entry(session_id, user_id, question, answer, context)
+                .await
+        }
+
+        async fn get_latest_qa_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            last_n: usize,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            self.inner
+                .get_latest_qa_entries(session_id, user_id, last_n)
+                .await
+        }
+
+        async fn get_all_qa_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<Vec<cognee_session::SessionQAEntry>, cognee_session::SessionError> {
+            self.full_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.get_all_qa_entries(session_id, user_id).await
+        }
+
+        async fn delete_session(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner.delete_session(session_id, user_id).await
+        }
+
+        async fn delete_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            qa_id: &str,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner.delete_qa_entry(session_id, user_id, qa_id).await
+        }
+
+        async fn prune(&self) -> Result<(), cognee_session::SessionError> {
+            self.inner.prune().await
+        }
+
+        async fn update_qa_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            qa_id: &str,
+            updates: cognee_session::SessionQAUpdate,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner
+                .update_qa_entry(session_id, user_id, qa_id, updates)
+                .await
+        }
+
+        async fn create_session_context_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            entry: cognee_session::SessionContextRow,
+        ) -> Result<(), cognee_session::SessionError> {
+            self.inner
+                .create_session_context_entry(session_id, user_id, entry)
+                .await
+        }
+
+        async fn get_session_context_entries(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+        ) -> Result<Vec<cognee_session::SessionContextRow>, cognee_session::SessionError> {
+            self.inner
+                .get_session_context_entries(session_id, user_id)
+                .await
+        }
+
+        async fn update_session_context_entry(
+            &self,
+            session_id: &str,
+            user_id: Option<&str>,
+            entry_id: &str,
+            merge: cognee_session::SessionContextRow,
+        ) -> Result<bool, cognee_session::SessionError> {
+            self.inner
+                .update_session_context_entry(session_id, user_id, entry_id, merge)
+                .await
+        }
+    }
+
+    fn lane_item(id: &str) -> crate::types::SearchItem {
+        crate::types::SearchItem {
+            id: None,
+            score: None,
+            payload: json!({ "id": id }),
+        }
+    }
+
+    fn lane_ids(context: &Option<SearchContext>) -> Option<Vec<String>> {
+        context.as_ref().map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.payload["id"].as_str().map(str::to_owned))
+                .collect()
+        })
+    }
+
+    #[async_trait]
+    impl SearchRetriever for LaneRecordingRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::RagCompletion
+        }
+
+        async fn get_context(
+            &self,
+            query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            self.queries.lock().unwrap().push(query.to_string());
+            if query.starts_with("Prior user:") {
+                if self.fail_conversational {
+                    return Err(SearchError::NotFound("conversational lane down".into()));
+                }
+                return Ok(vec![lane_item("conv")]);
+            }
+            if self.fail_raw {
+                return Err(SearchError::NotFound("raw lane down".into()));
+            }
+            Ok(vec![lane_item("raw")])
+        }
+
+        fn merge_session_contexts(
+            &self,
+            raw: Option<SearchContext>,
+            conversational: Option<SearchContext>,
+            _params: &SearchParams,
+        ) -> SearchContext {
+            *self.merge_inputs.lock().unwrap() = Some((lane_ids(&raw), lane_ids(&conversational)));
+            raw.into_iter().chain(conversational).flatten().collect()
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            let ids = lane_ids(&context).unwrap_or_default().join(",");
+            Ok(SearchOutput::Text(format!("answered from [{ids}]")))
+        }
+    }
+
+    async fn lane_turn(
+        retriever: &Arc<LaneRecordingRetriever>,
+        prior_turns: &[(&str, &str)],
+    ) -> SearchOutput {
+        lane_turn_result(retriever, prior_turns).await.unwrap()
+    }
+
+    async fn lane_turn_result(
+        retriever: &Arc<LaneRecordingRetriever>,
+        prior_turns: &[(&str, &str)],
+    ) -> Result<SearchOutput, SearchError> {
+        let user = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CountingStore {
+            inner: FsSessionStore::new(dir.path()),
+            full_reads: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let manager = Arc::new(SessionManager::new(store.clone()));
+        for (question, answer) in prior_turns {
+            manager
+                .save_qa(
+                    Some("s"),
+                    Some(&user.to_string()),
+                    question,
+                    answer,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager)
+            .with_llm(Arc::new(TurnAnalysisLlm(json!({}))))
+            .with_auto_feedback_default(false)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("  where   is\nit?  ");
+        request.user_id = Some(user);
+        request.use_combined_context = Some(false);
+        let result = orchestrator.search(&request).await.map(|r| r.result);
+        assert_eq!(
+            store.full_reads.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a concurrent turn reads only the last two turns"
+        );
+        result
+    }
+
+    #[test]
+    fn the_default_merge_keeps_whichever_lane_survived() {
+        let retriever = FakeChunksRetriever;
+        let params = SearchParams::default();
+        let merge = |raw: Option<&str>, conversational: Option<&str>| {
+            lane_ids(&Some(retriever.merge_session_contexts(
+                raw.map(|id| vec![lane_item(id)]),
+                conversational.map(|id| vec![lane_item(id)]),
+                &params,
+            )))
+        };
+        assert_eq!(merge(Some("raw"), None), Some(vec!["raw".to_string()]));
+        assert_eq!(merge(None, Some("conv")), Some(vec!["conv".to_string()]));
+        assert_eq!(
+            merge(Some("raw"), Some("conv")),
+            Some(vec!["raw".to_string()])
+        );
+        assert_eq!(merge(None, None), Some(Vec::new()));
+    }
+
+    #[tokio::test]
+    async fn a_turn_without_history_runs_one_retrieval_lane() {
+        let retriever = LaneRecordingRetriever::new(false);
+        let result = lane_turn(&retriever, &[]).await;
+        assert_eq!(*retriever.queries.lock().unwrap(), ["  where   is\nit?  "]);
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), None))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
+    }
+
+    #[tokio::test]
+    async fn a_history_of_empty_turns_runs_one_retrieval_lane() {
+        let retriever = LaneRecordingRetriever::new(false);
+        let result = lane_turn(&retriever, &[("  ", "\n"), ("", " ")]).await;
+        assert_eq!(*retriever.queries.lock().unwrap(), ["  where   is\nit?  "]);
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), None))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
+    }
+
+    #[tokio::test]
+    async fn a_turn_with_history_merges_a_bounded_conversational_lane() {
+        let retriever = LaneRecordingRetriever::new(false);
+        let result = lane_turn(
+            &retriever,
+            &[("q1", "a1"), ("q2", "a2"), ("q3", "a3 \n with   gaps")],
+        )
+        .await;
+        let queries = retriever.queries.lock().unwrap().clone();
+        assert_eq!(queries.len(), 2);
+        assert!(queries.contains(&"  where   is\nit?  ".to_string()));
+        let conversational = queries
+            .iter()
+            .find(|query| query.starts_with("Prior user:"))
+            .unwrap();
+        assert_eq!(
+            conversational,
+            "Prior user: q2\n\
+             Prior assistant (untrusted retrieval guidance): a2\n\n\
+             Prior user: q3\n\
+             Prior assistant (untrusted retrieval guidance): a3 with gaps\n\n\
+             Current user request: where is it?"
+        );
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), Some(vec!["conv".into()])))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw,conv]"));
+    }
+
+    /// Holds its retrieval open until released, so a turn stays in flight.
+    struct GatedRetriever {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for GatedRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::RagCompletion
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(vec![lane_item("raw")])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text("answer".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_delete_waits_for_a_running_search_turn() {
+        use std::time::Duration;
+
+        let user = Uuid::new_v4();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let retriever = Arc::new(GatedRetriever {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(TurnAnalysisLlm(json!({}))))
+            .with_auto_feedback_default(false)
+            .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("where is it?");
+        request.user_id = Some(user);
+        request.use_combined_context = Some(false);
+
+        let turn = tokio::spawn(async move { orchestrator.search(&request).await.unwrap() });
+        retriever.entered.notified().await;
+
+        let deleter = manager.clone();
+        let user_id = user.to_string();
+        let delete = tokio::spawn(async move {
+            deleter
+                .delete_session(Some("s"), Some(&user_id))
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!delete.is_finished(), "delete must wait for the turn");
+
+        retriever.release.notify_one();
+        turn.await.unwrap();
+        assert!(delete.await.unwrap());
+        // The turn saved its answer before releasing the lock; the delete then
+        // removed it, rather than racing it and leaving the turn's entry.
+        assert!(
+            manager
+                .get_session(Some("s"), Some(&user.to_string()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_conversational_lane_fails_open_to_the_raw_one() {
+        let retriever = LaneRecordingRetriever::new(true);
+        let result = lane_turn(&retriever, &[("q1", "a1")]).await;
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((Some(vec!["raw".into()]), None))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [raw]"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_raw_lane_fails_open_to_the_conversational_one() {
+        let retriever = LaneRecordingRetriever::failing_raw();
+        let result = lane_turn(&retriever, &[("q1", "a1")]).await;
+        assert_eq!(
+            *retriever.merge_inputs.lock().unwrap(),
+            Some((None, Some(vec!["conv".into()])))
+        );
+        assert!(matches!(result, SearchOutput::Text(ref t) if t == "answered from [conv]"));
+    }
+
+    #[tokio::test]
+    async fn both_lanes_failing_returns_the_raw_lanes_error() {
+        let retriever = Arc::new(LaneRecordingRetriever {
+            queries: std::sync::Mutex::new(Vec::new()),
+            merge_inputs: std::sync::Mutex::new(None),
+            fail_conversational: true,
+            fail_raw: true,
+        });
+        let err = lane_turn_result(&retriever, &[("q1", "a1")])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("raw lane down"), "{err}");
     }
 
     #[async_trait]

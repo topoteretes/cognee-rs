@@ -536,3 +536,106 @@ async fn create_context_row_appends() {
         2
     );
 }
+
+#[tokio::test]
+async fn delete_session_waits_for_an_in_flight_turn() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let manager = Arc::new(SessionManager::new(setup_store(dir.path())));
+    manager
+        .save_qa(Some("s1"), Some("turn-user"), "q", "a", None, None, None)
+        .await
+        .unwrap();
+
+    // A turn in flight holds the session's turn lock.
+    let turn = cognee_session::lock_session_turn("turn-user", "s1").await;
+    let deleter = Arc::clone(&manager);
+    let delete = tokio::spawn(async move {
+        deleter
+            .delete_session(Some("s1"), Some("turn-user"))
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!delete.is_finished(), "delete must wait for the turn");
+    assert_eq!(
+        manager
+            .get_session(Some("s1"), Some("turn-user"))
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the session is intact while the turn runs"
+    );
+
+    drop(turn);
+    assert!(delete.await.unwrap());
+    assert!(
+        manager
+            .get_session(Some("s1"), Some("turn-user"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn userless_delete_does_not_take_the_turn_lock() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let manager = SessionManager::new(setup_store(dir.path()));
+    manager
+        .save_qa(Some("s1"), None, "q", "a", None, None, None)
+        .await
+        .unwrap();
+    // Python's session_turn_lock does not lock without a user.
+    let _held = cognee_session::lock_session_turn("", "s1").await;
+    let deleted = tokio::time::timeout(
+        Duration::from_millis(500),
+        manager.delete_session(Some("s1"), None),
+    )
+    .await
+    .expect("a userless delete must not wait on a lock")
+    .unwrap();
+    assert!(deleted);
+}
+
+#[tokio::test]
+async fn zero_latest_entries_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = SessionManager::new(setup_store(dir.path()));
+    manager
+        .save_qa(Some("s1"), Some("u"), "q", "a", None, None, None)
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .get_latest_session_entries(Some("s1"), Some("u"), 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn delete_session_does_not_wait_for_another_sessions_turn() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let manager = SessionManager::new(setup_store(dir.path()));
+    manager
+        .save_qa(Some("s2"), Some("turn-user"), "q", "a", None, None, None)
+        .await
+        .unwrap();
+    let _other_turn = cognee_session::lock_session_turn("turn-user", "s1").await;
+    let deleted = tokio::time::timeout(
+        Duration::from_millis(500),
+        manager.delete_session(Some("s2"), Some("turn-user")),
+    )
+    .await
+    .expect("an unrelated turn must not block the delete")
+    .unwrap();
+    assert!(deleted);
+}

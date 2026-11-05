@@ -159,6 +159,22 @@ pub trait SearchRetriever: Send + Sync {
         Ok(None)
     }
 
+    /// Combine the two retrievals of a session turn (the raw question and its
+    /// conversational rewrite) into one context. Only the retriever knows its
+    /// items' shape, so only it can merge them (Python's
+    /// `merge_retrieved_objects`). Either lane is `None` when it failed open.
+    ///
+    /// The default keeps whichever lane survived, the raw one when both did,
+    /// so a retriever without its own merge never has its good result dropped.
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        _params: &SearchParams,
+    ) -> SearchContext {
+        raw.or(conversational).unwrap_or_default()
+    }
+
     /// Process multiple queries in sequence and return their contexts.
     ///
     /// Default: loops over [`get_context`]. Override for efficient batching.

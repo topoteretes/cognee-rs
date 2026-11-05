@@ -2,7 +2,9 @@ pub mod access_tracking;
 mod completion;
 mod edge_type_id;
 pub mod global_context;
+pub mod merge_results;
 mod resolve_edges_to_text;
+pub(crate) mod results;
 mod session_messages;
 
 pub use access_tracking::update_node_access_timestamps;
@@ -19,6 +21,7 @@ pub use global_context::{
     format_global_context_prelude, load_root_ids, load_root_text,
     search_top_global_context_summaries,
 };
+pub use merge_results::{conversational_reserve, edge_identity, item_identity, merge_ranked};
 pub(crate) use resolve_edges_to_text::DEFAULT_STOP_WORDS;
 pub use resolve_edges_to_text::resolve_edges_to_text as render_edges_context;
 pub use session_messages::build_messages_with_history;

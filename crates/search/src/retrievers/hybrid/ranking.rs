@@ -49,8 +49,8 @@ use cognee_graph::NodeTruthState;
 use cognee_truth_subspace::align::truth_factor;
 
 use crate::retrievers::hybrid::pairs::ChunkSummaryPair;
-use crate::retrievers::hybrid::results::{payload, result_id};
 use crate::user_preferences::personal_factor;
+use crate::utils::results::{payload, result_id};
 
 /// RRF constant `k` derived from the requested chunk count.
 ///

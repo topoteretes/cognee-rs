@@ -15,8 +15,8 @@ use crate::retrievers::context_items::search_node_filtered;
 use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
 use crate::user_preferences::{completion_guidance, load_for_search, personal_factor};
 use crate::utils::{
-    build_messages_with_history, render_user_prompt, resolve_system_prompt,
-    skip_completion_on_empty_context,
+    build_messages_with_history, conversational_reserve, item_identity, merge_ranked,
+    render_user_prompt, resolve_system_prompt, skip_completion_on_empty_context,
 };
 
 const CHUNKS_DATA_TYPE: &str = "DocumentChunk";
@@ -175,6 +175,22 @@ impl SearchRetriever for CompletionRetriever {
 
     fn dataset_scoping(&self) -> super::DatasetScoping {
         super::DatasetScoping::Membership
+    }
+
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        params: &SearchParams,
+    ) -> SearchContext {
+        let top_k = params.top_k_or(self.top_k);
+        merge_ranked(
+            raw.unwrap_or_default(),
+            conversational.unwrap_or_default(),
+            item_identity,
+            Some(top_k),
+            conversational_reserve(top_k),
+        )
     }
 
     async fn get_context(
@@ -1003,5 +1019,56 @@ mod tests {
             .map(|i| i.payload["id"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(order, ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn session_merge_is_capped_by_the_requests_top_k_else_the_retrievers() {
+        let retriever = CompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                has_collection: false,
+                results: vec![],
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestLlm {
+                response_text: "unused".to_string(),
+                ..Default::default()
+            }),
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+        );
+        let lane = |prefix: &str| -> SearchContext {
+            (0..4)
+                .map(|n| SearchItem {
+                    id: None,
+                    score: None,
+                    payload: json!({ "id": format!("{prefix}{n}") }),
+                })
+                .collect()
+        };
+        let ids = |context: SearchContext| -> Vec<String> {
+            context
+                .iter()
+                .map(|item| item.payload["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        // Retriever default 2: no reserve below three slots.
+        let merged = retriever.merge_session_contexts(
+            Some(lane("r")),
+            Some(lane("c")),
+            &SearchParams::default(),
+        );
+        assert_eq!(ids(merged), ["r0", "r1"]);
+
+        // Request top_k 3: one slot is held for the conversational lane.
+        let params = SearchParams {
+            top_k: Some(3),
+            ..Default::default()
+        };
+        let merged = retriever.merge_session_contexts(Some(lane("r")), Some(lane("c")), &params);
+        assert_eq!(ids(merged), ["r0", "r1", "c0"]);
     }
 }

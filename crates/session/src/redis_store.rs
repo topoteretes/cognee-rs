@@ -276,6 +276,10 @@ impl SessionStore for RedisSessionStore {
         user_id: Option<&str>,
         last_n: usize,
     ) -> Result<Vec<SessionQAEntry>, SessionError> {
+        // LRANGE -0 -1 is the whole list.
+        if last_n == 0 {
+            return Ok(Vec::new());
+        }
         let key = session_key(user_id, session_id);
         let mut conn = self.conn.clone();
         let raw: Vec<String> = conn

@@ -63,6 +63,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+- **`cognee-search` / `cognee-session`: a concurrent session turn retrieves
+  with Python's bounded conversational rewrite and merges the two lanes by
+  retriever; `SessionManager::delete_session` takes the turn lock (SDK-1045).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | Conversational retrieval query | `Recent conversation:\n<whole formatted history>\n\nCurrent question:\n<query>` | Python's `build_conversational_query`: the last two Q&A turns, whitespace-normalised, `Prior user:` / `Prior assistant (untrusted retrieval guidance):` / `Current user request:` lines, at most 2000 characters (answers trimmed first, then questions) |
+  | Second retrieval lane | whenever there was history | only when the rewrite differs from the whitespace-normalised raw question |
+  | Merging the two lanes | concatenate, then drop duplicate ids | `SearchRetriever::merge_session_contexts` (provided; default keeps the surviving lane, the raw one when both survived). RAG merges by result id, graph by edge identity, each capped at `top_k`; hybrid merges chunks, entities and facts under their own limits and keeps the summary of each surviving chunk. A lone lane (rewrite skipped) is still passed through the merge, which trims it to `top_k`. A third of the budget (none below three slots) is reserved for results only the rewrite found |
+  | Concurrent snapshot | read every Q&A entry of the session | reads the last two (Python's `get_session(last_n=2)`) plus the history window |
+  | `SessionContext` | no recent turns | also `recent_qas: Vec<(String, String)>` |
+  | Session turn lock | private to `cognee-search` | `cognee_session::lock_session_turn`; `SessionManager::delete_session` waits for it (given a user and session, as Python's `session_turn_lock`), so a session is not deleted under a turn in flight. No Rust entry point deletes a single session yet, so this has no production caller |
+  | `cognee_search::utils` | | `merge_ranked`, `conversational_reserve`, `edge_identity`, `item_identity` (ports of Python's `merge_results.py`) |
+
+  **Migration.** Build `SessionContext` values with `..Default::default()`.
+  A custom retriever that runs in a concurrent turn and needs more than "keep
+  the raw lane" overrides `merge_session_contexts`. Code that calls
+  `SessionManager::delete_session` while holding `lock_session_turn` for the
+  same session must release the guard first (the lock is not reentrant).
+
+
 - **`cognee-search` / `cognee-session`: session searches serve Python's
   active-guidance block and record the entries they served; session history
   moves to the user message (SDK-1045).**

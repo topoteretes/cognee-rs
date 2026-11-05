@@ -52,6 +52,10 @@ pub struct SessionContext {
     pub session_id: Option<String>,
     pub history: Vec<Message>,
     pub formatted_history: String,
+    /// The last two `(question, answer)` turns, oldest first: the context of
+    /// the conversational retrieval lane of a concurrent turn (Python's
+    /// `recent_qas`). Empty on the sequential path.
+    pub recent_qas: Vec<(String, String)>,
     /// The active-guidance entries selected for this turn, built once per
     /// turn. `Some` on every session search (Python's session path), `None`
     /// sessionless. A retriever renders it with the user's durable preference
