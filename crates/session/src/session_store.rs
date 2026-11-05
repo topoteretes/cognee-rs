@@ -27,7 +27,7 @@ pub struct SessionQAUpdate {
     pub feedback_score: Option<Option<i32>>,
     pub used_graph_element_ids: Option<Option<UsedGraphElementIds>>,
     pub used_session_context_ids: Option<Option<Vec<String>>>,
-    pub memify_metadata: Option<Option<HashMap<String, bool>>>,
+    pub memify_metadata: Option<Option<HashMap<String, serde_json::Value>>>,
 }
 
 /// Abstraction over session Q&A storage backends (SQLite, Redis, filesystem, etc.).

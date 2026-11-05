@@ -160,7 +160,7 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
     let memify_metadata = e
         .memify_metadata
         .as_ref()
-        .and_then(|v| serde_json::from_value::<HashMap<String, bool>>(v.clone()).ok());
+        .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok());
 
     SessionQAEntry {
         id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
@@ -555,7 +555,47 @@ impl SessionStore for RedisSessionStore {
     reason = "test code — panics are acceptable failures"
 )]
 mod tests {
-    use super::connection_info;
+    use super::{RedisQAEntry, connection_info, redis_entry_to_domain};
+
+    fn entry_with(metadata: serde_json::Value) -> RedisQAEntry {
+        serde_json::from_value(serde_json::json!({
+            "time": "2024-01-01T00:00:00Z",
+            "question": "q",
+            "context": "",
+            "answer": "a",
+            "qa_id": "q1",
+            "memify_metadata": metadata,
+        }))
+        .expect("entry deserializes")
+    }
+
+    /// A Python-shaped `memify_metadata` (lists, ints) decodes with every key
+    /// intact; it used to be dropped whole because only bools were accepted.
+    #[test]
+    fn python_shaped_memify_metadata_decodes_with_all_keys() {
+        let e = entry_with(serde_json::json!({
+            "feedback_weights_applied": true,
+            "feedback_weights_applied_node_ids": ["a"],
+            "feedback_weights_attempts": 2,
+        }));
+        let m = redis_entry_to_domain(&e, "s")
+            .memify_metadata
+            .expect("metadata decodes");
+        assert_eq!(m.len(), 3);
+        assert_eq!(m["feedback_weights_applied"], serde_json::json!(true));
+        assert_eq!(
+            m["feedback_weights_applied_node_ids"],
+            serde_json::json!(["a"])
+        );
+        assert_eq!(m["feedback_weights_attempts"], serde_json::json!(2));
+    }
+
+    /// A stored non-object value still decodes as `None`.
+    #[test]
+    fn non_object_memify_metadata_decodes_as_none() {
+        let e = entry_with(serde_json::json!("oops"));
+        assert!(redis_entry_to_domain(&e, "s").memify_metadata.is_none());
+    }
 
     #[test]
     fn credentials_with_url_reserved_characters_are_passed_verbatim() {

@@ -752,7 +752,7 @@ export interface CogneeSessionQAEntry {
   feedback_text: string | null;
   feedback_score: number | null;
   used_graph_element_ids: CogneeUsedGraphElementIds | null;
-  memify_metadata: Record<string, boolean> | null;
+  memify_metadata: Record<string, unknown> | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

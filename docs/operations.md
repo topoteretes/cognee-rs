@@ -123,7 +123,7 @@ the node's turn counter once; an edge that decayed to within 0.01 of neutral
 is retired. The node's text collects the usable `preferences`-section
 session-context entries newer than its watermark, newest first, capped at
 2000 characters on line boundaries. Turns are marked in `memify_metadata`
-(`preference_turn_counted`, `preference_weights_applied`), so a re-run
+(`preference_turn_counted`, `preference_weights_applied`; values are arbitrary JSON, as Python also stores lists and ints), so a re-run
 counts and applies each once. Counts: `turns_applied`, `edges_written`,
 `edges_pruned`, `text_lines_added`; nothing to fold is `completed` with the
 reason `no_changes`.

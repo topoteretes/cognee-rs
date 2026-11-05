@@ -819,9 +819,9 @@ async fn memify_metadata_updates_merge_keys() {
         .await
         .unwrap();
     for (key, value) in [
-        ("feedback_weights_applied", true),
-        ("preference_turn_counted", true),
-        ("feedback_weights_applied", false),
+        ("feedback_weights_applied", serde_json::json!(true)),
+        ("preference_turn_counted", serde_json::json!(true)),
+        ("feedback_weights_applied", serde_json::json!(false)),
     ] {
         store
             .update_qa_entry(
@@ -841,8 +841,14 @@ async fn memify_metadata_updates_merge_keys() {
     }
     let entries = store.get_all_qa_entries("s1", None).await.unwrap();
     let metadata = entries[0].memify_metadata.as_ref().unwrap();
-    assert_eq!(metadata.get("feedback_weights_applied"), Some(&false));
-    assert_eq!(metadata.get("preference_turn_counted"), Some(&true));
+    assert_eq!(
+        metadata.get("feedback_weights_applied"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(
+        metadata.get("preference_turn_counted"),
+        Some(&serde_json::json!(true))
+    );
 
     // `Some(None)` still clears it.
     store
@@ -859,4 +865,52 @@ async fn memify_metadata_updates_merge_keys() {
         .unwrap();
     let entries = store.get_all_qa_entries("s1", None).await.unwrap();
     assert!(entries[0].memify_metadata.is_none());
+}
+
+/// Lists, ints and strings round trip, and a later write overwrites only the
+/// keys it sends.
+#[tokio::test]
+async fn memify_metadata_accepts_python_shaped_values() {
+    use serde_json::json;
+    let store = setup_store().await;
+    let qa_id = store
+        .create_qa_entry("s1", None, "q1?", "a1", None)
+        .await
+        .unwrap();
+    let write = |pairs: Vec<(&str, serde_json::Value)>| cognee_session::SessionQAUpdate {
+        memify_metadata: Some(Some(
+            pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        )),
+        ..Default::default()
+    };
+    store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            write(vec![
+                ("feedback_weights_applied", json!(true)),
+                ("feedback_weights_applied_node_ids", json!(["a"])),
+                ("feedback_weights_attempts", json!(2)),
+                ("note", json!("x")),
+            ]),
+        )
+        .await
+        .unwrap();
+    store
+        .update_qa_entry(
+            "s1",
+            None,
+            &qa_id,
+            write(vec![("feedback_weights_attempts", json!(3))]),
+        )
+        .await
+        .unwrap();
+    let entries = store.get_all_qa_entries("s1", None).await.unwrap();
+    let m = entries[0].memify_metadata.as_ref().unwrap();
+    assert_eq!(m.len(), 4);
+    assert_eq!(m["feedback_weights_applied"], json!(true));
+    assert_eq!(m["feedback_weights_applied_node_ids"], json!(["a"]));
+    assert_eq!(m["feedback_weights_attempts"], json!(3));
+    assert_eq!(m["note"], json!("x"));
 }

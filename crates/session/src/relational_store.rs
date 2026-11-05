@@ -49,7 +49,7 @@ fn row_to_entry(m: SessionQaRow) -> SessionQAEntry {
     let memify_metadata = m
         .memify_metadata
         .as_deref()
-        .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(s).ok());
+        .and_then(|s| serde_json::from_str::<HashMap<String, serde_json::Value>>(s).ok());
     let used_session_context_ids = m
         .used_session_context_ids
         .as_deref()

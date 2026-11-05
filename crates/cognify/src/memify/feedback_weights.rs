@@ -104,7 +104,10 @@ fn is_eligible(entry: &SessionQAEntry) -> bool {
     let _ = score;
 
     if let Some(meta) = &entry.memify_metadata
-        && meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY).copied() == Some(true)
+        && meta
+            .get(FEEDBACK_WEIGHTS_APPLIED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
     {
         return false;
     }
@@ -250,7 +253,10 @@ async fn mark_feedback_processed(
     qa_id: &str,
     success: bool,
 ) -> Result<(), FeedbackError> {
-    let meta = HashMap::from([(FEEDBACK_WEIGHTS_APPLIED_KEY.to_string(), success)]);
+    let meta = HashMap::from([(
+        FEEDBACK_WEIGHTS_APPLIED_KEY.to_string(),
+        serde_json::Value::Bool(success),
+    )]);
 
     session_manager
         .update_qa(
@@ -490,7 +496,7 @@ mod tests {
     #[test]
     fn is_eligible_rejects_already_applied() {
         let mut meta = HashMap::new();
-        meta.insert("feedback_weights_applied".to_string(), true);
+        meta.insert("feedback_weights_applied".to_string(), true.into());
         let entry = SessionQAEntry {
             id: Uuid::new_v4(),
             session_id: "s".into(),

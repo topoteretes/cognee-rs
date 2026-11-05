@@ -40,9 +40,9 @@ pub struct SessionQAEntry {
     /// Session-context entry IDs that were served to produce this answer.
     #[serde(default)]
     pub used_session_context_ids: Option<Vec<String>>,
-    /// Metadata tracking for the memify pipeline (e.g. `{"feedback_weights_applied": true}`).
+    /// Metadata tracking for the memify pipeline (e.g. `{"feedback_weights_applied": true}`); values are arbitrary JSON (Python also stores lists and ints).
     #[serde(default)]
-    pub memify_metadata: Option<HashMap<String, bool>>,
+    pub memify_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Session context passed to retrievers: the session ID, the loaded
@@ -110,14 +110,14 @@ fn empty_object() -> serde_json::Value {
 #[cfg(any(feature = "fs", feature = "redis"))]
 pub(crate) fn merge_memify_metadata(
     existing: Option<serde_json::Value>,
-    updates: &HashMap<String, bool>,
+    updates: &HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
     let mut merged = match existing {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
     };
     for (key, value) in updates {
-        merged.insert(key.clone(), serde_json::Value::Bool(*value));
+        merged.insert(key.clone(), value.clone());
     }
     serde_json::Value::Object(merged)
 }
