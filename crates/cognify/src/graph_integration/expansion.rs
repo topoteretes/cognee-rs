@@ -7,13 +7,16 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
+use cognee_graph::GraphDBTrait;
 use cognee_models::{Entity, EntityType, Timestamp};
 use cognee_ontology::traits::OntologyEdge;
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use cognee_utils::{generate_edge_name, generate_node_name, normalize_identifier};
 use tracing::{debug, warn};
 
+use crate::error::CognifyError;
 use crate::fact_extraction::{KnowledgeGraph, Node};
+use crate::graph_integration::db_deduplication::partition_existing_edges;
 use crate::graph_integration::types::{
     ArtifactProducers, GraphEdgePair, GraphNodePair, TimestampNode,
 };
@@ -327,6 +330,13 @@ pub(crate) fn pre_stamp_extraction(
 /// Deciding it here, from a key derived separately from the raw extraction,
 /// misses every stored edge the two derivations disagree on (#75, #76).
 ///
+/// **This does not consult the graph database.** Writing the returned edges
+/// as they are re-writes every edge an earlier run stored and gives this run
+/// no ownership row for it, which brings back the cross-file deletion damage
+/// `cross_run_edge_ownership.rs` guards against. Pass them through
+/// `partition_existing_edges` first, or call
+/// [`expand_and_partition_extracted_graphs`], which does both.
+///
 /// # Arguments
 /// * `graphs` - Vector of (chunk_id, KnowledgeGraph) pairs. Each graph is
 ///   paired with the UUID of the chunk it was extracted from, so entities
@@ -443,12 +453,21 @@ pub async fn expand_with_nodes_and_edges_with_stats(
 }
 
 /// What one expansion pass produced. See [`expand_with_nodes_and_edges`] for
-/// the meaning of every field but `timestamps`.
+/// the meaning of every field but `claimed_existing_edges` and `timestamps`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Expansion {
     pub nodes: Vec<GraphNodePair>,
+    /// The edges to write. From [`expand_extracted_graphs`] these are all the
+    /// edges the pass produced, stored ones included; from
+    /// [`expand_and_partition_extracted_graphs`] only the ones not yet stored.
     pub edges: Vec<GraphEdgePair>,
+    /// Edges this pass produced that the graph already holds: not written
+    /// again, but claimed with an ownership row (see
+    /// [`partition_existing_edges`](super::db_deduplication::partition_existing_edges)).
+    /// Filled only by [`expand_and_partition_extracted_graphs`]; empty from
+    /// [`expand_extracted_graphs`], which does not consult the graph.
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
     /// Every chunk that produced each entity, Timestamp and edge.
     pub producers: ArtifactProducers,
     pub stats: EdgeResolutionStats,
@@ -532,8 +551,41 @@ fn is_timestamp_type(node_type: &str) -> bool {
     generate_node_name(node_type) == "timestamp"
 }
 
+/// [`expand_extracted_graphs`] followed by
+/// [`partition_existing_edges`](super::db_deduplication::partition_existing_edges):
+/// the returned `edges` are the ones to write and `claimed_existing_edges` the
+/// stored ones to claim. This is the form the cognify pipeline uses, and the
+/// one to use whenever the result is written to a graph.
+#[allow(clippy::too_many_arguments)]
+pub async fn expand_and_partition_extracted_graphs(
+    graph_db: &dyn GraphDBTrait,
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+) -> Result<Expansion, CognifyError> {
+    let mut expansion = expand_extracted_graphs(
+        graphs,
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        ontology_resolver,
+        user_label,
+        task_rank,
+    )
+    .await;
+    let edges = std::mem::take(&mut expansion.edges);
+    (expansion.edges, expansion.claimed_existing_edges) =
+        partition_existing_edges(graph_db, edges).await?;
+    Ok(expansion)
+}
+
 /// [`expand_with_nodes_and_edges_with_stats`], additionally returning the
-/// Timestamp nodes. This is the form the cognify pipeline uses.
+/// Timestamp nodes. Does not consult the graph database: see
+/// [`expand_and_partition_extracted_graphs`] for the form that does.
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_extracted_graphs(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
@@ -766,6 +818,8 @@ pub async fn expand_extracted_graphs(
                                     &onto_edges,
                                     &mut ontology_edge_keys,
                                     &mut ontology_edges_out,
+                                    &mut producers,
+                                    chunk_id,
                                 );
 
                                 // Insert under canonical key
@@ -932,6 +986,8 @@ pub async fn expand_extracted_graphs(
                     &ont_edges,
                     &mut ontology_edge_keys,
                     &mut ontology_edges_out,
+                    &mut producers,
+                    chunk_id,
                 );
             }
 
@@ -1231,9 +1287,10 @@ pub async fn expand_extracted_graphs(
         );
     }
 
-    // Ontology-derived nodes and edges appended above have no producing chunk
-    // and therefore no producer entry; callers fall back to today's behavior
-    // for them.
+    // Ontology-derived nodes appended above have no producing chunk and
+    // therefore no producer entry; callers fall back to today's behavior for
+    // them. Ontology edges do have one: the chunk whose entity pulled the
+    // subgraph in (see `process_ontology_edges`).
     let timestamps = timestamp_order
         .into_iter()
         .filter_map(|id| timestamp_map.remove(&id))
@@ -1242,6 +1299,7 @@ pub async fn expand_extracted_graphs(
     Expansion {
         nodes: graph_nodes,
         edges: graph_edges,
+        claimed_existing_edges: Vec::new(),
         producers,
         stats,
         timestamps,
@@ -1434,11 +1492,19 @@ fn process_ontology_nodes(
 /// this pass already produced (in `ontology_edge_keys`) are skipped; whether one
 /// is already in the graph is decided afterwards, with every other produced edge,
 /// by [`partition_existing_edges`](super::db_deduplication::partition_existing_edges).
+///
+/// `chunk_id` is recorded as a producer of every edge it yields, the skipped
+/// repeats included: it is the chunk whose entity pulled this subgraph in. Its
+/// document then owns the edge, as Python attaches the current document's ref
+/// to enrichment edges (`find_existing_edge_identities`), so a claimed ontology
+/// edge gets an ownership row for that document instead of a nil one.
 fn process_ontology_edges(
     ontology_nodes: &[AttachedOntologyNode],
     ontology_edges: &[OntologyEdge],
     ontology_edge_keys: &mut HashSet<String>,
     ontology_edges_out: &mut Vec<GraphEdgePair>,
+    producers: &mut ArtifactProducers,
+    chunk_id: Uuid,
 ) {
     // Mirror Python's `node_category = {node.name: node.category ...}`: an edge
     // endpoint that names a class resolves via `EntityType::id_for`, otherwise
@@ -1476,6 +1542,7 @@ fn process_ontology_edges(
         let target_id = endpoint_id(target);
         let rel_name = generate_edge_name(relation);
         let edge_key = format!("{source_id}_{target_id}_{rel_name}");
+        producers.record_edge((source_id, target_id, rel_name.clone()), chunk_id);
 
         if ontology_edge_keys.contains(&edge_key) {
             continue;
@@ -3411,6 +3478,8 @@ mod tests {
             &edges,
             &mut ontology_edge_keys,
             &mut ontology_edges_out,
+            &mut ArtifactProducers::default(),
+            Uuid::new_v4(),
         );
 
         assert_eq!(ontology_edges_out.len(), 2);
@@ -3470,6 +3539,8 @@ mod tests {
             &edges,
             &mut ontology_edge_keys,
             &mut ontology_edges_out,
+            &mut ArtifactProducers::default(),
+            Uuid::new_v4(),
         );
 
         // Only the second edge should be present; the first was already produced
