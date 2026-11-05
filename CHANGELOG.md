@@ -40,6 +40,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     possibly one shared with the caller, instead of looking `datasetName` up
     among the caller's own datasets. A non-string or malformed id is an error.
 
+- **`cognee-cognify`, `cognee-models`, `cognee-search`: DLT rows are `DltRow`
+  nodes indexed into `DltRow_text`, with Python's schema and cell-value
+  collections (SDK-1045).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | Graph type of a DLT row's chunk | `DocumentChunk` | `DltRow` (`DocumentChunk::dlt_row`, `cognee_models::DLT_ROW_TYPE`), `cut_type` `dlt_row`, `name` `table:primary_key_value` |
+  | Vector collection of a DLT row | `DocumentChunk_text` | `DltRow_text` (payload: the DataPoint dump, `field`, `text`, `document_id`, `dataset_id`, `chunk_index`, plus Rust-only `name`, `cut_type`, `chunk_size` that the hybrid lane uses; Python's `document_name` is not written and `external_metadata` stays with SDK-1057) |
+  | Source of `is_row_of`, foreign-key and cell-value edges | the row's document node | the row's `DltRow` chunk node (`dlt_row_chunk_id(document_id)`) |
+  | Schema nodes in the vector store | none | `SchemaTable_{name,description}`, `SchemaRelationship_{name,description}` |
+  | Cell values (`external_metadata.column_values`) | ignored | one shared `DltColumn` node per unique (table, column, value), embedded into `DltColumn_properties`, with an edge named after the column |
+  | Graph completion (`SEARCH_COLLECTIONS`) | no DLT rows | also searches `DltRow_text` |
+  | `DocumentChunk` serialization | no `name` | optional `name` (set only on DLT rows) |
+  | `SchemaTable.description` / `row_count_estimate` | `DLT-ingested relational table 'X' from database 'db'.` / none | Python's `Relational table 'X' from db with N rows, loaded through dlt.` (N counts the rows of the cognified batch) / `N` |
+  | `cognee_cognify::extract_dlt_fk_edges` | `(chunks, documents, graph_db, db, id)` | `(documents, chunks, graph_db, vector_db, embedding_engine, db, id)` |
+
+  The hybrid chunk lane reads `DltRow_text` whenever it exists, and the entity
+  lane then adds `DltColumn_properties`, `SchemaTable_name` and
+  `SchemaRelationship_name` (that lane was already in place; this change is
+  the producer that fills it).
+
+  **Migration.** None is provided. A dataset cognified before this change has
+  its DLT rows in `DocumentChunk_text` and as `DocumentChunk` nodes with
+  edges on the document node; re-run `cognify` on it (after deleting the old
+  graph and vector rows) to get `DltRow` rows, schema and cell-value
+  collections. Callers of `extract_dlt_fk_edges` pass the run's chunks (only
+  rows that produced a `DltRow` chunk get row-level edges) plus the vector
+  store and embedding engine.
+
+
 - **`cognee-search`: session-turn preparation follows Python's capability
   model; the legacy feedback detector is gone; `summarize_context` is removed
   (SDK-1045).**

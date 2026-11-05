@@ -1324,9 +1324,21 @@ removed from returned passage objects and completion context. When true, only
 non-null keys named by `external_metadata_keys` are returned and rendered as
 `key: value` lines above a passage. Missing, malformed, and non-object values
 produce `external_metadata: null` and do not fail search. This PR is a consumer
-only: SDK-1057 owns copying metadata to normal chunk and DLT vector payloads.
+only: SDK-1057 owns copying metadata to normal chunk and DLT vector payloads
+(the `DltRow_text` payload carries Python's `IndexSchema` keys apart from
+`document_name`, `source_chunk_id` and `external_metadata`, plus Rust-only
+`name`, `cut_type` and `chunk_size`; a missing `external_metadata` reads as
+`null`, so the projection needs no change once the producer lands).
 Existing datasets need re-cognification after that producer lands; there is no
 backfill or migration in SDK-1045.
+
+**DLT rows.** Cognify indexes a DLT row (a document whose `external_metadata`
+has `source: "dlt"`) into `DltRow_text`, never `DocumentChunk_text`, as Python
+does. When `DltRow_text` exists the chunk lane searches it next to
+`DocumentChunk_text` and ranks both as one list, and the entity lane adds
+`DltColumn_properties`, `SchemaTable_name` and `SchemaRelationship_name`; a
+store without DLT data behaves as before. Graph completion also searches
+`DltRow_text`. Datasets cognified before this layout need a re-cognify.
 
 **Chunk-lane fusion.** `chunk_lane_fusion` chooses how the `DocumentChunk_text`
 lane and the `TextSummary_text` lane are combined:

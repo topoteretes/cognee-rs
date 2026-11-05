@@ -35,7 +35,7 @@ pub use data_input::DataInput;
 pub use data_point::DataPoint;
 pub use dataset::Dataset;
 pub use document::{Document, classify_documents, doc_type_for_extension};
-pub use document_chunk::DocumentChunk;
+pub use document_chunk::{DLT_ROW_TYPE, DocumentChunk};
 pub use edge_metadata::EdgeMetadata;
 pub use edge_type::EdgeType;
 pub use embedding::Embedding;

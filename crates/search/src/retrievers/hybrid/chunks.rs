@@ -27,7 +27,7 @@ use crate::types::{SearchError, SearchItem};
 use crate::utils::results::{display_value, payload_matches_node_filter, result_id};
 
 const DOCUMENT_CHUNK_TYPE: &str = "DocumentChunk";
-pub(crate) const DLT_ROW_TYPE: &str = "DltRow";
+pub(crate) use cognee_models::DLT_ROW_TYPE;
 const TEXT_SUMMARY_TYPE: &str = "TextSummary";
 const TEXT_FIELD: &str = "text";
 
@@ -48,7 +48,8 @@ pub(crate) async fn has_chunk_collection(vector_db: &dyn VectorDB) -> VectorDBRe
         .await
 }
 
-/// Whether SDK-1057's DLT row producer has populated this dataset.
+/// Whether cognify's DLT row producer has populated this dataset (it indexes
+/// rows into `DltRow_text`, not `DocumentChunk_text`).
 ///
 /// This is deliberately the single capability check shared by the chunk and
 /// entity lanes. The row collection is the producer contract's marker; the

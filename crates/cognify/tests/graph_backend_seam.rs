@@ -677,8 +677,9 @@ async fn backend_arity_mismatch_is_rejected() {
 
 // ── T9 ─────────────────────────────────────────────────────────────────────
 
-/// DLT chunks are filtered above the branch point, so the backend never sees
-/// them — their graph is built deterministically by `extract_dlt_fk_edges`.
+/// DLT row chunks (`DocumentChunk::dlt_row`, as the pipeline emits them) are
+/// filtered above the branch point, so the backend never sees them — their
+/// graph is built deterministically by `extract_dlt_fk_edges`.
 #[tokio::test]
 async fn dlt_chunks_never_reach_the_backend() {
     let dlt_doc = Uuid::new_v4();
@@ -686,7 +687,17 @@ async fn dlt_chunks_never_reach_the_backend() {
     let text_chunk = chunk(text_doc, "Alpha is real prose.");
     let text_chunk_id = text_chunk.base.id;
     let input = input_from(
-        vec![chunk(dlt_doc, "row 1 col a"), text_chunk],
+        vec![
+            DocumentChunk::dlt_row(
+                Uuid::new_v4(),
+                "t:1".into(),
+                "row 1 col a".into(),
+                3,
+                0,
+                dlt_doc,
+            ),
+            text_chunk,
+        ],
         vec![
             document_of_type(dlt_doc, "dlt_row"),
             text_document(text_doc),

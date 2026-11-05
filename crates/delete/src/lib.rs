@@ -93,6 +93,12 @@ const EDGE_TYPE_FIELD: &str = "relationship_name";
 /// what reaches a runtime graph schema's `{Model}_{field}` collections.
 const FALLBACK_VECTOR_COLLECTIONS: &[(&str, &str)] = &[
     ("DocumentChunk", "text"),
+    (cognee_models::DLT_ROW_TYPE, "text"),
+    ("DltColumn", "properties"),
+    ("SchemaTable", "name"),
+    ("SchemaTable", "description"),
+    ("SchemaRelationship", "name"),
+    ("SchemaRelationship", "description"),
     ("Entity", "name"),
     ("EntityType", "name"),
     ("TextSummary", "text"),

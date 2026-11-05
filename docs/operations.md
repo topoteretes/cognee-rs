@@ -225,7 +225,11 @@ Turns stored data into a knowledge graph in five stages: **classify** documents 
 summarize** (conditional) — one fused stage running both concurrently over the
 same chunks, matching Python's `extract_graph_and_summarize` → **add data
 points** (six vector collections + provenance to the relational DB) →
-**extract DLT FK edges**. Configurable via `CognifyConfig`
+**extract DLT FK edges**. A DLT row (a document whose `external_metadata` has
+`source: "dlt"`) is one `DltRow` chunk indexed into `DltRow_text`, not
+`DocumentChunk_text`; the last step adds its `SchemaTable`, `SchemaRelationship`
+and `DltColumn` nodes (vector collections `SchemaTable_*`,
+`SchemaRelationship_*`, `DltColumn_properties`) and the row edges. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
