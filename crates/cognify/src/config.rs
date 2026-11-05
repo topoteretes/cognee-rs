@@ -390,6 +390,14 @@ pub struct CognifyConfig {
     #[serde(default)]
     pub tolerate_summarization_failures: bool,
 
+    /// Record which chunk supports which graph edge
+    /// (`provenance_edge_evidence`), so a search with `include_references`
+    /// can cite the source of the edges it used. Default `true`
+    /// (Python `EDGE_EVIDENCE_ENABLED`, `edge_evidence/config.py`). Turning it
+    /// off only stops new capture; existing rows are still read.
+    #[serde(default = "default_edge_evidence_enabled")]
+    pub edge_evidence_enabled: bool,
+
     /// The share of chunks that may fail before a
     /// [`RollbackScope::FailedItems`] run is called failed.
     ///
@@ -564,6 +572,11 @@ fn default_chunk_failure_ratio_threshold() -> f64 {
     FailurePolicy::DEFAULT_CHUNK_FAILURE_RATIO_THRESHOLD
 }
 
+/// Serde default for [`CognifyConfig::edge_evidence_enabled`].
+fn default_edge_evidence_enabled() -> bool {
+    true
+}
+
 /// Serde default for [`CognifyConfig::failure_report_cap`].
 fn default_failure_report_cap() -> usize {
     FailurePolicy::DEFAULT_REPORT_CAP
@@ -599,6 +612,7 @@ impl Default for CognifyConfig {
             failure_stop: FailureStop::default(),
             rollback_scope: RollbackScope::default(),
             tolerate_summarization_failures: false,
+            edge_evidence_enabled: true,
             chunk_failure_ratio_threshold: default_chunk_failure_ratio_threshold(),
             failure_report_cap: default_failure_report_cap(),
 
@@ -789,6 +803,13 @@ impl CognifyConfig {
     /// Set axis 2 — what a failed run removes.
     pub fn with_rollback_scope(mut self, scope: RollbackScope) -> Self {
         self.rollback_scope = scope;
+        self
+    }
+
+    /// Set whether graph-edge evidence is captured (see
+    /// [`Self::edge_evidence_enabled`]).
+    pub fn with_edge_evidence(mut self, enabled: bool) -> Self {
+        self.edge_evidence_enabled = enabled;
         self
     }
 

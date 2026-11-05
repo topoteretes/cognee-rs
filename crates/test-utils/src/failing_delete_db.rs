@@ -45,6 +45,14 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::delete_data(self.inner.as_ref(), id).await
     }
 
+    async fn delete_edge_evidence(
+        &self,
+        dataset_id: Uuid,
+        data_id: Option<Uuid>,
+    ) -> Result<u64, DatabaseError> {
+        DeleteDb::delete_edge_evidence(self.inner.as_ref(), dataset_id, data_id).await
+    }
+
     async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError> {
         DeleteDb::count_data_dataset_links(self.inner.as_ref(), data_id).await
     }
