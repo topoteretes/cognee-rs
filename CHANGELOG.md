@@ -16,6 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+- **`feedback_weights` improve stage matches Python's bookkeeping (SDK-1051).**
+  - Implicit ratings count: a rated answer's weight update also reads the
+    `kind = "feedback"` session-context rows (`referenced_qa_rating` /
+    `referenced_qa_ids`, latest row wins) and moves the elements at
+    `alpha * 0.5`; an explicit `feedback_score` still wins. The reader is shared
+    with `update_user_preferences` (`cognee_session::build_implicit_rating_map`).
+  - Each row records `feedback_weights_applied_node_ids` / `_edge_ids` /
+    `_score` / `_source`, `feedback_weights_attempts` and
+    `feedback_weights_pruned_ids` (only this stage's keys are written). A retry
+    moves only the ids that did not move yet; a row re-rated with another score
+    or source starts over; ids missing from the graph keep the row pending, and
+    a row is marked done after `FEEDBACK_WEIGHTS_MAX_ATTEMPTS` (3) attempts.
+  - A rated row with no usable element id is marked done (`true`, was `false`).
+    A graph or session-store error on one row persists its bookkeeping, counts
+    the row as skipped and no longer aborts the stage.
+  - `FeedbackApplyResult` gains `done`, `errored`, `elements_moved`,
+    `elements_pruned` and `elements_failed`; the stage's counts gain
+    `entries_skipped`, `entries_done`, `entries_errored` and `elements_*`.
+    New public API in `cognee_cognify::memify`: `extract_feedback_qas`,
+    `apply_feedback_weights`, `resolve_feedback`, `FeedbackItem`,
+    `FeedbackSource`. Edge ids keep the `source|||target|||relation` format.
+
+
 ### Breaking changes
 
 - **`SessionQAEntry.memify_metadata` holds JSON values, not only bools (SDK-1051).**

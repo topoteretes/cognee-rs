@@ -27,7 +27,8 @@ use cognee_search::user_preferences::{
 };
 use cognee_session::{
     FEEDBACK_ENTRY_KIND, MIN_CANDIDATE_CONFIDENCE, SessionContextEntry, SessionContextRow,
-    SessionManager, SessionQAEntry, SessionQAUpdate, coerce_active_context_entries,
+    SessionManager, SessionQAEntry, SessionQAUpdate, build_implicit_rating_map,
+    coerce_active_context_entries,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -49,35 +50,14 @@ pub struct PreferenceUpdateResult {
     pub text_lines_added: usize,
 }
 
-/// A 1–5 rating, from a JSON integer (a bool or a float is no rating).
-fn valid_rating(value: Option<&Value>) -> Option<i32> {
-    let rating = value?.as_i64()?;
-    (1..=5)
-        .contains(&rating)
-        .then(|| i32::try_from(rating).ok())
-        .flatten()
-}
-
 /// qa id → the rating feedback rows inferred for it, the latest row winning
-/// (`rows` oldest first; Python's `build_rating_map`).
+/// (`rows` oldest first; Python's `build_rating_map`). The reader is shared
+/// with the `feedback_weights` stage: [`build_implicit_rating_map`].
 pub fn build_rating_map(feedback_rows: &[SessionContextRow]) -> HashMap<String, i32> {
-    let mut ratings = HashMap::new();
-    for row in feedback_rows {
-        let Some(rating) = valid_rating(row.get("referenced_qa_rating")) else {
-            continue;
-        };
-        for qa_id in row
-            .get("referenced_qa_ids")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .filter(|id| !id.is_empty())
-        {
-            ratings.insert(qa_id.to_string(), rating);
-        }
-    }
-    ratings
+    build_implicit_rating_map(feedback_rows)
+        .into_iter()
+        .map(|(qa_id, (rating, _))| (qa_id, rating))
+        .collect()
 }
 
 /// The turn's rating: explicit human feedback wins, else the inferred one.
@@ -590,7 +570,7 @@ mod tests {
     #[test]
     fn explicit_feedback_wins_and_the_latest_inferred_rating_counts() {
         let row = |rating: Value, ids: Value| -> SessionContextRow {
-            json!({"referenced_qa_rating": rating, "referenced_qa_ids": ids})
+            json!({"kind": "feedback", "referenced_qa_rating": rating, "referenced_qa_ids": ids})
                 .as_object()
                 .unwrap()
                 .clone()

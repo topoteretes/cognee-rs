@@ -22,6 +22,7 @@ mod context_entry;
 mod disabled_store;
 mod error;
 mod feedback;
+mod implicit_feedback;
 mod improve_lock;
 mod session_manager;
 mod session_store;
@@ -61,6 +62,7 @@ pub use context_entry::{
 };
 pub use disabled_store::DisabledSessionStore;
 pub use error::SessionError;
+pub use implicit_feedback::{build_implicit_rating_map, valid_rating};
 pub use improve_lock::{ImproveClaim, acquire_improve_lock_many, improve_lock_keys};
 pub use session_manager::SessionManager;
 pub use session_store::{SessionQAUpdate, SessionStore};
