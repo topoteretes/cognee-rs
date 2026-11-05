@@ -35,6 +35,11 @@ class MemoryMarshallingTest {
         // Happy path: a supplied datasetName serializes.
         JsonNode n = Json.tree(new ImproveOptions("ds").feedbackAlpha(0.2).toJson());
         assertEquals("ds", n.path("datasetName").asText());
+        JsonNode flags = Json.tree(new ImproveOptions("ds")
+                .buildGlobalContextIndex(true).buildTruthSubspace(true).runInBackground(true).toJson());
+        assertEquals(true, flags.path("buildGlobalContextIndex").asBoolean());
+        assertEquals(true, flags.path("buildTruthSubspace").asBoolean());
+        assertEquals(true, flags.path("runInBackground").asBoolean());
         // datasetName is required — a null/empty name is rejected fast at the API
         // boundary (clearer than a surprising later core-side VALIDATION_ERROR).
         assertThrows(IllegalArgumentException.class, () -> new ImproveOptions(null));

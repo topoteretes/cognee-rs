@@ -589,6 +589,16 @@ export interface CogneeImproveOptions {
   sessionIds?: string[];
   feedbackAlpha?: number;
   tenant?: string;
+  /** Opt in to the `global_context_index` stage. Default `false`. */
+  buildGlobalContextIndex?: boolean;
+  /** Opt in to the `build_truth_subspace` stage. Default `false`. */
+  buildTruthSubspace?: boolean;
+  /**
+   * Return a `running` result at once (`background: true`, `finished: false`,
+   * no stages) and run the improve as a process-wide background task.
+   * There is no per-run handle. Default `false`.
+   */
+  runInBackground?: boolean;
 }
 
 /** What one improve stage did (Python's `StageResult`). */

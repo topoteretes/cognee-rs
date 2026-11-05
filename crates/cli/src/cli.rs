@@ -801,6 +801,14 @@ pub struct ImproveArgs {
     #[arg(long = "feedback-alpha")]
     pub feedback_alpha: Option<f64>,
 
+    /// Opt in to the `global_context_index` stage.
+    #[arg(long = "build-global-context-index")]
+    pub build_global_context_index: bool,
+
+    /// Opt in to the `build_truth_subspace` stage (needs `--session-id`).
+    #[arg(long = "build-truth-subspace")]
+    pub build_truth_subspace: bool,
+
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
 }

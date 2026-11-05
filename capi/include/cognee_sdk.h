@@ -666,7 +666,13 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
  *                  improve(dataset=<UUID>)),
  *   "sessionIds"  (string array, optional),
  *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
- *   "tenant"      (UUID string, optional).
+ *   "tenant"      (UUID string, optional),
+ *   "buildGlobalContextIndex" (bool, default false: opt in to that stage),
+ *   "buildTruthSubspace"      (bool, default false: opt in to that stage),
+ *   "runInBackground"         (bool, default false: return a "running" result
+ *                  at once -- background true, finished false, no stages --
+ *                  and run the improve as a process-wide background task.
+ *                  No per-run handle).
  *
  * result_json on success: ImproveResult JSON object (see wire shape above).
  *

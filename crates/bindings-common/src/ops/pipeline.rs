@@ -139,7 +139,7 @@ fn opt_usize(opts: &serde_json::Value, key: &str) -> Result<Option<usize>, SdkEr
 }
 
 /// A boolean option; a present non-boolean is an error.
-fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkError> {
+pub(crate) fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkError> {
     let Some(value) = opt_value(opts, key) else {
         return Ok(None);
     };

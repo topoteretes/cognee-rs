@@ -160,6 +160,14 @@ class ImproveOpts(TypedDict, total=False):
     session_ids: list[str]
     feedback_alpha: float
     tenant: str
+    # Opt in to the ``global_context_index`` stage (default ``False``).
+    build_global_context_index: bool
+    # Opt in to the ``build_truth_subspace`` stage (default ``False``).
+    build_truth_subspace: bool
+    # Return a ``running`` result at once (``background`` true, ``finished``
+    # false, no stages) and run the improve as a process-wide background task.
+    # No per-run handle (default ``False``).
+    run_in_background: bool
 
 
 class ForgetTarget(TypedDict, total=False):

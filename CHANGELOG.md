@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Added
+
+- **`improve` binding opts `runInBackground`, `buildGlobalContextIndex`,
+  `buildTruthSubspace` (SDK-1051).** The TS, Python, Java and C bindings
+  forward them, as Python's `improve()` does. With `runInBackground` the op
+  returns a `running` result at once (`background: true`, `finished: false`, no
+  stages) and the run continues as a process-wide background task, which the
+  `wait_for_background_tasks` op awaits (no per-run handle). The CLI gains
+  `--build-global-context-index` and `--build-truth-subspace`.
+
 ### Changed
 
 - **`feedback_weights` improve stage matches Python's bookkeeping (SDK-1051).**
