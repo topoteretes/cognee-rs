@@ -83,6 +83,7 @@
     "improve.stages_disabled",
     "improve.trace_window_steps",
     "improve.trace_windows_per_run",
+    "llm.answer_streaming",
     "llm.anthropic.base_url",
     "llm.api_key",
     "llm.api_version",
@@ -233,6 +234,7 @@
     "llm.structured_output_mode",
     "llm.temperature",
     "llm.streaming",
+    "llm.answer_streaming",
     "llm.max_completion_tokens",
     "llm.max_retries",
     "llm.network_retries",
@@ -7465,6 +7467,53 @@
   "set improve.trace_windows_per_run <- {\"a\":1}": {
     "err": true
   },
+  "set llm.answer_streaming <- \"\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- -1": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 0": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 1": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 1.5": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 70000": {
+    "err": true
+  },
+  "set llm.answer_streaming <- [1]": {
+    "err": true
+  },
+  "set llm.answer_streaming <- false": {
+    "ok": {}
+  },
+  "set llm.answer_streaming <- null": {
+    "err": true
+  },
+  "set llm.answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "set llm.answer_streaming <- {\"a\":1}": {
+    "err": true
+  },
   "set llm.anthropic.base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -9093,6 +9142,53 @@
     "err": true
   },
   "set llm.temperature <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- -1": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 0": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 1": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 1.5": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 70000": {
+    "err": true
+  },
+  "set llm_answer_streaming <- [1]": {
+    "err": true
+  },
+  "set llm_answer_streaming <- false": {
+    "ok": {}
+  },
+  "set llm_answer_streaming <- null": {
+    "err": true
+  },
+  "set llm_answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "set llm_answer_streaming <- {\"a\":1}": {
     "err": true
   },
   "set llm_api_key <- \"\"": {
@@ -16175,6 +16271,13 @@
       "relational.port": 1
     }
   },
+  "unset llm.answer_streaming": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset llm.anthropic.base_url": {
     "ok": {
       "chunk_size": 7,
@@ -16392,6 +16495,13 @@
     }
   },
   "unset llm.temperature": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset llm_answer_streaming": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
