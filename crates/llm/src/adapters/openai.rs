@@ -28,6 +28,7 @@ use cognee_utils::tracing_keys::{COGNEE_LLM_MODEL, COGNEE_LLM_PROVIDER};
 
 use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::{Llm, StructuredOutputValidator};
+use crate::token_sink::DeltaSink;
 use crate::transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 use crate::types::{
     GenerationOptions, GenerationResponse, Message, MessageRole, StructuredOutputMode, TokenUsage,
@@ -541,6 +542,9 @@ pub struct OpenAIAdapter {
     vision_model: Option<String>,
     /// Dump every request/response body to stderr (`llm.debug_requests`).
     debug_requests: bool,
+    /// Resolved `llm.streaming` setting: lets an answer call stream its text
+    /// deltas into a token sink ([`Llm::generate_streaming`]).
+    streaming: bool,
     /// Extra request parameters merged into every chat-completion request body,
     /// mirroring Python cognee's `LLM_ARGS` / `llm_config.llm_args`, which the
     /// litellm adapter merges into each call as `{**self.llm_args, **kwargs}`
@@ -903,6 +907,7 @@ impl OpenAIAdapter {
             transcription_model,
             vision_model: None,
             debug_requests: false,
+            streaming: false,
             extra_args: serde_json::Map::new(),
             default_max_tokens: Some(Self::DEFAULT_MAX_COMPLETION_TOKENS),
             default_temperature: None,
@@ -1219,6 +1224,13 @@ impl OpenAIAdapter {
     #[must_use]
     pub fn with_debug_requests(mut self, enabled: bool) -> Self {
         self.debug_requests = enabled;
+        self
+    }
+
+    /// Allow answer calls to stream their text deltas (`llm.streaming`).
+    #[must_use]
+    pub fn with_streaming(mut self, enabled: bool) -> Self {
+        self.streaming = enabled;
         self
     }
 
@@ -1604,6 +1616,21 @@ impl OpenAIAdapter {
         request_body: Value,
         deadline: Option<Instant>,
     ) -> LlmResult<OpenAIResponse> {
+        self.send_chat_request_inner(request_body, deadline, None)
+            .await
+    }
+
+    /// The chat-completions transport shared by the blocking and the streaming
+    /// path. With `stream` set the request is a `stream: true` one and the
+    /// success body is consumed as SSE, each content delta pushed into the sink;
+    /// the result is folded into the same [`OpenAIResponse`] a blocking call
+    /// yields, so the retry ladder, status mapping and pacing are shared.
+    async fn send_chat_request_inner(
+        &self,
+        request_body: Value,
+        deadline: Option<Instant>,
+        stream: Option<&dyn DeltaSink>,
+    ) -> LlmResult<OpenAIResponse> {
         let url = self.endpoint_url("chat/completions");
         tracing::Span::current().record("url", url.as_str());
         let debug_enabled = self.debug_requests;
@@ -1778,6 +1805,9 @@ impl OpenAIAdapter {
             }
 
             attempt += 1;
+            if let Some(sink) = stream {
+                sink.begin_attempt();
+            }
 
             let response = match self
                 .apply_auth(self.client.post(&url))
@@ -1879,6 +1909,24 @@ impl OpenAIAdapter {
                 continue;
             }
 
+            if let Some(sink) = stream {
+                match Self::consume_sse(response, sink).await {
+                    Ok(folded) => return Ok(folded),
+                    Err(e) => {
+                        // A failure mid-stream retries the whole call, as Python's
+                        // tenacity does; `begin_attempt` then emits `reset`.
+                        last_error = e;
+                        if budget.is_exhausted(
+                            attempt,
+                            started.elapsed().saturating_sub(queued_for_permit),
+                        ) {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+
             let response_body = response.text().await.map_err(|e| {
                 LlmError::DeserializationError(format!("Failed to read response body: {e}"))
             })?;
@@ -1900,6 +1948,96 @@ impl OpenAIAdapter {
             started.elapsed().as_secs_f64(),
             last_error
         )))
+    }
+
+    /// The chat-completions request body for a plain-text generation, shared by
+    /// the blocking and the streaming path so the two cannot drift.
+    fn build_generate_request(
+        &self,
+        messages: &[Message],
+        options: Option<GenerationOptions>,
+    ) -> Value {
+        let opts = self.resolve_options(options);
+
+        let mut request_body = json!({
+            "model": self.model,
+            "messages": Self::convert_messages(messages),
+        });
+
+        // Add optional parameters. Reasoning models (gpt-5*/o1*/o3*/o4*)
+        // reject sampling overrides and only accept `max_completion_tokens`.
+        if !self.is_reasoning_model() {
+            if let Some(temp) = opts.temperature {
+                request_body["temperature"] = json!(temp);
+            }
+            if let Some(top_p) = opts.top_p {
+                request_body["top_p"] = json!(top_p);
+            }
+            if let Some(freq_penalty) = opts.frequency_penalty {
+                request_body["frequency_penalty"] = json!(freq_penalty);
+            }
+            if let Some(pres_penalty) = opts.presence_penalty {
+                request_body["presence_penalty"] = json!(pres_penalty);
+            }
+        }
+        self.write_max_tokens(&mut request_body, opts.max_tokens);
+        if let Some(stop) = opts.stop
+            && !stop.is_empty()
+        {
+            request_body["stop"] = json!(stop);
+        }
+
+        if self.should_disable_thinking() {
+            request_body["think"] = json!(false);
+            request_body["reasoning"] = json!({"effort": "none"});
+        }
+
+        request_body
+    }
+
+    /// Fold a chat response into a [`GenerationResponse`] (first choice).
+    fn generation_response(response: OpenAIResponse) -> LlmResult<GenerationResponse> {
+        let choice = response
+            .choices
+            .first()
+            .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
+
+        Ok(GenerationResponse {
+            content: choice.message.content.clone().unwrap_or_default(),
+            model: response.model,
+            finish_reason: choice.finish_reason.clone(),
+            usage: response.usage.map(|u| TokenUsage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+            }),
+        })
+    }
+
+    /// Read a `stream: true` chat-completions body, pushing each `delta.content`
+    /// string into `sink`, and fold it into one [`OpenAIResponse`].
+    ///
+    /// Mirrors Python's `stream_text_completion`: chunks with no `choices` (the
+    /// trailing usage chunk) and chunks without a text delta are skipped, and an
+    /// empty answer is returned, never raised (the blocking path also yields `""`).
+    async fn consume_sse(
+        response: reqwest::Response,
+        sink: &dyn DeltaSink,
+    ) -> LlmResult<OpenAIResponse> {
+        use futures_util::StreamExt;
+
+        let mut parser = SseFold::default();
+        let mut bytes = response.bytes_stream();
+        while let Some(chunk) = bytes.next().await {
+            let chunk = chunk
+                .map_err(|e| LlmError::NetworkError(format!("LLM stream interrupted: {e}")))?;
+            parser.feed(&chunk, sink);
+            if parser.done {
+                break;
+            }
+        }
+        parser.finish(sink);
+        Ok(parser.into_response())
     }
 
     /// Convert our Message type to OpenAI's format
@@ -2089,59 +2227,34 @@ impl Llm for OpenAIAdapter {
         messages: Vec<Message>,
         options: Option<GenerationOptions>,
     ) -> LlmResult<GenerationResponse> {
-        let opts = self.resolve_options(options);
-
-        let mut request_body = json!({
-            "model": self.model,
-            "messages": Self::convert_messages(&messages),
-        });
-
-        // Add optional parameters. Reasoning models (gpt-5*/o1*/o3*/o4*)
-        // reject sampling overrides and only accept `max_completion_tokens`.
-        if !self.is_reasoning_model() {
-            if let Some(temp) = opts.temperature {
-                request_body["temperature"] = json!(temp);
-            }
-            if let Some(top_p) = opts.top_p {
-                request_body["top_p"] = json!(top_p);
-            }
-            if let Some(freq_penalty) = opts.frequency_penalty {
-                request_body["frequency_penalty"] = json!(freq_penalty);
-            }
-            if let Some(pres_penalty) = opts.presence_penalty {
-                request_body["presence_penalty"] = json!(pres_penalty);
-            }
-        }
-        self.write_max_tokens(&mut request_body, opts.max_tokens);
-        if let Some(stop) = opts.stop
-            && !stop.is_empty()
-        {
-            request_body["stop"] = json!(stop);
-        }
-
-        if self.should_disable_thinking() {
-            request_body["think"] = json!(false);
-            request_body["reasoning"] = json!({"effort": "none"});
-        }
-
+        let request_body = self.build_generate_request(&messages, options);
         let response = self.call_api(request_body).await?;
+        Self::generation_response(response)
+    }
 
-        // Extract the first choice
-        let choice = response
-            .choices
-            .first()
-            .ok_or_else(|| LlmError::InvalidResponse("No choices in response".to_string()))?;
-
-        Ok(GenerationResponse {
-            content: choice.message.content.clone().unwrap_or_default(),
-            model: response.model,
-            finish_reason: choice.finish_reason.clone(),
-            usage: response.usage.map(|u| TokenUsage {
-                prompt_tokens: u.prompt_tokens,
-                completion_tokens: u.completion_tokens,
-                total_tokens: u.total_tokens,
-            }),
-        })
+    async fn generate_streaming(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+        sink: &dyn DeltaSink,
+    ) -> LlmResult<GenerationResponse> {
+        let mut request_body = self.build_generate_request(&messages, options);
+        request_body["stream"] = json!(true);
+        // Without `include_usage` an OpenAI-compatible stream carries no usage
+        // block, so any accounting that reads it would see streamed answers as
+        // free (Python `stream_text_completion`).
+        request_body["stream_options"] = json!({ "include_usage": true });
+        self.apply_extra_args(&mut request_body);
+        // `apply_extra_args` only fills absent keys; re-assert the stream keys in
+        // case `LLM_ARGS` carried its own `stream_options`.
+        request_body["stream"] = json!(true);
+        if let Some(options) = request_body["stream_options"].as_object_mut() {
+            options.insert("include_usage".to_string(), json!(true));
+        }
+        let response = self
+            .send_chat_request_inner(request_body, None, Some(sink))
+            .await?;
+        Self::generation_response(response)
     }
 
     async fn create_structured_output_with_messages_raw(
@@ -2178,6 +2291,10 @@ impl Llm for OpenAIAdapter {
 
     fn supports_streaming(&self) -> bool {
         true
+    }
+
+    fn streaming_enabled(&self) -> bool {
+        self.streaming
     }
 
     fn supports_function_calling(&self) -> bool {
@@ -3667,6 +3784,101 @@ impl Transcriber for OpenAIAdapter {
 
     fn transcription_model(&self) -> &str {
         &self.transcription_model
+    }
+}
+
+/// Incremental parser for an OpenAI-compatible `text/event-stream` chat body.
+#[derive(Default)]
+struct SseFold {
+    pending: Vec<u8>,
+    content: String,
+    model: String,
+    finish_reason: Option<String>,
+    usage: Option<OpenAIUsage>,
+    done: bool,
+}
+
+impl SseFold {
+    fn feed(&mut self, bytes: &[u8], sink: &dyn DeltaSink) {
+        self.pending.extend_from_slice(bytes);
+        while let Some(newline) = self.pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=newline).collect();
+            self.line(&line, sink);
+            if self.done {
+                return;
+            }
+        }
+    }
+
+    /// Flush a final line that arrived without a trailing newline.
+    fn finish(&mut self, sink: &dyn DeltaSink) {
+        if !self.done && !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.line(&line, sink);
+        }
+    }
+
+    fn line(&mut self, raw: &[u8], sink: &dyn DeltaSink) {
+        let line = String::from_utf8_lossy(raw);
+        let line = line.trim();
+        let Some(data) = line.strip_prefix("data:") else {
+            return; // comments (": keepalive"), `event:` and blank lines
+        };
+        let data = data.trim();
+        if data == "[DONE]" {
+            self.done = true;
+            return;
+        }
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        if let Some(model) = chunk["model"].as_str()
+            && self.model.is_empty()
+        {
+            self.model = model.to_string();
+        }
+        if let Some(usage) = chunk.get("usage").filter(|u| u.is_object())
+            && let Ok(usage) = serde_json::from_value::<OpenAIUsage>(usage.clone())
+        {
+            self.usage = Some(usage);
+        }
+        // The trailing usage chunk has `choices == []`.
+        let Some(choice) = chunk["choices"].as_array().and_then(|c| c.first()) else {
+            return;
+        };
+        if let Some(reason) = choice["finish_reason"].as_str() {
+            self.finish_reason = Some(reason.to_string());
+        }
+        // Role-only and finish chunks carry no content; list-shaped
+        // (content-block) deltas are skipped rather than joined.
+        if let Some(piece) = choice["delta"]["content"].as_str()
+            && !piece.is_empty()
+        {
+            self.content.push_str(piece);
+            sink.delta(piece);
+        }
+    }
+
+    fn into_response(self) -> OpenAIResponse {
+        OpenAIResponse {
+            id: String::new(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: self.model,
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: Some(self.content),
+                    reasoning: None,
+                    refusal: None,
+                    tool_calls: None,
+                    function_call: None,
+                },
+                finish_reason: self.finish_reason,
+            }],
+            usage: self.usage,
+        }
     }
 }
 

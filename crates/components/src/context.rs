@@ -307,6 +307,11 @@ pub struct LlmInputs {
     /// built-in adapter streams (the `Llm` trait has no streaming call), so
     /// they ignore it; it is lowered for externally registered factories.
     pub streaming: bool,
+    /// Stream the answer's tokens into a token sink (`llm.answer_streaming`,
+    /// Python's `llm_answer_streaming`). Lowered into the OpenAI-compatible
+    /// adapter, which then streams a concurrent session turn's plain-text answer;
+    /// the other built-in adapters ignore it.
+    pub answer_streaming: bool,
 }
 
 /// Caller-supplied AWS parameters for the Bedrock LLM adapter and embedding

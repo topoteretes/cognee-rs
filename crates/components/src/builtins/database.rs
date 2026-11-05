@@ -169,6 +169,7 @@ mod tests {
                 api_version: String::new(),
                 debug_requests: false,
                 streaming: false,
+                answer_streaming: false,
                 temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),

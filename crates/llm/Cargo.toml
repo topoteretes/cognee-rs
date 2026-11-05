@@ -75,6 +75,9 @@ rand = { workspace = true }
 
 tracing.workspace = true
 
+# SSE body consumption for the streaming answer path
+futures-util.workspace = true
+
 # Shared tracing-key constants
 cognee-utils = { path = "../utils", version = "0.2.0" }
 
