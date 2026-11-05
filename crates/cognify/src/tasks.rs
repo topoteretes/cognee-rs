@@ -67,7 +67,7 @@ use crate::failure::{
 use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
     ArtifactProducers, Expansion, GraphEdgePair, GraphNodePair, TimestampNode,
-    deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
+    deduplicate_nodes_and_edges, expand_and_partition_extracted_graphs,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::rollback;
@@ -1048,7 +1048,7 @@ pub async fn extract_graph_from_data(
         // LLM-free path. Same batching, the same ordering guarantee, the same
         // per-chunk failure records and the same FailFast abort as the LLM
         // loop below, so the abort-time partition and everything from
-        // `retrieve_existing_edges` down is reused unchanged.
+        // expansion down is reused unchanged.
         let outcome = extract_graphs_via_backend(
             backend.0.as_ref(),
             &chunks_for_extraction,
@@ -1112,7 +1112,7 @@ pub async fn extract_graph_from_data(
             //
             // Completion order is not input order, so each future carries its index
             // and the batch is re-sorted below. Order still matters downstream:
-            // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
+            // `all_graphs` feeds expansion and edge dedup, and the failure
             // records below must be deterministic for a given input. Same shape as
             // `SummaryExtractor::summarize_chunks`.
             //
@@ -1300,14 +1300,6 @@ pub async fn extract_graph_from_data(
             }
         };
 
-    // Database deduplication — query for existing edges.
-    //
-    // Borrow the graphs out of `all_graphs` rather than deep-cloning every one
-    // of them (SDK-507): the callee only reads three `&str` fields per edge, so
-    // a second full copy of every extracted graph bought nothing.
-    let existing_edges_set =
-        retrieve_existing_edges(graph_db.as_ref(), all_graphs.iter().map(|(_, g)| g)).await?;
-
     // Merge and deduplicate graphs (with DB awareness).
     //
     // The string-form `user_id` is the best label we have at this
@@ -1348,6 +1340,10 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
+    // Expansion, then the database dedup check on the identities expansion
+    // stores the edges under, so the lookup cannot drift from what is written
+    // (#75, #76). Edges the graph already holds are not written again but are
+    // still claimed — see `partition_existing_edges`.
     let Expansion {
         nodes,
         edges,
@@ -1356,25 +1352,26 @@ pub async fn extract_graph_from_data(
         stats: edge_resolution,
         timestamps,
         ..
-    } = expand_extracted_graphs(
+    } = expand_and_partition_extracted_graphs(
+        graph_db.as_ref(),
         all_graphs,
         input.dataset_id,
         &chunk_node_sets,
         &chunk_importance_weights,
-        &existing_edges_set,
         ontology_resolver.as_ref(),
         user_label_owned.as_deref(),
         task_rank,
     )
-    .await;
+    .await?;
 
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
     // leaving one log line per dropped edge as the only evidence.
     //
-    // This counts endpoint resolution only. An edge that resolves here can still
-    // be filtered out downstream for already existing in the database, so the
-    // resolved figure is an upper bound on what this pass goes on to emit.
+    // This counts endpoint resolution only. An edge that resolved can also have
+    // been held back above because the database already stores it (it is then
+    // claimed, not written), so the resolved figure is an upper bound on what
+    // this pass goes on to emit.
     //
     // The cross-chunk fields are not a loss report. They price SDK-507 tier 2:
     // resolution is run-global today, so an endpoint can match a node declared
@@ -1440,7 +1437,7 @@ pub async fn extract_graph_from_data(
         &dedup_result.unique_edges,
         // Edges an earlier run already put in the graph, which this run
         // produced too. They get ownership rows and nothing else — see the
-        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
+        // `existing_edges` note on `partition_existing_edges`. The
         // row is what makes `get_unique_edges_for_data` stop calling the edge
         // exclusive to the earlier file, so deleting that file no longer takes
         // the edge away from this one.
@@ -7017,6 +7014,142 @@ mod tests {
     /// measures their dedup rather than this function's, and stays green
     /// against a duplicate pair that straddles a batch boundary — the latent
     /// bug at scale the doc comment names.
+    /// Canonicalizes the individual `Einstein` to `albert_einstein` and pulls
+    /// in `albert_einstein -is_a-> scientist`, an edge only the ontology yields.
+    struct ScientistOntology;
+
+    impl cognee_ontology::OntologyResolver for ScientistOntology {
+        fn find_closest_match(
+            &self,
+            name: &str,
+            category: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok((name == "Einstein" && category == "individuals")
+                .then(|| "albert_einstein".to_string()))
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            use cognee_ontology::{AttachedOntologyNode, NodeCategory};
+            if node_name != "Einstein" || node_type != "individuals" {
+                return Ok((vec![], vec![], None));
+            }
+            let scientist = AttachedOntologyNode {
+                uri: "http://test.org#scientist".to_string(),
+                name: "scientist".to_string(),
+                category: NodeCategory::Classes,
+            };
+            let root = AttachedOntologyNode {
+                uri: "http://test.org#albert_einstein".to_string(),
+                name: "albert_einstein".to_string(),
+                category: NodeCategory::Individuals,
+            };
+            let is_a = (
+                "albert_einstein".to_string(),
+                "is_a".to_string(),
+                "scientist".to_string(),
+            );
+            Ok((vec![scientist], vec![is_a], Some(root)))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// A stored ontology edge that a later file's run yields again is claimed,
+    /// not rewritten (Python never re-attaches an existing edge either), and the
+    /// claim belongs to that later file. Ontology edges had no producing chunk,
+    /// so the claim row used to fall back to a nil `data_id` and the later file
+    /// never owned the edge it relies on.
+    #[tokio::test]
+    async fn a_stored_ontology_edge_is_claimed_by_the_file_that_yields_it_again() {
+        use crate::fact_extraction::{KnowledgeGraph, Node};
+        use cognee_graph::{EdgeData, MockGraphDB};
+
+        let graph = || KnowledgeGraph {
+            nodes: vec![Node {
+                id: "einstein".to_string(),
+                name: "Einstein".to_string(),
+                node_type: "Person".to_string(),
+                description: "A physicist.".to_string(),
+            }],
+            edges: vec![],
+        };
+        let is_a = (
+            Entity::id_for("albert_einstein"),
+            EntityType::id_for("scientist"),
+            "is_a".to_string(),
+        );
+        let graph_db = MockGraphDB::new();
+        let dataset_id = Uuid::new_v4();
+        let (no_node_sets, no_weights) = (HashMap::new(), HashMap::new());
+        let expand = |chunk_id: Uuid| {
+            expand_and_partition_extracted_graphs(
+                &graph_db,
+                vec![(chunk_id, graph())],
+                dataset_id,
+                &no_node_sets,
+                &no_weights,
+                &ScientistOntology,
+                None,
+                None,
+            )
+        };
+
+        // Run 1 (file A) writes the ontology edge.
+        let first = expand(Uuid::new_v4()).await.expect("run 1 expands");
+        assert!(first.edges.iter().any(|e| e.dedup_key() == is_a));
+        let written: Vec<EdgeData> = first
+            .edges
+            .iter()
+            .map(|e| {
+                let (source, target, relationship) = e.dedup_key();
+                (
+                    source.to_string(),
+                    target.to_string(),
+                    relationship,
+                    HashMap::new(),
+                )
+            })
+            .collect();
+        graph_db
+            .add_edges(&written)
+            .await
+            .expect("store run 1's edges");
+
+        // Run 2 (file B) yields it again.
+        let (chunk_b, file_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let second = expand(chunk_b).await.expect("run 2 expands");
+        assert!(
+            second.edges.iter().all(|e| e.dedup_key() != is_a),
+            "a stored ontology edge is not written again"
+        );
+        let claimed: Vec<GraphEdgePair> = second
+            .claimed_existing_edges
+            .into_iter()
+            .filter(|e| e.dedup_key() == is_a)
+            .collect();
+        assert_eq!(claimed.len(), 1, "it is claimed instead");
+
+        let rows = semantic_edge_provenance_rows(
+            LedgerIdentity::new(None, Some(Uuid::new_v4()), dataset_id, Some(Uuid::new_v4())),
+            &claimed,
+            &HashMap::from([(chunk_b, file_b)]),
+            &HashMap::new(),
+            &second.producers,
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.data_id).collect::<Vec<_>>(),
+            vec![file_b],
+            "the claim row names file B, not nil"
+        );
+    }
+
     #[test]
     fn producing_data_ids_deduplicates_and_keeps_first_seen_order() {
         let file_a = Uuid::new_v4();
@@ -9907,12 +10040,11 @@ mod tests {
         let dataset_id = Uuid::new_v4();
         let resolver = NoOpOntologyResolver::new();
 
-        let (_nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
+        let (_nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, graph)],
             dataset_id,
             &HashMap::new(),
             &HashMap::new(),
-            &HashSet::new(),
             &resolver,
             None,
             None,
@@ -9951,12 +10083,11 @@ mod tests {
             }],
         };
 
-        let (nodes, edges, _claimed_edges, _producers) = expand_with_nodes_and_edges(
+        let (nodes, edges, _producers) = expand_with_nodes_and_edges(
             vec![(Uuid::new_v4(), graph)],
             Uuid::new_v4(),
             &HashMap::new(),
             &HashMap::new(),
-            &HashSet::new(),
             &NoOpOntologyResolver::new(),
             None,
             None,

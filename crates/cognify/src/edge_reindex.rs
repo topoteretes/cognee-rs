@@ -11,9 +11,9 @@
 //! Those orphans are permanent under every reachable configuration, because the
 //! retry does not re-emit them:
 //!
-//! - `retrieve_existing_edges` finds the edge already in the graph, so
-//!   `expand_with_nodes_and_edges` routes it into `claimed_existing_edge_map`
-//!   rather than the write bucket (`graph_integration/expansion.rs:844,867-870`).
+//! - `partition_existing_edges` finds the edge already in the graph, so it
+//!   routes it into the claim-only bucket rather than the write bucket
+//!   (`graph_integration/db_deduplication.rs`).
 //! - `extract_graph_from_data` returns only `dedup_result.unique_edges`, and
 //!   that is what feeds `edge_type_counts`, `edge_types` and the `index_points`
 //!   call for the `EdgeType` collection. The claimed-existing bucket is written
