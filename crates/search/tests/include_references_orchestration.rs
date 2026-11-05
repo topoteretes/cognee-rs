@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_llm::Message;
 use cognee_session::{FsSessionStore, SessionContext, SessionManager};
 use serde_json::json;
 use uuid::Uuid;
@@ -92,6 +93,23 @@ impl SearchRetriever for ChunkRetriever {
         } else {
             output
         }
+    }
+
+    /// A prompt that quotes the chunk, so an Evidence block appended to it
+    /// by mistake would ground and show up.
+    async fn completion_messages(
+        &self,
+        query: &str,
+        context: &SearchContext,
+        _session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<Option<Vec<Message>>, SearchError> {
+        let text = context
+            .iter()
+            .filter_map(|item| item.payload["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(Some(vec![Message::user(format!("{query}\n{text}"))]))
     }
 }
 
@@ -326,6 +344,29 @@ async fn per_dataset_fanout_collects_and_cites_each_datasets_own_chunks() {
         .map(|r| r.artifact_id.clone())
         .collect();
     assert_eq!(ids, [a.to_string(), b.to_string()]);
+}
+
+/// An `only_context` fan-out returns each dataset's prompt: evidence is
+/// collected, but no Evidence block is appended to a prompt (Python's
+/// `only_context` run never calls `append_references`).
+#[tokio::test]
+async fn only_context_fanout_appends_no_text_to_the_prompts() {
+    let (a, b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+    let orchestrator = orchestrator(ChunkRetriever).with_per_dataset_storage(true);
+    let mut preview = request(SearchType::RagCompletion, true);
+    preview.only_context = Some(true);
+    preview.dataset_ids = Some(vec![a, b]);
+
+    let results = orchestrator.search_datasets(&preview).await.unwrap();
+    assert_eq!(results.len(), 2);
+    for (result, dataset) in results.iter().zip([a, b]) {
+        let response = &result.response;
+        let prompt = text(&response.result);
+        assert!(prompt.contains("Revenue grew 12 percent"), "{prompt}");
+        assert!(!prompt.contains("Evidence:"), "{prompt}");
+        assert_eq!(response.evidence.len(), 1);
+        assert_eq!(response.evidence[0].dataset_id, Some(dataset.to_string()));
+    }
 }
 
 /// Python appends references after the session-aware completion saved the

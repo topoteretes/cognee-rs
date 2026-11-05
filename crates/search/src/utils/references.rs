@@ -96,13 +96,14 @@ fn provenance_suffix(data_id: Option<&str>, chunk_id: Option<&str>) -> String {
 }
 
 /// A stable chunk id for dedup: the item id, else `payload["id"]` (Python
-/// `_chunk_id`).
+/// `_chunk_id`). An empty id is falsy in Python: the dedup key falls back to
+/// `document#number` and the provenance suffix omits it, so it reads as `None`.
 fn chunk_id(item: &SearchItem) -> Option<String> {
     if let Some(id) = item.id {
         return Some(id.to_string());
     }
     match item.payload.get("id") {
-        Some(Value::String(id)) => Some(id.clone()),
+        Some(Value::String(id)) => (!id.is_empty()).then(|| id.clone()),
         Some(Value::Null) | None => None,
         Some(other) => Some(other.to_string()),
     }
@@ -349,6 +350,20 @@ mod tests {
         let block =
             format_chunk_references(&[doc("a", 0, "first"), doc("a", 0, "second")], None, 5);
         assert_eq!(block.matches("- chunk").count(), 1);
+    }
+
+    /// An empty `payload.id` is falsy in Python: it neither dedups nor shows
+    /// in the provenance suffix.
+    #[test]
+    fn empty_payload_id_is_treated_as_missing() {
+        let blank = |text: &str| {
+            item(json!({"id": "", "document_name": "d", "chunk_index": 0, "text": text}))
+        };
+        let other = item(json!({"id": "", "document_name": "d", "chunk_index": 1, "text": "y"}));
+        assert_eq!(
+            format_chunk_references(&[blank("x"), blank("again"), other], None, 5),
+            "Evidence:\n- chunk 1 of document d: \"x\"\n- chunk 2 of document d: \"y\""
+        );
     }
 
     #[test]

@@ -2194,12 +2194,16 @@ fn context_evidence(
 /// Apply the retriever's reference text to each dataset answer of a fan-out,
 /// once the merged answer has been saved to the session. Each answer is
 /// grounded in its own dataset's context.
+///
+/// An `only_context` fan-out carries prompts (or bare context), not answers:
+/// Python's `only_context` run never reaches `append_references`, so nothing
+/// is appended there.
 fn append_reference_text(
     retriever: &crate::retrievers::SearchRetrieverRef,
     request: &SearchRequest,
     results: &mut [DatasetSearchResult],
 ) {
-    if !request.include_references {
+    if !request.include_references || request.only_context() {
         return;
     }
     let params = SearchParams::from(request);
