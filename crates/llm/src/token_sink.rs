@@ -377,7 +377,8 @@ pub async fn promote_answer_lane<F: Future>(future: F) -> F::Output {
 /// `generate_answer` + `answer_scope`).
 ///
 /// Behaves exactly like [`Llm::generate`] unless every gate holds: a sink is
-/// promoted for this task, the adapter's resolved `llm.streaming` setting is on,
+/// promoted for this task, the adapter's resolved `llm.answer_streaming` setting
+/// is on (Python `llm_answer_streaming`),
 /// the adapter supports streaming, and the sink is not already closed. Callers
 /// must use it only for plain-text answers; a structured response never streams.
 ///
