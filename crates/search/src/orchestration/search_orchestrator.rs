@@ -14,6 +14,7 @@ use crate::types::{
     SearchContext, SearchError, SearchOutput, SearchParams, SearchPrompt, SearchRequest,
     SearchResponse, SearchType,
 };
+use crate::utils::evidence::append_source_evidence_text;
 use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::{Llm, Message, MessageRole};
 use cognee_models::dataset_scope::with_dataset;
@@ -286,6 +287,34 @@ impl SearchOrchestrator {
     pub fn with_database(mut self, database: Arc<dyn SearchHistoryDb>) -> Self {
         self.database = Some(database);
         self
+    }
+
+    /// Add the `supports_assertion` source chunks of the graph edges in
+    /// `evidence` (Python `graph_source_evidence`,
+    /// `get_retriever_output.py:114-125`).
+    ///
+    /// Runs only when the search asked for references, names one dataset and
+    /// used graph edges as context; it never fails the search, whatever the
+    /// sidecar does.
+    async fn add_source_evidence(
+        &self,
+        params: &SearchParams,
+        evidence: &mut Vec<crate::types::EvidenceReference>,
+    ) {
+        let (Some(database), Some(dataset_id)) = (&self.database, params.dataset_id) else {
+            return;
+        };
+        if !params.include_references
+            || !evidence
+                .iter()
+                .any(|reference| reference.kind == crate::types::EvidenceKind::GraphEdge)
+        {
+            return;
+        }
+        let sources =
+            crate::utils::evidence::graph_source_evidence(database.as_ref(), evidence, dataset_id)
+                .await;
+        evidence.extend(sources);
     }
 
     /// Wire in a metadata-DB-backed resolver so that `SearchRequest.datasets`
@@ -1690,7 +1719,8 @@ impl SearchOrchestrator {
             // Python collects evidence in `only_context` runs too
             // (`get_retriever_output.py:114-125`): the artifacts the prompt
             // was built from. No answer exists to append reference text to.
-            let evidence = context_evidence(retriever, &params, &output_context);
+            let mut evidence = context_evidence(retriever, &params, &output_context);
+            self.add_source_evidence(&params, &mut evidence).await;
             let mut response = prepare_search_result(
                 search_type,
                 result,
@@ -1806,12 +1836,18 @@ impl SearchOrchestrator {
         // saved it). A dataset fan-out (`keep_context`) saves the merged
         // answer later, so it appends the text itself once that is done
         // (`append_reference_text`).
-        let evidence = context
+        let mut evidence = context
             .as_ref()
             .map(|items| context_evidence(retriever, &params, items))
             .unwrap_or_default();
+        self.add_source_evidence(&params, &mut evidence).await;
         let output = match context.as_ref() {
-            Some(items) if !keep_context => retriever.append_references(output, items, &params),
+            Some(items) if !keep_context => {
+                // Python: the retriever's own references first, then the
+                // causal source block (`get_retriever_output.py:114-125`).
+                let output = retriever.append_references(output, items, &params);
+                append_source_evidence_text(output, &evidence)
+            }
             _ => output,
         };
         let mut response = prepare_search_result(
@@ -1912,7 +1948,8 @@ impl SearchOrchestrator {
         // return no text on an empty context): there is no turn to commit,
         // acknowledge or record, as in Python.
         if !produced_answer(&generated) {
-            let evidence = context_evidence(retriever, &params, &context);
+            let mut evidence = context_evidence(retriever, &params, &context);
+            self.add_source_evidence(&params, &mut evidence).await;
             let mut response = prepare_search_result(
                 search_type,
                 generated,
@@ -1953,8 +1990,10 @@ impl SearchOrchestrator {
         )
         .await;
         // After the session write, so history keeps the bare answer.
-        let evidence = context_evidence(retriever, &params, &context);
+        let mut evidence = context_evidence(retriever, &params, &context);
+        self.add_source_evidence(&params, &mut evidence).await;
         let generated = retriever.append_references(generated, &context, &params);
+        let generated = append_source_evidence_text(generated, &evidence);
         let mut response = prepare_search_result(
             search_type,
             generated,
@@ -2219,7 +2258,8 @@ fn append_reference_text(
         let context = merged_context(&result.response).unwrap_or_default();
         let output =
             std::mem::replace(&mut result.response.result, SearchOutput::Items(Vec::new()));
-        result.response.result = retriever.append_references(output, &context, &params);
+        let output = retriever.append_references(output, &context, &params);
+        result.response.result = append_source_evidence_text(output, &result.response.evidence);
     }
 }
 

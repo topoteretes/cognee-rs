@@ -396,3 +396,252 @@ async fn the_session_keeps_the_bare_answer() {
         .unwrap();
     assert_eq!(entries.last().unwrap().answer, ANSWER);
 }
+
+// ---------------------------------------------------------------------------
+// Graph edges resolved to their source chunks (provenance_edge_evidence)
+// ---------------------------------------------------------------------------
+
+mod source_evidence {
+    use super::*;
+    use cognee_database::ops::data::create_data;
+    use cognee_database::ops::datasets::create_dataset;
+    use cognee_database::ops::edge_evidence::insert_edge_evidence;
+    use cognee_database::{DatabaseConnection, EdgeEvidence, SearchHistoryDb, connect, initialize};
+    use cognee_search::types::EvidenceRole;
+    use cognee_utils::id_generation::generate_edge_object_id;
+
+    /// A graph retriever whose single triplet carries a real edge identity.
+    struct KnownEdgeRetriever {
+        source: Uuid,
+        target: Uuid,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for KnownEdgeRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::GraphCompletion
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![SearchItem {
+                id: None,
+                score: Some(0.5),
+                payload: json!({
+                    "source_id": self.source.to_string(),
+                    "target_id": self.target.to_string(),
+                    "source_name": "Alice", "target_name": "Bob",
+                    "relationship": "works_with",
+                }),
+            }])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Text(ANSWER.to_string()))
+        }
+
+        fn context_evidence(
+            &self,
+            context: &SearchContext,
+            dataset_id: Option<Uuid>,
+        ) -> Vec<EvidenceReference> {
+            graph_context_evidence(context, dataset_id)
+        }
+    }
+
+    struct World {
+        db: Arc<DatabaseConnection>,
+        dataset: Uuid,
+        data_id: Uuid,
+        chunk_id: Uuid,
+        retriever: KnownEdgeRetriever,
+    }
+
+    async fn world() -> World {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let user = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        create_dataset(
+            &db,
+            cognee_models::Dataset::new("reports".into(), user, None, dataset),
+        )
+        .await
+        .unwrap();
+        let data_id = Uuid::new_v4();
+        create_data(
+            &db,
+            cognee_models::Data::builder(
+                data_id,
+                "report.pdf",
+                "file:///tmp/r",
+                "file:///tmp/r",
+                "pdf",
+                "application/pdf",
+                "hash",
+                user,
+            )
+            .dataset_id(dataset)
+            .build(),
+        )
+        .await
+        .unwrap();
+
+        let retriever = KnownEdgeRetriever {
+            source: Uuid::new_v4(),
+            target: Uuid::new_v4(),
+        };
+        let chunk_id = Uuid::new_v4();
+        insert_edge_evidence(
+            &db,
+            &[EdgeEvidence {
+                id: Uuid::new_v4(),
+                tenant_id: None,
+                user_id: user,
+                dataset_id: dataset,
+                data_id,
+                pipeline_run_id: None,
+                chunk_id,
+                chunk_index: Some(2),
+                edge_id: generate_edge_object_id(
+                    &retriever.source.to_string(),
+                    &retriever.target.to_string(),
+                    "works_with",
+                ),
+                source_node_id: retriever.source,
+                destination_node_id: retriever.target,
+                relationship_name: "works_with".into(),
+                evidence_kind: "extracted".into(),
+                source_task: None,
+                confidence: None,
+                created_at: chrono::Utc::now(),
+            }],
+        )
+        .await
+        .unwrap();
+        World {
+            db: Arc::new(db),
+            dataset,
+            data_id,
+            chunk_id,
+            retriever,
+        }
+    }
+
+    fn scoped(world: &World, include_references: bool) -> SearchRequest {
+        let mut request = request(SearchType::GraphCompletion, include_references);
+        request.dataset_ids = Some(vec![world.dataset]);
+        request
+    }
+
+    #[tokio::test]
+    async fn graph_edges_gain_supporting_chunks_and_the_text_block() {
+        let world = world().await;
+        let orchestrator = orchestrator(KnownEdgeRetriever {
+            source: world.retriever.source,
+            target: world.retriever.target,
+        })
+        .with_database(world.db.clone() as Arc<dyn SearchHistoryDb>);
+
+        let response = orchestrator.search(&scoped(&world, true)).await.unwrap();
+
+        let kinds: Vec<_> = response.evidence.iter().map(|r| (r.kind, r.role)).collect();
+        assert_eq!(
+            kinds,
+            [
+                (EvidenceKind::GraphNode, EvidenceRole::UsedAsContext),
+                (EvidenceKind::GraphNode, EvidenceRole::UsedAsContext),
+                (EvidenceKind::GraphEdge, EvidenceRole::UsedAsContext),
+                (EvidenceKind::Segment, EvidenceRole::SupportsAssertion),
+            ]
+        );
+        let source = &response.evidence[3];
+        assert_eq!(source.chunk_id, Some(world.chunk_id.to_string()));
+        assert_eq!(source.data_id, Some(world.data_id.to_string()));
+        assert_eq!(source.document_name.as_deref(), Some("report.pdf"));
+        assert_eq!(source.chunk_index, Some(2));
+        assert_eq!(
+            source.assertion_id,
+            response.evidence[2].artifact_id.clone().into()
+        );
+        assert_eq!(source.rank, Some(3));
+        assert_eq!(
+            source.source_ref_key,
+            Some(format!("source_ref:v1:{}:{}", world.dataset, world.data_id))
+        );
+        assert_eq!(
+            text(&response.result),
+            format!(
+                "{ANSWER}\n\nEvidence:\n- chunk 3 of document report.pdf \
+                 (data_id: {}, chunk_id: {})",
+                world.data_id, world.chunk_id
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn without_the_flag_a_dataset_or_a_database_nothing_is_looked_up() {
+        let world = world().await;
+        let build = || {
+            orchestrator(KnownEdgeRetriever {
+                source: world.retriever.source,
+                target: world.retriever.target,
+            })
+        };
+        let with_db = |orchestrator: SearchOrchestrator| {
+            orchestrator.with_database(world.db.clone() as Arc<dyn SearchHistoryDb>)
+        };
+
+        // Flag off.
+        let response = with_db(build())
+            .search(&scoped(&world, false))
+            .await
+            .unwrap();
+        assert!(response.evidence.is_empty());
+        assert_eq!(text(&response.result), ANSWER);
+
+        // No dataset in scope: Python's `dataset is not None` guard.
+        let unscoped = request(SearchType::GraphCompletion, true);
+        let response = with_db(build()).search(&unscoped).await.unwrap();
+        assert_eq!(response.evidence.len(), 3);
+        assert_eq!(text(&response.result), ANSWER);
+
+        // No database wired.
+        let response = build().search(&scoped(&world, true)).await.unwrap();
+        assert_eq!(response.evidence.len(), 3);
+        assert_eq!(text(&response.result), ANSWER);
+    }
+
+    #[tokio::test]
+    async fn a_missing_sidecar_never_fails_the_search() {
+        use sea_orm::{ConnectionTrait, Statement};
+        let world = world().await;
+        world
+            .db
+            .execute(Statement::from_string(
+                world.db.get_database_backend(),
+                "DROP TABLE provenance_edge_evidence",
+            ))
+            .await
+            .unwrap();
+        let orchestrator = orchestrator(KnownEdgeRetriever {
+            source: world.retriever.source,
+            target: world.retriever.target,
+        })
+        .with_database(world.db.clone() as Arc<dyn SearchHistoryDb>);
+
+        let response = orchestrator.search(&scoped(&world, true)).await.unwrap();
+
+        assert_eq!(response.evidence.len(), 3);
+        assert_eq!(text(&response.result), ANSWER);
+    }
+}

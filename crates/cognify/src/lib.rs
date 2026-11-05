@@ -6,6 +6,8 @@ pub mod config;
 pub mod dataset_resolver;
 /// Runtime custom graph schemas and DataPoints.
 pub mod dynamic_graph;
+/// Capture of the graph-edge evidence sidecar (`provenance_edge_evidence`).
+pub mod edge_evidence;
 /// Whole-graph repair for `EdgeType` vector rows a killed run never wrote.
 pub mod edge_reindex;
 /// Error types module.

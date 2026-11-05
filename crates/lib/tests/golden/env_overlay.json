@@ -3540,6 +3540,60 @@
   "DEFAULT_USER_PASSWORD=\"{\\\"ssl\\\":true}\"": {
     "default_user_password": "{\"ssl\":true}"
   },
+  "EDGE_EVIDENCE_ENABLED=\"  \"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"-1\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"0\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"1\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"1.5\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"42\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"5000000000\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"70000\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"TRUE\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"[1]\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"abc\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"false\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"no\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"on\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"require\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"true\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"v\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"yes\"": {},
+  "EDGE_EVIDENCE_ENABLED=\"{\\\"a\\\":1}\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "cognify.edge_evidence_enabled": false
+  },
+  "EDGE_EVIDENCE_ENABLED=\"{\\\"ssl\\\":true}\"": {
+    "cognify.edge_evidence_enabled": false
+  },
   "EMBEDDING_API_KEY=\"  \"": {
     "embedding.api_key": "  "
   },

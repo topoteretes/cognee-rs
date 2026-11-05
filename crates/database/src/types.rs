@@ -122,3 +122,41 @@ pub struct SearchHistoryEntry {
     pub dataset_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
+
+/// One `provenance_edge_evidence` row: a chunk that supports a graph edge
+/// (Python `ProvenanceEdgeEvidence`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EdgeEvidence {
+    /// Deterministic (uuid5 of the row's identity) so a re-capture is a no-op.
+    pub id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub user_id: Uuid,
+    pub dataset_id: Uuid,
+    pub data_id: Uuid,
+    /// The run that captured the row. A row whose run never completed is
+    /// ignored at read time; `None` is always readable.
+    pub pipeline_run_id: Option<Uuid>,
+    pub chunk_id: Uuid,
+    pub chunk_index: Option<i32>,
+    /// The graph's deterministic `edge_object_id`.
+    pub edge_id: Uuid,
+    pub source_node_id: Uuid,
+    pub destination_node_id: Uuid,
+    pub relationship_name: String,
+    /// `extracted` or `structural`.
+    pub evidence_kind: String,
+    pub source_task: Option<String>,
+    pub confidence: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// An active source chunk of a graph edge, with its document's name (Python
+/// `EdgeEvidenceRecord`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EdgeEvidenceRecord {
+    pub edge_id: Uuid,
+    pub data_id: Uuid,
+    pub chunk_id: Uuid,
+    pub chunk_index: Option<i32>,
+    pub document_name: Option<String>,
+}

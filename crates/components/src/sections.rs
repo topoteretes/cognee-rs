@@ -804,6 +804,13 @@ config_section! {
         pub tolerate_summarization_failures: bool = false => {
             env: ["COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES"], alias: [], secret: false,
         },
+        /// Record which chunk supports which graph edge
+        /// (`provenance_edge_evidence`) during cognify, so `include_references`
+        /// can cite edge sources (Python `EDGE_EVIDENCE_ENABLED`,
+        /// `provenance/edge_evidence/config.py`).
+        pub edge_evidence_enabled: bool = true => {
+            env: ["EDGE_EVIDENCE_ENABLED"], alias: [], secret: false,
+        },
         /// Share of failed chunks (0, 1] above which a data item fails.
         pub max_chunk_failure_ratio: f64 = 0.05 => {
             env: ["COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO"], alias: [], secret: false,

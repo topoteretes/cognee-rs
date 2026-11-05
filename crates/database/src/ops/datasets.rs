@@ -216,6 +216,11 @@ pub async fn delete_dataset(db: &DatabaseConnection, id: Uuid) -> Result<(), Dat
         .exec(db)
         .await
         .map_err(map_sea_err)?;
+    // No foreign key ties the evidence sidecar to the dataset: sweep it here
+    // (non-fatal, like Python's `delete_edge_evidence`).
+    if let Err(error) = super::edge_evidence::delete_edge_evidence(db, id, None).await {
+        tracing::warn!(dataset_id = %id, %error, "unable to remove edge evidence of a deleted dataset");
+    }
     Ok(())
 }
 

@@ -3,6 +3,7 @@ pub mod data;
 pub mod dataset_configurations;
 pub mod dataset_databases;
 pub mod datasets;
+pub mod edge_evidence;
 pub mod graph_storage;
 pub mod pipeline_runs;
 pub mod search_history;
