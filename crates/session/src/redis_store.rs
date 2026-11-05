@@ -793,6 +793,100 @@ mod tests {
         );
     }
 
+    /// Mixed-type `memify_metadata` values (list, int, string, bool) round
+    /// trip through Redis, and a later write overwrites only the keys it
+    /// sends. Needs a Redis server (`REDIS_TEST_URL`); skipped when unset.
+    /// CI runs it in the `redis-session` lane.
+    #[tokio::test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
+    async fn redis_memify_metadata_round_trips_and_merges() {
+        use std::collections::HashMap;
+
+        use super::RedisSessionStore;
+        use crate::session_store::{SessionQAUpdate, SessionStore};
+
+        let Some(url) = std::env::var("REDIS_TEST_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+        else {
+            eprintln!(
+                "REDIS_TEST_URL not set — skipping redis_memify_metadata_round_trips_and_merges"
+            );
+            return;
+        };
+        let session = format!("memify-{}", uuid::Uuid::new_v4());
+        let user = Some("memify-user");
+
+        let store = RedisSessionStore::new(&url)
+            .await
+            .unwrap()
+            .with_session_ttl_seconds(120);
+        let qa_id = store
+            .create_qa_entry(&session, user, "q", "a", None)
+            .await
+            .unwrap();
+        let first = HashMap::from([
+            ("list".to_string(), serde_json::json!(["a", "b"])),
+            ("int".to_string(), serde_json::json!(3)),
+            ("str".to_string(), serde_json::json!("s")),
+            ("flag".to_string(), serde_json::json!(true)),
+        ]);
+        assert!(
+            store
+                .update_qa_entry(
+                    &session,
+                    user,
+                    &qa_id,
+                    SessionQAUpdate {
+                        memify_metadata: Some(Some(first)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+        );
+
+        // Round trip: every key and value type survives the store.
+        let entries = store.get_all_qa_entries(&session, user).await.unwrap();
+        let m = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(m.len(), 4);
+        assert_eq!(m["list"], serde_json::json!(["a", "b"]));
+        assert_eq!(m["int"], serde_json::json!(3));
+        assert_eq!(m["str"], serde_json::json!("s"));
+        assert_eq!(m["flag"], serde_json::json!(true));
+
+        // Merge: a partial write overwrites its key and keeps the others.
+        assert!(
+            store
+                .update_qa_entry(
+                    &session,
+                    user,
+                    &qa_id,
+                    SessionQAUpdate {
+                        memify_metadata: Some(Some(HashMap::from([(
+                            "int".to_string(),
+                            serde_json::json!(4),
+                        )]))),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+        );
+        let entries = store.get_all_qa_entries(&session, user).await.unwrap();
+        let m = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(m.len(), 4);
+        assert_eq!(m["list"], serde_json::json!(["a", "b"]));
+        assert_eq!(m["int"], serde_json::json!(4));
+        assert_eq!(m["str"], serde_json::json!("s"));
+        assert_eq!(m["flag"], serde_json::json!(true));
+
+        assert!(store.delete_session(&session, user).await.unwrap());
+    }
+
     #[test]
     fn empty_credentials_mean_none() {
         let info = connection_info("h", 1, "", "");
