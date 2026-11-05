@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Changed
+
 - **`feedback_weights` improve stage matches Python's bookkeeping (SDK-1051).**
   - Implicit ratings count: a rated answer's weight update also reads the
     `kind = "feedback"` session-context rows (`referenced_qa_rating` /
@@ -37,9 +39,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     New public API in `cognee_cognify::memify`: `extract_feedback_qas`,
     `apply_feedback_weights`, `resolve_feedback`, `FeedbackItem`,
     `FeedbackSource`. Edge ids keep the `source|||target|||relation` format.
-
+  - A QA entry whose stored `qa_id` is not a lowercase hyphenated UUID (a
+    foreign writer's id, or an uppercase UUID) reads back as a stable id and
+    `update_qa` matches on it in the fs and redis stores, so its bookkeeping is
+    saved instead of failing with `MetadataNotUpdated` on every run.
+  - `apply_feedback_weights_pipeline` / `extract_feedback_qas` reject an empty
+    `session_ids` list or an empty session id with
+    `FeedbackError::InvalidSessionIds`, as Python does.
 
 ### Breaking changes
+
+- **`feedback_weights` public API (SDK-1051).**
+  - `FeedbackApplyResult` has new public fields (`done`, `errored`,
+    `elements_moved`, `elements_pruned`, `elements_failed`): struct-literal
+    construction no longer compiles.
+  - `FeedbackError` gains the `MetadataNotUpdated` and `InvalidSessionIds`
+    variants: exhaustive matches need new arms.
+  - `cognee::api::improve::build_rating_map` now reads only `kind = "feedback"`
+    rows (it shares `build_implicit_rating_map`, which filters like Python's
+    reader); other rows are ignored.
+  - A rated row with no usable element id persists
+    `feedback_weights_applied = true` (was `false`).
 
 - **`SessionQAEntry.memify_metadata` holds JSON values, not only bools (SDK-1051).**
   - The field (and `SessionQAUpdate.memify_metadata`) changes from

@@ -53,6 +53,9 @@ pub struct PreferenceUpdateResult {
 /// qa id → the rating feedback rows inferred for it, the latest row winning
 /// (`rows` oldest first; Python's `build_rating_map`). The reader is shared
 /// with the `feedback_weights` stage: [`build_implicit_rating_map`].
+///
+/// Unlike Python's unfiltered `build_rating_map`, only rows with
+/// `kind == "feedback"` count (the shared reader's filter); other rows are ignored.
 pub fn build_rating_map(feedback_rows: &[SessionContextRow]) -> HashMap<String, i32> {
     build_implicit_rating_map(feedback_rows)
         .into_iter()

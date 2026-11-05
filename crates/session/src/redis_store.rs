@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds, qa_entry_uuid};
 
 /// A single Q&A entry as serialised to/from Redis (Python-compatible JSON).
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -163,7 +163,7 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
         .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok());
 
     SessionQAEntry {
-        id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
+        id: qa_entry_uuid(&e.qa_id),
         session_id: session_id.to_string(),
         user_id: None,
         question: e.question.clone(),
@@ -353,7 +353,7 @@ impl SessionStore for RedisSessionStore {
         for s in &raw {
             let e: RedisQAEntry = serde_json::from_str(s)
                 .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
-            if e.qa_id == qa_id {
+            if qa_entry_uuid(&e.qa_id) == qa_entry_uuid(qa_id) {
                 found = true;
             } else {
                 kept.push(s.clone());
@@ -430,7 +430,7 @@ impl SessionStore for RedisSessionStore {
             let mut entry: RedisQAEntry = serde_json::from_str(s)
                 .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))?;
 
-            if entry.qa_id == qa_id {
+            if qa_entry_uuid(&entry.qa_id) == qa_entry_uuid(qa_id) {
                 apply_update_to_redis_entry(&mut entry, &updates);
                 found = true;
             }

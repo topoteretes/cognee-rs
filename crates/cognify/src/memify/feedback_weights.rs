@@ -27,10 +27,11 @@
 //!    batch: its bookkeeping is persisted first, the row counts as skipped and
 //!    is retried on the next run.
 //!
-//! A QA entry's id is its `qa_id`. The stores keep Python's `uuid4` strings;
-//! only a foreign writer's non-UUID `qa_id` would read back as a random
-//! UUID, and such an entry can neither be matched to a feedback row nor
-//! updated, so it is simply never completed (Python has no such case).
+//! A QA entry's id is its `qa_id`. The stores keep Python's `uuid4` strings.
+//! A foreign writer's non-UUID `qa_id` reads back as a deterministic v5 UUID
+//! of the raw text, and every store matches `update_qa` on that parsed or
+//! derived id, so the bookkeeping of such a row (and of an uppercase or
+//! non-hyphenated UUID) is saved like any other.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -53,6 +54,9 @@ pub enum FeedbackError {
 
     #[error("Invalid alpha {0}: must be in (0, 1]")]
     InvalidAlpha(f64),
+
+    #[error("session_ids must be a non-empty list of non-empty strings")]
+    InvalidSessionIds,
 
     #[error("Failed to update memify metadata for qa_id={qa_id} in session={session_id}")]
     MetadataNotUpdated { qa_id: String, session_id: String },
@@ -222,6 +226,14 @@ pub struct FeedbackExtraction {
     pub skipped: usize,
 }
 
+/// Python's session-id validation: a non-empty list of non-empty strings.
+fn validate_session_ids(session_ids: &[String]) -> Result<(), FeedbackError> {
+    if session_ids.is_empty() || session_ids.iter().any(String::is_empty) {
+        return Err(FeedbackError::InvalidSessionIds);
+    }
+    Ok(())
+}
+
 /// Read `session_ids` and collect the rated QA rows not yet applied to graph
 /// weights (Python `extract_feedback_qas`). A row without
 /// `used_graph_element_ids` is collected too, so [`apply_feedback_weights`]
@@ -232,6 +244,7 @@ pub async fn extract_feedback_qas(
     session_store: &dyn SessionStore,
     session_manager: &SessionManager,
 ) -> Result<FeedbackExtraction, FeedbackError> {
+    validate_session_ids(session_ids)?;
     let mut extraction = FeedbackExtraction::default();
     for session_id in session_ids {
         let context_rows = session_manager
@@ -466,7 +479,7 @@ fn sorted(ids: &HashSet<String>) -> Vec<String> {
 }
 
 /// What one row contributed to the run.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 struct ItemOutcome {
     processed: bool,
     applied: bool,
@@ -482,7 +495,7 @@ async fn process_feedback_item(
     user_id: &str,
     graph_db: &dyn GraphDBTrait,
     session_manager: &SessionManager,
-) -> Result<ItemOutcome, FeedbackError> {
+) -> Result<ItemOutcome, (ItemOutcome, FeedbackError)> {
     let metadata = &item.memify_metadata;
     let qa_id = item.qa_id.as_str();
     let session_id = item.session_id.as_str();
@@ -512,7 +525,8 @@ async fn process_feedback_item(
             qa_id,
             HashMap::from([(FEEDBACK_WEIGHTS_APPLIED_KEY.to_string(), Value::Bool(true))]),
         )
-        .await?;
+        .await
+        .map_err(|error| (ItemOutcome::default(), error))?;
         return Ok(ItemOutcome {
             done: true,
             ..Default::default()
@@ -639,6 +653,15 @@ async fn process_feedback_item(
     }
 
     let pruned_set: HashSet<String> = pruned.iter().cloned().collect();
+    let moved = node_outcome.applied.len() + edge_outcome.applied.len();
+    let outcome = ItemOutcome {
+        processed: true,
+        applied: qa_success,
+        done,
+        moved,
+        pruned: pruned.len(),
+        failed: failed.len(),
+    };
     mark_feedback_processed(
         session_manager,
         session_id,
@@ -669,9 +692,16 @@ async fn process_feedback_item(
             ),
         ]),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        // Nothing was persisted: the weights moved, but the row is not done.
+        let unsaved = ItemOutcome {
+            done: false,
+            ..outcome
+        };
+        (unsaved, error)
+    })?;
 
-    let moved = node_outcome.applied.len() + edge_outcome.applied.len();
     info!(
         qa_id,
         session_id,
@@ -689,17 +719,12 @@ async fn process_feedback_item(
         "feedback_weights: processed QA entry"
     );
 
-    if let Some(error) = graph_error {
-        return Err(error);
+    match graph_error {
+        // The row's counts are returned with the error so the run totals
+        // agree with what was persisted (e.g. a row sealed by the cap).
+        Some(error) => Err((outcome, error)),
+        None => Ok(outcome),
     }
-    Ok(ItemOutcome {
-        processed: true,
-        applied: qa_success,
-        done,
-        moved,
-        pruned: pruned.len(),
-        failed: failed.len(),
-    })
 }
 
 /// Apply feedback-based weight updates for `items` (Python
@@ -731,7 +756,11 @@ pub async fn apply_feedback_weights(
                 result.elements_pruned += outcome.pruned;
                 result.elements_failed += outcome.failed;
             }
-            Err(error) => {
+            Err((outcome, error)) => {
+                result.done += usize::from(outcome.done);
+                result.elements_moved += outcome.moved;
+                result.elements_pruned += outcome.pruned;
+                result.elements_failed += outcome.failed;
                 warn!(
                     qa_id = item.qa_id,
                     session_id = item.session_id,
@@ -755,6 +784,7 @@ pub async fn apply_feedback_weights_pipeline(
     session_store: Arc<dyn SessionStore>,
     session_manager: Arc<SessionManager>,
 ) -> Result<FeedbackApplyResult, FeedbackError> {
+    validate_session_ids(session_ids)?;
     if !(alpha > 0.0 && alpha <= 1.0) {
         return Err(FeedbackError::InvalidAlpha(alpha));
     }

@@ -17,7 +17,7 @@ use cognee_cognify::memify::feedback_weights::{
     FEEDBACK_WEIGHTS_APPLIED_NODE_IDS_KEY, FEEDBACK_WEIGHTS_APPLIED_SCORE_KEY,
     FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY, FEEDBACK_WEIGHTS_ATTEMPTS_KEY,
     FEEDBACK_WEIGHTS_MAX_ATTEMPTS, FEEDBACK_WEIGHTS_PRUNED_IDS_KEY, FeedbackApplyResult,
-    apply_feedback_weights_pipeline,
+    FeedbackError, apply_feedback_weights, apply_feedback_weights_pipeline, extract_feedback_qas,
 };
 use cognee_graph::{
     EdgeData, EdgeKey, GraphDBResult, GraphDBTrait, GraphNode, MockGraphDB, NodeData,
@@ -736,6 +736,21 @@ impl Rows {
         .unwrap()
     }
 
+    async fn set_meta(&self, qa_id: &str, key: &str, value: Value) {
+        self.manager
+            .update_qa(
+                Some(SESSION),
+                Some(&self.user_id),
+                qa_id,
+                SessionQAUpdate {
+                    memify_metadata: Some(Some(HashMap::from([(key.to_string(), value)]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
     async fn meta(&self, qa_id: &str) -> HashMap<String, Value> {
         self.store
             .get_all_qa_entries(SESSION, Some(&self.user_id))
@@ -1019,6 +1034,10 @@ async fn a_graph_error_persists_the_bookkeeping_and_the_batch_continues() {
     );
     assert_eq!((result.processed, result.applied), (1, 1));
     assert_eq!((result.skipped, result.errored), (1, 1));
+    // q1's partial work still counts: n1 moved, the unattempted edge failed.
+    assert_eq!(result.done, 1); // q2 only; q1 is pending
+    assert_eq!(result.elements_moved, 2); // n1 and n2
+    assert_eq!(result.elements_failed, 1);
 
     // A retry of q1 does not move n1 again; the unattempted edge keeps failing.
     rows.run(&graph, 0.1).await;
@@ -1038,10 +1057,19 @@ async fn repeated_graph_errors_trip_the_attempt_cap() {
     let qa = rows.qa(&["n1"], &[edge_id()]).await;
     rows.rate(&qa, 5).await;
 
+    let mut results = Vec::new();
     for _ in 0..=FEEDBACK_WEIGHTS_MAX_ATTEMPTS {
-        rows.run(&graph, 0.1).await;
+        results.push(rows.run(&graph, 0.1).await);
     }
 
+    // The run that seals the row counts it done, though it raised.
+    let done: Vec<usize> = results.iter().map(|r| r.done).collect();
+    assert_eq!(done, vec![0, 0, 1, 0]);
+    let failed: Vec<usize> = results.iter().map(|r| r.elements_failed).collect();
+    assert_eq!(failed, vec![1, 1, 1, 0]);
+    let moved: Vec<usize> = results.iter().map(|r| r.elements_moved).collect();
+    assert_eq!(moved, vec![1, 0, 0, 0]);
+    assert!(results[..3].iter().all(|r| r.errored == 1));
     let meta = rows.meta(&qa).await;
     assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true)); // sealed by the cap
     assert_eq!(
@@ -1078,26 +1106,56 @@ async fn a_write_only_touches_this_stages_keys() {
     let graph = graph_with_n1_and_e1().await;
     let qa = rows.qa(&["n1"], &[]).await;
     rows.rate(&qa, 5).await;
-    // Another stage's flag, set after the row was scanned, must survive.
-    rows.manager
-        .update_qa(
-            Some(SESSION),
-            Some(&rows.user_id),
-            &qa,
-            SessionQAUpdate {
-                memify_metadata: Some(Some(HashMap::from([(
-                    "preference_weights_applied".to_string(),
-                    json!(true),
-                )]))),
-                ..Default::default()
-            },
-        )
+    // Another stage's flag starts false in the snapshot the scan reads...
+    rows.set_meta(&qa, "preference_weights_applied", json!(false))
+        .await;
+    let extraction = extract_feedback_qas(
+        &[SESSION.to_string()],
+        &rows.user_id,
+        &*rows.store,
+        &rows.manager,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        extraction.items[0].memify_metadata["preference_weights_applied"],
+        json!(false)
+    );
+    // ...and is set to true after the scan: writing the stale snapshot back
+    // would clobber it.
+    rows.set_meta(&qa, "preference_weights_applied", json!(true))
+        .await;
+
+    apply_feedback_weights(&extraction.items, 0.1, &rows.user_id, &graph, &rows.manager)
         .await
         .unwrap();
-
-    rows.run(&graph, 0.1).await;
 
     let meta = rows.meta(&qa).await;
     assert_eq!(meta["preference_weights_applied"], json!(true));
     assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+}
+
+#[tokio::test]
+async fn empty_session_ids_are_rejected() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    for ids in [
+        vec![],
+        vec![String::new()],
+        vec![SESSION.to_string(), String::new()],
+    ] {
+        let result = apply_feedback_weights_pipeline(
+            &ids,
+            rows.owner,
+            0.1,
+            &graph,
+            Arc::clone(&rows.store),
+            Arc::clone(&rows.manager),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FeedbackError::InvalidSessionIds)),
+            "{ids:?}"
+        );
+    }
 }
