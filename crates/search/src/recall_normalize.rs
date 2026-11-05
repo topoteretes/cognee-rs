@@ -321,6 +321,73 @@ fn write_python_json(value: &Value, out: &mut String) {
     }
 }
 
+/// Recover the dataset a retriever output element came from, from the
+/// membership its own payload carries (`dataset_id`, else the first parseable
+/// `dataset_ids` entry; looked up under a `payload` wrapper too). Completion
+/// texts carry none and return `None`; a caller aligns those with
+/// [`SearchResponse::datasets`] instead (see [`entry_dataset_ids`]).
+pub fn item_dataset_id(value: &Value) -> Option<uuid::Uuid> {
+    let object = value.as_object()?;
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .unwrap_or(object);
+    payload
+        .get("dataset_id")
+        .and_then(Value::as_str)
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+        .or_else(|| {
+            payload
+                .get("dataset_ids")?
+                .as_array()?
+                .iter()
+                .find_map(|id| uuid::Uuid::parse_str(id.as_str()?).ok())
+        })
+}
+
+/// The dataset of each of a response's `entries` (its graph output elements,
+/// in order): the element's own membership ([`item_dataset_id`]), else — when
+/// the response lists exactly one dataset per element, as a per-dataset
+/// fan-out of completion answers does — the dataset at the same position.
+/// `None` where neither recovers it.
+pub fn entry_dataset_ids(entries: &[&Value], response: &SearchResponse) -> Vec<Option<uuid::Uuid>> {
+    let datasets = response.datasets.as_deref().unwrap_or_default();
+    let aligned = datasets.len() == entries.len();
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| item_dataset_id(entry).or_else(|| aligned.then(|| datasets[index])))
+        .collect()
+}
+
+/// The evidence that belongs to one entry of a response (Python attaches each
+/// dataset's payload evidence to that payload's entries only).
+///
+/// A response over at most one dataset has one evidence list, which every
+/// entry shares. One merged over several datasets stamps each reference with
+/// its dataset id, so an entry takes only its own dataset's references. The
+/// whole list is kept when the entry's dataset is unknown, or when no
+/// reference carries a dataset id at all (a shared-store search over several
+/// datasets, which cannot be split) — never none.
+pub fn entry_evidence(
+    evidence: &[crate::types::EvidenceReference],
+    response_dataset_count: usize,
+    entry_dataset_id: Option<&str>,
+) -> Vec<crate::types::EvidenceReference> {
+    let splittable = response_dataset_count >= 2
+        && evidence
+            .iter()
+            .any(|reference| reference.dataset_id.is_some());
+    evidence
+        .iter()
+        .filter(|reference| match entry_dataset_id {
+            Some(dataset) if splittable => reference.dataset_id.as_deref() == Some(dataset),
+            _ => true,
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -330,6 +397,83 @@ fn write_python_json(value: &Value, out: &mut String) {
 mod tests {
     use super::*;
     use SearchType as CoreSearchType;
+
+    mod per_dataset_evidence {
+        use serde_json::json;
+
+        use super::super::{entry_dataset_ids, entry_evidence, item_dataset_id};
+        use crate::types::SearchType;
+        use crate::types::{EvidenceKind, EvidenceReference, SearchOutput, SearchResponse};
+
+        const DS_A: &str = "11111111-1111-4111-8111-111111111111";
+        const DS_B: &str = "22222222-2222-4222-8222-222222222222";
+
+        fn stamped(id: &str, dataset: Option<&str>) -> EvidenceReference {
+            let mut reference = EvidenceReference::new(EvidenceKind::GraphNode, id);
+            reference.dataset_id = dataset.map(str::to_string);
+            reference
+        }
+
+        fn ids(evidence: &[EvidenceReference]) -> Vec<&str> {
+            evidence.iter().map(|r| r.artifact_id.as_str()).collect()
+        }
+
+        #[test]
+        fn entry_evidence_splits_a_multi_dataset_response_by_dataset() {
+            let evidence = [stamped("a", Some(DS_A)), stamped("b", Some(DS_B))];
+            assert_eq!(ids(&entry_evidence(&evidence, 1, Some(DS_A))), ["a", "b"]);
+            assert_eq!(ids(&entry_evidence(&evidence, 2, Some(DS_A))), ["a"]);
+            assert_eq!(ids(&entry_evidence(&evidence, 2, Some(DS_B))), ["b"]);
+            assert_eq!(ids(&entry_evidence(&evidence, 2, None)), ["a", "b"]);
+        }
+
+        /// A shared-store search over several datasets stamps no dataset on
+        /// its references; the list cannot be split, so every entry keeps it.
+        #[test]
+        fn unstamped_evidence_is_never_split_away() {
+            let shared = [stamped("s", None)];
+            assert_eq!(ids(&entry_evidence(&shared, 3, None)), ["s"]);
+            assert_eq!(ids(&entry_evidence(&shared, 3, Some(DS_A))), ["s"]);
+        }
+
+        #[test]
+        fn item_dataset_id_reads_payload_membership() {
+            assert_eq!(
+                item_dataset_id(&json!({"dataset_id": DS_A}))
+                    .unwrap()
+                    .to_string(),
+                DS_A
+            );
+            assert_eq!(
+                item_dataset_id(&json!({"payload": {"dataset_ids": ["junk", DS_B]}}))
+                    .unwrap()
+                    .to_string(),
+                DS_B
+            );
+            assert_eq!(item_dataset_id(&json!("answer text")), None);
+        }
+
+        #[test]
+        fn entry_dataset_ids_align_answers_with_the_response_datasets() {
+            let mut response = SearchResponse::from_output(
+                SearchType::GraphCompletion,
+                SearchOutput::Texts(vec!["a".into(), "b".into()]),
+            );
+            let a = uuid::Uuid::parse_str(DS_A).unwrap();
+            let b = uuid::Uuid::parse_str(DS_B).unwrap();
+            response.datasets = Some(vec![a, b]);
+            let (first, second) = (json!("a"), json!("b"));
+            assert_eq!(
+                entry_dataset_ids(&[&first, &second], &response),
+                [Some(a), Some(b)]
+            );
+            // Misaligned: answers without membership stay unknown.
+            assert_eq!(entry_dataset_ids(&[&first], &response), [None]);
+            // Own membership wins over position.
+            let item = json!({"dataset_id": DS_B});
+            assert_eq!(entry_dataset_ids(&[&item], &response), [Some(b)]);
+        }
+    }
     use serde_json::json;
     // ── RecallResponse / ResponseGraphEntry shape ────────────────────────
 

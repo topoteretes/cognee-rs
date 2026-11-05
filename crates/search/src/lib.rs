@@ -38,7 +38,8 @@ pub use query_router::{
     pinned_route, route_query,
 };
 pub use recall_normalize::{
-    NormalizedResult, RecallResultKind, build_graph_entry, only_context_system_prompt,
+    NormalizedResult, RecallResultKind, build_graph_entry, entry_dataset_ids, entry_evidence,
+    item_dataset_id, only_context_system_prompt,
 };
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
