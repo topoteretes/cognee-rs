@@ -1933,12 +1933,32 @@ impl OpenAIAdapter {
             }
 
             if let Some(sink) = stream {
-                match Self::consume_sse(response, sink).await {
+                let streamed = Self::consume_sse(response, sink).await;
+                if debug_enabled {
+                    match &streamed {
+                        Ok(folded) => eprintln!(
+                            "\n[COGNEE_DEBUG_LLM_RESPONSE] POST {url} (streamed)\n{folded:?}\n"
+                        ),
+                        Err(failure) => eprintln!(
+                            "\n[COGNEE_DEBUG_LLM_RESPONSE] POST {url} (stream failed)\n{}\n",
+                            failure.error
+                        ),
+                    }
+                }
+                match streamed {
                     Ok(folded) => return Ok(folded),
-                    Err(e) => {
+                    Err(failure) => {
+                        // A body read that timed out is the same overload signal
+                        // as a send that timed out (above): Python's stream is
+                        // iterated inside the rate limiter for exactly this.
+                        if failure.timed_out
+                            && let Some(pacer) = pacer.as_deref()
+                        {
+                            pacer.record_overload("timeout");
+                        }
                         // A failure mid-stream retries the whole call, as Python's
                         // tenacity does; `begin_attempt` then emits `reset`.
-                        last_error = e;
+                        last_error = failure.error;
                         if budget.is_exhausted(
                             attempt,
                             started.elapsed().saturating_sub(queued_for_permit),
@@ -2040,26 +2060,76 @@ impl OpenAIAdapter {
     /// Read a `stream: true` chat-completions body, pushing each `delta.content`
     /// string into `sink`, and fold it into one [`OpenAIResponse`].
     ///
-    /// Mirrors Python's `stream_text_completion`: chunks with no `choices` (the
-    /// trailing usage chunk) and chunks without a text delta are skipped, and an
-    /// empty answer is returned, never raised (the blocking path also yields `""`).
+    /// Mirrors Python's `stream_text_completion` (litellm over the OpenAI SDK's
+    /// `AsyncStream`): chunks with no `choices` (the trailing usage chunk) and
+    /// chunks without a text delta are skipped, and an empty answer is
+    /// returned, never raised (the blocking path also yields `""`).
+    ///
+    /// Failures, all retried by the caller like any mid-stream failure:
+    /// - an in-stream `data: {"error": ...}` chunk (the SDK raises `APIError`),
+    ///   and a `finish_reason: "error"` chunk (litellm raises on it);
+    /// - a body that ends with neither `[DONE]` nor any `finish_reason`. The
+    ///   SDK accepts a clean close without `[DONE]`, and so does this when a
+    ///   choice finished; but a stream that never finished is a truncated
+    ///   answer, and the recall SSE `final` event is authoritative, so it must
+    ///   not carry a partial answer as if it were whole (deliberate deviation).
+    ///
+    /// A provider that ignores `stream: true` answers a JSON body. Python's SDK
+    /// finds no `data:` lines in it and returns `""`; here a non-SSE
+    /// `Content-Type` is parsed as the blocking JSON response instead, and its
+    /// answer is pushed to `sink` as a single delta so the consumer still sees
+    /// the text it will receive in `final`.
     async fn consume_sse(
         response: reqwest::Response,
         sink: &dyn DeltaSink,
-    ) -> LlmResult<OpenAIResponse> {
+    ) -> Result<OpenAIResponse, StreamFailure> {
         use futures_util::StreamExt;
+
+        let is_event_stream = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_none_or(|value| {
+                value
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("text/event-stream")
+            });
+        if !is_event_stream {
+            let body = response.text().await.map_err(StreamFailure::transport)?;
+            let folded = parse_unstreamed_body(&body)?;
+            if let Some(content) = folded
+                .choices
+                .first()
+                .and_then(|choice| choice.message.content.as_deref())
+                .filter(|content| !content.is_empty())
+            {
+                sink.delta(content);
+            }
+            return Ok(folded);
+        }
 
         let mut parser = SseFold::default();
         let mut bytes = response.bytes_stream();
         while let Some(chunk) = bytes.next().await {
-            let chunk = chunk
-                .map_err(|e| LlmError::NetworkError(format!("LLM stream interrupted: {e}")))?;
+            let chunk = chunk.map_err(StreamFailure::transport)?;
             parser.feed(&chunk, sink);
-            if parser.done {
+            if parser.done || parser.error.is_some() {
                 break;
             }
         }
         parser.finish(sink);
+        if let Some(error) = parser.error.take() {
+            return Err(StreamFailure::from(LlmError::ApiError(format!(
+                "LLM stream reported an error: {error}"
+            ))));
+        }
+        if !parser.done && parser.finish_reason.is_none() {
+            return Err(StreamFailure::from(LlmError::NetworkError(
+                "LLM stream ended before the answer finished (no [DONE], no finish_reason)"
+                    .to_string(),
+            )));
+        }
         Ok(parser.into_response())
     }
 
@@ -3811,6 +3881,52 @@ impl Transcriber for OpenAIAdapter {
     }
 }
 
+/// Why a streamed answer failed: the error to retry with, and whether it was a
+/// read timeout (an overload signal for the pacer).
+#[derive(Debug)]
+struct StreamFailure {
+    error: LlmError,
+    timed_out: bool,
+}
+
+impl StreamFailure {
+    fn transport(error: reqwest::Error) -> Self {
+        Self {
+            timed_out: error.is_timeout(),
+            error: LlmError::NetworkError(format!("LLM stream interrupted: {error}")),
+        }
+    }
+}
+
+impl From<LlmError> for StreamFailure {
+    fn from(error: LlmError) -> Self {
+        Self {
+            error,
+            timed_out: false,
+        }
+    }
+}
+
+/// Parse the JSON body a provider answered to a `stream: true` request it
+/// ignored: a chat completion, or an `{"error": ...}` object (a failure).
+fn parse_unstreamed_body(body: &str) -> Result<OpenAIResponse, StreamFailure> {
+    let value: Value = serde_json::from_str(body).map_err(|e| {
+        StreamFailure::from(LlmError::DeserializationError(format!(
+            "Failed to parse non-SSE response to a streaming request: {e}. Raw body: {body}"
+        )))
+    })?;
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+        return Err(StreamFailure::from(LlmError::ApiError(format!(
+            "LLM reported an error: {error}"
+        ))));
+    }
+    serde_json::from_value::<OpenAIResponse>(value).map_err(|e| {
+        StreamFailure::from(LlmError::DeserializationError(format!(
+            "Failed to parse response: {e}. Raw body: {body}"
+        )))
+    })
+}
+
 /// Incremental parser for an OpenAI-compatible `text/event-stream` chat body.
 #[derive(Default)]
 struct SseFold {
@@ -3820,6 +3936,9 @@ struct SseFold {
     finish_reason: Option<String>,
     usage: Option<OpenAIUsage>,
     done: bool,
+    /// An in-stream error chunk (`{"error": ...}`) or `finish_reason: "error"`;
+    /// parsing stops at the first one.
+    error: Option<String>,
 }
 
 impl SseFold {
@@ -3828,7 +3947,7 @@ impl SseFold {
         while let Some(newline) = self.pending.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.pending.drain(..=newline).collect();
             self.line(&line, sink);
-            if self.done {
+            if self.done || self.error.is_some() {
                 return;
             }
         }
@@ -3836,7 +3955,7 @@ impl SseFold {
 
     /// Flush a final line that arrived without a trailing newline.
     fn finish(&mut self, sink: &dyn DeltaSink) {
-        if !self.done && !self.pending.is_empty() {
+        if !self.done && self.error.is_none() && !self.pending.is_empty() {
             let line = std::mem::take(&mut self.pending);
             self.line(&line, sink);
         }
@@ -3856,6 +3975,11 @@ impl SseFold {
         let Ok(chunk) = serde_json::from_str::<Value>(data) else {
             return;
         };
+        // The OpenAI SDK raises `APIError` on a chunk carrying `error`.
+        if let Some(error) = chunk.get("error").filter(|error| !error.is_null()) {
+            self.error = Some(error.to_string());
+            return;
+        }
         if let Some(model) = chunk["model"].as_str()
             && self.model.is_empty()
         {
@@ -3871,6 +3995,11 @@ impl SseFold {
             return;
         };
         if let Some(reason) = choice["finish_reason"].as_str() {
+            if reason == "error" {
+                // litellm raises on `finish_reason: "error"`.
+                self.error = Some(format!("finish_reason \"error\" in chunk {chunk}"));
+                return;
+            }
             self.finish_reason = Some(reason.to_string());
         }
         // Role-only and finish chunks carry no content; list-shaped
