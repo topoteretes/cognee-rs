@@ -78,6 +78,16 @@ fn collect_distinct_candidate_edges(edges: &[GraphEdgePair]) -> Vec<EdgeData> {
 /// in one upsert batch twice. `new_edges` is left as is: it goes through
 /// [`deduplicate_nodes_and_edges`](super::deduplicate_nodes_and_edges) before
 /// anything is written.
+///
+/// Ontology edges go through the same check, as Python's `edges_by_identity`
+/// includes them, and that is intended: a stored edge, extracted or ontology,
+/// is not upserted or indexed again. Python likewise never re-attaches an
+/// existing edge, so neither SDK refreshes a stored edge's properties (an edge
+/// first stored with `ontology_valid=false` keeps it when the ontology later
+/// yields the same identity). An edge whose vector rows were lost to a run
+/// killed between the graph write and the vector stage is no longer repaired
+/// by the next run as a side effect; [`crate::reindex_edge_types`] repairs it,
+/// as it already did for extracted edges.
 pub async fn partition_existing_edges(
     graph_db: &dyn GraphDBTrait,
     edges: Vec<GraphEdgePair>,
@@ -88,14 +98,20 @@ pub async fn partition_existing_edges(
         return Ok((edges, Vec::new()));
     }
 
-    // Batch query graph database for existing edges
-    let stored: HashSet<(String, String, String)> = graph_db
+    // Batch query graph database for existing edges. The answer (usually far
+    // smaller than the candidate list) is keyed like `dedup_key`, so each edge
+    // is probed with the one key it then reuses for the claim set.
+    let stored: HashSet<EdgeIdentity> = graph_db
         .has_edges(&edges_to_check)
         .await
         .map_err(|e| CognifyError::GraphDatabaseError(e.to_string()))?
         .into_iter()
-        .map(|(source_id, target_id, relationship_name, _)| {
-            (source_id, target_id, relationship_name)
+        .filter_map(|(source_id, target_id, relationship_name, _)| {
+            Some((
+                Uuid::parse_str(&source_id).ok()?,
+                Uuid::parse_str(&target_id).ok()?,
+                relationship_name,
+            ))
         })
         .collect();
 
@@ -103,14 +119,10 @@ pub async fn partition_existing_edges(
     let mut existing_edges = Vec::new();
     let mut claimed: HashSet<EdgeIdentity> = HashSet::new();
     for edge in edges {
-        let identity = (
-            edge.source_entity_id.to_string(),
-            edge.target_entity_id.to_string(),
-            edge.relationship_name.clone(),
-        );
+        let identity = edge.dedup_key();
         if !stored.contains(&identity) {
             new_edges.push(edge);
-        } else if claimed.insert(edge.dedup_key()) {
+        } else if claimed.insert(identity) {
             existing_edges.push(edge);
         }
     }
