@@ -166,7 +166,7 @@ class ImproveOpts(TypedDict, total=False):
     build_truth_subspace: bool
     # Return a ``running`` result at once (``background`` true, ``finished``
     # false, no stages) and run the improve as a process-wide background task.
-    # No per-run handle (default ``False``).
+    # ``close()`` waits for it. No per-run handle (default ``False``).
     run_in_background: bool
 
 

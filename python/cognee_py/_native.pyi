@@ -797,7 +797,10 @@ class Cognee:
         """Apply graph improvement based on session feedback.
 
         *opts* must contain ``"datasetName"`` (camelCase) or
-        ``"dataset_name"`` (normalised).
+        ``"dataset_name"`` (normalised). Optional keys: ``sessionIds``,
+        ``feedbackAlpha``, ``tenant``, ``datasetId``, ``buildGlobalContextIndex``,
+        ``buildTruthSubspace`` (bool opt-ins) and ``runInBackground`` (bool:
+        return a ``running`` result at once; ``close()`` waits for the run).
 
         Returns a dict with camelCase keys: ``datasetId``, ``datasetName``,
         ``sessionIds``, ``stages`` (one per improve stage, in order),

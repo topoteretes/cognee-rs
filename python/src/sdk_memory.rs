@@ -171,7 +171,10 @@ impl PyCognee {
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
     /// ``feedbackAlpha`` (float in (0, 1], default the ``improve.feedback_alpha`` setting, 0.1),
-    /// ``tenant`` (UUID str).
+    /// ``tenant`` (UUID str), ``datasetId`` (UUID str of an already-resolved dataset),
+    /// ``buildGlobalContextIndex`` / ``buildTruthSubspace`` (bool, default False: opt in
+    /// to those stages), ``runInBackground`` (bool, default False: return a ``running``
+    /// result at once; ``close()`` waits for the run).
     ///
     /// Returns a dict with camelCase keys:
     /// ``datasetId``, ``datasetName``, ``sessionIds``, ``stages`` (one per

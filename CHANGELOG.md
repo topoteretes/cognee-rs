@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `buildTruthSubspace` (SDK-1051).** The TS, Python, Java and C bindings
   forward them, as Python's `improve()` does. With `runInBackground` the op
   returns a `running` result at once (`background: true`, `finished: false`, no
-  stages) and the run continues as a process-wide background task, which the
-  `wait_for_background_tasks` op awaits (no per-run handle). The CLI gains
+  stages) and the run continues as a process-wide background task, which
+  `close()` waits for (no per-run handle; the language bindings do not expose
+  the `wait_for_background_tasks` op). The CLI gains
   `--build-global-context-index` and `--build-truth-subspace`.
 
 ### Changed

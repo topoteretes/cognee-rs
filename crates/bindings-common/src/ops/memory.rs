@@ -51,8 +51,9 @@
 //! `buildGlobalContextIndex` / `buildTruthSubspace` opt in to those stages
 //! (default `false`). With `runInBackground: true` the op returns at once with
 //! a `running` result (`background: true`, `finished: false`, no stages) and
-//! the run continues as a process-wide background task; wait for it with
-//! `waitForBackgroundTasks`. There is no per-run handle.
+//! the run continues as a process-wide background task. `close()` waits for it;
+//! the `waitForBackgroundTasks` op exists in bindings-common but the language
+//! bindings do not expose it. There is no per-run handle.
 //!
 //! `datasetId` (optional) targets a dataset the caller already resolved and
 //! authorized, possibly one shared with it, as Python's
@@ -80,7 +81,7 @@ use cognee::api::{ImproveParams, ImproveResult, remember, remember_entry};
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
-use crate::{HandleState, SdkError};
+use crate::{CogneeServices, HandleState, SdkError};
 
 // ---------------------------------------------------------------------------
 // opts helpers.
@@ -390,64 +391,8 @@ pub async fn run_improve(
     let cognify_config =
         super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?;
 
-    if flags.run_in_background {
-        // As Python's `improve(run_in_background=True)`: hand back a
-        // `running` result now and let the run finish on its own. Callers wait
-        // with `waitForBackgroundTasks`. The spawned task owns everything
-        // `ImproveParams` borrows.
-        let running = ImproveResult::running_in_background(
-            Some(dataset_id.unwrap_or_else(|| {
-                cognee::add::generate_dataset_id(&dataset_name, owner_id, tenant_id)
-            })),
-            dataset_name.clone(),
-            session_ids.clone().unwrap_or_default(),
-        );
-        cognee::spawn_background_task(async move {
-            let params = ImproveParams {
-                dataset_name: dataset_name.clone(),
-                dataset_id,
-                session_ids,
-                owner_id,
-                tenant_id,
-                feedback_alpha,
-                config: improve_config,
-                personalization,
-                auto_feedback,
-                build_global_context_index: flags.build_global_context_index,
-                build_truth_subspace: flags.build_truth_subspace,
-                run_in_background: true,
-                llm: svc.llm.clone(),
-                storage: svc.storage.clone(),
-                graph_db: svc.graph_db.clone(),
-                vector_db: svc.vector_db.clone(),
-                embedding_engine: svc.embedding_engine.clone(),
-                ontology_resolver: svc.ontology_resolver.clone(),
-                db: Some(svc.database.clone()),
-                session_store: Some(svc.session_store.clone()),
-                session_manager: Some(svc.session_manager.clone()),
-                add_pipeline: Some(svc.add_pipeline.as_ref()),
-                dataset_locks: None,
-                cognify_config: &cognify_config,
-            };
-            match cognee::api::improve(params).await {
-                Ok(result) => tracing::info!(
-                    dataset = %dataset_name,
-                    status = result.status().as_str(),
-                    stages = %result.stage_summary(),
-                    "background improve finished"
-                ),
-                // A fatal-stage abort (`ApiError::ImproveAborted`) included.
-                Err(e) => tracing::warn!(
-                    dataset = %dataset_name,
-                    "background improve failed: {e}"
-                ),
-            }
-            crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
-        });
-        return Ok(improve_result_json(&running));
-    }
-
-    let result = cognee::api::improve(ImproveParams {
+    let session_ids = session_ids.map(|ids| ids.into_iter().filter(|s| !s.is_empty()).collect());
+    let run = ImproveRun {
         dataset_name,
         dataset_id,
         session_ids,
@@ -457,29 +402,114 @@ pub async fn run_improve(
         config: improve_config,
         personalization,
         auto_feedback,
-        build_global_context_index: flags.build_global_context_index,
-        build_truth_subspace: flags.build_truth_subspace,
-        run_in_background: false,
-        llm: svc.llm.clone(),
-        storage: svc.storage.clone(),
-        graph_db: svc.graph_db.clone(),
-        vector_db: svc.vector_db.clone(),
-        embedding_engine: svc.embedding_engine.clone(),
-        ontology_resolver: svc.ontology_resolver.clone(),
-        db: Some(svc.database.clone()),
-        session_store: Some(svc.session_store.clone()),
-        session_manager: Some(svc.session_manager.clone()),
-        add_pipeline: Some(svc.add_pipeline.as_ref()),
-        // The add pipeline's registry (none here), else the process-wide one.
-        dataset_locks: None,
-        cognify_config: &cognify_config,
-    })
-    .await
-    .map_err(improve_error)?;
+        flags,
+    };
+
+    if flags.run_in_background {
+        // As Python's `improve(run_in_background=True)`, which resolves and
+        // authorizes the dataset before spawning: reject what the run itself
+        // would reject first, so a bad `feedbackAlpha` or an unknown
+        // `datasetId` is an error here rather than a warning in a task nobody
+        // reads.
+        cognee::api::improve::validate_feedback_alpha(
+            run.feedback_alpha.unwrap_or(run.config.feedback_alpha),
+        )
+        .map_err(|e| SdkError::Validation(e.to_string()))?;
+        let mut dataset_name = run.dataset_name.clone();
+        if let Some(id) = run.dataset_id {
+            let dataset = cognee::database::IngestDb::get_dataset(&*svc.database, id)
+                .await
+                .map_err(|e| SdkError::Runtime(format!("dataset lookup failed for '{id}': {e}")))?
+                .ok_or_else(|| SdkError::Validation(format!("dataset '{id}' not found")))?;
+            dataset_name = dataset.name;
+        }
+        // Callers wait with `waitForBackgroundTasks` (or `close()`, which
+        // waits). The spawned task owns everything `ImproveParams` borrows.
+        let running = ImproveResult::running_in_background(
+            Some(run.dataset_id.unwrap_or_else(|| {
+                cognee::add::generate_dataset_id(&dataset_name, owner_id, tenant_id)
+            })),
+            dataset_name,
+            run.session_ids.clone().unwrap_or_default(),
+        );
+        cognee::spawn_background_task(async move {
+            let name = run.dataset_name.clone();
+            match cognee::api::improve(run.params(svc.as_ref(), &cognify_config, true)).await {
+                Ok(result) => tracing::info!(
+                    dataset = %name,
+                    status = result.status().as_str(),
+                    stages = %result.stage_summary(),
+                    "background improve finished"
+                ),
+                // A fatal-stage abort (`ApiError::ImproveAborted`) included.
+                Err(e) => tracing::warn!(dataset = %name, "background improve failed: {e}"),
+            }
+            crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
+        });
+        return Ok(improve_result_json(&running));
+    }
+
+    let result = cognee::api::improve(run.params(svc.as_ref(), &cognify_config, false))
+        .await
+        .map_err(improve_error)?;
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
     Ok(improve_result_json(&result))
+}
+
+/// The resolved inputs of one `improve` run, owned so a background task can
+/// hold them.
+struct ImproveRun {
+    dataset_name: String,
+    dataset_id: Option<uuid::Uuid>,
+    session_ids: Option<Vec<String>>,
+    owner_id: uuid::Uuid,
+    tenant_id: Option<uuid::Uuid>,
+    feedback_alpha: Option<f64>,
+    config: cognee::api::improve::ImproveConfig,
+    personalization: cognee::search::PreferenceConfig,
+    auto_feedback: bool,
+    flags: ImproveFlags,
+}
+
+impl ImproveRun {
+    /// The library params: the two build flags and `run_in_background` come
+    /// from the opts, the engines from `svc`.
+    fn params<'a>(
+        self,
+        svc: &'a CogneeServices,
+        cognify_config: &'a cognee::cognify::CognifyConfig,
+        run_in_background: bool,
+    ) -> ImproveParams<'a> {
+        ImproveParams {
+            dataset_name: self.dataset_name,
+            dataset_id: self.dataset_id,
+            session_ids: self.session_ids,
+            owner_id: self.owner_id,
+            tenant_id: self.tenant_id,
+            feedback_alpha: self.feedback_alpha,
+            config: self.config,
+            personalization: self.personalization,
+            auto_feedback: self.auto_feedback,
+            build_global_context_index: self.flags.build_global_context_index,
+            build_truth_subspace: self.flags.build_truth_subspace,
+            run_in_background,
+            llm: svc.llm.clone(),
+            storage: svc.storage.clone(),
+            graph_db: svc.graph_db.clone(),
+            vector_db: svc.vector_db.clone(),
+            embedding_engine: svc.embedding_engine.clone(),
+            ontology_resolver: svc.ontology_resolver.clone(),
+            db: Some(svc.database.clone()),
+            session_store: Some(svc.session_store.clone()),
+            session_manager: Some(svc.session_manager.clone()),
+            add_pipeline: Some(svc.add_pipeline.as_ref()),
+            // The add pipeline's registry (none here), else the process-wide one.
+            dataset_locks: None,
+            cognify_config,
+        }
+    }
 }
 
 /// The boolean `improve` opts that are not part of the dataset selection.

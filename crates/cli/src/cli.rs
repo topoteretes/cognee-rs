@@ -801,7 +801,9 @@ pub struct ImproveArgs {
     #[arg(long = "feedback-alpha")]
     pub feedback_alpha: Option<f64>,
 
-    /// Opt in to the `global_context_index` stage.
+    /// Opt in to the `global_context_index` stage. Default off, unlike Python,
+    /// where the flag only forces it on and the default follows
+    /// `IMPROVE_GLOBAL_CONTEXT_INDEX`.
     #[arg(long = "build-global-context-index")]
     pub build_global_context_index: bool,
 

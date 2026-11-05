@@ -28,7 +28,9 @@ use crate::sdk_ops::parse_c_str_or_fire;
 /// `dataset_name` is the target dataset name.
 /// `opts_json` may be `NULL` or a JSON object with optional fields:
 ///   `"sessionId"` (string), `"selfImprovement"` (boolean, default `true`),
-///   `"tenant"` (UUID string).
+///   `"tenant"` (UUID string),
+///   `"buildGlobalContextIndex"` / `"buildTruthSubspace"` (bool, default false: opt in to those stages),
+///   `"runInBackground"` (bool, default false: return a `running` result at once; closing the handle waits for the run).
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread, never
 /// synchronously from this call.

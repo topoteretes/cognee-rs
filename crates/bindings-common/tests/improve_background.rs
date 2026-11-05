@@ -44,7 +44,7 @@ async fn background_improve_returns_running_and_is_awaited_by_wait() {
         &state,
         &json!({
             "datasetName": "bg_ds",
-            "sessionIds": ["s1"],
+            "sessionIds": ["", "s1"],
             "runInBackground": true,
             "buildGlobalContextIndex": true,
             "buildTruthSubspace": true,
@@ -67,6 +67,50 @@ async fn background_improve_returns_running_and_is_awaited_by_wait() {
     .expect("wait");
     assert_eq!(waited["finished"], true, "{waited}");
     assert_eq!(waited["pending"], 0, "{waited}");
+
+    // A bad `feedbackAlpha` or an unknown `datasetId` is refused before
+    // anything is spawned, as the synchronous path refuses them.
+    let err = cognee_bindings_common::ops::memory::run_improve(
+        &state,
+        &json!({ "datasetName": "bg_ds", "runInBackground": true, "feedbackAlpha": 5.0 }),
+    )
+    .await
+    .expect_err("an out-of-range alpha is rejected");
+    assert!(matches!(err, SdkError::Validation(_)), "{err:?}");
+    let err = cognee_bindings_common::ops::memory::run_improve(
+        &state,
+        &json!({
+            "datasetName": "bg_ds",
+            "runInBackground": true,
+            "datasetId": "00000000-0000-0000-0000-0000000000aa",
+        }),
+    )
+    .await
+    .expect_err("an unknown dataset id is rejected");
+    assert!(matches!(err, SdkError::Validation(_)), "{err:?}");
+    assert_eq!(cognee::pending_background_tasks(), 0);
+
+    // The same flags run synchronously reach the library: neither build stage
+    // is skipped for want of an opt-in.
+    let sync = cognee_bindings_common::ops::memory::run_improve(
+        &state,
+        &json!({
+            "datasetName": "bg_ds",
+            "sessionIds": ["s1"],
+            "buildGlobalContextIndex": true,
+            "buildTruthSubspace": true,
+        }),
+    )
+    .await;
+    if let Ok(sync) = sync {
+        for stage in sync["stages"].as_array().expect("stages") {
+            let name = stage["stage"].as_str().unwrap_or_default();
+            if name == "global_context_index" || name == "build_truth_subspace" {
+                let reason = stage["reason"].as_str().unwrap_or_default();
+                assert!(!reason.contains("opt"), "{name} not enabled: {stage}");
+            }
+        }
+    }
 
     // An invalid flag is refused before anything is spawned.
     let err = cognee_bindings_common::ops::memory::run_improve(

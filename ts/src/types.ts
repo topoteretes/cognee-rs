@@ -596,7 +596,7 @@ export interface CogneeImproveOptions {
   /**
    * Return a `running` result at once (`background: true`, `finished: false`,
    * no stages) and run the improve as a process-wide background task.
-   * There is no per-run handle. Default `false`.
+   * `close()` waits for it. There is no per-run handle. Default `false`.
    */
   runInBackground?: boolean;
 }

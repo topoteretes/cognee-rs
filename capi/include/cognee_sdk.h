@@ -672,7 +672,8 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
  *   "runInBackground"         (bool, default false: return a "running" result
  *                  at once -- background true, finished false, no stages --
  *                  and run the improve as a process-wide background task.
- *                  No per-run handle).
+ *                  cg_sdk_close
+ *                  waits for it. No per-run handle).
  *
  * result_json on success: ImproveResult JSON object (see wire shape above).
  *

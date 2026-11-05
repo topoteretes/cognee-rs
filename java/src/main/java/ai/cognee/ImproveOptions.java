@@ -22,7 +22,7 @@ public final class ImproveOptions extends Options {
     public ImproveOptions buildTruthSubspace(boolean b) { put("buildTruthSubspace", b); return this; }
     /**
      * Return a {@code running} result at once and run the improve as a process-wide
-     * background task. No per-run handle.
+     * background task; {@code close()} waits for it. No per-run handle.
      */
     public ImproveOptions runInBackground(boolean b) { put("runInBackground", b); return this; }
 }
