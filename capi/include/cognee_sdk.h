@@ -669,11 +669,14 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
  *   "tenant"      (UUID string, optional),
  *   "buildGlobalContextIndex" (bool, default false: opt in to that stage),
  *   "buildTruthSubspace"      (bool, default false: opt in to that stage),
- *   "runInBackground"         (bool, default false: return a "running" result
- *                  at once -- background true, finished false, no stages --
- *                  and run the improve as a process-wide background task.
- *                  cg_sdk_close
- *                  waits for it. No per-run handle).
+ *   "runInBackground"         (bool, default false: resolve the dataset --
+ *                  an unknown or unwritable "datasetId" fails with
+ *                  CG_ERR_SDK_VALIDATION -- and validate the options, then
+ *                  return a "running" result at once -- background true,
+ *                  finished false, no stages -- and run the improve as a
+ *                  process-wide background task. Wait for it with
+ *                  cg_sdk_wait_for_background_tasks; cg_sdk_close waits too.
+ *                  No per-run handle).
  *
  * result_json on success: ImproveResult JSON object (see wire shape above).
  *
@@ -686,6 +689,29 @@ void cg_sdk_improve(const CgSdk*        sdk,
                     const char*         opts_json,
                     CgSdkResultCallback callback,
                     void*               user_data);
+
+/**
+ * Wait for the process-wide background tasks -- a "runInBackground" improve,
+ * a session remember's automatic improve -- as Python's
+ * cognee.wait_for_background_tasks().
+ *
+ * opts_json — NULL or a JSON object with:
+ *   "timeoutSeconds" (non-negative number, optional: bounds the wait; nothing
+ *                     is cancelled when it elapses).
+ *
+ * result_json on success: {"finished":bool,"pending":N}. "finished" is false
+ * only when the timeout elapsed with work still running. A bad
+ * "timeoutSeconds" fails with CG_ERR_SDK_VALIDATION.
+ *
+ * @param sdk       A valid CgSdk* (the tasks are process-wide; it scopes the call).
+ * @param opts_json NULL or null-terminated UTF-8 JSON options object.
+ * @param callback  Called exactly once with the result.
+ * @param user_data Forwarded to callback unchanged.
+ */
+void cg_sdk_wait_for_background_tasks(const CgSdk*        sdk,
+                                      const char*         opts_json,
+                                      CgSdkResultCallback callback,
+                                      void*               user_data);
 
 /* ── Data ops (Phase 6) ───────────────────────────────────────────────────── */
 /*

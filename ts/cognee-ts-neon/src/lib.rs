@@ -74,6 +74,10 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("cogneeRemember", sdk_memory::cognee_remember)?;
     cx.export_function("cogneeRememberEntry", sdk_memory::cognee_remember_entry)?;
     cx.export_function("cogneeImprove", sdk_memory::cognee_improve)?;
+    cx.export_function(
+        "cogneeWaitForBackgroundTasks",
+        sdk_memory::cognee_wait_for_background_tasks,
+    )?;
 
     // Data ops (Phase 5): forget / update / prune.
     cx.export_function("cogneeForget", sdk_data::cognee_forget)?;

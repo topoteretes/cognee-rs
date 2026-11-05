@@ -164,10 +164,20 @@ class ImproveOpts(TypedDict, total=False):
     build_global_context_index: bool
     # Opt in to the ``build_truth_subspace`` stage (default ``False``).
     build_truth_subspace: bool
-    # Return a ``running`` result at once (``background`` true, ``finished``
-    # false, no stages) and run the improve as a process-wide background task.
-    # ``close()`` waits for it. No per-run handle (default ``False``).
+    # Resolve the dataset and validate the options, then return a ``running``
+    # result at once (``background`` true, ``finished`` false, no stages) and
+    # run the improve as a process-wide background task. Wait for it with
+    # ``Cognee.wait_for_background_tasks()``; ``close()`` waits too. No per-run
+    # handle (default ``False``).
     run_in_background: bool
+
+
+class WaitForBackgroundTasksOpts(TypedDict, total=False):
+    """Options accepted by :meth:`Cognee.wait_for_background_tasks`."""
+
+    # Bound the wait, in seconds (non-negative); nothing is cancelled when it
+    # elapses. Absent waits until every task finished.
+    timeout_seconds: float
 
 
 class ForgetTarget(TypedDict, total=False):
@@ -341,6 +351,15 @@ class ImproveResult(TypedDict):
     status: str  # "completed" | "errored" | "skipped" | "running"
 
 
+class WaitForBackgroundTasksResult(TypedDict):
+    """Result of :meth:`Cognee.wait_for_background_tasks`."""
+
+    # False only when the timeout elapsed with work still running.
+    finished: bool
+    # Background tasks still running.
+    pending: int
+
+
 __all__ = [
     # Input types
     "TextInput",
@@ -360,6 +379,7 @@ __all__ = [
     "PruneSystemOpts",
     "DeleteDataOpts",
     "VisualizeOpts",
+    "WaitForBackgroundTasksOpts",
     # Result types
     "AddResult",
     "CognifyResult",
@@ -370,4 +390,5 @@ __all__ = [
     "PruneResult",
     "ImproveResult",
     "ImproveStageResult",
+    "WaitForBackgroundTasksResult",
 ]

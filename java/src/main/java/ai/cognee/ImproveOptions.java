@@ -21,8 +21,10 @@ public final class ImproveOptions extends Options {
     /** Opt in to the {@code build_truth_subspace} stage (default false). */
     public ImproveOptions buildTruthSubspace(boolean b) { put("buildTruthSubspace", b); return this; }
     /**
-     * Return a {@code running} result at once and run the improve as a process-wide
-     * background task; {@code close()} waits for it. No per-run handle.
+     * Resolve the dataset and validate the options (an unknown or unwritable {@code datasetId}
+     * fails the future), then return a {@code running} result at once and run the improve as a
+     * process-wide background task. Wait for it with {@link Cognee#waitForBackgroundTasks()};
+     * {@code close()} waits too. No per-run handle.
      */
     public ImproveOptions runInBackground(boolean b) { put("runInBackground", b); return this; }
 }

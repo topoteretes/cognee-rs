@@ -1,7 +1,8 @@
 //! Phase 6 — memory ops: `cg_sdk_remember`, `cg_sdk_remember_entry`,
-//! `cg_sdk_improve`.
+//! `cg_sdk_improve`, and `cg_sdk_wait_for_background_tasks`, the drain a
+//! background improve is awaited with.
 //!
-//! All three follow the Phase-4 canonical pattern:
+//! All four follow the Phase-4 canonical pattern:
 //!   `Arc::clone(&(*sdk).state)` → `spawn_sdk_op` → delegate to
 //!   `cognee_bindings_common::ops::memory` shared async bodies.
 //!
@@ -13,7 +14,7 @@ use std::ffi::c_char;
 use std::sync::Arc;
 
 use cognee_bindings_common::SdkError;
-use cognee_bindings_common::ops::memory;
+use cognee_bindings_common::ops::{lifecycle, memory};
 
 use crate::sdk::{CgSdk, CgSdkResultCallback, SendUserData, spawn_sdk_op};
 use crate::sdk_ops::parse_c_str_or_fire;
@@ -28,9 +29,7 @@ use crate::sdk_ops::parse_c_str_or_fire;
 /// `dataset_name` is the target dataset name.
 /// `opts_json` may be `NULL` or a JSON object with optional fields:
 ///   `"sessionId"` (string), `"selfImprovement"` (boolean, default `true`),
-///   `"tenant"` (UUID string),
-///   `"buildGlobalContextIndex"` / `"buildTruthSubspace"` (bool, default false: opt in to those stages),
-///   `"runInBackground"` (bool, default false: return a `running` result at once; closing the handle waits for the run).
+///   `"tenant"` (UUID string).
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread, never
 /// synchronously from this call.
@@ -158,7 +157,11 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
 /// `opts_json` is a JSON object with required field `"datasetName"` and optional:
 ///   `"datasetId"` (UUID string, a dataset the caller already resolved),
 ///   `"sessionIds"` (string array),
-///   `"feedbackAlpha"` (float in (0, 1], default the `improve.feedback_alpha` setting, 0.1), `"tenant"` (UUID string).
+///   `"feedbackAlpha"` (float in (0, 1], default the `improve.feedback_alpha` setting, 0.1), `"tenant"` (UUID string),
+///   `"buildGlobalContextIndex"` / `"buildTruthSubspace"` (bool, default false: opt in to those stages),
+///   `"runInBackground"` (bool, default false: resolve the dataset and validate the options,
+///   then return a `running` result at once; wait for the run with
+///   [`cg_sdk_wait_for_background_tasks`], closing the handle waits too).
 ///
 /// On success `result_json` is a JSON object:
 ///   `{"datasetId":…,"datasetName":"…","sessionIds":[…],"stages":[…],
@@ -195,5 +198,54 @@ pub unsafe extern "C" fn cg_sdk_improve(
         let opts_val: serde_json::Value = serde_json::from_str(&opts_str)
             .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?;
         memory::run_improve(&state, &opts_val).await
+    });
+}
+
+/// Wait for the process-wide background tasks — a `runInBackground` improve,
+/// a session remember's automatic improve — as Python's
+/// `cognee.wait_for_background_tasks()`.
+///
+/// `opts_json` may be `NULL` or a JSON object with optional
+/// `"timeoutSeconds"` (non-negative number): it bounds the wait, and nothing
+/// is cancelled when it elapses. On success `result_json` is
+/// `{"finished":bool,"pending":N}`; `finished` is `false` only when the
+/// timeout elapsed with work still running. The tasks are process-wide, so
+/// `sdk` only scopes the call.
+///
+/// Async (D4, R1): callback fires on a tokio worker thread.
+///
+/// # Safety
+/// `sdk` must be a valid `CgSdk*` or NULL.  `opts_json` may be NULL, else a
+/// valid null-terminated UTF-8 JSON string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cg_sdk_wait_for_background_tasks(
+    sdk: *const CgSdk,
+    opts_json: *const c_char,
+    callback: CgSdkResultCallback,
+    user_data: *mut std::ffi::c_void,
+) {
+    if sdk.is_null() {
+        crate::error::set_last_error("null pointer: sdk");
+        return;
+    }
+    let ud_raw = user_data as usize;
+
+    let opts_str: Option<String> = if opts_json.is_null() {
+        None
+    } else {
+        match parse_c_str_or_fire(opts_json, "opts_json", callback, ud_raw) {
+            Some(s) => Some(s),
+            None => return,
+        }
+    };
+
+    let ud = SendUserData(user_data);
+    spawn_sdk_op(callback, ud, async move {
+        let opts_val: serde_json::Value = match opts_str {
+            Some(ref s) => serde_json::from_str(s)
+                .map_err(|e| SdkError::Validation(format!("opts_json parse error: {e}")))?,
+            None => serde_json::Value::Null,
+        };
+        lifecycle::wait_for_background_tasks(&opts_val).await
     });
 }

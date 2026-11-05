@@ -59,6 +59,20 @@ async fn background_improve_returns_running_and_is_awaited_by_wait() {
     assert_eq!(result["sessionIds"], json!(["s1"]), "{result}");
     assert_eq!(result["stages"], json!([]), "{result}");
     assert!(result["datasetId"].is_string(), "{result}");
+    // The library resolved the name before dispatch: the dataset exists, under
+    // the id the running result reports.
+    let svc = state.services().await.expect("services");
+    let owner_id = state.owner_id().await.expect("owner");
+    let created = cognee::database::IngestDb::get_dataset_by_name_in_tenant(
+        &*svc.database,
+        "bg_ds",
+        owner_id,
+        None,
+    )
+    .await
+    .expect("lookup")
+    .expect("a background improve creates the named dataset for the caller");
+    assert_eq!(result["datasetId"], created.id.to_string(), "{result}");
 
     let waited = cognee_bindings_common::ops::lifecycle::wait_for_background_tasks(
         &json!({ "timeoutSeconds": 60 }),
@@ -88,6 +102,33 @@ async fn background_improve_returns_running_and_is_awaited_by_wait() {
     .await
     .expect_err("an unknown dataset id is rejected");
     assert!(matches!(err, SdkError::Validation(_)), "{err:?}");
+    assert!(err.to_string().contains("not found"), "{err}");
+
+    // A dataset another user owns is not the caller's to write (no ACL wired:
+    // ownership stands in for the grant).
+    let foreign = cognee::database::IngestDb::create_dataset(
+        &*svc.database,
+        cognee::models::Dataset::new(
+            "foreign_ds".to_string(),
+            uuid::Uuid::new_v4(),
+            None,
+            uuid::Uuid::new_v4(),
+        ),
+    )
+    .await
+    .expect("seed a foreign dataset");
+    let err = cognee_bindings_common::ops::memory::run_improve(
+        &state,
+        &json!({
+            "datasetName": "foreign_ds",
+            "runInBackground": true,
+            "datasetId": foreign.id.to_string(),
+        }),
+    )
+    .await
+    .expect_err("an unauthorized dataset id is rejected");
+    assert!(matches!(err, SdkError::Validation(_)), "{err:?}");
+    assert!(err.to_string().contains("permission denied"), "{err}");
     assert_eq!(cognee::pending_background_tasks(), 0);
 
     // The same flags run synchronously reach the library: neither build stage

@@ -45,4 +45,15 @@ class MemoryMarshallingTest {
         assertThrows(IllegalArgumentException.class, () -> new ImproveOptions(null));
         assertThrows(IllegalArgumentException.class, () -> new ImproveOptions(""));
     }
+
+    @Test
+    void waitForBackgroundTasksMarshals() {
+        JsonNode n = Json.tree(new WaitForBackgroundTasksOptions().timeoutSeconds(1.5).toJson());
+        assertEquals(1.5, n.path("timeoutSeconds").asDouble());
+        assertEquals("null", Options.jsonOf(null));
+        BackgroundTasksResult r =
+                Json.fromJson("{\"finished\":false,\"pending\":2}", BackgroundTasksResult.class);
+        assertEquals(false, r.finished());
+        assertEquals(2L, r.pending());
+    }
 }
