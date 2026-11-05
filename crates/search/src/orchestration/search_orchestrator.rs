@@ -1046,6 +1046,51 @@ impl SearchOrchestrator {
             return Ok(Vec::new());
         }
 
+        // A selecting retriever (FEELING_LUCKY) is resolved first, as in
+        // Python, so its pick decides whether the search is session-aware and
+        // serves the search.
+        let retriever = match retriever.resolve_for_query(&request.query_text).await? {
+            Some(selected) => selected,
+            None => retriever,
+        };
+
+        // A search that names no session uses the default one when its
+        // retriever prepares session turns (Python resolves it only in the
+        // session-aware completion retrievers, via `resolve_session_id`).
+        // Python gates it on a known user and an available session cache
+        // (`is_session_available_for_completion`), so a sessionless search with
+        // caching off or no user stays stateless.
+        //
+        // The id is scoped to the dataset when exactly one distinct dataset is
+        // named, or exactly one is readable under per-dataset storage (Python
+        // `current_dataset_id`). Divergences from Python, both because a
+        // multi-dataset fan-out is one logical turn here: (1) a search over
+        // several datasets uses the unscoped `default_session`, where
+        // Python's access-control path runs one leg, and so one
+        // `default_session_<id>`, per dataset (the HTTP router does the same
+        // by issuing one leg per dataset); (2) a shared-store search naming no
+        // dataset uses it too, where Python's non-access-control path scopes
+        // to the user's only dataset.
+        let session_defaulted_request;
+        if request.session_id.is_none()
+            && request.user_id.is_some()
+            && retriever.supports_session_turn_preparation()
+            && let Some(manager) = self.session_manager.as_ref().filter(|m| m.is_available())
+        {
+            let mut named: Vec<_> = request.dataset_ids.iter().flatten().copied().collect();
+            named.sort_unstable();
+            named.dedup();
+            let single_dataset = match (named.as_slice(), &preflight_datasets) {
+                ([only], _) => Some(*only),
+                (_, Some(readable)) if readable.len() == 1 => Some(readable[0]),
+                _ => None,
+            };
+            let mut clone = request.clone();
+            clone.session_id = Some(manager.default_session_id_for(single_dataset));
+            session_defaulted_request = clone;
+            request = &session_defaulted_request;
+        }
+
         // The concurrent runner is intentionally narrow, matching Python's
         // exact-type allowlist.
         if self.session_search_mode == SessionSearchMode::Concurrent
@@ -1110,13 +1155,7 @@ impl SearchOrchestrator {
         // deliberately runs one logical turn for the whole fan-out (a
         // documented divergence). A retriever that opts out
         // (`supports_session_turn_preparation`: the raw retrieval modes),
-        // previews and batch searches skip this LLM call. A selecting
-        // retriever (FEELING_LUCKY) is resolved first, as in Python, so its
-        // pick decides the capability and serves the search.
-        let retriever = match retriever.resolve_for_query(&request.query_text).await? {
-            Some(selected) => selected,
-            None => retriever,
-        };
+        // previews and batch searches skip this LLM call.
         let raw_request = request.clone();
         let prepared_request;
         let mut turn_prepared = false;
@@ -2513,6 +2552,519 @@ mod tests {
             .unwrap();
         assert_eq!(entries.last().unwrap().question, "raw follow-up");
         assert_eq!(entries.last().unwrap().answer, "generated answer");
+    }
+
+    const NO_REWRITE: &str = r#"{"response_to_user":null,"query_to_answer":null,"served_context_ratings":[],"candidate_context_updates":[],"previous_answer_rating":null}"#;
+
+    fn default_session_analysis() -> serde_json::Value {
+        serde_json::from_str(NO_REWRITE).unwrap()
+    }
+
+    async fn qa_questions(manager: &SessionManager, session: &str) -> Vec<String> {
+        manager
+            .get_session(Some(session), Some(&session_test_user().to_string()))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.question)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_writes_to_the_default_session() {
+        let (orchestrator, _retriever, manager, _dir) =
+            session_orchestrator(default_session_analysis()).await;
+        let mut request = session_request("where is it");
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(
+            qa_questions(&manager, "default_session").await,
+            vec!["where is it"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_runs_turn_preparation() {
+        // A feedback-only turn is acknowledged without retrieval: proof that
+        // the analysis ran for a search that named no session.
+        let (orchestrator, retriever, manager, _dir) = session_orchestrator(json!({
+            "response_to_user": "Noted.",
+            "query_to_answer": null,
+            "served_context_ratings": [],
+            "candidate_context_updates": [],
+            "previous_answer_rating": 2
+        }))
+        .await;
+        manager
+            .save_qa(
+                None,
+                Some(&session_test_user().to_string()),
+                "earlier",
+                "answer",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let mut request = session_request("thanks");
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert!(retriever.query_seen.lock().unwrap().is_none());
+        assert_eq!(
+            qa_questions(&manager, "default_session").await,
+            ["earlier", "thanks"]
+        );
+    }
+
+    #[tokio::test]
+    async fn sessionless_searches_of_two_datasets_never_mix() {
+        let (orchestrator, _retriever, manager, _dir) =
+            session_orchestrator(default_session_analysis()).await;
+        let (a, b) = (uuid::Uuid::from_u128(0xa), uuid::Uuid::from_u128(0xb));
+        for (dataset, query) in [(a, "about a"), (b, "about b")] {
+            let mut request = session_request(query);
+            request.session_id = None;
+            request.dataset_ids = Some(vec![dataset]);
+            orchestrator.search(&request).await.unwrap();
+        }
+
+        assert_eq!(
+            qa_questions(&manager, &format!("default_session_{a}")).await,
+            ["about a"]
+        );
+        assert_eq!(
+            qa_questions(&manager, &format!("default_session_{b}")).await,
+            ["about b"]
+        );
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_explicit_session_is_not_replaced_by_the_default() {
+        let (orchestrator, _retriever, manager, _dir) =
+            session_orchestrator(default_session_analysis()).await;
+        orchestrator
+            .search(&session_request("explicit"))
+            .await
+            .unwrap();
+
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+        assert!(
+            qa_questions(&manager, "s")
+                .await
+                .contains(&"explicit".to_string())
+        );
+    }
+
+    /// A turn-analysis LLM that counts its calls: the observable proof that
+    /// turn preparation did, or did not, run.
+    struct CountingAnalysisLlm {
+        analysis: serde_json::Value,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Llm for CountingAnalysisLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            Err(LlmError::ConfigError("not used".into()))
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.analysis.clone())
+        }
+
+        fn model(&self) -> &str {
+            "counting-analysis-test"
+        }
+    }
+
+    /// A retriever that opts out of turn preparation, like the raw modes.
+    struct RawChunksRetriever;
+
+    #[async_trait]
+    impl SearchRetriever for RawChunksRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::Chunks
+        }
+
+        fn supports_session_turn_preparation(&self) -> bool {
+            false
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            Ok(SearchOutput::Items(vec![]))
+        }
+    }
+
+    /// A sequential session orchestrator over `retrievers`, with a counting
+    /// analysis LLM, plus the store it writes to.
+    fn counting_session_orchestrator(
+        retrievers: Vec<crate::retrievers::SearchRetrieverRef>,
+    ) -> (
+        super::SearchOrchestrator,
+        Arc<SessionManager>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = SearchTypeRegistry::new();
+        for retriever in retrievers {
+            registry.register(retriever);
+        }
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager.clone())
+            .with_llm(Arc::new(CountingAnalysisLlm {
+                analysis: default_session_analysis(),
+                calls: calls.clone(),
+            }))
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Sequential);
+        (orchestrator, manager, calls, dir)
+    }
+
+    fn completion_retriever() -> crate::retrievers::SearchRetrieverRef {
+        Arc::new(SessionCompletionRetriever {
+            query_seen: std::sync::Mutex::new(None),
+            completion_query_seen: std::sync::Mutex::new(None),
+        })
+    }
+
+    fn analysis_calls(calls: &std::sync::atomic::AtomicUsize) -> usize {
+        calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_without_a_user_stays_stateless() {
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let mut request = session_request("anonymous");
+        request.session_id = None;
+        request.user_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        // No analysis ran, and nothing was written under either key.
+        assert_eq!(analysis_calls(&calls), 0);
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+        assert!(
+            manager
+                .get_session(Some("default_session"), None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_with_session_memory_off_runs_no_turn() {
+        let (orchestrator, _manager, calls, _dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let off = Arc::new(SessionManager::new(Arc::new(
+            cognee_session::DisabledSessionStore,
+        )));
+        let orchestrator = orchestrator.with_session_manager(off);
+        let mut request = session_request("no memory");
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        // The gate keeps the search out of the turn flow: without it the
+        // default session would be set and the analysis LLM called.
+        assert_eq!(analysis_calls(&calls), 0);
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_of_a_non_preparing_retriever_touches_no_session() {
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![Arc::new(RawChunksRetriever)]);
+        let mut request = session_request("raw lookup");
+        request.search_type = SearchType::Chunks;
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(analysis_calls(&calls), 0);
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_preview_neither_analyses_nor_writes() {
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let mut preview = session_request("preview");
+        preview.session_id = None;
+        preview.only_context = Some(true);
+
+        orchestrator.search(&preview).await.unwrap();
+
+        assert_eq!(analysis_calls(&calls), 0);
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+    }
+
+    /// Python's `load_read_only_session_prompt`: a sessionless preview reads
+    /// the default session, so its prompt carries that session's history.
+    #[tokio::test]
+    async fn a_sessionless_preview_prompt_carries_the_default_sessions_history() {
+        struct HistoryEchoRetriever;
+
+        #[async_trait]
+        impl SearchRetriever for HistoryEchoRetriever {
+            fn search_type(&self) -> SearchType {
+                SearchType::RagCompletion
+            }
+
+            async fn get_context(
+                &self,
+                _query: &str,
+                _params: &SearchParams,
+            ) -> Result<SearchContext, SearchError> {
+                Ok(vec![crate::types::SearchItem {
+                    id: None,
+                    score: Some(0.9),
+                    payload: json!({ "text": "ctx" }),
+                }])
+            }
+
+            async fn completion_messages(
+                &self,
+                _query: &str,
+                _context: &SearchContext,
+                session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<Option<Vec<Message>>, SearchError> {
+                Ok(Some(vec![
+                    Message::system("system"),
+                    Message::user(format!(
+                        "[{}] {}",
+                        session.session_id.as_deref().unwrap_or("none"),
+                        session.formatted_history
+                    )),
+                ]))
+            }
+
+            async fn get_completion(
+                &self,
+                _query: &str,
+                _context: Option<SearchContext>,
+                _session: &SessionContext,
+                _params: &SearchParams,
+            ) -> Result<SearchOutput, SearchError> {
+                Ok(SearchOutput::Text("unused".into()))
+            }
+        }
+
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![Arc::new(HistoryEchoRetriever)]);
+        let user = session_test_user().to_string();
+        manager
+            .save_qa(
+                None,
+                Some(&user),
+                "earlier question",
+                "earlier answer",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let mut preview = session_request("preview");
+        preview.session_id = None;
+        preview.only_context = Some(true);
+
+        let response = orchestrator.search(&preview).await.unwrap();
+
+        let prompt = format!("{:?}", response.result);
+        assert!(prompt.contains("[default_session]"), "{prompt}");
+        assert!(prompt.contains("earlier question"), "{prompt}");
+        assert!(prompt.contains("earlier answer"), "{prompt}");
+        assert_eq!(analysis_calls(&calls), 0);
+        assert_eq!(
+            qa_questions(&manager, "default_session").await,
+            ["earlier question"]
+        );
+    }
+
+    /// A batch search skips turn analysis whatever its session, but records
+    /// its answer like any completion: here in the default session.
+    #[tokio::test]
+    async fn a_sessionless_batch_search_skips_analysis_but_records_the_turn() {
+        let (orchestrator, manager, calls, _dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let mut batched = session_request("batched");
+        batched.session_id = None;
+
+        orchestrator.search_batch(&[batched]).await.unwrap();
+
+        assert_eq!(analysis_calls(&calls), 0);
+        assert_eq!(qa_questions(&manager, "default_session").await, ["batched"]);
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_search_naming_one_dataset_twice_uses_that_datasets_session() {
+        let (orchestrator, manager, _calls, _dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let a = uuid::Uuid::from_u128(0xa);
+        let mut request = session_request("twice");
+        request.session_id = None;
+        request.dataset_ids = Some(vec![a, a]);
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(
+            qa_questions(&manager, &format!("default_session_{a}")).await,
+            ["twice"]
+        );
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+    }
+
+    /// A per-dataset orchestrator whose caller owns `names.len()` datasets.
+    async fn per_dataset_session_orchestrator(
+        names: &[&str],
+        mode: crate::SessionSearchMode,
+    ) -> (
+        super::SearchOrchestrator,
+        Arc<SessionManager>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Vec<uuid::Uuid>,
+        tempfile::TempDir,
+    ) {
+        let (orchestrator, manager, calls, dir) =
+            counting_session_orchestrator(vec![completion_retriever()]);
+        let db = fresh_db().await;
+        let mut ids = Vec::new();
+        for name in names {
+            ids.push(seed_dataset(&db, name, session_test_user()).await.id);
+        }
+        let orchestrator = orchestrator
+            .with_per_dataset_storage(true)
+            .with_dataset_resolver(db as Arc<dyn IngestDb>)
+            .with_session_search_mode(mode);
+        (orchestrator, manager, calls, ids, dir)
+    }
+
+    #[tokio::test]
+    async fn per_dataset_sessionless_searches_of_one_dataset_use_its_session() {
+        for mode in [
+            crate::SessionSearchMode::Sequential,
+            crate::SessionSearchMode::Concurrent,
+        ] {
+            let (orchestrator, manager, calls, ids, _dir) =
+                per_dataset_session_orchestrator(&["a", "b"], mode).await;
+            let mut named = session_request("named");
+            named.session_id = None;
+            named.dataset_ids = Some(vec![ids[0]]);
+            orchestrator.search(&named).await.unwrap();
+
+            assert_eq!(
+                qa_questions(&manager, &format!("default_session_{}", ids[0])).await,
+                ["named"],
+                "{mode:?}"
+            );
+            assert_eq!(analysis_calls(&calls), 1, "{mode:?}");
+            assert!(qa_questions(&manager, "default_session").await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn per_dataset_sessionless_search_of_the_only_readable_dataset_uses_its_session() {
+        let (orchestrator, manager, _calls, ids, _dir) =
+            per_dataset_session_orchestrator(&["only"], crate::SessionSearchMode::Sequential).await;
+        let mut request = session_request("no names");
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(
+            qa_questions(&manager, &format!("default_session_{}", ids[0])).await,
+            ["no names"]
+        );
+        assert!(qa_questions(&manager, "default_session").await.is_empty());
+    }
+
+    /// A search over several datasets is one logical turn: the unscoped
+    /// default session, whichever datasets it names or resolves to.
+    #[tokio::test]
+    async fn per_dataset_sessionless_multi_dataset_search_is_one_turn_in_the_unscoped_session() {
+        for mode in [
+            crate::SessionSearchMode::Sequential,
+            crate::SessionSearchMode::Concurrent,
+        ] {
+            let (orchestrator, manager, calls, ids, _dir) =
+                per_dataset_session_orchestrator(&["a", "b"], mode).await;
+            let mut named = session_request("both named");
+            named.session_id = None;
+            named.dataset_ids = Some(ids.clone());
+            let mut unnamed = session_request("both resolved");
+            unnamed.session_id = None;
+            orchestrator.search(&named).await.unwrap();
+            orchestrator.search(&unnamed).await.unwrap();
+
+            assert_eq!(
+                qa_questions(&manager, "default_session").await,
+                ["both named", "both resolved"],
+                "{mode:?}"
+            );
+            assert_eq!(analysis_calls(&calls), 2, "{mode:?}");
+            for id in &ids {
+                assert!(
+                    qa_questions(&manager, &format!("default_session_{id}"))
+                        .await
+                        .is_empty(),
+                    "{mode:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sessionless_concurrent_search_writes_to_the_default_session() {
+        let (orchestrator, _retriever, manager, _dir) =
+            session_orchestrator(default_session_analysis()).await;
+        let orchestrator =
+            orchestrator.with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let mut request = session_request("concurrent");
+        request.session_id = None;
+
+        orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(
+            qa_questions(&manager, "default_session").await,
+            ["concurrent"]
+        );
     }
 
     #[tokio::test]

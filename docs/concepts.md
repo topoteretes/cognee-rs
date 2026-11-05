@@ -90,8 +90,16 @@ Rust: `Dataset` in [`cognee-models`](../crates/models/); lifecycle helpers in
 A **Session** is a temporary memory context — search/answer history and feedback
 for a single conversational thread — distinct from permanent, graph-backed
 storage. Passing a `--session-id` to `remember` / `recall` scopes a turn to that
-session and lets retrieval reuse prior context; omitting it persists input as
-permanent graph memory (see the memory API in [operations.md](operations.md)).
+session and lets retrieval reuse prior context; omitting it on `remember` persists
+input as permanent graph memory (see the memory API in
+[operations.md](operations.md)). A completion `search` / `recall` (a retriever
+that prepares session turns; not chunks, summaries, Cypher, ...) that omits it
+uses the default session when the caller is known and session memory is on
+(Python's `resolve_session_id`): `default_session_<dataset_id>` when one
+distinct dataset is searched, so separate single-dataset searches never share a
+session, else `default_session` (a search over several datasets, or none, is one
+logical turn; Python's access-control path would use one session per dataset,
+and the HTTP server does, issuing one leg per dataset).
 The store backend is pluggable.
 
 Rust: `SessionStore` trait in [`cognee-session`](../crates/session/), with

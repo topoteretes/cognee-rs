@@ -73,6 +73,18 @@ impl SessionManager {
         self
     }
 
+    /// The session a search that names none writes to (Python's
+    /// `resolve_session_id(None)`): `{default}_{dataset_id}` when the search is
+    /// scoped to one dataset, so two datasets can never mix their turns, and
+    /// the plain default otherwise. The default id is fixed
+    /// ([`Self::with_default_session_id`]); Python has no setting for it.
+    pub fn default_session_id_for(&self, dataset_id: Option<uuid::Uuid>) -> String {
+        match dataset_id {
+            Some(id) => format!("{}_{id}", self.default_session_id),
+            None => self.default_session_id.clone(),
+        }
+    }
+
     fn resolve_session_id<'a>(&'a self, session_id: Option<&'a str>) -> &'a str {
         session_id.unwrap_or(&self.default_session_id)
     }
@@ -492,6 +504,7 @@ fn entries_to_messages(entries: &[SessionQAEntry]) -> Vec<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DisabledSessionStore;
 
     fn make_entry(question: &str, answer: &str) -> SessionQAEntry {
         SessionQAEntry {
@@ -508,6 +521,17 @@ mod tests {
             used_session_context_ids: None,
             memify_metadata: None,
         }
+    }
+
+    #[test]
+    fn the_default_session_is_scoped_to_a_dataset() {
+        let manager = SessionManager::new(Arc::new(DisabledSessionStore));
+        let dataset = uuid::Uuid::from_u128(7);
+        assert_eq!(manager.default_session_id_for(None), "default_session");
+        assert_eq!(
+            manager.default_session_id_for(Some(dataset)),
+            format!("default_session_{dataset}")
+        );
     }
 
     #[test]
