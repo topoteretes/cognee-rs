@@ -1142,6 +1142,7 @@ async fn update_user_preferences_writes_prefers_edges() {
                 node_ids: vec!["pref-node-1".to_string(), "pref-node-2".to_string()],
                 edge_ids: vec![],
             }),
+            None,
         )
         .await
         .unwrap();

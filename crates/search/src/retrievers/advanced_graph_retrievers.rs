@@ -126,8 +126,9 @@ impl GraphSummaryCompletionRetriever {
             .await?
             .content;
 
+        let guidance = self.core.guidance(session, params, true).await;
         self.prompts
-            .messages(query, &summarized_context, session, params)
+            .messages(query, &summarized_context, session, &guidance, params)
             .map(Some)
     }
 }
@@ -318,11 +319,13 @@ impl GraphCompletionContextExtensionRetriever {
             return Ok(None);
         }
         let extended_context = self.extend_context(query, context, params).await?;
+        let guidance = self.core.guidance(session, params, true).await;
         self.prompts
             .messages(
                 query,
                 &render_edges_context(&extended_context),
                 session,
+                &guidance,
                 params,
             )
             .map(Some)
@@ -483,6 +486,16 @@ impl GraphCompletionCotRetriever {
                 .as_deref()
                 .or(self.prompts.system_prompt_path.as_deref()),
         )?;
+        // Python's intermediate rounds see the stored session entries only
+        // (`_maybe_active_context_block`: no preference lines, nothing when
+        // the layer is off); only the answer that is returned carries the
+        // full guidance (`build_session_prompt`).
+        let round_guidance = session
+            .guidance
+            .as_ref()
+            .map(|selection| selection.render::<&str>(&[]))
+            .unwrap_or_default();
+        let final_guidance = self.core.guidance(session, params, true).await;
         let max_iter = params.max_iter.unwrap_or(self.max_iter);
         let answer_over = |context: &SearchContext| {
             render_graph_user_prompt(
@@ -500,6 +513,11 @@ impl GraphCompletionCotRetriever {
                     system_prompt.clone(),
                     answer_over(&current_context),
                     session,
+                    if final_answer && max_iter == 0 {
+                        &final_guidance
+                    } else {
+                        &round_guidance
+                    },
                 ),
                 self.generation_options.clone(),
             )
@@ -569,6 +587,11 @@ impl GraphCompletionCotRetriever {
                         system_prompt.clone(),
                         answer_over(&current_context),
                         session,
+                        if final_answer && iteration + 1 == max_iter {
+                            &final_guidance
+                        } else {
+                            &round_guidance
+                        },
                     ),
                     self.generation_options.clone(),
                 )
@@ -628,11 +651,13 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         let outcome = self
             .reason(query, context.clone(), session, params, false)
             .await?;
+        let guidance = self.core.guidance(session, params, true).await;
         self.prompts
             .messages(
                 query,
                 &render_edges_context(&outcome.context),
                 session,
+                &guidance,
                 params,
             )
             .map(Some)
@@ -660,10 +685,12 @@ impl SearchRetriever for GraphCompletionCotRetriever {
         if params.response_schema.is_some() {
             // CoT builds the answer as plain text; structured output is the
             // final prompt re-run as a structured call.
+            let guidance = self.core.guidance(session, params, true).await;
             let messages = self.prompts.messages(
                 query,
                 &render_edges_context(&outcome.context),
                 session,
+                &guidance,
                 params,
             )?;
             complete(
@@ -1190,6 +1217,153 @@ mod tests {
     }
 
     /// GRAPH_SUMMARY_COMPLETION inherits Python's empty-graph `NoDataError`.
+    /// A graph with a stored preference for the returned `params` user.
+    async fn personalized() -> (Arc<MockGraphDB>, SearchParams) {
+        let graph = build_graph_db().await;
+        let (user, dataset) = (Uuid::new_v4(), Uuid::new_v4());
+        crate::user_preferences::upsert_preference_node(
+            graph.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Answer in one sentence",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..SearchParams::default()
+        };
+        (graph, params)
+    }
+
+    fn user_messages(llm: &TestLlm) -> Vec<String> {
+        llm.captured_messages
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|messages| messages.last().unwrap().content.clone())
+            .collect()
+    }
+
+    fn preference_tail() -> String {
+        format!(
+            "\n\n{}\nAnswer in one sentence",
+            crate::user_preferences::PREFERENCE_RENDER_HEADER
+        )
+    }
+
+    // Python's summary and context-extension retrievers inherit the graph
+    // retriever's sessionless completion, which appends the preference text.
+    #[tokio::test]
+    async fn sessionless_summary_and_extension_answers_carry_the_preference_block() {
+        let (graph, params) = personalized().await;
+        let llm = Arc::new(TestLlm::new(vec!["summary", "answer"]));
+        GraphSummaryCompletionRetriever::new(
+            build_vector_db(),
+            Arc::new(TestEmbeddingEngine),
+            Arc::clone(&graph) as Arc<dyn GraphDBTrait>,
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(5),
+            Some(5),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+        )
+        .get_completion("Who knows Bob?", None, &SessionContext::default(), &params)
+        .await
+        .unwrap();
+        let sent = user_messages(&llm);
+        assert!(!sent[0].contains("What this user prefers"), "{}", sent[0]);
+        assert!(sent[1].ends_with(&preference_tail()), "{}", sent[1]);
+
+        let llm = Arc::new(TestLlm::new(vec!["Find Bob relations", "answer"]));
+        GraphCompletionContextExtensionRetriever::new(
+            build_vector_db(),
+            Arc::new(TestEmbeddingEngine),
+            graph,
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(5),
+            Some(5),
+            Some(0.0),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+        )
+        .get_completion("Who knows Bob?", None, &SessionContext::default(), &params)
+        .await
+        .unwrap();
+        let sent = user_messages(&llm);
+        assert!(
+            sent.last().unwrap().ends_with(&preference_tail()),
+            "{sent:?}"
+        );
+    }
+
+    // Python's CoT rounds see the stored session entries only (no preference
+    // lines, nothing with the layer off); the answer that is returned carries
+    // the full guidance.
+    #[tokio::test]
+    async fn cot_rounds_skip_the_preferences_that_only_the_final_answer_carries() {
+        let cot = |graph: Arc<MockGraphDB>, llm: &Arc<TestLlm>| {
+            GraphCompletionCotRetriever::new(
+                build_vector_db(),
+                Arc::new(TestEmbeddingEngine),
+                graph,
+                Arc::clone(llm) as Arc<dyn Llm>,
+                Some(5),
+                Some(5),
+                Some(0.0),
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (graph, params) = personalized().await;
+        let responses = || vec!["first", "needs more", "find neighbors", "second"];
+
+        // Sessionless: rounds carry nothing, the returned answer the block.
+        let llm = Arc::new(TestLlm::new(responses()));
+        cot(Arc::clone(&graph), &llm)
+            .get_completion("Who knows Bob?", None, &SessionContext::default(), &params)
+            .await
+            .unwrap();
+        let sent = user_messages(&llm);
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        for round in &sent[..3] {
+            assert!(!round.contains("What this user prefers"), "{round}");
+        }
+        assert!(sent[3].ends_with(&preference_tail()), "{}", sent[3]);
+
+        // Guidance layer off (preferences only): same split.
+        let session = SessionContext {
+            guidance: Some(cognee_session::ActiveContextSelection::preferences_only()),
+            ..SessionContext::default()
+        };
+        let llm = Arc::new(TestLlm::new(responses()));
+        cot(graph, &llm)
+            .get_completion("Who knows Bob?", None, &session, &params)
+            .await
+            .unwrap();
+        let sent = user_messages(&llm);
+        for round in &sent[..3] {
+            assert!(!round.contains("Answer in one sentence"), "{round}");
+        }
+        assert!(sent[3].ends_with("- Answer in one sentence"), "{}", sent[3]);
+    }
+
     #[tokio::test]
     async fn graph_summary_on_an_empty_graph_is_not_found() {
         let llm = Arc::new(TestLlm::new(vec![]));

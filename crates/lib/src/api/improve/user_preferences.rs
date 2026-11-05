@@ -495,6 +495,7 @@ mod tests {
                         node_ids: ids.iter().map(|id| id.to_string()).collect(),
                         edge_ids: vec!["edge-x".to_string()],
                     }),
+                    None,
                 )
                 .await
                 .unwrap();

@@ -767,6 +767,7 @@ mod tests {
                 "answer",
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -815,6 +816,7 @@ mod tests {
                 Some("user"),
                 "previous",
                 "answer",
+                None,
                 None,
                 None,
             )

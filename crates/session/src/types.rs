@@ -5,6 +5,8 @@ use cognee_llm::Message;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::context_builder::ActiveContextSelection;
+
 /// Graph element IDs that were used to produce the answer for a Q&A entry.
 ///
 /// Matches the Python `used_graph_element_ids` dict: `{"node_ids": [...], "edge_ids": [...]}`.
@@ -43,13 +45,23 @@ pub struct SessionQAEntry {
     pub memify_metadata: Option<HashMap<String, bool>>,
 }
 
-/// Session context passed to retrievers: the session ID and any loaded
-/// conversation history (as LLM messages).
+/// Session context passed to retrievers: the session ID, the loaded
+/// conversation history (as LLM messages) and the turn's guidance.
 #[derive(Debug, Clone, Default)]
 pub struct SessionContext {
     pub session_id: Option<String>,
     pub history: Vec<Message>,
     pub formatted_history: String,
+    /// The active-guidance entries selected for this turn, built once per
+    /// turn. `Some` on every session search (Python's session path), `None`
+    /// sessionless. A retriever renders it with the user's durable preference
+    /// lines ([`ActiveContextSelection::render`]); with auto feedback off it
+    /// is [`ActiveContextSelection::preferences_only`], so preferences still
+    /// render but no stored entry does.
+    pub guidance: Option<ActiveContextSelection>,
+    /// Ids of the stored entries rendered into the guidance: the ids an
+    /// answered turn records as `used_session_context_ids`.
+    pub served_context_ids: Vec<String>,
 }
 
 /// One agent-trace step persisted in a session — mirrors Python's

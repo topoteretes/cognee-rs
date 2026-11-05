@@ -61,7 +61,7 @@ use crate::retrievers::SearchRetriever;
 use crate::types::{
     SearchContext, SearchError, SearchItem, SearchOutput, SearchParams, SearchType,
 };
-use crate::user_preferences::{ActivePreferences, append_preference_guidance, load_for_search};
+use crate::user_preferences::{ActivePreferences, guidance_from, load_for_search};
 use crate::utils::{
     DEFAULT_HYBRID_USER_PROMPT_TEMPLATE, EMPTY_GRAPH_MESSAGE, HYBRID_SMALL_WINDOW_SYSTEM_PROMPT,
     HYBRID_SMALL_WINDOW_USER_PROMPT_TEMPLATE, build_messages_with_history, render_user_prompt,
@@ -772,11 +772,11 @@ impl HybridRetriever {
                 ),
         };
         let preferences = load_for_search(self.graph_db.as_ref(), params).await;
-        let preference_guidance = preferences.rendered_text();
-        let guidance_overhead = if preference_guidance.is_empty() {
+        let guidance = guidance_from(session, &preferences);
+        let guidance_overhead = if guidance.is_empty() {
             0
         } else {
-            2 + preference_guidance.len()
+            2 + guidance.len()
         };
         let overhead = overhead_system
             + overhead_template
@@ -868,9 +868,12 @@ impl HybridRetriever {
         );
         debug!("LLM user prompt:\n{user_prompt}");
 
-        let mut messages = build_messages_with_history(system_prompt, user_prompt, session);
-        append_preference_guidance(&mut messages, &preference_guidance);
-        Ok(Some(messages))
+        Ok(Some(build_messages_with_history(
+            system_prompt,
+            user_prompt,
+            session,
+            &guidance,
+        )))
     }
 
     /// Build Python's `## Global context` hybrid section. Dataset filtering
@@ -2035,6 +2038,73 @@ mod retriever_tests {
             sent.last().unwrap().content,
             preview.last().unwrap().content
         );
+    }
+
+    #[tokio::test]
+    async fn a_session_prompt_carries_history_then_context_then_the_guidance_block() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let (user, dataset) = (Uuid::new_v4(), Uuid::new_v4());
+        crate::user_preferences::upsert_preference_node(
+            graph_db.as_ref(),
+            &user.to_string(),
+            &dataset.to_string(),
+            "Prefer terse tables",
+            1,
+            "",
+        )
+        .await
+        .unwrap();
+        let llm = Arc::new(CapturingLlm {
+            response_text: "hybrid answer".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, Arc::clone(&llm) as Arc<dyn Llm>);
+        let params = SearchParams {
+            user_id: Some(user),
+            dataset_id: Some(dataset),
+            dataset_ids: Some(vec![dataset]),
+            personalization: Some(crate::user_preferences::PreferenceConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let history = "Previous conversation:\n\nQUESTION: hi\nANSWER: hello\n\n";
+        let session = SessionContext {
+            session_id: Some("s".to_string()),
+            formatted_history: history.to_string(),
+            guidance: Some(cognee_session::ActiveContextSelection::preferences_only()),
+            ..Default::default()
+        };
+        let context = retriever
+            .get_context("what happened?", &params)
+            .await
+            .unwrap();
+        let messages = retriever
+            .completion_messages("what happened?", &context, &session, &params)
+            .await
+            .unwrap()
+            .unwrap();
+        // The system prompt is the task template alone.
+        assert!(!messages[0].content.contains("Previous conversation"));
+        let user_prompt = &messages[1].content;
+        let guidance = "## Active session guidance\n\
+             Items are listed oldest to newest within each section. \
+             When guidance conflicts, prefer the later item.\n\
+             ### Preferences\n- Prefer terse tables";
+        assert!(
+            user_prompt.starts_with(&format!("{history}\n\n")),
+            "{user_prompt}"
+        );
+        assert!(
+            user_prompt.ends_with(&format!("\n\n{guidance}")),
+            "{user_prompt}"
+        );
+        assert!(
+            !user_prompt.contains("What this user prefers"),
+            "{user_prompt}"
+        );
+        assert_eq!(user_prompt.matches("Previous conversation").count(), 1);
     }
 
     #[tokio::test]

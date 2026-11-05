@@ -130,6 +130,12 @@ impl SessionManager {
     /// during retrieval so the memify pipeline can trace which graph elements
     /// produced the answer (mirrors Python `session_manager.py:492-525`,
     /// `add_qa(..., used_graph_element_ids=used_graph_element_ids)`).
+    ///
+    /// `used_session_context_ids` carries the session-context entry ids
+    /// served into the answer's guidance block, so the next turn's analysis
+    /// can rate them (Python's `used_session_context_ids`). An answered turn
+    /// passes the served ids, an acknowledgement turn `None`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_qa(
         &self,
         session_id: Option<&str>,
@@ -138,6 +144,7 @@ impl SessionManager {
         answer: &str,
         context: Option<&str>,
         used_graph_element_ids: Option<UsedGraphElementIds>,
+        used_session_context_ids: Option<Vec<String>>,
     ) -> Result<String, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
         let qa_id = self
@@ -145,8 +152,10 @@ impl SessionManager {
             .create_qa_entry(resolved_id, user_id, question, answer, context)
             .await?;
 
-        // Write used_graph_element_ids if provided.
-        if let Some(ids) = used_graph_element_ids
+        // Write the lineage ids if provided. An empty served-id list stores
+        // nothing, as in Python (`served_ids or None`).
+        let used_session_context_ids = used_session_context_ids.filter(|ids| !ids.is_empty());
+        if (used_graph_element_ids.is_some() || used_session_context_ids.is_some())
             && let Err(e) = self
                 .store
                 .update_qa_entry(
@@ -154,7 +163,8 @@ impl SessionManager {
                     user_id,
                     &qa_id,
                     SessionQAUpdate {
-                        used_graph_element_ids: Some(Some(ids)),
+                        used_graph_element_ids: used_graph_element_ids.map(Some),
+                        used_session_context_ids: used_session_context_ids.map(Some),
                         ..Default::default()
                     },
                 )
@@ -162,7 +172,7 @@ impl SessionManager {
         {
             tracing::warn!(
                 qa_id = %qa_id,
-                "save_qa: failed to persist used_graph_element_ids (non-fatal): {e}"
+                "save_qa: failed to persist used_graph_element_ids / used_session_context_ids (non-fatal): {e}"
             );
         }
 

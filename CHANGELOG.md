@@ -62,6 +62,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrides `supports_session_turn_preparation` to return `false`.
 
 
+
+- **`cognee-search` / `cognee-session`: session searches serve Python's
+  active-guidance block and record the entries they served; session history
+  moves to the user message (SDK-1045).**
+
+  | Item | Before | After |
+  |---|---|---|
+  | Session guidance | not rendered; stored `context` entries never reached a prompt | `cognee_session::build_active_context_block` (ranker, 400 / 1200-character budgets, `## Active session guidance` block) is ported; a session search serves it after the question and context |
+  | Graph completion variants without a session (summary, context extension, CoT, decomposition) | no preference text | the standalone `## What this user prefers` block, as Python's inherited `GraphCompletionRetriever` completion |
+  | CoT reasoning rounds | n/a | see the stored session entries only (no preference lines, nothing with `auto_feedback_detection` off); the returned answer carries the full guidance |
+  | A failed guidance build | n/a | serves no guidance at all, preference lines included (Python's builder returns `("", [])`) |
+  | `used_session_context_ids` on a QA row | never written, so served-context ratings never applied | an answered turn stores the served entry ids; an acknowledgement turn stores none; `last_served_at` is stamped on the served entries once the answer is recorded (not on `only_context` previews, nor when no answer is produced; an intentional divergence from Python, which stamps while building the block, see `docs/roadmap/not-implemented.md`) |
+  | Durable preference lines on a session search | the standalone `## What this user prefers` block | the `Preferences` section of the guidance block, under the shared budgets; a sessionless search keeps the standalone block |
+  | Guidance with `auto_feedback_detection` off | n/a | no stored entry is served; preference lines still render through the same block |
+  | Session history in the completion prompt | prepended to the system prompt after a `\nTASK:` separator | the user prompt is the history, then the rendered template, then the guidance (`\n\n`-joined); the system prompt is the task template alone, as Python's `build_completion_prompts` |
+  | `SessionContext` | `session_id`, `history`, `formatted_history` | also `guidance: Option<ActiveContextSelection>` and `served_context_ids` |
+  | `SessionManager::save_qa` | 6 arguments | a seventh, `used_session_context_ids: Option<Vec<String>>` |
+  | `build_messages_with_history` / `GraphPrompts::messages` | no guidance argument | take the rendered `guidance` |
+  | `append_preference_guidance` | public in `cognee_search::user_preferences` | replaced by `completion_guidance` / `guidance_from` |
+
+  **Migration.** Pass `None` as the new last argument of `save_qa` (or the
+  served entry ids); build `SessionContext` values with `..Default::default()`;
+  call `completion_guidance` where you appended preference text yourself.
+
+
 - **`cognee-search`: recall notes a graph that is not built instead of
   searching it.** As Python's recall does, a graph-only recall first reads
   `pipeline_runs` for the datasets the caller can read. When no graph was ever
