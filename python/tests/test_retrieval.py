@@ -200,6 +200,7 @@ async def test_recall_basic_result_shape(tmp_path):
     assert "searchTypeUsed" in result
     assert "autoRouted" in result
     assert "searchResponse" in result
+    assert isinstance(result["normalizedResults"], list)
 
 
 @SKIP_IF_NO_SEARCH

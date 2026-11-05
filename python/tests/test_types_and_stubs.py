@@ -117,6 +117,7 @@ def test_camel_to_snake_conversions():
         "tripletCount": "triplet_count",
         "searchTypeUsed": "search_type_used",
         "autoRouted": "auto_routed",
+        "normalizedResults": "normalized_results",
         "deleteResult": "delete_result",
         "dataId": "data_id",
         "serviceUrl": "service_url",

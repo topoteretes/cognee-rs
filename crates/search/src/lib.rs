@@ -37,7 +37,9 @@ pub use query_router::{
     ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, constrain, default_route,
     pinned_route, route_query,
 };
-pub use recall_normalize::{NormalizedResult, RecallResultKind, build_graph_entry};
+pub use recall_normalize::{
+    NormalizedResult, RecallResultKind, build_graph_entry, only_context_system_prompt,
+};
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,

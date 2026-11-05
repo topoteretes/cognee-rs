@@ -11,13 +11,13 @@
 //!
 //! Deviation from Python (validation note V5): Python's `_score_from` accepts
 //! `isinstance(score, (int, float))`, which is true for `bool`, so a
-//! `{"score": True}` payload scores `1.0`. [`score_from`] deliberately
+//! `{"score": True}` payload scores `1.0`. `score_from` deliberately
 //! excludes booleans.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::types::SearchType;
+use crate::types::{SearchResponse, SearchType};
 
 /// Semantic kind of a recall result item.
 ///
@@ -71,26 +71,27 @@ impl RecallResultKind {
     }
 }
 
-/// One `source: "graph"` entry of the `/api/v1/recall` response.
+/// One normalized graph result: a `source: "graph"` entry of recall's
+/// response (the HTTP server's `/api/v1/recall` and the SDK bindings'
+/// `normalizedResults`).
 ///
 /// Mirrors Python's `ResponseGraphEntry(SearchResultItem)` — the
 /// `SearchResultItem` fields in declaration order, then the `source`
 /// discriminator the subclass adds
 /// (`cognee/modules/recall/types/RecallResponse.py:25-26`,
-/// `SearchResultItem.py:47-81`).
+/// `SearchResultItem.py:49-82`).
 ///
 /// Every key is snake_case: both classes are bare `BaseModel`s with no
-/// `alias_generator`, exactly like `SearchResult` (see `crate::dto`).
+/// `alias_generator`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedResult {
     pub kind: RecallResultKind,
     /// Effective search type, SCREAMING_SNAKE_CASE on the wire (the core
     /// `SearchType` enum already serializes that way).
     ///
-    /// Typed as the **core** enum, not [`WireSearchType`], because the value
+    /// Typed as the core enum, not a request-wire enum, because the value
     /// is whatever `run_graph` actually resolved — which for an auto-routed
-    /// query can be a variant the request wire does not accept. Documented
-    /// to OpenAPI as a string for that reason.
+    /// query can be a variant a request wire does not accept.
     pub search_type: SearchType,
     /// Always populated and always renderable. For an `onlyContext` recall
     /// on a completion type, the user prompt the LLM would have received.
@@ -112,9 +113,11 @@ pub struct NormalizedResult {
 
 /// Build one entry from one retriever output element.
 ///
-/// Mirrors Python `_build_item` (`normalize_search_payload.py:102-137`)
+/// Mirrors Python `_build_item` (`normalize_search_payload.py:102-142`)
 /// composed with `SearchResultItem`'s field assignment. `entry` is one
-/// element of a `RecallItem`'s content as `run_graph` produced it.
+/// retriever output element as JSON (one graph `RecallItem`'s content).
+/// `system_prompt` is left `None`; the caller sets it from
+/// [`only_context_system_prompt`].
 pub fn build_graph_entry(
     entry: Value,
     search_type: SearchType,
@@ -167,6 +170,22 @@ pub fn build_graph_entry(
         structured: None,
         source: "graph",
     }
+}
+
+/// The `system_prompt` every entry of one search response carries.
+///
+/// Python `normalize_search_payload` (`normalize_search_payload.py:149-157`):
+/// an `only_context` search whose retrieval found something answers one item
+/// whose `text` is the user prompt and whose `system_prompt` is the system
+/// message that goes with it. The orchestrator only sets
+/// [`SearchResponse::user_prompt`] in exactly that case (and then makes it the
+/// `result`), so the system prompt applies iff a user prompt is present;
+/// every other entry gets `None`.
+pub fn only_context_system_prompt(response: &SearchResponse) -> Option<String> {
+    response
+        .user_prompt
+        .as_ref()
+        .and(response.system_prompt.clone())
 }
 
 /// Python `_score_from` (`normalize_search_payload.py:70-75`): a score only
@@ -586,6 +605,26 @@ mod tests {
     fn boolean_score_is_excluded() {
         assert_eq!(score_from(&json!({"score": true})), None);
         assert_eq!(score_from(&json!({"score": 1})), Some(1.0));
+    }
+
+    /// Python `normalize_search_payload.py:149-157`: the system prompt rides
+    /// along only when the response carries an `only_context` user prompt.
+    #[test]
+    fn system_prompt_only_with_user_prompt() {
+        use crate::types::SearchOutput;
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            SearchOutput::Text("user prompt".into()),
+        );
+        response.system_prompt = Some("sys".into());
+        assert_eq!(only_context_system_prompt(&response), None);
+        response.user_prompt = Some("user prompt".into());
+        assert_eq!(
+            only_context_system_prompt(&response).as_deref(),
+            Some("sys")
+        );
+        response.system_prompt = None;
+        assert_eq!(only_context_system_prompt(&response), None);
     }
 
     #[test]

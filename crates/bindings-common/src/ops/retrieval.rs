@@ -34,7 +34,8 @@ use uuid::Uuid;
 
 use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::{
-    NormalizedResult, RecallItem, RecallSource, SearchRequest, SearchType, build_graph_entry,
+    NormalizedResult, RecallItem, RecallSource, SearchRequest, SearchResponse, SearchType,
+    build_graph_entry, only_context_system_prompt,
 };
 
 use crate::{HandleState, SdkError};
@@ -538,13 +539,16 @@ pub async fn recall(
     };
 
     let normalized_results = match result.search_type_used {
-        Some(st) => {
-            serde_json::to_value(normalize_recall_items(&result.items, st)).map_err(|e| {
-                SdkError::Runtime(format!(
-                    "failed to serialize normalized recall results: {e}"
-                ))
-            })?
-        }
+        Some(st) => serde_json::to_value(normalize_recall_items(
+            &result.items,
+            st,
+            result.search_response.as_ref(),
+        ))
+        .map_err(|e| {
+            SdkError::Runtime(format!(
+                "failed to serialize normalized recall results: {e}"
+            ))
+        })?,
         None => json!([]),
     };
 
@@ -562,15 +566,24 @@ pub async fn recall(
 /// Session, trace and system items are not retriever output and carry no
 /// search type, so they are skipped (Python's `normalize_search_payload`
 /// likewise only runs over search payloads). Dataset id/name are unknown at
-/// this layer and stay `None`.
+/// this layer and stay `None`. For an `only_context` recall the graph
+/// response's system prompt is stamped on each entry, as Python's
+/// `normalize_search_payload` (`normalize_search_payload.py:149-157`) and
+/// the HTTP `/api/v1/recall` route do.
 pub fn normalize_recall_items(
     items: &[RecallItem],
     search_type: SearchType,
+    search_response: Option<&SearchResponse>,
 ) -> Vec<NormalizedResult> {
+    let system_prompt = search_response.and_then(only_context_system_prompt);
     items
         .iter()
         .filter(|item| item.source == RecallSource::Graph)
-        .map(|item| build_graph_entry(item.content.clone(), search_type, None, None))
+        .map(|item| {
+            let mut entry = build_graph_entry(item.content.clone(), search_type, None, None);
+            entry.system_prompt = system_prompt.clone();
+            entry
+        })
         .collect()
 }
 
@@ -603,7 +616,7 @@ mod tests {
                 score: 1.0,
             },
         ];
-        let normalized = normalize_recall_items(&items, SearchType::Chunks);
+        let normalized = normalize_recall_items(&items, SearchType::Chunks, None);
         assert_eq!(normalized.len(), 1);
         let v = serde_json::to_value(&normalized[0]).unwrap();
         assert_eq!(v["kind"], "chunk");
@@ -612,6 +625,36 @@ mod tests {
         assert_eq!(v["score"], 0.5);
         assert_eq!(v["metadata"], json!({"data_id": "d1", "chunk_id": "c1"}));
         assert_eq!(v["source"], "graph");
+        assert!(v["system_prompt"].is_null());
+    }
+
+    /// An `only_context` graph response (user prompt set) stamps its system
+    /// prompt on the normalized entry, like Python's `normalize_search_payload`.
+    #[test]
+    fn normalize_recall_items_carries_only_context_system_prompt() {
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            cognee::search::SearchOutput::Text("rendered user prompt".into()),
+        );
+        response.user_prompt = Some("rendered user prompt".into());
+        response.system_prompt = Some("system message".into());
+        let items = vec![RecallItem {
+            source: RecallSource::Graph,
+            content: json!("rendered user prompt"),
+            score: 1.0,
+        }];
+        let normalized =
+            normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response));
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].text, "rendered user prompt");
+        assert_eq!(
+            normalized[0].system_prompt.as_deref(),
+            Some("system message")
+        );
+        assert_eq!(
+            normalized[0].kind,
+            cognee::search::RecallResultKind::GraphCompletion
+        );
     }
 
     /// `TRIPLET_COMPLETION` was removed (SDK-1039); it is an unknown type, and
