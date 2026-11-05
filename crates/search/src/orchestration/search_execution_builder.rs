@@ -1236,7 +1236,6 @@ mod tests {
             (SearchType::Summaries, false),
             (SearchType::Chunks, false),
             (SearchType::RagCompletion, true),
-            (SearchType::TripletCompletion, true),
             (SearchType::GraphCompletion, true),
             (SearchType::GraphCompletionDecomposition, true),
             (SearchType::GraphSummaryCompletion, true),
