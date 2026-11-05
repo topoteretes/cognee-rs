@@ -255,13 +255,16 @@ class RecallResult(TypedDict):
     """Result of :meth:`Cognee.recall` (snake_case view).
 
     The native method returns the same data with camelCase keys
-    (``searchTypeUsed``, ``autoRouted``, ``searchResponse``).
+    (``searchTypeUsed``, ``autoRouted``, ``searchResponse``,
+    ``normalizedResults``).
     """
 
     items: list[Any]
     search_type_used: str | None
     auto_routed: bool
     search_response: Any
+    # One typed entry (kind, text, score, metadata, raw, ...) per graph item.
+    normalized_results: list[Any]
 
 
 class ForgetResult(TypedDict):

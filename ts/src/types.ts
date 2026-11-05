@@ -435,6 +435,46 @@ export interface CogneeRecallResult {
   autoRouted: boolean;
   /** The raw graph search response, or null if no graph leg ran. */
   searchResponse: CogneeSearchResponse | null;
+  /**
+   * One typed entry per graph-source item in `items` (same order); session
+   * and trace items are not included. Additive: `items` is unchanged.
+   */
+  normalizedResults: CogneeNormalizedResult[];
+}
+
+/** Semantic kind of a normalized recall result (`RecallResultKind`). */
+export type CogneeResultKind =
+  | "graph_completion"
+  | "rag_completion"
+  | "cypher"
+  | "chunk"
+  | "summary"
+  | "coding_rule"
+  | "code"
+  | "skill"
+  | "natural_language"
+  | "temporal"
+  | "structured"
+  | "unknown";
+
+/**
+ * A normalized graph recall result. Mirrors
+ * `cognee_search::recall_normalize::NormalizedResult` (snake_case keys, as in
+ * Python's `SearchResultItem`).
+ */
+export interface CogneeNormalizedResult {
+  kind: CogneeResultKind;
+  search_type: SearchTypeString;
+  text: string;
+  system_prompt: string | null;
+  score: number | null;
+  dataset_id: string | null;
+  dataset_name: string | null;
+  /** Provenance: `data_id`, `chunk_id`, `chunk_index`, `document_name` when present. */
+  metadata: Record<string, unknown>;
+  raw: Record<string, unknown>;
+  structured: unknown | null;
+  source: "graph";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
