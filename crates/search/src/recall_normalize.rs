@@ -111,6 +111,23 @@ pub struct NormalizedResult {
     pub source: &'static str,
 }
 
+impl NormalizedResult {
+    /// Surface the response's evidence references as `metadata.evidence`
+    /// (Python `_build_item`, `normalize_search_payload.py:129-130`): only
+    /// when there is any, and as the snake_case `model_dump(mode="json")`
+    /// shape, one list shared by every entry of the dataset's payload.
+    pub fn attach_evidence(&mut self, evidence: &[crate::types::EvidenceReference]) {
+        if evidence.is_empty() {
+            return;
+        }
+        // Serializing plain strings, numbers and options cannot fail; an
+        // unreachable failure leaves the key off rather than panic.
+        if let Ok(value) = serde_json::to_value(evidence) {
+            self.metadata.insert("evidence".to_string(), value);
+        }
+    }
+}
+
 /// Build one entry from one retriever output element.
 ///
 /// Mirrors Python `_build_item` (`normalize_search_payload.py:102-142`)

@@ -105,6 +105,11 @@ impl PyCognee {
     ///   searches rank the triplets this many hops around the nearest hits
     /// - ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK`` — positive int;
     ///   how many of those hits to expand from, nearest first (default: all)
+    /// - ``include_references`` / ``includeReferences`` — bool (default
+    ///   ``False``); completion searches (RAG, graph completion) attach
+    ///   ``evidence`` (structured references to the chunks / graph nodes and
+    ///   edges placed in context, snake_case keys) to the response, and RAG
+    ///   text answers gain an ``Evidence:`` block
     ///
     /// ``userId`` / ``user_id`` in opts is ignored; the owner is always taken
     /// from the handle so dataset-name resolution works correctly.
@@ -145,7 +150,9 @@ impl PyCognee {
     ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"``
     ///   (``"graph_context"`` is a deprecated alias of ``"graph"``)
     /// - ``neighborhood_depth`` / ``neighborhoodDepth``,
-    ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK`` — as for ``search``
+    ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
+    ///   ``include_references`` / ``includeReferences`` — as for ``search``
+    ///   (references land in each normalized result's ``metadata.evidence``)
     #[pyo3(signature = (query, opts=None))]
     fn recall<'py>(
         &self,

@@ -1,8 +1,10 @@
 pub mod access_tracking;
 mod completion;
 mod edge_type_id;
+pub mod evidence;
 pub mod global_context;
 pub mod merge_results;
+pub mod references;
 mod resolve_edges_to_text;
 pub(crate) mod results;
 mod session_messages;

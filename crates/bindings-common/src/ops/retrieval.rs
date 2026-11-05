@@ -177,6 +177,7 @@ pub struct RecallArgs {
     pub scope: Option<Vec<cognee::api::RecallScope>>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    pub include_references: bool,
 }
 
 /// Parse camelCase recall `opts` into [`RecallArgs`].
@@ -228,6 +229,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     // passed as-is — recall() treats Some(vec![Auto]) and None identically.
     let scope = if scope.is_empty() { None } else { Some(scope) };
     let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
+    let include_references = parse_include_references(opts);
 
     Ok(RecallArgs {
         query_type,
@@ -240,7 +242,17 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         scope,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references,
     })
+}
+
+/// `includeReferences`: attach structured evidence references (and, for RAG,
+/// the Evidence text block) to a completion search or recall. Python's
+/// `include_references`, default `False`; anything but a JSON `true` is off.
+fn parse_include_references(opts: &serde_json::Value) -> bool {
+    opts.get("includeReferences")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// `neighborhoodDepth` / `neighborhoodSeedTopK`: the k-hop graph projection
@@ -394,6 +406,7 @@ pub fn build_search_request(
         auto_feedback_detection,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references: parse_include_references(opts),
     })
 }
 
@@ -484,6 +497,7 @@ pub async fn recall(
         scope: scope_opt,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references,
     } = build_recall_args(opts)?;
     let session_id: Option<&str> = session_id_owned.as_deref();
 
@@ -512,6 +526,7 @@ pub async fn recall(
             tenant_id,
             neighborhood_depth,
             neighborhood_seed_top_k,
+            include_references,
             ..Default::default()
         }),
     )
@@ -576,12 +591,14 @@ pub fn normalize_recall_items(
     search_response: Option<&SearchResponse>,
 ) -> Vec<NormalizedResult> {
     let system_prompt = search_response.and_then(only_context_system_prompt);
+    let evidence = search_response.map_or(&[][..], |response| response.evidence.as_slice());
     items
         .iter()
         .filter(|item| item.source == RecallSource::Graph)
         .map(|item| {
             let mut entry = build_graph_entry(item.content.clone(), search_type, None, None);
             entry.system_prompt = system_prompt.clone();
+            entry.attach_evidence(evidence);
             entry
         })
         .collect()
@@ -1021,5 +1038,62 @@ mod tests {
         // A missing `scope` normalizes to `[Auto]`, which recall() treats the
         // same as `None`; it must not arrive as an empty vec.
         assert_eq!(args.scope, Some(vec![cognee::api::RecallScope::Auto]));
+    }
+
+    /// `includeReferences` reaches both ops, defaults off, and a non-boolean
+    /// is off rather than an error (the other boolean opts read the same way).
+    #[test]
+    fn include_references_is_threaded_through_search_and_recall() {
+        let on = json!({ "includeReferences": true });
+        assert!(
+            build_search_request("q", &on, Uuid::new_v4())
+                .unwrap()
+                .include_references
+        );
+        assert!(build_recall_args(&on).unwrap().include_references);
+
+        for off in [
+            json!({}),
+            json!({ "includeReferences": false }),
+            json!({ "includeReferences": "yes" }),
+        ] {
+            assert!(
+                !build_search_request("q", &off, Uuid::new_v4())
+                    .unwrap()
+                    .include_references
+            );
+            assert!(!build_recall_args(&off).unwrap().include_references);
+        }
+    }
+
+    /// Recall's normalized entries carry the response's evidence as
+    /// `metadata.evidence` (snake_case), and only when there is any.
+    #[test]
+    fn normalized_recall_entries_carry_the_evidence() {
+        use cognee::search::{EvidenceKind, EvidenceReference, SearchOutput};
+
+        let items = vec![RecallItem {
+            source: RecallSource::Graph,
+            content: json!("an answer"),
+            score: 1.0,
+        }];
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            SearchOutput::Text("x".into()),
+        );
+
+        let bare = normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response));
+        assert!(!bare[0].metadata.contains_key("evidence"));
+
+        let mut reference = EvidenceReference::new(EvidenceKind::GraphNode, "node-a");
+        reference.label = Some("Alpha".into());
+        response.evidence = vec![reference];
+        let entries = normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response));
+        let evidence = entries[0].metadata["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["kind"], "graph_node");
+        assert_eq!(evidence[0]["artifact_id"], "node-a");
+        assert_eq!(evidence[0]["label"], "Alpha");
+        assert!(evidence[0].get("artifactId").is_none());
     }
 }

@@ -1567,6 +1567,7 @@ impl SearchOrchestrator {
         self.log_search_history(&raw_request, &merged).await;
         emit_search_completed(request);
         drop(fanout_turn_guard);
+        append_reference_text(&retriever, request, &mut results);
         Ok(results)
     }
 
@@ -1686,6 +1687,10 @@ impl SearchOrchestrator {
                 (None, Some(output)) => output,
                 (None, None) => SearchOutput::Items(output_context.clone()),
             };
+            // Python collects evidence in `only_context` runs too
+            // (`get_retriever_output.py:114-125`): the artifacts the prompt
+            // was built from. No answer exists to append reference text to.
+            let evidence = context_evidence(retriever, &params, &output_context);
             let mut response = prepare_search_result(
                 search_type,
                 result,
@@ -1697,6 +1702,7 @@ impl SearchOrchestrator {
             );
             response.user_prompt = user_prompt;
             response.system_prompt = system_prompt;
+            response.evidence = evidence;
 
             return Ok(response);
         }
@@ -1743,7 +1749,14 @@ impl SearchOrchestrator {
                 retriever.search_type(),
                 SearchType::HybridCompletion | SearchType::Temporal
             );
-        let context = if context.is_none() && (fetch_for_tracking || fetch_for_session) {
+        // References are built from the context the completion read (Python's
+        // `retrieved_objects`), so `include_references` fetches it here once
+        // too. `Feedback` is skipped as above: its context is the LLM analysis.
+        let fetch_for_references =
+            params.include_references && retriever.search_type() != SearchType::Feedback;
+        let context = if context.is_none()
+            && (fetch_for_tracking || fetch_for_session || fetch_for_references)
+        {
             let ctx = retriever.get_context(&request.query_text, &params).await?;
             // `context` is `None` only when `include_context` was false, so the
             // tracking above has not run for this search.
@@ -1783,6 +1796,19 @@ impl SearchOrchestrator {
             .await;
         }
 
+        // References come after the session write, so history keeps the bare
+        // answer, as Python (the hook runs after the session-aware door has
+        // saved it). A dataset fan-out (`keep_context`) saves the merged
+        // answer later, so it appends the text itself once that is done
+        // (`append_reference_text`).
+        let evidence = context
+            .as_ref()
+            .map(|items| context_evidence(retriever, &params, items))
+            .unwrap_or_default();
+        let output = match context.as_ref() {
+            Some(items) if !keep_context => retriever.append_references(output, items, &params),
+            _ => output,
+        };
         let mut response = prepare_search_result(
             search_type,
             output,
@@ -1792,6 +1818,7 @@ impl SearchOrchestrator {
             request.use_combined_context(),
             request.verbose(),
         );
+        response.evidence = evidence;
         // A dataset run keeps its context whatever `verbose` says, as a
         // dataset-scoped search always returned its per-dataset context.
         if keep_context && response.context.is_none() {
@@ -1877,18 +1904,18 @@ impl SearchOrchestrator {
         // return no text on an empty context): there is no turn to commit,
         // acknowledge or record, as in Python.
         if !produced_answer(&generated) {
-            return Ok((
-                prepare_search_result(
-                    search_type,
-                    generated,
-                    Some(context),
-                    request.dataset_ids.clone(),
-                    false,
-                    request.use_combined_context(),
-                    request.verbose(),
-                ),
-                true,
-            ));
+            let evidence = context_evidence(retriever, &params, &context);
+            let mut response = prepare_search_result(
+                search_type,
+                generated,
+                Some(context),
+                request.dataset_ids.clone(),
+                false,
+                request.use_combined_context(),
+                request.verbose(),
+            );
+            response.evidence = evidence;
+            return Ok((response, true));
         }
 
         super::session_turn::commit_session_turn_analysis(
@@ -1917,18 +1944,20 @@ impl SearchOrchestrator {
             &session.served_context_ids,
         )
         .await;
-        Ok((
-            prepare_search_result(
-                search_type,
-                generated,
-                Some(context),
-                request.dataset_ids.clone(),
-                false,
-                request.use_combined_context(),
-                request.verbose(),
-            ),
-            true,
-        ))
+        // After the session write, so history keeps the bare answer.
+        let evidence = context_evidence(retriever, &params, &context);
+        let generated = retriever.append_references(generated, &context, &params);
+        let mut response = prepare_search_result(
+            search_type,
+            generated,
+            Some(context),
+            request.dataset_ids.clone(),
+            false,
+            request.use_combined_context(),
+            request.verbose(),
+        );
+        response.evidence = evidence;
+        Ok((response, true))
     }
 
     /// Finish a session turn that analysis declined to answer (feedback or
@@ -2148,6 +2177,40 @@ impl SearchOrchestrator {
     }
 }
 
+/// The evidence references for the artifacts `context` placed into a
+/// completion: empty unless `params.include_references` is on (Python's
+/// `_context_evidence`, `get_retriever_output.py:59-71`).
+fn context_evidence(
+    retriever: &crate::retrievers::SearchRetrieverRef,
+    params: &SearchParams,
+    context: &SearchContext,
+) -> Vec<crate::types::EvidenceReference> {
+    if !params.include_references {
+        return Vec::new();
+    }
+    retriever.context_evidence(context, params.dataset_id)
+}
+
+/// Apply the retriever's reference text to each dataset answer of a fan-out,
+/// once the merged answer has been saved to the session. Each answer is
+/// grounded in its own dataset's context.
+fn append_reference_text(
+    retriever: &crate::retrievers::SearchRetrieverRef,
+    request: &SearchRequest,
+    results: &mut [DatasetSearchResult],
+) {
+    if !request.include_references {
+        return;
+    }
+    let params = SearchParams::from(request);
+    for result in results {
+        let context = merged_context(&result.response).unwrap_or_default();
+        let output =
+            std::mem::replace(&mut result.response.result, SearchOutput::Items(Vec::new()));
+        result.response.result = retriever.append_references(output, &context, &params);
+    }
+}
+
 /// The answer text a session turn records for `output`: text as is, a
 /// structured answer as compact JSON (Python's concurrent `model_dump_json`; its
 /// sequential path stores `str(model)`, which both modes here avoid), several
@@ -2254,6 +2317,7 @@ pub fn merge_dataset_results(
         merge_map(&mut merged.graphs, response.graphs);
         merge_map(&mut merged.prompts, response.prompts);
         merge_map(&mut merged.diagnostics, response.diagnostics);
+        merged.evidence.extend(response.evidence);
         if merged.user_prompt.is_none() {
             merged.user_prompt = response.user_prompt;
             merged.system_prompt = response.system_prompt;
@@ -2544,6 +2608,7 @@ mod tests {
             auto_feedback_detection: Some(true),
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         }
     }
 
@@ -3727,6 +3792,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3773,6 +3839,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3824,6 +3891,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3902,6 +3970,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4538,6 +4607,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4588,6 +4658,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -4687,6 +4758,7 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
+                include_references: false,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -4714,6 +4786,7 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
+                include_references: false,
             },
         ];
 
@@ -4760,6 +4833,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -4863,6 +4937,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         }
     }
 
@@ -6547,6 +6622,7 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
+            include_references: false,
         };
 
         let result = orchestrator.search(&request).await;

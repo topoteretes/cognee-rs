@@ -51,7 +51,8 @@ pub use retrievers::{
     TemporalRetrieval,
 };
 pub use types::{
-    Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge, SearchGraphNode, SearchItem,
-    SearchOutput, SearchParams, SearchRequest, SearchResponse, SearchType,
+    EvidenceKind, EvidenceReference, EvidenceRole, Rule, SearchContext, SearchError, SearchGraph,
+    SearchGraphEdge, SearchGraphNode, SearchItem, SearchOutput, SearchParams, SearchRequest,
+    SearchResponse, SearchType,
 };
 pub use user_preferences::{ActivePreferences, PreferenceConfig, load_active_preferences};

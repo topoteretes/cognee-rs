@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::types::SearchType;
+use crate::types::{EvidenceReference, SearchType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchItem {
@@ -89,6 +89,14 @@ pub struct SearchResponse {
     /// the completion answers from.
     #[serde(default)]
     pub prompts: Option<HashMap<String, SearchPrompt>>,
+    /// Structured references to the artifacts (chunks, graph nodes and edges)
+    /// placed into the completion's context, in rank order. Empty unless the
+    /// request set `include_references` and the retriever reports evidence
+    /// (RAG and the graph completion family) — Python's
+    /// `SearchResultPayload.evidence`. Serializes snake_case, as Python's
+    /// `model_dump` does.
+    #[serde(default)]
+    pub evidence: Vec<EvidenceReference>,
 }
 
 /// The two messages a completion sends, as an `only_context` search returns
@@ -114,6 +122,7 @@ impl SearchResponse {
             user_prompt: None,
             system_prompt: None,
             prompts: None,
+            evidence: Vec::new(),
         }
     }
 }

@@ -177,6 +177,18 @@ impl SearchRetriever for GraphCompletionRetriever {
         self.core.search(query, params).await
     }
 
+    /// The triplets rendered into this graph completion's context, as graph
+    /// node and edge references (Python
+    /// `GraphCompletionRetriever.get_context_evidence`, inherited by every
+    /// graph completion variant, `graph_completion_retriever.py:406`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<crate::types::EvidenceReference> {
+        crate::utils::evidence::graph_context_evidence(context, dataset_id)
+    }
+
     async fn completion_messages(
         &self,
         query: &str,
@@ -1204,5 +1216,104 @@ mod tests {
             &params,
         );
         assert_eq!(targets(merged), ["c", "b", "d"]);
+    }
+
+    // -- include_references wiring (Python test_include_references_wiring.py,
+    //    graph half; test_context_evidence.py) -----------------------------------
+
+    fn triplet_context() -> Vec<crate::types::SearchItem> {
+        vec![crate::types::SearchItem {
+            id: None,
+            score: Some(1.0),
+            payload: json!({
+                "source_id": "node-a",
+                "target_id": "node-b",
+                "source_name": "Alpha",
+                "target_name": "Beta",
+                "relationship": "relates_to",
+            }),
+        }]
+    }
+
+    fn quiet_retriever() -> GraphCompletionRetriever {
+        GraphCompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                collections: HashMap::new(),
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::new(TestGraphDb {
+                empty: true,
+                nodes: vec![],
+                edges: vec![],
+            }),
+            Arc::new(TestLlm {
+                response_text: "Revenue grew 12 percent.".to_string(),
+                ..Default::default()
+            }) as Arc<dyn Llm>,
+            Some(2),
+            Some(5),
+            Some(0.0),
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Graph references never rewrite the answer: the structured evidence
+    /// comes from the exact retrieved triplets, and there is no post-hoc
+    /// chunk lookup (`_append_graph_evidence` is a no-op in Python).
+    #[tokio::test]
+    async fn graph_references_leave_text_and_structured_answers_untouched() {
+        let retriever = quiet_retriever();
+        let params = SearchParams {
+            include_references: true,
+            ..SearchParams::default()
+        };
+        let context = triplet_context();
+        for output in [
+            SearchOutput::Text("Graph answer".to_string()),
+            SearchOutput::Structured(json!({"answer": "structured"})),
+        ] {
+            let before = serde_json::to_value(&output).unwrap();
+            let after = retriever.append_references(output, &context, &params);
+            assert_eq!(serde_json::to_value(&after).unwrap(), before);
+        }
+
+        let output = retriever
+            .get_completion(
+                "q",
+                Some(context.clone()),
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(output, SearchOutput::Text(ref t) if t == "Revenue grew 12 percent."));
+    }
+
+    #[test]
+    fn graph_context_evidence_lists_nodes_then_the_edge() {
+        let retriever = quiet_retriever();
+        let dataset = Uuid::from_u128(7);
+        let evidence = retriever.context_evidence(&triplet_context(), Some(dataset));
+        let shape: Vec<_> = evidence
+            .iter()
+            .map(|r| (r.kind, r.label.as_deref(), r.relationship_name.as_deref()))
+            .collect();
+        use crate::types::EvidenceKind::{GraphEdge, GraphNode};
+        assert_eq!(
+            shape,
+            vec![
+                (GraphNode, Some("Alpha"), None),
+                (GraphNode, Some("Beta"), None),
+                (GraphEdge, None, Some("relates_to")),
+            ]
+        );
+        assert!(
+            evidence
+                .iter()
+                .all(|r| r.dataset_id == Some(dataset.to_string()))
+        );
     }
 }
