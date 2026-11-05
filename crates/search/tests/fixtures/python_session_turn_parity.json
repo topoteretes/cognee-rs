@@ -66,5 +66,47 @@
     },
     "should_answer": true,
     "effective_query": "Explain the same topic for Rust."
+  },
+  {
+    "name": "first_turn_rating_only",
+    "has_previous": false,
+    "raw_query": "Great answer, thanks.",
+    "analysis": {
+      "response_to_user": null,
+      "query_to_answer": null,
+      "served_context_ratings": [],
+      "candidate_context_updates": [],
+      "previous_answer_rating": 4
+    },
+    "should_answer": true,
+    "effective_query": "Great answer, thanks.",
+    "expected_context_rows": []
+  },
+  {
+    "name": "first_turn_rating_with_candidate",
+    "has_previous": false,
+    "raw_query": "Great, and always cite sources.",
+    "analysis": {
+      "response_to_user": null,
+      "query_to_answer": null,
+      "served_context_ratings": [],
+      "candidate_context_updates": [
+        {
+          "section": "preferences",
+          "content": "Always cite sources.",
+          "confidence": 0.9
+        }
+      ],
+      "previous_answer_rating": 4
+    },
+    "should_answer": true,
+    "effective_query": "Great, and always cite sources.",
+    "expected_context_rows": [
+      {
+        "kind": "feedback",
+        "referenced_qa_rating": null,
+        "referenced_qa_ids": []
+      }
+    ]
   }
 ]

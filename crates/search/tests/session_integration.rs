@@ -588,3 +588,552 @@ async fn a_per_dataset_session_search_saves_one_turn() {
         "one turn for the whole search: {entries:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Session-turn commit correctness (SDK-1045 P1): declined turns are recorded in
+// the search history, an empty answer commits nothing, and batch searches skip
+// turn preparation.
+// ---------------------------------------------------------------------------
+
+/// Records every query/result pair written to the search history.
+#[derive(Default)]
+struct RecordingHistoryDb {
+    queries: Mutex<Vec<(Uuid, String)>>,
+    results: Mutex<Vec<(Uuid, String)>>,
+}
+
+impl RecordingHistoryDb {
+    /// `(query text, result text)` per recorded row, in write order.
+    fn rows(&self) -> Vec<(String, String)> {
+        let queries = self.queries.lock().unwrap(); // lock poison is unrecoverable
+        let results = self.results.lock().unwrap(); // lock poison is unrecoverable
+        results
+            .iter()
+            .map(|(id, text)| {
+                let query = queries.iter().find(|(qid, _)| qid == id).unwrap();
+                (query.1.clone(), text.clone())
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl SearchHistoryDb for RecordingHistoryDb {
+    async fn log_query(
+        &self,
+        query_text: &str,
+        _query_type: &str,
+        _user_id: Option<Uuid>,
+        _dataset_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        let id = Uuid::new_v4();
+        self.queries
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push((id, query_text.to_string()));
+        Ok(id)
+    }
+
+    async fn log_result(
+        &self,
+        query_id: Uuid,
+        serialized_result: &str,
+        _user_id: Option<Uuid>,
+        _dataset_id: Option<Uuid>,
+    ) -> Result<Uuid, DatabaseError> {
+        self.results
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push((query_id, serialized_result.to_string()));
+        Ok(Uuid::new_v4())
+    }
+
+    async fn get_history(
+        &self,
+        _user_id: Option<Uuid>,
+        _limit: Option<usize>,
+    ) -> Result<Vec<SearchHistoryEntry>, DatabaseError> {
+        Ok(vec![])
+    }
+}
+
+/// Answers session-turn analysis and feedback detection from fixed JSON and
+/// counts the analysis calls.
+struct RoutingLlm {
+    analysis: serde_json::Value,
+    feedback: serde_json::Value,
+    analysis_calls: Mutex<usize>,
+}
+
+#[async_trait]
+impl cognee_llm::Llm for RoutingLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+        Err(cognee_llm::LlmError::ConfigError("not used".into()))
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        json_schema: &serde_json::Value,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<serde_json::Value> {
+        if json_schema.to_string().contains("feedback_detected") {
+            return Ok(self.feedback.clone());
+        }
+        *self.analysis_calls.lock().unwrap() += 1; // lock poison is unrecoverable
+        Ok(self.analysis.clone())
+    }
+
+    fn model(&self) -> &str {
+        "routing-test"
+    }
+}
+
+/// A graph-completion retriever with a scripted answer that records the query
+/// it was asked in `get_context` and `get_completion`.
+struct ScriptedRetriever {
+    answer: SearchOutput,
+    context_queries: Mutex<Vec<String>>,
+    completion_queries: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl SearchRetriever for ScriptedRetriever {
+    fn search_type(&self) -> SearchType {
+        SearchType::GraphCompletion
+    }
+
+    async fn get_context(
+        &self,
+        query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        self.context_queries.lock().unwrap().push(query.into()); // lock poison is unrecoverable
+        Ok(vec![SearchItem {
+            id: None,
+            score: Some(0.9),
+            payload: json!({"text": "edge text"}),
+        }])
+    }
+
+    async fn get_completion(
+        &self,
+        query: &str,
+        _context: Option<SearchContext>,
+        _session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<SearchOutput, SearchError> {
+        self.completion_queries
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push(query.into());
+        Ok(self.answer.clone())
+    }
+}
+
+struct TurnHarness {
+    orchestrator: SearchOrchestrator,
+    manager: Arc<SessionManager>,
+    history: Arc<RecordingHistoryDb>,
+    llm: Arc<RoutingLlm>,
+    retriever: Arc<ScriptedRetriever>,
+    user: Uuid,
+    _dir: tempfile::TempDir,
+}
+
+const SESSION: &str = "turn-session";
+
+impl TurnHarness {
+    /// A session holding one prior QA turn, so analysis may decline the next.
+    async fn new(
+        mode: cognee_search::SessionSearchMode,
+        per_dataset: bool,
+        answer: SearchOutput,
+        analysis: serde_json::Value,
+    ) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path().join("sessions"),
+        ))));
+        let user = Uuid::new_v4();
+        manager
+            .save_qa(
+                Some(SESSION),
+                Some(&user.to_string()),
+                "old question",
+                "old answer",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let retriever = Arc::new(ScriptedRetriever {
+            answer,
+            context_queries: Mutex::new(vec![]),
+            completion_queries: Mutex::new(vec![]),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(retriever.clone());
+        let history = Arc::new(RecordingHistoryDb::default());
+        let llm = Arc::new(RoutingLlm {
+            analysis,
+            feedback: json!({
+                "feedback_detected": true,
+                "feedback_text": "Great.",
+                "feedback_score": 5.0,
+                "response_to_user": "Legacy thanks.",
+                "contains_followup_question": false
+            }),
+            analysis_calls: Mutex::new(0),
+        });
+        let orchestrator = SearchOrchestrator::new(registry)
+            .with_database(history.clone())
+            .with_session_manager(manager.clone())
+            .with_llm(llm.clone())
+            .with_auto_feedback_default(true)
+            // Makes the orchestrator fetch the context itself, so the
+            // retriever's `get_context` query is observable.
+            .with_access_tracking()
+            .with_session_search_mode(mode)
+            .with_per_dataset_storage(per_dataset);
+        Self {
+            orchestrator,
+            manager,
+            history,
+            llm,
+            retriever,
+            user,
+            _dir: dir,
+        }
+    }
+
+    fn request(&self, query: &str) -> SearchRequest {
+        let mut request = graph_request(query, Some(SESSION));
+        request.user_id = Some(self.user);
+        request.auto_feedback_detection = Some(true);
+        request
+    }
+
+    async fn qa_count(&self) -> usize {
+        self.manager
+            .get_session(Some(SESSION), Some(&self.user.to_string()))
+            .await
+            .unwrap()
+            .len()
+    }
+
+    async fn context_row_count(&self) -> usize {
+        self.manager
+            .get_session_context_entries(Some(SESSION), Some(&self.user.to_string()))
+            .await
+            .unwrap()
+            .len()
+    }
+}
+
+fn declining_analysis() -> serde_json::Value {
+    json!({
+        "response_to_user": "Noted, thanks.",
+        "query_to_answer": null,
+        "served_context_ratings": [],
+        "candidate_context_updates": [
+            {"section": "lessons_learned", "content": "Use X.", "confidence": 0.9}
+        ],
+        "previous_answer_rating": 2
+    })
+}
+
+fn answering_analysis() -> serde_json::Value {
+    json!({
+        "response_to_user": null,
+        "query_to_answer": "effective question",
+        "served_context_ratings": [],
+        "candidate_context_updates": [
+            {"section": "preferences", "content": "Be terse.", "confidence": 0.9}
+        ],
+        "previous_answer_rating": 4
+    })
+}
+
+fn answer(text: &str) -> SearchOutput {
+    SearchOutput::Text(text.to_string())
+}
+
+async fn assert_declined_turn_logged(harness: &TurnHarness, request: SearchRequest) {
+    let response = harness.orchestrator.search(&request).await.unwrap();
+
+    assert!(matches!(&response.result, SearchOutput::Text(t) if t == "Noted, thanks."));
+    assert_eq!(
+        harness.history.rows(),
+        vec![("No, use X.".to_string(), "Noted, thanks.".to_string())],
+        "the acknowledgement is one history row under the raw query"
+    );
+    assert_eq!(harness.qa_count().await, 2, "ack is saved as the turn's QA");
+}
+
+#[tokio::test]
+async fn sequential_declined_turn_is_logged_to_search_history() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("unused"),
+        declining_analysis(),
+    )
+    .await;
+    assert_declined_turn_logged(&harness, harness.request("No, use X.")).await;
+}
+
+#[tokio::test]
+async fn sequential_declined_turn_acknowledges_even_with_a_response_schema() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("unused"),
+        declining_analysis(),
+    )
+    .await;
+    let mut request = harness.request("No, use X.");
+    request.response_schema = Some(json!({"type": "object"}));
+
+    assert_declined_turn_logged(&harness, request).await;
+    assert!(
+        harness
+            .retriever
+            .completion_queries
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn concurrent_declined_turn_is_logged_to_search_history() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Concurrent,
+        false,
+        answer("discarded answer"),
+        declining_analysis(),
+    )
+    .await;
+    assert_declined_turn_logged(&harness, harness.request("No, use X.")).await;
+}
+
+#[tokio::test]
+async fn fanout_declined_turn_is_logged_to_search_history() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Concurrent,
+        true,
+        answer("discarded answer"),
+        declining_analysis(),
+    )
+    .await;
+    let mut request = harness.request("No, use X.");
+    request.dataset_ids = Some(vec![Uuid::new_v4(), Uuid::new_v4()]);
+
+    assert_declined_turn_logged(&harness, request).await;
+}
+
+#[tokio::test]
+async fn concurrent_empty_context_commits_nothing_for_a_declining_analysis() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Concurrent,
+        false,
+        SearchOutput::Texts(vec![]),
+        declining_analysis(),
+    )
+    .await;
+
+    let response = harness
+        .orchestrator
+        .search(&harness.request("No, use X."))
+        .await
+        .unwrap();
+
+    assert!(matches!(&response.result, SearchOutput::Texts(t) if t.is_empty()));
+    assert_eq!(harness.qa_count().await, 1, "no acknowledgement QA");
+    assert_eq!(harness.context_row_count().await, 0, "no analysis commit");
+}
+
+#[tokio::test]
+async fn concurrent_empty_context_commits_nothing_for_an_answering_analysis() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Concurrent,
+        false,
+        SearchOutput::Texts(vec![]),
+        answering_analysis(),
+    )
+    .await;
+
+    harness
+        .orchestrator
+        .search(&harness.request("Be terse. What now?"))
+        .await
+        .unwrap();
+
+    assert_eq!(harness.qa_count().await, 1, "no QA for an empty answer");
+    assert_eq!(harness.context_row_count().await, 0, "no analysis commit");
+}
+
+#[tokio::test]
+async fn fanout_empty_context_commits_nothing() {
+    for analysis in [declining_analysis(), answering_analysis()] {
+        let harness = TurnHarness::new(
+            cognee_search::SessionSearchMode::Concurrent,
+            true,
+            SearchOutput::Texts(vec![]),
+            analysis,
+        )
+        .await;
+        let mut request = harness.request("No, use X.");
+        request.dataset_ids = Some(vec![Uuid::new_v4(), Uuid::new_v4()]);
+
+        harness.orchestrator.search(&request).await.unwrap();
+
+        assert_eq!(harness.qa_count().await, 1, "no QA for an empty answer");
+        assert_eq!(harness.context_row_count().await, 0, "no analysis commit");
+    }
+}
+
+#[tokio::test]
+async fn fanout_answering_analysis_commits_once_an_answer_exists() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Concurrent,
+        true,
+        answer("fan-out answer"),
+        answering_analysis(),
+    )
+    .await;
+    let mut request = harness.request("Be terse. What now?");
+    request.dataset_ids = Some(vec![Uuid::new_v4(), Uuid::new_v4()]);
+
+    harness.orchestrator.search(&request).await.unwrap();
+
+    assert_eq!(harness.qa_count().await, 2);
+    assert!(harness.context_row_count().await > 0, "analysis committed");
+}
+
+#[tokio::test]
+async fn batch_search_skips_session_turn_preparation() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("unused"),
+        declining_analysis(),
+    )
+    .await;
+
+    let responses = harness
+        .orchestrator
+        .search_batch(&[harness.request("Great answer!")])
+        .await
+        .unwrap();
+
+    assert_eq!(*harness.llm.analysis_calls.lock().unwrap(), 0); // lock poison is unrecoverable
+    // The legacy feedback detection still answers the pure-feedback message,
+    // and its acknowledgement now reaches the search history. P2 removes the
+    // legacy path; this assertion goes with it.
+    assert!(matches!(&responses[0].result, SearchOutput::Text(t) if t == "Legacy thanks."));
+    assert_eq!(
+        harness.history.rows(),
+        vec![("Great answer!".to_string(), "Legacy thanks.".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn empty_readable_scope_records_an_empty_result_text() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        true,
+        answer("unused"),
+        declining_analysis(),
+    )
+    .await;
+
+    // Per-dataset storage with no dataset named and none readable.
+    let results = harness
+        .orchestrator
+        .search_datasets(&harness.request("anything"))
+        .await
+        .unwrap();
+
+    assert!(results.is_empty());
+    assert_eq!(
+        harness.history.rows(),
+        vec![("anything".to_string(), String::new())]
+    );
+}
+
+#[tokio::test]
+async fn sequential_turn_retrieves_and_answers_with_the_effective_query_alone() {
+    let harness = TurnHarness::new(
+        cognee_search::SessionSearchMode::Sequential,
+        false,
+        answer("final answer"),
+        answering_analysis(),
+    )
+    .await;
+
+    harness
+        .orchestrator
+        .search(&harness.request("Be terse. What now?"))
+        .await
+        .unwrap();
+
+    let queries = |recorded: &Mutex<Vec<String>>| recorded.lock().unwrap().clone(); // lock poison is unrecoverable
+    assert_eq!(
+        queries(&harness.retriever.context_queries),
+        vec!["effective question".to_string()]
+    );
+    assert_eq!(
+        queries(&harness.retriever.completion_queries),
+        vec!["effective question".to_string()]
+    );
+    let session = harness
+        .manager
+        .get_session(Some(SESSION), Some(&harness.user.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        session.last().map(|e| e.question.as_str()),
+        Some("Be terse. What now?"),
+        "storage keeps the raw message"
+    );
+    assert_eq!(
+        harness.history.rows(),
+        vec![(
+            "Be terse. What now?".to_string(),
+            "final answer".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn an_empty_completion_text_is_still_an_answer_and_commits() {
+    for per_dataset in [false, true] {
+        let harness = TurnHarness::new(
+            cognee_search::SessionSearchMode::Concurrent,
+            per_dataset,
+            answer(""),
+            answering_analysis(),
+        )
+        .await;
+        let mut request = harness.request("Be terse. What now?");
+        if per_dataset {
+            request.dataset_ids = Some(vec![Uuid::new_v4()]);
+        }
+
+        harness.orchestrator.search(&request).await.unwrap();
+
+        // Python skips the commit only when no completion was generated, so a
+        // generated "" is saved and committed together.
+        assert_eq!(harness.qa_count().await, 2, "per_dataset={per_dataset}");
+        assert!(
+            harness.context_row_count().await > 0,
+            "per_dataset={per_dataset}"
+        );
+    }
+}

@@ -135,7 +135,8 @@ re-rank RAG completion's chunks (fetching `wide_search_top_k` candidates
 first, then trimming to `top_k`), by at most `personalization_influence`;
 graph and RAG completion also append the preference text (under
 `## What this user prefers`) to the question and context. The hybrid search
-does not use them yet.
+uses them too: they weight its chunk ranking, and its completion and preview
+carry the preference text as guidance.
 
 A run holds its dataset's lock for its whole length, then a claim on every
 session it targets (`session:{user_id}:{session_id}`), and releases both once

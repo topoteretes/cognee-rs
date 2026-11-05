@@ -1,7 +1,9 @@
 use super::concurrent_session::{self, SessionSearchMode};
 use crate::graph_warmup::{CacheKey, GraphWarmup, WarmupProbe};
 use crate::orchestration::hybrid_fallback::{passed_graph_only_knob, requested_graph_only_filter};
-use crate::orchestration::search_history::{history_query_type, history_row, log_history_row};
+use crate::orchestration::search_history::{
+    HistoryRow, history_query_type, history_row, log_history_row,
+};
 use crate::orchestration::{SearchTypeRegistry, prepare_search_result};
 use crate::query_router::RoutingConstraints;
 use crate::retrievers::DatasetScoping;
@@ -1033,16 +1035,7 @@ impl SearchOrchestrator {
             // Python still records an unfiltered search when ACL resolution
             // leaves the caller with no readable datasets.  Keep this before
             // session preparation, but preserve the normal history pair.
-            let response = prepare_search_result(
-                search_type,
-                SearchOutput::Items(Vec::new()),
-                None,
-                Some(Vec::new()),
-                request.only_context(),
-                request.use_combined_context(),
-                request.verbose(),
-            );
-            self.log_search_history(request, &response).await;
+            self.log_empty_scope_history(request).await;
             emit_search_completed(request);
             return Ok(Vec::new());
         }
@@ -1062,13 +1055,15 @@ impl SearchOrchestrator {
                 SearchError::InvalidInput("concurrent session search requires a session".into())
             })?;
             let _turn_guard = concurrent_session::lock(user_id, session_id).await;
-            let (response, log) = self
+            let (response, finalize) = self
                 .run_concurrent_session_turn(request, &retriever, search_type, auto_feedback)
                 .await?;
-            if log {
+            // A declined turn was already logged and announced by
+            // `acknowledge_declined_turn`.
+            if finalize {
                 self.log_search_history(request, &response).await;
+                emit_search_completed(request);
             }
-            emit_search_completed(request);
             let dataset_id = match request.dataset_ids.as_deref() {
                 Some([only]) => Some(*only),
                 _ => None,
@@ -1098,12 +1093,15 @@ impl SearchOrchestrator {
         let mut fanout_session = None;
         let mut fanout_commit_snapshot = None;
 
-        // Python prepares exactly one turn before a generative completion. Raw
-        // retrieval modes and previews deliberately skip this LLM call.
+        // Python prepares one turn per dataset leg before a generative
+        // completion; Rust deliberately runs one logical turn for the whole
+        // fan-out (a documented divergence). Raw retrieval modes, previews and
+        // batch searches deliberately skip this LLM call.
         let raw_request = request.clone();
         let prepared_request;
         let mut turn_prepared = false;
         if !fanout_concurrent
+            && !is_batch
             && !request.only_context()
             && request.session_id.as_ref().is_some_and(|id| !id.is_empty())
             && matches!(
@@ -1131,24 +1129,14 @@ impl SearchOrchestrator {
             )
             .await;
             turn_prepared = true;
-            if !preparation.should_answer && request.response_schema.is_none() {
-                let answer = preparation
-                    .response_to_user
-                    .unwrap_or_else(|| "Got it.".to_string());
-                let mut acknowledgement_request = raw_request.clone();
-                acknowledgement_request.summarize_context = Some(false);
-                self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+            if !preparation.should_answer {
+                let response = self
+                    .acknowledge_declined_turn(
+                        &raw_request,
+                        search_type,
+                        preparation.response_to_user,
+                    )
                     .await;
-                let response = prepare_search_result(
-                    search_type,
-                    SearchOutput::Text(answer),
-                    None,
-                    request.dataset_ids.clone(),
-                    false,
-                    request.use_combined_context(),
-                    request.verbose(),
-                );
-                emit_search_completed(&raw_request);
                 return Ok(vec![DatasetSearchResult {
                     dataset_id: None,
                     dataset_name: None,
@@ -1157,15 +1145,10 @@ impl SearchOrchestrator {
                     error: None,
                 }]);
             }
+            // Retrieval and the answer use the effective query alone, as in
+            // Python; storage and history keep the raw message.
             let mut clone = request.clone();
-            clone.query_text = if preparation.effective_query == raw_request.query_text {
-                preparation.effective_query
-            } else {
-                format!(
-                    "{}\n\nCurrent user message and instructions:\n{}",
-                    preparation.effective_query, raw_request.query_text
-                )
-            };
+            clone.query_text = preparation.effective_query;
             prepared_request = clone;
             request = &prepared_request;
         }
@@ -1179,7 +1162,7 @@ impl SearchOrchestrator {
             // result names the dataset only when exactly one was searched.
             // Nothing is filtered by dataset membership — that could not be made
             // tight (cognee-rs #290) and is what per-dataset storage replaces.
-            let (response, log) = self
+            let response = self
                 .run_search(
                     request,
                     &retriever,
@@ -1191,9 +1174,7 @@ impl SearchOrchestrator {
                     None,
                 )
                 .await?;
-            if log {
-                self.log_search_history(&raw_request, &response).await;
-            }
+            self.log_search_history(&raw_request, &response).await;
             emit_search_completed(request);
             let dataset_id = match request.dataset_ids.as_deref() {
                 Some([only]) => Some(*only),
@@ -1249,16 +1230,7 @@ impl SearchOrchestrator {
             // The caller may read no dataset at all: nothing to search. Python
             // gathers zero per-dataset tasks and returns `[]`
             // (`search.py:503-504`); the query is still logged.
-            let response = prepare_search_result(
-                search_type,
-                SearchOutput::Items(Vec::new()),
-                None,
-                Some(Vec::new()),
-                request.only_context(),
-                request.use_combined_context(),
-                request.verbose(),
-            );
-            self.log_search_history(request, &response).await;
+            self.log_empty_scope_history(request).await;
             emit_search_completed(request);
             return Ok(Vec::new());
         }
@@ -1333,6 +1305,7 @@ impl SearchOrchestrator {
                 .handle_auto_feedback(request, search_type, auto_feedback && !turn_prepared)
                 .await
         {
+            self.log_search_history(request, &acknowledgement).await;
             emit_search_completed(request);
             return Ok(vec![DatasetSearchResult {
                 dataset_id: None,
@@ -1386,11 +1359,9 @@ impl SearchOrchestrator {
 
         let mut results = Vec::with_capacity(outcomes.len());
         let mut no_data = Vec::new();
-        let mut log = false;
         for (dataset_id, (dataset_name, dataset_tenant_id), outcome) in outcomes {
             match outcome {
-                Ok((mut response, dataset_log)) => {
-                    log |= dataset_log;
+                Ok(mut response) => {
                     key_context_by_dataset(&mut response, dataset_id);
                     response.datasets = Some(vec![dataset_id]);
                     results.push(DatasetSearchResult {
@@ -1467,53 +1438,56 @@ impl SearchOrchestrator {
 
         let merged = merge_dataset_results(request, results.clone());
         if let Some(handle) = fanout_analysis {
-            let mut preparation = match handle.join().await {
-                Some(Ok(preparation)) => preparation,
-                Some(Err(error)) => {
-                    tracing::warn!(%error, "concurrent fan-out analysis task failed open");
-                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
-                }
-                None => {
-                    tracing::warn!("concurrent fan-out analysis handle was unavailable");
-                    super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
-                }
-            };
-            if let Some((manager, session_id, user_id, entries, rows)) = fanout_commit_snapshot {
-                super::session_turn::commit_session_turn_analysis(
-                    &manager,
-                    &session_id,
-                    user_id.as_deref(),
-                    &request.query_text,
-                    &mut preparation,
-                    &entries,
-                    &rows,
-                )
-                .await;
-            }
-            if !preparation.should_answer {
-                let answer = preparation
-                    .response_to_user
-                    .unwrap_or_else(|| "Got it.".to_string());
-                let mut acknowledgement_request = raw_request.clone();
-                acknowledgement_request.summarize_context = Some(false);
-                self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+            // No dataset produced an answer: there is no turn to commit or
+            // acknowledge (Python skips both when the completion is empty).
+            if !produced_answer(&merged.result) {
+                handle.abort();
+            } else {
+                let mut preparation = match handle.join().await {
+                    Some(Ok(preparation)) => preparation,
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "concurrent fan-out analysis task failed open");
+                        super::session_turn::SessionTurnPreparation::pass_through(
+                            &request.query_text,
+                        )
+                    }
+                    None => {
+                        tracing::warn!("concurrent fan-out analysis handle was unavailable");
+                        super::session_turn::SessionTurnPreparation::pass_through(
+                            &request.query_text,
+                        )
+                    }
+                };
+                if let Some((manager, session_id, user_id, entries, rows)) = fanout_commit_snapshot
+                {
+                    super::session_turn::commit_session_turn_analysis(
+                        &manager,
+                        &session_id,
+                        user_id.as_deref(),
+                        &request.query_text,
+                        &mut preparation,
+                        &entries,
+                        &rows,
+                    )
                     .await;
-                drop(fanout_turn_guard);
-                return Ok(vec![DatasetSearchResult {
-                    dataset_id: None,
-                    dataset_name: None,
-                    dataset_tenant_id: None,
-                    response: prepare_search_result(
-                        search_type,
-                        SearchOutput::Text(answer),
-                        None,
-                        request.dataset_ids.clone(),
-                        false,
-                        request.use_combined_context(),
-                        request.verbose(),
-                    ),
-                    error: None,
-                }]);
+                }
+                if !preparation.should_answer {
+                    let response = self
+                        .acknowledge_declined_turn(
+                            &raw_request,
+                            search_type,
+                            preparation.response_to_user,
+                        )
+                        .await;
+                    drop(fanout_turn_guard);
+                    return Ok(vec![DatasetSearchResult {
+                        dataset_id: None,
+                        dataset_name: None,
+                        dataset_tenant_id: None,
+                        response,
+                        error: None,
+                    }]);
+                }
             }
         }
         // An `only_context` result is a preview (a prompt or the context), not
@@ -1540,9 +1514,7 @@ impl SearchOrchestrator {
             }
             _ => {}
         }
-        if log {
-            self.log_search_history(&raw_request, &merged).await;
-        }
+        self.log_search_history(&raw_request, &merged).await;
         emit_search_completed(request);
         drop(fanout_turn_guard);
         Ok(results)
@@ -1563,9 +1535,7 @@ impl SearchOrchestrator {
     }
 
     /// One retriever run over whatever store the current scope reaches — the
-    /// shared store, or one dataset's own under per-dataset storage. Returns
-    /// the response and whether it is to be recorded in the search history (a
-    /// pure-feedback acknowledgement is not).
+    /// shared store, or one dataset's own under per-dataset storage.
     ///
     /// `keep_context`: fetch the context and keep it on the response, as a
     /// dataset-scoped search always returned its per-dataset context.
@@ -1584,7 +1554,7 @@ impl SearchOrchestrator {
         session_turn: bool,
         raw_session_query: Option<&str>,
         session_snapshot: Option<&SessionContext>,
-    ) -> Result<(SearchResponse, bool), crate::types::SearchError> {
+    ) -> Result<SearchResponse, crate::types::SearchError> {
         let mut params = SearchParams::from(request);
         params.personalization = Some(self.personalization).filter(|config| config.enabled);
         if params.feedback_influence.is_none() && self.default_feedback_influence > 0.0 {
@@ -1670,7 +1640,7 @@ impl SearchOrchestrator {
             response.user_prompt = user_prompt;
             response.system_prompt = system_prompt;
 
-            return Ok((response, true));
+            return Ok(response);
         }
 
         let session_context = match session_snapshot {
@@ -1685,7 +1655,7 @@ impl SearchOrchestrator {
                 .handle_auto_feedback(request, search_type, auto_feedback)
                 .await
         {
-            return Ok((acknowledgement, false));
+            return Ok(acknowledgement);
         }
 
         // When the orchestrator did not fetch the context above
@@ -1768,7 +1738,7 @@ impl SearchOrchestrator {
             response.context = context.map(|items| HashMap::from([(String::new(), items)]));
         }
 
-        Ok((response, true))
+        Ok(response)
     }
 
     /// Run analysis and the answer lane from the same pre-turn snapshot.
@@ -1857,6 +1827,25 @@ impl SearchOrchestrator {
         };
         let (mut preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
         let (context, generated) = answer_result?;
+
+        // No answer was produced (a completion retriever may deliberately
+        // return no text on an empty context): there is no turn to commit,
+        // acknowledge or record, as in Python.
+        if !produced_answer(&generated) {
+            return Ok((
+                prepare_search_result(
+                    search_type,
+                    generated,
+                    Some(context),
+                    request.dataset_ids.clone(),
+                    false,
+                    request.use_combined_context(),
+                    request.verbose(),
+                ),
+                true,
+            ));
+        }
+
         super::session_turn::commit_session_turn_analysis(
             manager,
             session_id,
@@ -1869,29 +1858,12 @@ impl SearchOrchestrator {
         .await;
 
         if !preparation.should_answer {
-            let answer = preparation
-                .response_to_user
-                .unwrap_or_else(|| "Got it.".into());
-            let mut raw = request.clone();
-            raw.summarize_context = Some(false);
-            self.save_session_turn(&raw, search_type, &answer, None)
+            let response = self
+                .acknowledge_declined_turn(request, search_type, preparation.response_to_user)
                 .await;
-            return Ok((
-                prepare_search_result(
-                    search_type,
-                    SearchOutput::Text(answer),
-                    None,
-                    request.dataset_ids.clone(),
-                    false,
-                    request.use_combined_context(),
-                    request.verbose(),
-                ),
-                false,
-            ));
+            return Ok((response, false));
         }
 
-        // A completion retriever may deliberately return no text on an empty
-        // context. As in Python, do not manufacture or persist a QA turn.
         if let SearchOutput::Text(answer) = &generated {
             self.save_session_turn(request, search_type, answer, Some(&context))
                 .await;
@@ -1908,6 +1880,35 @@ impl SearchOrchestrator {
             ),
             true,
         ))
+    }
+
+    /// Finish a session turn that analysis declined to answer (feedback or
+    /// guidance only): save the acknowledgement as the turn's QA (no context),
+    /// record it in the search history and announce completion, as Python does
+    /// for every result. Returns the acknowledgement response.
+    async fn acknowledge_declined_turn(
+        &self,
+        request: &SearchRequest,
+        search_type: SearchType,
+        response_to_user: Option<String>,
+    ) -> SearchResponse {
+        let answer = response_to_user.unwrap_or_else(|| "Got it.".to_string());
+        let mut acknowledgement_request = request.clone();
+        acknowledgement_request.summarize_context = Some(false);
+        self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+            .await;
+        let response = prepare_search_result(
+            search_type,
+            SearchOutput::Text(answer),
+            None,
+            request.dataset_ids.clone(),
+            false,
+            request.use_combined_context(),
+            request.verbose(),
+        );
+        self.log_search_history(request, &response).await;
+        emit_search_completed(request);
+        response
     }
 
     /// Auto-feedback detection for a session search (Python
@@ -2069,17 +2070,40 @@ impl SearchOrchestrator {
         }
     }
 
+    /// Record a search that had no readable dataset to run in: Python stores
+    /// an empty result text for it.
+    async fn log_empty_scope_history(&self, request: &SearchRequest) {
+        let row = HistoryRow {
+            dataset_id: None,
+            value: String::new(),
+        };
+        self.write_history_row(request, row).await;
+    }
+
     /// Record the search in history as one query and result row.
     async fn log_search_history(&self, request: &SearchRequest, response: &SearchResponse) {
+        self.write_history_row(request, history_row(request, response))
+            .await;
+    }
+
+    /// Write one history row when history logging is on.
+    async fn write_history_row(&self, request: &SearchRequest, row: HistoryRow) {
         let Some(database) = self.database.as_ref().filter(|_| self.log_search_history) else {
             return;
         };
         let query_type = history_query_type(request.search_type);
-        let row = history_row(request, response);
         if let Err(error) = log_history_row(database.as_ref(), request, &query_type, &row).await {
             tracing::warn!(%error, "failed to record search history");
         }
     }
+}
+
+/// Whether a completion run produced an answer worth recording as a session
+/// turn. Only the empty `Texts` list (the `skip_completion_on_empty_context`
+/// sentinel) means "no answer", as Python's `generated_answer is None`; an
+/// empty completion text is still an answer.
+fn produced_answer(output: &SearchOutput) -> bool {
+    !matches!(output, SearchOutput::Texts(answers) if answers.is_empty())
 }
 
 /// How many datasets a per-dataset search runs at once.
@@ -2330,6 +2354,7 @@ mod tests {
 
     struct SessionCompletionRetriever {
         query_seen: std::sync::Mutex<Option<String>>,
+        completion_query_seen: std::sync::Mutex<Option<String>>,
     }
 
     #[async_trait]
@@ -2349,11 +2374,12 @@ mod tests {
 
         async fn get_completion(
             &self,
-            _query: &str,
+            query: &str,
             _context: Option<SearchContext>,
             _session: &SessionContext,
             _params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
+            *self.completion_query_seen.lock().unwrap() = Some(query.to_string());
             Ok(SearchOutput::Text("generated answer".into()))
         }
     }
@@ -2402,6 +2428,7 @@ mod tests {
             .unwrap();
         let retriever = Arc::new(SessionCompletionRetriever {
             query_seen: std::sync::Mutex::new(None),
+            completion_query_seen: std::sync::Mutex::new(None),
         });
         let mut registry = SearchTypeRegistry::new();
         registry.register(retriever.clone());
@@ -2459,9 +2486,14 @@ mod tests {
             .await
             .unwrap();
 
+        // Retrieval and the answer see the effective query alone.
         assert_eq!(
             retriever.query_seen.lock().unwrap().as_deref(),
-            Some("effective query\n\nCurrent user message and instructions:\nraw follow-up")
+            Some("effective query")
+        );
+        assert_eq!(
+            retriever.completion_query_seen.lock().unwrap().as_deref(),
+            Some("effective query")
         );
         let entries = manager.get_session(Some("s"), None).await.unwrap();
         assert_eq!(entries.last().unwrap().question, "raw follow-up");
@@ -2527,6 +2559,7 @@ mod tests {
             .unwrap();
         let retriever = Arc::new(SessionCompletionRetriever {
             query_seen: std::sync::Mutex::new(None),
+            completion_query_seen: std::sync::Mutex::new(None),
         });
         let mut registry = SearchTypeRegistry::new();
         registry.register(retriever.clone());
