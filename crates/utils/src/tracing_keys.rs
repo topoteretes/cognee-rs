@@ -38,6 +38,12 @@ pub const COGNEE_RECALL_SCOPE: &str = "cognee.recall.scope";
 /// The query-router rule that picked `recall()`'s search type.
 pub const COGNEE_RECALL_ROUTE_RULE: &str = "cognee.recall.route_rule";
 
+/// Set when recall's warm-up guard skipped the graph search.
+pub const COGNEE_RECALL_WARMUP_SHORTCIRCUIT: &str = "cognee.recall.warmup_shortcircuit";
+
+/// The graph readiness that made the warm-up guard skip the search.
+pub const COGNEE_RECALL_WARMUP_STATE: &str = "cognee.recall.warmup_state";
+
 /// `forget()` target.
 pub const COGNEE_FORGET_TARGET: &str = "cognee.forget.target";
 

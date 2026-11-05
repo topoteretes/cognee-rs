@@ -20,7 +20,9 @@ use cognee_search::observability::{
     COGNEE_RECALL_SCOPE, COGNEE_RECALL_SOURCE, COGNEE_RESULT_COUNT, COGNEE_SEARCH_QUERY,
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
-use cognee_search::recall_scope::{run_graph, search_session, search_trace};
+use cognee_search::recall_scope::{
+    dedupe_scopes, has_dataset_filter, plan_graph, run_graph, search_session, search_trace,
+};
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
@@ -37,11 +39,13 @@ pub struct RecallResult {
     /// Source-tagged results -- order matches the iteration order of the
     /// resolved `sources` list (Python `recall.py:503-513`).
     pub items: Vec<RecallItem>,
-    /// The search type that was used (if graph search ran).
+    /// The search type that was used (if graph search ran), or would have
+    /// been when the warm-up guard skipped it.
     pub search_type_used: Option<SearchType>,
     /// Whether auto-routing was applied (only relevant when graph ran).
     pub auto_routed: bool,
-    /// The raw graph search response (if graph search ran).
+    /// The raw graph search response (if graph search ran); empty when the
+    /// warm-up guard skipped it.
     pub search_response: Option<SearchResponse>,
 }
 
@@ -86,7 +90,10 @@ pub async fn recall(
         // unknown strings are rejected at the HTTP/CLI boundary before they
         // reach this function.
         Some(v) if v.is_empty() => vec![RecallScope::Auto],
-        Some(v) => v,
+        // A repeated source runs once, as `normalize_scope` dedupes the wire
+        // form. `Auto` stays: next to real sources it is skipped, but the
+        // scope is then not graph-only.
+        Some(v) => dedupe_scopes(v),
     };
 
     let auto_mode = normalized.as_slice() == [RecallScope::Auto];
@@ -94,8 +101,7 @@ pub async fn recall(
         // Python recall.py:466-476: `has_dataset_scope = bool(dataset_ids)
         // or bool(datasets)` — either filter counts, and an empty list does
         // not.
-        let has_dataset_scope = dataset_ids.as_ref().is_some_and(|d| !d.is_empty())
-            || datasets.as_ref().is_some_and(|d| !d.is_empty());
+        let has_dataset_scope = has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref());
         match (session_id, has_dataset_scope, query_type) {
             (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
             (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
@@ -105,10 +111,11 @@ pub async fn recall(
         (normalized, false)
     };
 
-    // Comma-joined source names, mirroring Python's `span_scope` (`recall.py:388`).
+    // Comma-joined source names, `auto` included, mirroring Python's
+    // `span_scope` (`recall.py:388`).
     let span_scope: String = sources
         .iter()
-        .filter_map(|s| s.as_source().map(|src| src.as_str()))
+        .map(RecallScope::as_wire)
         .collect::<Vec<_>>()
         .join(",");
 
@@ -139,6 +146,8 @@ pub async fn recall(
         "cognee.recall.top_k" = top_k,
         { cognee_search::observability::COGNEE_SEARCH_TYPE } = field::Empty,
         { cognee_search::observability::COGNEE_RECALL_ROUTE_RULE } = field::Empty,
+        { cognee_search::observability::COGNEE_RECALL_WARMUP_SHORTCIRCUIT } = field::Empty,
+        { cognee_search::observability::COGNEE_RECALL_WARMUP_STATE } = field::Empty,
         { COGNEE_RECALL_SOURCE } = field::Empty,
         { COGNEE_RESULT_COUNT } = field::Empty,
         { COGNEE_SESSION_ENTRY_COUNT } = field::Empty,
@@ -175,34 +184,60 @@ pub async fn recall(
                     .map_err(|e| ApiError::Search(e.to_string()))?
             }
             RecallScope::Graph => {
-                let (items, used_type, was_auto, response) = run_graph(
+                let search_err =
+                    |e: cognee_search::types::SearchError| ApiError::Search(e.to_string());
+                let plan = plan_graph(
                     query_text,
                     query_type,
-                    datasets.clone(),
-                    dataset_ids.clone(),
-                    top_k,
                     auto_route,
-                    session_id,
+                    datasets.as_deref(),
+                    dataset_ids.as_deref(),
                     user_id,
                     search_orchestrator,
                     &span,
-                    options.as_ref(),
                 )
-                .await
-                .map_err(|e| ApiError::Search(e.to_string()))?;
+                .map_err(search_err)?;
+                let note = plan
+                    .warmup_note(
+                        search_orchestrator,
+                        datasets.as_deref(),
+                        dataset_ids.as_deref(),
+                        &span,
+                        options.as_ref(),
+                    )
+                    .await
+                    .map_err(search_err)?;
+                // A graph that is not built is not searched: it answers the
+                // note as the one source, and nothing next to others.
+                let (items, used_type, was_auto, response) = match note {
+                    Some(note) => (
+                        if sources.as_slice() == [RecallScope::Graph] {
+                            vec![note]
+                        } else {
+                            Vec::new()
+                        },
+                        plan.search_type(),
+                        plan.auto_routed(),
+                        plan.empty_response(),
+                    ),
+                    None => run_graph(
+                        &plan,
+                        query_text,
+                        datasets.clone(),
+                        dataset_ids.clone(),
+                        top_k,
+                        session_id,
+                        search_orchestrator,
+                        &span,
+                        options.as_ref(),
+                    )
+                    .await
+                    .map_err(search_err)?,
+                };
                 graph_search_type = Some(used_type);
                 graph_auto_routed = was_auto;
                 graph_response = Some(response);
-                // A graph that is not built answers with a note only when it
-                // is the one source; next to others it contributes nothing.
-                if sources.as_slice() == [RecallScope::Graph] {
-                    items
-                } else {
-                    items
-                        .into_iter()
-                        .filter(|item| item.source != RecallSource::System)
-                        .collect()
-                }
+                items
             }
         };
 
@@ -213,16 +248,7 @@ pub async fn recall(
     }
 
     // -- Telemetry (Python recall.py:515-522). --
-    let source_label: &str = if sources.iter().filter(|s| s.as_source().is_some()).count() == 1 {
-        sources
-            .iter()
-            .find_map(|s| s.as_source())
-            .map(|s| s.as_str())
-            .unwrap_or("graph")
-    } else {
-        "multi"
-    };
-    span.record(COGNEE_RECALL_SOURCE, source_label);
+    span.record(COGNEE_RECALL_SOURCE, source_label(&sources));
     span.record(COGNEE_RESULT_COUNT, merged.len());
     if session_result_count > 0 {
         span.record(COGNEE_SESSION_ENTRY_COUNT, session_result_count);
@@ -267,9 +293,26 @@ pub async fn recall(
     })
 }
 
+/// The recall's `cognee.recall.source`: a single source names itself; any
+/// other scope, `[auto, graph]` included, is "multi".
+fn source_label(sources: &[RecallScope]) -> &'static str {
+    match sources {
+        [only] => only.as_wire(),
+        _ => "multi",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_label_names_a_single_source_only() {
+        use RecallScope::{Auto, Graph, Session};
+        assert_eq!(source_label(&[Graph]), "graph");
+        assert_eq!(source_label(&[Auto, Graph]), "multi");
+        assert_eq!(source_label(&[Session, Graph]), "multi");
+    }
 
     #[test]
     fn recall_options_fields_are_set_correctly() {

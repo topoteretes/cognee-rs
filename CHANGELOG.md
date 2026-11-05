@@ -175,7 +175,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Migration.** `RecallSource` has a `System` variant, so an exhaustive
   `match` on it needs an arm. An orchestrator is probed only when given a
   `GraphWarmup` (`SearchBuilder::with_graph_warmup`); without one, recall
-  searches as before.
+  searches as before. A recall's graph search is planned once:
+  `recall_scope::plan_graph` decides the owner and the search type, and
+  `run_graph` takes that `GraphPlan` instead of `query_type`, `auto_route`
+  and `user_id`. The guard is `GraphPlan::warmup_note`, which `recall()`
+  calls before the graph search; `run_graph` itself never notes. A caller
+  that runs its own per-dataset searches plans and calls `warmup_note` once,
+  with all the recall's datasets, before the first. On a note it does not
+  search: it answers the note when the graph is the one source, nothing next
+  to others, and reports the plan's `search_type()`, `auto_routed()` and
+  `empty_response()`. A search it runs itself goes through
+  `GraphPlan::search_with_fallback`, which retries a failed routed pick as
+  the fallback as `run_graph` does, with `only_context(caller)` on the
+  request. A skipped search sets `cognee.recall.warmup_shortcircuit`
+  and `cognee.recall.warmup_state` on the span `warmup_note` is given. A
+  typed `recall()` scope runs a repeated source once (`dedupe_scopes`, shared
+  with `normalize_scope`); `Auto` stays, so `[auto, graph]` is not graph-only.
 
 - **`cognee-search`: recall routing honours what the deployment can run.** As
   Python's router does on `dev` (SDK-751, cognee `5ae7523fb`; v1.6.5 still
