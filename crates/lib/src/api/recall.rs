@@ -248,16 +248,7 @@ pub async fn recall(
     }
 
     // -- Telemetry (Python recall.py:515-522). --
-    let source_label: &str = if sources.iter().filter(|s| s.as_source().is_some()).count() == 1 {
-        sources
-            .iter()
-            .find_map(|s| s.as_source())
-            .map(|s| s.as_str())
-            .unwrap_or("graph")
-    } else {
-        "multi"
-    };
-    span.record(COGNEE_RECALL_SOURCE, source_label);
+    span.record(COGNEE_RECALL_SOURCE, source_label(&sources));
     span.record(COGNEE_RESULT_COUNT, merged.len());
     if session_result_count > 0 {
         span.record(COGNEE_SESSION_ENTRY_COUNT, session_result_count);
@@ -302,9 +293,26 @@ pub async fn recall(
     })
 }
 
+/// The recall's `cognee.recall.source`: a single source names itself; any
+/// other scope, `[auto, graph]` included, is "multi".
+fn source_label(sources: &[RecallScope]) -> &'static str {
+    match sources {
+        [only] => only.as_wire(),
+        _ => "multi",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_label_names_a_single_source_only() {
+        use RecallScope::{Auto, Graph, Session};
+        assert_eq!(source_label(&[Graph]), "graph");
+        assert_eq!(source_label(&[Auto, Graph]), "multi");
+        assert_eq!(source_label(&[Session, Graph]), "multi");
+    }
 
     #[test]
     fn recall_options_fields_are_set_correctly() {

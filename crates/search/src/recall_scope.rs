@@ -735,7 +735,8 @@ impl GraphPlan {
         empty_graph_response(self.search_type())
     }
 
-    /// Runs `search` on `request`, which carries the plan's type, and retries
+    /// Runs `search` on `request` with the plan's type and `only_context`
+    /// (from `caller_only_context`) set on it, and retries
     /// as the fallback when the router's pick fails: a type the backend
     /// rejects, or a lexical or rules search that `found_nothing` judges
     /// empty. An explicit type is never retried. Returns the result and the
@@ -751,6 +752,7 @@ impl GraphPlan {
         F: FnMut(SearchRequest) -> Fut,
         Fut: std::future::Future<Output = Result<T, SearchError>>,
     {
+        switch_to(&mut request, self.decision, caller_only_context);
         // The router picked something other than the fallback, so the
         // fallback is still untried and may replace this result.
         let routed_guess =
@@ -893,6 +895,110 @@ mod tests {
             options,
         )
         .await
+    }
+
+    /// A plan in which the router picked `search_type`.
+    fn routed_plan(search_type: SearchType) -> GraphPlan {
+        let decision = |search_type, rule| RouteDecision {
+            search_type,
+            rule,
+            only_context: false,
+        };
+        GraphPlan {
+            owner: None,
+            decision: decision(search_type, "test_rule"),
+            routed_rule: Some("test_rule"),
+            fallback: decision(ROUTER_FALLBACK_TYPE, "default"),
+        }
+    }
+
+    /// A request with only a type and `only_context` set.
+    fn bare_request(search_type: SearchType, only_context: Option<bool>) -> SearchRequest {
+        let mut request: SearchRequest =
+            serde_json::from_str(r#"{"query_text": "q"}"#).expect("a query is a whole request");
+        request.search_type = search_type;
+        request.only_context = only_context;
+        request
+    }
+
+    #[tokio::test]
+    async fn search_with_fallback_searches_as_planned_and_retries_an_empty_pick() {
+        let plan = routed_plan(SearchType::CodingRules);
+        let mut seen = Vec::new();
+        let (found, answered) = plan
+            .search_with_fallback(
+                bare_request(SearchType::Chunks, Some(true)),
+                Some(false),
+                |request: SearchRequest| {
+                    seen.push((request.search_type, request.only_context));
+                    let found = request.search_type == ROUTER_FALLBACK_TYPE;
+                    async move { Ok::<bool, SearchError>(found) }
+                },
+                |found: &bool| !found,
+            )
+            .await
+            .expect("search");
+        assert!(found);
+        assert_eq!(answered, ROUTER_FALLBACK_TYPE);
+        assert_eq!(
+            seen,
+            [
+                (SearchType::CodingRules, Some(false)),
+                (ROUTER_FALLBACK_TYPE, Some(false)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_with_fallback_keeps_the_forced_only_context_on_retry() {
+        let mut plan = routed_plan(SearchType::CodingRules);
+        plan.decision.only_context = true;
+        plan.fallback.only_context = true;
+        let mut seen = Vec::new();
+        plan.search_with_fallback(
+            bare_request(SearchType::Chunks, Some(false)),
+            Some(false),
+            |request: SearchRequest| {
+                seen.push(request.only_context);
+                async move { Ok::<bool, SearchError>(false) }
+            },
+            |found: &bool| !found,
+        )
+        .await
+        .expect("search");
+        assert_eq!(seen, [Some(true), Some(true)]);
+    }
+
+    #[tokio::test]
+    async fn search_with_fallback_retries_a_rejected_pick_as_planned() {
+        let plan = routed_plan(SearchType::CodingRules);
+        let mut seen = Vec::new();
+        let (_, answered) = plan
+            .search_with_fallback(
+                bare_request(SearchType::Chunks, None),
+                Some(true),
+                |request: SearchRequest| {
+                    seen.push((request.search_type, request.only_context));
+                    let result = match request.search_type {
+                        SearchType::CodingRules => {
+                            Err(SearchError::UnsupportedSearchType(SearchType::CodingRules))
+                        }
+                        _ => Ok(true),
+                    };
+                    async move { result }
+                },
+                |found: &bool| !found,
+            )
+            .await
+            .expect("the fallback answers");
+        assert_eq!(answered, ROUTER_FALLBACK_TYPE);
+        assert_eq!(
+            seen,
+            [
+                (SearchType::CodingRules, Some(true)),
+                (ROUTER_FALLBACK_TYPE, Some(true)),
+            ]
+        );
     }
 
     #[test]
