@@ -576,6 +576,7 @@ impl LadybugAdapter {
         use LbugValue::*;
         match value {
             Null(_) => serde_json::Value::Null,
+            Json(v) => v,
             Bool(b) => serde_json::Value::Bool(b),
             Int8(i) => json!(i),
             Int16(i) => json!(i),
