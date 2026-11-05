@@ -317,3 +317,76 @@ async fn deleting_a_data_row_or_a_dataset_removes_its_evidence() {
     delete_dataset(&seed.db, seed.dataset).await.unwrap();
     assert_eq!(count(&seed.db).await, 0);
 }
+
+/// Python migrated the shared SQLite file first: its alembic revision
+/// `f3a7b9c1d2e4` created the table with SQLAlchemy's DDL (`Uuid` is CHAR(32)
+/// hex, DATETIME, FLOAT) and Python wrote a row in SQLAlchemy's DATETIME
+/// format. The Rust migration skips the existing table, Rust writes beside the
+/// Python row, and the lookup reads both.
+#[tokio::test]
+async fn a_python_migrated_sqlite_table_is_shared() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    for ddl in [
+        "CREATE TABLE provenance_edge_evidence (
+            id CHAR(32) NOT NULL, tenant_id CHAR(32), user_id CHAR(32) NOT NULL,
+            dataset_id CHAR(32) NOT NULL, data_id CHAR(32) NOT NULL,
+            pipeline_run_id CHAR(32), chunk_id CHAR(32) NOT NULL, chunk_index INTEGER,
+            edge_id CHAR(32) NOT NULL, source_node_id CHAR(32) NOT NULL,
+            destination_node_id CHAR(32) NOT NULL, relationship_name TEXT NOT NULL,
+            evidence_kind VARCHAR(32) DEFAULT 'extracted' NOT NULL,
+            source_task VARCHAR(255), confidence FLOAT, created_at DATETIME NOT NULL,
+            PRIMARY KEY (id))",
+        "CREATE INDEX ix_prov_evidence_edge ON provenance_edge_evidence (dataset_id, edge_id)",
+        "CREATE INDEX ix_prov_evidence_source ON provenance_edge_evidence \
+            (dataset_id, data_id, chunk_id)",
+        "CREATE INDEX ix_prov_evidence_run ON provenance_edge_evidence (pipeline_run_id)",
+    ] {
+        db.execute(Statement::from_string(db.get_database_backend(), ddl))
+            .await
+            .unwrap();
+    }
+    initialize(&db).await.unwrap();
+
+    let user = Uuid::new_v4();
+    let dataset = Uuid::new_v4();
+    create_dataset(&db, Dataset::new("shared".into(), user, None, dataset))
+        .await
+        .unwrap();
+    let seed = Seed { db, user, dataset };
+    let data = seed_data(&seed, "shared.txt").await;
+    let edge = Uuid::new_v4();
+    let (python_chunk, rust_chunk) = (Uuid::new_v4(), Uuid::new_v4());
+
+    // Python's row: hex ids, no run, SQLAlchemy's naive DATETIME text, older.
+    seed.db
+        .execute(Statement::from_string(
+            seed.db.get_database_backend(),
+            format!(
+                "INSERT INTO provenance_edge_evidence (id, user_id, dataset_id, data_id, \
+                 chunk_id, chunk_index, edge_id, source_node_id, destination_node_id, \
+                 relationship_name, evidence_kind, created_at) VALUES ('{}', '{}', '{}', \
+                 '{}', '{}', 0, '{}', '{}', '{}', 'works_with', 'extracted', \
+                 '2020-01-01 00:00:00.000000')",
+                Uuid::new_v4().simple(),
+                user.simple(),
+                dataset.simple(),
+                data.simple(),
+                python_chunk.simple(),
+                edge.simple(),
+                Uuid::new_v4().simple(),
+                Uuid::new_v4().simple(),
+            ),
+        ))
+        .await
+        .unwrap();
+    insert_edge_evidence(&seed.db, &[row(&seed, data, rust_chunk, edge, None, 0)])
+        .await
+        .unwrap();
+
+    let records = get_edge_evidence_records(&seed.db, dataset, &[edge], 5, 50)
+        .await
+        .unwrap();
+    let chunks: Vec<Uuid> = records.iter().map(|r| r.chunk_id).collect();
+    // Python's older sighting ranks first.
+    assert_eq!(chunks, vec![python_chunk, rust_chunk]);
+}

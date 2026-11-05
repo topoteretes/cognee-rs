@@ -291,7 +291,12 @@ pub fn append_source_evidence_text(
         let chunk_number = reference
             .chunk_index
             .map_or_else(|| "unknown".to_string(), |index| (index + 1).to_string());
-        let document_name = reference.document_name.as_deref().unwrap_or("unknown");
+        // Python `reference.document_name or "unknown"`: empty is unknown too.
+        let document_name = reference
+            .document_name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("unknown");
         let mut identifiers = Vec::new();
         if let Some(data_id) = reference.data_id.as_deref().filter(|id| !id.is_empty()) {
             identifiers.push(format!("data_id: {data_id}"));
@@ -708,12 +713,15 @@ mod tests {
             // Repeat of the same (data, chunk): listed once.
             source("data-1", "chunk-1", Some(0), Some("a.txt")),
             source("data-2", "chunk-2", None, None),
+            // An empty name is unknown too (Python `document_name or "unknown"`).
+            source("data-3", "chunk-3", Some(1), Some("")),
         ];
         let out = append_source_evidence_text(SearchOutput::Text("answer".into()), &evidence);
         assert!(matches!(&out, SearchOutput::Text(text) if text
             == "answer\n\nEvidence:\n\
                 - chunk 1 of document a.txt (data_id: data-1, chunk_id: chunk-1)\n\
-                - chunk unknown of document unknown (data_id: data-2, chunk_id: chunk-2)"));
+                - chunk unknown of document unknown (data_id: data-2, chunk_id: chunk-2)\n\
+                - chunk 2 of document unknown (data_id: data-3, chunk_id: chunk-3)"));
 
         let bare = EvidenceReference {
             data_id: None,

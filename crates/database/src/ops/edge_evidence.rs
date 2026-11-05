@@ -135,56 +135,46 @@ pub async fn get_edge_evidence_records(
     }
 
     let dataset_hex = uuid_hex::to_hex(dataset_id);
-    let mut rows: Vec<evidence::Model> = Vec::new();
+    // Distinct active supports with their first sighting, grouped in SQL as
+    // Python's `lookup.py` does: every completed re-cognify adds a full set of
+    // rows (the run id is part of the row id), so fetching raw rows would grow
+    // with history while the answer is bounded by the limits. An observation
+    // is active with no run id, or when its run has a COMPLETED row.
+    let completed_runs = sea_orm::sea_query::Query::select()
+        .column(pipeline_run::Column::PipelineRunId)
+        .from(pipeline_run::Entity)
+        .and_where(pipeline_run::Column::Status.eq(RunStatus::Completed))
+        .to_owned();
+    type SupportKey = (String, String, String, Option<i32>);
+    type SupportRow = (String, String, String, Option<i32>, DateTime<Utc>);
+    let mut supports: HashMap<SupportKey, DateTime<Utc>> = HashMap::new();
     for batch in unique.chunks(IN_BATCH) {
-        rows.extend(
-            evidence::Entity::find()
-                .filter(evidence::Column::DatasetId.eq(dataset_hex.clone()))
-                .filter(
-                    evidence::Column::EdgeId.is_in(batch.iter().map(|id| uuid_hex::to_hex(*id))),
-                )
-                .all(db)
-                .await
-                .map_err(map_sea_err)?,
-        );
-    }
-
-    // Which of the rows' runs completed.
-    let run_ids: BTreeSet<String> = rows
-        .iter()
-        .filter_map(|row| row.pipeline_run_id.clone())
-        .collect();
-    let run_ids: Vec<String> = run_ids.into_iter().collect();
-    let mut completed: HashSet<String> = HashSet::new();
-    for batch in run_ids.chunks(IN_BATCH) {
-        let found: Vec<String> = pipeline_run::Entity::find()
+        let found: Vec<SupportRow> = evidence::Entity::find()
             .select_only()
-            .column(pipeline_run::Column::PipelineRunId)
-            .filter(pipeline_run::Column::Status.eq(RunStatus::Completed))
-            .filter(pipeline_run::Column::PipelineRunId.is_in(batch.iter().cloned()))
+            .column(evidence::Column::EdgeId)
+            .column(evidence::Column::DataId)
+            .column(evidence::Column::ChunkId)
+            .column(evidence::Column::ChunkIndex)
+            .column_as(evidence::Column::CreatedAt.min(), "first_seen")
+            .filter(evidence::Column::DatasetId.eq(dataset_hex.clone()))
+            .filter(evidence::Column::EdgeId.is_in(batch.iter().map(|id| uuid_hex::to_hex(*id))))
+            .filter(
+                sea_orm::Condition::any()
+                    .add(evidence::Column::PipelineRunId.is_null())
+                    .add(evidence::Column::PipelineRunId.in_subquery(completed_runs.clone())),
+            )
+            .group_by(evidence::Column::EdgeId)
+            .group_by(evidence::Column::DataId)
+            .group_by(evidence::Column::ChunkId)
+            .group_by(evidence::Column::ChunkIndex)
             .into_tuple()
             .all(db)
             .await
             .map_err(map_sea_err)?;
-        completed.extend(found);
-    }
-
-    // Distinct supports with their first sighting.
-    type SupportKey = (String, String, String, Option<i32>);
-    let mut supports: HashMap<SupportKey, DateTime<Utc>> = HashMap::new();
-    for row in rows {
-        let active = match &row.pipeline_run_id {
-            None => true,
-            Some(run) => completed.contains(run),
-        };
-        if !active {
-            continue;
+        for (edge, data, chunk, chunk_index, first_seen) in found {
+            // Edge batches are disjoint, so a key is seen once.
+            supports.insert((edge, data, chunk, chunk_index), first_seen);
         }
-        let key = (row.edge_id, row.data_id, row.chunk_id, row.chunk_index);
-        supports
-            .entry(key)
-            .and_modify(|first| *first = (*first).min(row.created_at))
-            .or_insert(row.created_at);
     }
 
     // Rank per edge by first sighting (ties by chunk id, for determinism).

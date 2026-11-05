@@ -4,8 +4,13 @@
 //! (`add_provenance_edge_evidence`): same columns, same three indexes under the
 //! same names, and a no-op when the table already exists, so whichever SDK
 //! migrates a shared database second skips it. Ids are `text` holding
-//! `uuid_hex`, like every other id column here. No foreign keys, as in Python:
-//! graph deletion must never depend on the sidecar.
+//! `uuid_hex`, like every other id column here. On SQLite that is exactly what
+//! SQLAlchemy's `Uuid` stores (CHAR(32) lowercase hex), so the two SDKs read
+//! and write each other's rows. On Postgres, Python's columns are native
+//! `uuid`, so a table either SDK created is not writable by the other — the
+//! same limit every Rust table has there (`m20260914_000001_baseline`); a
+//! shared database is SQLite-only. No foreign keys, as in Python: graph
+//! deletion must never depend on the sidecar.
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
