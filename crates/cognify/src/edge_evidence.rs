@@ -11,7 +11,10 @@
 //!
 //! - `extracted`: edges the chunk's graph extraction produced (Python's
 //!   `chunk._provenance_edges`; here [`ArtifactProducers`], which remembers
-//!   every chunk that produced each merged edge);
+//!   every chunk that produced each merged edge). That includes an edge an
+//!   earlier run already wrote to the graph and this run only claims: Python
+//!   appends to `_provenance_edges` before the existing-edge filter
+//!   (`expand_with_nodes_and_edges.py:283-302`), so such a chunk still cites it;
 //! - `structural`: edges of the storage batch rooted at the chunk, such as
 //!   `contains` and `is_part_of`.
 
@@ -24,7 +27,7 @@ use cognee_models::DocumentChunk;
 use cognee_utils::id_generation::generate_edge_object_id;
 use uuid::Uuid;
 
-use crate::graph_integration::{ArtifactProducers, GraphEdgePair};
+use crate::graph_integration::ArtifactProducers;
 
 /// `evidence_kind` of an edge the chunk's extraction produced.
 pub const KIND_EXTRACTED: &str = "extracted";
@@ -85,14 +88,15 @@ fn confidence(
 /// Build the evidence rows of one storage batch (Python
 /// `ProvenanceBuffer.capture`).
 ///
-/// `edges` are the semantic edges the batch carries and `producers` names the
-/// chunks that produced each; `structural_edges` are the edges the storage
-/// walk discovered. Rows are deduplicated by id; order follows the chunks.
-pub(crate) fn build_edge_evidence(
+/// `producers` names every edge the extraction produced (written this run or
+/// already in the graph) with the chunks that produced it; `structural_edges`
+/// are the edges the storage walk writes (Python's `graph_edges`, custom edges
+/// included). Rows are deduplicated by id; order follows the chunks, then the
+/// edge key.
+pub(crate) fn build_edge_evidence<'a>(
     scope: &EvidenceScope,
     chunks: &[DocumentChunk],
-    edges: &[GraphEdgePair],
-    structural_edges: &[EdgeData],
+    structural_edges: impl IntoIterator<Item = &'a EdgeData>,
     producers: &ArtifactProducers,
 ) -> Vec<EdgeEvidence> {
     let chunk_by_id: HashMap<Uuid, &DocumentChunk> =
@@ -101,13 +105,16 @@ pub(crate) fn build_edge_evidence(
     // chunk id -> (kind, source, destination, relationship, confidence)
     type Support = (&'static str, Uuid, Uuid, String, Option<f64>);
     let mut by_chunk: HashMap<Uuid, Vec<Support>> = HashMap::new();
-    for edge in edges {
-        for chunk_id in producers.edge_chunks(&edge.dedup_key()) {
+    // Sorted, so the rows (and their insert order) are deterministic.
+    let mut produced: Vec<_> = producers.edges().collect();
+    produced.sort_by(|a, b| a.0.cmp(b.0));
+    for ((source, target, relationship), chunk_ids) in produced {
+        for chunk_id in chunk_ids {
             by_chunk.entry(*chunk_id).or_default().push((
                 KIND_EXTRACTED,
-                edge.source_entity_id,
-                edge.target_entity_id,
-                edge.relationship_name.clone(),
+                *source,
+                *target,
+                relationship.clone(),
                 None,
             ));
         }
@@ -176,6 +183,7 @@ pub(crate) fn build_edge_evidence(
 )]
 mod tests {
     use super::*;
+    use crate::graph_integration::GraphEdgePair;
     use serde_json::json;
 
     fn chunk(index: usize, document_id: Uuid) -> DocumentChunk {
@@ -263,7 +271,6 @@ mod tests {
         let rows = build_edge_evidence(
             &scope(),
             &[c0.clone(), c1.clone()],
-            &[edge],
             &[contains, unrelated],
             &producers,
         );
@@ -296,25 +303,42 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_support_is_one_row_and_an_unproduced_edge_has_none() {
-        let c0 = chunk(0, Uuid::new_v4());
+    fn a_repeated_support_is_one_row_and_an_unproducing_chunk_has_none() {
+        let (c0, c1) = (chunk(0, Uuid::new_v4()), chunk(1, Uuid::new_v4()));
         let edge = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "r");
         let mut producers = ArtifactProducers::default();
         producers.record_edge(edge.dedup_key(), c0.base.id);
+        producers.record_edge(edge.dedup_key(), c0.base.id);
         let scope = scope();
 
-        let rows = build_edge_evidence(
-            &scope,
-            std::slice::from_ref(&c0),
-            &[edge.clone(), edge.clone()],
-            &[],
-            &producers,
-        );
+        let rows = build_edge_evidence(&scope, &[c0.clone(), c1], &[], &producers);
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].chunk_id, c0.base.id);
+        assert!(build_edge_evidence(&scope, &[c0], &[], &ArtifactProducers::default()).is_empty());
+    }
 
-        assert!(
-            build_edge_evidence(&scope, &[c0], &[edge], &[], &ArtifactProducers::default())
-                .is_empty()
+    /// Python appends to `_provenance_edges` before the existing-edge filter
+    /// (`expand_with_nodes_and_edges.py:283-302`): an edge an earlier run
+    /// already wrote, which this run only claims (it is in the producers but
+    /// not in the batch's written edges), is still cited by its chunk.
+    #[test]
+    fn an_edge_already_in_the_graph_is_still_evidence_of_its_chunk() {
+        let c0 = chunk(0, Uuid::new_v4());
+        let claimed = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "works_with");
+        let mut producers = ArtifactProducers::default();
+        producers.record_edge(claimed.dedup_key(), c0.base.id);
+
+        let rows = build_edge_evidence(&scope(), std::slice::from_ref(&c0), &[], &producers);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].evidence_kind, KIND_EXTRACTED);
+        assert_eq!(
+            rows[0].edge_id,
+            generate_edge_object_id(
+                &claimed.source_entity_id.to_string(),
+                &claimed.target_entity_id.to_string(),
+                "works_with"
+            )
         );
     }
 }

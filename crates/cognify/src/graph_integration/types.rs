@@ -167,6 +167,15 @@ impl ArtifactProducers {
     pub fn edge_chunks(&self, key: &(Uuid, Uuid, String)) -> &[Uuid] {
         self.edges.get(key).map_or(&[], Vec::as_slice)
     }
+
+    /// Every produced edge with its producing chunks, in no particular order.
+    /// Includes the edges an earlier run already wrote, which this run only
+    /// claims (see `claimed_existing_edges`).
+    pub fn edges(&self) -> impl Iterator<Item = (&(Uuid, Uuid, String), &[Uuid])> {
+        self.edges
+            .iter()
+            .map(|(key, chunks)| (key, chunks.as_slice()))
+    }
 }
 
 #[cfg(test)]

@@ -2620,12 +2620,14 @@ pub async fn add_data_points(
     // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
     // never describes an edge the graph does not hold.
     if config.edge_evidence_enabled {
+        // Python captures over the batch's `edges` after `custom_edges` were
+        // appended to them (`add_data_points.py:403`), so runtime custom
+        // edges are structural candidates too.
         capture_edge_evidence(
             db,
             ledger_identity,
             &input.chunks,
-            &input.edges,
-            &structural_edges,
+            structural_edges.iter().chain(dynamic_edges.iter()),
             &input.producers,
         )
         .await?;
@@ -2657,12 +2659,11 @@ pub async fn add_data_points(
 /// (`modules/provenance/edge_evidence/capture.py`); the rows are built by
 /// [`crate::edge_evidence::build_edge_evidence`]. A failed insert fails the
 /// stage, as Python's flush does at data-item completion.
-async fn capture_edge_evidence(
+async fn capture_edge_evidence<'a>(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
-    edges: &[GraphEdgePair],
-    structural_edges: &[EdgeData],
+    structural_edges: impl IntoIterator<Item = &'a EdgeData>,
     producers: &ArtifactProducers,
 ) -> Result<(), CognifyError> {
     let scope = crate::edge_evidence::EvidenceScope {
@@ -2672,13 +2673,8 @@ async fn capture_edge_evidence(
         pipeline_run_id: id.pipeline_run_id,
         captured_at: Utc::now(),
     };
-    let rows = crate::edge_evidence::build_edge_evidence(
-        &scope,
-        chunks,
-        edges,
-        structural_edges,
-        producers,
-    );
+    let rows =
+        crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers);
     if rows.is_empty() {
         return Ok(());
     }
