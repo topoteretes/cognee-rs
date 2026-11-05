@@ -553,7 +553,6 @@ pub async fn run_graph(
         node_name_filter_operator: options.and_then(|o| o.node_name_filter_operator.clone()),
         neighborhood_depth: options.and_then(|o| o.neighborhood_depth),
         neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
-        summarize_context: None,
     };
 
     // A graph that is not built gets a note instead of a search. A caller

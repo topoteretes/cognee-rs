@@ -262,7 +262,10 @@ mod tests {
                 );
             }
             // Non-unix has no reading; that is a supported outcome, not a bug.
-            None => assert!(!cfg!(unix), "unix must report a peak RSS"),
+            None => {
+                #[cfg(unix)]
+                panic!("unix must report a peak RSS");
+            }
         }
     }
 

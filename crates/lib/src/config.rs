@@ -204,6 +204,14 @@ pub struct Settings {
     /// Session completion execution order (`concurrent` by default, or
     /// `sequential` for analysis-before-answer behavior).
     pub session_search_mode: cognee_search::SessionSearchMode,
+    /// Environment values a key rejects, as `(key, value)`: an overlay cannot
+    /// return an error, so [`Settings::check_supported`] reports the first
+    /// entry until the key is overlaid again, set or reset. Python validates
+    /// `SESSION_SEARCH_MODE` as a `Literal`, so an invalid value is an error
+    /// rather than a warning. `#[serde(skip)]` keeps config snapshots stable.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub invalid_env: Vec<(&'static str, String)>,
 
     // -- Feedback & personalization ----------------------------------------------
     // Python's `BaseConfig` knobs (`cognee/base_config.py`). Each is range-checked
@@ -1123,6 +1131,7 @@ impl Default for Settings {
             // Session / cache
             auto_feedback: true,
             session_search_mode: cognee_search::SessionSearchMode::Concurrent,
+            invalid_env: Vec::new(),
             default_feedback_influence: 0.0,
             preference_alpha: 0.3,
             preference_beta: 0.02,
@@ -1177,8 +1186,8 @@ pub enum ConfigError {
     #[error("Type mismatch for key '{key}': {reason}")]
     TypeMismatch { key: String, reason: String },
     /// The value is well formed but this build does not support it. `reason`
-    /// says why and what to do. No setting reports it today; see
-    /// [`Settings::check_supported`].
+    /// says why and what to do. [`Settings::check_supported`] reports it, today
+    /// for an invalid `SESSION_SEARCH_MODE` (`Settings::invalid_env`).
     #[error("Unsupported value for key '{key}': {reason}")]
     Unsupported { key: String, reason: String },
 }
@@ -2839,6 +2848,41 @@ mod tests {
         );
     }
 
+    /// Python validates `SESSION_SEARCH_MODE` as a `Literal`: an invalid env
+    /// value is an error, not a silent fallback to the default.
+    #[test]
+    fn invalid_session_search_mode_env_is_rejected_until_set() {
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "fast"));
+        let manager = ConfigManager::new(settings);
+        let err = manager.check_supported().unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::TypeMismatch { key, .. } if key == "session_search_mode"),
+            "{err:?}"
+        );
+        assert!(manager.check_strict().is_err());
+
+        manager
+            .set("session_search_mode", serde_json::json!("sequential"))
+            .unwrap();
+        manager.check_supported().unwrap();
+
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "Sequential "));
+        // Exact values only, as Python's `Literal`: no trimming or case folding.
+        assert!(ConfigManager::new(settings).check_supported().is_err());
+
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "sequential"));
+        ConfigManager::new(settings).check_supported().unwrap();
+
+        // A later overlay without the variable clears the stale rejection.
+        let mut settings = Settings::default();
+        settings.overlay_from(&MapEnv::new().with("SESSION_SEARCH_MODE", "fast"));
+        settings.overlay_from(&MapEnv::new());
+        ConfigManager::new(settings).check_supported().unwrap();
+    }
+
     #[test]
     #[serial_test::serial]
     fn overlay_llm_max_completion_tokens_primary() {
@@ -3052,7 +3096,7 @@ mod tests {
 
     /// The defaults keep the historical pipeline: Python's batch sizes, the
     /// built-in prompts (their Python file names select them), no schema,
-    /// no access tracking, with Python-parity automatic feedback detection.
+    /// no access tracking, with Python-parity session turn preparation.
     #[test]
     fn formerly_inert_settings_default_to_the_builtin_behaviour() {
         let s = Settings::default();

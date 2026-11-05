@@ -46,8 +46,7 @@ pub use retrievers::{
     TemporalRetrieval,
 };
 pub use types::{
-    FeedbackDetectionResult, Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge,
-    SearchGraphNode, SearchItem, SearchOutput, SearchParams, SearchRequest, SearchResponse,
-    SearchType,
+    Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge, SearchGraphNode, SearchItem,
+    SearchOutput, SearchParams, SearchRequest, SearchResponse, SearchType,
 };
 pub use user_preferences::{ActivePreferences, PreferenceConfig, load_active_preferences};

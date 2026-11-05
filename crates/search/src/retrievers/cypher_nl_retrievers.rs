@@ -174,6 +174,10 @@ impl SearchRetriever for CypherSearchRetriever {
         SearchType::Cypher
     }
 
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
+    }
+
     #[cfg(test)]
     fn applied_tuning(&self) -> crate::retrievers::AppliedTuning {
         crate::retrievers::AppliedTuning {
@@ -400,6 +404,10 @@ impl NaturalLanguageRetriever {
 impl SearchRetriever for NaturalLanguageRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::NaturalLanguage
+    }
+
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
     }
 
     #[cfg(test)]

@@ -385,6 +385,10 @@ impl SearchRetriever for LexicalRetriever {
         SearchType::ChunksLexical
     }
 
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
+    }
+
     async fn get_context(
         &self,
         query: &str,

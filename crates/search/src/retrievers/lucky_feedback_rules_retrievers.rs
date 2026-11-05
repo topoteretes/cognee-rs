@@ -275,6 +275,15 @@ impl SearchRetriever for FeelingLuckyRetriever {
         SearchType::FeelingLucky
     }
 
+    // Python resolves FEELING_LUCKY to the selected retriever before the turn
+    // is prepared; the orchestrator does the same through this hook.
+    async fn resolve_for_query(
+        &self,
+        query: &str,
+    ) -> Result<Option<SearchRetrieverRef>, SearchError> {
+        self.select_retriever(query).await.map(Some)
+    }
+
     async fn get_context(
         &self,
         query: &str,
@@ -447,6 +456,11 @@ impl FeedbackRetriever {
 impl SearchRetriever for FeedbackRetriever {
     fn search_type(&self) -> SearchType {
         SearchType::Feedback
+    }
+
+    // Not a Python `BaseRetriever`: the message is the feedback, not a turn.
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
     }
 
     fn dataset_scoping(&self) -> super::DatasetScoping {

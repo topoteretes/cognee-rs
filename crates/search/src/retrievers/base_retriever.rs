@@ -61,6 +61,29 @@ pub trait SearchRetriever: Send + Sync {
         DatasetScoping::Unsupported
     }
 
+    /// Whether a session search prepares a turn (the feedback / guidance
+    /// analysis LLM call) before this retriever runs. Python's
+    /// `BaseRetriever.supports_session_turn_preparation` is `True`; it is
+    /// `False` for the raw retrieval and non-generative retrievers (chunks,
+    /// lexical, summaries, Cypher, natural language, graph report, code,
+    /// skills), which make no analysis call and write no feedback. A custom
+    /// retriever prepares turns unless it opts out.
+    fn supports_session_turn_preparation(&self) -> bool {
+        true
+    }
+
+    /// The retriever that serves `query` when this one only selects among
+    /// others (`FEELING_LUCKY`). Python resolves the effective search type
+    /// before preparing a turn, so the orchestrator asks once up front, gates
+    /// turn preparation on the selected retriever and runs it directly.
+    /// `None` (the default) means this retriever serves the query itself.
+    async fn resolve_for_query(
+        &self,
+        _query: &str,
+    ) -> Result<Option<SearchRetrieverRef>, SearchError> {
+        Ok(None)
+    }
+
     /// The tuning knobs this retriever was built with (test-only
     /// introspection; see [`AppliedTuning`]).
     #[cfg(test)]

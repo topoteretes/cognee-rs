@@ -11,7 +11,6 @@ use crate::types::{
     SearchContext, SearchError, SearchOutput, SearchParams, SearchPrompt, SearchRequest,
     SearchResponse, SearchType,
 };
-use crate::utils::detect_feedback;
 use cognee_database::{AclDb, IngestDb, SearchHistoryDb, SearchHistoryEntry};
 use cognee_llm::{Llm, Message, MessageRole};
 use cognee_models::dataset_scope::with_dataset;
@@ -1044,7 +1043,10 @@ impl SearchOrchestrator {
         // exact-type allowlist.
         if self.session_search_mode == SessionSearchMode::Concurrent
             && !self.per_dataset_storage
-            && self.session_manager.is_some()
+            && self
+                .session_manager
+                .as_ref()
+                .is_some_and(|m| m.is_available())
             && self.llm.is_some()
             && concurrent_session::eligible(request, search_type, is_batch)
         {
@@ -1085,7 +1087,10 @@ impl SearchOrchestrator {
         let fanout_concurrent = self.session_search_mode == SessionSearchMode::Concurrent
             && self.per_dataset_storage
             && scoping != DatasetScoping::NotDatasetData
-            && self.session_manager.is_some()
+            && self
+                .session_manager
+                .as_ref()
+                .is_some_and(|m| m.is_available())
             && self.llm.is_some()
             && concurrent_session::eligible(request, search_type, is_batch);
         let mut fanout_turn_guard = None;
@@ -1093,10 +1098,17 @@ impl SearchOrchestrator {
         let mut fanout_session = None;
         let mut fanout_commit_snapshot = None;
 
-        // Python prepares one turn per dataset leg before a generative
-        // completion; Rust deliberately runs one logical turn for the whole
-        // fan-out (a documented divergence). Raw retrieval modes, previews and
-        // batch searches deliberately skip this LLM call.
+        // Python prepares one turn per dataset leg before a completion; Rust
+        // deliberately runs one logical turn for the whole fan-out (a
+        // documented divergence). A retriever that opts out
+        // (`supports_session_turn_preparation`: the raw retrieval modes),
+        // previews and batch searches skip this LLM call. A selecting
+        // retriever (FEELING_LUCKY) is resolved first, as in Python, so its
+        // pick decides the capability and serves the search.
+        let retriever = match retriever.resolve_for_query(&request.query_text).await? {
+            Some(selected) => selected,
+            None => retriever,
+        };
         let raw_request = request.clone();
         let prepared_request;
         let mut turn_prepared = false;
@@ -1104,17 +1116,7 @@ impl SearchOrchestrator {
             && !is_batch
             && !request.only_context()
             && request.session_id.as_ref().is_some_and(|id| !id.is_empty())
-            && matches!(
-                search_type,
-                SearchType::RagCompletion
-                    | SearchType::GraphCompletion
-                    | SearchType::GraphCompletionDecomposition
-                    | SearchType::GraphSummaryCompletion
-                    | SearchType::GraphCompletionCot
-                    | SearchType::GraphCompletionContextExtension
-                    | SearchType::HybridCompletion
-                    | SearchType::Temporal
-            )
+            && retriever.supports_session_turn_preparation()
             && auto_feedback
             && let (Some(manager), Some(llm), Some(session_id)) =
                 (&self.session_manager, &self.llm, &request.session_id)
@@ -1167,7 +1169,6 @@ impl SearchOrchestrator {
                     request,
                     &retriever,
                     search_type,
-                    auto_feedback && !turn_prepared,
                     false,
                     true,
                     turn_prepared.then_some(raw_request.query_text.as_str()),
@@ -1298,24 +1299,6 @@ impl SearchOrchestrator {
             )));
         }
 
-        // The session side effects run once for the whole search, not once per
-        // dataset: a message that is only feedback is acknowledged here.
-        if !fanout_concurrent
-            && let Some(acknowledgement) = self
-                .handle_auto_feedback(request, search_type, auto_feedback && !turn_prepared)
-                .await
-        {
-            self.log_search_history(request, &acknowledgement).await;
-            emit_search_completed(request);
-            return Ok(vec![DatasetSearchResult {
-                dataset_id: None,
-                dataset_name: None,
-                dataset_tenant_id: None,
-                response: acknowledgement,
-                error: None,
-            }]);
-        }
-
         // One run per dataset, each in its own scope: Python's `asyncio.gather`
         // over `_search_in_dataset_context`, here at most
         // `MAX_CONCURRENT_DATASETS` at a time (each first use opens, or
@@ -1339,7 +1322,6 @@ impl SearchOrchestrator {
                             &dataset_request,
                             &retriever,
                             search_type,
-                            auto_feedback && !turn_prepared,
                             true,
                             false,
                             None,
@@ -1491,28 +1473,17 @@ impl SearchOrchestrator {
             }
         }
         // An `only_context` result is a preview (a prompt or the context), not
-        // an answer: nothing is written, as in the single-store run.
-        match &merged.result {
-            _ if request.only_context() => {}
-            SearchOutput::Text(answer) => {
-                self.save_session_turn(
-                    &raw_request,
-                    search_type,
-                    answer,
-                    merged_context(&merged).as_deref(),
-                )
-                .await;
-            }
-            SearchOutput::Texts(answers) if !answers.is_empty() => {
-                self.save_session_turn(
-                    &raw_request,
-                    search_type,
-                    &answers.join("\n\n"),
-                    merged_context(&merged).as_deref(),
-                )
-                .await;
-            }
-            _ => {}
+        // an answer: nothing is written, as in the single-store run. Only the
+        // session-aware completion paths record a turn in Python, so an
+        // opted-out retriever (graph report, Cypher, ...) writes none.
+        if !request.only_context() && retriever.supports_session_turn_preparation() {
+            self.save_session_turn(
+                &raw_request,
+                search_type,
+                &merged.result,
+                merged_context(&merged).as_deref(),
+            )
+            .await;
         }
         self.log_search_history(&raw_request, &merged).await;
         emit_search_completed(request);
@@ -1540,16 +1511,15 @@ impl SearchOrchestrator {
     /// `keep_context`: fetch the context and keep it on the response, as a
     /// dataset-scoped search always returned its per-dataset context.
     ///
-    /// `session_turn`: run the session side effects (auto-feedback detection,
-    /// saving the turn). Off for one dataset's run of a fan-out, which runs
-    /// them once around all the runs instead.
+    /// `session_turn`: run the session side effects (saving the turn). Off
+    /// for one dataset's run of a fan-out, which runs them once around all
+    /// the runs instead.
     #[allow(clippy::too_many_arguments)]
     async fn run_search(
         &self,
         request: &SearchRequest,
         retriever: &crate::retrievers::SearchRetrieverRef,
         search_type: SearchType,
-        auto_feedback: bool,
         keep_context: bool,
         session_turn: bool,
         raw_session_query: Option<&str>,
@@ -1648,16 +1618,6 @@ impl SearchOrchestrator {
             None => self.load_session_context(request).await,
         };
 
-        // Session side effects run once per search: here over the shared
-        // store, around the fan-out under per-dataset storage.
-        if session_turn
-            && let Some(acknowledgement) = self
-                .handle_auto_feedback(request, search_type, auto_feedback)
-                .await
-        {
-            return Ok(acknowledgement);
-        }
-
         // When the orchestrator did not fetch the context above
         // (`include_context` is `only_context || use_combined_context ||
         // keep_context`, false on the default path), the retriever would
@@ -1711,16 +1671,17 @@ impl SearchOrchestrator {
             )
             .await?;
 
-        if session_turn && let SearchOutput::Text(ref answer) = output {
+        // Python records a turn only on the session-aware completion paths, so
+        // a retriever that opted out of turn preparation (graph report, Cypher,
+        // natural language, ...) writes no QA row.
+        if session_turn && retriever.supports_session_turn_preparation() {
+            // The raw message is stored when the turn ran on a rewritten query.
+            let mut stored = request.clone();
             if let Some(raw_query) = raw_session_query {
-                let mut raw_request = request.clone();
-                raw_request.query_text = raw_query.to_string();
-                self.save_session_turn(&raw_request, search_type, answer, context.as_deref())
-                    .await;
-            } else {
-                self.save_session_turn(request, search_type, answer, context.as_deref())
-                    .await;
+                stored.query_text = raw_query.to_string();
             }
+            self.save_session_turn(&stored, search_type, &output, context.as_deref())
+                .await;
         }
 
         let mut response = prepare_search_result(
@@ -1864,10 +1825,8 @@ impl SearchOrchestrator {
             return Ok((response, false));
         }
 
-        if let SearchOutput::Text(answer) = &generated {
-            self.save_session_turn(request, search_type, answer, Some(&context))
-                .await;
-        }
+        self.save_session_turn(request, search_type, &generated, Some(&context))
+            .await;
         Ok((
             prepare_search_result(
                 search_type,
@@ -1892,14 +1851,12 @@ impl SearchOrchestrator {
         search_type: SearchType,
         response_to_user: Option<String>,
     ) -> SearchResponse {
-        let answer = response_to_user.unwrap_or_else(|| "Got it.".to_string());
-        let mut acknowledgement_request = request.clone();
-        acknowledgement_request.summarize_context = Some(false);
-        self.save_session_turn(&acknowledgement_request, search_type, &answer, None)
+        let answer = SearchOutput::Text(response_to_user.unwrap_or_else(|| "Got it.".to_string()));
+        self.save_session_turn(request, search_type, &answer, None)
             .await;
         let response = prepare_search_result(
             search_type,
-            SearchOutput::Text(answer),
+            answer,
             None,
             request.dataset_ids.clone(),
             false,
@@ -1911,123 +1868,23 @@ impl SearchOrchestrator {
         response
     }
 
-    /// Auto-feedback detection for a session search (Python
-    /// `session_manager.py:461-516`): when the message is feedback on the
-    /// previous turn it is stored there, and a message that is only feedback
-    /// is acknowledged instead of searched (the acknowledgement is returned).
-    async fn handle_auto_feedback(
-        &self,
-        request: &SearchRequest,
-        search_type: SearchType,
-        auto_feedback: bool,
-    ) -> Option<SearchResponse> {
-        let user_id_str = request.user_id.map(|id| id.to_string());
-        // Look up the latest QA id for the session. This is used by both the
-        // auto-feedback path (to write feedback to the prior entry) and by the
-        // session save path (to know which entry precedes the current turn).
-        // Matches Python `session_manager.py:461-469`.
-        let last_qa_id: Option<String> = if let (Some(session_id), Some(sm)) =
-            (&request.session_id, &self.session_manager)
-            && auto_feedback
-            && !session_id.is_empty()
-        {
-            sm.latest_qa_id(Some(session_id), user_id_str.as_deref())
-                .await
-                .unwrap_or(None)
-        } else {
-            None
-        };
-
-        // Auto-feedback detection: if session is active and detection is enabled,
-        // check if the user message contains feedback before routing to the retriever.
-        if auto_feedback
-            && let (Some(session_id), Some(llm)) = (&request.session_id, &self.llm)
-            && !session_id.is_empty()
-        {
-            let detection = detect_feedback(llm.as_ref(), &request.query_text).await;
-            // Python gates the whole feedback branch on `last_qa_id is not None`
-            // (`session_manager.py:489`): feedback can only attach to a PRIOR
-            // entry, so when there is no prior turn the message is treated as a
-            // normal query (retriever runs, the turn is saved). Mirroring that
-            // here also ensures the first turn in a session is never dropped.
-            if detection.feedback_detected
-                && let (Some(prior_id), Some(sm)) = (&last_qa_id, &self.session_manager)
-            {
-                // Persist feedback to the PRIOR QA entry before anything else.
-                // Matches Python `session_manager.py:492-516`: feedback to the
-                // previous entry first, then save the new turn.
-                let score: Option<i32> = detection.feedback_score.map(|s| {
-                    let s = s.round() as i32;
-                    s.clamp(1, 5)
-                });
-                let feedback_text = detection
-                    .feedback_text
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(String::from)
-                    .unwrap_or_else(|| format!("User message: {}", request.query_text.trim()));
-                if let Err(e) = sm
-                    .add_feedback(
-                        Some(session_id),
-                        user_id_str.as_deref(),
-                        prior_id,
-                        Some(&feedback_text),
-                        score,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        prior_qa_id = %prior_id,
-                        "auto-feedback persistence failed, proceeding without storing: {e}"
-                    );
-                }
-
-                if !detection.contains_followup_question {
-                    // Pure feedback — acknowledge and return early.
-                    let acknowledgment = detection
-                        .response_to_user
-                        .unwrap_or_else(|| "Thank you for your feedback!".to_string());
-                    let response = prepare_search_result(
-                        search_type,
-                        SearchOutput::Text(acknowledgment),
-                        None,
-                        request.dataset_ids.clone(),
-                        false,
-                        request.use_combined_context(),
-                        request.verbose(),
-                    );
-                    return Some(response);
-                }
-            }
-            // If no feedback, or feedback with follow-up, proceed normally.
-        }
-
-        None
-    }
-
-    /// Save a session search's turn (Python `save_qa`), once per search.
+    /// Save a session search's turn (Python `save_qa`), once per search. The
+    /// stored context is always empty, as Python's (`summarize_context` is
+    /// never on); an output with no answer text is not saved.
     async fn save_session_turn(
         &self,
         request: &SearchRequest,
         search_type: SearchType,
-        answer: &str,
+        output: &SearchOutput,
         context: Option<&[crate::types::SearchItem]>,
     ) {
         let (Some(session_id), Some(sm)) = (&request.session_id, &self.session_manager) else {
             return;
         };
-        let user_id_str = request.user_id.map(|id| id.to_string());
-        // Python parity: only persist the full context payload when the caller
-        // explicitly opts in via `summarize_context = true`.  Storing the full
-        // context unconditionally would silently change the cross-SDK persisted
-        // shape for callers that omit the flag, so we write an empty string when
-        // it is absent or set to false.
-        let ctx_json = if request.summarize_context == Some(true) {
-            context.and_then(|c| serde_json::to_string(c).ok())
-        } else {
-            Some(String::new())
+        let Some(answer) = session_answer(output) else {
+            return;
         };
+        let user_id_str = request.user_id.map(|id| id.to_string());
 
         // Collect node/edge IDs from the retrieved context items so the feedback
         // stage can trace which graph elements produced the answer.
@@ -2040,8 +1897,8 @@ impl SearchOrchestrator {
                 Some(session_id),
                 user_id_str.as_deref(),
                 &request.query_text,
-                answer,
-                ctx_json.as_deref(),
+                &answer,
+                Some(""),
                 used_graph_element_ids,
             )
             .await;
@@ -2095,6 +1952,20 @@ impl SearchOrchestrator {
         if let Err(error) = log_history_row(database.as_ref(), request, &query_type, &row).await {
             tracing::warn!(%error, "failed to record search history");
         }
+    }
+}
+
+/// The answer text a session turn records for `output`: text as is, a
+/// structured answer as compact JSON (Python's concurrent `model_dump_json`; its
+/// sequential path stores `str(model)`, which both modes here avoid), several
+/// texts joined by a blank line. `None` for retrieval items and for the empty
+/// `Texts` sentinel, which are not answers.
+fn session_answer(output: &SearchOutput) -> Option<String> {
+    match output {
+        SearchOutput::Text(answer) => Some(answer.clone()),
+        SearchOutput::Structured(value) => serde_json::to_string(value).ok(),
+        SearchOutput::Texts(answers) if !answers.is_empty() => Some(answers.join("\n\n")),
+        _ => None,
     }
 }
 
@@ -2423,7 +2294,14 @@ mod tests {
             dir.path(),
         ))));
         manager
-            .save_qa(Some("s"), None, "old question", "old answer", None, None)
+            .save_qa(
+                Some("s"),
+                Some(&session_test_user().to_string()),
+                "old question",
+                "old answer",
+                None,
+                None,
+            )
             .await
             .unwrap();
         let retriever = Arc::new(SessionCompletionRetriever {
@@ -2435,8 +2313,14 @@ mod tests {
         let orchestrator = super::SearchOrchestrator::new(registry)
             .with_session_manager(manager.clone())
             .with_llm(Arc::new(TurnAnalysisLlm(analysis)))
-            .with_auto_feedback_default(true);
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(crate::SessionSearchMode::Sequential);
         (orchestrator, retriever, manager, dir)
+    }
+
+    /// The user of the session fixtures: a turn needs one, as in Python.
+    fn session_test_user() -> uuid::Uuid {
+        uuid::Uuid::from_u128(1)
     }
 
     fn session_request(query: &str) -> SearchRequest {
@@ -2456,7 +2340,7 @@ mod tests {
             node_name_filter_operator: None,
             wide_search_top_k: None,
             triplet_distance_penalty: None,
-            user_id: None,
+            user_id: Some(session_test_user()),
             tenant_id: None,
             verbose: None,
             feedback_influence: None,
@@ -2466,7 +2350,6 @@ mod tests {
             auto_feedback_detection: Some(true),
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         }
     }
 
@@ -2495,7 +2378,10 @@ mod tests {
             retriever.completion_query_seen.lock().unwrap().as_deref(),
             Some("effective query")
         );
-        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("s"), Some(&session_test_user().to_string()))
+            .await
+            .unwrap();
         assert_eq!(entries.last().unwrap().question, "raw follow-up");
         assert_eq!(entries.last().unwrap().answer, "generated answer");
     }
@@ -2521,13 +2407,16 @@ mod tests {
             &result.result,
             SearchOutput::Text(text) if text == "Thanks for the correction."
         ));
-        let entries = manager.get_session(Some("s"), None).await.unwrap();
+        let entries = manager
+            .get_session(Some("s"), Some(&session_test_user().to_string()))
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].question, "No, use X.");
         assert!(entries[0].feedback_text.is_none());
         assert!(entries[0].feedback_score.is_none());
         let context = manager
-            .get_session_context_entries(Some("s"), None)
+            .get_session_context_entries(Some("s"), Some(&session_test_user().to_string()))
             .await
             .unwrap();
         assert!(context.iter().any(|row| {
@@ -2678,7 +2567,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -2725,7 +2613,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -2777,7 +2664,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -2856,7 +2742,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3492,7 +3377,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3543,7 +3427,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let _ = orchestrator.search(&request).await.unwrap();
@@ -3643,7 +3526,6 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
-                summarize_context: None,
             },
             SearchRequest {
                 query_text: "second".to_string(),
@@ -3671,7 +3553,6 @@ mod tests {
                 auto_feedback_detection: None,
                 neighborhood_depth: None,
                 neighborhood_seed_top_k: None,
-                summarize_context: None,
             },
         ];
 
@@ -3718,7 +3599,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -3822,7 +3702,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         }
     }
 
@@ -5507,7 +5386,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let result = orchestrator.search(&request).await;

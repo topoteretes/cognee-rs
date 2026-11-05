@@ -523,6 +523,10 @@ impl SearchRetriever for GraphReportRetriever {
         SearchType::GraphReport
     }
 
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
+    }
+
     /// One item: the deterministic report as Markdown under
     /// [`REPORT_PAYLOAD_KEY`], with the hubs, cross-set connections and
     /// provenance counts it was built from. The query is ignored.

@@ -333,6 +333,16 @@ fn monitoring_tool(value: &str) -> Result<String, String> {
     }
 }
 
+/// The `session_search_mode` a value names (exactly `sequential` or
+/// `concurrent`, like Python's `Literal`), `None` for anything else.
+fn session_search_mode(value: &str) -> Option<cognee_search::SessionSearchMode> {
+    match value {
+        "sequential" => Some(cognee_search::SessionSearchMode::Sequential),
+        "concurrent" => Some(cognee_search::SessionSearchMode::Concurrent),
+        _ => None,
+    }
+}
+
 /// The registry. Field order follows `Settings`.
 static KEYS: &[KeySpec] = &[
     // -- System paths, users & datasets -------------------------------------
@@ -441,28 +451,30 @@ static KEYS: &[KeySpec] = &[
         secret: false,
         persisted: true,
         overlay: |s, env| {
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
             if let Some(value) = first_set(env, &["SESSION_SEARCH_MODE"]) {
-                match value.to_ascii_lowercase().as_str() {
-                    "sequential" => {
-                        s.session_search_mode = cognee_search::SessionSearchMode::Sequential
-                    }
-                    "concurrent" => {
-                        s.session_search_mode = cognee_search::SessionSearchMode::Concurrent
-                    }
-                    _ => tracing::warn!(%value, "ignoring invalid SESSION_SEARCH_MODE"),
+                match session_search_mode(&value) {
+                    Some(mode) => s.session_search_mode = mode,
+                    // Python validates the setting as a `Literal`, so an invalid
+                    // value is an error; `check_supported` reports it.
+                    None => s.invalid_env.push(("session_search_mode", value)),
                 }
             }
         },
         set: |s, key, value| {
-            s.session_search_mode = match as_string(key, &value)?.to_ascii_lowercase().as_str() {
-                "sequential" => cognee_search::SessionSearchMode::Sequential,
-                "concurrent" => cognee_search::SessionSearchMode::Concurrent,
-                _ => return Err(mismatch(key, "expected sequential or concurrent")),
-            };
+            s.session_search_mode = session_search_mode(&as_string(key, &value)?)
+                .ok_or_else(|| mismatch(key, "expected sequential or concurrent"))?;
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
             Ok(())
         },
         get: |s| serde_json::to_value(s.session_search_mode).unwrap_or(Value::Null),
-        reset: |s, d| s.session_search_mode = d.session_search_mode,
+        reset: |s, d| {
+            s.session_search_mode = d.session_search_mode;
+            s.invalid_env
+                .retain(|(key, _)| *key != "session_search_mode");
+        },
     },
     // -- Feedback & personalization (Python's `BaseConfig`) -------------------
     ranged_f64!(
@@ -597,15 +609,21 @@ impl Settings {
         cognee_config_core::unknown_key(key, self.strict_config).map_err(ConfigError::from)
     }
 
-    /// Fail if a setting holds a value cognee-rust accepts as a key but does
-    /// not support. No setting has such a value today:
-    /// `enable_access_control = true` (`ENABLE_BACKEND_ACCESS_CONTROL`), the
-    /// last one, turns on per-dataset storage now
-    /// (`docs/design/per-dataset-storage.md`). The hook stays so that
+    /// Fail if a setting holds a value cognee-rust rejects. Today that is an
+    /// invalid `SESSION_SEARCH_MODE` from the environment (the overlay cannot
+    /// return an error; see `Settings::invalid_env`). `enable_access_control = true`
+    /// (`ENABLE_BACKEND_ACCESS_CONTROL`), the earlier unsupported value, turns
+    /// on per-dataset storage now (`docs/design/per-dataset-storage.md`).
     /// [`ConfigManager::check_supported`](super::ConfigManager::check_supported)
-    /// keeps running before every component build when the next one appears.
+    /// runs before every component build.
     pub fn check_supported(&self, _application_access_control: bool) -> Result<(), ConfigError> {
-        Ok(())
+        match self.invalid_env.first() {
+            Some((key, value)) => Err(mismatch(
+                key,
+                &format!("'{value}' is not a valid value (expected sequential or concurrent)"),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// The current value of setting `key` (or an alias) as JSON, unmasked.

@@ -50,6 +50,10 @@ impl SearchRetriever for SummariesRetriever {
         SearchType::Summaries
     }
 
+    fn supports_session_turn_preparation(&self) -> bool {
+        false
+    }
+
     fn dataset_scoping(&self) -> super::DatasetScoping {
         super::DatasetScoping::Membership
     }

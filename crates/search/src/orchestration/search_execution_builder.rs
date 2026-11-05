@@ -447,7 +447,7 @@ impl SearchBuilder {
     }
 
     pub fn build(self) -> SearchOrchestrator {
-        // The orchestrator's own LLM runs session feedback detection.
+        // The orchestrator's own LLM runs session turn analysis.
         let llm = Arc::clone(&self.engines.llm);
         let mut retrievers = Self::standard_retrievers(self.engines, &self.tuning);
         retrievers.extend(self.retrievers);
@@ -860,7 +860,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         }
     }
 
@@ -1042,7 +1041,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1122,7 +1120,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let response = orchestrator.search(&request).await.unwrap();
@@ -1176,7 +1173,6 @@ mod tests {
             auto_feedback_detection: None,
             neighborhood_depth: None,
             neighborhood_seed_top_k: None,
-            summarize_context: None,
         };
 
         let result = orchestrator.search(&request).await;
@@ -1214,6 +1210,59 @@ mod tests {
                 .get(&search_type)
                 .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
             assert_eq!(retriever.search_type(), search_type);
+        }
+    }
+
+    /// Python's `supports_session_turn_preparation` matrix
+    /// (`base_retriever.py`, with the overrides of the chunks, lexical,
+    /// summaries, Cypher, natural-language and graph-report retrievers): the
+    /// raw retrieval modes opt out, every other standard retriever (coding
+    /// rules included) prepares session turns.
+    #[test]
+    fn session_turn_preparation_capability_matches_python() {
+        use super::{SearchTuning, StandardEngines};
+
+        let retrievers = SearchBuilder::standard_retrievers(
+            StandardEngines {
+                vector_db: Arc::new(TestVectorDb),
+                embedding_engine: Arc::new(TestEmbedding),
+                graph_db: Arc::new(TestGraphDb),
+                llm: Arc::new(TestLlm),
+            },
+            &SearchTuning::default(),
+        );
+        // Every search type, so a standard type missing from the map fails.
+        let expected = [
+            (SearchType::Summaries, false),
+            (SearchType::Chunks, false),
+            (SearchType::RagCompletion, true),
+            (SearchType::GraphCompletion, true),
+            (SearchType::GraphCompletionDecomposition, true),
+            (SearchType::GraphSummaryCompletion, true),
+            (SearchType::Cypher, false),
+            (SearchType::NaturalLanguage, false),
+            (SearchType::GraphCompletionCot, true),
+            (SearchType::GraphCompletionContextExtension, true),
+            // The selector: its delegate decides, see `resolve_for_query`.
+            (SearchType::FeelingLucky, true),
+            // Not a Python `BaseRetriever`: the feedback message itself.
+            (SearchType::Feedback, false),
+            (SearchType::Temporal, true),
+            (SearchType::CodingRules, true),
+            (SearchType::ChunksLexical, false),
+            (SearchType::GraphReport, false),
+            (SearchType::HybridCompletion, true),
+        ];
+        assert_eq!(expected.len(), retrievers.len());
+        for (search_type, prepares) in expected {
+            let retriever = retrievers
+                .get(&search_type)
+                .unwrap_or_else(|| panic!("{search_type:?} is a standard retriever"));
+            assert_eq!(
+                retriever.supports_session_turn_preparation(),
+                prepares,
+                "{search_type:?}"
+            );
         }
     }
 
