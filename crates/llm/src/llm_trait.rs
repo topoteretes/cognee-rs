@@ -111,9 +111,35 @@ pub trait Llm: Send + Sync {
         true
     }
 
-    /// Check if the LLM supports streaming.
+    /// Whether this adapter has a streaming plain-text path
+    /// ([`Llm::generate_streaming`]). A wrapper must forward it.
     fn supports_streaming(&self) -> bool {
         false
+    }
+
+    /// Whether the resolved `llm.streaming` setting is on for this adapter
+    /// (lowered from config at build time). The answer-streaming gate is
+    /// `streaming_enabled() && supports_streaming()`, so a default adapter
+    /// answers exactly as before. A wrapper must forward it.
+    fn streaming_enabled(&self) -> bool {
+        false
+    }
+
+    /// Plain-text generation that pushes each content delta into `sink` while
+    /// still returning the complete response (Python `stream_text_completion`).
+    ///
+    /// The default is the non-streaming call and emits nothing, as Python's
+    /// non-streaming adapters do; callers cannot tell the difference except by
+    /// the absence of deltas. Implementations must return exactly what
+    /// [`Llm::generate`] would have returned.
+    async fn generate_streaming(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+        sink: &dyn crate::token_sink::DeltaSink,
+    ) -> LlmResult<GenerationResponse> {
+        let _ = sink;
+        self.generate(messages, options).await
     }
 
     /// Check if the LLM supports function calling / tool use.

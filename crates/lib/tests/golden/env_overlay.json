@@ -5602,6 +5602,38 @@
   "IMPROVE_TRACE_WINDOW_STEPS=\"{\\\"a\\\":1}\"": {},
   "IMPROVE_TRACE_WINDOW_STEPS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "IMPROVE_TRACE_WINDOW_STEPS=\"{\\\"ssl\\\":true}\"": {},
+  "LLM_ANSWER_STREAMING=\"  \"": {},
+  "LLM_ANSWER_STREAMING=\"\"": {},
+  "LLM_ANSWER_STREAMING=\"-1\"": {},
+  "LLM_ANSWER_STREAMING=\"0\"": {},
+  "LLM_ANSWER_STREAMING=\"1\"": {
+    "llm.answer_streaming": true
+  },
+  "LLM_ANSWER_STREAMING=\"1.5\"": {},
+  "LLM_ANSWER_STREAMING=\"42\"": {},
+  "LLM_ANSWER_STREAMING=\"5000000000\"": {},
+  "LLM_ANSWER_STREAMING=\"70000\"": {},
+  "LLM_ANSWER_STREAMING=\"TRUE\"": {
+    "llm.answer_streaming": true
+  },
+  "LLM_ANSWER_STREAMING=\"[1]\"": {},
+  "LLM_ANSWER_STREAMING=\"abc\"": {},
+  "LLM_ANSWER_STREAMING=\"false\"": {},
+  "LLM_ANSWER_STREAMING=\"no\"": {},
+  "LLM_ANSWER_STREAMING=\"on\"": {
+    "llm.answer_streaming": true
+  },
+  "LLM_ANSWER_STREAMING=\"require\"": {},
+  "LLM_ANSWER_STREAMING=\"true\"": {
+    "llm.answer_streaming": true
+  },
+  "LLM_ANSWER_STREAMING=\"v\"": {},
+  "LLM_ANSWER_STREAMING=\"yes\"": {
+    "llm.answer_streaming": true
+  },
+  "LLM_ANSWER_STREAMING=\"{\\\"a\\\":1}\"": {},
+  "LLM_ANSWER_STREAMING=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "LLM_ANSWER_STREAMING=\"{\\\"ssl\\\":true}\"": {},
   "LLM_API_KEY=\"  \"": {
     "embedding.api_key": "  ",
     "llm.api_key": "  "

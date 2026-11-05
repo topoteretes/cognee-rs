@@ -56,6 +56,14 @@ config_section! {
         pub streaming: bool = false => {
             env: ["LLM_STREAMING"], alias: ["llm_streaming"], secret: false,
         },
+        /// Stream the plain-text answer of a concurrent session turn into a
+        /// token sink (Python's `llm_answer_streaming`, deliberately not the
+        /// older `llm_streaming`). Lowered into `LlmInputs::answer_streaming`;
+        /// only the OpenAI-compatible adapter streams, and only for a recall
+        /// that supplied a sink, so enabling it changes nothing otherwise.
+        pub answer_streaming: bool = false => {
+            env: ["LLM_ANSWER_STREAMING"], alias: ["llm_answer_streaming"], secret: false,
+        },
         /// Completion-token ceiling sent with every request.
         pub max_completion_tokens: u32 = cognee_llm::OpenAIAdapter::DEFAULT_MAX_COMPLETION_TOKENS => {
             env: ["LLM_MAX_COMPLETION_TOKENS", "LLM_MAX_TOKENS"], alias: ["llm_max_completion_tokens"], secret: false,

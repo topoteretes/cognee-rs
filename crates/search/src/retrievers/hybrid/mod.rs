@@ -1318,10 +1318,13 @@ impl SearchRetriever for HybridRetriever {
                 .map_err(|e| SearchError::LlmError(e.to_string()))?;
             Ok(SearchOutput::Structured(structured_value))
         } else {
-            let completion = self
-                .llm
-                .generate(messages, self.generation_options.clone())
-                .await?;
+            // The turn's answer: streams into a promoted token sink, if any.
+            let completion = cognee_llm::generate_answer(
+                self.llm.as_ref(),
+                messages,
+                self.generation_options.clone(),
+            )
+            .await?;
             Ok(SearchOutput::Text(completion.content))
         }
     }

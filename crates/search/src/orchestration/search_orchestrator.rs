@@ -1768,14 +1768,19 @@ impl SearchOrchestrator {
             context
         };
 
-        let output = retriever
-            .get_completion(
-                &request.query_text,
-                context.clone(),
-                &session_context,
-                &params,
-            )
-            .await?;
+        let completion = retriever.get_completion(
+            &request.query_text,
+            context.clone(),
+            &session_context,
+            &params,
+        );
+        // Only the concurrent session-turn lane may stream (Python
+        // `token_sink` docstring): sessionless and sequential runs stay silent.
+        let output = if conversational_retrieval {
+            cognee_llm::promote_answer_lane(completion).await?
+        } else {
+            completion.await?
+        };
 
         // Python records a turn only on the session-aware completion paths, so
         // a retriever that opted out of turn preparation (graph report, Cypher,
@@ -1881,7 +1886,10 @@ impl SearchOrchestrator {
                 super::session_turn::SessionTurnPreparation::pass_through(&request.query_text)
             }
         };
-        let answer_lane = async {
+        // Only this lane is promoted: `join!` polls both arms on one task, but the
+        // promotion is scoped to the wrapped future, so the analysis lane never
+        // sees the sink (Python's `active_token_sink` ContextVar).
+        let answer_lane = cognee_llm::promote_answer_lane(async {
             let context =
                 retrieve_session_context(retriever, &request.query_text, &session, &params).await?;
             if self.enable_access_tracking {
@@ -1896,7 +1904,7 @@ impl SearchOrchestrator {
                 )
                 .await?;
             Ok::<_, SearchError>((context, output))
-        };
+        });
         let (mut preparation, answer_result) = tokio::join!(analysis_lane, answer_lane);
         let (context, generated) = answer_result?;
 
@@ -3143,6 +3151,208 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A streaming adapter whose analysis lane reports whether it saw a promoted
+    /// sink (it must never) and whose answer streams two deltas.
+    struct StreamingLlm {
+        analysis_saw_sink: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl Llm for StreamingLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            Ok(GenerationResponse {
+                content: "Hello".into(),
+                model: "m".into(),
+                finish_reason: None,
+                usage: None,
+            })
+        }
+
+        async fn generate_streaming(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+            sink: &dyn cognee_llm::DeltaSink,
+        ) -> LlmResult<GenerationResponse> {
+            sink.begin_attempt();
+            sink.delta("Hel");
+            sink.delta("lo");
+            self.generate(Vec::new(), None).await
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            if cognee_llm::active_token_sink().is_some() {
+                self.analysis_saw_sink
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(default_session_analysis())
+        }
+
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+
+        fn streaming_enabled(&self) -> bool {
+            true
+        }
+
+        fn model(&self) -> &str {
+            "streaming-test"
+        }
+    }
+
+    /// Answers through `generate_answer`, as the real retrievers do, and appends
+    /// a citation the way `include_references` does.
+    struct StreamingAnswerRetriever {
+        llm: Arc<StreamingLlm>,
+    }
+
+    #[async_trait]
+    impl SearchRetriever for StreamingAnswerRetriever {
+        fn search_type(&self) -> SearchType {
+            SearchType::RagCompletion
+        }
+
+        async fn get_context(
+            &self,
+            _query: &str,
+            _params: &SearchParams,
+        ) -> Result<SearchContext, SearchError> {
+            Ok(vec![])
+        }
+
+        async fn get_completion(
+            &self,
+            _query: &str,
+            _context: Option<SearchContext>,
+            _session: &SessionContext,
+            _params: &SearchParams,
+        ) -> Result<SearchOutput, SearchError> {
+            let response = cognee_llm::generate_answer(self.llm.as_ref(), Vec::new(), None).await?;
+            Ok(SearchOutput::Text(response.content))
+        }
+
+        fn append_references(
+            &self,
+            output: SearchOutput,
+            _context: &SearchContext,
+            params: &SearchParams,
+        ) -> SearchOutput {
+            match output {
+                SearchOutput::Text(text) if params.include_references => {
+                    SearchOutput::Text(format!("{text}\n\nSources: [1]"))
+                }
+                other => other,
+            }
+        }
+    }
+
+    async fn streamed_search(
+        mode: crate::SessionSearchMode,
+        mutate: impl FnOnce(&mut SearchRequest),
+    ) -> (Vec<cognee_llm::StreamEvent>, SearchOutput, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SessionManager::new(Arc::new(FsSessionStore::new(
+            dir.path(),
+        ))));
+        let llm = Arc::new(StreamingLlm {
+            analysis_saw_sink: std::sync::atomic::AtomicBool::new(false),
+        });
+        let mut registry = SearchTypeRegistry::new();
+        registry.register(Arc::new(StreamingAnswerRetriever {
+            llm: Arc::clone(&llm),
+        }));
+        let orchestrator = super::SearchOrchestrator::new(registry)
+            .with_session_manager(manager)
+            .with_llm(llm.clone())
+            .with_auto_feedback_default(true)
+            .with_session_search_mode(mode);
+        let mut request = session_request("question");
+        mutate(&mut request);
+
+        let sink = Arc::new(cognee_llm::TokenSink::new());
+        let mut stream = sink.stream().unwrap();
+        let result = cognee_llm::with_token_sink(Arc::clone(&sink), async {
+            orchestrator.search(&request).await
+        })
+        .await
+        .unwrap();
+        // The creator closes, as the transport does.
+        sink.close();
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+        let saw = llm
+            .analysis_saw_sink
+            .load(std::sync::atomic::Ordering::SeqCst);
+        (events, result.result, saw)
+    }
+
+    fn delta_texts(events: &[cognee_llm::StreamEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                cognee_llm::StreamEvent::Delta(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_turn_streams_only_the_answer_lane() {
+        let (events, result, analysis_saw_sink) =
+            streamed_search(crate::SessionSearchMode::Concurrent, |_| {}).await;
+
+        assert_eq!(delta_texts(&events), ["Hel", "lo"]);
+        assert!(events.contains(&cognee_llm::StreamEvent::AnswerDone));
+        assert!(
+            !analysis_saw_sink,
+            "the analysis lane must never see the promoted sink"
+        );
+        assert!(matches!(result, SearchOutput::Text(t) if t == "Hello"));
+    }
+
+    #[tokio::test]
+    async fn include_references_citations_are_not_streamed() {
+        let (events, result, _) = streamed_search(crate::SessionSearchMode::Concurrent, |r| {
+            r.include_references = true;
+        })
+        .await;
+
+        let streamed: String = delta_texts(&events).concat();
+        assert_eq!(streamed, "Hello");
+        assert!(!streamed.contains("Sources"));
+        // The returned payload is authoritative and carries the citation.
+        assert!(matches!(result, SearchOutput::Text(t) if t == "Hello\n\nSources: [1]"));
+    }
+
+    #[tokio::test]
+    async fn sequential_and_stateless_searches_stream_nothing() {
+        let (events, result, _) =
+            streamed_search(crate::SessionSearchMode::Sequential, |_| {}).await;
+        assert!(delta_texts(&events).is_empty());
+        assert!(matches!(result, SearchOutput::Text(t) if t == "Hello"));
+
+        // No user, no session: the stateless path.
+        let (events, result, _) = streamed_search(crate::SessionSearchMode::Concurrent, |r| {
+            r.user_id = None;
+            r.session_id = None;
+        })
+        .await;
+        assert!(delta_texts(&events).is_empty());
+        assert!(matches!(result, SearchOutput::Text(t) if t == "Hello"));
     }
 
     #[tokio::test]

@@ -56,6 +56,7 @@ const ENV_VARS: &[&str] = &[
     "LLM_MAX_TOKENS",
     "LLM_ARGS",
     "LLM_STREAMING",
+    "LLM_ANSWER_STREAMING",
     "LLM_MAX_RETRIES",
     "LLM_NETWORK_RETRIES",
     "LLM_MIN_RETRY_SECONDS",

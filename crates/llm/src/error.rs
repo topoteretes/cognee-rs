@@ -62,6 +62,20 @@ pub enum LlmError {
 pub type LlmResult<T> = Result<T, LlmError>;
 
 impl LlmError {
+    /// The HTTP status this failure maps to when it came from a provider
+    /// response, mirroring the `status_code` Python's streaming error frame
+    /// carries. `None` when there is no meaningful status.
+    #[must_use]
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::AuthenticationError(_) => Some(401),
+            Self::PaymentRequired(_) => Some(402),
+            Self::ModelNotFound(_) => Some(404),
+            Self::RateLimitExceeded(_) => Some(429),
+            _ => None,
+        }
+    }
+
     /// A stable, payload-free discriminant for logging.
     ///
     /// Several variants embed provider payloads verbatim — `DeserializationError`

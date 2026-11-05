@@ -154,6 +154,16 @@ impl Llm for ThrottleLlm {
         self.inner.generate(messages, options).await
     }
 
+    async fn generate_streaming(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+        sink: &dyn crate::token_sink::DeltaSink,
+    ) -> LlmResult<GenerationResponse> {
+        self.gate().await?;
+        self.inner.generate_streaming(messages, options, sink).await
+    }
+
     async fn create_structured_output_with_messages_raw(
         &self,
         messages: Vec<Message>,
@@ -210,6 +220,10 @@ impl Llm for ThrottleLlm {
 
     fn supports_streaming(&self) -> bool {
         self.inner.supports_streaming()
+    }
+
+    fn streaming_enabled(&self) -> bool {
+        self.inner.streaming_enabled()
     }
 
     fn supports_function_calling(&self) -> bool {

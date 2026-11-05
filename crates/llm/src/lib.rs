@@ -63,6 +63,7 @@ pub mod prompts;
 pub mod responses_client;
 mod retry;
 pub mod schema;
+pub mod token_sink;
 pub mod transcriber;
 pub mod types;
 pub mod unconfigured;
@@ -79,6 +80,10 @@ pub use schema::{
     generate_json_schema, generate_json_schema_string, graph_model_to_schema,
     graph_model_to_schema_string, schema_fingerprint, schema_required_validator,
     strict_json_schema,
+};
+pub use token_sink::{
+    DeltaSink, StreamEvent, TokenSink, TokenStream, active_token_sink, generate_answer,
+    promote_answer_lane, requested_token_sink, with_token_sink,
 };
 pub use transcriber::{Transcriber, TranscriptionOutput, validate_audio_format};
 pub use types::{
