@@ -542,8 +542,9 @@ pub struct OpenAIAdapter {
     vision_model: Option<String>,
     /// Dump every request/response body to stderr (`llm.debug_requests`).
     debug_requests: bool,
-    /// Resolved `llm.streaming` setting: lets an answer call stream its text
-    /// deltas into a token sink ([`Llm::generate_streaming`]).
+    /// Resolved `llm.answer_streaming` setting (Python `llm_answer_streaming`):
+    /// lets an answer call stream its text deltas into a token sink
+    /// ([`Llm::generate_streaming`]).
     streaming: bool,
     /// Extra request parameters merged into every chat-completion request body,
     /// mirroring Python cognee's `LLM_ARGS` / `llm_config.llm_args`, which the
@@ -1227,7 +1228,7 @@ impl OpenAIAdapter {
         self
     }
 
-    /// Allow answer calls to stream their text deltas (`llm.streaming`).
+    /// Allow answer calls to stream their text deltas (`llm.answer_streaming`).
     #[must_use]
     pub fn with_streaming(mut self, enabled: bool) -> Self {
         self.streaming = enabled;
@@ -1617,6 +1618,28 @@ impl OpenAIAdapter {
         deadline: Option<Instant>,
     ) -> LlmResult<OpenAIResponse> {
         self.send_chat_request_inner(request_body, deadline, None)
+            .await
+    }
+
+    /// The streaming twin of
+    /// [`send_chat_request_before`](Self::send_chat_request_before): the same
+    /// `llm.api_call` span, so a streamed answer is traced like a blocking one.
+    #[instrument(
+        name = "llm.api_call",
+        level = "info",
+        skip(self, request_body, sink),
+        fields(
+            url = tracing::field::Empty,
+            cognee.llm.model = self.model.as_str(),
+            cognee.llm.provider = "openai",
+        ),
+    )]
+    async fn send_chat_request_streaming(
+        &self,
+        request_body: Value,
+        sink: &dyn DeltaSink,
+    ) -> LlmResult<OpenAIResponse> {
+        self.send_chat_request_inner(request_body, None, Some(sink))
             .await
     }
 
@@ -2239,21 +2262,22 @@ impl Llm for OpenAIAdapter {
         sink: &dyn DeltaSink,
     ) -> LlmResult<GenerationResponse> {
         let mut request_body = self.build_generate_request(&messages, options);
-        request_body["stream"] = json!(true);
-        // Without `include_usage` an OpenAI-compatible stream carries no usage
-        // block, so any accounting that reads it would see streamed answers as
-        // free (Python `stream_text_completion`).
-        request_body["stream_options"] = json!({ "include_usage": true });
+        // `LLM_ARGS` first, exactly as the blocking path (`call_api`) merges it.
         self.apply_extra_args(&mut request_body);
-        // `apply_extra_args` only fills absent keys; re-assert the stream keys in
-        // case `LLM_ARGS` carried its own `stream_options`.
+        // Then the stream keys win over anything `LLM_ARGS` carried. A caller's
+        // `stream_options` is merged rather than replaced, and `include_usage` is
+        // forced: without it an OpenAI-compatible stream carries no usage block,
+        // so any accounting that reads it would see streamed answers as free
+        // (Python `stream_completion.py:55-61`).
         request_body["stream"] = json!(true);
-        if let Some(options) = request_body["stream_options"].as_object_mut() {
-            options.insert("include_usage".to_string(), json!(true));
-        }
-        let response = self
-            .send_chat_request_inner(request_body, None, Some(sink))
-            .await?;
+        let mut stream_options = request_body
+            .get("stream_options")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        stream_options.insert("include_usage".to_string(), json!(true));
+        request_body["stream_options"] = Value::Object(stream_options);
+        let response = self.send_chat_request_streaming(request_body, sink).await?;
         Self::generation_response(response)
     }
 

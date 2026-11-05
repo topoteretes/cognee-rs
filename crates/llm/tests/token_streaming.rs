@@ -222,7 +222,7 @@ async fn single_consumer_and_detach() {
 }
 
 #[tokio::test]
-async fn stream_failure_reports_a_sanitised_error_with_status() {
+async fn a_failure_before_any_delta_leaves_the_sink_to_its_creator() {
     let server = MockServer::start_async().await;
     server.mock(|when, then| {
         when.method(POST).path("/chat/completions");
@@ -239,4 +239,165 @@ async fn stream_failure_reports_a_sanitised_error_with_status() {
     // owning lane reports): it stays open and silent, and the creator surfaces
     // the failure itself.
     assert!(!sink.is_closed());
+}
+
+#[tokio::test]
+async fn llm_args_stream_options_are_merged_and_include_usage_is_forced() {
+    // Python `test_include_usage_survives_caller_supplied_stream_options` and
+    // `test_sampling_parameters_are_not_dropped`: a caller's `stream_options` is
+    // merged, never replaced, `include_usage` is forced on, and the rest of
+    // `LLM_ARGS` reaches the streamed request as it reaches the blocking one.
+    let server = MockServer::start_async().await;
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/chat/completions")
+            .json_body_includes(r#"{"stream": true}"#)
+            .json_body_includes(
+                r#"{"stream_options": {"include_usage": true, "other_key": "value"}}"#,
+            )
+            .json_body_includes(r#"{"seed": 7}"#);
+        then.status(200)
+            .header("content-type", "text/event-stream")
+            .body(SSE_BODY);
+    });
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "stream_options".into(),
+        serde_json::json!({"other_key": "value", "include_usage": false}),
+    );
+    args.insert("stream".into(), serde_json::json!(false));
+    args.insert("seed".into(), serde_json::json!(7));
+    let llm = adapter(&server, true).with_extra_args(args);
+
+    let sink = Arc::new(TokenSink::new());
+    let response = with_token_sink(Arc::clone(&sink), async {
+        promote_answer_lane(generate_answer(&llm, user_msg(), None)).await
+    })
+    .await
+    .unwrap();
+    mock.assert();
+    assert_eq!(response.content, "Hello world");
+}
+
+/// A raw HTTP/1.1 server: the first connection streams one delta and then dies
+/// mid-body; every later one serves the full [`SSE_BODY`].
+async fn flaky_sse_server() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut connection = 0;
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            connection += 1;
+            // Read the whole request (headers + Content-Length body).
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
+            let body = if connection == 1 {
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"
+            } else {
+                SSE_BODY
+            };
+            let mut out = format!("{head}{:x}\r\n{body}\r\n", body.len());
+            if connection > 1 {
+                out.push_str("0\r\n\r\n");
+            }
+            socket.write_all(out.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            // Dropping the socket without the terminating chunk truncates the
+            // first response mid-body.
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn a_mid_stream_failure_retries_and_tells_the_consumer_to_reset() {
+    // Python `test_a_retry_tells_the_consumer_to_discard_the_partial_answer`,
+    // driven through the real adapter: the retry ladder re-streams from the
+    // beginning, so the owning lane emits `reset` before the second attempt.
+    let base = flaky_sse_server().await;
+    let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(base))
+        .unwrap()
+        .with_network_retries(2)
+        .with_min_retry_elapsed(std::time::Duration::ZERO)
+        .with_streaming(true);
+
+    let sink = Arc::new(TokenSink::new());
+    let response = with_token_sink(Arc::clone(&sink), async {
+        promote_answer_lane(generate_answer(&llm, user_msg(), None)).await
+    })
+    .await
+    .unwrap();
+    assert_eq!(response.content, "Hello world", "only the retry's text");
+
+    let events = drain(&sink).await;
+    assert_eq!(
+        events,
+        vec![
+            StreamEvent::Stage("generating".into()),
+            StreamEvent::Delta("partial".into()),
+            StreamEvent::Reset,
+            StreamEvent::Delta("Hel".into()),
+            StreamEvent::Delta("lo".into()),
+            StreamEvent::Delta(" world".into()),
+            StreamEvent::AnswerDone,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_failure_after_deltas_ends_the_stream_with_one_sanitised_error() {
+    // The owning lane failed after it streamed: the consumer already has a 200,
+    // so the failure reaches it as one `error` event with no provider detail.
+    let base = flaky_sse_server().await;
+    let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(base))
+        .unwrap()
+        .with_network_retries(0)
+        .with_min_retry_elapsed(std::time::Duration::ZERO)
+        .with_streaming(true);
+
+    let sink = Arc::new(TokenSink::new());
+    let result = with_token_sink(Arc::clone(&sink), async {
+        promote_answer_lane(generate_answer(&llm, user_msg(), None)).await
+    })
+    .await;
+    assert!(result.is_err());
+    assert!(sink.is_closed());
+    let events = drain(&sink).await;
+    let errors: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::Error { message, status } => Some((message.clone(), *status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors.len(), 1, "{events:?}");
+    let (message, status) = &errors[0];
+    assert!(message.ends_with("during answer generation"), "{message}");
+    assert!(!message.contains("127.0.0.1"), "{message}");
+    assert_eq!(*status, None, "a network failure has no HTTP status");
 }

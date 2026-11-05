@@ -117,7 +117,8 @@ pub trait Llm: Send + Sync {
         false
     }
 
-    /// Whether the resolved `llm.streaming` setting is on for this adapter
+    /// Whether the resolved `llm.answer_streaming` setting (Python
+    /// `llm_answer_streaming`, deliberately not `llm.streaming`) is on for this adapter
     /// (lowered from config at build time). The answer-streaming gate is
     /// `streaming_enabled() && supports_streaming()`, so a default adapter
     /// answers exactly as before. A wrapper must forward it.
