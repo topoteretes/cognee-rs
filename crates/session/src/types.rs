@@ -40,7 +40,10 @@ pub struct SessionQAEntry {
     /// Session-context entry IDs that were served to produce this answer.
     #[serde(default)]
     pub used_session_context_ids: Option<Vec<String>>,
-    /// Metadata tracking for the memify pipeline (e.g. `{"feedback_weights_applied": true}`); values are arbitrary JSON (Python also stores lists and ints).
+    /// Metadata tracking for the memify pipeline (e.g.
+    /// `{"feedback_weights_applied": true}`). Values must be a bool, an
+    /// integer, a string or a list of strings, or Python's `SessionQAEntry`
+    /// validator rejects the entry when reading the shared store.
     #[serde(default)]
     pub memify_metadata: Option<HashMap<String, serde_json::Value>>,
 }
