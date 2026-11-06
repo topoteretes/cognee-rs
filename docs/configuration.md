@@ -1021,6 +1021,25 @@ prompt and the summary schema:
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
 | — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
 
+### Edge evidence (`provenance_edge_evidence`)
+
+With `EDGE_EVIDENCE_ENABLED` on, each cognify storage batch records which chunk
+supports which graph edge, keyed by the run's `pipeline_run_id`; a search only
+cites rows whose run has a `COMPLETED` `pipeline_runs` row. As in Python, a run
+without a user records no evidence (the ownership ledger, by contrast, falls
+back to the default user).
+
+**Postgres: a table Python created is not shared.** The SQLite table is
+byte-compatible with Python's, so one SQLite database serves both SDKs. On
+Postgres it is not: Python's migration (`f3a7b9c1d2e4`) declares the id
+columns as native `uuid`, and Rust stores them as text. Rust creates the table
+with `IF NOT EXISTS`, so on a database Python already migrated it leaves
+Python's table untouched, and then every Rust insert fails (`column "id" is of
+type uuid but expression is of type text`). That fails cognify's storage stage
+for any run that captures evidence, and a search's lookup (`uuid = text`) finds
+no source evidence. Checked on Postgres 18. Point Rust at a database Python did
+not migrate, or turn `EDGE_EVIDENCE_ENABLED` off there.
+
 ### `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` — a deliberate divergence from Python
 
 By default a chunk's size is the tokenizer's count of the chunk itself. Until
