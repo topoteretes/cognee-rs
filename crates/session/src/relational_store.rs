@@ -49,7 +49,7 @@ fn row_to_entry(m: SessionQaRow) -> SessionQAEntry {
     let memify_metadata = m
         .memify_metadata
         .as_deref()
-        .and_then(|s| serde_json::from_str::<HashMap<String, bool>>(s).ok());
+        .and_then(|s| serde_json::from_str::<HashMap<String, serde_json::Value>>(s).ok());
     let used_session_context_ids = m
         .used_session_context_ids
         .as_deref()
@@ -292,5 +292,52 @@ impl SessionStore for RelationalSessionStore {
             .update_session_context_entry(session_id, user_id, entry_id, &merge)
             .await
             .map_err(store_err)
+    }
+}
+
+#[cfg(test)]
+mod row_decode_tests {
+    use super::*;
+
+    fn row(memify_metadata: Option<&str>) -> SessionQaRow {
+        SessionQaRow {
+            id: Uuid::new_v4().simple().to_string(),
+            session_id: "s".to_string(),
+            user_id: None,
+            question: "q".to_string(),
+            answer: "a".to_string(),
+            context: None,
+            created_at: chrono::Utc::now(),
+            feedback_text: None,
+            feedback_score: None,
+            used_graph_element_ids: None,
+            used_session_context_ids: None,
+            memify_metadata: memify_metadata.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn python_shaped_metadata_keeps_all_keys() {
+        let raw = r#"{"feedback_weights_applied": true, "feedback_weights_applied_node_ids": ["a"], "feedback_weights_attempts": 2}"#;
+        let Some(map) = row_to_entry(row(Some(raw))).memify_metadata else {
+            panic!("object decodes");
+        };
+        assert_eq!(map.len(), 3);
+        assert_eq!(map["feedback_weights_applied"], serde_json::json!(true));
+        assert_eq!(
+            map["feedback_weights_applied_node_ids"],
+            serde_json::json!(["a"])
+        );
+        assert_eq!(map["feedback_weights_attempts"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn non_object_metadata_decodes_to_none() {
+        assert!(row_to_entry(row(Some("[1,2]"))).memify_metadata.is_none());
+        assert!(
+            row_to_entry(row(Some("\"oops\"")))
+                .memify_metadata
+                .is_none()
+        );
     }
 }

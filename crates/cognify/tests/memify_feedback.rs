@@ -202,7 +202,10 @@ async fn feedback_idempotent_second_run_skips() {
         .await
         .unwrap();
     let meta = entries[0].memify_metadata.as_ref().expect("metadata set");
-    assert_eq!(meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY).copied(), Some(true));
+    assert_eq!(
+        meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY),
+        Some(&serde_json::Value::Bool(true))
+    );
 
     // Second run should skip.
     let second = apply_feedback_weights_pipeline(
@@ -580,5 +583,8 @@ async fn feedback_edge_success_updates_weight_and_marks_applied() {
         .await
         .unwrap();
     let meta = entries[0].memify_metadata.as_ref().expect("metadata set");
-    assert_eq!(meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY).copied(), Some(true));
+    assert_eq!(
+        meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY),
+        Some(&serde_json::Value::Bool(true))
+    );
 }

@@ -17,7 +17,8 @@ use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
 ///
 /// `memify_metadata` is merged, not replaced: `Some(Some(map))` overlays
 /// `map`'s keys on the stored ones (Python's `update_qa`), so each improve
-/// stage passes only its own flags.
+/// stage passes only its own flags. Values must be a bool, an integer, a
+/// string or a list of strings to stay readable by Python.
 #[derive(Debug, Clone, Default)]
 pub struct SessionQAUpdate {
     pub question: Option<String>,
@@ -27,7 +28,7 @@ pub struct SessionQAUpdate {
     pub feedback_score: Option<Option<i32>>,
     pub used_graph_element_ids: Option<Option<UsedGraphElementIds>>,
     pub used_session_context_ids: Option<Option<Vec<String>>>,
-    pub memify_metadata: Option<Option<HashMap<String, bool>>>,
+    pub memify_metadata: Option<Option<HashMap<String, serde_json::Value>>>,
 }
 
 /// Abstraction over session Q&A storage backends (SQLite, Redis, filesystem, etc.).

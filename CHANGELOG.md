@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`SessionQAEntry.memify_metadata` holds JSON values, not only bools (SDK-1051).**
+  - The field (and `SessionQAUpdate.memify_metadata`) changes from
+    `Option<HashMap<String, bool>>` to `Option<HashMap<String, serde_json::Value>>`;
+    the TypeScript type is `Record<string, unknown> | null`. Python stores lists
+    and ints there (e.g. `feedback_weights_applied_node_ids`); the old bool-only
+    decode dropped the whole map when it met one, losing
+    `feedback_weights_applied` and the `preference_*` flags. Read flags with
+    `Value::as_bool`. A stored non-object value still decodes as `None`.
+
 - **`remember` reports its automatic improve as Python does (SDK-1039).**
   - `RememberResult::improve_result` (formerly `#[serde(skip)]`) is renamed
     `improve` and serializes the `ImproveResult`; `improve_error`,

@@ -1399,7 +1399,9 @@ jobs:
       # `session.ttl_seconds` on Redis: the store arms an expiry on every key
       # a write touches (`session_ttl_expires_every_written_key`), and the
       # registry hands the configured TTL to the store it builds
-      # (`the_redis_session_store_applies_the_session_ttl`). Both skip with
+      # (`the_redis_session_store_applies_the_session_ttl`). The session run
+      # also covers `memify_metadata` round trip + key merge on Redis
+      # (`redis_memify_metadata_round_trips_and_merges`). All skip with
       # `REDIS_TEST_URL not set — skipping …` when the URL is absent, and a
       # skip still reports `ok`, so the guard step below is what makes this
       # lane mean anything. `--no-default-features --features sqlite,…` keeps
@@ -1409,6 +1411,7 @@ jobs:
           set -o pipefail
           cargo test -p cognee-session --features redis --lib \
             session_ttl_expires_every_written_key -- --nocapture \
+            redis_memify_metadata_round_trips_and_merges \
             2>&1 | tee redis-session.log
           cargo test -p cognee-components --no-default-features \
             --features sqlite,session-redis --lib \
@@ -1421,6 +1424,7 @@ jobs:
             --log redis-session.log    --min-tests 1 \
             --log redis-components.log --min-tests 1 \
             --require-test session_ttl_expires_every_written_key \
+            --require-test redis_memify_metadata_round_trips_and_merges \
             --require-test the_redis_session_store_applies_the_session_ttl
 
   # ── Stage 3: Language binding checks (depend on lint, parallel with `test`) ──

@@ -172,7 +172,7 @@ pub fn refresh_preference_text(
 }
 
 fn flag(entry: &SessionQAEntry, key: &str) -> Option<bool> {
-    entry.memify_metadata.as_ref()?.get(key).copied()
+    entry.memify_metadata.as_ref()?.get(key)?.as_bool()
 }
 
 /// The sessions' Q&A turns (oldest first, across sessions), feedback rows
@@ -377,26 +377,27 @@ pub async fn update_user_preferences(
     // Step 5: mark the turns. The stores merge `memify_metadata`, so only
     // this stage's keys are sent; the applied flag records the outcome
     // (`false` is retried on the next run).
-    let mut metadata_updates: BTreeMap<(String, String), HashMap<String, bool>> = BTreeMap::new();
+    let mut metadata_updates: BTreeMap<(String, String), HashMap<String, serde_json::Value>> =
+        BTreeMap::new();
     let key =
         |(session_id, entry): &(String, SessionQAEntry)| (session_id.clone(), entry.id.to_string());
     for turn in &new_turns {
         metadata_updates
             .entry(key(turn))
             .or_default()
-            .insert(PREFERENCE_TURN_COUNTED_KEY.to_string(), true);
+            .insert(PREFERENCE_TURN_COUNTED_KEY.to_string(), true.into());
     }
     for turn in &applied_turns {
         metadata_updates
             .entry(key(turn))
             .or_default()
-            .insert(PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), write_ok);
+            .insert(PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), write_ok.into());
     }
     for turn in &unapplied_turns {
         metadata_updates
             .entry(key(turn))
             .or_default()
-            .insert(PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), false);
+            .insert(PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), false.into());
     }
     for ((session_id, qa_id), metadata) in metadata_updates {
         manager
@@ -527,7 +528,7 @@ mod tests {
                 .unwrap();
         }
 
-        async fn metadata(&self, session: &str) -> Vec<HashMap<String, bool>> {
+        async fn metadata(&self, session: &str) -> Vec<HashMap<String, serde_json::Value>> {
             self.manager
                 .get_session(Some(session), Some(USER))
                 .await
@@ -578,10 +579,10 @@ mod tests {
         }
     }
 
-    fn counted_and_applied(applied: bool) -> HashMap<String, bool> {
+    fn counted_and_applied(applied: bool) -> HashMap<String, serde_json::Value> {
         HashMap::from([
-            (PREFERENCE_TURN_COUNTED_KEY.to_string(), true),
-            (PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), applied),
+            (PREFERENCE_TURN_COUNTED_KEY.to_string(), true.into()),
+            (PREFERENCE_WEIGHTS_APPLIED_KEY.to_string(), applied.into()),
         ])
     }
 
@@ -659,7 +660,7 @@ mod tests {
             f.metadata("s1").await,
             [HashMap::from([(
                 PREFERENCE_TURN_COUNTED_KEY.to_string(),
-                true
+                true.into()
             )])]
         );
     }
@@ -678,7 +679,7 @@ mod tests {
                 SessionQAUpdate {
                     memify_metadata: Some(Some(HashMap::from([(
                         "feedback_weights_applied".to_string(),
-                        true,
+                        true.into(),
                     )]))),
                     ..Default::default()
                 },
@@ -687,7 +688,7 @@ mod tests {
             .unwrap();
         f.run(&["s1"]).await;
         let mut expected = counted_and_applied(true);
-        expected.insert("feedback_weights_applied".to_string(), true);
+        expected.insert("feedback_weights_applied".to_string(), true.into());
         assert_eq!(f.metadata("s1").await, [expected]);
     }
 
@@ -780,7 +781,7 @@ mod tests {
             f.metadata("s1").await,
             [HashMap::from([(
                 PREFERENCE_TURN_COUNTED_KEY.to_string(),
-                true
+                true.into()
             )])]
         );
     }

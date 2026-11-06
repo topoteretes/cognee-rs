@@ -676,6 +676,7 @@ jobs:
           set -o pipefail
           cargo test -p cognee-session --features redis --lib \
             session_ttl_expires_every_written_key -- --nocapture \
+            redis_memify_metadata_round_trips_and_merges \
             2>&1 | tee redis-session.log
           cargo test -p cognee-components --no-default-features \
             --features sqlite,session-redis --lib \
@@ -688,6 +689,7 @@ jobs:
             --log redis-session.log    --min-tests 1 \
             --log redis-components.log --min-tests 1 \
             --require-test session_ttl_expires_every_written_key \
+            --require-test redis_memify_metadata_round_trips_and_merges \
             --require-test the_redis_session_store_applies_the_session_ttl
 
   notify:
