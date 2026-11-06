@@ -2619,7 +2619,10 @@ pub async fn add_data_points(
     // Only after the graph and vector writes succeeded (Python captures at the
     // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
     // never describes an edge the graph does not hold.
-    if config.edge_evidence_enabled {
+    // A run with no user records no evidence: Python's buffer skips a
+    // context without a user (`ProvenanceBuffer.capture`, `buffer.py:105`),
+    // where the ownership ledger above falls back to the default user.
+    if config.edge_evidence_enabled && input.user_id.is_some() {
         // Python captures over the batch's `edges` after `custom_edges` were
         // appended to them (`add_data_points.py:403`), so runtime custom
         // edges are structural candidates too.
@@ -9894,8 +9897,37 @@ mod tests {
             }
         };
 
+        async fn ledger_rows(db: &cognee_database::DatabaseConnection) -> u64 {
+            use sea_orm::{EntityTrait, PaginatorTrait};
+            cognee_database::entities::provenance_edge_evidence::Entity::find()
+                .count(db)
+                .await
+                .expect("count ledger rows")
+        }
+
+        // No user: nothing is captured, as Python's buffer skips a context
+        // without one (the ownership ledger still falls back to the default
+        // user).
+        let userless = SummarizedData {
+            user_id: None,
+            ..input.clone()
+        };
+        add_data_points(
+            &userless,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(run_id),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("storage succeeds");
+        assert_eq!(ledger_rows(&db).await, 0);
+
         // Off: nothing is captured.
         run(CognifyConfig::default().with_edge_evidence(false)).await;
+        assert_eq!(ledger_rows(&db).await, 0);
         let edge_id = generate_edge_object_id(
             &alice.entity.base.id.to_string(),
             &bob.entity.base.id.to_string(),
