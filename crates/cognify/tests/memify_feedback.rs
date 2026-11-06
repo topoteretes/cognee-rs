@@ -7,18 +7,24 @@
 #![cfg(feature = "testing")]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use cognee_cognify::memify::feedback_weights::{
-    EDGE_ID_DELIMITER, FEEDBACK_WEIGHTS_APPLIED_KEY, apply_feedback_weights_pipeline,
+    EDGE_ID_DELIMITER, FEEDBACK_WEIGHTS_APPLIED_EDGE_IDS_KEY, FEEDBACK_WEIGHTS_APPLIED_KEY,
+    FEEDBACK_WEIGHTS_APPLIED_NODE_IDS_KEY, FEEDBACK_WEIGHTS_APPLIED_SCORE_KEY,
+    FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY, FEEDBACK_WEIGHTS_ATTEMPTS_KEY,
+    FEEDBACK_WEIGHTS_MAX_ATTEMPTS, FEEDBACK_WEIGHTS_PRUNED_IDS_KEY, FeedbackApplyResult,
+    FeedbackError, apply_feedback_weights, apply_feedback_weights_pipeline, extract_feedback_qas,
 };
 use cognee_graph::{
     EdgeData, EdgeKey, GraphDBResult, GraphDBTrait, GraphNode, MockGraphDB, NodeData,
 };
 use cognee_session::{
     FsSessionStore, SessionManager, SessionQAUpdate, SessionStore, UsedGraphElementIds,
+    qa_entry_uuid,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -380,6 +386,15 @@ async fn feedback_handles_edge_ids_on_mock() {
 struct EdgeStoreGraph {
     inner: MockGraphDB,
     edge_weights: Mutex<HashMap<EdgeKey, f64>>,
+    /// Edge writes to these keys report `false` (the graph has the edge but
+    /// the write did not succeed).
+    failing_edge_writes: Mutex<HashSet<EdgeKey>>,
+    /// Every edge read raises.
+    edge_reads_raise: AtomicBool,
+    /// Every node write batch, in call order.
+    node_write_log: Mutex<Vec<HashMap<String, f64>>>,
+    /// Every edge write batch, in call order.
+    edge_write_log: Mutex<Vec<HashMap<EdgeKey, f64>>>,
 }
 
 impl EdgeStoreGraph {
@@ -387,6 +402,10 @@ impl EdgeStoreGraph {
         Self {
             inner: MockGraphDB::new(),
             edge_weights: Mutex::new(HashMap::new()),
+            failing_edge_writes: Mutex::new(HashSet::new()),
+            edge_reads_raise: AtomicBool::new(false),
+            node_write_log: Mutex::new(Vec::new()),
+            edge_write_log: Mutex::new(Vec::new()),
         }
     }
 
@@ -407,6 +426,11 @@ impl GraphDBTrait for EdgeStoreGraph {
         &self,
         edge_keys: &[EdgeKey],
     ) -> GraphDBResult<HashMap<EdgeKey, f64>> {
+        if self.edge_reads_raise.load(Ordering::SeqCst) {
+            return Err(cognee_graph::GraphDBError::QueryError(
+                "edge read failed".to_string(),
+            ));
+        }
         // lock poison is unrecoverable
         let store = self.edge_weights.lock().unwrap();
         let mut out = HashMap::new();
@@ -423,13 +447,30 @@ impl GraphDBTrait for EdgeStoreGraph {
         updates: &HashMap<EdgeKey, f64>,
     ) -> GraphDBResult<HashMap<EdgeKey, bool>> {
         // lock poison is unrecoverable
+        self.edge_write_log.lock().unwrap().push(updates.clone());
+        // lock poison is unrecoverable
+        let failing = self.failing_edge_writes.lock().unwrap();
+        // lock poison is unrecoverable
         let mut store = self.edge_weights.lock().unwrap();
         let mut out = HashMap::new();
         for (k, w) in updates {
+            if failing.contains(k) {
+                out.insert(k.clone(), false);
+                continue;
+            }
             store.insert(k.clone(), *w);
             out.insert(k.clone(), true);
         }
         Ok(out)
+    }
+
+    async fn set_node_feedback_weights(
+        &self,
+        updates: &HashMap<String, f64>,
+    ) -> GraphDBResult<HashMap<String, bool>> {
+        // lock poison is unrecoverable
+        self.node_write_log.lock().unwrap().push(updates.clone());
+        self.inner.set_node_feedback_weights(updates).await
     }
 
     // --- everything below just delegates to the inner MockGraphDB ---
@@ -587,4 +628,604 @@ async fn feedback_edge_success_updates_weight_and_marks_applied() {
         meta.get(FEEDBACK_WEIGHTS_APPLIED_KEY),
         Some(&serde_json::Value::Bool(true))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Row bookkeeping (Python `test_apply_feedback_weights.py`): implicit ratings,
+// retries, the attempt cap, re-rating, pruned ids and graph errors.
+// ---------------------------------------------------------------------------
+
+const SESSION: &str = "sess-rows";
+
+fn edge_key() -> EdgeKey {
+    ("src".to_string(), "tgt".to_string(), "rel".to_string())
+}
+
+fn edge_id() -> String {
+    format!("src{EDGE_ID_DELIMITER}tgt{EDGE_ID_DELIMITER}rel")
+}
+
+struct Rows {
+    _dir: tempfile::TempDir,
+    store: Arc<dyn SessionStore>,
+    manager: Arc<SessionManager>,
+    owner: Uuid,
+    user_id: String,
+}
+
+impl Rows {
+    fn new() -> Self {
+        let (dir, store, manager) = make_store_and_manager();
+        let owner = Uuid::new_v4();
+        Self {
+            _dir: dir,
+            store,
+            manager,
+            owner,
+            user_id: owner.to_string(),
+        }
+    }
+
+    /// A QA entry using `node_ids` and `edge_ids`, with no rating yet.
+    async fn qa(&self, node_ids: &[&str], edge_ids: &[String]) -> String {
+        let qa_id = self
+            .store
+            .create_qa_entry(SESSION, Some(&self.user_id), "Q", "A", None)
+            .await
+            .unwrap();
+        self.manager
+            .update_qa(
+                Some(SESSION),
+                Some(&self.user_id),
+                &qa_id,
+                SessionQAUpdate {
+                    used_graph_element_ids: Some(Some(UsedGraphElementIds {
+                        node_ids: node_ids.iter().map(|id| id.to_string()).collect(),
+                        edge_ids: edge_ids.to_vec(),
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        qa_id
+    }
+
+    /// The user's own rating, resetting the done flag as `add_feedback` does.
+    async fn rate(&self, qa_id: &str, score: i32) {
+        self.manager
+            .add_feedback(
+                Some(SESSION),
+                Some(&self.user_id),
+                qa_id,
+                Some("text"),
+                Some(score),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The feedback row the next turn's analysis stores for `qa_id`.
+    async fn implicit_rating(&self, qa_id: &str, rating: i32) {
+        let row = json!({
+            "id": Uuid::new_v4().to_string(),
+            "kind": "feedback",
+            "raw_text": "thanks",
+            "referenced_qa_ids": [qa_id],
+            "referenced_qa_rating": rating,
+        });
+        self.manager
+            .create_session_context_entry(
+                Some(SESSION),
+                Some(&self.user_id),
+                row.as_object().unwrap().clone(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Rewrite the stored `qa_id` of `qa_id` to `foreign`, as a foreign writer
+    /// (Python accepts any caller-supplied `qa_id`) would have stored it.
+    /// Returns the id the store now reads the entry back as.
+    fn rewrite_qa_id(&self, qa_id: &str, foreign: &str) -> String {
+        let path = self
+            ._dir
+            .path()
+            .join(&self.user_id)
+            .join(format!("{SESSION}.json"));
+        let mut entries: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry["qa_id"] == json!(qa_id))
+            .unwrap();
+        entry["qa_id"] = json!(foreign);
+        std::fs::write(&path, serde_json::to_string_pretty(&entries).unwrap()).unwrap();
+        qa_entry_uuid(foreign).to_string()
+    }
+
+    async fn run(&self, graph: &dyn GraphDBTrait, alpha: f64) -> FeedbackApplyResult {
+        apply_feedback_weights_pipeline(
+            &[SESSION.to_string()],
+            self.owner,
+            alpha,
+            graph,
+            Arc::clone(&self.store),
+            Arc::clone(&self.manager),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn set_meta(&self, qa_id: &str, key: &str, value: Value) {
+        self.manager
+            .update_qa(
+                Some(SESSION),
+                Some(&self.user_id),
+                qa_id,
+                SessionQAUpdate {
+                    memify_metadata: Some(Some(HashMap::from([(key.to_string(), value)]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn meta(&self, qa_id: &str) -> HashMap<String, Value> {
+        self.store
+            .get_all_qa_entries(SESSION, Some(&self.user_id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.id.to_string() == qa_id)
+            .and_then(|entry| entry.memify_metadata)
+            .unwrap_or_default()
+    }
+}
+
+async fn node_weight(graph: &dyn GraphDBTrait, id: &str) -> f64 {
+    graph
+        .get_node_feedback_weights(&[id.to_string()])
+        .await
+        .unwrap()[id]
+}
+
+/// Nodes `n1` and edge `src|||tgt|||rel` at 0.5.
+async fn graph_with_n1_and_e1() -> EdgeStoreGraph {
+    let graph = EdgeStoreGraph::new();
+    add_node_with_weight(&graph.inner, "n1", 0.5).await;
+    graph.seed_edge(edge_key(), 0.5);
+    graph
+}
+
+fn approx(a: f64, b: f64) {
+    assert!((a - b).abs() < 1e-9, "expected {b}, got {a}");
+}
+
+#[tokio::test]
+async fn implicit_rating_moves_weights_at_half_alpha() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.implicit_rating(&qa, 5).await;
+
+    let result = rows.run(&graph, 0.1).await;
+
+    assert_eq!((result.processed, result.applied), (1, 1));
+    approx(node_weight(&graph, "n1").await, 0.525);
+    approx(graph.edge_weight(&edge_key()).unwrap(), 0.525);
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("implicit"));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SCORE_KEY], json!(5));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+}
+
+/// An implicit rating of a row whose `qa_id` was written by a foreign writer
+/// finds it however either side spelled the id; the bookkeeping is saved.
+async fn assert_foreign_qa_id_gets_its_implicit_rating(
+    foreign: impl Fn(&str) -> String,
+    referenced: impl Fn(&str) -> String,
+) {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    let stored = foreign(&qa);
+    let read_back = rows.rewrite_qa_id(&qa, &stored);
+    rows.implicit_rating(&referenced(&stored), 5).await;
+
+    let result = rows.run(&graph, 0.1).await;
+
+    assert_eq!((result.processed, result.applied), (1, 1), "{stored}");
+    approx(node_weight(&graph, "n1").await, 0.525);
+    let meta = rows.meta(&read_back).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("implicit"));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+
+    // Done: a second run neither re-collects nor moves it again.
+    let again = rows.run(&graph, 0.1).await;
+    assert_eq!(again.processed, 0);
+    approx(node_weight(&graph, "n1").await, 0.525);
+}
+
+#[tokio::test]
+async fn implicit_rating_finds_an_uppercase_uuid_qa_id() {
+    // Stored uppercase, referenced uppercase.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_uppercase, str::to_string).await;
+    // Stored uppercase, referenced in the canonical lowercase spelling.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_uppercase, str::to_lowercase).await;
+    // Stored lowercase, referenced uppercase and without hyphens.
+    assert_foreign_qa_id_gets_its_implicit_rating(str::to_string, |id| {
+        id.to_uppercase().replace('-', "")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn implicit_rating_finds_a_non_uuid_qa_id_written_by_python() {
+    assert_foreign_qa_id_gets_its_implicit_rating(
+        |_| "qa-python-turn-1".to_string(),
+        str::to_string,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_rating_moves_weights_at_full_alpha_and_beats_implicit() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[]).await;
+    rows.implicit_rating(&qa, 5).await;
+    rows.rate(&qa, 1).await;
+
+    rows.run(&graph, 0.1).await;
+
+    // Explicit score 1 at full alpha: 0.5 + 0.1 * (0 - 0.5).
+    approx(node_weight(&graph, "n1").await, 0.45);
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("explicit"));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SCORE_KEY], json!(1));
+}
+
+#[tokio::test]
+async fn explicit_rerating_after_an_implicit_one_reapplies_at_full_alpha() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[]).await;
+    rows.implicit_rating(&qa, 5).await;
+
+    rows.run(&graph, 0.1).await;
+    approx(node_weight(&graph, "n1").await, 0.525); // half alpha
+
+    // Same score, now explicit: new information, so it re-applies.
+    rows.rate(&qa, 5).await;
+    let second = rows.run(&graph, 0.1).await;
+
+    assert_eq!((second.processed, second.applied), (1, 1));
+    approx(node_weight(&graph, "n1").await, 0.5725); // full alpha from 0.525
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_SOURCE_KEY], json!("explicit"));
+    // Restarted: this is the first attempt of the new rating.
+    assert_eq!(meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY], json!(1));
+}
+
+#[tokio::test]
+async fn rerating_with_another_score_starts_the_row_over() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+    rows.run(&graph, 0.1).await;
+    approx(node_weight(&graph, "n1").await, 0.55);
+
+    rows.rate(&qa, 1).await;
+    let second = rows.run(&graph, 0.1).await;
+
+    assert_eq!(second.applied, 1);
+    approx(node_weight(&graph, "n1").await, 0.495);
+    approx(graph.edge_weight(&edge_key()).unwrap(), 0.495);
+    assert_eq!(
+        rows.meta(&qa).await[FEEDBACK_WEIGHTS_ATTEMPTS_KEY],
+        json!(1)
+    );
+}
+
+#[tokio::test]
+async fn the_same_rating_with_a_reset_flag_moves_nothing_again() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+    rows.run(&graph, 0.1).await;
+
+    rows.rate(&qa, 5).await; // resets the done flag, same score and source
+    let second = rows.run(&graph, 0.1).await;
+
+    assert_eq!((second.processed, second.applied), (1, 1));
+    assert_eq!(second.elements_moved, 0);
+    approx(node_weight(&graph, "n1").await, 0.55);
+    assert_eq!(graph.node_write_log.lock().unwrap().len(), 1);
+    assert_eq!(
+        rows.meta(&qa).await[FEEDBACK_WEIGHTS_APPLIED_KEY],
+        json!(true)
+    );
+}
+
+#[tokio::test]
+async fn a_retry_moves_only_the_ids_that_did_not_move() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    graph.failing_edge_writes.lock().unwrap().insert(edge_key());
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+
+    let first = rows.run(&graph, 0.1).await;
+    assert_eq!(
+        (first.processed, first.applied, first.elements_failed),
+        (1, 0, 1)
+    );
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(false));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_NODE_IDS_KEY], json!(["n1"]));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_EDGE_IDS_KEY], json!([]));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY], json!(1));
+
+    graph.failing_edge_writes.lock().unwrap().clear();
+    let second = rows.run(&graph, 0.1).await;
+    assert_eq!((second.processed, second.applied), (1, 1));
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+    assert_eq!(
+        meta[FEEDBACK_WEIGHTS_APPLIED_EDGE_IDS_KEY],
+        json!([edge_id()])
+    );
+    assert_eq!(meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY], json!(2));
+    // n1 moved once across both runs; the edge moved once, on the retry.
+    approx(node_weight(&graph, "n1").await, 0.55);
+    approx(graph.edge_weight(&edge_key()).unwrap(), 0.55);
+    assert_eq!(graph.node_write_log.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_row_is_done_after_the_attempt_cap() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    graph.failing_edge_writes.lock().unwrap().insert(edge_key());
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+
+    let mut processed = Vec::new();
+    for _ in 0..=FEEDBACK_WEIGHTS_MAX_ATTEMPTS {
+        let result = rows.run(&graph, 0.1).await;
+        assert_eq!(result.applied, 0);
+        processed.push(result.processed);
+    }
+
+    assert_eq!(processed, vec![1, 1, 1, 0], "the capped row is not retried");
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true)); // sealed by the cap
+    assert_eq!(
+        meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY],
+        json!(FEEDBACK_WEIGHTS_MAX_ATTEMPTS)
+    );
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_EDGE_IDS_KEY], json!([]));
+    approx(node_weight(&graph, "n1").await, 0.55);
+    assert_eq!(graph.node_write_log.lock().unwrap().len(), 1);
+    assert_eq!(
+        graph.edge_write_log.lock().unwrap().len(),
+        FEEDBACK_WEIGHTS_MAX_ATTEMPTS as usize
+    );
+}
+
+#[tokio::test]
+async fn pruned_ids_keep_the_row_pending_until_the_cap() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1", "n_deleted"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+
+    let mut results = Vec::new();
+    for _ in 0..=FEEDBACK_WEIGHTS_MAX_ATTEMPTS {
+        results.push(rows.run(&graph, 0.1).await);
+    }
+
+    // Each surviving element moved exactly once.
+    approx(node_weight(&graph, "n1").await, 0.55);
+    approx(graph.edge_weight(&edge_key()).unwrap(), 0.55);
+    assert_eq!(graph.node_write_log.lock().unwrap().len(), 1);
+    assert_eq!(graph.edge_write_log.lock().unwrap().len(), 1);
+    assert!(results.iter().all(|r| r.applied == 0));
+    let processed: Vec<usize> = results.iter().map(|r| r.processed).collect();
+    let skipped: Vec<usize> = results.iter().map(|r| r.skipped).collect();
+    assert_eq!(processed, vec![1, 1, 1, 0]);
+    assert_eq!(skipped, vec![0, 0, 0, 1]);
+    assert_eq!(results[0].elements_pruned, 1);
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_NODE_IDS_KEY], json!(["n1"]));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_PRUNED_IDS_KEY], json!(["n_deleted"]));
+}
+
+#[tokio::test]
+async fn ids_pruned_in_one_graph_are_consumed_by_the_graph_that_has_them() {
+    let rows = Rows::new();
+    let graph_a = EdgeStoreGraph::new(); // has n1, no edge
+    add_node_with_weight(&graph_a.inner, "n1", 0.5).await;
+    let graph_b = EdgeStoreGraph::new(); // has the edge, no n1
+    graph_b.seed_edge(edge_key(), 0.5);
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+
+    let first = rows.run(&graph_a, 0.1).await;
+    assert_eq!(first.applied, 0);
+    assert_eq!(
+        rows.meta(&qa).await[FEEDBACK_WEIGHTS_APPLIED_KEY],
+        json!(false)
+    );
+
+    let second = rows.run(&graph_b, 0.1).await;
+    assert_eq!(second.applied, 1);
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+    assert_eq!(
+        meta[FEEDBACK_WEIGHTS_APPLIED_EDGE_IDS_KEY],
+        json!([edge_id()])
+    );
+    approx(graph_b.edge_weight(&edge_key()).unwrap(), 0.55);
+    // n1 moved once, in graph A; B never re-applied it.
+    approx(node_weight(&graph_a, "n1").await, 0.55);
+    assert!(graph_b.node_write_log.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_graph_error_persists_the_bookkeeping_and_the_batch_continues() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    add_node_with_weight(&graph.inner, "n2", 0.5).await;
+    graph.edge_reads_raise.store(true, Ordering::SeqCst);
+    let q1 = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&q1, 5).await;
+    // q2 has no edge ids, so the raising edge read never runs for it.
+    let q2 = rows.qa(&["n2"], &[]).await;
+    rows.rate(&q2, 5).await;
+
+    let result = rows.run(&graph, 0.1).await;
+
+    // q1: the node write is persisted despite the raise; attempt counted; not done.
+    let meta = rows.meta(&q1).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(false));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_NODE_IDS_KEY], json!(["n1"]));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY], json!(1));
+    approx(node_weight(&graph, "n1").await, 0.55);
+    // q2 still processed: the batch survived q1's failure.
+    assert_eq!(
+        rows.meta(&q2).await[FEEDBACK_WEIGHTS_APPLIED_KEY],
+        json!(true)
+    );
+    assert_eq!((result.processed, result.applied), (1, 1));
+    assert_eq!((result.skipped, result.errored), (1, 1));
+    // q1's partial work still counts: n1 moved, the unattempted edge failed.
+    assert_eq!(result.done, 1); // q2 only; q1 is pending
+    assert_eq!(result.elements_moved, 2); // n1 and n2
+    assert_eq!(result.elements_failed, 1);
+
+    // A retry of q1 does not move n1 again; the unattempted edge keeps failing.
+    rows.run(&graph, 0.1).await;
+    approx(node_weight(&graph, "n1").await, 0.55);
+    assert_eq!(graph.node_write_log.lock().unwrap().len(), 2); // n1 once, n2 once
+    assert_eq!(
+        rows.meta(&q1).await[FEEDBACK_WEIGHTS_ATTEMPTS_KEY],
+        json!(2)
+    );
+}
+
+#[tokio::test]
+async fn repeated_graph_errors_trip_the_attempt_cap() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    graph.edge_reads_raise.store(true, Ordering::SeqCst);
+    let qa = rows.qa(&["n1"], &[edge_id()]).await;
+    rows.rate(&qa, 5).await;
+
+    let mut results = Vec::new();
+    for _ in 0..=FEEDBACK_WEIGHTS_MAX_ATTEMPTS {
+        results.push(rows.run(&graph, 0.1).await);
+    }
+
+    // The run that seals the row counts it done, though it raised.
+    let done: Vec<usize> = results.iter().map(|r| r.done).collect();
+    assert_eq!(done, vec![0, 0, 1, 0]);
+    let failed: Vec<usize> = results.iter().map(|r| r.elements_failed).collect();
+    assert_eq!(failed, vec![1, 1, 1, 0]);
+    let moved: Vec<usize> = results.iter().map(|r| r.elements_moved).collect();
+    assert_eq!(moved, vec![1, 0, 0, 0]);
+    assert!(results[..3].iter().all(|r| r.errored == 1));
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true)); // sealed by the cap
+    assert_eq!(
+        meta[FEEDBACK_WEIGHTS_ATTEMPTS_KEY],
+        json!(FEEDBACK_WEIGHTS_MAX_ATTEMPTS)
+    );
+}
+
+#[tokio::test]
+async fn a_rated_row_without_ids_is_marked_done_and_touches_no_weights() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&[], &[]).await;
+    rows.rate(&qa, 5).await;
+
+    let result = rows.run(&graph, 0.1).await;
+
+    assert_eq!(
+        (result.processed, result.applied, result.skipped),
+        (0, 0, 1)
+    );
+    assert_eq!(result.done, 1);
+    // Only the done marker is written, and `true`: the row is never rescanned.
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+    assert!(!meta.contains_key(FEEDBACK_WEIGHTS_ATTEMPTS_KEY));
+    approx(node_weight(&graph, "n1").await, 0.5);
+    approx(graph.edge_weight(&edge_key()).unwrap(), 0.5);
+}
+
+#[tokio::test]
+async fn a_write_only_touches_this_stages_keys() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    let qa = rows.qa(&["n1"], &[]).await;
+    rows.rate(&qa, 5).await;
+    // Another stage's flag starts false in the snapshot the scan reads...
+    rows.set_meta(&qa, "preference_weights_applied", json!(false))
+        .await;
+    let extraction = extract_feedback_qas(
+        &[SESSION.to_string()],
+        &rows.user_id,
+        &*rows.store,
+        &rows.manager,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        extraction.items[0].memify_metadata["preference_weights_applied"],
+        json!(false)
+    );
+    // ...and is set to true after the scan: writing the stale snapshot back
+    // would clobber it.
+    rows.set_meta(&qa, "preference_weights_applied", json!(true))
+        .await;
+
+    apply_feedback_weights(&extraction.items, 0.1, &rows.user_id, &graph, &rows.manager)
+        .await
+        .unwrap();
+
+    let meta = rows.meta(&qa).await;
+    assert_eq!(meta["preference_weights_applied"], json!(true));
+    assert_eq!(meta[FEEDBACK_WEIGHTS_APPLIED_KEY], json!(true));
+}
+
+#[tokio::test]
+async fn empty_session_ids_are_rejected() {
+    let rows = Rows::new();
+    let graph = graph_with_n1_and_e1().await;
+    for ids in [
+        vec![],
+        vec![String::new()],
+        vec![SESSION.to_string(), String::new()],
+    ] {
+        let result = apply_feedback_weights_pipeline(
+            &ids,
+            rows.owner,
+            0.1,
+            &graph,
+            Arc::clone(&rows.store),
+            Arc::clone(&rows.manager),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(FeedbackError::InvalidSessionIds)),
+            "{ids:?}"
+        );
+    }
 }

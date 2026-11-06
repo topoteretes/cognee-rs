@@ -28,8 +28,10 @@ pub use distill_sessions::{
     distill_sessions_in_knowledge_graph, render_lesson_document,
 };
 pub use feedback_weights::{
-    FEEDBACK_WEIGHTS_APPLIED_KEY, FeedbackApplyResult, FeedbackError,
-    apply_feedback_weights_pipeline, normalize_feedback_score, stream_update_weight,
+    FEEDBACK_WEIGHTS_APPLIED_KEY, FEEDBACK_WEIGHTS_MAX_ATTEMPTS, FeedbackApplyResult,
+    FeedbackError, FeedbackItem, FeedbackSource, IMPLICIT_FEEDBACK_ALPHA_FACTOR,
+    apply_feedback_weights, apply_feedback_weights_pipeline, extract_feedback_qas,
+    normalize_feedback_score, resolve_feedback, stream_update_weight,
 };
 pub use persist_sessions::{
     PersistSessionsError, PersistSessionsResult, USER_SESSIONS_NODE_SET,

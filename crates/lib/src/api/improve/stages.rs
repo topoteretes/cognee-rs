@@ -380,12 +380,23 @@ impl ImproveStages<'_> {
                     processed = r.processed,
                     applied = r.applied,
                     skipped = r.skipped,
+                    done = r.done,
+                    errored = r.errored,
+                    moved = r.elements_moved,
+                    pruned = r.elements_pruned,
+                    failed = r.elements_failed,
                     "improve: feedback weights applied"
                 );
                 StageResult::completed(STAGE).with_counts([
                     ("sessions", self.sessions()),
                     ("entries_processed", count(r.processed)),
                     ("entries_applied", count(r.applied)),
+                    ("entries_skipped", count(r.skipped)),
+                    ("entries_done", count(r.done)),
+                    ("entries_errored", count(r.errored)),
+                    ("elements_moved", count(r.elements_moved)),
+                    ("elements_pruned", count(r.elements_pruned)),
+                    ("elements_failed", count(r.elements_failed)),
                 ])
             }
             Err(e) => StageResult::errored(STAGE, e.to_string()),
