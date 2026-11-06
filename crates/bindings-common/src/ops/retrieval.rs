@@ -33,7 +33,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
-use cognee::search::{SearchRequest, SearchType};
+use cognee::search::{
+    NormalizedResult, RecallItem, RecallSource, SearchRequest, SearchResponse, SearchType,
+    build_graph_entry, only_context_system_prompt,
+};
 
 use crate::{HandleState, SdkError};
 
@@ -454,7 +457,11 @@ pub async fn search(
 ///
 /// `RecallResult` does not derive `Serialize`; JSON is hand-built with
 /// camelCase keys to match the TS wire shape: `items`, `searchTypeUsed`,
-/// `autoRouted`, `searchResponse`.
+/// `autoRouted`, `searchResponse`, `normalizedResults`.
+///
+/// `normalizedResults` is additive: one typed entry (kind, text, score,
+/// provenance metadata, raw; see [`normalize_recall_items`]) per graph-source
+/// item, in the same order. `items` is unchanged.
 ///
 /// `opts` may be `serde_json::Value::Null` when no options were provided.
 pub async fn recall(
@@ -531,12 +538,53 @@ pub async fn recall(
         None => serde_json::Value::Null,
     };
 
+    let normalized_results = match result.search_type_used {
+        Some(st) => serde_json::to_value(normalize_recall_items(
+            &result.items,
+            st,
+            result.search_response.as_ref(),
+        ))
+        .map_err(|e| {
+            SdkError::Runtime(format!(
+                "failed to serialize normalized recall results: {e}"
+            ))
+        })?,
+        None => json!([]),
+    };
+
     Ok(json!({
         "items": items,
         "searchTypeUsed": search_type_used,
         "autoRouted": result.auto_routed,
         "searchResponse": search_response,
+        "normalizedResults": normalized_results,
     }))
+}
+
+/// Normalize the graph-source recall items into typed entries.
+///
+/// Session, trace and system items are not retriever output and carry no
+/// search type, so they are skipped (Python's `normalize_search_payload`
+/// likewise only runs over search payloads). Dataset id/name are unknown at
+/// this layer and stay `None`. For an `only_context` recall the graph
+/// response's system prompt is stamped on each entry, as Python's
+/// `normalize_search_payload` (`normalize_search_payload.py:149-157`) and
+/// the HTTP `/api/v1/recall` route do.
+pub fn normalize_recall_items(
+    items: &[RecallItem],
+    search_type: SearchType,
+    search_response: Option<&SearchResponse>,
+) -> Vec<NormalizedResult> {
+    let system_prompt = search_response.and_then(only_context_system_prompt);
+    items
+        .iter()
+        .filter(|item| item.source == RecallSource::Graph)
+        .map(|item| {
+            let mut entry = build_graph_entry(item.content.clone(), search_type, None, None);
+            entry.system_prompt = system_prompt.clone();
+            entry
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -550,6 +598,64 @@ mod tests {
 
     const ID_A: &str = "11111111-1111-4111-8111-111111111111";
     const ID_B: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// `recall` adds `normalizedResults` next to the untouched raw `items`:
+    /// graph items are normalized with the used search type's kind, other
+    /// sources are skipped.
+    #[test]
+    fn normalize_recall_items_types_graph_items_only() {
+        let items = vec![
+            RecallItem {
+                source: RecallSource::Session,
+                content: json!({"question": "q"}),
+                score: 1.0,
+            },
+            RecallItem {
+                source: RecallSource::Graph,
+                content: json!({"id": "c1", "document_id": "d1", "text": "body", "score": 0.5}),
+                score: 1.0,
+            },
+        ];
+        let normalized = normalize_recall_items(&items, SearchType::Chunks, None);
+        assert_eq!(normalized.len(), 1);
+        let v = serde_json::to_value(&normalized[0]).unwrap();
+        assert_eq!(v["kind"], "chunk");
+        assert_eq!(v["search_type"], "CHUNKS");
+        assert_eq!(v["text"], "body");
+        assert_eq!(v["score"], 0.5);
+        assert_eq!(v["metadata"], json!({"data_id": "d1", "chunk_id": "c1"}));
+        assert_eq!(v["source"], "graph");
+        assert!(v["system_prompt"].is_null());
+    }
+
+    /// An `only_context` graph response (user prompt set) stamps its system
+    /// prompt on the normalized entry, like Python's `normalize_search_payload`.
+    #[test]
+    fn normalize_recall_items_carries_only_context_system_prompt() {
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            cognee::search::SearchOutput::Text("rendered user prompt".into()),
+        );
+        response.user_prompt = Some("rendered user prompt".into());
+        response.system_prompt = Some("system message".into());
+        let items = vec![RecallItem {
+            source: RecallSource::Graph,
+            content: json!("rendered user prompt"),
+            score: 1.0,
+        }];
+        let normalized =
+            normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response));
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].text, "rendered user prompt");
+        assert_eq!(
+            normalized[0].system_prompt.as_deref(),
+            Some("system message")
+        );
+        assert_eq!(
+            normalized[0].kind,
+            cognee::search::RecallResultKind::GraphCompletion
+        );
+    }
 
     /// `TRIPLET_COMPLETION` was removed (SDK-1039); it is an unknown type, and
     /// the error does not list it among the valid values.

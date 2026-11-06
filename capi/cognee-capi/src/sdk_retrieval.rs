@@ -21,7 +21,7 @@
 //!
 //! `RecallResult` does NOT derive `Serialize` (derives only `Debug, Clone`) —
 //! hand-build JSON with camelCase keys: `items`, `searchTypeUsed`, `autoRouted`,
-//! `searchResponse`.
+//! `searchResponse`, `normalizedResults`.
 
 use std::ffi::c_char;
 use std::sync::Arc;
@@ -134,6 +134,7 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "searchTypeUsed" — null or SCREAMING_SNAKE_CASE string
 ///   "autoRouted"     — boolean
 ///   "searchResponse" — null or SearchResponse value
+///   "normalizedResults" — array of typed entries, one per graph item
 ///
 /// # Safety
 /// `sdk` must be a valid `CgSdk*` or NULL.  `query` must be a valid

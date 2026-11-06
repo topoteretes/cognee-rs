@@ -483,7 +483,12 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *       "items":          [...],           // array of recall items
  *       "searchTypeUsed": null | "...",    // SCREAMING_SNAKE_CASE or null
  *       "autoRouted":     true | false,
- *       "searchResponse": null | {...}     // SearchResponse or null
+ *       "searchResponse": null | {...},    // SearchResponse or null
+ *       "normalizedResults": [...]         // one typed entry per graph item:
+ *                                          // {kind, search_type, text,
+ *                                          //  system_prompt, score, dataset_id,
+ *                                          //  dataset_name, metadata, raw,
+ *                                          //  structured, source: "graph"}
  *     }
  *
  * SearchType strings (SCREAMING_SNAKE_CASE — all 17 valid values):

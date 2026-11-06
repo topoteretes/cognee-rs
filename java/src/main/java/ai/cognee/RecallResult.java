@@ -29,6 +29,13 @@ public final class RecallResult {
         return root.path("autoRouted").asBoolean(false);
     }
 
+    /** One normalized entry per graph item in {@link #items()}, in order (open-ended
+     *  array of objects with snake_case keys: kind, search_type, text, system_prompt,
+     *  score, dataset_id, dataset_name, metadata, raw, structured, source). */
+    public JsonNode normalizedResults() {
+        return root.path("normalizedResults");
+    }
+
     /** The nested search response, or null if absent. */
     public SearchResponse searchResponse() {
         JsonNode n = root.path("searchResponse");

@@ -131,6 +131,8 @@ impl PyCognee {
     /// - ``searchTypeUsed`` — ``None`` or the SCREAMING_SNAKE_CASE search type string
     /// - ``autoRouted`` — bool indicating whether auto-routing was used
     /// - ``searchResponse`` — ``None`` or the raw ``SearchResponse`` value
+    /// - ``normalizedResults`` — typed entries (kind, text, score, metadata, raw)
+    ///   for the graph items, in order
     ///
     /// Supported ``opts`` keys (both ``snake_case`` and ``camelCase`` accepted):
     ///

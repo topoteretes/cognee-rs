@@ -10,6 +10,8 @@ pub mod observability;
 pub mod orchestration;
 /// Query router that maps natural-language queries to `SearchType`s.
 pub mod query_router;
+/// Normalization of retriever output into recall's typed result shape.
+pub mod recall_normalize;
 /// `RecallScope` and related types for scoping search results.
 pub mod recall_scope;
 /// Individual retriever implementations for each `SearchType`.
@@ -34,6 +36,9 @@ pub use orchestration::{
 pub use query_router::{
     ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, constrain, default_route,
     pinned_route, route_query,
+};
+pub use recall_normalize::{
+    NormalizedResult, RecallResultKind, build_graph_entry, only_context_system_prompt,
 };
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
