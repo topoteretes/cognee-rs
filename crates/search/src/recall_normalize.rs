@@ -348,15 +348,24 @@ pub fn item_dataset_id(value: &Value) -> Option<uuid::Uuid> {
 /// The dataset of each of a response's `entries` (its graph output elements,
 /// in order): the element's own membership ([`item_dataset_id`]), else — when
 /// the response lists exactly one dataset per element, as a per-dataset
-/// fan-out of completion answers does — the dataset at the same position.
-/// `None` where neither recovers it.
+/// fan-out of completion answers does — the dataset at the same position,
+/// else the response's dataset when it searched exactly one (every element
+/// then came from it). `None` where none of these recovers it.
 pub fn entry_dataset_ids(entries: &[&Value], response: &SearchResponse) -> Vec<Option<uuid::Uuid>> {
     let datasets = response.datasets.as_deref().unwrap_or_default();
     let aligned = datasets.len() == entries.len();
+    let only = match datasets {
+        [only] => Some(*only),
+        _ => None,
+    };
     entries
         .iter()
         .enumerate()
-        .map(|(index, entry)| item_dataset_id(entry).or_else(|| aligned.then(|| datasets[index])))
+        .map(|(index, entry)| {
+            item_dataset_id(entry)
+                .or_else(|| aligned.then(|| datasets[index]))
+                .or(only)
+        })
         .collect()
 }
 
@@ -472,6 +481,19 @@ mod tests {
             // Own membership wins over position.
             let item = json!({"dataset_id": DS_B});
             assert_eq!(entry_dataset_ids(&[&item], &response), [Some(b)]);
+
+            // A response over one dataset owns every element it returned.
+            response.datasets = Some(vec![a]);
+            assert_eq!(
+                entry_dataset_ids(&[&first, &second], &response),
+                [Some(a), Some(a)]
+            );
+            // No datasets on the response: only membership recovers one.
+            response.datasets = None;
+            assert_eq!(
+                entry_dataset_ids(&[&first, &item], &response),
+                [None, Some(b)]
+            );
         }
     }
     use serde_json::json;

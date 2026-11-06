@@ -479,6 +479,11 @@ export interface CogneeNormalizedResult {
   text: string;
   system_prompt: string | null;
   score: number | null;
+  /**
+   * The dataset the entry came from and its name: `null` when it cannot be
+   * recovered (a shared-store recall over several datasets whose answers
+   * carry no dataset membership).
+   */
   dataset_id: string | null;
   dataset_name: string | null;
   /** Provenance: `data_id`, `chunk_id`, `chunk_index`, `document_name` when present. */
