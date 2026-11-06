@@ -447,6 +447,18 @@ impl SearchRetriever for GraphCompletionDecompositionRetriever {
         Ok(merged)
     }
 
+    /// The triplets rendered into this graph completion's context, as graph
+    /// node and edge references (Python
+    /// `GraphCompletionRetriever.get_context_evidence`, inherited by every
+    /// graph completion variant, `graph_completion_retriever.py:406`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<crate::types::EvidenceReference> {
+        crate::utils::evidence::graph_context_evidence(context, dataset_id)
+    }
+
     async fn completion_messages(
         &self,
         query: &str,

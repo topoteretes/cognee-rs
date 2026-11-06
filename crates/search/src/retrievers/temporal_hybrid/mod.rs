@@ -564,6 +564,20 @@ impl SearchRetriever for TemporalHybridRetriever {
             .await
     }
 
+    /// Plain hybrid's citations: Python's `TemporalHybridRetriever` inherits
+    /// `HybridRetriever.append_references` (`cite_hybrid_completions`) and
+    /// the factory passes it `include_references`
+    /// (`get_search_type_retriever_instance.py:383`). The reranked context
+    /// keeps hybrid's item shape, so the chunk lane is cited the same way.
+    fn append_references(
+        &self,
+        output: SearchOutput,
+        context: &SearchContext,
+        params: &SearchParams,
+    ) -> SearchOutput {
+        self.hybrid.append_references(output, context, params)
+    }
+
     /// TEMPORAL answers one query at a time (Python raises
     /// `NotImplementedError` for `query_batch`).
     async fn get_context_batch(

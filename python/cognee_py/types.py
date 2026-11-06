@@ -120,6 +120,9 @@ class SearchOpts(TypedDict, total=False):
     #: With ``neighborhood_depth``: at most this many hits to expand from,
     #: nearest first (all of them when omitted).
     neighborhood_seed_top_k: int
+    #: Completion searches attach structured ``evidence`` references (and RAG
+    #: text answers gain an ``Evidence:`` block). Default ``False``.
+    include_references: bool
     user_id: str
 
 
@@ -136,6 +139,9 @@ class RecallOpts(TypedDict, total=False):
     scope: Union[str, list[str]]
     neighborhood_depth: int
     neighborhood_seed_top_k: int
+    #: As ``SearchOpts.include_references``; evidence lands in each result's
+    #: ``metadata["evidence"]``.
+    include_references: bool
 
 
 class RememberOpts(TypedDict, total=False):

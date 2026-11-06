@@ -279,6 +279,12 @@ export interface CogneeSearchOptions {
    */
   neighborhoodSeedTopK?: number;
   /**
+   * Completion searches attach structured `evidence` references (the chunks,
+   * graph nodes and edges placed in context; snake_case keys) to the response,
+   * and RAG text answers gain an `Evidence:` block. Default `false`.
+   */
+  includeReferences?: boolean;
+  /**
    * Per-retriever knobs, forwarded verbatim to the retriever the search
    * resolves to. Keys are snake_case and retriever-defined; a key the chosen
    * retriever does not know is ignored rather than rejected.
@@ -326,6 +332,11 @@ export interface CogneeRecallOptions {
   neighborhoodDepth?: number;
   /** As `CogneeSearchOptions.neighborhoodSeedTopK`. */
   neighborhoodSeedTopK?: number;
+  /**
+   * As `CogneeSearchOptions.includeReferences`; evidence lands in each
+   * normalized result's `metadata.evidence`.
+   */
+  includeReferences?: boolean;
 }
 
 /**
@@ -468,6 +479,11 @@ export interface CogneeNormalizedResult {
   text: string;
   system_prompt: string | null;
   score: number | null;
+  /**
+   * The dataset the entry came from and its name: `null` when it cannot be
+   * recovered (a shared-store recall over several datasets whose answers
+   * carry no dataset membership).
+   */
   dataset_id: string | null;
   dataset_name: string | null;
   /** Provenance: `data_id`, `chunk_id`, `chunk_index`, `document_name` when present. */

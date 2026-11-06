@@ -122,6 +122,8 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             auto_feedback_detection: None,
             neighborhood_depth: args.neighborhood_depth.map(usize::from),
             neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),
+            // The CLI prints the answer text only; it has no flag for references.
+            include_references: false,
         };
 
         let response = orchestrator

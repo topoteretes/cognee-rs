@@ -36,6 +36,12 @@ public final class SearchOptions extends Options {
      */
     public SearchOptions neighborhoodSeedTopK(int n) { put("neighborhoodSeedTopK", n); return this; }
     /**
+     * Completion searches attach structured {@code evidence} references (the
+     * chunks, graph nodes and edges placed in context) to the response, and
+     * RAG text answers gain an {@code Evidence:} block. Default false.
+     */
+    public SearchOptions includeReferences(boolean enabled) { put("includeReferences", enabled); return this; }
+    /**
      * Per-retriever knobs, forwarded verbatim to the retriever the search
      * resolves to. Keys are snake_case and retriever-defined; a key the chosen
      * retriever does not know is ignored, not an error.

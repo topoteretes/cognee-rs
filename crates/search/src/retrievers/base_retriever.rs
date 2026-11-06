@@ -3,8 +3,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cognee_llm::Message;
 use cognee_session::SessionContext;
+use uuid::Uuid;
 
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
+use crate::types::{
+    EvidenceReference, SearchContext, SearchError, SearchOutput, SearchParams, SearchType,
+};
 
 pub type SearchRetrieverRef = Arc<dyn SearchRetriever>;
 
@@ -173,6 +176,36 @@ pub trait SearchRetriever: Send + Sync {
         _params: &SearchParams,
     ) -> SearchContext {
         raw.or(conversational).unwrap_or_default()
+    }
+
+    /// Structured identifiers for the artifacts `context` placed into the
+    /// completion, for `include_references` (Python's
+    /// `BaseRetriever.get_context_evidence`, `base_retriever.py:123`).
+    ///
+    /// Pure and synchronous: it only describes the context already
+    /// retrieved. The default reports no evidence, so retrievers (community
+    /// ones included) opt in. `dataset_id` is the one dataset the run was
+    /// scoped to, when exactly one.
+    fn context_evidence(
+        &self,
+        _context: &SearchContext,
+        _dataset_id: Option<Uuid>,
+    ) -> Vec<EvidenceReference> {
+        Vec::new()
+    }
+
+    /// Apply this retriever's own reference text to a finished answer when
+    /// `params.include_references` is on (Python's
+    /// `BaseRetriever.append_references`, `base_retriever.py:119`). The
+    /// default leaves the answer unchanged; only text answers are ever
+    /// altered.
+    fn append_references(
+        &self,
+        output: SearchOutput,
+        _context: &SearchContext,
+        _params: &SearchParams,
+    ) -> SearchOutput {
+        output
     }
 
     /// Process multiple queries in sequence and return their contexts.

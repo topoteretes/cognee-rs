@@ -30,4 +30,6 @@ public final class RecallOptions extends Options {
     public RecallOptions neighborhoodDepth(int n) { put("neighborhoodDepth", n); return this; }
     /** As {@link SearchOptions#neighborhoodSeedTopK}. */
     public RecallOptions neighborhoodSeedTopK(int n) { put("neighborhoodSeedTopK", n); return this; }
+    /** As {@link SearchOptions#includeReferences}; evidence lands in each result's {@code metadata.evidence}. */
+    public RecallOptions includeReferences(boolean enabled) { put("includeReferences", enabled); return this; }
 }

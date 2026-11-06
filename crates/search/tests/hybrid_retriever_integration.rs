@@ -291,6 +291,7 @@ fn completion_request(query: &str, session_id: &str) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        include_references: false,
     }
 }
 

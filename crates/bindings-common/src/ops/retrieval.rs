@@ -27,6 +27,7 @@
 //! JSON is hand-built with camelCase keys: `items`, `searchTypeUsed`,
 //! `autoRouted`, `searchResponse`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::json;
@@ -35,7 +36,7 @@ use uuid::Uuid;
 use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::{
     NormalizedResult, RecallItem, RecallSource, SearchRequest, SearchResponse, SearchType,
-    build_graph_entry, only_context_system_prompt,
+    build_graph_entry, entry_dataset_ids, entry_evidence, only_context_system_prompt,
 };
 
 use crate::{HandleState, SdkError};
@@ -177,6 +178,7 @@ pub struct RecallArgs {
     pub scope: Option<Vec<cognee::api::RecallScope>>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    pub include_references: bool,
 }
 
 /// Parse camelCase recall `opts` into [`RecallArgs`].
@@ -228,6 +230,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     // passed as-is — recall() treats Some(vec![Auto]) and None identically.
     let scope = if scope.is_empty() { None } else { Some(scope) };
     let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
+    let include_references = parse_include_references(opts);
 
     Ok(RecallArgs {
         query_type,
@@ -240,7 +243,17 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         scope,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references,
     })
+}
+
+/// `includeReferences`: attach structured evidence references (and, for RAG,
+/// the Evidence text block) to a completion search or recall. Python's
+/// `include_references`, default `False`; anything but a JSON `true` is off.
+fn parse_include_references(opts: &serde_json::Value) -> bool {
+    opts.get("includeReferences")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// `neighborhoodDepth` / `neighborhoodSeedTopK`: the k-hop graph projection
@@ -394,6 +407,7 @@ pub fn build_search_request(
         auto_feedback_detection,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references: parse_include_references(opts),
     })
 }
 
@@ -484,6 +498,7 @@ pub async fn recall(
         scope: scope_opt,
         neighborhood_depth,
         neighborhood_seed_top_k,
+        include_references,
     } = build_recall_args(opts)?;
     let session_id: Option<&str> = session_id_owned.as_deref();
 
@@ -512,6 +527,7 @@ pub async fn recall(
             tenant_id,
             neighborhood_depth,
             neighborhood_seed_top_k,
+            include_references,
             ..Default::default()
         }),
     )
@@ -538,11 +554,18 @@ pub async fn recall(
         None => serde_json::Value::Null,
     };
 
+    let dataset_names = recall_dataset_names(
+        svc.database.as_ref(),
+        &result.items,
+        result.search_response.as_ref(),
+    )
+    .await;
     let normalized_results = match result.search_type_used {
         Some(st) => serde_json::to_value(normalize_recall_items(
             &result.items,
             st,
             result.search_response.as_ref(),
+            &dataset_names,
         ))
         .map_err(|e| {
             SdkError::Runtime(format!(
@@ -561,27 +584,103 @@ pub async fn recall(
     }))
 }
 
+/// The graph-source items of a recall, in order.
+fn graph_items(items: &[RecallItem]) -> Vec<&RecallItem> {
+    items
+        .iter()
+        .filter(|item| item.source == RecallSource::Graph)
+        .collect()
+}
+
+/// The dataset of each graph-source item ([`entry_dataset_ids`]); all `None`
+/// without a search response.
+fn graph_item_datasets(
+    graph_items: &[&RecallItem],
+    search_response: Option<&SearchResponse>,
+) -> Vec<Option<Uuid>> {
+    match search_response {
+        Some(response) => {
+            let contents: Vec<&serde_json::Value> =
+                graph_items.iter().map(|item| &item.content).collect();
+            entry_dataset_ids(&contents, response)
+        }
+        None => vec![None; graph_items.len()],
+    }
+}
+
+/// The names of the datasets the graph-source items came from, for
+/// `normalizedResults`' `dataset_name` (Python's per-dataset payload carries
+/// it). A lookup failure only leaves the names out: the recall already
+/// succeeded, and the ids are still reported.
+async fn recall_dataset_names(
+    database: &dyn cognee::database::RelationalDb,
+    items: &[RecallItem],
+    search_response: Option<&SearchResponse>,
+) -> HashMap<Uuid, String> {
+    let mut ids: Vec<Uuid> = graph_item_datasets(&graph_items(items), search_response)
+        .into_iter()
+        .flatten()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+    match cognee::database::IngestDb::get_datasets_by_ids(database, &ids).await {
+        Ok(datasets) => datasets.into_iter().map(|ds| (ds.id, ds.name)).collect(),
+        Err(error) => {
+            tracing::warn!(%error, "recall: dataset names for normalizedResults not resolved");
+            HashMap::new()
+        }
+    }
+}
+
 /// Normalize the graph-source recall items into typed entries.
 ///
 /// Session, trace and system items are not retriever output and carry no
 /// search type, so they are skipped (Python's `normalize_search_payload`
-/// likewise only runs over search payloads). Dataset id/name are unknown at
-/// this layer and stay `None`. For an `only_context` recall the graph
+/// likewise only runs over search payloads). Each entry's `dataset_id` is
+/// the dataset it came from ([`entry_dataset_ids`]: its own membership, its
+/// position in a per-dataset fan-out, or the response's only dataset) and
+/// its `dataset_name` that dataset's name in `dataset_names`; both stay
+/// `None` where the dataset cannot be recovered (a shared-store search over
+/// several datasets whose answers carry no membership). For an `only_context` recall the graph
 /// response's system prompt is stamped on each entry, as Python's
 /// `normalize_search_payload` (`normalize_search_payload.py:149-157`) and
 /// the HTTP `/api/v1/recall` route do.
+///
+/// `metadata.evidence` is split per dataset, as Python attaches each
+/// dataset's payload evidence to that payload's entries only: an entry of a
+/// response merged over several datasets keeps only the references stamped
+/// with its own dataset ([`entry_evidence`]), the dataset being recovered from
+/// the entry's own membership or its position ([`entry_dataset_ids`]). Where
+/// it cannot be recovered the entry keeps the whole list.
 pub fn normalize_recall_items(
     items: &[RecallItem],
     search_type: SearchType,
     search_response: Option<&SearchResponse>,
+    dataset_names: &HashMap<Uuid, String>,
 ) -> Vec<NormalizedResult> {
     let system_prompt = search_response.and_then(only_context_system_prompt);
-    items
-        .iter()
-        .filter(|item| item.source == RecallSource::Graph)
-        .map(|item| {
-            let mut entry = build_graph_entry(item.content.clone(), search_type, None, None);
+    let graph_items = graph_items(items);
+    let entry_datasets = graph_item_datasets(&graph_items, search_response);
+    let (evidence, dataset_count) = match search_response {
+        Some(response) => (
+            response.evidence.as_slice(),
+            response.datasets.as_ref().map_or(0, Vec::len),
+        ),
+        None => (&[][..], 0),
+    };
+    graph_items
+        .into_iter()
+        .zip(entry_datasets)
+        .map(|(item, dataset)| {
+            let name = dataset.and_then(|id| dataset_names.get(&id).cloned());
+            let dataset = dataset.map(|id| id.to_string());
+            let mut entry =
+                build_graph_entry(item.content.clone(), search_type, dataset.clone(), name);
             entry.system_prompt = system_prompt.clone();
+            entry.attach_evidence(&entry_evidence(evidence, dataset_count, dataset.as_deref()));
             entry
         })
         .collect()
@@ -616,7 +715,7 @@ mod tests {
                 score: 1.0,
             },
         ];
-        let normalized = normalize_recall_items(&items, SearchType::Chunks, None);
+        let normalized = normalize_recall_items(&items, SearchType::Chunks, None, &HashMap::new());
         assert_eq!(normalized.len(), 1);
         let v = serde_json::to_value(&normalized[0]).unwrap();
         assert_eq!(v["kind"], "chunk");
@@ -643,8 +742,12 @@ mod tests {
             content: json!("rendered user prompt"),
             score: 1.0,
         }];
-        let normalized =
-            normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response));
+        let normalized = normalize_recall_items(
+            &items,
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
         assert_eq!(normalized.len(), 1);
         assert_eq!(normalized[0].text, "rendered user prompt");
         assert_eq!(
@@ -654,6 +757,133 @@ mod tests {
         assert_eq!(
             normalized[0].kind,
             cognee::search::RecallResultKind::GraphCompletion
+        );
+    }
+
+    /// A recall merged over two datasets attaches each answer only its own
+    /// dataset's evidence (Python's per-dataset payloads); a response over one
+    /// dataset shares its list with every entry.
+    #[test]
+    fn normalize_recall_items_splits_evidence_per_dataset() {
+        use cognee::search::{EvidenceKind, EvidenceReference};
+        let stamped = |id: &str, dataset: &str| {
+            let mut reference = EvidenceReference::new(EvidenceKind::Segment, id);
+            reference.dataset_id = Some(dataset.to_string());
+            reference
+        };
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            cognee::search::SearchOutput::Texts(vec!["a".into(), "b".into()]),
+        );
+        response.datasets = Some(vec![
+            Uuid::parse_str(ID_A).unwrap(),
+            Uuid::parse_str(ID_B).unwrap(),
+        ]);
+        response.evidence = vec![stamped("chunk-a", ID_A), stamped("chunk-b", ID_B)];
+        let items: Vec<RecallItem> = ["a", "b"]
+            .into_iter()
+            .map(|text| RecallItem {
+                source: RecallSource::Graph,
+                content: json!(text),
+                score: 1.0,
+            })
+            .collect();
+        let evidence_ids = |entry: &NormalizedResult| -> Vec<String> {
+            entry.metadata["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["artifact_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        let normalized = normalize_recall_items(
+            &items,
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
+        assert_eq!(evidence_ids(&normalized[0]), ["chunk-a"]);
+        assert_eq!(evidence_ids(&normalized[1]), ["chunk-b"]);
+
+        // Unaligned (one answer, two datasets): the dataset is unknown, so
+        // the entry keeps every reference rather than none.
+        let normalized = normalize_recall_items(
+            &items[..1],
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
+        assert_eq!(evidence_ids(&normalized[0]), ["chunk-a", "chunk-b"]);
+    }
+
+    /// Each entry names the dataset it came from, as Python's per-dataset
+    /// payload does: by position in a per-dataset fan-out, by its own
+    /// membership, or as the response's only dataset. The name comes from
+    /// the looked-up names; an id without one keeps a `null` name.
+    #[test]
+    fn normalize_recall_items_name_each_entrys_dataset() {
+        let (a, b) = (
+            Uuid::parse_str(ID_A).unwrap(),
+            Uuid::parse_str(ID_B).unwrap(),
+        );
+        let names = HashMap::from([(a, "alpha".to_string())]);
+        let graph = |content: serde_json::Value| RecallItem {
+            source: RecallSource::Graph,
+            content,
+            score: 1.0,
+        };
+        let dataset_of =
+            |entry: &NormalizedResult| (entry.dataset_id.clone(), entry.dataset_name.clone());
+
+        // Per-dataset fan-out of answers: by position.
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            cognee::search::SearchOutput::Texts(vec!["a".into(), "b".into()]),
+        );
+        response.datasets = Some(vec![a, b]);
+        let items = [graph(json!("a")), graph(json!("b"))];
+        let normalized =
+            normalize_recall_items(&items, SearchType::GraphCompletion, Some(&response), &names);
+        assert_eq!(
+            dataset_of(&normalized[0]),
+            (Some(ID_A.to_string()), Some("alpha".to_string()))
+        );
+        assert_eq!(dataset_of(&normalized[1]), (Some(ID_B.to_string()), None));
+        let wire = serde_json::to_value(&normalized[0]).unwrap();
+        assert_eq!(wire["dataset_id"], ID_A);
+        assert_eq!(wire["dataset_name"], "alpha");
+
+        // Items carrying their own membership.
+        let items = [graph(json!({"id": "c1", "text": "t", "dataset_id": ID_A}))];
+        let normalized =
+            normalize_recall_items(&items, SearchType::Chunks, Some(&response), &names);
+        assert_eq!(
+            dataset_of(&normalized[0]),
+            (Some(ID_A.to_string()), Some("alpha".to_string()))
+        );
+
+        // One dataset searched: every entry is from it.
+        response.datasets = Some(vec![a]);
+        let items = [
+            graph(json!({"id": "c1", "text": "t"})),
+            graph(json!({"id": "c2", "text": "u"})),
+        ];
+        let normalized =
+            normalize_recall_items(&items, SearchType::Chunks, Some(&response), &names);
+        assert!(
+            normalized
+                .iter()
+                .all(|entry| dataset_of(entry)
+                    == (Some(ID_A.to_string()), Some("alpha".to_string())))
+        );
+
+        // Nothing recovers it: both stay null.
+        let normalized = normalize_recall_items(&items, SearchType::Chunks, None, &names);
+        assert!(
+            normalized
+                .iter()
+                .all(|entry| dataset_of(entry) == (None, None))
         );
     }
 
@@ -1021,5 +1251,72 @@ mod tests {
         // A missing `scope` normalizes to `[Auto]`, which recall() treats the
         // same as `None`; it must not arrive as an empty vec.
         assert_eq!(args.scope, Some(vec![cognee::api::RecallScope::Auto]));
+    }
+
+    /// `includeReferences` reaches both ops, defaults off, and a non-boolean
+    /// is off rather than an error (the other boolean opts read the same way).
+    #[test]
+    fn include_references_is_threaded_through_search_and_recall() {
+        let on = json!({ "includeReferences": true });
+        assert!(
+            build_search_request("q", &on, Uuid::new_v4())
+                .unwrap()
+                .include_references
+        );
+        assert!(build_recall_args(&on).unwrap().include_references);
+
+        for off in [
+            json!({}),
+            json!({ "includeReferences": false }),
+            json!({ "includeReferences": "yes" }),
+        ] {
+            assert!(
+                !build_search_request("q", &off, Uuid::new_v4())
+                    .unwrap()
+                    .include_references
+            );
+            assert!(!build_recall_args(&off).unwrap().include_references);
+        }
+    }
+
+    /// Recall's normalized entries carry the response's evidence as
+    /// `metadata.evidence` (snake_case), and only when there is any.
+    #[test]
+    fn normalized_recall_entries_carry_the_evidence() {
+        use cognee::search::{EvidenceKind, EvidenceReference, SearchOutput};
+
+        let items = vec![RecallItem {
+            source: RecallSource::Graph,
+            content: json!("an answer"),
+            score: 1.0,
+        }];
+        let mut response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            SearchOutput::Text("x".into()),
+        );
+
+        let bare = normalize_recall_items(
+            &items,
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
+        assert!(!bare[0].metadata.contains_key("evidence"));
+
+        let mut reference = EvidenceReference::new(EvidenceKind::GraphNode, "node-a");
+        reference.label = Some("Alpha".into());
+        response.evidence = vec![reference];
+        let entries = normalize_recall_items(
+            &items,
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
+        let evidence = entries[0].metadata["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["kind"], "graph_node");
+        assert_eq!(evidence[0]["artifact_id"], "node-a");
+        assert_eq!(evidence[0]["label"], "Alpha");
+        assert!(evidence[0].get("artifactId").is_none());
     }
 }
