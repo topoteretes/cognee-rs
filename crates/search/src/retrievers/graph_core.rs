@@ -308,7 +308,8 @@ pub(crate) async fn complete(
             .map_err(|e| SearchError::LlmError(e.to_string()))?;
         Ok(SearchOutput::Structured(structured_value))
     } else {
-        let completion = llm.generate(messages, generation_options).await?;
+        // The turn's answer: streams into a promoted token sink, if any.
+        let completion = cognee_llm::generate_answer(llm, messages, generation_options).await?;
         Ok(SearchOutput::Text(completion.content))
     }
 }

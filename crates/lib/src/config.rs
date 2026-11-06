@@ -881,6 +881,7 @@ impl Settings {
                 record_path: llm.record_path.clone(),
                 debug_requests: llm.debug_requests,
                 streaming: llm.streaming,
+                answer_streaming: llm.answer_streaming,
             },
         }
     }

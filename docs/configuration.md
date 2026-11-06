@@ -286,6 +286,7 @@ for the adapter.
 | `LLM_STRUCTURED_OUTPUT_MODE` | `llm.structured_output_mode` (`llm_structured_output_mode`) | `auto` |
 | `LLM_TEMPERATURE` | `llm.temperature` (`llm_temperature`) | *unset — no `temperature` is sent* |
 | `LLM_STREAMING` | `llm.streaming` (`llm_streaming`) | `false` (accepted for Python parity; no effect, see below) |
+| `LLM_ANSWER_STREAMING` | `llm.answer_streaming` (`llm_answer_streaming`) | `false` (stream the plain-text answer of a concurrent session turn into a token sink; see below) |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm.max_completion_tokens` (`llm_max_completion_tokens`) | `16384` |
 | `LLM_ARGS` | `llm.args` (`llm_args`) | _(empty)_ |
 | `LLM_MAX_RETRIES` | `llm.max_retries` (`llm_max_retries`) | `3` |
@@ -366,8 +367,39 @@ pin `0.0` for local inference servers when the variable is unset.
 
 `LLM_STREAMING` has no effect. Python's `llm_streaming` is likewise unread by
 its OpenAI and Azure adapters (its own `LLMConfig` says so, beside
-`llm_answer_streaming`), and no Rust adapter streams: the `Llm` trait has no
-token-streaming call for a stream to reach.
+`llm_answer_streaming`).
+
+`LLM_ANSWER_STREAMING` is Python's `llm_answer_streaming`. With it on, the
+OpenAI-compatible adapter answers through a `stream: true` request
+(`Llm::generate_streaming`) and pushes each content delta into a token sink
+(`cognee_llm::TokenSink`), still returning the complete string. It changes
+nothing unless a caller installs a sink with `cognee_llm::with_token_sink`
+around a recall, and then only the concurrent session-turn answer lane streams:
+sessionless, sequential, `only_context` and structured-output answers send zero
+deltas, and `include_references` citations are appended after the answer so they
+are never deltas. Deltas are a preview; the returned payload is authoritative.
+
+How the streamed body is read: an in-stream `{"error": ...}` chunk or a
+`finish_reason: "error"` fails the attempt (as the OpenAI SDK under litellm
+does) and is retried, the sink getting a `reset`; a body that closes with
+neither `[DONE]` nor any `finish_reason` is treated as truncated and retried
+(Python accepts any clean close; a close after a `finish_reason` without
+`[DONE]` is accepted here too); a read timeout counts as an overload for the
+pacer, like a send timeout; and a provider that ignores `stream: true` and
+answers JSON (non-`text/event-stream` `Content-Type`) is parsed as the blocking
+response, its text pushed as one delta. `llm.debug_requests` also logs the
+folded streamed response.
+
+Two of these are deliberate deviations from Python, both so that a streamed
+answer is never silently wrong:
+
+- **Truncation.** Python returns whatever arrived when the body closes cleanly,
+  even if no choice finished. Here a stream with neither `[DONE]` nor any
+  `finish_reason` is a failed attempt and is retried, so a partial answer is
+  never returned as a whole one.
+- **JSON fallback.** For a provider that ignores `stream: true`, Python's SDK
+  finds no `data:` lines in the JSON body and answers `""`. Here the JSON body
+  is parsed as a blocking response and its answer returned.
 
 A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
 `llm_fallback_*`) is configurable programmatically (no env binding) but not used

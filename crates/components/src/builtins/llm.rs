@@ -42,6 +42,7 @@ fn with_openai_compatible_section(
         .with_vision_model(section.vision_model)
         .with_transcription_model(section.transcription_model)
         .with_debug_requests(ctx.llm.debug_requests)
+        .with_streaming(ctx.llm.answer_streaming)
 }
 
 fn min_retry_elapsed(ctx: &BackendBuildContext) -> std::time::Duration {
