@@ -160,7 +160,7 @@ fn redis_entry_to_domain(e: &RedisQAEntry, session_id: &str) -> SessionQAEntry {
     let memify_metadata = e
         .memify_metadata
         .as_ref()
-        .and_then(|v| serde_json::from_value::<HashMap<String, bool>>(v.clone()).ok());
+        .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok());
 
     SessionQAEntry {
         id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
@@ -555,7 +555,47 @@ impl SessionStore for RedisSessionStore {
     reason = "test code — panics are acceptable failures"
 )]
 mod tests {
-    use super::connection_info;
+    use super::{RedisQAEntry, connection_info, redis_entry_to_domain};
+
+    fn entry_with(metadata: serde_json::Value) -> RedisQAEntry {
+        serde_json::from_value(serde_json::json!({
+            "time": "2024-01-01T00:00:00Z",
+            "question": "q",
+            "context": "",
+            "answer": "a",
+            "qa_id": "q1",
+            "memify_metadata": metadata,
+        }))
+        .expect("entry deserializes")
+    }
+
+    /// A Python-shaped `memify_metadata` (lists, ints) decodes with every key
+    /// intact; it used to be dropped whole because only bools were accepted.
+    #[test]
+    fn python_shaped_memify_metadata_decodes_with_all_keys() {
+        let e = entry_with(serde_json::json!({
+            "feedback_weights_applied": true,
+            "feedback_weights_applied_node_ids": ["a"],
+            "feedback_weights_attempts": 2,
+        }));
+        let m = redis_entry_to_domain(&e, "s")
+            .memify_metadata
+            .expect("metadata decodes");
+        assert_eq!(m.len(), 3);
+        assert_eq!(m["feedback_weights_applied"], serde_json::json!(true));
+        assert_eq!(
+            m["feedback_weights_applied_node_ids"],
+            serde_json::json!(["a"])
+        );
+        assert_eq!(m["feedback_weights_attempts"], serde_json::json!(2));
+    }
+
+    /// A stored non-object value still decodes as `None`.
+    #[test]
+    fn non_object_memify_metadata_decodes_as_none() {
+        let e = entry_with(serde_json::json!("oops"));
+        assert!(redis_entry_to_domain(&e, "s").memify_metadata.is_none());
+    }
 
     #[test]
     fn credentials_with_url_reserved_characters_are_passed_verbatim() {
@@ -751,6 +791,100 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// Mixed-type `memify_metadata` values (list, int, string, bool) round
+    /// trip through Redis, and a later write overwrites only the keys it
+    /// sends. Needs a Redis server (`REDIS_TEST_URL`); skipped when unset.
+    /// CI runs it in the `redis-session` lane.
+    #[tokio::test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
+    async fn redis_memify_metadata_round_trips_and_merges() {
+        use std::collections::HashMap;
+
+        use super::RedisSessionStore;
+        use crate::session_store::{SessionQAUpdate, SessionStore};
+
+        let Some(url) = std::env::var("REDIS_TEST_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+        else {
+            eprintln!(
+                "REDIS_TEST_URL not set — skipping redis_memify_metadata_round_trips_and_merges"
+            );
+            return;
+        };
+        let session = format!("memify-{}", uuid::Uuid::new_v4());
+        let user = Some("memify-user");
+
+        let store = RedisSessionStore::new(&url)
+            .await
+            .unwrap()
+            .with_session_ttl_seconds(120);
+        let qa_id = store
+            .create_qa_entry(&session, user, "q", "a", None)
+            .await
+            .unwrap();
+        let first = HashMap::from([
+            ("list".to_string(), serde_json::json!(["a", "b"])),
+            ("int".to_string(), serde_json::json!(3)),
+            ("str".to_string(), serde_json::json!("s")),
+            ("flag".to_string(), serde_json::json!(true)),
+        ]);
+        assert!(
+            store
+                .update_qa_entry(
+                    &session,
+                    user,
+                    &qa_id,
+                    SessionQAUpdate {
+                        memify_metadata: Some(Some(first)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+        );
+
+        // Round trip: every key and value type survives the store.
+        let entries = store.get_all_qa_entries(&session, user).await.unwrap();
+        let m = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(m.len(), 4);
+        assert_eq!(m["list"], serde_json::json!(["a", "b"]));
+        assert_eq!(m["int"], serde_json::json!(3));
+        assert_eq!(m["str"], serde_json::json!("s"));
+        assert_eq!(m["flag"], serde_json::json!(true));
+
+        // Merge: a partial write overwrites its key and keeps the others.
+        assert!(
+            store
+                .update_qa_entry(
+                    &session,
+                    user,
+                    &qa_id,
+                    SessionQAUpdate {
+                        memify_metadata: Some(Some(HashMap::from([(
+                            "int".to_string(),
+                            serde_json::json!(4),
+                        )]))),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+        );
+        let entries = store.get_all_qa_entries(&session, user).await.unwrap();
+        let m = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(m.len(), 4);
+        assert_eq!(m["list"], serde_json::json!(["a", "b"]));
+        assert_eq!(m["int"], serde_json::json!(4));
+        assert_eq!(m["str"], serde_json::json!("s"));
+        assert_eq!(m["flag"], serde_json::json!(true));
+
+        assert!(store.delete_session(&session, user).await.unwrap());
     }
 
     #[test]

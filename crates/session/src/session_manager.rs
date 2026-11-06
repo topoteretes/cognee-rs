@@ -369,7 +369,10 @@ impl SessionManager {
         }
 
         let mut memify = HashMap::new();
-        memify.insert("feedback_weights_applied".to_string(), false);
+        memify.insert(
+            "feedback_weights_applied".to_string(),
+            serde_json::Value::Bool(false),
+        );
 
         self.update_qa(
             session_id,

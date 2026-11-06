@@ -111,7 +111,7 @@ docker run --rm -d --name cognee-pgv-test \
 
 ### Redis-gated tests
 
-`REDIS_TEST_URL` (e.g. `redis://127.0.0.1:6379`, image `redis:7`) gates the two tests that prove `session.ttl_seconds` reaches Redis keys: `cognee-session`'s inline `session_ttl_expires_every_written_key` (`--features redis`) and `cognee-components`' inline `the_redis_session_store_applies_the_session_ttl` (`--no-default-features --features sqlite,session-redis`). Both skip as `ok` without it; CI runs them in the `redis-session` lane (ci.yml, mirrored in community.yml), guarded by `assert_pg_suite_ran.sh`.
+`REDIS_TEST_URL` (e.g. `redis://127.0.0.1:6379`, image `redis:7`) gates the two tests that prove `session.ttl_seconds` reaches Redis keys: `cognee-session`'s inline `session_ttl_expires_every_written_key` (`--features redis`) and `cognee-components`' inline `the_redis_session_store_applies_the_session_ttl` (`--no-default-features --features sqlite,session-redis`). It also gates `cognee-session`'s inline `redis_memify_metadata_round_trips_and_merges` (mixed-type `memify_metadata` round trip + key merge), run by the same lane command. All skip as `ok` without it; CI runs them in the `redis-session` lane (ci.yml, mirrored in community.yml), guarded by `assert_pg_suite_ran.sh`.
 
 ### Running Rust workspace tests
 

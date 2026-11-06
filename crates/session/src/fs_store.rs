@@ -155,7 +155,7 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
     let memify_metadata = e
         .memify_metadata
         .as_ref()
-        .and_then(|v| serde_json::from_value::<HashMap<String, bool>>(v.clone()).ok());
+        .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok());
 
     SessionQAEntry {
         id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
@@ -486,6 +486,92 @@ impl SessionStore for FsSessionStore {
 mod tests {
     use super::*;
 
+    /// A Python-shaped `memify_metadata` (lists, ints) decodes with every key
+    /// intact; it used to be dropped whole because only bools were accepted.
+    #[test]
+    fn python_shaped_memify_metadata_decodes_with_all_keys() {
+        let mut e = build_entry("q1", "q", "a", None);
+        e.memify_metadata = Some(serde_json::json!({
+            "feedback_weights_applied": true,
+            "feedback_weights_applied_node_ids": ["a"],
+            "feedback_weights_attempts": 2,
+            "note": "x",
+        }));
+        let m = fs_entry_to_domain(&e, "s")
+            .memify_metadata
+            .expect("metadata decodes");
+        assert_eq!(m.len(), 4);
+        assert_eq!(m["feedback_weights_applied"], serde_json::json!(true));
+        assert_eq!(
+            m["feedback_weights_applied_node_ids"],
+            serde_json::json!(["a"])
+        );
+        assert_eq!(m["feedback_weights_attempts"], serde_json::json!(2));
+        assert_eq!(m["note"], serde_json::json!("x"));
+    }
+
+    /// A stored non-object value still decodes as `None`.
+    #[test]
+    fn non_object_memify_metadata_decodes_as_none() {
+        let mut e = build_entry("q1", "q", "a", None);
+        e.memify_metadata = Some(serde_json::json!([1, 2]));
+        assert!(fs_entry_to_domain(&e, "s").memify_metadata.is_none());
+    }
+
+    /// Mixed-type values round trip through the store and a later write
+    /// overwrites only the keys it sends.
+    #[tokio::test]
+    async fn memify_metadata_mixed_values_round_trip_and_merge() {
+        let dir = tempfile::tempdir().expect("tempdir creation must succeed");
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let qa_id = store
+            .create_qa_entry("sess1", None, "q1?", "a1", None)
+            .await
+            .expect("create should succeed");
+        let first = HashMap::from([
+            ("list".to_string(), serde_json::json!(["a", "b"])),
+            ("int".to_string(), serde_json::json!(3)),
+            ("str".to_string(), serde_json::json!("s")),
+            ("flag".to_string(), serde_json::json!(true)),
+        ]);
+        store
+            .update_qa_entry(
+                "sess1",
+                None,
+                &qa_id,
+                SessionQAUpdate {
+                    memify_metadata: Some(Some(first)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update should succeed");
+        store
+            .update_qa_entry(
+                "sess1",
+                None,
+                &qa_id,
+                SessionQAUpdate {
+                    memify_metadata: Some(Some(HashMap::from([(
+                        "int".to_string(),
+                        serde_json::json!(4),
+                    )]))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update should succeed");
+        let entries = store
+            .get_all_qa_entries("sess1", None)
+            .await
+            .expect("get should succeed");
+        let m = entries[0].memify_metadata.as_ref().expect("metadata");
+        assert_eq!(m["list"], serde_json::json!(["a", "b"]));
+        assert_eq!(m["int"], serde_json::json!(4));
+        assert_eq!(m["str"], serde_json::json!("s"));
+        assert_eq!(m["flag"], serde_json::json!(true));
+    }
+
     /// Push `path`'s last write `age` into the past.
     fn age_file(path: &Path, age: std::time::Duration) {
         let file = std::fs::File::options().write(true).open(path).unwrap();
@@ -757,7 +843,7 @@ mod tests {
             .expect("create should succeed");
 
         let mut meta = HashMap::new();
-        meta.insert("feedback_weights_applied".to_string(), false);
+        meta.insert("feedback_weights_applied".to_string(), false.into());
 
         store
             .update_qa_entry(
@@ -781,7 +867,10 @@ mod tests {
             .memify_metadata
             .as_ref()
             .expect("should have memify metadata");
-        assert_eq!(mm.get("feedback_weights_applied"), Some(&false));
+        assert_eq!(
+            mm.get("feedback_weights_applied"),
+            Some(&serde_json::json!(false))
+        );
 
         // A second write overlays its own keys (Python's `update_qa` merge).
         store
@@ -792,7 +881,7 @@ mod tests {
                 SessionQAUpdate {
                     memify_metadata: Some(Some(HashMap::from([(
                         "preference_turn_counted".to_string(),
-                        true,
+                        true.into(),
                     )]))),
                     ..Default::default()
                 },
@@ -804,8 +893,14 @@ mod tests {
             .await
             .expect("get should succeed");
         let mm = entries[0].memify_metadata.as_ref().expect("metadata");
-        assert_eq!(mm.get("feedback_weights_applied"), Some(&false));
-        assert_eq!(mm.get("preference_turn_counted"), Some(&true));
+        assert_eq!(
+            mm.get("feedback_weights_applied"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            mm.get("preference_turn_counted"),
+            Some(&serde_json::json!(true))
+        );
     }
 
     /// A graph-context snapshot left by the removed graph-to-session sync is
