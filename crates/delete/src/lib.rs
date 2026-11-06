@@ -1265,6 +1265,33 @@ impl DeleteService {
             }
         }
 
+        // The edges the evidence rows describe are gone, so the rows are stale;
+        // the next cognify recaptures them under its own run. Non-fatal, as
+        // Python's forget (`forget.py` step 1c): lookups ignore rows whose
+        // document is gone, so a failed sweep only leaves garbage.
+        let evidence_targets: Vec<(Uuid, Option<Uuid>)> = if request.scope.is_data_item() {
+            targets
+                .links_to_detach
+                .iter()
+                .map(|(dataset_id, data_id)| (*dataset_id, Some(*data_id)))
+                .collect()
+        } else {
+            targets
+                .datasets_to_delete
+                .iter()
+                .map(|dataset| (dataset.id, None))
+                .collect()
+        };
+        for (dataset_id, data_id) in evidence_targets {
+            if let Err(error) = self
+                .database
+                .delete_edge_evidence(dataset_id, data_id)
+                .await
+            {
+                warn!(%dataset_id, ?data_id, %error, "forget: unable to remove edge evidence (non-fatal)");
+            }
+        }
+
         // Phase 2: Pipeline-status reset.
         //
         // The dataset and data-item variants differ exactly as Python does:

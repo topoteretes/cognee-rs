@@ -2504,6 +2504,66 @@
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
   },
+  "cognify.edge_evidence_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- false": {
+    "ok": {
+      "cognify.edge_evidence_enabled": false
+    }
+  },
+  "cognify.edge_evidence_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- true": {
+    "ok": {}
+  },
+  "cognify.edge_evidence_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
   "cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },

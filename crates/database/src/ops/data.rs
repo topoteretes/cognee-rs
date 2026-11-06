@@ -193,6 +193,13 @@ pub async fn delete_data(db: &DatabaseConnection, id: Uuid) -> Result<(), Databa
         .exec(db)
         .await
         .map_err(map_sea_err)?;
+    // The evidence sidecar has no foreign key to `data`, so its rows are swept
+    // here, after the row is gone (Python `delete_data_entity` →
+    // `delete_edge_evidence`). A sidecar failure never fails the delete:
+    // lookups already skip evidence whose `Data` row no longer exists.
+    if let Err(error) = super::edge_evidence::delete_edge_evidence_for_data(db, id).await {
+        tracing::warn!(data_id = %id, %error, "unable to remove edge evidence of a deleted data row");
+    }
     Ok(())
 }
 

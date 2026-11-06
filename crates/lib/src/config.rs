@@ -441,7 +441,8 @@ impl Settings {
             .with_token_count_mode(cognee_chunking::TokenCountMode::from_legacy_flag(
                 cognify.legacy_per_word_token_count,
             ))
-            .with_summarization_failure_tolerance(cognify.tolerate_summarization_failures);
+            .with_summarization_failure_tolerance(cognify.tolerate_summarization_failures)
+            .with_edge_evidence(cognify.edge_evidence_enabled);
         if let Some(raise) = cognify.raise_incremental_loading_errors {
             cfg = cfg.with_failure_stop(FailureStop::from_raise_errors(raise.get()));
         }

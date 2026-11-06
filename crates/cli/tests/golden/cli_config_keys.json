@@ -22,6 +22,7 @@
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
+    "cognify.edge_evidence_enabled",
     "cognify.extraction_strategy",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
@@ -307,6 +308,7 @@
     "cognify.raise_incremental_loading_errors",
     "cognify.rollback_scope",
     "cognify.tolerate_summarization_failures",
+    "cognify.edge_evidence_enabled",
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
@@ -2437,6 +2439,53 @@
     "err": true
   },
   "set cognify.chunks_per_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"1\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"s\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"true\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- -1": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 0": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 1": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 1.5": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 5000000000": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 70000": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- [1]": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- false": {
+    "ok": {
+      "cognify.edge_evidence_enabled": false
+    }
+  },
+  "set cognify.edge_evidence_enabled <- null": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- true": {
+    "ok": {}
+  },
+  "set cognify.edge_evidence_enabled <- {\"a\":1}": {
     "err": true
   },
   "set cognify.extraction_strategy <- \"\"": {
@@ -15580,6 +15629,13 @@
     }
   },
   "unset cognify.chunks_per_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.edge_evidence_enabled": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

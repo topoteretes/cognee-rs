@@ -44,6 +44,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 
 [dev-dependencies]
+sea-orm          = { version = "1.1", default-features = false }
 cognee-core      = { path = "../core" }
 cognee-database  = { path = "../database", features = ["sqlite"] }
 cognee-embedding  = { path = "../embedding", features = ["onnx"] }

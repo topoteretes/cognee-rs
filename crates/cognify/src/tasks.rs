@@ -2616,6 +2616,26 @@ pub async fn add_data_points(
         embeddings.extend(dynamic_embeddings);
     }
 
+    // Only after the graph and vector writes succeeded (Python captures at the
+    // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
+    // never describes an edge the graph does not hold.
+    // A run with no user records no evidence: Python's buffer skips a
+    // context without a user (`ProvenanceBuffer.capture`, `buffer.py:105`),
+    // where the ownership ledger above falls back to the default user.
+    if config.edge_evidence_enabled && input.user_id.is_some() {
+        // Python captures over the batch's `edges` after `custom_edges` were
+        // appended to them (`add_data_points.py:403`), so runtime custom
+        // edges are structural candidates too.
+        capture_edge_evidence(
+            db,
+            ledger_identity,
+            &input.chunks,
+            structural_edges.iter().chain(dynamic_edges.iter()),
+            &input.producers,
+        )
+        .await?;
+    }
+
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
         entities: input.entities.clone(),
@@ -2634,6 +2654,36 @@ pub async fn add_data_points(
         // under every configuration and propagates as its own error variant.
         failures: input.failures.clone(),
     })
+}
+
+/// Record which chunks support which graph edges (`provenance_edge_evidence`).
+///
+/// Port of Python's `capture_graph_provenance`
+/// (`modules/provenance/edge_evidence/capture.py`); the rows are built by
+/// [`crate::edge_evidence::build_edge_evidence`]. A failed insert fails the
+/// stage, as Python's flush does at data-item completion.
+async fn capture_edge_evidence<'a>(
+    db: &dyn RelationalDb,
+    id: LedgerIdentity,
+    chunks: &[DocumentChunk],
+    structural_edges: impl IntoIterator<Item = &'a EdgeData>,
+    producers: &ArtifactProducers,
+) -> Result<(), CognifyError> {
+    let scope = crate::edge_evidence::EvidenceScope {
+        tenant_id: id.tenant_id,
+        user_id: id.user_id,
+        dataset_id: id.dataset_id,
+        pipeline_run_id: id.pipeline_run_id,
+        captured_at: Utc::now(),
+    };
+    let rows =
+        crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers);
+    if rows.is_empty() {
+        return Ok(());
+    }
+    cognee_database::ProvenanceDb::insert_edge_evidence(db, &rows).await?;
+    info!("Recorded {} edge evidence rows", rows.len());
+    Ok(())
 }
 
 /// Vector-index runtime custom DataPoints inside a bulk-load scope of their own handled exactly like
@@ -9763,6 +9813,191 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    /// SDK-1037 P4: a storage run records which chunk supports which graph
+    /// edge (`provenance_edge_evidence`), a lookup resolves those rows to the
+    /// supporting chunk, and deleting the data row sweeps them.
+    #[tokio::test]
+    async fn add_data_points_captures_edge_evidence_for_the_lookup() {
+        use cognee_database::DeleteDb;
+        use cognee_database::ops::data::create_data;
+        use cognee_database::ops::edge_evidence::get_edge_evidence_records;
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_utils::id_generation::generate_edge_object_id;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        create_data(
+            &db,
+            cognee_models::Data::builder(
+                document_id,
+                "report.txt",
+                "file:///tmp/report.txt",
+                "file:///tmp/report.txt",
+                "txt",
+                "text/plain",
+                "hash",
+                user_id,
+            )
+            .dataset_id(dataset_id)
+            .build(),
+        )
+        .await
+        .expect("seed data row");
+
+        let chunk_id = Uuid::new_v4();
+        let other_chunk_id = Uuid::new_v4();
+        let type_id = Uuid::new_v4();
+        let (alice, bob) = (test_entity("Alice", type_id), test_entity("Bob", type_id));
+        let edge = GraphEdgePair::new(alice.entity.base.id, bob.entity.base.id, "works_with");
+        // The merged edge was produced by both chunks of the document.
+        let mut producers = ArtifactProducers::default();
+        producers.record_edge(edge.dedup_key(), chunk_id);
+        producers.record_edge(edge.dedup_key(), other_chunk_id);
+        let mut other_chunk = test_chunk(other_chunk_id, document_id, "Bob works with Alice");
+        other_chunk.chunk_index = 1;
+        let input = SummarizedData {
+            chunks: vec![
+                test_chunk(chunk_id, document_id, "Alice works with Bob"),
+                other_chunk,
+            ],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![alice.clone(), bob.clone()],
+            timestamps: vec![],
+            edges: vec![edge],
+            producers,
+            dynamic_graphs: vec![],
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(user_id),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let run = |config: CognifyConfig| {
+            let input = &input;
+            let db = &db;
+            async move {
+                add_data_points(
+                    input,
+                    Arc::new(cognee_graph::MockGraphDB::new()),
+                    Arc::new(MockVectorDB::new()),
+                    Arc::new(MockEmbeddingEngine::new(8)),
+                    db,
+                    Some(run_id),
+                    &config,
+                )
+                .await
+                .expect("storage succeeds");
+            }
+        };
+
+        async fn ledger_rows(db: &cognee_database::DatabaseConnection) -> u64 {
+            use sea_orm::{EntityTrait, PaginatorTrait};
+            cognee_database::entities::provenance_edge_evidence::Entity::find()
+                .count(db)
+                .await
+                .expect("count ledger rows")
+        }
+
+        // No user: nothing is captured, as Python's buffer skips a context
+        // without one (the ownership ledger still falls back to the default
+        // user).
+        let userless = SummarizedData {
+            user_id: None,
+            ..input.clone()
+        };
+        add_data_points(
+            &userless,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(run_id),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("storage succeeds");
+        assert_eq!(ledger_rows(&db).await, 0);
+
+        // Off: nothing is captured.
+        run(CognifyConfig::default().with_edge_evidence(false)).await;
+        assert_eq!(ledger_rows(&db).await, 0);
+        let edge_id = generate_edge_object_id(
+            &alice.entity.base.id.to_string(),
+            &bob.entity.base.id.to_string(),
+            "works_with",
+        );
+        let supports = |db| async move {
+            get_edge_evidence_records(db, dataset_id, &[edge_id], 5, 50)
+                .await
+                .expect("lookup")
+        };
+        assert!(supports(&db).await.is_empty());
+
+        // On: the run id has no `COMPLETED` pipeline_runs row yet, so the
+        // supports are not active until the run completes.
+        run(CognifyConfig::default()).await;
+        assert!(
+            supports(&db).await.is_empty(),
+            "an unfinished run is ignored"
+        );
+        cognee_database::ops::pipeline_runs::create_pipeline_run(
+            &db,
+            cognee_database::PipelineRun {
+                id: Uuid::new_v4(),
+                created_at: Utc::now(),
+                status: cognee_database::PipelineRunStatus::Completed,
+                pipeline_run_id: run_id,
+                pipeline_name: "cognify_pipeline".to_string(),
+                pipeline_id: Uuid::new_v4(),
+                dataset_id: Some(dataset_id),
+                run_info: None,
+                user_id: None,
+            },
+        )
+        .await
+        .expect("complete the run");
+
+        let found = supports(&db).await;
+        let mut chunks: Vec<_> = found.iter().map(|r| (r.chunk_index, r.chunk_id)).collect();
+        chunks.sort();
+        assert_eq!(chunks, vec![(Some(0), chunk_id), (Some(1), other_chunk_id)]);
+        assert!(found.iter().all(|record| {
+            record.data_id == document_id && record.document_name.as_deref() == Some("report.txt")
+        }));
+
+        // Storing again under the same run changes nothing (deterministic ids).
+        run(CognifyConfig::default()).await;
+        assert_eq!(supports(&db).await.len(), 2);
+
+        // The chunk's own `is_part_of` edge is structural evidence too.
+        let document_edge = generate_edge_object_id(
+            &chunk_id.to_string(),
+            &document_id.to_string(),
+            "is_part_of",
+        );
+        let structural = get_edge_evidence_records(&db, dataset_id, &[document_edge], 5, 50)
+            .await
+            .expect("structural lookup");
+        assert_eq!(structural.len(), 1);
+        assert_eq!(structural[0].chunk_id, chunk_id);
+
+        // Deleting the data row sweeps its evidence.
+        DeleteDb::delete_data(&db, document_id)
+            .await
+            .expect("delete data row");
+        assert!(supports(&db).await.is_empty());
+        assert!(
+            get_edge_evidence_records(&db, dataset_id, &[document_edge], 5, 50)
+                .await
+                .expect("lookup after delete")
+                .is_empty()
         );
     }
 

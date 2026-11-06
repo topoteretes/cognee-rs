@@ -60,8 +60,8 @@ pub use traits::{
     SessionListPage, SessionQaDb, SessionRowWithStatus, SessionStats,
 };
 pub use types::{
-    DatabaseError, GraphEdge, GraphMetrics, GraphNode, PipelineRun, PipelineRunStatus,
-    SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
+    DatabaseError, EdgeEvidence, EdgeEvidenceRecord, GraphEdge, GraphMetrics, GraphNode,
+    PipelineRun, PipelineRunStatus, SearchHistoryEntry, SearchHistoryEntryType, TaskRun,
 };
 
 // The `auth`, `permissions`, `UserDb`/`RoleDb`/`TenantDb`,

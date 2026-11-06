@@ -5,9 +5,10 @@ use chrono::{DateTime, Utc};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
+use crate::ops::edge_evidence;
 use crate::ops::graph_storage::RunScope;
 use crate::ops::{data, graph_storage, pipeline_runs};
-use crate::types::{DatabaseError, GraphEdge, GraphNode, PipelineRun};
+use crate::types::{DatabaseError, EdgeEvidence, GraphEdge, GraphNode, PipelineRun};
 
 /// The relational provenance ledger cognify writes and run rollback reads:
 /// which graph nodes and edges each pipeline run produced, per data item,
@@ -30,6 +31,11 @@ pub trait ProvenanceDb: Send + Sync {
         since: Option<DateTime<Utc>>,
         limit: u64,
     ) -> Result<Vec<GraphEdge>, DatabaseError>;
+
+    /// Record which chunks support which graph edges
+    /// (`provenance_edge_evidence`), idempotently by row id, in one
+    /// transaction. Returns the number of rows offered.
+    async fn insert_edge_evidence(&self, rows: &[EdgeEvidence]) -> Result<u64, DatabaseError>;
 
     /// The recorded nodes with these ids.
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError>;
@@ -113,6 +119,10 @@ impl ProvenanceDb for DatabaseConnection {
         limit: u64,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
         graph_storage::get_edges_since(self, dataset_id, since, limit).await
+    }
+
+    async fn insert_edge_evidence(&self, rows: &[EdgeEvidence]) -> Result<u64, DatabaseError> {
+        edge_evidence::insert_edge_evidence(self, rows).await
     }
 
     async fn get_nodes_by_ids(&self, ids: &[String]) -> Result<Vec<GraphNode>, DatabaseError> {
