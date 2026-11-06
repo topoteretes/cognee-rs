@@ -1029,6 +1029,14 @@ cites rows whose run has a `COMPLETED` `pipeline_runs` row. As in Python, a run
 without a user records no evidence (the ownership ledger, by contrast, falls
 back to the default user).
 
+A host that records the run in `pipeline_runs` itself, and hands cognify a
+no-op run repository, sets `CognifyConfig::with_evidence_pipeline_run_id` (code
+only) to the id it marks `COMPLETED`; otherwise the rows carry the executor's
+run id, which nothing records, and no search cites them. The HTTP server's
+dispatcher does this with its deterministic run id, as Python stamps the
+deterministic id. Only the evidence rows change: ownership and rollback stay
+keyed on the executor's run id.
+
 **Postgres: a table Python created is not shared.** The SQLite table is
 byte-compatible with Python's, so one SQLite database serves both SDKs. On
 Postgres it is not: Python's migration (`f3a7b9c1d2e4`) declares the id

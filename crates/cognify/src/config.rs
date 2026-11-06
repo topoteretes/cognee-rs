@@ -12,6 +12,7 @@ use cognee_embedding::engine::EmbeddingEngine;
 use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::dynamic_graph::{DynamicGraphError, DynamicGraphSchema};
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
@@ -398,6 +399,23 @@ pub struct CognifyConfig {
     #[serde(default = "default_edge_evidence_enabled")]
     pub edge_evidence_enabled: bool,
 
+    /// The run id stamped on the `provenance_edge_evidence` rows this run
+    /// records, in place of the pipeline executor's own run id.
+    ///
+    /// A search only cites evidence whose run has a `COMPLETED`
+    /// `pipeline_runs` row. A host that tracks the run itself — the HTTP
+    /// server's dispatcher writes `pipeline_runs` under its deterministic
+    /// `pipeline_run_id(pipeline_id(user, dataset, name), dataset)` and hands
+    /// cognify a no-op run repository — sets this to that id, so the evidence
+    /// is keyed on the run that actually completes (Python stamps the same
+    /// deterministic id, `buffer.py`). `None` (the default) keeps the
+    /// executor's run id, which is the id it writes to `pipeline_runs`.
+    ///
+    /// Only the evidence rows change: the ownership ledger, the completion
+    /// markers and rollback stay keyed on the executor's run id.
+    #[serde(skip)]
+    pub evidence_pipeline_run_id: Option<Uuid>,
+
     /// The share of chunks that may fail before a
     /// [`RollbackScope::FailedItems`] run is called failed.
     ///
@@ -613,6 +631,7 @@ impl Default for CognifyConfig {
             rollback_scope: RollbackScope::default(),
             tolerate_summarization_failures: false,
             edge_evidence_enabled: true,
+            evidence_pipeline_run_id: None,
             chunk_failure_ratio_threshold: default_chunk_failure_ratio_threshold(),
             failure_report_cap: default_failure_report_cap(),
 
@@ -810,6 +829,13 @@ impl CognifyConfig {
     /// [`Self::edge_evidence_enabled`]).
     pub fn with_edge_evidence(mut self, enabled: bool) -> Self {
         self.edge_evidence_enabled = enabled;
+        self
+    }
+
+    /// Stamp this run's edge-evidence rows with `run_id` instead of the
+    /// executor's run id. See [`Self::evidence_pipeline_run_id`].
+    pub fn with_evidence_pipeline_run_id(mut self, run_id: Uuid) -> Self {
+        self.evidence_pipeline_run_id = Some(run_id);
         self
     }
 
