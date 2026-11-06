@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::context_entry::SessionContextRow;
 use crate::error::SessionError;
 use crate::session_store::{SessionQAUpdate, SessionStore};
-use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds};
+use crate::types::{SessionQAEntry, SessionTraceStep, UsedGraphElementIds, qa_entry_uuid};
 
 /// JSON layout of a single entry on disk — matches the Python `SessionQAEntry`
 /// model fields so the serialised form is cross-SDK compatible.
@@ -158,7 +158,7 @@ fn fs_entry_to_domain(e: &FsQAEntry, session_id: &str) -> SessionQAEntry {
         .and_then(|v| serde_json::from_value::<HashMap<String, serde_json::Value>>(v.clone()).ok());
 
     SessionQAEntry {
-        id: Uuid::parse_str(&e.qa_id).unwrap_or_else(|_| Uuid::new_v4()),
+        id: qa_entry_uuid(&e.qa_id),
         session_id: session_id.to_string(),
         user_id: None,
         question: e.question.clone(),
@@ -353,7 +353,7 @@ impl SessionStore for FsSessionStore {
         self.expire(&path).await?;
         let mut entries = load_entries(&path).await?;
         let before = entries.len();
-        entries.retain(|e| e.qa_id != qa_id);
+        entries.retain(|e| qa_entry_uuid(&e.qa_id) != qa_entry_uuid(qa_id));
 
         if entries.len() == before {
             return Ok(false);
@@ -398,7 +398,10 @@ impl SessionStore for FsSessionStore {
         self.expire(&path).await?;
         let mut entries = load_entries(&path).await?;
 
-        let Some(entry) = entries.iter_mut().find(|e| e.qa_id == qa_id) else {
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|e| qa_entry_uuid(&e.qa_id) == qa_entry_uuid(qa_id))
+        else {
             return Ok(false);
         };
 
@@ -508,6 +511,48 @@ mod tests {
         );
         assert_eq!(m["feedback_weights_attempts"], serde_json::json!(2));
         assert_eq!(m["note"], serde_json::json!("x"));
+    }
+
+    /// A foreign writer's non-UUID `qa_id` reads back as a stable id that
+    /// addresses the same entry in `update_qa_entry`, and an uppercase UUID
+    /// matches its lowercase spelling.
+    #[tokio::test]
+    async fn non_uuid_and_uppercase_qa_ids_are_addressable() {
+        let dir = tempfile::tempdir().expect("tempdir creation must succeed");
+        let store = FsSessionStore::new(dir.path());
+        let path = session_file(dir.path(), None, "s1");
+        let upper = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
+        save_entries(
+            &path,
+            &[
+                build_entry("legacy-id", "q1", "a1", None),
+                build_entry(upper, "q2", "a2", None),
+            ],
+        )
+        .await
+        .expect("seed entries");
+
+        let first = store.get_all_qa_entries("s1", None).await.expect("read");
+        let second = store.get_all_qa_entries("s1", None).await.expect("read");
+        assert_eq!(first[0].id, second[0].id, "the id is stable across reads");
+
+        for entry in &first {
+            let updated = store
+                .update_qa_entry(
+                    "s1",
+                    None,
+                    &entry.id.to_string(),
+                    SessionQAUpdate {
+                        feedback_score: Some(Some(4)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("update");
+            assert!(updated, "{} must be addressable by its own id", entry.id);
+        }
+        let after = store.get_all_qa_entries("s1", None).await.expect("read");
+        assert!(after.iter().all(|e| e.feedback_score == Some(4)));
     }
 
     /// A stored non-object value still decodes as `None`.

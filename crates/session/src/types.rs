@@ -7,6 +7,18 @@ use uuid::Uuid;
 
 use crate::context_builder::ActiveContextSelection;
 
+/// The id a stored `qa_id` string reads back as: the UUID it parses to
+/// (case and hyphenation normalized), or a deterministic v5 UUID of the raw
+/// text when it is not a UUID. Stable across reads, so the id a caller got
+/// from an entry always addresses that same entry in `update_qa_entry` /
+/// `delete_qa_entry` (a random fallback would never match). Also the key of
+/// [`build_implicit_rating_map`](crate::build_implicit_rating_map), so a
+/// feedback row's `referenced_qa_ids` match an entry however the id was
+/// written.
+pub fn qa_entry_uuid(raw: &str) -> Uuid {
+    Uuid::parse_str(raw).unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes()))
+}
+
 /// Graph element IDs that were used to produce the answer for a Q&A entry.
 ///
 /// Matches the Python `used_graph_element_ids` dict: `{"node_ids": [...], "edge_ids": [...]}`.
