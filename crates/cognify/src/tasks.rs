@@ -2626,9 +2626,19 @@ pub async fn add_data_points(
         // Python captures over the batch's `edges` after `custom_edges` were
         // appended to them (`add_data_points.py:403`), so runtime custom
         // edges are structural candidates too.
+        // A host that records the run under its own id (the HTTP server's
+        // dispatcher) keys the evidence on that id, so the lookup's COMPLETED
+        // filter sees it; ownership above stays on the executor's run id.
+        let evidence_identity = match config.evidence_pipeline_run_id {
+            Some(run_id) => LedgerIdentity {
+                pipeline_run_id: Some(run_id),
+                ..ledger_identity
+            },
+            None => ledger_identity,
+        };
         capture_edge_evidence(
             db,
-            ledger_identity,
+            evidence_identity,
             &input.chunks,
             structural_edges.iter().chain(dynamic_edges.iter()),
             &input.producers,
