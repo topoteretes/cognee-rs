@@ -1,4 +1,5 @@
-//! Phase 5 — memory ops: remember / remember_entry / improve.
+//! Phase 5 — memory ops: remember / remember_entry / improve, and the
+//! `waitForBackgroundTasks` drain a background improve is awaited with.
 //!
 //! Each export follows the canonical pattern:
 //!   `Arc::clone(&handle.state)` → `runtime().spawn` → delegate to
@@ -13,7 +14,7 @@ use std::sync::Arc;
 
 use neon::prelude::*;
 
-use cognee_bindings_common::ops::memory;
+use cognee_bindings_common::ops::{lifecycle, memory};
 
 use crate::errors::throw_sdk_error;
 use crate::json::{js_to_value, parse_js, read_opts};
@@ -113,7 +114,8 @@ pub fn cognee_remember_entry(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
 /// `cogneeImprove(handle, opts) -> Promise<ImproveResult>`
 ///
-/// opts: `{ datasetName, sessionIds?, feedbackAlpha?, tenant? }`
+/// opts: `{ datasetName, datasetId?, sessionIds?, feedbackAlpha?, tenant?,
+/// buildGlobalContextIndex?, buildTruthSubspace?, runInBackground? }`
 ///
 /// The camelCase result JSON is built by the shared `run_improve` in
 /// bindings-common (`improve_result_json`).
@@ -127,6 +129,43 @@ pub fn cognee_improve(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
     runtime().spawn(async move {
         let result = memory::run_improve(&state, &opts).await;
+        deferred.settle_with(&channel, move |mut cx| match result {
+            Ok(val) => {
+                let json_str = match serde_json::to_string(&val) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return cx.throw_error(format!("serialization error: {e}"));
+                    }
+                };
+                parse_js(&mut cx, &json_str)
+            }
+            Err(e) => throw_sdk_error(&mut cx, e),
+        });
+    });
+
+    Ok(promise)
+}
+
+// ---------------------------------------------------------------------------
+// cogneeWaitForBackgroundTasks
+// ---------------------------------------------------------------------------
+
+/// `cogneeWaitForBackgroundTasks(handle, opts?) -> Promise<{finished, pending}>`
+///
+/// opts: `{ timeoutSeconds? }` (a non-negative number; nothing is cancelled
+/// when it elapses). Waits for the process-wide background tasks — a
+/// `runInBackground` improve, a session remember's automatic improve — as
+/// Python's `cognee.wait_for_background_tasks()`. The tasks are process-wide,
+/// so the handle only types the call; a closed handle may still wait.
+pub fn cognee_wait_for_background_tasks(mut cx: FunctionContext) -> JsResult<JsPromise> {
+    let _handle = cx.argument::<JsBox<CogneeHandle>>(0)?;
+    let opts = read_opts(&mut cx, 1)?;
+
+    let channel = cx.channel();
+    let (deferred, promise) = cx.promise();
+
+    runtime().spawn(async move {
+        let result = lifecycle::wait_for_background_tasks(&opts).await;
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(val) => {
                 let json_str = match serde_json::to_string(&val) {

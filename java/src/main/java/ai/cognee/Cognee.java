@@ -311,6 +311,27 @@ public final class Cognee implements AutoCloseable {
         return f.thenApply(json -> ai.cognee.internal.Json.fromJson(json, ImproveResult.class));
     }
 
+    // --- background tasks ---
+    /** {@link #waitForBackgroundTasks(WaitForBackgroundTasksOptions)} without a timeout. */
+    public CompletableFuture<BackgroundTasksResult> waitForBackgroundTasks() {
+        return waitForBackgroundTasks(null);
+    }
+
+    /**
+     * Wait for the process-wide background tasks — an {@link #improve} run with
+     * {@code runInBackground}, a session remember's automatic improve — as Python's
+     * {@code cognee.wait_for_background_tasks()}. {@code opts} may be {@code null}; its
+     * {@code timeoutSeconds} bounds the wait, and nothing is cancelled when it elapses.
+     * {@link #close()} also waits, without a timeout.
+     */
+    public CompletableFuture<BackgroundTasksResult> waitForBackgroundTasks(
+            WaitForBackgroundTasksOptions opts) {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        dispatchVoid(h -> Native.waitForBackgroundTasks(h, Options.jsonOf(opts), f));
+        return f.thenApply(
+                json -> ai.cognee.internal.Json.fromJson(json, BackgroundTasksResult.class));
+    }
+
     // --- forget ---
     /** Delete an item, a dataset, or everything (see {@link ForgetTarget}). */
     public CompletableFuture<ForgetResult> forget(ForgetTarget target) {

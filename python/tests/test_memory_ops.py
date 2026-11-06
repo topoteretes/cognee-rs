@@ -1,4 +1,5 @@
-"""Tests for PyCognee.remember, .remember_entry, and .improve (T7).
+"""Tests for PyCognee.remember, .remember_entry, .improve and
+.wait_for_background_tasks (T7, SDK-1051).
 
 Environment requirements:
 - ``MOCK_EMBEDDING=true`` — avoids downloading an ONNX model; required for
@@ -202,3 +203,60 @@ async def test_improve_result_keys(tmp_path):
         assert key in result, f"missing key: {key}"
     assert isinstance(result["stages"], list)
     assert result["stages"][0]["stage"] == "feedback_weights"
+
+
+# ---------------------------------------------------------------------------
+# improve(runInBackground) + wait_for_background_tasks() (SDK-1051).
+# ---------------------------------------------------------------------------
+
+def _cold_cognee(tmp_path) -> cp.Cognee:
+    """A handle that is never warmed: the wait needs no services."""
+    db = str(tmp_path / "cognee.db")
+    return cp.Cognee(f'{{"relational_db_url": "sqlite://{db}?mode=rwc"}}')
+
+
+@pytest.mark.asyncio
+async def test_wait_for_background_tasks_idle(tmp_path):
+    """With nothing running the wait returns at once, finished, none pending."""
+    c = _cold_cognee(tmp_path)
+    assert await c.wait_for_background_tasks() == {"finished": True, "pending": 0}
+    # snake_case and camelCase spellings of the timeout are both accepted.
+    assert (await c.wait_for_background_tasks({"timeout_seconds": 5}))["finished"] is True
+    assert (await c.wait_for_background_tasks({"timeoutSeconds": 0.5}))["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_background_tasks_rejects_bad_timeout(tmp_path):
+    """A negative or non-numeric timeout raises CogneeValidationError."""
+    c = _cold_cognee(tmp_path)
+    for bad in (-1, "5"):
+        with pytest.raises(cp.CogneeValidationError):
+            await c.wait_for_background_tasks({"timeout_seconds": bad})
+
+
+@SKIP_IF_NO_BASE
+@pytest.mark.asyncio
+async def test_improve_in_background_returns_running_then_drains(tmp_path):
+    """runInBackground returns the running result; the wait drains the run."""
+    c = await _make_cognee(tmp_path)
+    result = await c.improve({"dataset_name": "bg_ds", "run_in_background": True})
+    assert result["status"] == "running"
+    assert result["background"] is True
+    assert result["finished"] is False
+    assert result["datasetName"] == "bg_ds"
+    assert isinstance(result["datasetId"], str)
+    waited = await c.wait_for_background_tasks({"timeout_seconds": 60})
+    assert waited == {"finished": True, "pending": 0}
+
+
+@SKIP_IF_NO_BASE
+@pytest.mark.asyncio
+async def test_improve_in_background_unknown_dataset_id_raises(tmp_path):
+    """An unknown datasetId is refused before anything is dispatched."""
+    c = await _make_cognee(tmp_path)
+    with pytest.raises(cp.CogneeValidationError):
+        await c.improve({
+            "dataset_name": "bg_ds",
+            "dataset_id": "00000000-0000-0000-0000-0000000000aa",
+            "run_in_background": True,
+        })

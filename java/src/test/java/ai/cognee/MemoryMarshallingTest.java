@@ -35,9 +35,25 @@ class MemoryMarshallingTest {
         // Happy path: a supplied datasetName serializes.
         JsonNode n = Json.tree(new ImproveOptions("ds").feedbackAlpha(0.2).toJson());
         assertEquals("ds", n.path("datasetName").asText());
+        JsonNode flags = Json.tree(new ImproveOptions("ds")
+                .buildGlobalContextIndex(true).buildTruthSubspace(true).runInBackground(true).toJson());
+        assertEquals(true, flags.path("buildGlobalContextIndex").asBoolean());
+        assertEquals(true, flags.path("buildTruthSubspace").asBoolean());
+        assertEquals(true, flags.path("runInBackground").asBoolean());
         // datasetName is required — a null/empty name is rejected fast at the API
         // boundary (clearer than a surprising later core-side VALIDATION_ERROR).
         assertThrows(IllegalArgumentException.class, () -> new ImproveOptions(null));
         assertThrows(IllegalArgumentException.class, () -> new ImproveOptions(""));
+    }
+
+    @Test
+    void waitForBackgroundTasksMarshals() {
+        JsonNode n = Json.tree(new WaitForBackgroundTasksOptions().timeoutSeconds(1.5).toJson());
+        assertEquals(1.5, n.path("timeoutSeconds").asDouble());
+        assertEquals("null", Options.jsonOf(null));
+        BackgroundTasksResult r =
+                Json.fromJson("{\"finished\":false,\"pending\":2}", BackgroundTasksResult.class);
+        assertEquals(false, r.finished());
+        assertEquals(2L, r.pending());
     }
 }

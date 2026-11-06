@@ -11,6 +11,9 @@
  *   7. cg_sdk_forget          — {"kind":"all"} — assert JSON with "target" key
  *   8. cg_sdk_prune_data      — assert result is "null"
  *   9. cg_sdk_prune_system    — assert JSON with "graphPruned" key
+ *  2b. cg_sdk_improve with runInBackground — a "running" result; then
+ *      cg_sdk_wait_for_background_tasks drains it; an unknown datasetId and a
+ *      negative timeout are CG_ERR_SDK_VALIDATION (SDK-1051)
  *
  * Exit codes: 0 = all assertions passed, 1 = at least one failure.
  */
@@ -170,6 +173,58 @@ int main(void)
         assert_json_contains(add_result, "\"addedCount\"",
                              "add result must contain addedCount");
         printf("  add result: %.200s\n", add_result);
+    }
+
+    /* ── Step 2b: background improve + wait_for_background_tasks ──────── */
+    printf("=== Step 2b: cg_sdk_improve(runInBackground) + wait ===\n");
+    {
+        CgSdkWaiter *w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_improve(sdk,
+                       "{\"datasetName\":\"smoke6-dataset\",\"runInBackground\":true}",
+                       cg_sdk_waiter_callback, (void *)w);
+        char *result = NULL;
+        rc = waiter_wait_result(w, &result);
+        ASSERT_EQ(rc, CG_OK, "background cg_sdk_improve must succeed");
+        if (result) {
+            assert_json_contains(result, "\"status\":\"running\"",
+                                 "background improve must return a running result");
+            assert_json_contains(result, "\"background\":true",
+                                 "background improve must report background");
+            printf("  improve result: %.300s\n", result);
+            cg_string_destroy(result);
+        }
+
+        w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_wait_for_background_tasks(sdk, "{\"timeoutSeconds\":60}",
+                                         cg_sdk_waiter_callback, (void *)w);
+        result = NULL;
+        rc = waiter_wait_result(w, &result);
+        ASSERT_EQ(rc, CG_OK, "cg_sdk_wait_for_background_tasks must succeed");
+        if (result) {
+            assert_json_equals(result, "{\"finished\":true,\"pending\":0}",
+                               "wait must drain the background improve");
+            cg_string_destroy(result);
+        }
+
+        w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_improve(sdk,
+                       "{\"datasetName\":\"smoke6-dataset\","
+                       "\"datasetId\":\"00000000-0000-0000-0000-0000000000aa\","
+                       "\"runInBackground\":true}",
+                       cg_sdk_waiter_callback, (void *)w);
+        rc = waiter_wait_result(w, NULL);
+        ASSERT_EQ(rc, CG_ERR_SDK_VALIDATION,
+                  "an unknown datasetId must be refused before dispatch");
+
+        w = cg_sdk_waiter_new();
+        if (!w) { g_failures++; goto cleanup; }
+        cg_sdk_wait_for_background_tasks(sdk, "{\"timeoutSeconds\":-1}",
+                                         cg_sdk_waiter_callback, (void *)w);
+        rc = waiter_wait_result(w, NULL);
+        ASSERT_EQ(rc, CG_ERR_SDK_VALIDATION, "a negative timeout must be refused");
     }
 
     /* Extract dataset_id for later ops. We'll parse it from cg_sdk_list_datasets. */

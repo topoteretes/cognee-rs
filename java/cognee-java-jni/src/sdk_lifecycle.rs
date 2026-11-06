@@ -1,10 +1,12 @@
-//! Async lifecycle ops: `warm`, `ownerId`, `flush`.
+//! Async lifecycle ops: `warm`, `ownerId`, `flush`, `waitForBackgroundTasks`.
 
 use cognee_bindings_common::ops;
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject};
+use jni::objects::{JClass, JObject, JString};
 use jni::sys::jlong;
 
+use crate::args::arg_json;
+use crate::errors::throw_sdk_error;
 use crate::future::spawn_future;
 use crate::guard_void;
 use crate::handle::checked_handle;
@@ -79,5 +81,34 @@ pub extern "system" fn Java_ai_cognee_internal_Native_flush<'l>(
             &future,
             async move { ops::lifecycle::flush(&state).await },
         );
+    })
+}
+
+/// `waitForBackgroundTasks(handle, optsJson, future)` — wait for the
+/// process-wide background tasks (a `runInBackground` improve, a session
+/// remember's automatic improve), as Python's
+/// `cognee.wait_for_background_tasks()`. `optsJson` may be null or
+/// `{"timeoutSeconds":N}` (non-negative; nothing is cancelled when it
+/// elapses). Completes with `{"finished":bool,"pending":N}`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_cognee_internal_Native_waitForBackgroundTasks<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    handle: jlong,
+    opts_json: JString<'l>,
+    future: JObject<'l>,
+) {
+    guard_void(&mut env, |env| {
+        // The tasks are process-wide; the handle only scopes the call.
+        let Some(_state) = checked_handle(env, handle, &future) else {
+            return;
+        };
+        let opts = match arg_json(env, &opts_json) {
+            Ok(v) => v,
+            Err(e) => return throw_sdk_error(env, e),
+        };
+        spawn_future(env, &future, async move {
+            ops::lifecycle::wait_for_background_tasks(&opts).await
+        });
     })
 }

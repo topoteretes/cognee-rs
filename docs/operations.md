@@ -86,6 +86,21 @@ Python (SDK-1115), and so are the deprecated custom-task and scoping options
 (`extraction_tasks`, `enrichment_tasks`, `data`, `node_name`, `node_type`,
 `vector_db_config`, `graph_db_config`); over REST they are ignored.
 
+**Background runs.** `cognee::api::improve_in_background` is Python's
+`improve(run_in_background=True)`: it validates the configuration and
+`feedback_alpha` and resolves the dataset first — a name resolves to the
+caller's dataset or is created for it, a dataset id that names no dataset
+(`InvalidArgument`) or one the caller may not write (`PermissionDenied`; the
+ACL's `write` grant, or ownership without an ACL) is refused — then spawns the
+run as a process-wide background task and returns the `running` result with
+the resolved dataset id and name. Wait for it with
+`cognee::wait_for_background_tasks`; every binding exposes the same wait
+(`waitForBackgroundTasks` in TS and Java, `wait_for_background_tasks` in
+Python, `cg_sdk_wait_for_background_tasks` in C), and an `improve` op with
+`runInBackground: true` uses this entry point. `ImproveParams::run_in_background`
+on `improve()` itself is only a label, for a host that dispatches the run on
+its own.
+
 The run fails open — a failed stage is recorded and the next one runs —
 except that a failure in `persist_session_qa` (losing session Q&A would be data
 loss) stops the run with `ApiError::ImproveAborted` carrying the partial

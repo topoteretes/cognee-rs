@@ -18,6 +18,8 @@ import type {
   CogneeMemoryEntry,
   CogneeImproveOptions,
   CogneeImproveResult,
+  CogneeWaitForBackgroundTasksOptions,
+  CogneeWaitForBackgroundTasksResult,
   CogneeForgetTarget,
   CogneeForgetResult,
   CogneeUpdateOptions,
@@ -49,6 +51,8 @@ export type {
   CogneeMemoryEntry,
   CogneeImproveOptions,
   CogneeImproveResult,
+  CogneeWaitForBackgroundTasksOptions,
+  CogneeWaitForBackgroundTasksResult,
   CogneeImproveStage,
   CogneeForgetTarget,
   CogneeForgetResult,
@@ -171,6 +175,12 @@ export interface NativeBindings {
     handle: NativeBox,
     opts: CogneeImproveOptions
   ): Promise<CogneeImproveResult>;
+  // Waits for the process-wide background tasks (a `runInBackground`
+  // improve, a session remember's automatic improve).
+  cogneeWaitForBackgroundTasks(
+    handle: NativeBox,
+    opts?: CogneeWaitForBackgroundTasksOptions
+  ): Promise<CogneeWaitForBackgroundTasksResult>;
 
   // Data ops (Phase 5): forget / update / prune.
   //

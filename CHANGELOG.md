@@ -16,6 +16,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Added
+
+- **`improve` binding opts `runInBackground`, `buildGlobalContextIndex`,
+  `buildTruthSubspace` (SDK-1051).** The TS, Python, Java and C bindings
+  forward them, as Python's `improve()` does. With `runInBackground` the op
+  resolves the dataset and validates the options first, then returns a
+  `running` result at once (`background: true`, `finished: false`, no stages,
+  the resolved `datasetId`/`datasetName`) and the run continues as a
+  process-wide background task (no per-run handle). An unknown or unwritable
+  `datasetId` is a validation error up front instead of a logged failure of
+  the background run. The CLI gains `--build-global-context-index` and
+  `--build-truth-subspace`.
+- **`cognee::api::improve_in_background` (SDK-1051).** The library entry point
+  of Python's `improve(run_in_background=True)`: it validates the improve
+  configuration and `feedback_alpha`, resolves the dataset with the write-level
+  rules (a name resolves or is created for the caller; a missing id is
+  `InvalidArgument`, an unwritable one `PermissionDenied`), spawns the run on
+  the process-wide background registry and returns the `running`
+  `ImproveResult`. `OwnedImproveParams` is the owned counterpart of
+  `ImproveParams`; `improve_in_background_then` runs a host's post-run work in
+  the same task. `AddPipeline::acl_db()` exposes the wired ACL store.
+- **`waitForBackgroundTasks` in every binding (SDK-1051).** TS
+  (`Cognee.waitForBackgroundTasks({timeoutSeconds?})`), Python
+  (`Cognee.wait_for_background_tasks({"timeout_seconds": …})`), Java
+  (`Cognee.waitForBackgroundTasks(WaitForBackgroundTasksOptions)` →
+  `BackgroundTasksResult`) and C (`cg_sdk_wait_for_background_tasks`) wait for
+  the process-wide background tasks — a `runInBackground` improve, a session
+  remember's automatic improve — and report `{finished, pending}`.
+
 ### Changed
 
 - **`feedback_weights` improve stage matches Python's bookkeeping (SDK-1051).**

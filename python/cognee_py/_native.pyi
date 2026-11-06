@@ -797,11 +797,33 @@ class Cognee:
         """Apply graph improvement based on session feedback.
 
         *opts* must contain ``"datasetName"`` (camelCase) or
-        ``"dataset_name"`` (normalised).
+        ``"dataset_name"`` (normalised). Optional keys: ``sessionIds``,
+        ``feedbackAlpha``, ``tenant``, ``datasetId``, ``buildGlobalContextIndex``,
+        ``buildTruthSubspace`` (bool opt-ins) and ``runInBackground`` (bool:
+        resolve the dataset and validate the options, then return a ``running``
+        result at once; wait for the run with :meth:`wait_for_background_tasks`,
+        ``close()`` waits too).
 
         Returns a dict with camelCase keys: ``datasetId``, ``datasetName``,
         ``sessionIds``, ``stages`` (one per improve stage, in order),
         ``background``, ``finished``, ``error``, ``status``.
+        """
+        ...
+
+    async def wait_for_background_tasks(
+        self,
+        opts: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Wait for the process-wide background tasks (a ``runInBackground``
+        improve, a session ``remember``'s automatic improve), as Python's
+        ``cognee.wait_for_background_tasks()``.
+
+        *opts* may hold ``timeoutSeconds`` (``timeout_seconds``; a non-negative
+        number) to bound the wait; nothing is cancelled when it elapses. A bad
+        value raises :exc:`CogneeValidationError`.
+
+        Returns ``{"finished": bool, "pending": int}``; ``finished`` is
+        ``False`` only when the timeout elapsed with work still running.
         """
         ...
 
