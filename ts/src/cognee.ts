@@ -28,6 +28,8 @@ import type {
   CogneeMemoryEntry,
   CogneeImproveOptions,
   CogneeImproveResult,
+  CogneeWaitForBackgroundTasksOptions,
+  CogneeWaitForBackgroundTasksResult,
   CogneeForgetTarget,
   CogneeForgetResult,
   CogneeUpdateOptions,
@@ -586,6 +588,26 @@ export class Cognee {
   async improve(opts: CogneeImproveOptions): Promise<CogneeImproveResult> {
     try {
       return await native.cogneeImprove(this._handle, opts);
+    } catch (e) {
+      throw wrapNativeError(e);
+    }
+  }
+
+  /**
+   * Wait for the process-wide background tasks — an `improve` run with
+   * `runInBackground`, a session `remember`'s automatic improve — as Python's
+   * `cognee.wait_for_background_tasks()`.
+   *
+   * `opts.timeoutSeconds` (non-negative) bounds the wait; nothing is cancelled
+   * when it elapses. Resolves to `{ finished, pending }`: `finished` is `false`
+   * only when the timeout elapsed with work still running. `close()` also
+   * waits, without a timeout.
+   */
+  async waitForBackgroundTasks(
+    opts?: CogneeWaitForBackgroundTasksOptions
+  ): Promise<CogneeWaitForBackgroundTasksResult> {
+    try {
+      return await native.cogneeWaitForBackgroundTasks(this._handle, opts);
     } catch (e) {
       throw wrapNativeError(e);
     }

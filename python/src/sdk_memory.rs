@@ -1,5 +1,5 @@
 //! Python-facing wrappers for memory operations:
-//! `remember`, `remember_entry`, and `improve`.
+//! `remember`, `remember_entry`, `improve` and `wait_for_background_tasks`.
 //!
 //! Each function converts Python arguments to `serde_json::Value` via the
 //! shared `crate::json` helpers, delegates to the shared async op in
@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use cognee_bindings_common::HandleState;
-use cognee_bindings_common::ops::memory;
+use cognee_bindings_common::ops::{lifecycle, memory};
 use pyo3::prelude::*;
 
 use crate::json::{
@@ -80,6 +80,21 @@ pub fn py_sdk_improve<'py>(
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = memory::run_improve(&handle, &opts_json)
+            .await
+            .map_err(sdk_error_to_py)?;
+        crate::gil::attach_or_err(|py| serde_to_py(py, &result))
+    })
+}
+
+/// Async body for `PyCognee.wait_for_background_tasks`.
+pub fn py_sdk_wait_for_background_tasks<'py>(
+    py: Python<'py>,
+    opts: Option<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let opts_json = opts_to_camel_json(opts)?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = lifecycle::wait_for_background_tasks(&opts_json)
             .await
             .map_err(sdk_error_to_py)?;
         crate::gil::attach_or_err(|py| serde_to_py(py, &result))
@@ -171,7 +186,11 @@ impl PyCognee {
     /// Supported ``opts`` keys (snake_case spellings accepted too):
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
     /// ``feedbackAlpha`` (float in (0, 1], default the ``improve.feedback_alpha`` setting, 0.1),
-    /// ``tenant`` (UUID str).
+    /// ``tenant`` (UUID str), ``datasetId`` (UUID str of an already-resolved dataset),
+    /// ``buildGlobalContextIndex`` / ``buildTruthSubspace`` (bool, default False: opt in
+    /// to those stages), ``runInBackground`` (bool, default False: resolve the
+    /// dataset and validate the options, then return a ``running`` result at once;
+    /// wait for the run with ``wait_for_background_tasks()``, ``close()`` waits too).
     ///
     /// Returns a dict with camelCase keys:
     /// ``datasetId``, ``datasetName``, ``sessionIds``, ``stages`` (one per
@@ -183,5 +202,22 @@ impl PyCognee {
         opts: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_sdk_improve(py, Arc::clone(&self.inner), opts)
+    }
+
+    /// Wait for the process-wide background tasks — a ``runInBackground``
+    /// improve, a session ``remember``'s automatic improve — as Python's
+    /// ``cognee.wait_for_background_tasks()``.
+    ///
+    /// ``opts`` may hold ``timeoutSeconds`` (``timeout_seconds``; a
+    /// non-negative number) to bound the wait; nothing is cancelled when it
+    /// elapses. Returns ``{"finished": bool, "pending": int}``: ``finished``
+    /// is False only when the timeout elapsed with work still running.
+    #[pyo3(signature = (opts=None))]
+    fn wait_for_background_tasks<'py>(
+        &self,
+        py: Python<'py>,
+        opts: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_sdk_wait_for_background_tasks(py, opts)
     }
 }

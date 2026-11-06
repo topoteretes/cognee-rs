@@ -76,6 +76,9 @@ public final class Native {
 
     public static native void improve(long handle, String optsJson, CompletableFuture<String> future);
 
+    public static native void waitForBackgroundTasks(long handle, String optsJson,
+            CompletableFuture<String> future);
+
     // data ops
     public static native void forget(long handle, String targetJson, String optsJson,
             CompletableFuture<String> future);

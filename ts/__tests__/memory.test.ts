@@ -1,5 +1,5 @@
 /**
- * Memory ops — remember / rememberEntry / improve.
+ * Memory ops — remember / rememberEntry / improve / waitForBackgroundTasks.
  *
  * ─── Tier-A (no LLM, no network) ────────────────────────────────────────────
  *
@@ -124,6 +124,57 @@ describe("memory ops (Tier-A — no LLM)", () => {
     });
   });
 
+  // ── improve(runInBackground) + waitForBackgroundTasks (SDK-1051) ───────────
+
+  describe("background improve", () => {
+    it("returns a running result that waitForBackgroundTasks drains", async () => {
+      const h = makeTempHandle("improve_bg@example.com");
+      await native.cogneeWarm(h.handle);
+      try {
+        const result = await native.cogneeImprove(h.handle, {
+          datasetName: "improve_bg_ds",
+          runInBackground: true,
+        });
+        expect(result.status).toBe("running");
+        expect(result.background).toBe(true);
+        expect(result.finished).toBe(false);
+        expect(result.datasetName).toBe("improve_bg_ds");
+        expect(typeof result.datasetId).toBe("string");
+        expect(result.stages).toEqual([]);
+
+        const waited = await native.cogneeWaitForBackgroundTasks(h.handle, {
+          timeoutSeconds: 60,
+        });
+        expect(waited).toEqual({ finished: true, pending: 0 });
+      } finally {
+        cleanup(h.tmpDir);
+      }
+    });
+
+    it("rejects an unknown datasetId before dispatching", async () => {
+      await expect(
+        native.cogneeImprove(handle, {
+          datasetName: "improve_bg_ds",
+          datasetId: "00000000-0000-0000-0000-0000000000aa",
+          runInBackground: true,
+        })
+      ).rejects.toThrow(/not found/);
+    });
+
+    it("waitForBackgroundTasks with nothing running resolves at once", async () => {
+      expect(await native.cogneeWaitForBackgroundTasks(handle)).toEqual({
+        finished: true,
+        pending: 0,
+      });
+    });
+
+    it("waitForBackgroundTasks rejects a negative timeout", async () => {
+      await expect(
+        native.cogneeWaitForBackgroundTasks(handle, { timeoutSeconds: -1 })
+      ).rejects.toThrow(/timeoutSeconds/);
+    });
+  });
+
   // ── argument-validation ──────────────────────────────────────────────────────
 
   describe("argument validation", () => {
@@ -131,6 +182,13 @@ describe("memory ops (Tier-A — no LLM)", () => {
       expect(() => {
         // @ts-expect-error intentionally omitting required args
         native.cogneeRemember(handle);
+      }).toThrow();
+    });
+
+    it("cogneeWaitForBackgroundTasks throws synchronously when handle is missing", () => {
+      expect(() => {
+        // @ts-expect-error intentionally omitting required arg
+        native.cogneeWaitForBackgroundTasks();
       }).toThrow();
     });
 

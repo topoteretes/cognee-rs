@@ -27,6 +27,7 @@
 //! dataset do, instead of the later one skipping. The stages' own `add` calls
 //! re-enter the dataset lock the run holds.
 
+mod background;
 mod config;
 mod result;
 mod stages;
@@ -54,6 +55,7 @@ use super::error::ApiError;
 use stages::{GraphCapabilities, ImproveStages, StageExecutor, StageRun};
 use watermark::{StageStamp, record_improve_operation};
 
+pub use background::{OwnedImproveParams, improve_in_background, improve_in_background_then};
 pub use config::{
     DEFAULT_FEEDBACK_ALPHA, ImproveConfig, ImproveConfigError, parse_stages_disabled,
     validate_feedback_alpha, validate_stages_disabled,
@@ -125,9 +127,13 @@ pub struct ImproveParams<'a> {
     /// `build_truth_subspace`). Default `false`.
     pub build_truth_subspace: bool,
 
-    /// The host dispatched this run in the background; reported on
-    /// [`ImproveResult::background`]. Background dispatch itself is the
-    /// host's (HTTP server, CLI): this function always runs to completion.
+    /// This run was dispatched in the background; reported on
+    /// [`ImproveResult::background`]. A label only: [`improve`] always runs
+    /// to completion. To run in the background, call
+    /// [`improve_in_background`], which resolves the dataset and validates
+    /// the options first, spawns the run and returns the `running` result;
+    /// a host that dispatches the run itself (the HTTP server) sets this
+    /// flag and calls [`improve`] from its own task.
     pub run_in_background: bool,
 
     /// LLM handle (session persistence and distillation).

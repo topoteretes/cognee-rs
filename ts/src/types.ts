@@ -589,6 +589,33 @@ export interface CogneeImproveOptions {
   sessionIds?: string[];
   feedbackAlpha?: number;
   tenant?: string;
+  /** Opt in to the `global_context_index` stage. Default `false`. */
+  buildGlobalContextIndex?: boolean;
+  /** Opt in to the `build_truth_subspace` stage. Default `false`. */
+  buildTruthSubspace?: boolean;
+  /**
+   * Resolve the dataset and validate the options (an unknown or unwritable
+   * `datasetId` rejects), then return a `running` result at once
+   * (`background: true`, `finished: false`, no stages) and run the improve as
+   * a process-wide background task. Wait for it with
+   * `waitForBackgroundTasks()`; `close()` waits too. There is no per-run
+   * handle. Default `false`.
+   */
+  runInBackground?: boolean;
+}
+
+/** Options of `waitForBackgroundTasks`. */
+export interface CogneeWaitForBackgroundTasksOptions {
+  /** Bound the wait, in seconds (non-negative); nothing is cancelled when it elapses. */
+  timeoutSeconds?: number;
+}
+
+/** Result of `waitForBackgroundTasks`. */
+export interface CogneeWaitForBackgroundTasksResult {
+  /** `false` only when the timeout elapsed with work still running. */
+  finished: boolean;
+  /** Background tasks still running. */
+  pending: number;
 }
 
 /** What one improve stage did (Python's `StageResult`). */

@@ -44,8 +44,20 @@
 //! ### `improve` opts (required: `datasetName`)
 //! ```json
 //! {"datasetName":"...", "datasetId":"<uuid>", "sessionIds":["..."],
-//!  "feedbackAlpha":0.1, "tenant":"<uuid>"}
+//!  "feedbackAlpha":0.1, "tenant":"<uuid>", "buildGlobalContextIndex":bool,
+//!  "buildTruthSubspace":bool, "runInBackground":bool}
 //! ```
+//!
+//! `buildGlobalContextIndex` / `buildTruthSubspace` opt in to those stages
+//! (default `false`). With `runInBackground: true` the dataset is resolved
+//! (a name resolves or is created; an unknown or unwritable `datasetId` is a
+//! validation error) and the options are validated first, as Python does,
+//! then the op returns a `running` result (`background: true`,
+//! `finished: false`, no stages, the resolved `datasetId`/`datasetName`) and
+//! the run continues as a process-wide background task
+//! ([`cognee::api::improve::improve_in_background`]). Callers wait for it with
+//! the `waitForBackgroundTasks` op, which every binding exposes; `close()`
+//! waits too. There is no per-run handle.
 //!
 //! `datasetId` (optional) targets a dataset the caller already resolved and
 //! authorized, possibly one shared with it, as Python's
@@ -73,7 +85,7 @@ use cognee::api::{ImproveParams, ImproveResult, remember, remember_entry};
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
-use crate::{HandleState, SdkError};
+use crate::{CogneeServices, HandleState, SdkError};
 
 // ---------------------------------------------------------------------------
 // opts helpers.
@@ -376,13 +388,15 @@ pub async fn run_improve(
     };
 
     let tenant_id = opts_tenant(opts)?;
+    let flags = improve_flags(opts)?;
 
     let svc = state.services().await?;
     let owner_id = state.owner_id().await?;
     let cognify_config =
         super::pipeline::cognify_config_with_graph_backend(svc.as_ref(), opts).await?;
 
-    let result = cognee::api::improve(ImproveParams {
+    let session_ids = session_ids.map(|ids| ids.into_iter().filter(|s| !s.is_empty()).collect());
+    let run = ImproveRun {
         dataset_name,
         dataset_id,
         session_ids,
@@ -392,29 +406,144 @@ pub async fn run_improve(
         config: improve_config,
         personalization,
         auto_feedback,
-        build_global_context_index: false,
-        build_truth_subspace: false,
-        run_in_background: false,
-        llm: svc.llm.clone(),
-        storage: svc.storage.clone(),
-        graph_db: svc.graph_db.clone(),
-        vector_db: svc.vector_db.clone(),
-        embedding_engine: svc.embedding_engine.clone(),
-        ontology_resolver: svc.ontology_resolver.clone(),
-        db: Some(svc.database.clone()),
-        session_store: Some(svc.session_store.clone()),
-        session_manager: Some(svc.session_manager.clone()),
-        add_pipeline: Some(svc.add_pipeline.as_ref()),
-        // The add pipeline's registry (none here), else the process-wide one.
-        dataset_locks: None,
-        cognify_config: &cognify_config,
-    })
-    .await
-    .map_err(improve_error)?;
+        flags,
+    };
+
+    if flags.run_in_background {
+        // As Python's `improve(run_in_background=True)`: the library resolves
+        // and authorizes the dataset and validates the options before it
+        // spawns, so those errors reach the caller. The returned result is
+        // `running`; callers wait with `waitForBackgroundTasks` (or
+        // `close()`, which waits). The graph checkpoint runs after the run,
+        // inside the same background task.
+        let checkpoint_svc = Arc::clone(&svc);
+        let running = cognee::api::improve::improve_in_background_then(
+            run.owned_params(svc.as_ref(), cognify_config),
+            move |_outcome| async move {
+                crate::ops::lifecycle::checkpoint_graph_after(checkpoint_svc.as_ref(), "improve")
+                    .await;
+            },
+        )
+        .await
+        .map_err(improve_dispatch_error)?;
+        return Ok(improve_result_json(&running));
+    }
+
+    let result = cognee::api::improve(run.params(svc.as_ref(), &cognify_config))
+        .await
+        .map_err(improve_error)?;
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "improve").await;
 
     Ok(improve_result_json(&result))
+}
+
+/// The resolved inputs of one `improve` run, owned so a background task can
+/// hold them.
+struct ImproveRun {
+    dataset_name: String,
+    dataset_id: Option<uuid::Uuid>,
+    session_ids: Option<Vec<String>>,
+    owner_id: uuid::Uuid,
+    tenant_id: Option<uuid::Uuid>,
+    feedback_alpha: Option<f64>,
+    config: cognee::api::improve::ImproveConfig,
+    personalization: cognee::search::PreferenceConfig,
+    auto_feedback: bool,
+    flags: ImproveFlags,
+}
+
+impl ImproveRun {
+    /// The owned library params of a background run, engines from `svc`.
+    fn owned_params(
+        self,
+        svc: &CogneeServices,
+        cognify_config: cognee::cognify::CognifyConfig,
+    ) -> cognee::api::improve::OwnedImproveParams {
+        cognee::api::improve::OwnedImproveParams {
+            dataset_name: self.dataset_name,
+            dataset_id: self.dataset_id,
+            session_ids: self.session_ids,
+            owner_id: self.owner_id,
+            tenant_id: self.tenant_id,
+            feedback_alpha: self.feedback_alpha,
+            config: self.config,
+            personalization: self.personalization,
+            auto_feedback: self.auto_feedback,
+            build_global_context_index: self.flags.build_global_context_index,
+            build_truth_subspace: self.flags.build_truth_subspace,
+            llm: svc.llm.clone(),
+            storage: svc.storage.clone(),
+            graph_db: svc.graph_db.clone(),
+            vector_db: svc.vector_db.clone(),
+            embedding_engine: svc.embedding_engine.clone(),
+            ontology_resolver: svc.ontology_resolver.clone(),
+            db: Some(svc.database.clone()),
+            session_store: Some(svc.session_store.clone()),
+            session_manager: Some(svc.session_manager.clone()),
+            add_pipeline: Some(Arc::clone(&svc.add_pipeline)),
+            // The add pipeline's registry and ACL (none here), else the
+            // process-wide registry and ownership.
+            dataset_locks: None,
+            acl_db: None,
+            cognify_config,
+        }
+    }
+
+    /// The library params of a synchronous run: the two build flags come
+    /// from the opts, the engines from `svc`.
+    fn params<'a>(
+        self,
+        svc: &'a CogneeServices,
+        cognify_config: &'a cognee::cognify::CognifyConfig,
+    ) -> ImproveParams<'a> {
+        ImproveParams {
+            dataset_name: self.dataset_name,
+            dataset_id: self.dataset_id,
+            session_ids: self.session_ids,
+            owner_id: self.owner_id,
+            tenant_id: self.tenant_id,
+            feedback_alpha: self.feedback_alpha,
+            config: self.config,
+            personalization: self.personalization,
+            auto_feedback: self.auto_feedback,
+            build_global_context_index: self.flags.build_global_context_index,
+            build_truth_subspace: self.flags.build_truth_subspace,
+            run_in_background: false,
+            llm: svc.llm.clone(),
+            storage: svc.storage.clone(),
+            graph_db: svc.graph_db.clone(),
+            vector_db: svc.vector_db.clone(),
+            embedding_engine: svc.embedding_engine.clone(),
+            ontology_resolver: svc.ontology_resolver.clone(),
+            db: Some(svc.database.clone()),
+            session_store: Some(svc.session_store.clone()),
+            session_manager: Some(svc.session_manager.clone()),
+            add_pipeline: Some(svc.add_pipeline.as_ref()),
+            // The add pipeline's registry (none here), else the process-wide one.
+            dataset_locks: None,
+            cognify_config,
+        }
+    }
+}
+
+/// The boolean `improve` opts that are not part of the dataset selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ImproveFlags {
+    run_in_background: bool,
+    build_global_context_index: bool,
+    build_truth_subspace: bool,
+}
+
+/// Parse `runInBackground`, `buildGlobalContextIndex` and `buildTruthSubspace`
+/// (all default `false`); a present non-boolean is rejected.
+fn improve_flags(opts: &serde_json::Value) -> Result<ImproveFlags, SdkError> {
+    let flag = |key: &str| super::pipeline::opt_bool(opts, key).map(Option::unwrap_or_default);
+    Ok(ImproveFlags {
+        run_in_background: flag("runInBackground")?,
+        build_global_context_index: flag("buildGlobalContextIndex")?,
+        build_truth_subspace: flag("buildTruthSubspace")?,
+    })
 }
 
 /// The `datasetId` improve opt: `None` when absent or null, else a UUID string.
@@ -427,6 +556,17 @@ fn improve_dataset_id(opts: &serde_json::Value) -> Result<Option<uuid::Uuid>, Sd
         Some(other) => Err(SdkError::Validation(format!(
             "`datasetId` must be a UUID string, got {other}"
         ))),
+    }
+}
+
+/// The binding error of a background `improve` refused before dispatch: a
+/// bad option, an unknown dataset id or a dataset the caller may not write is
+/// the caller's to fix.
+fn improve_dispatch_error(error: cognee::api::ApiError) -> SdkError {
+    match error {
+        cognee::api::ApiError::InvalidArgument(message)
+        | cognee::api::ApiError::PermissionDenied(message) => SdkError::Validation(message),
+        other => improve_error(other),
     }
 }
 
@@ -482,6 +622,42 @@ pub fn improve_result_json(result: &ImproveResult) -> serde_json::Value {
 mod tests {
     use super::*;
     use cognee::api::StageResult;
+
+    #[test]
+    fn improve_flags_default_off_and_reach_each_field() {
+        assert_eq!(improve_flags(&json!({})).unwrap(), ImproveFlags::default());
+        assert_eq!(
+            improve_flags(&json!({"runInBackground": null})).unwrap(),
+            ImproveFlags::default()
+        );
+        let flags = improve_flags(&json!({
+            "runInBackground": true,
+            "buildGlobalContextIndex": true,
+            "buildTruthSubspace": true,
+        }))
+        .unwrap();
+        assert!(flags.run_in_background);
+        assert!(flags.build_global_context_index);
+        assert!(flags.build_truth_subspace);
+        let only_truth = improve_flags(&json!({"buildTruthSubspace": true})).unwrap();
+        assert!(only_truth.build_truth_subspace);
+        assert!(!only_truth.build_global_context_index);
+    }
+
+    #[test]
+    fn improve_flags_reject_non_booleans() {
+        for key in [
+            "runInBackground",
+            "buildGlobalContextIndex",
+            "buildTruthSubspace",
+        ] {
+            for bad in [json!("true"), json!(1)] {
+                let err = improve_flags(&json!({ key: bad })).unwrap_err();
+                assert!(matches!(err, SdkError::Validation(_)), "{err:?}");
+                assert!(err.to_string().contains(key), "{err}");
+            }
+        }
+    }
 
     // Python attaches `improve_result` to the error a fatal-stage abort
     // raises; the binding error keeps it in the wire shape.

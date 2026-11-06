@@ -2099,6 +2099,13 @@ impl AddPipeline {
         self
     }
 
+    /// The ACL store wired with [`Self::with_acl_db`], if any. An operation
+    /// that resolves or creates a dataset outside `add` (a background
+    /// `improve`) authorizes and grants through the same store.
+    pub fn acl_db(&self) -> Option<&Arc<dyn AclDb>> {
+        self.acl_db.as_ref()
+    }
+
     /// Serialize dataset create-and-grant against other writers of the same
     /// dataset identity in this process.
     ///
