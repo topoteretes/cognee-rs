@@ -1214,8 +1214,9 @@ impl SearchRetriever for HybridRetriever {
     /// items are never cited.
     ///
     /// Python's list branch (one context per answer) only arises for a
-    /// `query_batch`, which HYBRID_COMPLETION rejects here, so the single
-    /// context covers every answer — each still grounded by its own text
+    /// `query_batch`, which HYBRID_COMPLETION rejects here (Python dev
+    /// accepts it; see `get_context_batch`), so the single context covers
+    /// every answer — each still grounded by its own text
     /// (`append_chunk_evidence`). Structured hybrid evidence
     /// (`context_evidence`) is not ported: Python dev has none yet.
     fn append_references(
@@ -1326,9 +1327,12 @@ impl SearchRetriever for HybridRetriever {
         }
     }
 
-    /// HYBRID_COMPLETION rejects query batches at every entry point (Python
-    /// `_reject_query_batch`, `hybrid_retriever.py:300-302`). No default
-    /// per-query-loop fallback.
+    /// HYBRID_COMPLETION rejects query batches at every entry point. No
+    /// default per-query-loop fallback. This is a deviation: Python's
+    /// `_reject_query_batch` is gone, and Python dev's `HybridRetriever`
+    /// answers a `query_batch` by retrieving each query concurrently
+    /// (`get_retrieved_objects`, `hybrid_retriever.py:134`). TEMPORAL still
+    /// rejects batches in both.
     async fn get_context_batch(
         &self,
         _queries: &[String],
