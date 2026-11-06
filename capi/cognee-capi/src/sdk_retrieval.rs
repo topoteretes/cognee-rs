@@ -21,7 +21,7 @@
 //!
 //! `RecallResult` does NOT derive `Serialize` (derives only `Debug, Clone`) —
 //! hand-build JSON with camelCase keys: `items`, `searchTypeUsed`, `autoRouted`,
-//! `searchResponse`.
+//! `searchResponse`, `normalizedResults`.
 
 use std::ffi::c_char;
 use std::sync::Arc;
@@ -59,6 +59,10 @@ use crate::sdk_ops::parse_c_str_or_fire;
 ///                              triplets this many hops around the nearest hits
 ///   "neighborhoodSeedTopK"   — positive integer; at most this many hits to
 ///                              expand from, nearest first (default: all)
+///   "includeReferences"      — boolean (default false); completion searches
+///                              attach structured `evidence` references to the
+///                              response, and RAG text answers gain an
+///                              "Evidence:" block
 ///
 /// `userId` from opts is ignored; `user_id` in `SearchRequest` is always set
 /// from the handle's `owner_id` so dataset-name resolution works correctly.
@@ -125,7 +129,9 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///                   "auto" | "graph" | "session" | "trace"
 ///                   ("graph_context" is a deprecated alias of "graph")
 ///                   (absent/null → "auto" default applied by recall())
-///   "neighborhoodDepth", "neighborhoodSeedTopK" — as for `cg_sdk_search`
+///   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as for
+///                   `cg_sdk_search` (references land in each normalized
+///                   result's `metadata.evidence`)
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///
@@ -134,6 +140,7 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "searchTypeUsed" — null or SCREAMING_SNAKE_CASE string
 ///   "autoRouted"     — boolean
 ///   "searchResponse" — null or SearchResponse value
+///   "normalizedResults" — array of typed entries, one per graph item
 ///
 /// # Safety
 /// `sdk` must be a valid `CgSdk*` or NULL.  `query` must be a valid

@@ -2504,6 +2504,66 @@
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
   },
+  "cognify.edge_evidence_enabled <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- false": {
+    "ok": {
+      "cognify.edge_evidence_enabled": false
+    }
+  },
+  "cognify.edge_evidence_enabled <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
+  "cognify.edge_evidence_enabled <- true": {
+    "ok": {}
+  },
+  "cognify.edge_evidence_enabled <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.edge_evidence_enabled"
+  },
   "cognify.extraction_strategy <- \"\"": {
     "ok": {}
   },
@@ -8638,6 +8698,66 @@
     "err": "TypeMismatch",
     "key": "improve.trace_windows_per_run"
   },
+  "llm.answer_streaming <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- false": {
+    "ok": {}
+  },
+  "llm.answer_streaming <- null": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
+  "llm.answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "llm.answer_streaming <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm.answer_streaming"
+  },
   "llm.anthropic.base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -10636,6 +10756,66 @@
   "llm.temperature <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "llm.temperature"
+  },
+  "llm_answer_streaming <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- -1": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- 0": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- 1": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- 70000": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- [1]": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- false": {
+    "ok": {}
+  },
+  "llm_answer_streaming <- null": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
+  },
+  "llm_answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "llm_answer_streaming <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "llm_answer_streaming"
   },
   "llm_api_key <- \"\"": {
     "ok": {}

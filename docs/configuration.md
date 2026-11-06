@@ -286,6 +286,7 @@ for the adapter.
 | `LLM_STRUCTURED_OUTPUT_MODE` | `llm.structured_output_mode` (`llm_structured_output_mode`) | `auto` |
 | `LLM_TEMPERATURE` | `llm.temperature` (`llm_temperature`) | *unset — no `temperature` is sent* |
 | `LLM_STREAMING` | `llm.streaming` (`llm_streaming`) | `false` (accepted for Python parity; no effect, see below) |
+| `LLM_ANSWER_STREAMING` | `llm.answer_streaming` (`llm_answer_streaming`) | `false` (stream the plain-text answer of a concurrent session turn into a token sink; see below) |
 | `LLM_MAX_COMPLETION_TOKENS` / `LLM_MAX_TOKENS` | `llm.max_completion_tokens` (`llm_max_completion_tokens`) | `16384` |
 | `LLM_ARGS` | `llm.args` (`llm_args`) | _(empty)_ |
 | `LLM_MAX_RETRIES` | `llm.max_retries` (`llm_max_retries`) | `3` |
@@ -366,8 +367,39 @@ pin `0.0` for local inference servers when the variable is unset.
 
 `LLM_STREAMING` has no effect. Python's `llm_streaming` is likewise unread by
 its OpenAI and Azure adapters (its own `LLMConfig` says so, beside
-`llm_answer_streaming`), and no Rust adapter streams: the `Llm` trait has no
-token-streaming call for a stream to reach.
+`llm_answer_streaming`).
+
+`LLM_ANSWER_STREAMING` is Python's `llm_answer_streaming`. With it on, the
+OpenAI-compatible adapter answers through a `stream: true` request
+(`Llm::generate_streaming`) and pushes each content delta into a token sink
+(`cognee_llm::TokenSink`), still returning the complete string. It changes
+nothing unless a caller installs a sink with `cognee_llm::with_token_sink`
+around a recall, and then only the concurrent session-turn answer lane streams:
+sessionless, sequential, `only_context` and structured-output answers send zero
+deltas, and `include_references` citations are appended after the answer so they
+are never deltas. Deltas are a preview; the returned payload is authoritative.
+
+How the streamed body is read: an in-stream `{"error": ...}` chunk or a
+`finish_reason: "error"` fails the attempt (as the OpenAI SDK under litellm
+does) and is retried, the sink getting a `reset`; a body that closes with
+neither `[DONE]` nor any `finish_reason` is treated as truncated and retried
+(Python accepts any clean close; a close after a `finish_reason` without
+`[DONE]` is accepted here too); a read timeout counts as an overload for the
+pacer, like a send timeout; and a provider that ignores `stream: true` and
+answers JSON (non-`text/event-stream` `Content-Type`) is parsed as the blocking
+response, its text pushed as one delta. `llm.debug_requests` also logs the
+folded streamed response.
+
+Two of these are deliberate deviations from Python, both so that a streamed
+answer is never silently wrong:
+
+- **Truncation.** Python returns whatever arrived when the body closes cleanly,
+  even if no choice finished. Here a stream with neither `[DONE]` nor any
+  `finish_reason` is a failed attempt and is retried, so a partial answer is
+  never returned as a whole one.
+- **JSON fallback.** For a provider that ignores `stream: true`, Python's SDK
+  finds no `data:` lines in the JSON body and answers `""`. Here the JSON body
+  is parsed as a blocking response and its answer returned.
 
 A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
 `llm_fallback_*`) is configurable programmatically (no env binding) but not used
@@ -983,10 +1015,30 @@ prompt and the summary schema:
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
 | `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
+| `EDGE_EVIDENCE_ENABLED` | `cognify.edge_evidence_enabled` | record which chunk supports which graph edge (`provenance_edge_evidence`) during cognify, so `include_references` can cite edge sources (Python's `EDGE_EVIDENCE_ENABLED`); off only stops new capture | `true` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
 | — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
+
+### Edge evidence (`provenance_edge_evidence`)
+
+With `EDGE_EVIDENCE_ENABLED` on, each cognify storage batch records which chunk
+supports which graph edge, keyed by the run's `pipeline_run_id`; a search only
+cites rows whose run has a `COMPLETED` `pipeline_runs` row. As in Python, a run
+without a user records no evidence (the ownership ledger, by contrast, falls
+back to the default user).
+
+**Postgres: a table Python created is not shared.** The SQLite table is
+byte-compatible with Python's, so one SQLite database serves both SDKs. On
+Postgres it is not: Python's migration (`f3a7b9c1d2e4`) declares the id
+columns as native `uuid`, and Rust stores them as text. Rust creates the table
+with `IF NOT EXISTS`, so on a database Python already migrated it leaves
+Python's table untouched, and then every Rust insert fails (`column "id" is of
+type uuid but expression is of type text`). That fails cognify's storage stage
+for any run that captures evidence, and a search's lookup (`uuid = text`) finds
+no source evidence. Checked on Postgres 18. Point Rust at a database Python did
+not migrate, or turn `EDGE_EVIDENCE_ENABLED` off there.
 
 ### `COGNEE_LEGACY_PER_WORD_TOKEN_COUNT` — a deliberate divergence from Python
 

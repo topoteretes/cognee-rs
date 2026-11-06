@@ -1205,6 +1205,37 @@ impl SearchRetriever for HybridRetriever {
         )
     }
 
+    /// Python `HybridRetriever.append_references` (`hybrid_retriever.py:373`
+    /// → `cite_hybrid_completions`, `hybrid/references.py`): when
+    /// `include_references` is on and the answer is plain text (no
+    /// `response_schema`, Python's `response_model is str`), each string
+    /// answer gets an answer-grounded Evidence block cited from the **chunk
+    /// lane only** — the passages the LLM actually read. Entity and fact
+    /// items are never cited.
+    ///
+    /// Python's list branch (one context per answer) only arises for a
+    /// `query_batch`, which HYBRID_COMPLETION rejects here (Python dev
+    /// accepts it; see `get_context_batch`), so the single context covers
+    /// every answer — each still grounded by its own text
+    /// (`append_chunk_evidence`). Structured hybrid evidence
+    /// (`context_evidence`) is not ported: Python dev has none yet.
+    fn append_references(
+        &self,
+        output: SearchOutput,
+        context: &SearchContext,
+        params: &SearchParams,
+    ) -> SearchOutput {
+        if !params.include_references || params.response_schema.is_some() {
+            return output;
+        }
+        let chunks: Vec<SearchItem> = context
+            .iter()
+            .filter(|item| item.payload.get("kind").and_then(Value::as_str) == Some("chunk"))
+            .cloned()
+            .collect();
+        crate::utils::references::append_chunk_evidence(output, &chunks)
+    }
+
     async fn get_context(
         &self,
         query: &str,
@@ -1288,17 +1319,23 @@ impl SearchRetriever for HybridRetriever {
                 .map_err(|e| SearchError::LlmError(e.to_string()))?;
             Ok(SearchOutput::Structured(structured_value))
         } else {
-            let completion = self
-                .llm
-                .generate(messages, self.generation_options.clone())
-                .await?;
+            // The turn's answer: streams into a promoted token sink, if any.
+            let completion = cognee_llm::generate_answer(
+                self.llm.as_ref(),
+                messages,
+                self.generation_options.clone(),
+            )
+            .await?;
             Ok(SearchOutput::Text(completion.content))
         }
     }
 
-    /// HYBRID_COMPLETION rejects query batches at every entry point (Python
-    /// `_reject_query_batch`, `hybrid_retriever.py:300-302`). No default
-    /// per-query-loop fallback.
+    /// HYBRID_COMPLETION rejects query batches at every entry point. No
+    /// default per-query-loop fallback. This is a deviation: Python's
+    /// `_reject_query_batch` is gone, and Python dev's `HybridRetriever`
+    /// answers a `query_batch` by retrieving each query concurrently
+    /// (`get_retrieved_objects`, `hybrid_retriever.py:134`). TEMPORAL still
+    /// rejects batches in both.
     async fn get_context_batch(
         &self,
         _queries: &[String],
@@ -2220,6 +2257,163 @@ mod retriever_tests {
         let user = &messages[1].content;
         assert!(user.contains("provided chunk"));
         assert!(user.contains("### Bob"));
+    }
+
+    /// A hybrid context with one citable chunk and an entity and a fact whose
+    /// payloads would also be citable if the lane filter were missing.
+    fn citable_hybrid_context() -> SearchContext {
+        let citable = |kind: &str, document: &str, text: &str| SearchItem {
+            id: None,
+            score: None,
+            payload: json!({
+                "kind": kind,
+                "id": format!("{kind}-1"),
+                "document_name": document,
+                "chunk_index": 0,
+                "text": text,
+            }),
+        };
+        vec![
+            citable(
+                "chunk",
+                "report.pdf",
+                "Revenue grew twelve percent in 2024.",
+            ),
+            citable("entity", "entity.pdf", "Revenue grew twelve percent."),
+            citable("fact", "fact.pdf", "Revenue grew twelve percent."),
+        ]
+    }
+
+    fn with_references() -> SearchParams {
+        SearchParams {
+            include_references: true,
+            ..SearchParams::default()
+        }
+    }
+
+    fn hybrid_retriever_for_references() -> HybridRetriever {
+        retriever(
+            Arc::new(MockVectorDB::new()),
+            Arc::new(MockGraphDB::new()),
+            Arc::new(CapturingLlm::default()),
+        )
+    }
+
+    #[test]
+    fn append_references_cites_only_the_chunk_lane() {
+        let retriever = hybrid_retriever_for_references();
+        let output = retriever.append_references(
+            SearchOutput::Text("Revenue grew twelve percent.".into()),
+            &citable_hybrid_context(),
+            &with_references(),
+        );
+        let SearchOutput::Text(text) = output else {
+            panic!("expected text output");
+        };
+        assert_eq!(
+            text,
+            "Revenue grew twelve percent.\n\nEvidence:\n- chunk 1 of document report.pdf \
+             (chunk_id: chunk-1): \"Revenue grew twelve percent in 2024.\""
+        );
+    }
+
+    #[test]
+    fn append_references_is_off_by_default_and_for_structured_answers() {
+        let retriever = hybrid_retriever_for_references();
+        let context = citable_hybrid_context();
+        let answer = || SearchOutput::Text("Revenue grew twelve percent.".into());
+
+        // Flag off: byte-identical.
+        let off = retriever.append_references(answer(), &context, &SearchParams::default());
+        assert!(matches!(off, SearchOutput::Text(t) if t == "Revenue grew twelve percent."));
+
+        // A response_schema (Python `response_model is not str`) disables it.
+        let schema = SearchParams {
+            response_schema: Some(json!({ "type": "object" })),
+            ..with_references()
+        };
+        let structured_run = retriever.append_references(answer(), &context, &schema);
+        assert!(
+            matches!(structured_run, SearchOutput::Text(t) if t == "Revenue grew twelve percent.")
+        );
+
+        // A structured answer is never touched.
+        let structured = retriever.append_references(
+            SearchOutput::Structured(json!({ "answer": "x" })),
+            &context,
+            &with_references(),
+        );
+        assert!(matches!(structured, SearchOutput::Structured(v) if v == json!({ "answer": "x" })));
+    }
+
+    #[test]
+    fn append_references_grounds_each_answer_and_skips_ungrounded_ones() {
+        let retriever = hybrid_retriever_for_references();
+        let output = retriever.append_references(
+            SearchOutput::Texts(vec![
+                "Revenue grew twelve percent.".into(),
+                "Unrelated zebra answer".into(),
+            ]),
+            &citable_hybrid_context(),
+            &with_references(),
+        );
+        let SearchOutput::Texts(answers) = output else {
+            panic!("expected texts output");
+        };
+        assert!(answers[0].contains("Evidence:\n- chunk 1 of document report.pdf"));
+        assert_eq!(answers[1], "Unrelated zebra answer");
+    }
+
+    #[tokio::test]
+    async fn a_completion_over_real_lanes_is_cited_from_its_chunk_lane() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let chunk_id = Uuid::new_v4();
+        vector_db
+            .index_points(
+                "DocumentChunk",
+                "text",
+                &[VectorPoint::new(chunk_id, vec![1.0, 0.0])
+                    .with_metadata("id", json!(chunk_id.to_string()))
+                    .with_metadata("text", json!("Ownership rules borrow checking"))
+                    .with_metadata("document_name", json!("rust-book.md"))
+                    .with_metadata("document_id", json!("data-7"))
+                    .with_metadata("chunk_index", json!(2))],
+            )
+            .await
+            .unwrap();
+        let llm = Arc::new(CapturingLlm {
+            response_text: "Ownership drives borrow checking.".to_string(),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, llm);
+        let params = with_references();
+
+        let context = retriever.get_context("ownership", &params).await.unwrap();
+        let output = retriever
+            .get_completion(
+                "ownership",
+                Some(context.clone()),
+                &SessionContext::default(),
+                &params,
+            )
+            .await
+            .unwrap();
+        let SearchOutput::Text(text) = retriever.append_references(output, &context, &params)
+        else {
+            panic!("expected text output");
+        };
+        assert!(
+            text.starts_with("Ownership drives borrow checking.\n\nEvidence:\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "- chunk 3 of document rust-book.md (data_id: data-7, chunk_id: {chunk_id})"
+            )),
+            "{text}"
+        );
+        // Only the chunk-lane row with document metadata is citable.
+        assert_eq!(text.matches("\n- ").count(), 1, "{text}");
     }
 
     #[tokio::test]

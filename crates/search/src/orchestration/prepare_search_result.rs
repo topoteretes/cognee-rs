@@ -80,6 +80,7 @@ pub fn prepare_search_result(
         user_prompt: None,
         system_prompt: None,
         prompts: None,
+        evidence: Vec::new(),
     }
 }
 

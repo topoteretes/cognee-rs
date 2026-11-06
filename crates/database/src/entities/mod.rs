@@ -13,6 +13,7 @@ pub mod graph_metrics;
 pub mod node;
 pub mod pipeline_run;
 pub mod pipeline_run_payload_field;
+pub mod provenance_edge_evidence;
 pub mod task_run;
 
 // P6 sync_operations (cloud sync state):

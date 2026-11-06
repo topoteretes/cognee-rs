@@ -127,6 +127,30 @@ impl Llm for RecordingLlm {
         Ok(response)
     }
 
+    async fn generate_streaming(
+        &self,
+        messages: Vec<Message>,
+        options: Option<GenerationOptions>,
+        sink: &dyn crate::token_sink::DeltaSink,
+    ) -> LlmResult<GenerationResponse> {
+        let hash = input_hash(&messages, None);
+        let preview = user_input_preview(&messages);
+        let response = self
+            .inner
+            .generate_streaming(messages, options, sink)
+            .await?;
+        self.record(
+            hash,
+            CassetteEntry {
+                method: CassetteMethod::Generate,
+                user_input_preview: preview,
+                schema_name: None,
+                response: Value::String(response.content.clone()),
+            },
+        );
+        Ok(response)
+    }
+
     async fn create_structured_output_with_messages_raw(
         &self,
         messages: Vec<Message>,
@@ -223,6 +247,10 @@ impl Llm for RecordingLlm {
 
     fn supports_streaming(&self) -> bool {
         self.inner.supports_streaming()
+    }
+
+    fn streaming_enabled(&self) -> bool {
+        self.inner.streaming_enabled()
     }
 
     fn supports_function_calling(&self) -> bool {

@@ -22,6 +22,7 @@
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
+    "cognify.edge_evidence_enabled",
     "cognify.extraction_strategy",
     "cognify.failure_report_cap",
     "cognify.legacy_per_word_token_count",
@@ -83,6 +84,7 @@
     "improve.stages_disabled",
     "improve.trace_window_steps",
     "improve.trace_windows_per_run",
+    "llm.answer_streaming",
     "llm.anthropic.base_url",
     "llm.api_key",
     "llm.api_version",
@@ -233,6 +235,7 @@
     "llm.structured_output_mode",
     "llm.temperature",
     "llm.streaming",
+    "llm.answer_streaming",
     "llm.max_completion_tokens",
     "llm.max_retries",
     "llm.network_retries",
@@ -305,6 +308,7 @@
     "cognify.raise_incremental_loading_errors",
     "cognify.rollback_scope",
     "cognify.tolerate_summarization_failures",
+    "cognify.edge_evidence_enabled",
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
@@ -2435,6 +2439,53 @@
     "err": true
   },
   "set cognify.chunks_per_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"1\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"s\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- \"true\"": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- -1": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 0": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 1": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 1.5": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 5000000000": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- 70000": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- [1]": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- false": {
+    "ok": {
+      "cognify.edge_evidence_enabled": false
+    }
+  },
+  "set cognify.edge_evidence_enabled <- null": {
+    "err": true
+  },
+  "set cognify.edge_evidence_enabled <- true": {
+    "ok": {}
+  },
+  "set cognify.edge_evidence_enabled <- {\"a\":1}": {
     "err": true
   },
   "set cognify.extraction_strategy <- \"\"": {
@@ -7465,6 +7516,53 @@
   "set improve.trace_windows_per_run <- {\"a\":1}": {
     "err": true
   },
+  "set llm.answer_streaming <- \"\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm.answer_streaming <- -1": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 0": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 1": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 1.5": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm.answer_streaming <- 70000": {
+    "err": true
+  },
+  "set llm.answer_streaming <- [1]": {
+    "err": true
+  },
+  "set llm.answer_streaming <- false": {
+    "ok": {}
+  },
+  "set llm.answer_streaming <- null": {
+    "err": true
+  },
+  "set llm.answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "set llm.answer_streaming <- {\"a\":1}": {
+    "err": true
+  },
   "set llm.anthropic.base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -9093,6 +9191,53 @@
     "err": true
   },
   "set llm.temperature <- {\"a\":1}": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"1\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"s\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- \"true\"": {
+    "err": true
+  },
+  "set llm_answer_streaming <- -1": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 0": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 1": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 1.5": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 5000000000": {
+    "err": true
+  },
+  "set llm_answer_streaming <- 70000": {
+    "err": true
+  },
+  "set llm_answer_streaming <- [1]": {
+    "err": true
+  },
+  "set llm_answer_streaming <- false": {
+    "ok": {}
+  },
+  "set llm_answer_streaming <- null": {
+    "err": true
+  },
+  "set llm_answer_streaming <- true": {
+    "ok": {
+      "llm.answer_streaming": true
+    }
+  },
+  "set llm_answer_streaming <- {\"a\":1}": {
     "err": true
   },
   "set llm_api_key <- \"\"": {
@@ -15490,6 +15635,13 @@
       "relational.port": 1
     }
   },
+  "unset cognify.edge_evidence_enabled": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset cognify.extraction_strategy": {
     "ok": {
       "chunk_size": 7,
@@ -16175,6 +16327,13 @@
       "relational.port": 1
     }
   },
+  "unset llm.answer_streaming": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset llm.anthropic.base_url": {
     "ok": {
       "chunk_size": 7,
@@ -16392,6 +16551,13 @@
     }
   },
   "unset llm.temperature": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset llm_answer_streaming": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

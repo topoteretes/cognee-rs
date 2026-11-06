@@ -279,6 +279,12 @@ export interface CogneeSearchOptions {
    */
   neighborhoodSeedTopK?: number;
   /**
+   * Completion searches attach structured `evidence` references (the chunks,
+   * graph nodes and edges placed in context; snake_case keys) to the response,
+   * and RAG text answers gain an `Evidence:` block. Default `false`.
+   */
+  includeReferences?: boolean;
+  /**
    * Per-retriever knobs, forwarded verbatim to the retriever the search
    * resolves to. Keys are snake_case and retriever-defined; a key the chosen
    * retriever does not know is ignored rather than rejected.
@@ -326,6 +332,11 @@ export interface CogneeRecallOptions {
   neighborhoodDepth?: number;
   /** As `CogneeSearchOptions.neighborhoodSeedTopK`. */
   neighborhoodSeedTopK?: number;
+  /**
+   * As `CogneeSearchOptions.includeReferences`; evidence lands in each
+   * normalized result's `metadata.evidence`.
+   */
+  includeReferences?: boolean;
 }
 
 /**
@@ -435,6 +446,51 @@ export interface CogneeRecallResult {
   autoRouted: boolean;
   /** The raw graph search response, or null if no graph leg ran. */
   searchResponse: CogneeSearchResponse | null;
+  /**
+   * One typed entry per graph-source item in `items` (same order); session
+   * and trace items are not included. Additive: `items` is unchanged.
+   */
+  normalizedResults: CogneeNormalizedResult[];
+}
+
+/** Semantic kind of a normalized recall result (`RecallResultKind`). */
+export type CogneeResultKind =
+  | "graph_completion"
+  | "rag_completion"
+  | "cypher"
+  | "chunk"
+  | "summary"
+  | "coding_rule"
+  | "code"
+  | "skill"
+  | "natural_language"
+  | "temporal"
+  | "structured"
+  | "unknown";
+
+/**
+ * A normalized graph recall result. Mirrors
+ * `cognee_search::recall_normalize::NormalizedResult` (snake_case keys, as in
+ * Python's `SearchResultItem`).
+ */
+export interface CogneeNormalizedResult {
+  kind: CogneeResultKind;
+  search_type: SearchTypeString;
+  text: string;
+  system_prompt: string | null;
+  score: number | null;
+  /**
+   * The dataset the entry came from and its name: `null` when it cannot be
+   * recovered (a shared-store recall over several datasets whose answers
+   * carry no dataset membership).
+   */
+  dataset_id: string | null;
+  dataset_name: string | null;
+  /** Provenance: `data_id`, `chunk_id`, `chunk_index`, `document_name` when present. */
+  metadata: Record<string, unknown>;
+  raw: Record<string, unknown>;
+  structured: unknown | null;
+  source: "graph";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

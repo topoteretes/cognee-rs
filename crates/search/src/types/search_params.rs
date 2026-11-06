@@ -71,6 +71,11 @@ pub struct SearchParams {
     /// Number of initial seed nodes for neighborhood expansion.
     pub neighborhood_seed_top_k: Option<usize>,
 
+    /// Collect evidence references for the completion's context and append
+    /// the Evidence block to RAG text answers (`SearchRequest::include_references`).
+    #[serde(default)]
+    pub include_references: bool,
+
     /// (HybridCompletion) Max chunks for the chunk lane.
     /// When `None`: `top_k` capped at 10, else 5 (Python `_hybrid_lane_top_k`).
     pub chunks_top_k: Option<usize>,
@@ -212,6 +217,7 @@ impl From<&SearchRequest> for SearchParams {
             response_schema: req.response_schema.clone(),
             neighborhood_depth: req.neighborhood_depth,
             neighborhood_seed_top_k: req.neighborhood_seed_top_k,
+            include_references: req.include_references,
             chunks_top_k: req
                 .retriever_specific_config
                 .as_ref()

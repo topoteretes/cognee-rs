@@ -124,7 +124,10 @@ async fn impl_moves_the_stamps_and_drops_the_table(db: Arc<DatabaseConnection>) 
     );
 
     // `down` brings back the (empty) table; `up` drops it again.
-    Migrator::down(&*db, Some(1)).await.unwrap();
+    // Back through this revision and every later one, so the chain's tail may
+    // grow without this test noticing.
+    let to_revert = Migrator::migrations().len() as u32 - before_move();
+    Migrator::down(&*db, Some(to_revert)).await.unwrap();
     assert!(table_exists(&db, "graph_sync_checkpoints").await);
     Migrator::up(&*db, None).await.unwrap();
     assert!(!table_exists(&db, "graph_sync_checkpoints").await);

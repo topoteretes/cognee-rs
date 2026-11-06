@@ -198,7 +198,7 @@ async fn baseline_creates_full_table_set_sqlite() {
     // Auth tables (principals, permissions, acls, tenants, users, roles,
     // user_tenants, user_roles, user_api_key, role/user/tenant_default_permissions,
     // principal_configuration) are not part of the OSS schema. The OSS
-    // chain leaves the 15 non-auth tables listed here (the baseline also creates
+    // chain leaves the 16 non-auth tables listed here (the baseline also creates
     // `dataset_data`, which `m20261028_000001_dataset_scoped_data` drops).
     let db = connect("sqlite::memory:").await.expect("connect");
     initialize(&db).await.expect("initialize");
@@ -219,6 +219,7 @@ async fn baseline_creates_full_table_set_sqlite() {
         "session_records",
         "session_model_usage",
         "dataset_configurations",
+        "provenance_edge_evidence",
     ] {
         assert!(
             tables.iter().any(|x| x == t),
@@ -314,6 +315,9 @@ async fn baseline_creates_full_table_set_sqlite() {
 /// Bumped to 14 for `m20261031_000001_improve_stamps_to_run_info`: the improve
 /// stage watermarks move into the `improve` operation rows' `run_info`, as in
 /// Python, and `graph_sync_checkpoints` is dropped (SDK-1039).
+/// Bumped to 15 for `m20261101_000001_provenance_edge_evidence`: the
+/// graph-edge evidence sidecar (Python alembic `f3a7b9c1d2e4`, SDK-1037),
+/// created only if missing because a database Python migrated already has it.
 #[test]
 fn relational_chain_is_baseline_plus_additive_migrations() {
     use sea_orm_migration::MigratorTrait;
@@ -323,7 +327,7 @@ fn relational_chain_is_baseline_plus_additive_migrations() {
         .collect();
     assert_eq!(
         names.len(),
-        14,
+        15,
         "unexpected migration-chain length — chain: {names:?}"
     );
     assert!(

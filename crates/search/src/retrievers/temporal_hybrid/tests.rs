@@ -34,6 +34,7 @@ use crate::types::SearchItem;
 struct ScriptedLlm {
     interval: Value,
     error: Option<String>,
+    answer: String,
     structured_calls: AtomicUsize,
     generate_calls: AtomicUsize,
     last_prompt: Mutex<Vec<Message>>,
@@ -44,9 +45,17 @@ impl ScriptedLlm {
         Self {
             interval,
             error: None,
+            answer: "answer".to_string(),
             structured_calls: AtomicUsize::new(0),
             generate_calls: AtomicUsize::new(0),
             last_prompt: Mutex::new(vec![]),
+        }
+    }
+
+    fn answering(answer: &str) -> Self {
+        Self {
+            answer: answer.to_string(),
+            ..Self::new(json!({}))
         }
     }
 
@@ -68,7 +77,7 @@ impl Llm for ScriptedLlm {
         self.generate_calls.fetch_add(1, Ordering::SeqCst);
         *self.last_prompt.lock().unwrap() = messages;
         Ok(GenerationResponse {
-            content: "answer".to_string(),
+            content: self.answer.clone(),
             model: "scripted".to_string(),
             usage: None,
             finish_reason: Some("stop".to_string()),
@@ -814,4 +823,141 @@ async fn the_expansion_respects_the_node_set_filter() {
         result.diagnostics.expansion,
         names(&["r3"]).into_iter().collect()
     );
+}
+
+// --- include_references -----------------------------------------------------------
+
+const CITED_ANSWER: &str = "Atlas was founded during the expedition.";
+
+/// A TEMPORAL retriever over a non-empty graph whose chunk lane holds one
+/// citable chunk (document name and index) that grounds [`CITED_ANSWER`].
+async fn citable_temporal() -> (Arc<TemporalHybridRetriever>, Uuid) {
+    let h = harness_with(ScriptedLlm::answering(CITED_ANSWER), Some(2), None);
+    add_node(&h.graph, "c1", "DocumentChunk").await;
+    let chunk_id = Uuid::new_v4();
+    h.vector
+        .create_collection("DocumentChunk", "text", 2)
+        .await
+        .unwrap();
+    h.vector
+        .index_points(
+            "DocumentChunk",
+            "text",
+            &[VectorPoint::new(chunk_id, vec![1.0, 0.0])
+                .with_metadata("id", json!(chunk_id.to_string()))
+                .with_metadata(
+                    "text",
+                    json!("Atlas was founded in 1950 by the expedition."),
+                )
+                .with_metadata("document_name", json!("atlas.md"))
+                .with_metadata("document_id", json!("data-1"))
+                .with_metadata("chunk_index", json!(0))],
+        )
+        .await
+        .unwrap();
+    (Arc::new(h.retriever), chunk_id)
+}
+
+fn temporal_orchestrator(
+    retriever: Arc<TemporalHybridRetriever>,
+) -> crate::orchestration::SearchOrchestrator {
+    let mut registry = crate::orchestration::SearchTypeRegistry::new();
+    registry.register(retriever as Arc<dyn SearchRetriever>);
+    crate::orchestration::SearchOrchestrator::new(registry)
+}
+
+fn answer_text(output: &SearchOutput) -> String {
+    match output {
+        SearchOutput::Text(text) => text.clone(),
+        SearchOutput::Texts(texts) if texts.len() == 1 => texts[0].clone(),
+        other => panic!("expected one text answer, got {other:?}"),
+    }
+}
+
+fn assert_cites_the_chunk(text: &str, chunk_id: Uuid) {
+    assert!(
+        text.starts_with(&format!("{CITED_ANSWER}\n\nEvidence:\n")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "- chunk 1 of document atlas.md (data_id: data-1, chunk_id: {chunk_id})"
+        )),
+        "{text}"
+    );
+}
+
+/// Python's `TemporalHybridRetriever` inherits `HybridRetriever`'s
+/// `append_references`; an explicit TEMPORAL search cites its chunk lane.
+#[tokio::test]
+async fn explicit_temporal_cites_its_chunk_lane_under_include_references() {
+    let (retriever, chunk_id) = citable_temporal().await;
+    let orchestrator = temporal_orchestrator(retriever);
+    let mut request: crate::types::SearchRequest =
+        serde_json::from_value(json!({"query_text": "What happened in 1950?"})).unwrap();
+    request.search_type = SearchType::Temporal;
+
+    let plain = orchestrator.search(&request).await.unwrap();
+    assert_eq!(answer_text(&plain.result), CITED_ANSWER);
+
+    request.include_references = true;
+    let cited = orchestrator.search(&request).await.unwrap();
+    assert_cites_the_chunk(&answer_text(&cited.result), chunk_id);
+
+    // A response schema (Python `response_model is not str`) cites nothing.
+    let params = SearchParams {
+        include_references: true,
+        response_schema: Some(json!({"type": "object"})),
+        ..SearchParams::default()
+    };
+    let context = vec![SearchItem {
+        id: None,
+        score: None,
+        payload: json!({"kind": "chunk", "id": "x", "text": CITED_ANSWER,
+                        "document_name": "atlas.md", "chunk_index": 0}),
+    }];
+    let untouched = append_with_a_fresh_temporal(&context, &params);
+    assert_eq!(untouched, CITED_ANSWER);
+}
+
+fn append_with_a_fresh_temporal(context: &SearchContext, params: &SearchParams) -> String {
+    let h = harness();
+    answer_text(&h.retriever.append_references(
+        SearchOutput::Text(CITED_ANSWER.to_string()),
+        context,
+        params,
+    ))
+}
+
+/// A recall the router sends to TEMPORAL (no explicit type) carries the
+/// same citations, as Python's factory passes `include_references` to it.
+#[tokio::test]
+async fn auto_routed_temporal_cites_its_chunk_lane_under_include_references() {
+    let (retriever, chunk_id) = citable_temporal().await;
+    let orchestrator = temporal_orchestrator(retriever);
+    let span = tracing::Span::none();
+    let query = "What happened in 1950?";
+    let plan =
+        crate::recall_scope::plan_graph(query, None, true, None, None, None, &orchestrator, &span)
+            .unwrap();
+    let options = crate::recall_scope::RecallOptions {
+        include_references: true,
+        ..Default::default()
+    };
+    let (_items, used, auto_routed, response) = crate::recall_scope::run_graph(
+        &plan,
+        query,
+        None,
+        None,
+        2,
+        None,
+        &orchestrator,
+        &span,
+        Some(&options),
+    )
+    .await
+    .unwrap();
+    assert_eq!(used, SearchType::Temporal);
+    assert!(auto_routed);
+    assert_cites_the_chunk(&answer_text(&response.result), chunk_id);
 }

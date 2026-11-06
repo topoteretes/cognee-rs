@@ -48,6 +48,11 @@ pub struct RecallOptions {
     pub auto_feedback_detection: Option<bool>,
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Attach evidence references to the graph search
+    /// (`SearchRequest::include_references`); they come back on the raw
+    /// [`SearchResponse::evidence`] and in each normalized entry's
+    /// `metadata.evidence`.
+    pub include_references: bool,
     /// Retriever-specific per-request overrides forwarded unchanged to the
     /// selected graph retriever. HTTP and binding adapters should expose a
     /// typed, allowlisted surface rather than accepting arbitrary JSON.
@@ -573,6 +578,7 @@ pub async fn run_graph(
         node_name_filter_operator: options.and_then(|o| o.node_name_filter_operator.clone()),
         neighborhood_depth: options.and_then(|o| o.neighborhood_depth),
         neighborhood_seed_top_k: options.and_then(|o| o.neighborhood_seed_top_k),
+        include_references: options.is_some_and(|o| o.include_references),
     };
 
     let (response, search_type) = plan

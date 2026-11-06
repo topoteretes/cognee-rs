@@ -87,6 +87,11 @@ path = "tests/pipeline_status_key_compat.rs"
 required-features = ["sqlite"]
 
 [[test]]
+name = "edge_evidence"
+path = "tests/edge_evidence.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "provenance_run_scope"
 path = "tests/provenance_run_scope.rs"
 required-features = ["sqlite"]

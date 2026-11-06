@@ -693,7 +693,8 @@ class Cognee:
         """Recall from memory using the session-aware routing pipeline.
 
         Returns a dict with camelCase keys: ``items``, ``searchTypeUsed``,
-        ``autoRouted``, ``searchResponse``.
+        ``autoRouted``, ``searchResponse``, ``normalizedResults`` (typed
+        entries for the graph items).
 
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``search_type`` / ``searchType``, ``datasets``, ``top_k`` / ``topK``,

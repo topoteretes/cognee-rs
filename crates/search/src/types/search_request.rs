@@ -63,6 +63,13 @@ pub struct SearchRequest {
     /// Number of initial seed nodes for neighborhood expansion.
     /// Controls starting point density.
     pub neighborhood_seed_top_k: Option<usize>,
+    /// Attach structured [`EvidenceReference`](crate::types::EvidenceReference)s
+    /// for the artifacts the completion's context was built from, and append
+    /// the answer-grounded Evidence block to RAG text answers. Python's
+    /// `include_references` (`search.py:76`, default `False`). Off leaves the
+    /// answer byte-identical and `SearchResponse::evidence` empty.
+    #[serde(default)]
+    pub include_references: bool,
 }
 
 impl SearchRequest {

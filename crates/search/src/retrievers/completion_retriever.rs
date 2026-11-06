@@ -12,8 +12,12 @@ use cognee_session::SessionContext;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_node_filtered;
-use crate::types::{SearchContext, SearchError, SearchOutput, SearchParams, SearchType};
+use crate::types::{
+    EvidenceReference, SearchContext, SearchError, SearchOutput, SearchParams, SearchType,
+};
 use crate::user_preferences::{completion_guidance, load_for_search, personal_factor};
+use crate::utils::evidence::chunk_context_evidence;
+use crate::utils::references::append_chunk_evidence;
 use crate::utils::{
     build_messages_with_history, conversational_reserve, item_identity, merge_ranked,
     render_user_prompt, resolve_system_prompt, skip_completion_on_empty_context,
@@ -259,6 +263,35 @@ impl SearchRetriever for CompletionRetriever {
             .await
     }
 
+    /// The exact chunks concatenated into this RAG completion's context
+    /// (Python `CompletionRetriever.get_context_evidence`,
+    /// `completion_retriever.py:176`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<EvidenceReference> {
+        chunk_context_evidence(context, dataset_id)
+    }
+
+    /// Python `CompletionRetriever.append_references`
+    /// (`completion_retriever.py:231`): an answer-grounded Evidence block on
+    /// string answers, enabled by `include_references` unless a
+    /// `response_schema` asks for structured output (Python's
+    /// `response_model is str`).
+    fn append_references(
+        &self,
+        output: SearchOutput,
+        context: &SearchContext,
+        params: &SearchParams,
+    ) -> SearchOutput {
+        if params.include_references && params.response_schema.is_none() {
+            append_chunk_evidence(output, context)
+        } else {
+            output
+        }
+    }
+
     async fn get_completion(
         &self,
         query: &str,
@@ -290,10 +323,13 @@ impl SearchRetriever for CompletionRetriever {
                 .map_err(|e| SearchError::LlmError(e.to_string()))?;
             Ok(SearchOutput::Structured(structured_value))
         } else {
-            let completion = self
-                .llm
-                .generate(messages, self.generation_options.clone())
-                .await?;
+            // The turn's answer: streams into a promoted token sink, if any.
+            let completion = cognee_llm::generate_answer(
+                self.llm.as_ref(),
+                messages,
+                self.generation_options.clone(),
+            )
+            .await?;
             Ok(SearchOutput::Text(completion.content))
         }
     }
@@ -1070,5 +1106,183 @@ mod tests {
         };
         let merged = retriever.merge_session_contexts(Some(lane("r")), Some(lane("c")), &params);
         assert_eq!(ids(merged), ["r0", "r1", "c0"]);
+    }
+
+    // -- include_references wiring (Python test_include_references_wiring.py,
+    //    RAG half) -------------------------------------------------------------
+
+    const MOCK_ANSWER: &str = "Revenue grew 12 percent.";
+
+    fn chunk_hit(id: u128, payload: serde_json::Value) -> SearchResult {
+        SearchResult {
+            id: Uuid::from_u128(id),
+            score: 0.9,
+            metadata: payload
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        }
+    }
+
+    fn reporting_chunk() -> SearchResult {
+        chunk_hit(
+            1,
+            json!({
+                "document_name": "report.pdf",
+                "chunk_index": 0,
+                // Shares terms with MOCK_ANSWER so answer-grounded filtering keeps it.
+                "text": "Revenue grew 12 percent year over year.",
+            }),
+        )
+    }
+
+    /// A retriever over `results` whose LLM always answers `answer`.
+    fn referencing_retriever(
+        results: Vec<SearchResult>,
+        answer: &str,
+    ) -> (CompletionRetriever, Arc<TestLlm>) {
+        let llm = Arc::new(TestLlm {
+            response_text: answer.to_string(),
+            ..Default::default()
+        });
+        let retriever = CompletionRetriever::new(
+            Arc::new(TestVectorDb {
+                has_collection: true,
+                results,
+            }),
+            Arc::new(TestEmbeddingEngine),
+            Arc::clone(&llm) as Arc<dyn Llm>,
+            Some(10),
+            None,
+            None,
+            None,
+            None,
+        );
+        (retriever, llm)
+    }
+
+    /// The answer a search over `params` yields, references applied the way
+    /// the orchestrator does (after `get_completion`).
+    async fn answer_with(
+        retriever: &CompletionRetriever,
+        params: &SearchParams,
+    ) -> (SearchOutput, SearchContext) {
+        let context = retriever.get_context("q", params).await.unwrap();
+        let output = retriever
+            .get_completion(
+                "q",
+                Some(context.clone()),
+                &SessionContext::default(),
+                params,
+            )
+            .await
+            .unwrap();
+        (
+            retriever.append_references(output, &context, params),
+            context,
+        )
+    }
+
+    #[tokio::test]
+    async fn references_disabled_preserves_the_answer_text() {
+        let (retriever, _llm) = referencing_retriever(vec![reporting_chunk()], MOCK_ANSWER);
+        for params in [
+            SearchParams::default(),
+            SearchParams {
+                include_references: false,
+                ..SearchParams::default()
+            },
+        ] {
+            let (output, _) = answer_with(&retriever, &params).await;
+            assert!(matches!(output, SearchOutput::Text(ref text) if text == MOCK_ANSWER));
+        }
+    }
+
+    #[tokio::test]
+    async fn references_enabled_append_an_answer_grounded_evidence_block() {
+        let (retriever, _llm) = referencing_retriever(vec![reporting_chunk()], MOCK_ANSWER);
+        let params = SearchParams {
+            include_references: true,
+            ..SearchParams::default()
+        };
+        let (output, _) = answer_with(&retriever, &params).await;
+        let SearchOutput::Text(text) = output else {
+            panic!("a text answer stays text");
+        };
+        assert!(
+            text.starts_with(&format!("{MOCK_ANSWER}\n\nEvidence:\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "- chunk 1 of document report.pdf (chunk_id: {}):",
+                Uuid::from_u128(1)
+            )),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn references_are_omitted_when_the_answer_does_not_overlap() {
+        let (retriever, _llm) =
+            referencing_retriever(vec![reporting_chunk()], "Penguins live in Antarctica.");
+        let params = SearchParams {
+            include_references: true,
+            ..SearchParams::default()
+        };
+        let (output, _) = answer_with(&retriever, &params).await;
+        assert!(
+            matches!(output, SearchOutput::Text(ref text) if text == "Penguins live in Antarctica.")
+        );
+    }
+
+    #[tokio::test]
+    async fn references_with_no_usable_payload_leave_the_answer_alone() {
+        let bare = chunk_hit(2, json!({"text": "only text, no name or index"}));
+        let (retriever, _llm) = referencing_retriever(vec![bare], MOCK_ANSWER);
+        let params = SearchParams {
+            include_references: true,
+            ..SearchParams::default()
+        };
+        let (output, _) = answer_with(&retriever, &params).await;
+        assert!(matches!(output, SearchOutput::Text(ref text) if text == MOCK_ANSWER));
+    }
+
+    #[tokio::test]
+    async fn references_skip_structured_answers() {
+        let (retriever, _llm) = referencing_retriever(vec![reporting_chunk()], MOCK_ANSWER);
+        let params = SearchParams {
+            include_references: true,
+            response_schema: Some(json!({"type": "object"})),
+            ..SearchParams::default()
+        };
+        let context = retriever.get_context("q", &params).await.unwrap();
+        let structured = SearchOutput::Structured(json!({"answer": "structured"}));
+        let output = retriever.append_references(structured, &context, &params);
+        assert!(matches!(
+            output,
+            SearchOutput::Structured(ref value) if *value == json!({"answer": "structured"})
+        ));
+        // Even a text output is left alone when a schema was requested.
+        let output =
+            retriever.append_references(SearchOutput::Text(MOCK_ANSWER.into()), &context, &params);
+        assert!(matches!(output, SearchOutput::Text(ref text) if text == MOCK_ANSWER));
+    }
+
+    #[tokio::test]
+    async fn context_evidence_names_the_retrieved_chunks() {
+        let (retriever, _llm) = referencing_retriever(vec![reporting_chunk()], MOCK_ANSWER);
+        let context = retriever
+            .get_context("q", &SearchParams::default())
+            .await
+            .unwrap();
+        let dataset = Uuid::from_u128(9);
+        let evidence = retriever.context_evidence(&context, Some(dataset));
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].artifact_id, Uuid::from_u128(1).to_string());
+        assert_eq!(evidence[0].dataset_id, Some(dataset.to_string()));
+        assert_eq!(evidence[0].document_name.as_deref(), Some("report.pdf"));
     }
 }

@@ -87,6 +87,34 @@ pub fn data_point_id_for(class_name: &str, values: &[&str]) -> Uuid {
     Uuid::new_v5(&NAMESPACE_OID, format!("{class_name}:{joined}").as_bytes())
 }
 
+/// Deterministic, stable id of one edge `(source, target, relationship)`.
+///
+/// Port of Python's `generate_edge_object_id`
+/// (`cognee/modules/engine/utils/generate_edge_object_id.py`):
+/// `uuid5(NAMESPACE_OID, normalize(source + relationship + target))`, with the
+/// same normalization as [`generate_node_id`]. Evidence references use it as a
+/// graph edge's `artifact_id` when the edge carries no stored `edge_object_id`.
+///
+/// # Examples
+/// ```
+/// use cognee_utils::id_generation::generate_edge_object_id;
+///
+/// assert_eq!(
+///     generate_edge_object_id("Alice", "Bob", "works at").to_string(),
+///     "1251b503-c597-5421-a919-c20fc3db093a"
+/// );
+/// ```
+pub fn generate_edge_object_id(
+    source_node_id: &str,
+    target_node_id: &str,
+    relationship_name: &str,
+) -> Uuid {
+    let identifier = normalize_identifier(&format!(
+        "{source_node_id}{relationship_name}{target_node_id}"
+    ));
+    Uuid::new_v5(&NAMESPACE_OID, identifier.as_bytes())
+}
+
 /// Generate a normalized edge name string.
 ///
 /// Unlike `generate_node_id()`, this returns a normalized string rather than a UUID,

@@ -3,7 +3,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
-use crate::ops::{data, datasets, graph_storage, pipeline_runs, search_history};
+use crate::ops::{data, datasets, edge_evidence, graph_storage, pipeline_runs, search_history};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
 
 #[async_trait]
@@ -114,6 +114,16 @@ pub trait DeleteDb: Send + Sync {
         data_id: Uuid,
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError>;
+
+    /// Remove the `provenance_edge_evidence` rows of a dataset, or of one data
+    /// item in it. The rows have no foreign key, so the memory-only forget
+    /// (which keeps the `Data` rows) sweeps them explicitly. Returns the
+    /// number removed.
+    async fn delete_edge_evidence(
+        &self,
+        dataset_id: Uuid,
+        data_id: Option<Uuid>,
+    ) -> Result<u64, DatabaseError>;
 
     // ------------------------------------------------------------------
     // Graph provenance methods
@@ -244,6 +254,14 @@ impl DeleteDb for DatabaseConnection {
 
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
         data::delete_data(self, id).await
+    }
+
+    async fn delete_edge_evidence(
+        &self,
+        dataset_id: Uuid,
+        data_id: Option<Uuid>,
+    ) -> Result<u64, DatabaseError> {
+        edge_evidence::delete_edge_evidence(self, dataset_id, data_id).await
     }
 
     async fn count_data_dataset_links(&self, data_id: Uuid) -> Result<usize, DatabaseError> {

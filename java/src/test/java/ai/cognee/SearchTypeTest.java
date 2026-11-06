@@ -56,8 +56,12 @@ class SearchTypeTest {
         String canned = "{\"items\":[{\"text\":\"remembered\"}],"
                 + "\"searchTypeUsed\":\"GRAPH_COMPLETION\",\"autoRouted\":true,"
                 + "\"searchResponse\":{\"search_type\":\"CHUNKS\",\"result\":{\"kind\":\"Text\","
-                + "\"data\":\"hi\"},\"verbose\":false}}";
+                + "\"data\":\"hi\"},\"verbose\":false},"
+                + "\"normalizedResults\":[{\"kind\":\"graph_completion\",\"text\":\"remembered\","
+                + "\"source\":\"graph\"}]}";
         RecallResult r = new RecallResult(Json.tree(canned));
+        assertEquals(1, r.normalizedResults().size());
+        assertEquals("graph_completion", r.normalizedResults().get(0).path("kind").asText());
         assertEquals(SearchType.GRAPH_COMPLETION, r.searchTypeUsed());
         assertTrue(r.autoRouted());
         assertEquals(1, r.items().size());

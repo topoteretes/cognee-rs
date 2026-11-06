@@ -1219,7 +1219,7 @@ pub(crate) mod tests {
     #[test]
     #[cfg(not(target_os = "android"))]
     fn android_fallback_constant_is_off_on_non_android_targets() {
-        assert!(!ANDROID_LANCEDB_FALLBACK);
+        const { assert!(!ANDROID_LANCEDB_FALLBACK) };
     }
 
     /// A graph factory that only answers to `provider`, for composing registries
@@ -2383,6 +2383,7 @@ pub(crate) mod tests {
                 api_version: String::new(),
                 debug_requests: false,
                 streaming: false,
+                answer_streaming: false,
                 temperature: None,
                 provider: "openai".to_string(),
                 model: "gpt-4o-mini".to_string(),

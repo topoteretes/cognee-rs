@@ -163,6 +163,18 @@ impl SearchRetriever for GraphSummaryCompletionRetriever {
         Ok(self.core.search(query, params).await?)
     }
 
+    /// The triplets rendered into this graph completion's context, as graph
+    /// node and edge references (Python
+    /// `GraphCompletionRetriever.get_context_evidence`, inherited by every
+    /// graph completion variant, `graph_completion_retriever.py:406`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<crate::types::EvidenceReference> {
+        crate::utils::evidence::graph_context_evidence(context, dataset_id)
+    }
+
     async fn completion_messages(
         &self,
         query: &str,
@@ -364,6 +376,18 @@ impl SearchRetriever for GraphCompletionContextExtensionRetriever {
     /// The final prompt over the extended context. The extension rounds call
     /// the LLM, as they do under Python's `only_context` — they are retrieval,
     /// not the answer.
+    /// The triplets rendered into this graph completion's context, as graph
+    /// node and edge references (Python
+    /// `GraphCompletionRetriever.get_context_evidence`, inherited by every
+    /// graph completion variant, `graph_completion_retriever.py:406`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<crate::types::EvidenceReference> {
+        crate::utils::evidence::graph_context_evidence(context, dataset_id)
+    }
+
     async fn completion_messages(
         &self,
         query: &str,
@@ -638,6 +662,18 @@ impl SearchRetriever for GraphCompletionCotRetriever {
     /// The final prompt over the context the reasoning ended with. The
     /// reasoning rounds call the LLM, as they do under Python's
     /// `only_context`; the final answer is not generated.
+    /// The triplets rendered into this graph completion's context, as graph
+    /// node and edge references (Python
+    /// `GraphCompletionRetriever.get_context_evidence`, inherited by every
+    /// graph completion variant, `graph_completion_retriever.py:406`).
+    fn context_evidence(
+        &self,
+        context: &SearchContext,
+        dataset_id: Option<uuid::Uuid>,
+    ) -> Vec<crate::types::EvidenceReference> {
+        crate::utils::evidence::graph_context_evidence(context, dataset_id)
+    }
+
     async fn completion_messages(
         &self,
         query: &str,

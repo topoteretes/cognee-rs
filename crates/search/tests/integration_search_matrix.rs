@@ -99,6 +99,7 @@ fn make_request(query: &str, search_type: SearchType) -> SearchRequest {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        include_references: false,
     }
 }
 
@@ -340,6 +341,7 @@ async fn test_search_type_matrix() {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        include_references: false,
     };
     let chunks_resp = orchestrator
         .search(&chunks_ctx)
@@ -384,6 +386,7 @@ async fn test_search_type_matrix() {
         auto_feedback_detection: None,
         neighborhood_depth: None,
         neighborhood_seed_top_k: None,
+        include_references: false,
     };
     let graph_ctx_resp = orchestrator
         .search(&graph_ctx)

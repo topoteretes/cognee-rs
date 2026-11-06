@@ -10,6 +10,8 @@ pub mod observability;
 pub mod orchestration;
 /// Query router that maps natural-language queries to `SearchType`s.
 pub mod query_router;
+/// Normalization of retriever output into recall's typed result shape.
+pub mod recall_normalize;
 /// `RecallScope` and related types for scoping search results.
 pub mod recall_scope;
 /// Individual retriever implementations for each `SearchType`.
@@ -35,6 +37,10 @@ pub use query_router::{
     ROUTER_FALLBACK_TYPE, RouteDecision, RoutingConstraints, constrain, default_route,
     pinned_route, route_query,
 };
+pub use recall_normalize::{
+    NormalizedResult, RecallResultKind, build_graph_entry, entry_dataset_ids, entry_evidence,
+    item_dataset_id, only_context_system_prompt,
+};
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
@@ -46,7 +52,8 @@ pub use retrievers::{
     TemporalRetrieval,
 };
 pub use types::{
-    Rule, SearchContext, SearchError, SearchGraph, SearchGraphEdge, SearchGraphNode, SearchItem,
-    SearchOutput, SearchParams, SearchRequest, SearchResponse, SearchType,
+    EvidenceKind, EvidenceReference, EvidenceRole, Rule, SearchContext, SearchError, SearchGraph,
+    SearchGraphEdge, SearchGraphNode, SearchItem, SearchOutput, SearchParams, SearchRequest,
+    SearchResponse, SearchType,
 };
 pub use user_preferences::{ActivePreferences, PreferenceConfig, load_active_preferences};
