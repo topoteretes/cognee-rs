@@ -390,6 +390,17 @@ answers JSON (non-`text/event-stream` `Content-Type`) is parsed as the blocking
 response, its text pushed as one delta. `llm.debug_requests` also logs the
 folded streamed response.
 
+Two of these are deliberate deviations from Python, both so that a streamed
+answer is never silently wrong:
+
+- **Truncation.** Python returns whatever arrived when the body closes cleanly,
+  even if no choice finished. Here a stream with neither `[DONE]` nor any
+  `finish_reason` is a failed attempt and is retried, so a partial answer is
+  never returned as a whole one.
+- **JSON fallback.** For a provider that ignores `stream: true`, Python's SDK
+  finds no `data:` lines in the JSON body and answers `""`. Here the JSON body
+  is parsed as a blocking response and its answer returned.
+
 A fallback LLM (`llm.fallback_provider/_model/_endpoint/_api_key`, aliases
 `llm_fallback_*`) is configurable programmatically (no env binding) but not used
 yet (SDK-1070). `MOCK_LLM` + cassettes power the offline
