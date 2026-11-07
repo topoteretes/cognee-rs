@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
@@ -36,6 +37,7 @@ use cognee_llm::transcriber::{Transcriber, TranscriptionOutput, validate_audio_f
 pub struct MockTranscriber {
     responses: Mutex<VecDeque<TranscriptionOutput>>,
     model: String,
+    calls: AtomicUsize,
 }
 
 impl MockTranscriber {
@@ -46,6 +48,7 @@ impl MockTranscriber {
         Self {
             responses: Mutex::new(VecDeque::from(responses)),
             model: model.to_string(),
+            calls: AtomicUsize::new(0),
         }
     }
 
@@ -54,7 +57,13 @@ impl MockTranscriber {
         Self {
             responses: Mutex::new(VecDeque::new()),
             model: "mock-whisper".to_string(),
+            calls: AtomicUsize::new(0),
         }
+    }
+
+    /// How many times `transcribe_audio` was called, refused formats included.
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
     }
 }
 
@@ -68,6 +77,7 @@ impl Transcriber for MockTranscriber {
         _prompt_hint: Option<&str>,
     ) -> LlmResult<TranscriptionOutput> {
         // Validate format even in mock, so tests catch invalid-format errors.
+        self.calls.fetch_add(1, Ordering::SeqCst);
         validate_audio_format(format)?;
 
         let mut queue = self

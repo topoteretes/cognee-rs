@@ -8,9 +8,9 @@
 //! - [`build_add_pipeline`] — build a composable cognee-core [`Pipeline`]
 //! - [`AddPipeline`] — convenience wrapper with a simple `add()` API
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use cognee_core::CpuPool;
@@ -201,7 +201,6 @@ pub async fn process_input_with_loaders(
 
 /// Like [`process_input_with_loaders`], trying the Python loader names in
 /// `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
-#[instrument(name = "ingestion.process_input", skip(input, storage, loaders))]
 pub async fn process_input_preferring(
     input: &DataInput,
     storage: &dyn StorageTrait,
@@ -210,6 +209,119 @@ pub async fn process_input_preferring(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     preferred_loaders: &[String],
+) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
+    process_input_reusing(
+        input,
+        storage,
+        loaders,
+        hash_algorithm,
+        owner_id,
+        tenant_id,
+        preferred_loaders,
+        None,
+    )
+    .await
+}
+
+/// Doc types whose loader calls a paid model at add time, with that loader's
+/// engine name. Running it again costs another request and can change the
+/// text, so a re-add reuses what an earlier add stored.
+const REUSES_STORED_TEXT: &[(&str, &str)] = &[("audio", "audio_loader")];
+
+/// Where a re-add finds the text an earlier add of the same content stored:
+/// the row [`persist_data`] deduplicates against, in the dataset the add
+/// writes to.
+#[derive(Clone)]
+struct StoredTextLookup {
+    database: Arc<dyn IngestDb>,
+    dataset_name: String,
+    target_dataset_id: Option<Uuid>,
+}
+
+/// The stored text of an earlier add, reused instead of running the loader.
+struct StoredText {
+    location: String,
+    raw_content_hash: String,
+    extension: String,
+    mime_type: String,
+}
+
+/// The text `engine` stored for this content in the add's dataset, if it is
+/// still in storage.
+///
+/// Re-adding content rewrites its row from the re-add (see
+/// [`persist_data_with_acl_and_locks`]), so a reused transcript keeps the row
+/// as it is, while one that is gone is transcribed again and the row pointed
+/// at the new file. The probe only decides whether the loader can be skipped,
+/// so a storage error transcribes again instead of failing the add. Re-adds in
+/// one `add` and in sequence see the row; two concurrent adds of the same new
+/// file can both transcribe it, since the content lock is taken in persist.
+async fn reusable_stored_text(
+    lookup: &StoredTextLookup,
+    storage: &dyn StorageTrait,
+    content_hash: &str,
+    engine: &str,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+) -> Result<Option<StoredText>, Box<dyn std::error::Error>> {
+    let database = &*lookup.database;
+    let dataset = match lookup.target_dataset_id {
+        Some(id) => database.get_dataset(id).await?,
+        None => {
+            database
+                .get_dataset_by_name_in_tenant(&lookup.dataset_name, owner_id, tenant_id)
+                .await?
+        }
+    };
+    let Some(dataset) = dataset else {
+        return Ok(None);
+    };
+    let Some(row) = database
+        .find_data_in_dataset(dataset.id, content_hash, owner_id, tenant_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    // A URL add of an audio file stores its raw bytes, so only a text file
+    // the loader wrote is a transcript.
+    if row.extension != "txt" || row.loader_engine.as_deref() != Some(engine) {
+        return Ok(None);
+    }
+    let Some(raw_content_hash) = row.raw_content_hash else {
+        return Ok(None);
+    };
+    match storage.exists(&row.raw_data_location).await {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(error) => {
+            warn!(data_id = %row.id, %error, "stored text could not be checked, extracting again");
+            return Ok(None);
+        }
+    }
+    Ok(Some(StoredText {
+        location: uri_to_storage_location(storage.base_path(), &row.raw_data_location),
+        raw_content_hash,
+        extension: row.extension,
+        mime_type: row.mime_type,
+    }))
+}
+
+/// [`process_input_preferring`] that, with `stored_text`, reuses the text an
+/// earlier add of the same content stored (see [`reusable_stored_text`]).
+#[allow(clippy::too_many_arguments)]
+#[instrument(
+    name = "ingestion.process_input",
+    skip(input, storage, loaders, stored_text)
+)]
+async fn process_input_reusing(
+    input: &DataInput,
+    storage: &dyn StorageTrait,
+    loaders: &LoaderRegistry,
+    hash_algorithm: HashAlgorithm,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    preferred_loaders: &[String],
+    stored_text: Option<&StoredTextLookup>,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
@@ -380,7 +492,27 @@ pub async fn process_input_preferring(
             doc_type.to_string()
         };
 
-        {
+        // Checked before a loader is needed: audio transcribed before is reused
+        // even when no transcriber is configured now.
+        let engine = REUSES_STORED_TEXT
+            .iter()
+            .find(|(reused, _)| *reused == doc_type)
+            .map(|(_, engine)| *engine);
+        let reused = match (stored_text, engine) {
+            (Some(lookup), Some(engine)) => {
+                reusable_stored_text(lookup, storage, &content_hash, engine, owner_id, tenant_id)
+                    .await?
+                    .map(|stored| (stored, engine))
+            }
+            _ => None,
+        };
+
+        if let Some((stored, engine)) = reused {
+            stored_extension = stored.extension;
+            stored_mime_type = stored.mime_type;
+            loader_engine = engine.to_string();
+            (stored.location, stored.raw_content_hash)
+        } else {
             let loader = registry.get(&doc_type).ok_or_else(|| {
                 Box::new(IngestionError::UnsupportedDocumentType {
                     document_type: doc_type.clone(),
@@ -1253,8 +1385,9 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
 /// resolved against the current working directory first so that the URI
 /// stored in the database is always absolute and self-contained.
 fn storage_location_to_uri(base_path: &str, location: &str) -> String {
-    if base_path.is_empty() {
-        // MockStorage or other non-filesystem backend — return as-is
+    if base_path.is_empty() || location.starts_with("file://") {
+        // MockStorage or other non-filesystem backend, or a location that is
+        // already a URI (see `uri_to_storage_location`) — return as-is
         location.to_string()
     } else {
         let joined = Path::new(base_path).join(location);
@@ -1266,6 +1399,34 @@ fn storage_location_to_uri(base_path: &str, location: &str) -> String {
             std::env::current_dir().unwrap_or_default().join(&joined)
         };
         format!("file://{}", abs.display())
+    }
+}
+
+/// The relative storage location of a `file://` URI under `base_path`, the
+/// inverse of [`storage_location_to_uri`]. A URI outside `base_path` (a row
+/// written with another data root) comes back unchanged: the storage backends
+/// resolve an absolute `file://` location directly.
+fn uri_to_storage_location(base_path: &str, uri: &str) -> String {
+    let Some(path) = uri.strip_prefix("file://") else {
+        return uri.to_string();
+    };
+    if base_path.is_empty() {
+        return uri.to_string();
+    }
+    match Path::new(path).strip_prefix(absolute_base(base_path)) {
+        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Err(_) => uri.to_string(),
+    }
+}
+
+/// `base_path` made absolute against the working directory, as
+/// [`storage_location_to_uri`] does when it builds a URI.
+fn absolute_base(base_path: &str) -> PathBuf {
+    let base = Path::new(base_path);
+    if base.is_absolute() {
+        base.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(base)
     }
 }
 
@@ -1755,6 +1916,7 @@ pub fn make_process_input_task_with_loaders(
         hash_algorithm,
         owner_id,
         tenant_id,
+        None,
     )
 }
 
@@ -1767,14 +1929,16 @@ fn make_process_input_task_preferring(
     hash_algorithm: HashAlgorithm,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+    stored_text: Option<StoredTextLookup>,
 ) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let loaders = Arc::clone(&loaders);
         let preferred_loaders = Arc::clone(&preferred_loaders);
+        let stored_text = stored_text.clone();
         Box::pin(async move {
-            process_input_preferring(
+            process_input_reusing(
                 &input,
                 &*storage,
                 &loaders,
@@ -1782,6 +1946,7 @@ fn make_process_input_task_preferring(
                 owner_id,
                 tenant_id,
                 &preferred_loaders,
+                stored_text.as_ref(),
             )
             .await
             .map(Box::new)
@@ -1980,6 +2145,11 @@ fn build_add_pipeline_internal(
             hash_algorithm,
             owner_id,
             tenant_id,
+            Some(StoredTextLookup {
+                database: Arc::clone(&database),
+                dataset_name: dataset_name.to_string(),
+                target_dataset_id: add_params.target_dataset_id,
+            }),
         ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
@@ -5148,5 +5318,150 @@ mod tests {
         let column: serde_json::Value =
             serde_json::from_str(stored.node_set.as_deref().unwrap()).unwrap();
         assert_eq!(metadata_json(&stored)["node_set"], column);
+    }
+
+    // -- stored text of a re-add -----------------------------------------------
+
+    /// A storage whose existence probe fails, as `fs::try_exists` does on a
+    /// parent directory it may not read.
+    struct ProbeFails(cognee_storage::LocalStorage);
+
+    #[async_trait::async_trait]
+    impl StorageTrait for ProbeFails {
+        async fn store(
+            &self,
+            data: &[u8],
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.0.store(data, file_name).await
+        }
+        async fn store_stream_dyn(
+            &self,
+            reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.0.store_stream_dyn(reader, file_name).await
+        }
+        async fn create_writer(
+            &self,
+            file_name: &str,
+        ) -> Result<cognee_storage::StorageWriter, cognee_storage::StorageError> {
+            self.0.create_writer(file_name).await
+        }
+        async fn retrieve(&self, location: &str) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.0.retrieve(location).await
+        }
+        async fn exists(&self, _location: &str) -> Result<bool, cognee_storage::StorageError> {
+            Err(cognee_storage::StorageError::IoError(
+                "Permission denied".to_string(),
+            ))
+        }
+        async fn delete(&self, location: &str) -> Result<(), cognee_storage::StorageError> {
+            self.0.delete(location).await
+        }
+        fn get_full_path(&self, location: &str) -> PathBuf {
+            self.0.get_full_path(location)
+        }
+        fn base_path(&self) -> &str {
+            self.0.base_path()
+        }
+        async fn initialize(&self) -> Result<(), cognee_storage::StorageError> {
+            self.0.initialize().await
+        }
+        async fn remove_all(&self) -> Result<(), cognee_storage::StorageError> {
+            self.0.remove_all().await
+        }
+    }
+
+    /// A re-add reuses the stored transcript with the backend-relative
+    /// `storage_location` every other path returns, not the row's `file://`
+    /// URI; a failed storage probe extracts again instead of failing the add.
+    #[cfg(feature = "audio-loader")]
+    #[tokio::test]
+    async fn a_reused_transcript_keeps_a_relative_location_and_a_failed_probe_extracts_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        storage.initialize().await.unwrap();
+        let db: Arc<dyn IngestDb> = Arc::new({
+            let db = connect("sqlite::memory:").await.unwrap();
+            initialize(&db).await.unwrap();
+            db
+        });
+        let transcriber = Arc::new(cognee_test_utils::MockTranscriber::new(
+            "mock-whisper",
+            vec![cognee_llm::TranscriptionOutput {
+                text: "Hello from the meeting.".to_string(),
+                language: None,
+                duration: None,
+            }],
+        ));
+        let mut registry = LoaderRegistry::default_registry();
+        registry.register_audio_loader(transcriber.clone());
+        let lookup = StoredTextLookup {
+            database: Arc::clone(&db),
+            dataset_name: "meetings".to_string(),
+            target_dataset_id: None,
+        };
+        let input = DataInput::Binary {
+            data: b"RIFF\x24\x00\x00\x00WAVEfmt fake-wav-payload".to_vec(),
+            name: "speech.wav".to_string(),
+        };
+        let owner_id = Uuid::new_v4();
+        let process = || {
+            process_input_reusing(
+                &input,
+                &storage,
+                &registry,
+                HashAlgorithm::Md5,
+                owner_id,
+                None,
+                &[],
+                Some(&lookup),
+            )
+        };
+
+        let first = process().await.unwrap();
+        persist_data(&first, &*db, "meetings", owner_id, None)
+            .await
+            .unwrap();
+        let again = process().await.unwrap();
+
+        assert_eq!(transcriber.calls(), 1, "the re-add reuses the transcript");
+        assert_eq!(again.storage_location, first.storage_location);
+        assert!(!again.storage_location.starts_with("file://"));
+        assert_eq!(again.raw_data_uri, first.raw_data_uri);
+        assert_eq!(again.loader_engine, "audio_loader");
+
+        let probe_fails = ProbeFails(cognee_storage::LocalStorage::new(dir.path().to_path_buf()));
+        let stored = reusable_stored_text(
+            &lookup,
+            &probe_fails,
+            &first.content_hash,
+            "audio_loader",
+            owner_id,
+            None,
+        )
+        .await
+        .expect("a failed probe must not fail the add");
+        assert!(stored.is_none(), "a failed probe extracts again");
+    }
+
+    /// A reused row's URI goes back to the relative location every other path
+    /// returns, and builds the same URI again; one outside the storage
+    /// directory is kept as it is.
+    #[test]
+    fn stored_uri_round_trips_through_its_storage_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().to_str().unwrap();
+        let uri = storage_location_to_uri(base, "ab/cd/text_x.txt");
+
+        let location = uri_to_storage_location(base, &uri);
+        assert_eq!(Path::new(&location), Path::new("ab/cd/text_x.txt"));
+        assert_eq!(storage_location_to_uri(base, &location), uri);
+
+        let other = tempfile::tempdir().unwrap();
+        let outside = storage_location_to_uri(other.path().to_str().unwrap(), "text_y.txt");
+        assert_eq!(uri_to_storage_location(base, &outside), outside);
+        assert_eq!(storage_location_to_uri(base, &outside), outside);
     }
 }
