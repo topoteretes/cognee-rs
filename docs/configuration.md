@@ -341,6 +341,20 @@ attempt altogether.
 LLM_ARGS='{"max_tokens": 16384}'
 ```
 
+OpenAI-compatible adapters do not add `think` or `reasoning` fields based on a
+Qwen model name. This also applies to `LLM_PROVIDER=ollama`, which uses Ollama's
+OpenAI-compatible route: the server's defaults apply unless you explicitly
+configure supported options. If you relied on the previous automatic fields,
+you can restore them **only if your endpoint supports them**:
+
+```bash
+LLM_ARGS='{"think": false, "reasoning": {"effort": "none"}}'
+```
+
+Rust callers can supply the same endpoint-specific keys through
+`OpenAIAdapter::with_extra_args`. Consult your endpoint's documentation for its
+accepted options and values; a model name does not establish that support.
+
 Three details worth knowing. A bare `max_tokens` is folded into
 `max_completion_tokens` for reasoning models, and sampling params those models
 reject (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`) are
