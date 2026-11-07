@@ -94,6 +94,14 @@ struct WaiterInner {
 /// **Single-use**: calling `cg_sdk_waiter_wait` twice returns
 /// `CG_ERR_SDK_VALIDATION`. Do not reuse a waiter after `wait` returns.
 pub struct CgSdkWaiter {
+    shared: Arc<WaiterShared>,
+}
+
+/// Shared waiter state, held both by `CgSdkWaiter` and — for the duration of
+/// the call — by `cg_sdk_waiter_callback`, so that `cg_sdk_waiter_destroy`
+/// may free the `CgSdkWaiter` as soon as `cg_sdk_waiter_wait` returns even if
+/// the callback is still running.
+struct WaiterShared {
     inner: Mutex<WaiterInner>,
     condvar: Condvar,
 }
@@ -516,11 +524,13 @@ pub unsafe extern "C" fn cg_sdk_destroy(sdk: *mut CgSdk) {
 #[unsafe(no_mangle)]
 pub extern "C" fn cg_sdk_waiter_new() -> *mut CgSdkWaiter {
     let w = CgSdkWaiter {
-        inner: Mutex::new(WaiterInner {
-            result: None,
-            consumed: false,
+        shared: Arc::new(WaiterShared {
+            inner: Mutex::new(WaiterInner {
+                result: None,
+                consumed: false,
+            }),
+            condvar: Condvar::new(),
         }),
-        condvar: Condvar::new(),
     };
     Box::into_raw(Box::new(w))
 }
@@ -531,6 +541,11 @@ pub extern "C" fn cg_sdk_waiter_new() -> *mut CgSdkWaiter {
 /// This callback copies both `result_json` and `error_message` into owned
 /// storage so that `cg_sdk_waiter_wait` can forward the error message to the
 /// calling thread's last-error slot (sync-style error-query pattern).
+///
+/// The callback holds its own `Arc` reference to the waiter's shared state
+/// for its whole duration, so `cg_sdk_waiter_destroy` is safe as soon as
+/// `cg_sdk_waiter_wait` returns — the notify below then operates on state
+/// kept alive by this clone rather than on the freed `CgSdkWaiter`.
 ///
 /// # Safety
 /// `user_data` must be a valid `*mut CgSdkWaiter` allocated by
@@ -546,6 +561,10 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
         return;
     }
     let waiter = unsafe { &*(user_data as *const CgSdkWaiter) };
+    // Keep the shared state alive past `cg_sdk_waiter_destroy`: `wait` may
+    // observe the result and the caller may destroy the waiter while this
+    // callback is still running. Never touch `waiter` again after this line.
+    let shared = Arc::clone(&waiter.shared);
 
     // Copy the result_json string into owned storage so the caller can use
     // it after the callback returns (the pointer from the op is only valid
@@ -568,13 +587,13 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
         s.to_str().ok().and_then(|s| CString::new(s).ok())
     };
 
-    let mut guard = waiter.inner.lock().unwrap_or_else(|p| {
+    let mut guard = shared.inner.lock().unwrap_or_else(|p| {
         // lock poison is unrecoverable
         p.into_inner()
     });
     guard.result = Some((code, owned_json, owned_err));
+    shared.condvar.notify_one();
     drop(guard);
-    waiter.condvar.notify_one();
 }
 
 /// Block until the associated async op's callback fires, then return the
@@ -610,7 +629,7 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
 
     let w = unsafe { &*waiter };
 
-    let mut guard = w.inner.lock().unwrap_or_else(|p| {
+    let mut guard = w.shared.inner.lock().unwrap_or_else(|p| {
         // lock poison is unrecoverable
         p.into_inner()
     });
@@ -623,6 +642,7 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
 
     // Block until the callback fires.
     guard = w
+        .shared
         .condvar
         .wait_while(guard, |inner| inner.result.is_none())
         .unwrap_or_else(|p| {
@@ -665,6 +685,10 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
 ///
 /// No-op if `waiter` is null.  Must not be called while `cg_sdk_waiter_wait`
 /// is blocking on the same waiter from another thread.
+///
+/// Safe to call as soon as `cg_sdk_waiter_wait` has returned, even if the
+/// async op's callback is still running: `cg_sdk_waiter_callback` keeps the
+/// waiter's shared state alive through its own `Arc` reference.
 ///
 /// # Safety
 /// `waiter` must be a pointer previously returned by `cg_sdk_waiter_new`,
@@ -827,4 +851,47 @@ where
             },
         }
     });
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::cg_string_destroy;
+
+    /// Race smoke test for the waiter use-after-free fix: `wait` may observe
+    /// the result and return while the callback is still inside its
+    /// `notify_one`, and the documented `cg_sdk_waiter_destroy` then frees
+    /// the `CgSdkWaiter`. The callback holds its own `Arc<WaiterShared>` so
+    /// that destroy is safe from the moment `wait` returns. The freed-memory
+    /// access this guards against is a race, so this loop is a smoke test,
+    /// not a deterministic repro — the real guarantee is structural.
+    #[test]
+    fn waiter_destroy_may_race_with_callback_notify() {
+        for _ in 0..2_000 {
+            let waiter = cg_sdk_waiter_new();
+            let ud = waiter as usize;
+            let cb_thread = std::thread::spawn(move || {
+                let json = CString::new("{}").expect("literal has no null bytes");
+                unsafe {
+                    cg_sdk_waiter_callback(
+                        CgErrorCode::Ok,
+                        json.as_ptr(),
+                        std::ptr::null(),
+                        ud as *mut std::ffi::c_void,
+                    )
+                };
+            });
+
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { cg_sdk_waiter_wait(waiter, &mut out) };
+            assert_eq!(code, CgErrorCode::Ok);
+            unsafe { cg_sdk_waiter_destroy(waiter) };
+            cb_thread.join().expect("callback thread panicked");
+            if !out.is_null() {
+                unsafe { cg_string_destroy(out) };
+            }
+        }
+    }
 }
