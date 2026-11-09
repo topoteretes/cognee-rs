@@ -57,6 +57,11 @@ tokio = { workspace = true, optional = true }
 # opt out of that (`autotests` stays at its edition-2018+ default of `true`).
 
 [[test]]
+name = "recent_session_ids"
+path = "tests/recent_session_ids.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "audit_query_consolidation"
 path = "tests/audit_query_consolidation.rs"
 required-features = ["sqlite"]

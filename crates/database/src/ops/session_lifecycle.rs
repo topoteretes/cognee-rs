@@ -594,6 +594,77 @@ pub async fn list_session_rows(
 }
 
 // ---------------------------------------------------------------------------
+// list_recent_session_ids_for_dataset
+// ---------------------------------------------------------------------------
+
+/// `text` with the LIKE wildcards `%` and `_` and the escape character `\`
+/// itself escaped by `\`, for a pattern used with `ESCAPE '\'` — the
+/// `autoescape=True` of Python's `endswith`. Without it the `_` of
+/// `_{dataset_id}` would match any single character.
+fn escape_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    for c in text.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[derive(Debug, FromQueryResult)]
+struct SessionIdRow {
+    session_id: String,
+}
+
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.list_recent_session_ids_for_dataset",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn list_recent_session_ids_for_dataset(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    dataset_id: Option<Uuid>,
+    limit: u32,
+) -> Result<Vec<String>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let backend = db.get_database_backend();
+    let mut params: Vec<Value> = vec![Value::from(uuid_hex::to_hex(user_id))];
+    let dataset_clause = match dataset_id {
+        Some(dataset_id) => {
+            params.push(Value::from(uuid_hex::to_hex(dataset_id)));
+            params.push(Value::from(format!(
+                "%{}",
+                escape_like(&format!("_{dataset_id}"))
+            )));
+            "AND (dataset_id = $2 OR session_id LIKE $3 ESCAPE '\\') "
+        }
+        None => "",
+    };
+    let limit_param = params.len() + 1;
+    params.push(Value::from(i64::from(limit)));
+    let sql = format!(
+        "SELECT session_id FROM session_records \
+         WHERE user_id = $1 {dataset_clause}\
+         ORDER BY last_activity_at DESC, session_id ASC \
+         LIMIT ${limit_param}"
+    );
+    let rows =
+        SessionIdRow::find_by_statement(Statement::from_sql_and_values(backend, &sql, params))
+            .all(db)
+            .await
+            .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows.into_iter().map(|row| row.session_id).collect())
+}
+
+// ---------------------------------------------------------------------------
 // aggregate_stats
 // ---------------------------------------------------------------------------
 
@@ -947,6 +1018,15 @@ impl SessionLifecycleDb for DatabaseConnection {
         filters: SessionListFilters,
     ) -> Result<SessionListPage, DatabaseError> {
         list_session_rows(self, filters).await
+    }
+
+    async fn list_recent_session_ids_for_dataset(
+        &self,
+        user_id: Uuid,
+        dataset_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<Vec<String>, DatabaseError> {
+        list_recent_session_ids_for_dataset(self, user_id, dataset_id, limit).await
     }
 
     async fn aggregate_stats(
