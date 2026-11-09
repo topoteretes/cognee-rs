@@ -40,8 +40,9 @@ pub enum VisualizationError {
         found: usize,
     },
 
-    /// The bundled d3 contains a `</script` sequence, which would terminate the
-    /// inline `<script>` element early.
-    #[error("bundled d3 contains `</script` and cannot be inlined verbatim")]
+    /// The bundled d3 contains `</script`, `<!--` or `<script`, which would
+    /// terminate the inline `<script>` element early or change how the HTML
+    /// tokenizer finds its end.
+    #[error("bundled d3 contains `</script`, `<!--` or `<script` and cannot be inlined verbatim")]
     UnsafeInlineScript,
 }

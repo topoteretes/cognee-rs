@@ -64,9 +64,8 @@ fn extract_var(html: &str, name: &str) -> serde_json::Value {
     }
     assert!(end > 0, "could not balance var {name} payload");
     let raw = &body[..end];
-    let unescaped = raw.replace("<\\/", "</");
-    serde_json::from_str(&unescaped)
-        .unwrap_or_else(|e| panic!("parse var {name} JSON: {e}: raw={raw:?}"))
+    // The script-escapes (`\u003c` & co.) are JSON escapes: parse verbatim.
+    serde_json::from_str(raw).unwrap_or_else(|e| panic!("parse var {name} JSON: {e}: raw={raw:?}"))
 }
 
 async fn seed_three_nodes(db: &MockGraphDB, prefix: &str) {

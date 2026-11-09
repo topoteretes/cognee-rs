@@ -99,9 +99,18 @@ leaked `__TOKEN__` is a hard failure — it lands as literal garbage inside a
 `<script>` block and breaks the page — so `tests/html_test.rs` scans the whole
 output for any surviving `__[A-Z][A-Z0-9_]*__`.
 
-All embedded JSON goes through `safe_json_embed`: `serde_json::to_string` then
-`</` → `<\/`. That is the only XSS guard on the payload; without it a node whose
-`name` contains `</script>` would close the script block early.
+All embedded JSON goes through `safe_json_embed`: `serde_json::to_string`, then
+`<` / `>` / `&` / U+2028 / U+2029 become the JSON escapes `\u003c` / `\u003e` /
+`\u0026` / `\u2028` / `\u2029` (serde emits these characters only inside string
+literals, where the escape decodes to the same value). That is the only XSS
+guard on the payload. Upstream's `_safe_json_embed` only rewrites `</` → `<\/`,
+which stops a `</script>` in a node `name` from closing the block but not a
+`<!--` followed by `<script` (e.g. a chunk of an ingested HTML file): that pair
+puts the HTML tokenizer into the script-data-double-escaped state, the
+template's own `</script>` no longer closes the block, and the page renders
+blank. The inlined d3 is likewise refused if it ever contains `</script`,
+`<!--` or `<script`. `tests/offline_test.rs` renders hostile data and asserts
+it stays inert.
 
 ## Vendored assets: re-sync, never hand-edit
 

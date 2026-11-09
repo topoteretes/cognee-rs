@@ -157,14 +157,28 @@ fn offline_template(template: &str) -> Result<String, VisualizationError> {
     Ok(html)
 }
 
+/// Markup sequences that must never appear in a verbatim-inlined script:
+/// `</script` closes the element early, and `<!--` followed later by
+/// `<script` moves the HTML tokenizer into the script-data-double-escaped
+/// state, where the template's own `</script>` no longer closes the element.
+const UNSAFE_INLINE_SCRIPT_SEQUENCES: [&[u8]; 3] = [b"</script", b"<!--", b"<script"];
+
+/// Whether `script` contains any [`UNSAFE_INLINE_SCRIPT_SEQUENCES`] entry
+/// (ASCII case-insensitively).
+fn has_unsafe_inline_script_sequence(script: &str) -> bool {
+    UNSAFE_INLINE_SCRIPT_SEQUENCES.iter().any(|needle| {
+        script
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+    })
+}
+
 /// `<script>` + [`D3_JS`] + `</script>`, refusing a d3 build that would close
-/// the script element early.
+/// the script element early or disturb the tokenizer state (see
+/// [`UNSAFE_INLINE_SCRIPT_SEQUENCES`]).
 fn inline_d3_script() -> Result<String, VisualizationError> {
-    if D3_JS
-        .as_bytes()
-        .windows(b"</script".len())
-        .any(|window| window.eq_ignore_ascii_case(b"</script"))
-    {
+    if has_unsafe_inline_script_sequence(D3_JS) {
         return Err(VisualizationError::UnsafeInlineScript);
     }
     let mut script = String::with_capacity(D3_JS.len() + 17);
@@ -187,16 +201,39 @@ const PIPELINE_LAYOUT_JS: &str = "";
 /// substituted before the data tokens.
 const SEMANTIC_LAYOUT_JS: &str = "window._semanticPositions = __SEMANTIC_POSITIONS__;";
 
-/// Serialize a value to JSON and neutralize `</` so the result is safe to embed
-/// inside a `<script>` element.
+/// Serialize a value to JSON and escape every character that has meaning to
+/// the HTML tokenizer, so the result is safe to embed inside a `<script>`
+/// element.
 ///
-/// Ports `_safe_json_embed()` (`cognee_network_visualization.py:70-73`). This is
-/// the only XSS guard on the embedded payload: without it a node whose `name`
-/// contains `</script>` would terminate the script block early and let the
-/// remainder be parsed as markup.
+/// Ports `_safe_json_embed()` (`cognee_network_visualization.py:70-73`) and
+/// hardens it. Upstream only rewrites `</`, which stops a node `name` holding
+/// `</script>` from closing the block, but not `<!--` followed later by
+/// `<script` + space / `/` / `>`: that pair puts the tokenizer into the
+/// script-data-double-escaped state, the template's own `</script>` then no
+/// longer closes the element, and the whole page renders blank. Realistic
+/// input does that — a `DocumentChunk` from an ingested HTML file.
+///
+/// So `<`, `>` and `&` become `\u003c`, `\u003e` and `\u0026`, and U+2028 /
+/// U+2029 (line terminators in pre-ES2019 JS string literals) become
+/// `\u2028` / `\u2029`. This is sound because `serde_json` emits none of these
+/// characters outside a string literal, and inside one each replacement is a
+/// JSON (and JS) escape decoding to the same character: every data token is a
+/// JS expression, so the parsed value is unchanged. The `</` rule is subsumed.
+/// This is the only XSS guard on the embedded payload.
 fn safe_json_embed<T: serde::Serialize>(value: &T) -> Result<String, VisualizationError> {
     let raw = serde_json::to_string(value)?;
-    Ok(raw.replace("</", "<\\/"))
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            other => out.push(other),
+        }
+    }
+    Ok(out)
 }
 
 /// Replace every `(token, value)` pair in `source` in **one** left-to-right
@@ -429,8 +466,44 @@ mod tests {
     fn safe_json_embed_escapes_closing_script() {
         let v = serde_json::json!({"x": "</script>"});
         let out = safe_json_embed(&v).expect("json encode");
-        assert!(out.contains("<\\/script>"));
+        assert!(out.contains("\\u003c/script\\u003e"));
         assert!(!out.contains("</script>"));
+    }
+
+    /// No markup character survives, and the escaped JSON parses back to the
+    /// original value.
+    #[test]
+    fn safe_json_embed_escapes_markup_and_round_trips() {
+        let hostile = [
+            "<!--<script>",
+            "</script><img src=https://x>",
+            "&lt;&amp;",
+            "a\u{2028}b\u{2029}c",
+            "<SCRIPT/x>-->",
+        ];
+        let value = serde_json::json!({"names": hostile, "<key>": "&"});
+        let out = safe_json_embed(&value).expect("json encode");
+        for c in ['<', '>', '&', '\u{2028}', '\u{2029}'] {
+            assert!(!out.contains(c), "{c:?} survived in {out}");
+        }
+        let back: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn bundled_d3_has_no_unsafe_inline_script_sequence() {
+        assert!(!has_unsafe_inline_script_sequence(D3_JS));
+        assert!(inline_d3_script().is_ok());
+    }
+
+    #[test]
+    fn unsafe_inline_script_sequences_are_detected_case_insensitively() {
+        for bad in ["a</SCRIPT>b", "x<!--y", "if(a<ScRiPt)", "</script"] {
+            assert!(has_unsafe_inline_script_sequence(bad), "{bad}");
+        }
+        for ok in ["a < b", "x<!-y", "<\\/script>", "i<scrip"] {
+            assert!(!has_unsafe_inline_script_sequence(ok), "{ok}");
+        }
     }
 
     /// The whole point of the single pass: an injected value that happens to

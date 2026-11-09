@@ -277,7 +277,8 @@ async fn preprocessor_enrichment_reaches_html() {
 #[tokio::test]
 async fn render_escapes_closing_script_in_data() {
     // A node name containing `</script>` must not be able to terminate the
-    // embedded <script> block — `safe_json_embed` rewrites `</` to `<\/`.
+    // embedded <script> block — `safe_json_embed` escapes `<` / `>` as
+    // `\u003c` / `\u003e`.
     let db = MockGraphDB::new();
     db.add_node_raw(serde_json::json!({
         "id": "evil",
@@ -288,7 +289,7 @@ async fn render_escapes_closing_script_in_data() {
     .expect("MockGraphDB accepts valid node JSON");
     let html = render(&db).await.expect("render succeeds");
     assert!(
-        html.contains("hi<\\/script>bye"),
+        html.contains("hi\\u003c/script\\u003ebye"),
         "`</script>` in node data was not escaped"
     );
     assert!(

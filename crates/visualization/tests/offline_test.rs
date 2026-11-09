@@ -495,3 +495,197 @@ fn scanners_reject_external_resources() {
     // `<links.length` in JS is not a link tag.
     assert!(tags("for(i=0;i<links.length;i++)", "link").is_empty());
 }
+
+// ── Hostile data ─────────────────────────────────────────────────────────────
+//
+// User data (node names, chunk text, user labels) is embedded as JSON inside
+// the template's `<script>` blocks. It must never change how the HTML
+// tokenizer sees the page: no `</script` closing a block early, and no `<!--`
+// + `<script` pair pushing the tokenizer into the script-data-double-escaped
+// state (after which the template's own `</script>` no longer closes the
+// block and the page renders blank).
+//
+// The URL allowlist question: escaping `<` / `>` / `&` neutralises markup but
+// cannot hide a `https://` inside a string, and it should not — the data is
+// the user's. So the offline check is split in two, keeping the guarantee:
+//
+// * every occurrence of a hostile URL is proven to sit inside a JSON string
+//   literal, inside a `<script>` element, with no tag or attribute context
+//   around it (the markup counts match the empty page, and the literal
+//   decodes to the original string) — inert data the page never fetches;
+// * those proven-inert literals are then blanked to `""` and the full,
+//   unrelaxed `assert_offline` (allowlist included) runs on the rest.
+//
+// Any URL outside such a literal still trips the strict allowlist.
+
+/// Each hostile string carries a unique `HOSTILE_` marker so the test can find
+/// its JSON literal without depending on how the crate escapes it.
+const HOSTILE: [&str; 6] = [
+    "HOSTILE_A:<!--<script>",
+    "HOSTILE_B:</script><img src=https://x>",
+    "HOSTILE_C:&lt;&amp;",
+    "HOSTILE_D:line\u{2028}para\u{2029}end",
+    "HOSTILE_E:<!-- <script type=x> --> </SCRIPT >",
+    "HOSTILE_F:<script/>https://evil.example/a.js",
+];
+
+/// The non-allowlisted URLs the hostile strings carry.
+const HOSTILE_URLS: [&str; 2] = ["https://x", "https://evil.example/a.js"];
+
+/// Byte span `[start, end)` of the JSON string literal opening at `start`.
+fn json_string_span(html: &str, start: usize) -> (usize, usize) {
+    let bytes = html.as_bytes();
+    assert_eq!(bytes[start], b'"');
+    let mut i = start + 1;
+    while bytes[i] != b'"' {
+        i += if bytes[i] == b'\\' { 2 } else { 1 };
+    }
+    (start, i + 1)
+}
+
+/// Whether byte offset `at` lies inside a `<script>` element: the last
+/// `<script` opener before it is not closed before it.
+fn inside_script_element(html: &str, at: usize) -> bool {
+    let before = html[..at].to_ascii_lowercase();
+    match (before.rfind("<script"), before.rfind("</script")) {
+        (Some(open), Some(close)) => open > close,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// Count of case-insensitive occurrences of each tokenizer-relevant sequence.
+fn markup_counts(html: &str) -> [usize; 3] {
+    [
+        find_all_ci(html, "<!--").len(),
+        find_all_ci(html, "<script").len(),
+        find_all_ci(html, "</script").len(),
+    ]
+}
+
+/// Assert the hostile strings are inert data in `html`, then run the full
+/// offline check on `html` with their (proven-inert) literals blanked.
+fn assert_hostile_data_is_inert(html: &str, label: &str, expected: &[&str]) {
+    let baseline = render_graph_data(Vec::new(), Vec::new()).expect("render succeeds");
+    assert_eq!(
+        markup_counts(html),
+        markup_counts(&baseline),
+        "{label}: data changed the `<!--` / `<script` / `</script` counts"
+    );
+    for raw in [
+        "<img",
+        "<!--<script",
+        "<!-- <script",
+        "<script/>",
+        "</script><",
+    ] {
+        assert!(
+            !html.contains(raw) || baseline.contains(raw),
+            "{label}: raw hostile markup {raw:?} reached the page"
+        );
+    }
+
+    // Locate and decode every hostile literal.
+    let mut spans = Vec::new();
+    for at in find_all_ci(html, "\"HOSTILE_") {
+        if html[..at].ends_with('\\') {
+            continue; // a quote inside an enclosing literal, covered by it
+        }
+        let (start, end) = json_string_span(html, at);
+        assert!(
+            inside_script_element(html, start),
+            "{label}: hostile literal outside a <script> element"
+        );
+        let decoded: String = serde_json::from_str(&html[start..end])
+            .unwrap_or_else(|err| panic!("{label}: literal does not parse: {err}"));
+        assert!(decoded.starts_with("HOSTILE_"));
+        spans.push((start, end, decoded));
+    }
+    for original in expected {
+        assert!(
+            spans.iter().any(|(_, _, decoded)| decoded == original),
+            "{label}: {original:?} does not round-trip through the page"
+        );
+    }
+
+    // Every hostile URL lies inside one of those literals.
+    for url in HOSTILE_URLS {
+        for at in find_all_ci(html, url) {
+            assert!(
+                spans.iter().any(|&(start, end, _)| start < at && at < end),
+                "{label}: {url} appears outside a JSON string literal"
+            );
+        }
+    }
+
+    // Blank the inert literals and run the unrelaxed offline check.
+    let mut blanked = String::with_capacity(html.len());
+    let mut cursor = 0;
+    spans.sort_by_key(|&(start, _, _)| start);
+    for (start, end, _) in &spans {
+        blanked.push_str(&html[cursor..*start]);
+        blanked.push_str("\"\"");
+        cursor = *end;
+    }
+    blanked.push_str(&html[cursor..]);
+    assert_offline(&blanked, label);
+}
+
+fn hostile_graph() -> (Vec<GraphNode>, Vec<EdgeData>) {
+    let mut nodes = vec![graph_node(
+        "doc1",
+        json!({"type": "TextDocument", "name": HOSTILE[0]}),
+    )];
+    let mut edges = Vec::new();
+    for (i, text) in HOSTILE.iter().enumerate() {
+        let chunk = format!("chunk{i}");
+        let entity = format!("ent{i}");
+        nodes.push(graph_node(
+            &chunk,
+            json!({"type": "DocumentChunk", "text": text, "document_id": "doc1",
+                   "chunk_index": i}),
+        ));
+        nodes.push(graph_node(
+            &entity,
+            json!({"type": "Entity", "name": text, "description": text,
+                   "source_node_set": "session_learnings"}),
+        ));
+        edges.push(edge("doc1", &chunk, "contains"));
+        edges.push(edge(&chunk, &entity, "contains"));
+    }
+    (nodes, edges)
+}
+
+#[test]
+fn hostile_graph_data_is_inert_and_offline() {
+    let (nodes, edges) = hostile_graph();
+    let html = render_graph_data(nodes, edges).expect("render succeeds");
+    assert_hostile_data_is_inert(&html, "hostile graph", &HOSTILE);
+}
+
+#[tokio::test]
+async fn hostile_multi_user_data_is_inert_and_offline() {
+    let db = MockGraphDB::new();
+    for (i, text) in HOSTILE.iter().enumerate() {
+        db.add_node_raw(json!({"id": format!("n{i}"), "type": "Entity", "name": text}))
+            .await
+            .expect("add node");
+    }
+    let pairs: Vec<(String, Arc<dyn GraphDBTrait>)> = vec![(HOSTILE[1].to_string(), Arc::new(db))];
+    let html = render_multi_user(&pairs).await.expect("render succeeds");
+    assert_hostile_data_is_inert(&html, "hostile multi-user", &HOSTILE);
+}
+
+/// The inertness check must catch hostile markup that escaped the JSON.
+#[test]
+fn hostile_scan_rejects_unescaped_markup() {
+    let (nodes, edges) = hostile_graph();
+    let html = render_graph_data(nodes, edges).expect("render succeeds");
+    for injected in ["<!--<script>", "<img src=https://x>"] {
+        let tampered = html.replacen("</body>", &format!("{injected}</body>"), 1);
+        let result = std::panic::catch_unwind(|| {
+            assert_hostile_data_is_inert(&tampered, "tampered", &HOSTILE);
+        });
+        assert!(result.is_err(), "hostile scan missed {injected}");
+    }
+}
