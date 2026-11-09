@@ -598,11 +598,12 @@ async fn index_node_texts(h: &Harness) -> Vec<String> {
     texts
 }
 
-/// Stage 9 (`global_context_index`) is opt-in and needs no sessions. It
+/// Stage 9 (`global_context_index`) is on by default (`improve.global_context_index`;
+/// this test forces it on with `Some(true)`) and needs no sessions. It
 /// builds Python's default `from_entities` index: one bucket per document
 /// and a root, with no LLM call (Python `test_improve_global_context_index`).
 #[tokio::test]
-async fn improve_builds_the_global_context_index_when_opted_in() {
+async fn improve_builds_the_global_context_index() {
     let h = make_harness().await;
     let config = CognifyConfig::default();
     let mut p = params(&h, &config, "ds_gcidx", None, mock_llm());

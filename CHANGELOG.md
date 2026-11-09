@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `buildGlobalContextIndex` opt, when omitted, now follows the setting, and
   `reviewConflicts` is new. Set `IMPROVE_GLOBAL_CONTEXT_INDEX=false` and
   `IMPROVE_REVIEW_CONFLICTS=false` to keep the old behaviour.
+  `review_conflicts` gate order is now `turned_off`, `no_llm_configured`,
+  `edge_evidence_disabled` (with an LLM and `EDGE_EVIDENCE_ENABLED=false`;
+  previously `not_ported`), then `not_ported`. The CLI also accepts Python's
+  `--no-review-conflicts` spelling.
 
 ### Added
 

@@ -840,6 +840,17 @@ pub struct ImproveArgs {
     pub tenant_id: Option<String>,
 }
 
+impl ImproveArgs {
+    /// Resolved `review_conflicts` override: `None` follows the setting.
+    pub fn review_conflicts(&self) -> Option<bool> {
+        if self.no_review_conflicts {
+            Some(false)
+        } else {
+            self.review_conflicts
+        }
+    }
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum DeleteModeArg {
     #[value(name = "soft")]
@@ -988,11 +999,27 @@ mod tests {
             }
         };
         assert_eq!(flags(&[]), (None, None));
-        let argv = ["cognee-cli", "improve", "--no-review-conflicts"];
-        match parse(&argv).command {
-            Commands::Improve(a) => assert!(a.no_review_conflicts),
-            other => panic!("not improve: {other:?}"),
-        }
+        let resolved = |extra: &[&str]| {
+            let mut argv = vec!["cognee-cli", "improve"];
+            argv.extend_from_slice(extra);
+            match parse(&argv).command {
+                Commands::Improve(a) => a.review_conflicts(),
+                other => panic!("not improve: {other:?}"),
+            }
+        };
+        assert_eq!(resolved(&[]), None);
+        assert_eq!(resolved(&["--review-conflicts"]), Some(true));
+        assert_eq!(resolved(&["--review-conflicts=false"]), Some(false));
+        assert_eq!(resolved(&["--no-review-conflicts"]), Some(false));
+        assert!(
+            Cli::try_parse_from([
+                "cognee-cli",
+                "improve",
+                "--no-review-conflicts",
+                "--review-conflicts"
+            ])
+            .is_err()
+        );
         assert_eq!(
             flags(&["--build-global-context-index", "--review-conflicts"]),
             (Some(true), Some(true))

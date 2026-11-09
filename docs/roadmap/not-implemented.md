@@ -148,7 +148,7 @@ Partial stages:
   so the order matches Python's. A RAG completion's turn records its chunks' ids, so ratings
   can weight chunks.
 
-- **`global_context_index`** — opt-in via `build_global_context_index`; builds Python's
+- **`global_context_index`** — on by default (`improve.global_context_index`; per-call `build_global_context_index` overrides it either way); builds Python's
   default `from_entities` index. Differences: a document's name comes from its data item
   (`name`, else the basename of `raw_data_location`) because Rust chunks carry no
   `document_name`; the LLM method ports only the default `bucketing_strategy="vector"`

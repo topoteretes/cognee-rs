@@ -117,11 +117,7 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             personalization,
             auto_feedback,
             build_global_context_index: args.build_global_context_index,
-            review_conflicts: if args.no_review_conflicts {
-                Some(false)
-            } else {
-                args.review_conflicts
-            },
+            review_conflicts: args.review_conflicts(),
             build_truth_subspace: args.build_truth_subspace,
             run_in_background: false,
             llm,
