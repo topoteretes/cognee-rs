@@ -1893,3 +1893,290 @@ pub async fn test_get_temporal_anchors_matches_default(db: &dyn GraphDBTrait) {
     assert!(none.is_empty());
     assert_eq!(none, cognee_graph::TemporalAnchors::default());
 }
+
+// -- bounded graph-view reads (SDK-610 / SDK-786 / SDK-794) -------------------
+
+/// A node with a large-ish `text` property and a small `value`, so a
+/// projected read is observable.
+fn view_node(id: &str, node_type: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "name": format!("name-{id}"),
+        "type": node_type,
+        "text": format!("long text of {id}"),
+        "value": 7,
+    })
+}
+
+/// Two seeds: `s1` is a hub with five neighbours (`a1..a5`, plus an edge
+/// between `a1` and `a2` and a self-loop on `a3`), `s2` has `b1` (incoming)
+/// and `b2`. Second hop: `a1 -> c1`, `b1 -> c2`; third hop `c2 -> c3`.
+async fn seed_view_fixture(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+    let ids = [
+        "s1", "s2", "a1", "a2", "a3", "a4", "a5", "b1", "b2", "c1", "c2", "c3", "lonely",
+    ];
+    db.add_nodes_raw(ids.iter().map(|id| view_node(id, "T")).collect())
+        .await
+        .unwrap();
+    let edges = [
+        ("s1", "s2", "between"),
+        ("s1", "a1", "r"),
+        ("s1", "a2", "r"),
+        ("s1", "a3", "r"),
+        ("s1", "a4", "r"),
+        ("s1", "a5", "r"),
+        ("a1", "a2", "side"),
+        ("a3", "a3", "loop"),
+        ("b1", "s2", "r"),
+        ("s2", "b2", "r"),
+        ("a1", "c1", "r"),
+        ("b1", "c2", "r"),
+        ("c2", "c3", "r"),
+    ];
+    let edges: Vec<EdgeData> = edges
+        .iter()
+        .map(|(s, t, r)| {
+            let mut props = HashMap::new();
+            props.insert(Cow::Borrowed("weight"), json!(1));
+            (s.to_string(), t.to_string(), r.to_string(), props)
+        })
+        .collect();
+    db.add_edges(&edges).await.unwrap();
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|s| s.to_string()).collect()
+}
+
+fn members_of(hood: &cognee_graph::BoundedNeighborhood) -> Vec<(String, usize)> {
+    hood.nodes.iter().map(|n| (n.id.clone(), n.hops)).collect()
+}
+
+fn edge_keys_of(hood: &cognee_graph::BoundedNeighborhood) -> Vec<(String, String, String)> {
+    hood.edges
+        .iter()
+        .map(|(s, t, r, _)| (s.clone(), t.clone(), r.clone()))
+        .collect()
+}
+
+/// `get_top_degree_node_ids` ranks by degree then id, fills with edgeless
+/// nodes in id order, and agrees with the trait default.
+pub async fn test_get_top_degree_node_ids_matches_default(db: &dyn GraphDBTrait) {
+    seed_view_fixture(db).await;
+
+    // Degrees: s1 6; a1, a3 (the loop counts twice) and s2 3; a2, b1 and
+    // c2 2; the rest 1; lonely 0.
+    let top = db.get_top_degree_node_ids(4).await.unwrap();
+    assert_eq!(top, strings(&["s1", "a1", "a3", "s2"]));
+    for k in [1usize, 3, 4, 12, 13, 50] {
+        let native = db.get_top_degree_node_ids(k).await.unwrap();
+        let default = cognee_graph::default_top_degree_node_ids(db, k)
+            .await
+            .unwrap();
+        assert_eq!(native, default, "top_k {k}");
+        assert_eq!(native.len(), k.min(13), "top_k {k}");
+    }
+    let all = db.get_top_degree_node_ids(50).await.unwrap();
+    assert_eq!(all.last().map(String::as_str), Some("lonely"));
+
+    // An edgeless graph still yields seeds, in id order.
+    db.delete_graph().await.unwrap();
+    db.add_nodes_raw(vec![
+        view_node("z", "T"),
+        view_node("m", "T"),
+        view_node("b", "T"),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(
+        db.get_top_degree_node_ids(2).await.unwrap(),
+        strings(&["b", "m"])
+    );
+
+    assert!(matches!(
+        db.get_top_degree_node_ids(0).await,
+        Err(cognee_graph::GraphDBError::InvalidArgument(_))
+    ));
+}
+
+/// `get_bounded_neighborhood` follows the shared membership rule — seeds
+/// first, then the budget shared round robin over the frontier — and returns
+/// exactly what the trait default returns, nodes, hops, edges and kept
+/// properties alike.
+pub async fn test_get_bounded_neighborhood_matches_default(db: &dyn GraphDBTrait) {
+    seed_view_fixture(db).await;
+
+    // A missing seed takes no slot, a repeated one counts once.
+    let seeds = strings(&["s1", "s2", "ghost", "s1"]);
+    let hood = db
+        .get_bounded_neighborhood(&seeds, 2, 6, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        members_of(&hood),
+        vec![
+            ("s1".to_string(), 0),
+            ("s2".to_string(), 0),
+            ("a1".to_string(), 1),
+            ("b1".to_string(), 1),
+            ("a2".to_string(), 1),
+            ("b2".to_string(), 1),
+        ],
+        "round robin: s1's first, s2's first, s1's second, s2's second"
+    );
+    let e = |s: &str, t: &str, r: &str| (s.to_string(), t.to_string(), r.to_string());
+    assert_eq!(
+        edge_keys_of(&hood),
+        vec![
+            e("s1", "s2", "between"),
+            e("s1", "a1", "r"),
+            e("b1", "s2", "r"),
+            e("a1", "a2", "side"),
+            e("s1", "a2", "r"),
+            e("s2", "b2", "r"),
+        ],
+        "induced edges, stored direction, ordered by their later endpoint"
+    );
+    assert!(
+        hood.nodes.iter().all(|n| n.data.contains_key("text")),
+        "no projection keeps every property"
+    );
+
+    // A budget that covers everything equals the unbounded neighbourhood.
+    let wide = db
+        .get_bounded_neighborhood(&strings(&["s1", "s2"]), 2, 100, None)
+        .await
+        .unwrap();
+    let (full_nodes, full_edges) = db
+        .get_neighborhood(&strings(&["s1", "s2"]), 2)
+        .await
+        .unwrap();
+    let got: std::collections::BTreeSet<&str> = wide.nodes.iter().map(|n| n.id.as_str()).collect();
+    let want: std::collections::BTreeSet<&str> =
+        full_nodes.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(got, want);
+    assert!(!got.contains("c3"), "c3 is three hops away");
+    assert_eq!(wide.edges.len(), full_edges.len(), "each edge once");
+    let hops = wide.hop_distances();
+    assert_eq!(hops.get("c1"), Some(&2));
+    assert_eq!(hops.get("a3"), Some(&1));
+
+    // Every bound, with and without projection, matches the default.
+    let keys = vec!["value".to_string()];
+    for (seed_ids, depth, max_nodes) in [
+        (strings(&["s1"]), 1usize, 3usize),
+        (strings(&["s1"]), 3, 100),
+        (strings(&["s2", "s1"]), 2, 9),
+        (strings(&["c3"]), 3, 5),
+        (strings(&["lonely", "s2"]), 2, 4),
+        (strings(&["s1", "s2"]), 1, 1),
+    ] {
+        for projection in [None, Some(keys.as_slice())] {
+            let native = db
+                .get_bounded_neighborhood(&seed_ids, depth, max_nodes, projection)
+                .await
+                .unwrap();
+            let default = cognee_graph::default_bounded_neighborhood(
+                db, &seed_ids, depth, max_nodes, projection,
+            )
+            .await
+            .unwrap();
+            let label = format!("{seed_ids:?} depth {depth} max {max_nodes} keys {projection:?}");
+            assert_eq!(members_of(&native), members_of(&default), "{label}");
+            assert_eq!(edge_keys_of(&native), edge_keys_of(&default), "{label}");
+            assert!(native.len() <= max_nodes, "{label}");
+            for (n, d) in native.nodes.iter().zip(&default.nodes) {
+                assert_eq!(n.data, d.data, "{label}: properties of {}", n.id);
+            }
+            if projection.is_some() {
+                for node in &native.nodes {
+                    let mut kept: Vec<&str> = node.data.keys().map(|k| k.as_ref()).collect();
+                    kept.sort_unstable();
+                    assert_eq!(kept, ["id", "name", "type", "value"], "{label}");
+                }
+            }
+            // The chunk contract: every edge arrives with or after both
+            // endpoints, and every edge arrives once.
+            let edge_count = native.edges.len();
+            let mut delivered: std::collections::HashSet<String> = Default::default();
+            let mut delivered_edges = 0;
+            for (nodes, edges) in native.into_chunks(2) {
+                delivered.extend(nodes.into_iter().map(|(id, _)| id));
+                for (s, t, _, _) in edges {
+                    assert!(delivered.contains(&s) && delivered.contains(&t), "{label}");
+                    delivered_edges += 1;
+                }
+            }
+            assert_eq!(delivered_edges, edge_count, "{label}");
+        }
+    }
+
+    // Nothing to seed from is an empty read; bad bounds fail before any read.
+    let empty = db.get_bounded_neighborhood(&[], 2, 10, None).await.unwrap();
+    assert!(empty.is_empty());
+    let ghosts = db
+        .get_bounded_neighborhood(&strings(&["ghost"]), 2, 10, None)
+        .await
+        .unwrap();
+    assert!(ghosts.is_empty() && ghosts.edges.is_empty());
+    for (depth, max_nodes) in [(0usize, 10usize), (1, 0)] {
+        assert!(matches!(
+            db.get_bounded_neighborhood(&strings(&["s1"]), depth, max_nodes, None)
+                .await,
+            Err(cognee_graph::GraphDBError::InvalidArgument(_))
+        ));
+    }
+}
+
+/// `get_entity_type_names` follows outgoing `is_a` edges to `EntityType`
+/// nodes only, and agrees with the trait default.
+pub async fn test_get_entity_type_names_matches_default(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+    db.add_nodes_raw(vec![
+        view_node("alice", "Entity"),
+        view_node("bob", "Entity"),
+        view_node("carol", "Entity"),
+        view_node("dave", "Entity"),
+        view_node("erin", "Entity"),
+        json!({"id": "t-person", "name": "Person", "type": "EntityType"}),
+        json!({"id": "t-human", "name": "Human", "type": "EntityType"}),
+        json!({"id": "t-unnamed", "name": "", "type": "EntityType"}),
+        json!({"id": "not-a-type", "name": "Chunk", "type": "DocumentChunk"}),
+    ])
+    .await
+    .unwrap();
+    let edges: Vec<EdgeData> = [
+        ("alice", "t-person", "is_a"),
+        // Two types: the smaller name wins on every backend.
+        ("bob", "t-person", "is_a"),
+        ("bob", "t-human", "is_a"),
+        // An `is_a` into a non-type node does not count.
+        ("carol", "not-a-type", "is_a"),
+        // Another relation into a type does not count.
+        ("dave", "t-person", "mentions"),
+        // An unnamed type labels nothing.
+        ("erin", "t-unnamed", "is_a"),
+        // Incoming `is_a` (type -> entity) does not name the entity's type.
+        ("t-human", "carol", "is_a"),
+    ]
+    .iter()
+    .map(|(s, t, r)| (s.to_string(), t.to_string(), r.to_string(), HashMap::new()))
+    .collect();
+    db.add_edges(&edges).await.unwrap();
+
+    let ids = strings(&["alice", "bob", "carol", "dave", "erin", "ghost", "alice"]);
+    let names = db.get_entity_type_names(&ids).await.unwrap();
+    let mut got: Vec<(&str, &str)> = names
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    got.sort_unstable();
+    assert_eq!(got, [("alice", "Person"), ("bob", "Human")]);
+
+    let default = cognee_graph::default_entity_type_names(db, &ids)
+        .await
+        .unwrap();
+    assert_eq!(names, default);
+    assert!(db.get_entity_type_names(&[]).await.unwrap().is_empty());
+}

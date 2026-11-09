@@ -35,4 +35,9 @@ pub enum GraphDBError {
     /// Generic database error
     #[error("Database error: {0}")]
     DatabaseError(String),
+
+    /// A caller passed an argument the operation cannot honour (for example
+    /// a zero `max_nodes`); rejected before anything is read.
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }

@@ -72,6 +72,11 @@ path = "tests/formatted_graph_data.rs"
 required-features = ["testing"]
 
 [[test]]
+name = "mock_contract"
+path = "tests/mock_contract.rs"
+required-features = ["testing"]
+
+[[test]]
 name = "ladybug_close"
 path = "tests/ladybug_close.rs"
 required-features = ["ladybug"]
