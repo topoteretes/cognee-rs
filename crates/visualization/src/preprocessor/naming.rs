@@ -27,7 +27,8 @@ const MAX_DERIVED_NAME_CHARS: usize = 120;
 
 /// Fallback keys `derive_node_name` walks, in Python's order
 /// (`preprocessor.py:209`).
-const NAME_FALLBACK_KEYS: [&str; 5] = ["title", "text", "summary", "description", "content"];
+pub(crate) const NAME_FALLBACK_KEYS: [&str; 5] =
+    ["title", "text", "summary", "description", "content"];
 
 /// True for UUID- or content-hash-shaped strings that would read as noise in
 /// the UI.
