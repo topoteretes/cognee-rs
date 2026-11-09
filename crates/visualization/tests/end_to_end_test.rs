@@ -275,7 +275,9 @@ async fn visualize_writes_html_file_to_provided_path() {
 
     let html = std::fs::read_to_string(&dest).expect("read generated HTML");
     assert!(html.starts_with("<!DOCTYPE html>"));
-    assert!(html.contains("d3.v7.min.js"));
+    // d3 is inlined by the offline transform, never fetched.
+    assert!(html.contains("d3js.org v7.9.0"));
+    assert!(!html.contains("d3.v7.min.js"));
 
     // Data round-trip: every node id reaches the embedded payload.
     for id in ["doc1", "chunk1", "ranked", "alice"] {

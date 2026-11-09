@@ -22,4 +22,26 @@ pub enum VisualizationError {
     /// be resolved.
     #[error("Could not determine home directory for default output path")]
     NoHomeDir,
+
+    /// The offline transform (inline d3, drop the webfont links) did not find
+    /// one of its exact patterns exactly once in the vendored `template.html`.
+    ///
+    /// This means an upstream resync changed the tags the transform rewrites;
+    /// rendering fails loudly rather than silently shipping a page that
+    /// fetches from a CDN. Update the patterns in `src/html.rs`.
+    #[error(
+        "offline transform: expected exactly one occurrence of {pattern:?} in the vendored \
+         template.html, found {found}; the template was resynced with changed tags"
+    )]
+    OfflineTransform {
+        /// The exact pattern that was looked for.
+        pattern: &'static str,
+        /// How many times it occurred.
+        found: usize,
+    },
+
+    /// The bundled d3 contains a `</script` sequence, which would terminate the
+    /// inline `<script>` element early.
+    #[error("bundled d3 contains `</script` and cannot be inlined verbatim")]
+    UnsafeInlineScript,
 }

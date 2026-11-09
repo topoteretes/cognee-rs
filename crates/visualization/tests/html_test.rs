@@ -301,8 +301,9 @@ async fn render_escapes_closing_script_in_data() {
 async fn render_contains_d3_script_tag_and_all_four_tabs() {
     let db = minimal_graph().await;
     let html = render(&db).await.expect("render succeeds");
-    // d3 v7 is fetched from a CDN by the vendored template — same as Python.
-    assert!(html.contains("d3.v7.min.js"));
+    // d3 v7.9.0 is inlined by the offline transform; nothing is fetched.
+    assert!(html.contains("d3js.org v7.9.0"));
+    assert!(!html.contains("<script src="));
     for view in ["graph", "schema", "memory", "semantic"] {
         assert!(
             html.contains(&format!("data-view=\"{view}\"")),
