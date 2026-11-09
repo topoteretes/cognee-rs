@@ -723,6 +723,55 @@ async fn hostile_multi_user_data_is_inert_and_offline() {
     assert_hostile_data_is_inert(&html, "hostile multi-user", &HOSTILE);
 }
 
+/// Hostile session events and schema data (`__SEARCH_EVENTS__`,
+/// `__SCHEMA_DATA__`) go through the same escape.
+#[test]
+fn hostile_events_and_schema_data_are_inert_and_offline() {
+    let (nodes, edges) = non_trivial_graph();
+    let events: Vec<Value> = HOSTILE
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            json!({
+                "kind": "search", "time": "2026-06-10T10:31:02", "qa_id": format!("qa-{i}"),
+                "question": text, "answer": text, "node_ids": ["alice"], "edge_ids": []
+            })
+        })
+        .collect();
+    let schema_data =
+        json!({"tables": HOSTILE.iter().map(|name| json!({"name": name})).collect::<Vec<_>>()});
+    let html = render_graph_data_with_events(nodes, edges, Some(schema_data), &events)
+        .expect("render succeeds");
+    assert_hostile_data_is_inert(&html, "hostile events and schema data", &HOSTILE);
+}
+
+/// The bounded read path embeds hostile node data just as safely.
+#[tokio::test]
+async fn hostile_bounded_render_is_inert_and_offline() {
+    let db = MockGraphDB::new();
+    db.add_node_raw(json!({"id": "seed", "type": "Entity", "name": "Seed"}))
+        .await
+        .expect("add seed");
+    for (i, text) in HOSTILE.iter().enumerate() {
+        let id = format!("n{i}");
+        db.add_node_raw(json!({"id": id, "type": "DocumentChunk", "text": text, "name": text}))
+            .await
+            .expect("add node");
+        db.add_edge("seed", &id, "contains", None)
+            .await
+            .expect("add edge");
+    }
+    let bounds = VisualizationBounds {
+        seed_node_ids: vec!["seed".to_string()],
+        depth: 1,
+        ..VisualizationBounds::default()
+    };
+    let html = render_bounded(&db, &bounds, None, &[])
+        .await
+        .expect("render succeeds");
+    assert_hostile_data_is_inert(&html, "hostile bounded render", &HOSTILE);
+}
+
 /// The inertness check must catch hostile markup that escaped the JSON.
 #[test]
 fn hostile_scan_rejects_unescaped_markup() {
