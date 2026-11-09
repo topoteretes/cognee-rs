@@ -15,6 +15,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 cognee-graph = { path = "../graph", version = "0.2.0" }
 dirs = { workspace = true }
 serde = { workspace = true }

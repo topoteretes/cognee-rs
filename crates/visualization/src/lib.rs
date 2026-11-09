@@ -28,6 +28,26 @@
 //! **Memory** (deterministic column map of documents → chunks → entities →
 //! summaries → context) and **Semantic**.
 //!
+//! # Bounded reads, JSON payloads and the streamed read
+//!
+//! * [`subgraph`] — port of `subgraph_data.py`: [`VisualizationBounds`],
+//!   seed resolution (explicit > recall > query via a caller-supplied
+//!   [`SeedSearcher`] > top degree), [`truncate_subgraph`](subgraph::truncate_subgraph),
+//!   entity typing and [`fetch_visualization_graph_data`].
+//! * [`payload`] — `build_visualization_payload` / `build_brain_summary_payload`
+//!   (the `/visualize/json` and `/visualize/brains` bodies).
+//! * [`stream`] — the ordered `meta` / `chunk` / `summary` / `done` events
+//!   of the streamed `/visualize/json`, built from the compact payload in
+//!   [`preprocessor::compact`]. The SSE transport is the HTTP server's.
+//! * Session events (the Memory timeline) are collected by
+//!   `cognee_session::collect_session_events` and passed in as
+//!   `search_events` ([`render_graph_data_with_events`], [`render_bounded`],
+//!   [`visualize_bounded`], [`build_visualization_payload`]).
+//!
+//! [`render`], [`render_graph_data`] and [`visualize`] keep their old
+//! behaviour (the whole graph, no events); Python's SDK default is the bounded
+//! read, which [`VisualizationBounds::default`] gives.
+//!
 //! # Deferred pieces
 //!
 //! * **Semantic tab** — `__SEMANTIC_POSITIONS__` and `__SEMANTIC_CLUSTERS__`
@@ -36,12 +56,6 @@
 //!   embeddings cannot be read back, and the workspace has no PCA/SVD or
 //!   k-means. This is the same state Python reaches whenever its own
 //!   best-effort `_semantic_payload` raises.
-//! * **Session events** — `__SEARCH_EVENTS__` is the literal `[]`; there is no
-//!   Rust equivalent of Python's `visualization/session_events.py`, so the
-//!   Memory timeline rail and the Semantic recall overlay stay empty.
-//! * **Subgraph bounding** — Python's `subgraph_data.py` (bounded per-dataset
-//!   subgraph extraction) has no Rust counterpart; Rust always renders the
-//!   full graph returned by `get_graph_data()`.
 //!
 //! # Quick start
 //!
@@ -63,10 +77,19 @@ mod colors;
 mod error;
 mod html;
 mod paths;
+pub mod payload;
 pub mod preprocessor;
+pub mod stream;
+pub mod subgraph;
 
 pub use error::VisualizationError;
-pub use preprocessor::{ColorMaps, PreprocessedGraph, preprocess};
+pub use payload::{build_brain_summary_payload, build_visualization_payload};
+pub use preprocessor::{ColorMaps, PreprocessedGraph, build_node_set_colors, preprocess};
+pub use stream::{GraphStreamEvent, GraphStreamEvents, GraphStreamMeta, prepare_graph_stream};
+pub use subgraph::{
+    SeedSearcher, SeedSource, SubgraphMeta, VisualizationBounds, VisualizationGraph,
+    fetch_visualization_graph_data,
+};
 
 use std::path::{Path, PathBuf};
 
@@ -84,12 +107,36 @@ use tracing::info;
 ///   written to `~/graph_visualization.html` (or `%USERPROFILE%` on Windows),
 ///   matching Python's `visualize_graph()`.
 ///
+/// Renders the whole graph with no session events; [`visualize_bounded`] is
+/// the variant with Python's bounds and events.
+///
 /// Returns the absolute path the file was written to.
 pub async fn visualize(
     graph_db: &dyn GraphDBTrait,
     output_path: Option<&Path>,
 ) -> Result<PathBuf, VisualizationError> {
-    let html = render(graph_db).await?;
+    visualize_bounded(
+        graph_db,
+        output_path,
+        &VisualizationBounds::full_graph(),
+        None,
+        &[],
+    )
+    .await
+}
+
+/// [`visualize`] with Python `visualize_graph`'s bounds and session events:
+/// the graph is read by [`fetch_visualization_graph_data`] (a bounded
+/// subgraph unless `bounds.full`) and `search_events` fill the Memory tab's
+/// timeline.
+pub async fn visualize_bounded(
+    graph_db: &dyn GraphDBTrait,
+    output_path: Option<&Path>,
+    bounds: &VisualizationBounds,
+    seed_searcher: Option<&dyn SeedSearcher>,
+    search_events: &[serde_json::Value],
+) -> Result<PathBuf, VisualizationError> {
+    let html = render_bounded(graph_db, bounds, seed_searcher, search_events).await?;
 
     let dest: PathBuf = match output_path {
         Some(p) => p.to_path_buf(),
@@ -118,11 +165,26 @@ pub async fn visualize(
 /// preprocessor derives the type-schema graph from the nodes and links it sees,
 /// which is what feeds the Schema tab.
 ///
+/// Reads the whole graph and embeds no session events; see
+/// [`render_bounded`].
+///
 /// Useful when the caller wants to stream the HTML over HTTP, embed it into a
 /// larger page, or post-process it before persisting.
 pub async fn render(graph_db: &dyn GraphDBTrait) -> Result<String, VisualizationError> {
-    let (nodes, edges) = graph_db.get_graph_data().await?;
-    render_graph_data(nodes, edges)
+    render_bounded(graph_db, &VisualizationBounds::full_graph(), None, &[]).await
+}
+
+/// [`render`] with bounds and session events: the graph comes from
+/// [`fetch_visualization_graph_data`] and `search_events` fill
+/// `__SEARCH_EVENTS__` (the HTML half of Python `visualize_graph`).
+pub async fn render_bounded(
+    graph_db: &dyn GraphDBTrait,
+    bounds: &VisualizationBounds,
+    seed_searcher: Option<&dyn SeedSearcher>,
+    search_events: &[serde_json::Value],
+) -> Result<String, VisualizationError> {
+    let graph = fetch_visualization_graph_data(graph_db, bounds, seed_searcher).await?;
+    render_graph_data_with_events(graph.nodes, graph.edges, None, search_events)
 }
 
 /// [`render`] over graph data already in hand — for a caller with no engine
@@ -132,8 +194,20 @@ pub fn render_graph_data(
     nodes: Vec<cognee_graph::GraphNode>,
     edges: Vec<cognee_graph::EdgeData>,
 ) -> Result<String, VisualizationError> {
-    let pre = preprocessor::preprocess(nodes, edges, None);
-    html::build_html(&pre)
+    render_graph_data_with_events(nodes, edges, None, &[])
+}
+
+/// [`render_graph_data`] with Python `cognee_network_visualization`'s
+/// `schema_data` (passed through to the Schema tab; `null` when `None`) and
+/// `search_events` (the Memory tab's timeline; `[]` when empty).
+pub fn render_graph_data_with_events(
+    nodes: Vec<cognee_graph::GraphNode>,
+    edges: Vec<cognee_graph::EdgeData>,
+    schema_data: Option<serde_json::Value>,
+    search_events: &[serde_json::Value],
+) -> Result<String, VisualizationError> {
+    let pre = preprocessor::preprocess(nodes, edges, schema_data);
+    html::build_html(&pre, search_events)
 }
 
 /// Render a combined HTML visualization aggregating multiple `(user_label, graph_db)`
@@ -214,5 +288,5 @@ pub async fn render_multi_user(
         .collect();
 
     let pre = preprocessor::preprocess(ordered_nodes, all_edges, None);
-    html::build_html(&pre)
+    html::build_html(&pre, &[])
 }

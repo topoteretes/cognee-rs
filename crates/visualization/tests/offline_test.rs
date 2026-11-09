@@ -8,8 +8,9 @@
 //! The vendored `template.html` loads d3 from a CDN and the Inter webfont from
 //! Google Fonts; `src/html.rs` applies an "offline transform" that inlines the
 //! bundled d3 and drops the webfont links. These tests pin the result on every
-//! HTML path (`render_graph_data` on an empty and a non-trivial graph, and
-//! `render_multi_user`):
+//! HTML path (`render_graph_data` on an empty and a non-trivial graph,
+//! `render_graph_data_with_events` with session events and schema data,
+//! `render_bounded` over a bounded read, and `render_multi_user`):
 //!
 //! 1. The inline d3 blob is located by its exact bundled content and hashes to
 //!    the pinned SHA-256.
@@ -25,7 +26,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cognee_graph::{EdgeData, GraphDBTrait, GraphNode, MockGraphDB};
-use cognee_visualization::{render_graph_data, render_multi_user};
+use cognee_visualization::{
+    VisualizationBounds, render_bounded, render_graph_data, render_graph_data_with_events,
+    render_multi_user,
+};
 use serde_json::{Value, json};
 
 /// The bundled d3, byte-for-byte what `src/html.rs` inlines.
@@ -462,6 +466,49 @@ async fn multi_user_html_is_fully_offline() {
 
     let empty = render_multi_user(&[]).await.expect("render succeeds");
     assert_offline(&empty, "multi-user (empty)");
+}
+
+/// The variant that embeds session events (and schema data) is offline too.
+#[test]
+fn graph_with_search_events_html_is_fully_offline() {
+    let (nodes, edges) = non_trivial_graph();
+    let events = vec![json!({
+        "kind": "search", "time": "2026-06-10T10:31:02", "qa_id": "qa-1",
+        "question": "Who knows Bob?", "answer": "Alice.",
+        "node_ids": ["alice"], "edge_ids": []
+    })];
+    let html = render_graph_data_with_events(nodes, edges, Some(json!({"tables": []})), &events)
+        .expect("render succeeds");
+    assert_offline(&html, "graph with search events");
+    assert!(html.contains("\"qa_id\":\"qa-1\""));
+}
+
+/// The bounded read path renders through the same offline shell.
+#[tokio::test]
+async fn bounded_render_html_is_fully_offline() {
+    let db = MockGraphDB::new();
+    for (id, name) in [("a", "Alice"), ("b", "Bob"), ("c", "Carol")] {
+        db.add_node_raw(json!({"id": id, "type": "Entity", "name": name}))
+            .await
+            .expect("add node");
+    }
+    db.add_edge("a", "b", "knows", None)
+        .await
+        .expect("add edge");
+    db.add_edge("b", "c", "knows", None)
+        .await
+        .expect("add edge");
+    let bounds = VisualizationBounds {
+        seed_node_ids: vec!["a".to_string()],
+        depth: 1,
+        ..VisualizationBounds::default()
+    };
+    let html = render_bounded(&db, &bounds, None, &[])
+        .await
+        .expect("render succeeds");
+    assert_offline(&html, "bounded render");
+    assert!(html.contains("\"id\":\"b\""));
+    assert!(!html.contains("\"id\":\"c\""));
 }
 
 /// The scanners must actually catch what they exist to catch — otherwise a
