@@ -101,9 +101,8 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 each. Not yet ported — they report a skip reason instead of running:
 
 - **`review_conflicts`** — skipped `turned_off` when switched off (per call, or
-  `improve.review_conflicts`, default on), then `no_llm_configured`, then `not_ported`
-  (SDK-1038). Python's `edge_evidence_disabled` gate has no Rust equivalent until the provenance
-  edge-evidence switch is ported.
+  `improve.review_conflicts`, default on), then `no_llm_configured`, then
+  `edge_evidence_disabled` (`cognify.edge_evidence_enabled` off), then `not_ported` (SDK-1038).
 
 Improve settings that exist but are not read by any stage yet: `improve.trace_window_steps`,
 `improve.trace_windows_per_run` (SDK-1047), `improve.distill_max_batches_per_run` (SDK-1049) and

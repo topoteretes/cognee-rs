@@ -45,10 +45,12 @@
 //! ```json
 //! {"datasetName":"...", "datasetId":"<uuid>", "sessionIds":["..."],
 //!  "feedbackAlpha":0.1, "tenant":"<uuid>", "buildGlobalContextIndex":bool,
-//!  "buildTruthSubspace":bool, "runInBackground":bool}
+//!  "reviewConflicts":bool, "buildTruthSubspace":bool, "runInBackground":bool}
 //! ```
 //!
-//! `buildGlobalContextIndex` / `buildTruthSubspace` opt in to those stages
+//! `buildGlobalContextIndex` / `reviewConflicts` follow
+//! `improve.global_context_index` / `improve.review_conflicts` when absent
+//! (an explicit value wins either way); only `buildTruthSubspace` is an opt-in
 //! (default `false`). With `runInBackground: true` the dataset is resolved
 //! (a name resolves or is created; an unknown or unwritable `datasetId` is a
 //! validation error) and the options are validated first, as Python does,

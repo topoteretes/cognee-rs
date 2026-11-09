@@ -824,6 +824,14 @@ pub struct ImproveArgs {
     )]
     pub review_conflicts: Option<bool>,
 
+    /// Python's spelling of `--review-conflicts=false`.
+    #[arg(
+        long = "no-review-conflicts",
+        hide = true,
+        conflicts_with = "review_conflicts"
+    )]
+    pub no_review_conflicts: bool,
+
     /// Opt in to the `build_truth_subspace` stage (needs `--session-id`).
     #[arg(long = "build-truth-subspace")]
     pub build_truth_subspace: bool,
@@ -980,6 +988,11 @@ mod tests {
             }
         };
         assert_eq!(flags(&[]), (None, None));
+        let argv = ["cognee-cli", "improve", "--no-review-conflicts"];
+        match parse(&argv).command {
+            Commands::Improve(a) => assert!(a.no_review_conflicts),
+            other => panic!("not improve: {other:?}"),
+        }
         assert_eq!(
             flags(&["--build-global-context-index", "--review-conflicts"]),
             (Some(true), Some(true))

@@ -18,8 +18,8 @@ use cognee::api::ApiError;
 use cognee::api::improve::{
     DEFAULT_STAGES, ImproveConfig, ImproveParams, ImproveResult, ImproveStatus,
     REASON_ABORTED_BY_FATAL_STAGE, REASON_AUTO_FEEDBACK_DISABLED, REASON_BACKEND_UNSUPPORTED,
-    REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_CHANGES,
-    REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
+    REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_EDGE_EVIDENCE_DISABLED,
+    REASON_NO_CHANGES, REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
     REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
     REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF, StageKind, StageResult, StageStatus,
     TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
@@ -1238,6 +1238,37 @@ async fn review_conflicts_follows_setting_and_per_call_override() {
     assert_eq!(
         reason(&run("ds_rc_arg_on", false, Some(true), mock_llm()).await),
         REASON_NOT_PORTED
+    );
+    // Edge evidence off: reported once the LLM gate passes; turned_off and
+    // no_llm_configured still win over it.
+    let no_evidence = CognifyConfig {
+        edge_evidence_enabled: false,
+        ..CognifyConfig::default()
+    };
+    let run_ne = |name: &'static str, on: bool, llm| {
+        let mut p = params(&h, &no_evidence, name, None, llm);
+        p.config = setting(on);
+        p.review_conflicts = None;
+        async move { improve(p).await.unwrap() }
+    };
+    assert_eq!(
+        reason(&run_ne("ds_rc_ne", true, mock_llm()).await),
+        REASON_EDGE_EVIDENCE_DISABLED
+    );
+    assert_eq!(
+        reason(&run_ne("ds_rc_ne_off", false, mock_llm()).await),
+        REASON_TURNED_OFF
+    );
+    assert_eq!(
+        reason(
+            &run_ne(
+                "ds_rc_ne_keyless",
+                true,
+                Arc::new(cognee_llm::UnconfiguredLlm::new("openai"))
+            )
+            .await
+        ),
+        REASON_NO_LLM_CONFIGURED
     );
     // Turned off wins over the LLM gate; otherwise a keyless install reports it.
     let keyless =

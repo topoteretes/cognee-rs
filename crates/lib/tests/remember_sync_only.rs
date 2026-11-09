@@ -386,3 +386,72 @@ async fn remember_auto_improve_follows_the_stage_settings() {
         "settings off: {off:?}"
     );
 }
+
+/// SDK-1206: the detached automatic improve after a session `remember()`
+/// also passes no per-call stage flags, so `improve.global_context_index`
+/// decides. The detached result is discarded, so the observable effect is the
+/// stage's stamp on the dataset's improve operation row: left when the
+/// setting is on, absent when it is off (`turned_off`).
+#[tokio::test]
+async fn remember_session_auto_improve_follows_the_stage_settings() {
+    use cognee::api::improve::{IMPROVE_WRITE_PIPELINE_NAME, StageKind, stage_watermark_key};
+    use cognee_database::RelationalDb;
+
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    let mut stamped = Vec::new();
+    for (dataset, on) in [("ds_sess_stages_on", true), ("ds_sess_stages_off", false)] {
+        let config = ImproveConfig {
+            global_context_index: on,
+            ..ImproveConfig::default()
+        };
+        // The detached improve needs the dataset row; a session write alone
+        // does not create it.
+        let dataset_id = cognee_ingestion::generate_dataset_id(dataset, owner, None);
+        IngestDb::create_dataset(
+            &*h.db,
+            cognee_models::Dataset::new(dataset.to_string(), owner, None, dataset_id),
+        )
+        .await
+        .expect("create dataset");
+        let result = remember(
+            vec![DataInput::Text("Alice works at Acme.".to_string())],
+            dataset,
+            Some("sync-sess-stages"),
+            /* self_improvement= */ true,
+            owner,
+            None,
+            Arc::clone(&h.add_pipeline),
+            cognify_llm(),
+            Arc::clone(&h.storage),
+            h.graph_db.clone() as Arc<_>,
+            h.vector_db.clone() as Arc<_>,
+            h.embedding_engine.clone() as Arc<_>,
+            Some(h.db.clone()),
+            Some(Arc::clone(&h.session_store)),
+            Some(Arc::clone(&h.session_manager)),
+            Arc::clone(&h.ontology),
+            Arc::new(CognifyConfig::default()),
+            Some(config),
+            cognee::search::PreferenceConfig::default(),
+            false,
+        )
+        .await
+        .expect("session remember with background improve");
+        assert!(result.improve_launched, "{dataset}");
+        assert!(cognee::wait_for_background_tasks(None).await);
+
+        let stamp = Arc::clone(&h.db)
+            .pipeline_runs()
+            .latest_stamped_run(
+                dataset_id,
+                IMPROVE_WRITE_PIPELINE_NAME,
+                stage_watermark_key(StageKind::GlobalContextIndex),
+            )
+            .await
+            .expect("read stamp");
+        stamped.push(stamp.is_some());
+    }
+    assert_eq!(stamped, [true, false], "[on, off] stamped");
+}

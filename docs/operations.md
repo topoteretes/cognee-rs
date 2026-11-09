@@ -111,7 +111,8 @@ result, and an exhausted LLM budget skips every later stage with
 `improve.global_context_index`; a per-call `review_conflicts` /
 `build_global_context_index` wins either way) and report `turned_off` when off.
 `review_conflicts` is not ported yet and always reports a skip reason
-(`turned_off`, then `no_llm_configured`, then `not_ported`).
+(`turned_off`, then `no_llm_configured`, then `edge_evidence_disabled` while
+`cognify.edge_evidence_enabled` is off, then `not_ported`).
 
 `extract_agent_context` runs while automatic session context is on
 (`auto_feedback` with session caching; otherwise `auto_feedback_disabled`)
@@ -173,7 +174,7 @@ and `improve`; the HTTP server shares the global one. The stages' own adds and
 cognifies re-enter the improve's hold. A dataset that does not exist yet is
 held by the id an `add` of it would create.
 
-`global_context_index` (opt-in, `build_global_context_index`) builds the
+`global_context_index` (on by default, `improve.global_context_index`; per-call `build_global_context_index`) builds the
 dataset's global context index with Python's default `from_entities` method,
 which makes no LLM call: one `GlobalContextSummary` bucket per document
 naming the entities it is distinctively about (tf·idf over the dataset's

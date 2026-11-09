@@ -49,6 +49,10 @@ pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
 /// setting (`review_conflicts`, `global_context_index`). Python's
 /// `REASON_TURNED_OFF`; `build_truth_subspace` keeps `opt_in_disabled`.
 pub const REASON_TURNED_OFF: &str = "turned_off";
+/// Skip reason of `review_conflicts` while provenance edge evidence
+/// (`cognify.edge_evidence_enabled`) is off. Python's
+/// `REASON_EDGE_EVIDENCE_DISABLED`.
+pub const REASON_EDGE_EVIDENCE_DISABLED: &str = "edge_evidence_disabled";
 /// Skip reason of a stage that drafts text with an LLM when none is
 /// configured (keyless installs).
 pub const REASON_NO_LLM_CONFIGURED: &str = "no_llm_configured";
@@ -296,13 +300,15 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::BuildTruthSubspace if !self.capabilities.supports_truth_state => {
                 Some(REASON_BACKEND_UNSUPPORTED)
             }
-            // Conflict review is not ported yet (SDK-1038). Python's gate also
-            // has `edge_evidence_disabled` between `no_llm_configured` and the
-            // run; Rust has no provenance edge-evidence switch to read.
+            // Python's gate order: turned_off, no_llm_configured,
+            // edge_evidence_disabled. The review itself is not ported yet
+            // (SDK-1038), so a run that passes them reports `not_ported`.
             StageKind::ReviewConflicts => Some(if !self.review_conflicts {
                 REASON_TURNED_OFF
             } else if !self.llm.is_configured() {
                 REASON_NO_LLM_CONFIGURED
+            } else if !self.cognify_config.edge_evidence_enabled {
+                REASON_EDGE_EVIDENCE_DISABLED
             } else {
                 REASON_NOT_PORTED
             }),
@@ -807,7 +813,7 @@ impl ImproveStages<'_> {
         truth_subspace_stage_result(&ts)
     }
 
-    /// Stage 9: the global context index (opt-in).
+    /// Stage 9: the global context index (on by default, `improve.global_context_index`).
     ///
     /// `already_completed` (`no_writes_since_last_improve`) when only reads
     /// ran since its last build, which a completed run stamps (see

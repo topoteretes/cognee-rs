@@ -148,7 +148,10 @@ async fn background_improve_returns_running_and_is_awaited_by_wait() {
             let name = stage["stage"].as_str().unwrap_or_default();
             if name == "global_context_index" || name == "build_truth_subspace" {
                 let reason = stage["reason"].as_str().unwrap_or_default();
-                assert!(!reason.contains("opt"), "{name} not enabled: {stage}");
+                assert!(
+                    reason != "turned_off" && reason != "opt_in_disabled",
+                    "{name} not enabled: {stage}"
+                );
             }
         }
     }
