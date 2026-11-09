@@ -123,6 +123,11 @@ async fn all_view_modules_contribute() {
         html.contains("_renderSchemaGraph"),
         "schema_view.js missing"
     );
+    // schema_view.js: the "Tables" column for SQL/DLT tables (SCHEMA_TABLE_RANK).
+    assert!(
+        html.contains("'6': 'Tables'"),
+        "schema_view.js is missing the Tables column label"
+    );
     // story_view.js: canvas renderer, label budget, and the data globals the
     // Memory/Semantic tabs read back out of it.
     assert!(
@@ -272,7 +277,8 @@ async fn preprocessor_enrichment_reaches_html() {
 #[tokio::test]
 async fn render_escapes_closing_script_in_data() {
     // A node name containing `</script>` must not be able to terminate the
-    // embedded <script> block — `safe_json_embed` rewrites `</` to `<\/`.
+    // embedded <script> block — `safe_json_embed` escapes `<` / `>` as
+    // `\u003c` / `\u003e`.
     let db = MockGraphDB::new();
     db.add_node_raw(serde_json::json!({
         "id": "evil",
@@ -283,7 +289,7 @@ async fn render_escapes_closing_script_in_data() {
     .expect("MockGraphDB accepts valid node JSON");
     let html = render(&db).await.expect("render succeeds");
     assert!(
-        html.contains("hi<\\/script>bye"),
+        html.contains("hi\\u003c/script\\u003ebye"),
         "`</script>` in node data was not escaped"
     );
     assert!(
@@ -296,8 +302,9 @@ async fn render_escapes_closing_script_in_data() {
 async fn render_contains_d3_script_tag_and_all_four_tabs() {
     let db = minimal_graph().await;
     let html = render(&db).await.expect("render succeeds");
-    // d3 v7 is fetched from a CDN by the vendored template — same as Python.
-    assert!(html.contains("d3.v7.min.js"));
+    // d3 v7.9.0 is inlined by the offline transform; nothing is fetched.
+    assert!(html.contains("d3js.org v7.9.0"));
+    assert!(!html.contains("<script src="));
     for view in ["graph", "schema", "memory", "semantic"] {
         assert!(
             html.contains(&format!("data-view=\"{view}\"")),

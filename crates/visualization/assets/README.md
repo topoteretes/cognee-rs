@@ -1,10 +1,11 @@
 # Vendored visualization frontend
 
-Everything in this directory is **vendored verbatim** from the upstream Python
-[`cognee`](https://github.com/topoteretes/cognee) repository. Not a port, not an
-adaptation — a byte-for-byte copy.
+Everything in this directory except `vendor/` is **vendored verbatim** from the
+upstream Python [`cognee`](https://github.com/topoteretes/cognee) repository
+(branch `dev`). Not a port, not an adaptation — a byte-for-byte copy.
+`vendor/` holds the d3 release the offline transform inlines (see below).
 
-- **Upstream commit:** `38eece5b` (`38eece5bbb0cb9f5706fed908abd16dba0f5505e`)
+- **Upstream commit:** `685de12d2` (`685de12d2c8cd9bd2e56be92095dbf4347c8f191`, `origin/dev`)
 
 | Vendored file            | Upstream source path                                       |
 | ------------------------ | ---------------------------------------------------------- |
@@ -33,16 +34,31 @@ side. Hand-editing is exactly how that happened, so the resync rule is the fix.
 Re-sync procedure:
 
 ```bash
-git clone --depth 1 https://github.com/topoteretes/cognee.git /tmp/cognee-python
+git clone --depth 1 --branch dev https://github.com/topoteretes/cognee.git /tmp/cognee-python
 SRC=/tmp/cognee-python/cognee/modules/visualization
 DST=crates/visualization/assets
 cp "$SRC/template.html" "$DST/template.html"
 for f in ui_chrome schema_view story_view inspector memory_map semantic_map; do
   cp "$SRC/views/$f.js" "$DST/views/$f.js"
 done
-# then update the commit hash in this file and re-run:
-#   cargo test -p cognee-visualization
+git -C /tmp/cognee-python rev-parse HEAD   # record this as the upstream commit above
+cargo test -p cognee-visualization
 ```
+
+Then check, before committing:
+
+1. **The offline transform still applies.** `src/html.rs` rewrites three exact
+   tag patterns in `template.html` (the d3 CDN `<script>` and the three Google
+   Fonts `<link>` lines). If upstream changed any of them, rendering fails with
+   `VisualizationError::OfflineTransform` and the unit test
+   `offline_patterns_occur_exactly_once_in_the_vendored_template` fails. Update
+   the patterns (`D3_CDN_TAG`, `GOOGLE_FONTS_LINES`) — never the vendored file.
+2. **Nothing new loads from the network.** `tests/offline_test.rs` fails if the
+   new files introduce an external URL, `fetch`, `<link href>`, etc. If upstream
+   bumped the d3 major/minor version it loads, bump `vendor/` too (below).
+3. **The preprocessor still matches.** Diff the Python side
+   (`git diff <old> <new> -- cognee/modules/visualization`) and port changes to
+   `preprocessor.py` / `operations_catalog.py` into `../src/preprocessor/`.
 
 `cargo test -p cognee-visualization` is enough on its own: the crate declares
 every feature its output ordering depends on (notably `serde_json/preserve_order`)
@@ -77,12 +93,40 @@ Two of the tokens are *not* filled from a vendored file:
   `layouts/semantic_layout.py:200-206`. This is why the layout chunk must be
   substituted *before* the data tokens.
 
-## Known limitation: CDN fetches
+## Offline transform: the one deliberate divergence
 
 The vendored `template.html` loads d3 v7 from `https://d3js.org` and the Inter
-webfont from `https://fonts.googleapis.com` / `https://fonts.gstatic.com`.
-That is exactly what Python does, so it is **not a parity gap** — but it does
-mean the generated HTML is not fully self-contained and degrades on offline or
-air-gapped edge devices (no d3 ⇒ no graph, only the page chrome). Inlining d3
-would be a deliberate divergence from upstream and is intentionally not done
-here.
+webfont from `https://fonts.googleapis.com` / `https://fonts.gstatic.com`, as
+Python does. Every HTML this crate produces must work with no network, so
+`../src/html.rs` rewrites the shell at render time (the file on disk stays
+byte-identical to upstream):
+
+- `<script src="https://d3js.org/d3.v7.min.js"></script>` → `<script>` +
+  `vendor/d3.v7.9.0.min.js` + `</script>`;
+- the three Google Fonts `<link>` lines are deleted; the CSS falls back to a
+  local Inter, then `system-ui`.
+
+Each pattern must match exactly once, or rendering returns
+`VisualizationError::OfflineTransform`. `../tests/offline_test.rs` pins the
+result. See [`../README.md`](../README.md#fully-offline-output).
+
+## Bundled d3 (`vendor/`)
+
+| File | What |
+| --- | --- |
+| `vendor/d3.v7.9.0.min.js` | d3 **7.9.0**, the official `dist/d3.min.js`, unmodified |
+| `vendor/LICENSE-d3` | d3's ISC license (Copyright 2010-2023 Mike Bostock) |
+
+- **Source:** `https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js`
+  (byte-identical to `https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js`).
+- **Size:** 279,706 bytes.
+- **SHA-256:** `f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539`
+  (asserted by `../tests/offline_test.rs`).
+- Contains no `</script` (so it can be inlined verbatim; `build_html` refuses
+  one that does). Its only URLs are the `https://d3js.org` banner comment and
+  five w3.org XML namespace identifiers, none of which is fetched.
+
+The template's `d3.v7.min.js` is "latest v7"; 7.9.0 is the current v7 release.
+To bump: download the new `dist/d3.min.js`, verify it on two CDNs, replace the
+file (renaming it and the `include_str!` in `../src/html.rs`), and update the
+version, size and SHA here and in `../tests/offline_test.rs`.

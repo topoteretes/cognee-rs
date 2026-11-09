@@ -67,6 +67,25 @@
 //! With the first two `null`, `views/semantic_map.js` shows its empty state and
 //! the Semantic tab is inert; the Graph, Schema and Memory tabs are fully
 //! functional.
+//!
+//! # Offline transform (the one deliberate divergence from upstream)
+//!
+//! Every HTML this crate produces must work with no network. The vendored
+//! `template.html` loads d3 from `https://d3js.org` and the Inter webfont from
+//! Google Fonts, so before any token is substituted [`offline_template`]
+//! rewrites the shell:
+//!
+//! * the exact tag [`D3_CDN_TAG`] becomes the `__COGNEE_INLINE_D3__` slot,
+//!   filled in the JS-chunk phase with `<script>` + the bundled
+//!   `assets/vendor/d3.v7.9.0.min.js` + `</script>`;
+//! * the three exact Google Fonts `<link>` lines ([`GOOGLE_FONTS_LINES`]) are
+//!   deleted. The template's CSS already falls back to a locally installed
+//!   Inter and then `system-ui`.
+//!
+//! Each pattern must occur **exactly once** or rendering fails with
+//! [`VisualizationError::OfflineTransform`]: a resync that changes those tags
+//! then breaks loudly instead of silently re-enabling the CDN. The vendored
+//! files themselves stay byte-identical to upstream.
 
 use std::borrow::Cow;
 
@@ -94,6 +113,81 @@ const MEMORY_VIEW_JS: &str = include_str!("../assets/views/memory_map.js");
 /// Vendored `views/semantic_map.js` — the Semantic tab's meaning-space scatter.
 const SEMANTIC_VIEW_JS: &str = include_str!("../assets/views/semantic_map.js");
 
+/// d3 v7.9.0 (`dist/d3.min.js`, ISC license — see `assets/vendor/LICENSE-d3`),
+/// inlined so the page never fetches it. Source and SHA-256 are recorded in
+/// `assets/README.md`.
+pub const D3_JS: &str = include_str!("../assets/vendor/d3.v7.9.0.min.js");
+
+/// The upstream template's d3 CDN tag, replaced by the inline d3.
+pub const D3_CDN_TAG: &str = r#"<script src="https://d3js.org/d3.v7.min.js"></script>"#;
+
+/// Slot the offline transform leaves where [`D3_CDN_TAG`] was; filled in the
+/// JS-chunk phase.
+const INLINE_D3_SLOT: &str = "__COGNEE_INLINE_D3__";
+
+/// The upstream template's three Google Fonts lines (with their newline),
+/// deleted by the offline transform.
+pub const GOOGLE_FONTS_LINES: [&str; 3] = [
+    "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n",
+    "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n",
+    "<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap\" rel=\"stylesheet\">\n",
+];
+
+/// Replace the single occurrence of `pattern` in `source` with `replacement`,
+/// or fail when it does not occur exactly once.
+fn replace_exactly_once(
+    source: &str,
+    pattern: &'static str,
+    replacement: &str,
+) -> Result<String, VisualizationError> {
+    let found = source.matches(pattern).count();
+    if found != 1 {
+        return Err(VisualizationError::OfflineTransform { pattern, found });
+    }
+    Ok(source.replacen(pattern, replacement, 1))
+}
+
+/// Apply the offline transform to a template (see the module docs): the d3
+/// CDN tag becomes [`INLINE_D3_SLOT`] and the webfont links are dropped.
+fn offline_template(template: &str) -> Result<String, VisualizationError> {
+    let mut html = replace_exactly_once(template, D3_CDN_TAG, INLINE_D3_SLOT)?;
+    for line in GOOGLE_FONTS_LINES {
+        html = replace_exactly_once(&html, line, "")?;
+    }
+    Ok(html)
+}
+
+/// Markup sequences that must never appear in a verbatim-inlined script:
+/// `</script` closes the element early, and `<!--` followed later by
+/// `<script` moves the HTML tokenizer into the script-data-double-escaped
+/// state, where the template's own `</script>` no longer closes the element.
+const UNSAFE_INLINE_SCRIPT_SEQUENCES: [&[u8]; 3] = [b"</script", b"<!--", b"<script"];
+
+/// Whether `script` contains any [`UNSAFE_INLINE_SCRIPT_SEQUENCES`] entry
+/// (ASCII case-insensitively).
+fn has_unsafe_inline_script_sequence(script: &str) -> bool {
+    UNSAFE_INLINE_SCRIPT_SEQUENCES.iter().any(|needle| {
+        script
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
+    })
+}
+
+/// `<script>` + [`D3_JS`] + `</script>`, refusing a d3 build that would close
+/// the script element early or disturb the tokenizer state (see
+/// [`UNSAFE_INLINE_SCRIPT_SEQUENCES`]).
+fn inline_d3_script() -> Result<String, VisualizationError> {
+    if has_unsafe_inline_script_sequence(D3_JS) {
+        return Err(VisualizationError::UnsafeInlineScript);
+    }
+    let mut script = String::with_capacity(D3_JS.len() + 17);
+    script.push_str("<script>");
+    script.push_str(D3_JS);
+    script.push_str("</script>");
+    Ok(script)
+}
+
 /// `layouts/pipeline_layout.emit_js()` returns `""` upstream
 /// ([`pipeline_layout.py:16-17`](https://github.com/topoteretes/cognee/blob/main/cognee/modules/visualization/layouts/pipeline_layout.py#L16-L17)).
 /// The slot is kept so a future L→R Story layout drops in without touching the
@@ -107,16 +201,39 @@ const PIPELINE_LAYOUT_JS: &str = "";
 /// substituted before the data tokens.
 const SEMANTIC_LAYOUT_JS: &str = "window._semanticPositions = __SEMANTIC_POSITIONS__;";
 
-/// Serialize a value to JSON and neutralize `</` so the result is safe to embed
-/// inside a `<script>` element.
+/// Serialize a value to JSON and escape every character that has meaning to
+/// the HTML tokenizer, so the result is safe to embed inside a `<script>`
+/// element.
 ///
-/// Ports `_safe_json_embed()` (`cognee_network_visualization.py:70-73`). This is
-/// the only XSS guard on the embedded payload: without it a node whose `name`
-/// contains `</script>` would terminate the script block early and let the
-/// remainder be parsed as markup.
+/// Ports `_safe_json_embed()` (`cognee_network_visualization.py:70-73`) and
+/// hardens it. Upstream only rewrites `</`, which stops a node `name` holding
+/// `</script>` from closing the block, but not `<!--` followed later by
+/// `<script` + space / `/` / `>`: that pair puts the tokenizer into the
+/// script-data-double-escaped state, the template's own `</script>` then no
+/// longer closes the element, and the whole page renders blank. Realistic
+/// input does that — a `DocumentChunk` from an ingested HTML file.
+///
+/// So `<`, `>` and `&` become `\u003c`, `\u003e` and `\u0026`, and U+2028 /
+/// U+2029 (line terminators in pre-ES2019 JS string literals) become
+/// `\u2028` / `\u2029`. This is sound because `serde_json` emits none of these
+/// characters outside a string literal, and inside one each replacement is a
+/// JSON (and JS) escape decoding to the same character: every data token is a
+/// JS expression, so the parsed value is unchanged. The `</` rule is subsumed.
+/// This is the only XSS guard on the embedded payload.
 fn safe_json_embed<T: serde::Serialize>(value: &T) -> Result<String, VisualizationError> {
     let raw = serde_json::to_string(value)?;
-    Ok(raw.replace("</", "<\\/"))
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            other => out.push(other),
+        }
+    }
+    Ok(out)
 }
 
 /// Replace every `(token, value)` pair in `source` in **one** left-to-right
@@ -173,12 +290,17 @@ fn substitute_once(source: &str, replacements: &[(&str, Cow<'_, str>)]) -> Strin
 /// for why the phase order matters, why each phase is a single pass, and which
 /// three payloads are deferred.
 pub(crate) fn build_html(pre: &PreprocessedGraph) -> Result<String, VisualizationError> {
+    // 0) Offline transform: inline d3, drop the webfont links. Fails loudly
+    //    when a resync changed the tags it rewrites.
+    let template = offline_template(HTML_TEMPLATE)?;
+
     // 1) JS chunks: ordered so the first script block (ui_chrome + schema) runs
     //    before the main story-view IIFE in the second block. Substituted first
     //    so the data tokens *inside* these chunks get resolved below.
     let html = substitute_once(
-        HTML_TEMPLATE,
+        &template,
         &[
+            (INLINE_D3_SLOT, Cow::Owned(inline_d3_script()?)),
             ("__UI_CHROME_JS__", Cow::Borrowed(UI_CHROME_JS)),
             ("__SCHEMA_VIEW_JS__", Cow::Borrowed(SCHEMA_VIEW_JS)),
             ("__STORY_VIEW_JS__", Cow::Borrowed(STORY_VIEW_JS)),
@@ -344,8 +466,44 @@ mod tests {
     fn safe_json_embed_escapes_closing_script() {
         let v = serde_json::json!({"x": "</script>"});
         let out = safe_json_embed(&v).expect("json encode");
-        assert!(out.contains("<\\/script>"));
+        assert!(out.contains("\\u003c/script\\u003e"));
         assert!(!out.contains("</script>"));
+    }
+
+    /// No markup character survives, and the escaped JSON parses back to the
+    /// original value.
+    #[test]
+    fn safe_json_embed_escapes_markup_and_round_trips() {
+        let hostile = [
+            "<!--<script>",
+            "</script><img src=https://x>",
+            "&lt;&amp;",
+            "a\u{2028}b\u{2029}c",
+            "<SCRIPT/x>-->",
+        ];
+        let value = serde_json::json!({"names": hostile, "<key>": "&"});
+        let out = safe_json_embed(&value).expect("json encode");
+        for c in ['<', '>', '&', '\u{2028}', '\u{2029}'] {
+            assert!(!out.contains(c), "{c:?} survived in {out}");
+        }
+        let back: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn bundled_d3_has_no_unsafe_inline_script_sequence() {
+        assert!(!has_unsafe_inline_script_sequence(D3_JS));
+        assert!(inline_d3_script().is_ok());
+    }
+
+    #[test]
+    fn unsafe_inline_script_sequences_are_detected_case_insensitively() {
+        for bad in ["a</SCRIPT>b", "x<!--y", "if(a<ScRiPt)", "</script"] {
+            assert!(has_unsafe_inline_script_sequence(bad), "{bad}");
+        }
+        for ok in ["a < b", "x<!-y", "<\\/script>", "i<scrip"] {
+            assert!(!has_unsafe_inline_script_sequence(ok), "{ok}");
+        }
     }
 
     /// The whole point of the single pass: an injected value that happens to
@@ -379,6 +537,51 @@ mod tests {
     fn substitute_once_is_utf8_safe() {
         let out = substitute_once("héllo __T__ wörld", &[("__T__", Cow::Borrowed("→"))]);
         assert_eq!(out, "héllo → wörld");
+    }
+
+    /// Every offline-transform pattern is in the vendored template exactly
+    /// once — the precondition `build_html` enforces at render time.
+    #[test]
+    fn offline_patterns_occur_exactly_once_in_the_vendored_template() {
+        assert_eq!(HTML_TEMPLATE.matches(D3_CDN_TAG).count(), 1);
+        for line in GOOGLE_FONTS_LINES {
+            assert_eq!(HTML_TEMPLATE.matches(line).count(), 1, "{line}");
+        }
+        let html = offline_template(HTML_TEMPLATE).expect("transform applies");
+        assert!(!html.contains("d3js.org/d3.v7.min.js"));
+        assert!(!html.contains("fonts.googleapis.com"));
+        assert!(!html.contains("fonts.gstatic.com"));
+        assert_eq!(html.matches(INLINE_D3_SLOT).count(), 1);
+    }
+
+    /// A resync that drops or duplicates a pattern fails instead of silently
+    /// re-enabling the CDN.
+    #[test]
+    fn offline_transform_rejects_missing_or_duplicated_patterns() {
+        let missing = HTML_TEMPLATE.replace(D3_CDN_TAG, "");
+        assert!(matches!(
+            offline_template(&missing),
+            Err(VisualizationError::OfflineTransform { found: 0, .. })
+        ));
+        let doubled = HTML_TEMPLATE.replace(D3_CDN_TAG, &format!("{D3_CDN_TAG}{D3_CDN_TAG}"));
+        assert!(matches!(
+            offline_template(&doubled),
+            Err(VisualizationError::OfflineTransform { found: 2, .. })
+        ));
+        let no_font = HTML_TEMPLATE.replace(GOOGLE_FONTS_LINES[2], "");
+        assert!(matches!(
+            offline_template(&no_font),
+            Err(VisualizationError::OfflineTransform { found: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn bundled_d3_is_safe_to_inline() {
+        assert!(!D3_JS.to_ascii_lowercase().contains("</script"));
+        assert!(D3_JS.starts_with("// https://d3js.org v7.9.0 "));
+        let script = inline_d3_script().expect("d3 inlines");
+        assert!(script.starts_with("<script>// https://d3js.org v7.9.0"));
+        assert!(script.ends_with("</script>"));
     }
 
     #[test]

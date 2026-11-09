@@ -22,6 +22,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cognee_graph::{EdgeData, GraphNode};
+use cognee_visualization::preprocessor::build_node_set_colors;
 use cognee_visualization::{PreprocessedGraph, preprocess};
 use serde_json::{Value, json};
 
@@ -209,10 +210,13 @@ fn stage_assignment_covers_every_known_type() {
         ("EntityType", "type"),
         ("DatabaseSchema", "schema"),
         ("SchemaTable", "schema"),
+        ("SchemaColumn", "schema"),
         ("SchemaRelationship", "schema"),
         ("TableType", "schema"),
         ("TableRow", "schema"),
         ("ColumnValue", "schema"),
+        ("DltColumn", "schema"),
+        ("DltRow", "chunk"),
         ("MysteryType", "other"),
     ];
     let nodes: Vec<GraphNode> = cases
@@ -877,4 +881,322 @@ fn type_card_fields_prefer_database_properties_over_derived_keys() {
         ],
         "TextDocument type card must read like Python's"
     );
+}
+
+// ── Custom graph-model identity → "entity" stage (SDK-863) ──────────────────
+
+fn identity() -> Value {
+    json!({"index_fields": ["name"], "identity_fields": ["name"]})
+}
+
+/// Port of `test_custom_graph_model_node_with_identity_is_an_entity`: metadata
+/// arrives as an object from some adapters and as a JSON string from others.
+#[test]
+fn custom_graph_model_node_with_identity_is_an_entity() {
+    for metadata in [identity(), Value::String(identity().to_string())] {
+        let result = preprocess(
+            vec![node(
+                "dana",
+                json!({"type": "Person", "name": "Dana Kim", "metadata": metadata}),
+            )],
+            vec![],
+            None,
+        );
+        assert_eq!(field(&result.nodes[0], "stage"), &json!("entity"));
+        assert_eq!(field(&result.nodes[0], "entity_type"), &json!("Person"));
+    }
+}
+
+#[test]
+fn custom_graph_model_node_without_identity_stays_other() {
+    // A container root such as CompanyGraph declares no identity.
+    for metadata in [
+        json!({"index_fields": []}),
+        json!({"identity_fields": []}),
+        json!("not json"),
+        json!("[\"identity_fields\"]"),
+    ] {
+        let result = preprocess(
+            vec![node(
+                "root",
+                json!({"type": "CompanyGraph", "metadata": metadata}),
+            )],
+            vec![],
+            None,
+        );
+        assert_eq!(field(&result.nodes[0], "stage"), &json!("other"));
+    }
+}
+
+#[test]
+fn builtin_types_with_identity_keep_their_stage() {
+    for node_type in [
+        "EdgeType",
+        "NodeSet",
+        "Skill",
+        "SkillRun",
+        "SkillImprovementProposal",
+    ] {
+        let result = preprocess(
+            vec![node(
+                "n",
+                json!({"type": node_type, "name": "n", "metadata": identity()}),
+            )],
+            vec![],
+            None,
+        );
+        assert_eq!(
+            field(&result.nodes[0], "stage"),
+            &json!("other"),
+            "type {node_type}"
+        );
+    }
+}
+
+#[test]
+fn mapped_types_keep_their_mapped_stage_even_with_identity() {
+    let result = preprocess(
+        vec![
+            node(
+                "e",
+                json!({"type": "Entity", "name": "Alice", "metadata": identity()}),
+            ),
+            node(
+                "t",
+                json!({"type": "EntityType", "name": "Person", "metadata": identity()}),
+            ),
+            node(
+                "s",
+                json!({"type": "NodeSet", "name": "hr_database", "metadata": {"index_fields": []}}),
+            ),
+        ],
+        vec![],
+        None,
+    );
+    let nodes = by_id(&result);
+    assert_eq!(field(&nodes["e"], "stage"), &json!("entity"));
+    assert_eq!(field(&nodes["t"], "stage"), &json!("type"));
+    assert_eq!(field(&nodes["s"], "stage"), &json!("other"));
+}
+
+// ── Semantic entity_type on every node (SDK-794) ─────────────────────────────
+
+#[test]
+fn every_node_carries_its_semantic_entity_type() {
+    let result = alice_like();
+    let nodes = by_id(&result);
+    for node in result.nodes.iter() {
+        assert!(node.get("entity_type").is_some(), "{node}");
+    }
+    // Entities resolve through is_a; everything else keeps its raw type.
+    let entity = result
+        .nodes
+        .iter()
+        .find(|n| n["type"] == "Entity")
+        .expect("an entity");
+    assert_ne!(entity["entity_type"], "Entity");
+    assert_eq!(field(&nodes["doc1"], "entity_type"), &json!("TextDocument"));
+}
+
+#[test]
+fn semantic_type_key_overrides_and_is_stripped() {
+    let result = preprocess(
+        vec![
+            node(
+                "a",
+                json!({"type": "Entity", "name": "Alice", "_semantic_type": "Person"}),
+            ),
+            node("b", json!({"type": "Entity", "name": "Bob"})),
+            // `_semantic_type` only applies to Entity nodes.
+            node(
+                "c",
+                json!({"type": "DocumentChunk", "text": "x", "_semantic_type": "Person"}),
+            ),
+        ],
+        vec![],
+        None,
+    );
+    let nodes = by_id(&result);
+    assert_eq!(field(&nodes["a"], "entity_type"), &json!("Person"));
+    assert_eq!(field(&nodes["b"], "entity_type"), &json!("Entity"));
+    assert_eq!(field(&nodes["c"], "entity_type"), &json!("DocumentChunk"));
+    for node in &result.nodes {
+        assert!(node.get("_semantic_type").is_none(), "{node}");
+    }
+}
+
+// ── Structural relations, node-set colors ────────────────────────────────────
+
+#[test]
+fn table_and_container_relations_are_structural() {
+    let nodes = vec![
+        node("a", json!({"type": "DltRow"})),
+        node("b", json!({"type": "StructureContainer"})),
+    ];
+    let edges = vec![
+        edge("a", "b", "is_table_of", json!({})),
+        edge("a", "b", "child_of", json!({})),
+    ];
+    let result = preprocess(nodes, edges, None);
+    for link in &result.links {
+        assert_eq!(field(link, "edge_class"), &json!("structural"), "{link}");
+    }
+    let nodes = by_id(&result);
+    assert_eq!(field(&nodes["b"], "color"), &json!("#0EA5A4"));
+}
+
+/// Port of `test_node_set_colors_pin_the_memory_sets_and_rotate_the_rest`.
+#[test]
+fn node_set_colors_pin_the_memory_sets_and_rotate_the_rest() {
+    let colors = build_node_set_colors([
+        Some("slack".to_string()),
+        Some("session_learnings".to_string()),
+        None,
+        Some("slack".to_string()),
+        Some("skills".to_string()),
+    ]);
+    assert_eq!(colors["session_learnings"], "#FFC53D");
+    assert_eq!(colors["skills"], "#7DD3FC");
+    assert_eq!(colors.len(), 3, "empty values never become a key");
+    // The unpinned set keeps its hue-rotation slot among *all* present sets
+    // (pinned ones included): "slack" sorts third here, so it gets the same
+    // color as any other set sorting third among three unpinned ones.
+    let rotation = build_node_set_colors([
+        Some("aaa".to_string()),
+        Some("bbb".to_string()),
+        Some("slack".to_string()),
+    ]);
+    assert_eq!(colors["slack"], rotation["slack"]);
+}
+
+/// Port of `test_node_set_colors_are_the_ones_preprocess_puts_in_its_color_map`.
+#[test]
+fn node_set_colors_are_the_ones_preprocess_puts_in_its_color_map() {
+    let result = preprocess(
+        vec![
+            node(
+                "n1",
+                json!({"type": "Entity", "name": "a", "source_node_set": "slack"}),
+            ),
+            node(
+                "n2",
+                json!({"type": "Entity", "name": "b", "source_node_set": "notion"}),
+            ),
+        ],
+        vec![],
+        None,
+    );
+    assert_eq!(
+        result.color_maps.node_set,
+        build_node_set_colors([Some("slack".to_string()), Some("notion".to_string())])
+    );
+}
+
+// ── Database tables through preprocess() ─────────────────────────────────────
+
+/// Port of `test_schema_graph_draws_one_card_per_table_in_the_type_graph_shape`.
+#[test]
+fn schema_graph_draws_one_card_per_table_in_the_type_graph_shape() {
+    let nodes = vec![
+        node(
+            "users",
+            json!({"type": "SchemaTable", "name": "users",
+                   "columns": [{"name": "id", "type": "int", "primary_key": true}]}),
+        ),
+        node(
+            "posts",
+            json!({"type": "SchemaTable", "name": "posts",
+                   "columns": [{"name": "user_id", "type": "int"}]}),
+        ),
+    ];
+    let edges = vec![edge(
+        "posts",
+        "users",
+        "has_relationship",
+        json!({"relationship_name": "foreign_key"}),
+    )];
+    let result = preprocess(nodes, edges, None);
+    let cards: HashMap<String, Value> = result.schema_graph["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter(|n| n["type"] == "GraphNodeType")
+        .map(|n| (n["name"].as_str().expect("name").to_string(), n.clone()))
+        .collect();
+    assert_eq!(cards.len(), 2);
+    let names: Vec<&str> = cards["users"]["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|f| f["name"].as_str().expect("field name"))
+        .collect();
+    assert_eq!(names, vec!["id"]);
+    assert_eq!(cards["posts"]["rank"], 6);
+}
+
+fn foreign_key() -> GraphNode {
+    node(
+        "fk",
+        json!({
+            "type": "SchemaRelationship",
+            "name": "pins_part_id",
+            "source_table": "pins",
+            "target_table": "parts",
+            "relationship_type": "foreign_key",
+        }),
+    )
+}
+
+/// Port of `test_a_foreign_key_becomes_a_relationship_edge_between_the_table_cards`.
+#[test]
+fn a_foreign_key_becomes_a_relationship_edge_between_the_table_cards() {
+    let nodes = vec![
+        node(
+            "pins",
+            json!({"type": "SchemaTable", "name": "pins", "columns": "[]"}),
+        ),
+        node(
+            "parts",
+            json!({"type": "SchemaTable", "name": "parts", "columns": "[]"}),
+        ),
+        foreign_key(),
+    ];
+    let result = preprocess(nodes, vec![], None);
+    let edges: Vec<(Value, Value, Value)> = result.schema_graph["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter(|n| n["type"] == "GraphRelationshipType")
+        .map(|n| {
+            (
+                n["source_type"].clone(),
+                n["target_type"].clone(),
+                n["relationship_label"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        edges,
+        vec![(json!("pins"), json!("parts"), json!("foreign_key"))]
+    );
+}
+
+/// Port of `test_a_relationship_to_a_table_that_is_not_there_is_not_drawn`.
+#[test]
+fn a_relationship_to_a_table_that_is_not_there_is_not_drawn() {
+    let nodes = vec![
+        node(
+            "pins",
+            json!({"type": "SchemaTable", "name": "pins", "columns": "[]"}),
+        ),
+        foreign_key(),
+    ];
+    let result = preprocess(nodes, vec![], None);
+    let types: Vec<&Value> = result.schema_graph["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .map(|n| &n["type"])
+        .collect();
+    assert_eq!(types, vec![&json!("GraphNodeType")]);
 }

@@ -18,6 +18,11 @@
 //!   re-synced wholesale from upstream rather than hand-edited; see
 //!   `assets/README.md` for the rule and the reason it exists.
 //!
+//! Every rendered page is **fully offline**: the template's d3 CDN tag is
+//! replaced by the bundled d3 v7.9.0 and its Google Fonts links are dropped
+//! (the one deliberate divergence from upstream; see the private `html`
+//! module and `tests/offline_test.rs`).
+//!
 //! The rendered page has four tabs: **Graph** (canvas force/flow/story
 //! renderer), **Schema** (ontology diagram + type/instance inspector),
 //! **Memory** (deterministic column map of documents → chunks → entities →

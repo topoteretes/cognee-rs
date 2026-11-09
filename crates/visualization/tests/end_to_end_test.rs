@@ -63,10 +63,8 @@ fn extract_js_value(html: &str, marker: &str) -> serde_json::Value {
     }
     assert!(end > 0, "could not balance the payload for {marker:?}");
     let raw = &body[..end];
-    // Undo the `</` → `<\/` script-escape before parsing.
-    let unescaped = raw.replace("<\\/", "</");
-    serde_json::from_str(&unescaped)
-        .unwrap_or_else(|e| panic!("parse {marker:?} JSON: {e}: raw={raw:?}"))
+    // The script-escapes (`\u003c` & co.) are JSON escapes: parse verbatim.
+    serde_json::from_str(raw).unwrap_or_else(|e| panic!("parse {marker:?} JSON: {e}: raw={raw:?}"))
 }
 
 fn node_by_id<'a>(nodes: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
@@ -275,7 +273,9 @@ async fn visualize_writes_html_file_to_provided_path() {
 
     let html = std::fs::read_to_string(&dest).expect("read generated HTML");
     assert!(html.starts_with("<!DOCTYPE html>"));
-    assert!(html.contains("d3.v7.min.js"));
+    // d3 is inlined by the offline transform, never fetched.
+    assert!(html.contains("d3js.org v7.9.0"));
+    assert!(!html.contains("d3.v7.min.js"));
 
     // Data round-trip: every node id reaches the embedded payload.
     for id in ["doc1", "chunk1", "ranked", "alice"] {

@@ -24,16 +24,18 @@ use std::collections::{BTreeMap, HashMap};
 use cognee_graph::{EdgeData, GraphNode};
 use serde_json::{Map, Value};
 
-use crate::colors::{MEMORY_NODESET_COLORS, provenance_colors, type_color};
+pub use crate::colors::build_node_set_colors;
+use crate::colors::{provenance_colors, type_color};
 
 // ── Constants (verbatim from preprocessor.py) ────────────────────────────────
 
-// `SCHEMA_GRAPH_NODE_TYPES` (`preprocessor.py:24-29`) lives in [`schema_graph`],
-// its only consumer, together with the other Schema-view caps.
+// `SCHEMA_TABLE_NODE_TYPES` / `SCHEMA_TABLE_RANK` live in [`schema_graph`],
+// their only consumer, together with the other Schema-view caps.
 
 /// Stage assignment by node type — drives the left-to-right Story layout.
-/// Unknown types fall through to `"other"` (`preprocessor.py:55-68`).
-pub(crate) const STAGE_BY_TYPE: [(&str, &str); 12] = [
+/// Unknown types fall through to `"other"`, unless they declare identity
+/// fields (see [`stage_for_node`]) (`preprocessor.py` `_STAGE_BY_TYPE`).
+pub(crate) const STAGE_BY_TYPE: [(&str, &str); 15] = [
     ("TextDocument", "document"),
     ("DocumentChunk", "chunk"),
     ("TextSummary", "summary"),
@@ -42,10 +44,24 @@ pub(crate) const STAGE_BY_TYPE: [(&str, &str); 12] = [
     ("EntityType", "type"),
     ("DatabaseSchema", "schema"),
     ("SchemaTable", "schema"),
+    ("SchemaColumn", "schema"),
     ("SchemaRelationship", "schema"),
     ("TableType", "schema"),
     ("TableRow", "schema"),
     ("ColumnValue", "schema"),
+    ("DltColumn", "schema"),
+    ("DltRow", "chunk"),
+];
+
+/// Built-in node types outside [`STAGE_BY_TYPE`] that also declare
+/// `identity_fields` but are not entities (`preprocessor.py`
+/// `_BUILTIN_IDENTITY_TYPES`, SDK-863).
+pub(crate) const BUILTIN_IDENTITY_TYPES: [&str; 5] = [
+    "EdgeType",
+    "NodeSet",
+    "Skill",
+    "SkillRun",
+    "SkillImprovementProposal",
 ];
 
 /// Visual ordering of stages along the Story view's left-to-right spine
@@ -56,20 +72,30 @@ pub const STAGE_ORDER: [&str; 8] = [
 
 /// Relationship names that connect a structural parent to its children; edges
 /// of these types are bundled in the Story view to cut visual noise on dense
-/// graphs (`preprocessor.py:87-97`).
-pub(crate) const STRUCTURAL_RELATIONS: [&str; 7] = [
+/// graphs (`preprocessor.py` `_STRUCTURAL_RELATIONS`; `child_of` is
+/// `StructureContainer.CHILD_OF`).
+pub(crate) const STRUCTURAL_RELATIONS: [&str; 9] = [
     "contains",
     "is_a",
     "part_of",
     "is_part_of",
+    "is_table_of",
     "has_relationship",
     "made_from",
     "summarized_in",
+    "child_of",
 ];
 
 /// Relationship name of the `Entity -> EntityType` edge used to resolve the
 /// semantic type of extracted entities (`preprocessor.py:471`).
 pub(crate) const ENTITY_TYPE_RELATION: &str = "is_a";
+
+/// Node property a bounded read sets on each `Entity` whose semantic type the
+/// store resolved (Python `SEMANTIC_TYPE_KEY`, set by
+/// `subgraph_data.resolve_entity_types`). Underscored so it never collides
+/// with a custom graph-model field; [`preprocess`] turns it into the public
+/// `entity_type` field and strips it from the emitted nodes.
+pub const SEMANTIC_TYPE_KEY: &str = "_semantic_type";
 
 /// Node stages whose labels are always shown in Key mode — documents and
 /// entity types are the natural landmarks of the Story view
@@ -143,20 +169,52 @@ fn str_prop<'a>(node: &'a Value, key: &str) -> Option<&'a str> {
 
 // ── Story-view enrichment helpers (preprocessor.py:848-892) ──────────────────
 
-/// `_stage_for_node()` — `_STAGE_BY_TYPE.get(node_type, "other")`.
+/// `_stage_for_node()` — the [`STAGE_BY_TYPE`] entry for the node's type;
+/// otherwise `"entity"` for a node that declares identity fields (a custom
+/// graph-model node such as `Person`, SDK-863) unless its type is one of
+/// [`BUILTIN_IDENTITY_TYPES`]; otherwise `"other"`.
 ///
-/// Note that unlike the color lookup, an absent or `null` `type` yields
-/// `"other"` and never a `"default"` entry.
+/// Note that unlike the color lookup, an absent or `null` `type` never yields
+/// a `"default"` entry.
 pub(crate) fn stage_for_node(node_info: &Map<String, Value>) -> &'static str {
     let node_type = node_info.get("type").and_then(Value::as_str);
-    node_type
-        .and_then(|name| {
-            STAGE_BY_TYPE
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, stage)| *stage)
-        })
-        .unwrap_or("other")
+    if let Some(stage) = node_type.and_then(|name| {
+        STAGE_BY_TYPE
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, stage)| *stage)
+    }) {
+        return stage;
+    }
+    let is_builtin = node_type.is_some_and(|name| BUILTIN_IDENTITY_TYPES.contains(&name));
+    if !is_builtin && declares_identity(node_info) {
+        return "entity";
+    }
+    "other"
+}
+
+/// `_declares_identity()` — whether `metadata.identity_fields` is truthy.
+///
+/// `metadata` arrives as an object from most adapters and as a JSON string from
+/// others (Python names Neo4j); a string that does not parse, or parses to
+/// something other than an object, declares nothing.
+fn declares_identity(node_info: &Map<String, Value>) -> bool {
+    let parsed;
+    let metadata = match node_info.get("metadata") {
+        Some(Value::String(raw)) => match serde_json::from_str::<Value>(raw) {
+            Ok(value) => {
+                parsed = value;
+                &parsed
+            }
+            Err(_) => return false,
+        },
+        Some(other) => other,
+        None => return false,
+    };
+    metadata
+        .as_object()
+        .and_then(|map| map.get("identity_fields"))
+        .is_some_and(is_truthy)
 }
 
 /// `_visual_rank()` — prefer the runtime-stamped `topological_rank`, fall back
@@ -518,7 +576,18 @@ pub fn preprocess(
         links.push(Value::Object(link));
     }
 
-    // ── Nodes pass 2: degree, importance ─────────────────────────────────────
+    // ── Nodes pass 2: degree, importance, semantic type ──────────────────────
+    let semantic_types = schema_graph::resolve_semantic_types(&out_nodes, &links);
+    for node in &mut out_nodes {
+        let entity_type = str_prop(node, "id")
+            .and_then(|id| semantic_types.get(id))
+            .cloned()
+            .unwrap_or_else(|| "Node".to_string());
+        if let Some(object) = node.as_object_mut() {
+            object.insert("entity_type".to_string(), Value::String(entity_type));
+        }
+    }
+
     let max_degree = degree_counter.values().copied().max().unwrap_or(1).max(1);
     let scale = (max_degree as f64).ln_1p();
     for node in &mut out_nodes {
@@ -571,22 +640,22 @@ pub fn preprocess(
     }
 
     // ── Color maps (verbatim shape from the original orchestrator) ───────────
-    let mut color_maps = ColorMaps {
+    let color_maps = ColorMaps {
         task: provenance_colors(node_strings(&out_nodes, "source_task")),
         pipeline: provenance_colors(node_strings(&out_nodes, "source_pipeline")),
-        node_set: provenance_colors(node_strings(&out_nodes, "source_node_set")),
+        // Hue rotation with the self-improvement node sets pinned.
+        node_set: build_node_set_colors(node_strings(&out_nodes, "source_node_set")),
         user: provenance_colors(node_strings(&out_nodes, "source_user")),
     };
-    // Pin stable colors for the self-improvement node sets, overriding the hue
-    // rotation only for sets actually present in this graph.
-    for (set_name, color) in MEMORY_NODESET_COLORS {
-        if let Some(entry) = color_maps.node_set.get_mut(set_name) {
-            *entry = color.to_string();
-        }
-    }
 
     let mut schema_graph = schema_graph::extract_schema_graph_data(&out_nodes, &links);
     schema_graph::build_operation_layer(&mut schema_graph, &out_nodes, &links);
+    // Internal to the read; clients get it as `entity_type`.
+    for node in &mut out_nodes {
+        if let Some(object) = node.as_object_mut() {
+            object.shift_remove(SEMANTIC_TYPE_KEY);
+        }
+    }
 
     // Stages present in the graph, in canonical left-to-right order.
     let pipeline_stages: Vec<String> = STAGE_ORDER

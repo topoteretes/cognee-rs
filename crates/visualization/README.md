@@ -15,13 +15,45 @@ Parity mapping:
 | `src/html.rs` | `cognee/modules/visualization/cognee_network_visualization.py` |
 | `src/colors.rs` | the `color_map` dict + `_generate_provenance_colors()` |
 | `assets/template.html`, `assets/views/*.js` | vendored byte-for-byte, not ported |
+| `assets/vendor/d3.v7.9.0.min.js` | d3 v7.9.0 release, inlined by the offline transform |
+
+## Fully offline output
+
+Every HTML this crate produces — `render`, `render_graph_data`,
+`render_multi_user`, `visualize` — works with no network: no external script,
+stylesheet, font, image or fetch. The vendored `template.html` loads d3 from
+`https://d3js.org` and the Inter webfont from Google Fonts, exactly as Python
+does, so `src/html.rs` applies an **offline transform** to the shell before any
+token is substituted. It is the **single deliberate divergence** from upstream:
+
+- the exact tag `<script src="https://d3js.org/d3.v7.min.js"></script>` is
+  replaced by `<script>` + the bundled `assets/vendor/d3.v7.9.0.min.js` +
+  `</script>` (~280 KB);
+- the three exact Google Fonts `<link>` lines (two `preconnect`s and the
+  `css2?family=Inter` stylesheet) are deleted. The template's CSS already falls
+  back to a locally installed Inter (`src: local('Inter')`) and then
+  `system-ui`, so no font is bundled.
+
+Each pattern must occur **exactly once** in the template, or rendering fails
+with `VisualizationError::OfflineTransform`. A resync that changes those tags
+therefore breaks loudly instead of silently re-enabling the CDN. The vendored
+files themselves stay byte-identical to upstream.
+
+`tests/offline_test.rs` pins this on an empty graph, a non-trivial graph, a
+table dataset and `render_multi_user`: it locates the inline d3 by its exact
+bundled content and checks its SHA-256, scans the rest of the page for any
+resource-loading construct (`<script src`, `<link href`, non-`data:` `<img>`,
+`<iframe>`/`<object>`/`<embed>`, CSS `url(http`/`url(//`/`@import`, `fetch(`,
+`XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `importScripts`),
+and checks that every `http(s)://` substring in the whole document is one of a
+fixed allowlist (d3's banner comment and the five w3.org XML namespace URIs).
 
 ## The four tabs
 
 | Tab | Rendered by | State in Rust |
 | --- | --- | --- |
 | **Graph** | `views/story_view.js` | Full. Canvas renderer with Story / Flow / Force layouts, quadtree hit-testing, minimap, label budget, density layers, search and hover. The Flow layout keys off the preprocessor's `visual_rank` (the runtime-stamped `topological_rank` when present, otherwise a stage-order fallback). |
-| **Schema** | `views/schema_view.js` + `views/inspector.js` | Full. Ontology diagram of node types in canonical pipeline order, labelled relationship curves, edge-type cards, and a side-panel inspector with type → instance drill-down. Fed by the preprocessor's derived type-schema graph, so it works without any caller-supplied schema. |
+| **Schema** | `views/schema_view.js` + `views/inspector.js` | Full. Ontology diagram of node types in canonical pipeline order, labelled relationship curves, edge-type cards, and a side-panel inspector with type → instance drill-down. Fed by the preprocessor's derived type-schema graph, so it works without any caller-supplied schema. A DLT/SQL dataset (`SchemaTable` / `TableType` nodes) is drawn as one card per table in a "Tables" column, with its foreign keys as relationship edges. The **Transformations** overlay is fed by the operations catalog: hand-curated rows plus one generated row per improve stage (`crates/lib/tests/visualization_improve_stages.rs` keeps those in step with the improve registry). |
 | **Memory** | `views/memory_map.js` | Renders. Deterministic column map: documents (with ordered chunk cells) → entity-type groups → summaries → global context, plus the run timeline the preprocessor gap-clusters from each node's `t_created`. Only the *search-retrieval* half of the timeline rail (and the recall overlay) is inert, because `__SEARCH_EVENTS__` is empty (see Deferred). |
 | **Semantic** | `views/semantic_map.js` | Empty state only. See Deferred. |
 
@@ -67,9 +99,18 @@ leaked `__TOKEN__` is a hard failure — it lands as literal garbage inside a
 `<script>` block and breaks the page — so `tests/html_test.rs` scans the whole
 output for any surviving `__[A-Z][A-Z0-9_]*__`.
 
-All embedded JSON goes through `safe_json_embed`: `serde_json::to_string` then
-`</` → `<\/`. That is the only XSS guard on the payload; without it a node whose
-`name` contains `</script>` would close the script block early.
+All embedded JSON goes through `safe_json_embed`: `serde_json::to_string`, then
+`<` / `>` / `&` / U+2028 / U+2029 become the JSON escapes `\u003c` / `\u003e` /
+`\u0026` / `\u2028` / `\u2029` (serde emits these characters only inside string
+literals, where the escape decodes to the same value). That is the only XSS
+guard on the payload. Upstream's `_safe_json_embed` only rewrites `</` → `<\/`,
+which stops a `</script>` in a node `name` from closing the block but not a
+`<!--` followed by `<script` (e.g. a chunk of an ingested HTML file): that pair
+puts the HTML tokenizer into the script-data-double-escaped state, the
+template's own `</script>` no longer closes the block, and the page renders
+blank. The inlined d3 is likewise refused if it ever contains `</script`,
+`<!--` or `<script`. `tests/offline_test.rs` renders hostile data and asserts
+it stays inert.
 
 ## Vendored assets: re-sync, never hand-edit
 
@@ -87,9 +128,9 @@ inspector, and a Schema tab that could never render). `tests/html_test.rs`
 asserts each chunk's distinctive identifiers survived the copy, so a bad or
 partial resync fails the test suite instead of shipping quietly.
 
-Note that the vendored `template.html` fetches d3 v7 and the Inter webfont from
-CDNs. That matches Python exactly, so it is not a parity gap — but the output is
-not fully self-contained and degrades offline / on air-gapped edge devices.
+The offline transform (see [Fully offline output](#fully-offline-output))
+rewrites the d3 and webfont tags at render time; it never edits the vendored
+files.
 
 ## Deferred
 

@@ -14,9 +14,9 @@
 
 use std::collections::HashMap;
 
-use cognee_visualization::preprocessor::operations_catalog::OPERATIONS;
+use cognee_visualization::preprocessor::operations_catalog::catalog_operations;
 use cognee_visualization::preprocessor::schema_graph::{
-    OTHER_ENTITY_TYPES_LABEL, SCHEMA_MAX_ENTITY_TYPES, build_operation_layer,
+    OTHER_ENTITY_TYPES_LABEL, SCHEMA_MAX_ENTITY_TYPES, SCHEMA_TABLE_RANK, build_operation_layer,
     extract_schema_graph_data, node_type_rank, resolve_semantic_types,
 };
 use serde_json::{Value, json};
@@ -206,6 +206,9 @@ fn node_type_rank_follows_the_document_pipeline_and_schema_taxonomy() {
     assert_eq!(node_type_rank(Some("TableType")), 1);
     assert_eq!(node_type_rank(Some("TableRow")), 2);
     assert_eq!(node_type_rank(Some("ColumnValue")), 3);
+    assert_eq!(node_type_rank(Some("SchemaColumn")), 2);
+    assert_eq!(node_type_rank(Some("DltColumn")), 3);
+    assert_eq!(node_type_rank(Some("DltRow")), 1);
 }
 
 #[test]
@@ -508,10 +511,10 @@ fn entity_types_under_the_cap_are_not_rolled_up() {
     );
 }
 
-// ── DLT branch ───────────────────────────────────────────────────────────────
+// ── Table branch (DLT / SQL datasets) ────────────────────────────────────────
 
 #[test]
-fn schema_table_nodes_switch_to_the_dlt_branch() {
+fn schema_table_nodes_become_cards_in_the_type_graph_shape() {
     let nodes = vec![
         json!({
             "id": "orders",
@@ -523,6 +526,12 @@ fn schema_table_nodes_switch_to_the_dlt_branch() {
                 { "name": "id", "data_type": "bigint", "primary_key": true },
                 { "name": "customer_id", "data_type": "bigint", "nullable": false },
             ],
+        }),
+        json!({
+            "id": "customers",
+            "type": "TableType",
+            "name": "customers",
+            "degree": 1,
         }),
         json!({
             "id": "orders_customers",
@@ -542,34 +551,80 @@ fn schema_table_nodes_switch_to_the_dlt_branch() {
     ];
     let schema = extract_schema_graph_data(&nodes, &links);
 
-    // The DLT branch emits nodes + links only.
+    // The table branch emits nodes + links only, and links is always empty:
+    // relationships are GraphRelationshipType entries in `nodes`.
     assert!(schema.get("instances_by_type").is_none());
     assert!(schema.get("instance_index").is_none());
+    assert_eq!(schema["links"], json!([]));
 
     let schema_nodes = schema["nodes"].as_array().expect("nodes is an array");
-    assert_eq!(schema_nodes.len(), 2);
-    assert_eq!(schema_nodes[0]["name"], "orders");
-    assert_eq!(schema_nodes[0]["description"], "one row per order");
+    assert_eq!(schema_nodes.len(), 3);
     assert_eq!(
-        schema_nodes[0]["fields"],
-        json!([
-            { "name": "id", "type": "bigint", "required": true },
-            { "name": "customer_id", "type": "bigint", "required": true },
-        ])
+        schema_nodes[0],
+        json!({
+            "id": "orders",
+            "name": "orders",
+            "type": "GraphNodeType",
+            "rank": SCHEMA_TABLE_RANK,
+            "fields": [
+                { "name": "id", "type": "bigint", "required": true },
+                { "name": "customer_id", "type": "bigint", "required": true },
+            ],
+            "instance_count": null,
+            "samples": [],
+            "relationships": [],
+        })
     );
-    assert_eq!(schema_nodes[1]["source_table"], "orders");
-    assert_eq!(schema_nodes[1]["target_table"], "customers");
-    assert_eq!(schema_nodes[1]["relationship_type"], "many_to_one");
+    assert_eq!(schema_nodes[1]["name"], "customers");
+    assert_eq!(schema_nodes[1]["rank"], 6);
+    assert_eq!(
+        schema_nodes[2],
+        json!({
+            "id": "orders_customers",
+            "type": "GraphRelationshipType",
+            "source_type": "orders",
+            "target_type": "customers",
+            "relationship_label": "many_to_one",
+            "edge_count": 1,
+        })
+    );
+}
 
-    // Only links whose endpoints are both schema nodes survive.
-    assert_eq!(
-        schema["links"],
-        json!([{
-            "source": "orders",
-            "target": "orders_customers",
-            "label": "has_relationship",
-        }])
+#[test]
+fn database_schema_and_relationship_nodes_alone_do_not_switch_branches() {
+    // Only SchemaTable / TableType are tables; DatabaseSchema and
+    // SchemaRelationship used to switch branches too (SCHEMA_GRAPH_NODE_TYPES).
+    let nodes = vec![
+        node("db", "DatabaseSchema", "warehouse", 0),
+        json!({"id": "r", "type": "SchemaRelationship", "name": "r", "degree": 0}),
+    ];
+    let schema = extract_schema_graph_data(&nodes, &[]);
+    assert!(
+        schema.get("instances_by_type").is_some(),
+        "type-graph fallback"
     );
+}
+
+#[test]
+fn relationship_label_falls_back_to_name_then_related() {
+    let table = |name: &str| json!({"id": name, "type": "SchemaTable", "name": name, "degree": 0});
+    let nodes = vec![
+        table("a"),
+        table("b"),
+        json!({"id": "r1", "type": "SchemaRelationship", "name": "a_b",
+               "source_table": "a", "target_table": "b"}),
+        json!({"id": "r2", "type": "SchemaRelationship", "name": "",
+               "source_table": "b", "target_table": "a", "relationship_type": ""}),
+    ];
+    let schema = extract_schema_graph_data(&nodes, &[]);
+    let labels: Vec<&Value> = schema["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .filter(|n| n["type"] == "GraphRelationshipType")
+        .map(|n| &n["relationship_label"])
+        .collect();
+    assert_eq!(labels, vec![&json!("a_b"), &json!("related")]);
 }
 
 // ── Operation impact layer ───────────────────────────────────────────────────
@@ -628,19 +683,17 @@ fn operation_layer_maps_operations_to_present_types() {
     assert!(!op_ids.contains(&"op:coding_rule_associations"));
 
     // Modify effects are surfaced, and carry their property.
-    let feedback = targets_for("op:apply_feedback_weights");
+    let feedback = targets_for("op:feedback_weights");
     assert!(feedback.contains(&("type:Person".into(), "modifies".into())));
     assert!(feedback.contains(&("type:EntityType".into(), "modifies".into())));
     let feedback_property = operation_links
         .iter()
-        .find(|entry| {
-            entry["source"] == "op:apply_feedback_weights" && entry["target"] == "type:Person"
-        })
+        .find(|entry| entry["source"] == "op:feedback_weights" && entry["target"] == "type:Person")
         .expect("feedback weighting touches Person");
     assert_eq!(feedback_property["property"], "feedback_weight");
     assert_eq!(
         feedback_property["observed"], false,
-        "no pipeline_name means never observed"
+        "no live source_pipeline on Person, so not observed"
     );
 
     // Operation nodes carry the catalog metadata verbatim.
@@ -658,8 +711,7 @@ fn operation_layer_maps_operations_to_present_types() {
     );
 
     // Operation nodes appear in catalog declaration order.
-    let catalog_order: Vec<&str> = OPERATIONS
-        .iter()
+    let catalog_order: Vec<&str> = catalog_operations()
         .map(|op| op.name)
         .filter(|name| op_ids.contains(&format!("op:{name}").as_str()))
         .collect();
@@ -720,4 +772,96 @@ fn operation_layer_is_always_present_even_when_empty() {
     assert_eq!(schema["links"], json!([]));
     assert_eq!(schema["instances_by_type"], json!({}));
     assert_eq!(schema["instance_index"], json!({}));
+}
+
+/// An effect scoped to a node set does not expand `Entity` to every semantic
+/// entity type: `distill_sessions` (cognify_pipeline, `session_learnings`)
+/// must not show up as the producer of a cognify-built graph's Person cards.
+#[test]
+fn node_set_scoped_effects_do_not_expand_entity() {
+    let nodes = vec![
+        json!({"id": "p1", "type": "Entity", "name": "Carlos", "degree": 1,
+               "source_pipeline": "cognify_pipeline"}),
+        node("t_person", "EntityType", "Person", 1),
+        // A type literally named after the node set is matched loosely.
+        node("ls", "session_learnings", "lesson", 0),
+    ];
+    let links = vec![link("p1", "t_person", "is_a")];
+    let mut schema = extract_schema_graph_data(&nodes, &links);
+    build_operation_layer(&mut schema, &nodes, &links);
+
+    let targets_of = |op: &str| -> Vec<String> {
+        schema["operation_links"]
+            .as_array()
+            .expect("operation_links")
+            .iter()
+            .filter(|l| l["source"] == op)
+            .map(|l| l["target"].as_str().expect("target").to_string())
+            .collect()
+    };
+    assert_eq!(
+        targets_of("op:distill_sessions"),
+        vec!["type:session_learnings"]
+    );
+    // persist_agent_traces' node set is absent, so the op is dropped entirely.
+    assert!(targets_of("op:persist_agent_traces").is_empty());
+    // cognify's unscoped Entity effect still expands to Person.
+    assert!(targets_of("op:cognify").contains(&"type:Person".to_string()));
+}
+
+/// Two effects of the same kind on the same type are distinct rows when they
+/// touch different properties (`consolidate_entity_descriptions` modifies
+/// both `Entity.description` and `Entity.is_a.edge_text`).
+#[test]
+fn operation_links_are_deduplicated_per_property() {
+    let nodes = vec![
+        node("p1", "Entity", "Carlos", 1),
+        node("t_person", "EntityType", "Person", 1),
+    ];
+    let links = vec![link("p1", "t_person", "is_a")];
+    let mut schema = extract_schema_graph_data(&nodes, &links);
+    build_operation_layer(&mut schema, &nodes, &links);
+
+    let mut person_props: Vec<String> = schema["operation_links"]
+        .as_array()
+        .expect("operation_links")
+        .iter()
+        .filter(|l| {
+            l["source"] == "op:consolidate_entity_descriptions" && l["target"] == "type:Person"
+        })
+        .map(|l| l["property"].as_str().expect("property").to_string())
+        .collect();
+    person_props.sort();
+    assert_eq!(person_props, vec!["description", "is_a.edge_text"]);
+}
+
+/// A bounded read stamps `_semantic_type` on an Entity whose EntityType node
+/// was not admitted; it wins over the edges and counts as a semantic entity
+/// type (Entity column rank, Entity-effect expansion).
+#[test]
+fn semantic_type_key_resolves_entities_without_their_type_node() {
+    let nodes = vec![
+        json!({"id": "p1", "type": "Entity", "name": "Carlos", "degree": 1,
+               "_semantic_type": "Person"}),
+        json!({"id": "p2", "type": "Entity", "name": "Dana", "degree": 1,
+               "_semantic_type": "Person"}),
+        node("t_org", "EntityType", "Org", 1),
+    ];
+    // The edge says Org; the stamped key wins for p1.
+    let links = vec![link("p1", "t_org", "is_a")];
+    let types = resolve_semantic_types(&nodes, &links);
+    assert_eq!(types["p1"], "Person");
+    assert_eq!(types["p2"], "Person");
+
+    let mut schema = extract_schema_graph_data(&nodes, &links);
+    let cards = type_cards(&schema);
+    assert_eq!(cards["Person"]["rank"], node_type_rank(Some("Entity")));
+    build_operation_layer(&mut schema, &nodes, &links);
+    assert!(
+        schema["operation_links"]
+            .as_array()
+            .expect("operation_links")
+            .iter()
+            .any(|l| l["source"] == "op:cognify" && l["target"] == "type:Person")
+    );
 }
