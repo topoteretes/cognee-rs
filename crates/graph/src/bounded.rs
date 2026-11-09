@@ -308,6 +308,7 @@ impl BoundedBfs {
     }
 
     /// The nodes whose neighbours the next hop needs.
+    #[cfg(any(feature = "ladybug", feature = "postgres"))]
     pub(crate) fn frontier(&self) -> &[String] {
         &self.frontier
     }
