@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Breaking changes
+
+- **`improve()` follows Python 1.6.7 stage defaults (SDK-1206).**
+  `review_conflicts` and `global_context_index` now run by default
+  (`IMPROVE_REVIEW_CONFLICTS` and the new `IMPROVE_GLOBAL_CONTEXT_INDEX`,
+  both `true`). When off they report the skip reason `turned_off` instead of
+  `opt_in_disabled` (`build_truth_subspace` keeps `opt_in_disabled`).
+  `ImproveParams::build_global_context_index` is now `Option<bool>` and
+  `ImproveParams` / `OwnedImproveParams` gain `review_conflicts: Option<bool>`;
+  `None` follows the setting, an explicit value wins in either direction.
+  The automatic improve after `remember()` no longer hardcodes the index off,
+  so the setting decides. `ImproveConfig` gains `global_context_index`.
+  CLI: `--build-global-context-index` takes an optional `=BOOL` (bare flag
+  still means on) and `--review-conflicts[=BOOL]` is new. Bindings: the
+  `buildGlobalContextIndex` opt, when omitted, now follows the setting, and
+  `reviewConflicts` is new. Set `IMPROVE_GLOBAL_CONTEXT_INDEX=false` and
+  `IMPROVE_REVIEW_CONFLICTS=false` to keep the old behaviour.
+
 ### Added
 
 - **`improve` binding opts `runInBackground`, `buildGlobalContextIndex`,

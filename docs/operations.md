@@ -106,9 +106,12 @@ except that a failure in `persist_session_qa` (losing session Q&A would be data
 loss) stops the run with `ApiError::ImproveAborted` carrying the partial
 result, and an exhausted LLM budget skips every later stage with
 `budget_exhausted`. The stages that draft text with an LLM are skipped with
-`no_llm_configured` when none is configured. `review_conflicts` (opt-in via
-`improve.review_conflicts`) is not ported yet and always reports a skip
-reason.
+`no_llm_configured` when none is configured. `review_conflicts` and
+`global_context_index` run by default (`improve.review_conflicts`,
+`improve.global_context_index`; a per-call `review_conflicts` /
+`build_global_context_index` wins either way) and report `turned_off` when off.
+`review_conflicts` is not ported yet and always reports a skip reason
+(`turned_off`, then `no_llm_configured`, then `not_ported`).
 
 `extract_agent_context` runs while automatic session context is on
 (`auto_feedback` with session caching; otherwise `auto_feedback_disabled`)

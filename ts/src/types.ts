@@ -645,8 +645,10 @@ export interface CogneeImproveOptions {
   sessionIds?: string[];
   feedbackAlpha?: number;
   tenant?: string;
-  /** Opt in to the `global_context_index` stage. Default `false`. */
+  /** Run the `global_context_index` stage. Omitted follows the `improve.global_context_index` setting (default on); an explicit value wins either way. */
   buildGlobalContextIndex?: boolean;
+  /** Run the `review_conflicts` stage. Omitted follows the `improve.review_conflicts` setting (default on); an explicit value wins either way. */
+  reviewConflicts?: boolean;
   /** Opt in to the `build_truth_subspace` stage. Default `false`. */
   buildTruthSubspace?: boolean;
   /**

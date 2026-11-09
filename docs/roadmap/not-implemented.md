@@ -100,9 +100,10 @@ from the docs is correct). The four memory-API CLI verbs (`remember` / `recall` 
 `improve()` runs Python's nine stages in order and reports one `StageResult`
 each. Not yet ported — they report a skip reason instead of running:
 
-- **`review_conflicts`** — skipped `opt_in_disabled` unless opted in with
-  `improve.review_conflicts` (there is no per-call argument yet), then `no_llm_configured` or
-  `not_ported` (SDK-1038).
+- **`review_conflicts`** — skipped `turned_off` when switched off (per call, or
+  `improve.review_conflicts`, default on), then `no_llm_configured`, then `not_ported`
+  (SDK-1038). Python's `edge_evidence_disabled` gate has no Rust equivalent until the provenance
+  edge-evidence switch is ported.
 
 Improve settings that exist but are not read by any stage yet: `improve.trace_window_steps`,
 `improve.trace_windows_per_run` (SDK-1047), `improve.distill_max_batches_per_run` (SDK-1049) and

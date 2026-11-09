@@ -272,7 +272,7 @@ mod tests {
             .enumerate()
             .map(|(i, status)| StageResult {
                 status: *status,
-                reason: (*status == StageStatus::Skipped).then(|| "opt_in_disabled".to_string()),
+                reason: (*status == StageStatus::Skipped).then(|| "turned_off".to_string()),
                 ..StageResult::completed(&format!("s{i}"))
             })
             .collect();
@@ -340,7 +340,7 @@ mod tests {
             .push(StageResult::completed("feedback_weights").with_counts([("sessions", 1)]));
         result
             .stages
-            .push(StageResult::skipped("review_conflicts", "opt_in_disabled"));
+            .push(StageResult::skipped("review_conflicts", "turned_off"));
         let wire = serde_json::to_value(&result).unwrap();
         assert_eq!(
             wire,
@@ -352,7 +352,7 @@ mod tests {
                     {"stage": "feedback_weights", "status": "completed", "reason": null,
                      "error": null, "counts": {"sessions": 1}, "duration_ms": 0, "run": null},
                     {"stage": "review_conflicts", "status": "skipped",
-                     "reason": "opt_in_disabled", "error": null, "counts": {},
+                     "reason": "turned_off", "error": null, "counts": {},
                      "duration_ms": 0, "run": null},
                 ],
                 "background": false,

@@ -326,3 +326,63 @@ async fn remember_permanent_self_improvement_runs_improve() {
     .expect("permanent remember without self-improvement");
     assert!(result.improve.is_none());
 }
+
+/// SDK-1206: the automatic improve after a permanent `remember()` passes no
+/// per-call stage flags, so `improve.review_conflicts` and
+/// `improve.global_context_index` decide (Python `improve(...=None)`).
+#[tokio::test]
+async fn remember_auto_improve_follows_the_stage_settings() {
+    let h = make_harness().await;
+    let owner = Uuid::new_v4();
+
+    let mut reasons = Vec::new();
+    for (dataset, on) in [("ds_auto_stages_on", true), ("ds_auto_stages_off", false)] {
+        let config = ImproveConfig {
+            review_conflicts: on,
+            global_context_index: on,
+            ..ImproveConfig::default()
+        };
+        let result = remember(
+            vec![DataInput::Text("Alice works at Acme.".to_string())],
+            dataset,
+            None,
+            /* self_improvement= */ true,
+            owner,
+            None,
+            Arc::clone(&h.add_pipeline),
+            cognify_llm(),
+            Arc::clone(&h.storage),
+            h.graph_db.clone() as Arc<_>,
+            h.vector_db.clone() as Arc<_>,
+            h.embedding_engine.clone() as Arc<_>,
+            Some(h.db.clone()),
+            Some(Arc::clone(&h.session_store)),
+            Some(Arc::clone(&h.session_manager)),
+            Arc::clone(&h.ontology),
+            Arc::new(CognifyConfig::default()),
+            Some(config),
+            cognee::search::PreferenceConfig::default(),
+            false,
+        )
+        .await
+        .expect("permanent remember with self-improvement");
+        let improve = result.improve.expect("improve ran");
+        let stage = |name: &str| {
+            let s = improve.stage(name).expect("stage reported");
+            (s.status, s.reason.clone())
+        };
+        reasons.push((stage("review_conflicts"), stage("global_context_index")));
+    }
+    let turned_off = |r: &(cognee::api::StageStatus, Option<String>)| {
+        r.0 == cognee::api::StageStatus::Skipped && r.1.as_deref() == Some("turned_off")
+    };
+    let (on, off) = (&reasons[0], &reasons[1]);
+    assert!(
+        !turned_off(&on.0) && !turned_off(&on.1),
+        "settings on: {on:?}"
+    );
+    assert!(
+        turned_off(&off.0) && turned_off(&off.1),
+        "settings off: {off:?}"
+    );
+}

@@ -21,8 +21,8 @@ use cognee::api::improve::{
     REASON_BUDGET_EXHAUSTED, REASON_DISABLED_BY_CONFIG, REASON_NO_CHANGES,
     REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NO_SESSION_IDS,
     REASON_NO_WRITES_SINCE_LAST_IMPROVE, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
-    REASON_PERSONALIZATION_DISABLED, StageKind, StageResult, StageStatus, TRUTH_SUBSPACE_STAGE,
-    improve, stage_watermark_key,
+    REASON_PERSONALIZATION_DISABLED, REASON_TURNED_OFF, StageKind, StageResult, StageStatus,
+    TRUTH_SUBSPACE_STAGE, improve, stage_watermark_key,
 };
 use cognee::api::improve::{IMPROVE_PIPELINE_NAME, IMPROVE_WRITE_PIPELINE_NAME};
 use cognee::models::Dataset;
@@ -216,7 +216,8 @@ fn params<'a>(
         add_pipeline: Some(&h.add_pipeline),
         dataset_locks: None,
         cognify_config: config,
-        build_global_context_index: false,
+        build_global_context_index: Some(false),
+        review_conflicts: Some(false),
         build_truth_subspace: false,
         run_in_background: false,
     }
@@ -269,8 +270,8 @@ async fn create_dataset(h: &Harness, name: &str, owner: Uuid) -> Uuid {
 }
 
 /// Without session ids every session-fed stage is skipped with
-/// `no_session_ids` and, with nothing opted in, the two graph stages with
-/// `opt_in_disabled`: the run is `skipped` (Python `test_improve_router`
+/// `no_session_ids` and, with both turned off, the two graph stages with
+/// `turned_off`: the run is `skipped` (Python `test_improve_router`
 /// all-skipped case).
 #[tokio::test]
 async fn improve_without_sessions_skips_every_stage() {
@@ -286,7 +287,7 @@ async fn improve_without_sessions_skips_every_stage() {
             let reason = if s.needs_sessions() {
                 REASON_NO_SESSION_IDS
             } else {
-                REASON_OPT_IN_DISABLED
+                REASON_TURNED_OFF
             };
             (s.name(), StageStatus::Skipped, Some(reason))
         })
@@ -348,12 +349,8 @@ async fn improve_with_an_empty_session_reports_every_stage() {
                 Skipped,
                 Some(REASON_OPT_IN_DISABLED)
             ),
-            ("review_conflicts", Skipped, Some(REASON_OPT_IN_DISABLED)),
-            (
-                "global_context_index",
-                Skipped,
-                Some(REASON_OPT_IN_DISABLED)
-            ),
+            ("review_conflicts", Skipped, Some(REASON_TURNED_OFF)),
+            ("global_context_index", Skipped, Some(REASON_TURNED_OFF)),
         ]
     );
     assert_eq!(r.status(), ImproveStatus::Completed);
@@ -612,7 +609,7 @@ async fn improve_builds_the_global_context_index_when_opted_in() {
     let owner = p.owner_id;
     let dataset_id = create_dataset(&h, "ds_gcidx", owner).await;
     seed_document(&h, dataset_id, owner, "Alice").await;
-    p.build_global_context_index = true;
+    p.build_global_context_index = Some(true);
     let r = improve(p).await.unwrap();
 
     let gci = stage(&r, "global_context_index");
@@ -639,7 +636,7 @@ async fn improve_runs_global_context_index_in_background() {
         .await
         .unwrap();
     let mut p = params(&h, &config, "ds_gcidx_bg", None, mock_llm());
-    p.build_global_context_index = true;
+    p.build_global_context_index = Some(true);
     p.run_in_background = true;
     let r = improve(p).await.unwrap();
 
@@ -889,7 +886,7 @@ async fn improve_runs_the_graph_stages_in_the_dataset_under_per_dataset_storage(
     let dataset_id = create_dataset(&h, "ds_per_dataset", p.owner_id).await;
     p.graph_db = stores.graph_db();
     p.vector_db = stores.vector_db();
-    p.build_global_context_index = true;
+    p.build_global_context_index = Some(true);
     let r = improve(p).await.unwrap();
 
     assert_eq!(
@@ -928,7 +925,7 @@ async fn stages_disabled_by_config_are_skipped_first() {
         ],
         ..ImproveConfig::default()
     };
-    p.build_global_context_index = true;
+    p.build_global_context_index = Some(true);
     let r = improve(p).await.unwrap();
     for name in [
         "feedback_weights",
@@ -1199,32 +1196,102 @@ async fn update_user_preferences_writes_prefers_edges() {
     assert_eq!(s.counts.get("edges_written"), Some(&0));
 }
 
-/// `improve.review_conflicts` opts every run into `review_conflicts`; the
-/// stage then applies its own gates (no LLM), and is not ported past them.
+/// `improve.review_conflicts` / `review_conflicts=` decide whether the stage
+/// runs: on by default, then its own gates (no LLM), then `not_ported`; off
+/// reports `turned_off`. An explicit value beats the setting both ways.
 #[tokio::test]
-async fn review_conflicts_config_opts_in() {
+async fn review_conflicts_follows_setting_and_per_call_override() {
     let h = make_harness().await;
     let config = CognifyConfig::default();
-    let opted_in = || ImproveConfig {
-        review_conflicts: true,
+    let reason = |r: &cognee::api::ImproveResult| {
+        stage(r, "review_conflicts")
+            .reason
+            .clone()
+            .unwrap_or_default()
+    };
+    let setting = |on: bool| ImproveConfig {
+        review_conflicts: on,
         ..ImproveConfig::default()
     };
-    let mut p = params(&h, &config, "ds_review", None, mock_llm());
-    p.config = opted_in();
-    let r = improve(p).await.unwrap();
-    assert_eq!(
-        stage(&r, "review_conflicts").reason.as_deref(),
-        Some(REASON_NOT_PORTED)
-    );
+    let run = |name: &'static str, on: bool, arg: Option<bool>, llm| {
+        let mut p = params(&h, &config, name, None, llm);
+        p.config = setting(on);
+        p.review_conflicts = arg;
+        async move { improve(p).await.unwrap() }
+    };
 
-    let keyless: Arc<dyn cognee_llm::Llm> = Arc::new(cognee_llm::UnconfiguredLlm::new("openai"));
-    let mut p = params(&h, &config, "ds_review_keyless", None, keyless);
-    p.config = opted_in();
-    let r = improve(p).await.unwrap();
+    // The shipped default is on.
+    assert!(ImproveConfig::default().review_conflicts);
     assert_eq!(
-        stage(&r, "review_conflicts").reason.as_deref(),
-        Some(REASON_NO_LLM_CONFIGURED)
+        reason(&run("ds_rc_on", true, None, mock_llm()).await),
+        REASON_NOT_PORTED
     );
+    assert_eq!(
+        reason(&run("ds_rc_off", false, None, mock_llm()).await),
+        REASON_TURNED_OFF
+    );
+    // Explicit off beats an on setting; explicit on beats an off setting.
+    assert_eq!(
+        reason(&run("ds_rc_arg_off", true, Some(false), mock_llm()).await),
+        REASON_TURNED_OFF
+    );
+    assert_eq!(
+        reason(&run("ds_rc_arg_on", false, Some(true), mock_llm()).await),
+        REASON_NOT_PORTED
+    );
+    // Turned off wins over the LLM gate; otherwise a keyless install reports it.
+    let keyless =
+        || -> Arc<dyn cognee_llm::Llm> { Arc::new(cognee_llm::UnconfiguredLlm::new("openai")) };
+    assert_eq!(
+        reason(&run("ds_rc_keyless", true, None, keyless()).await),
+        REASON_NO_LLM_CONFIGURED
+    );
+    assert_eq!(
+        reason(&run("ds_rc_keyless_off", false, None, keyless()).await),
+        REASON_TURNED_OFF
+    );
+}
+
+/// `improve.global_context_index` decides when `build_global_context_index`
+/// is `None`; an explicit value wins in either direction. Off is `turned_off`.
+#[tokio::test]
+async fn global_context_index_follows_setting_and_per_call_override() {
+    let h = make_harness().await;
+    let config = CognifyConfig::default();
+    let status_of = |r: &cognee::api::ImproveResult| {
+        let s = stage(r, "global_context_index");
+        (s.status, s.reason.clone())
+    };
+    let run = |name: &'static str, on: bool, arg: Option<bool>| {
+        let mut p = params(&h, &config, name, None, mock_llm());
+        p.config = ImproveConfig {
+            global_context_index: on,
+            ..ImproveConfig::default()
+        };
+        p.build_global_context_index = arg;
+        async move { improve(p).await.unwrap() }
+    };
+
+    assert!(ImproveConfig::default().global_context_index);
+    let turned_off = (StageStatus::Skipped, Some(REASON_TURNED_OFF.to_string()));
+    assert_eq!(status_of(&run("ds_gc_off", false, None).await), turned_off);
+    assert_eq!(
+        status_of(&run("ds_gc_arg_off", true, Some(false)).await),
+        turned_off
+    );
+    // On (by setting, or by argument over an off setting): the stage ran.
+    for (name, on, arg) in [
+        ("ds_gc_on", true, None),
+        ("ds_gc_arg_on", false, Some(true)),
+    ] {
+        let r = run(name, on, arg).await;
+        assert_ne!(status_of(&r), turned_off, "{name}");
+        assert_ne!(
+            stage(&r, "global_context_index").status,
+            StageStatus::Skipped,
+            "{name}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1273,7 +1340,7 @@ async fn global_context_index_is_already_completed_without_writes_since_last_imp
     let run = || {
         let mut p = params(&h, &config, "ds_watermark", None, mock_llm());
         p.owner_id = owner;
-        p.build_global_context_index = true;
+        p.build_global_context_index = Some(true);
         improve(p)
     };
 
@@ -1332,7 +1399,7 @@ async fn a_data_item_delete_invalidates_the_global_context_index() {
     let run = || {
         let mut p = params(&h, &config, "ds_forget", None, mock_llm());
         p.owner_id = owner;
-        p.build_global_context_index = true;
+        p.build_global_context_index = Some(true);
         improve(p)
     };
     let first = run().await.unwrap();
@@ -1386,7 +1453,7 @@ async fn an_improve_that_wrote_invalidates_the_index_and_a_host_row_does_not() {
     let run = |sessions: Option<Vec<String>>| {
         let mut p = params(&h, &config, "ds_improve_write", sessions, mock_llm());
         p.owner_id = owner;
-        p.build_global_context_index = true;
+        p.build_global_context_index = Some(true);
         improve(p)
     };
     run(None).await.unwrap();
@@ -1443,7 +1510,7 @@ async fn an_errored_run_does_not_stamp_the_stage() {
     h.vector_db.set_index_error("boom");
     let mut p = params(&h, &config, "ds_watermark_err", None, mock_llm());
     p.owner_id = owner;
-    p.build_global_context_index = true;
+    p.build_global_context_index = Some(true);
     let r = improve(p).await.unwrap();
     assert_eq!(
         stage(&r, "global_context_index").status,

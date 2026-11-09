@@ -45,6 +45,10 @@ pub const REASON_AUTO_FEEDBACK_DISABLED: &str = "auto_feedback_disabled";
 pub const REASON_PERSONALIZATION_DISABLED: &str = "personalization_disabled";
 /// Skip reason of an opt-in stage the caller did not opt into.
 pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
+/// Skip reason of a stage that is switched off, by its argument or its
+/// setting (`review_conflicts`, `global_context_index`). Python's
+/// `REASON_TURNED_OFF`; `build_truth_subspace` keeps `opt_in_disabled`.
+pub const REASON_TURNED_OFF: &str = "turned_off";
 /// Skip reason of a stage that drafts text with an LLM when none is
 /// configured (keyless installs).
 pub const REASON_NO_LLM_CONFIGURED: &str = "no_llm_configured";
@@ -233,8 +237,11 @@ pub(crate) struct ImproveStages<'a> {
     pub session_ids: Vec<String>,
     pub feedback_alpha: f64,
     pub build_truth_subspace: bool,
+    /// `global_context_index` is on (the call's argument, else
+    /// `improve.global_context_index`).
     pub build_global_context_index: bool,
-    /// Opt in to `review_conflicts` (`improve.review_conflicts`).
+    /// `review_conflicts` is on (the call's argument, else
+    /// `improve.review_conflicts`).
     pub review_conflicts: bool,
     /// The personalization settings (`personalization_enabled`,
     /// `preference_alpha`, `preference_beta`).
@@ -289,16 +296,18 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::BuildTruthSubspace if !self.capabilities.supports_truth_state => {
                 Some(REASON_BACKEND_UNSUPPORTED)
             }
-            // Conflict review is opt-in and not ported yet (SDK-1038).
+            // Conflict review is not ported yet (SDK-1038). Python's gate also
+            // has `edge_evidence_disabled` between `no_llm_configured` and the
+            // run; Rust has no provenance edge-evidence switch to read.
             StageKind::ReviewConflicts => Some(if !self.review_conflicts {
-                REASON_OPT_IN_DISABLED
+                REASON_TURNED_OFF
             } else if !self.llm.is_configured() {
                 REASON_NO_LLM_CONFIGURED
             } else {
                 REASON_NOT_PORTED
             }),
             StageKind::GlobalContextIndex if !self.build_global_context_index => {
-                Some(REASON_OPT_IN_DISABLED)
+                Some(REASON_TURNED_OFF)
             }
             _ => None,
         }
