@@ -390,6 +390,30 @@ impl GraphDBTrait for DatasetRoutedGraphDB {
             .get_temporal_anchors(chunk_ids, entity_ids, start_ms, end_ms)
             .await
     }
+
+    async fn get_top_degree_node_ids(&self, top_k: usize) -> GraphDBResult<Vec<String>> {
+        self.engine().await?.get_top_degree_node_ids(top_k).await
+    }
+
+    async fn get_bounded_neighborhood(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        max_nodes: usize,
+        property_keys: Option<&[String]>,
+    ) -> GraphDBResult<crate::BoundedNeighborhood> {
+        self.engine()
+            .await?
+            .get_bounded_neighborhood(node_ids, depth, max_nodes, property_keys)
+            .await
+    }
+
+    async fn get_entity_type_names(
+        &self,
+        entity_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, String>> {
+        self.engine().await?.get_entity_type_names(entity_ids).await
+    }
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@
 //! db.add_node(&entity).await?;
 //! ```
 
+mod bounded;
 mod dataset_routed;
 #[cfg(any(feature = "ladybug", feature = "postgres"))]
 mod dedup;
@@ -40,6 +41,13 @@ mod pg_graph_adapter;
 #[cfg(any(test, feature = "testing"))]
 pub mod mock;
 
+pub use bounded::{
+    BoundedNeighborhood, BoundedNode, DEFAULT_NEIGHBORHOOD_CHUNK_SIZE,
+    DEGREE_SEED_EDGE_SAMPLE_ROWS, ENTITY_TYPE_NODE_TYPE, IS_A_RELATIONSHIP,
+    default_bounded_neighborhood, default_entity_type_names, default_top_degree_node_ids,
+    hop_distances, project_node_properties, unique_node_ids, validate_bounded_neighborhood_args,
+    validate_top_k,
+};
 pub use dataset_routed::{DatasetGraphResolver, DatasetRoutedGraphDB, NO_DATASET_SCOPE};
 pub use error::{GraphDBError, GraphDBResult};
 pub use formatted::get_formatted_graph_data;

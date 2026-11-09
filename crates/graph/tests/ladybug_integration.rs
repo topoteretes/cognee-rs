@@ -85,3 +85,6 @@ ladybug_test!(test_edge_feedback_weight_rejects_non_finite);
 ladybug_test!(test_nul_bytes_in_text_are_persistable);
 ladybug_test!(test_get_timestamps_in_range_matches_default);
 ladybug_test!(test_get_temporal_anchors_matches_default);
+ladybug_test!(test_get_top_degree_node_ids_matches_default);
+ladybug_test!(test_get_bounded_neighborhood_matches_default);
+ladybug_test!(test_get_entity_type_names_matches_default);

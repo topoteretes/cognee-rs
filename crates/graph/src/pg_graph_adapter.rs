@@ -2161,6 +2161,225 @@ impl GraphDBTrait for PgGraphAdapter {
         self.subgraph_query(&sql, vec![ids.into()]).await
     }
 
+    /// Python's sampled aggregate (SDK-610): degree over one materialized
+    /// prefix of `DEGREE_SEED_EDGE_SAMPLE_ROWS` edges, both endpoints from
+    /// the same sample, then an id-only fill for sparse samples (isolated
+    /// nodes included). Ties and the fill are ordered by id in byte order,
+    /// so the result equals the default on any graph the sample covers whole.
+    async fn get_top_degree_node_ids(&self, top_k: usize) -> GraphDBResult<Vec<String>> {
+        crate::validate_top_k(top_k)?;
+        let sample = i64::try_from(crate::DEGREE_SEED_EDGE_SAMPLE_ROWS).unwrap_or(i64::MAX);
+        let limit = i64::try_from(top_k).unwrap_or(i64::MAX);
+        let rows = self
+            .query_all_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "WITH sampled_edges AS MATERIALIZED ( \
+                     SELECT source_id, target_id FROM graph_edge LIMIT $1) \
+                 SELECT node_id FROM ( \
+                     SELECT target_id AS node_id FROM sampled_edges \
+                     UNION ALL SELECT source_id FROM sampled_edges) endpoints \
+                 GROUP BY node_id \
+                 ORDER BY count(*) DESC, node_id COLLATE \"C\" \
+                 LIMIT $2",
+                [sample.into(), limit.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        let mut seeds = Vec::with_capacity(top_k);
+        for row in &rows {
+            let id: String = row
+                .try_get("", "node_id")
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            seeds.push(id);
+        }
+        if seeds.len() < top_k {
+            let remaining = i64::try_from(top_k - seeds.len()).unwrap_or(i64::MAX);
+            // `= ANY('{}')` matches nothing, so the NOT keeps every node on
+            // an edgeless graph.
+            let rows = self
+                .query_all_tuned(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT id FROM graph_node WHERE NOT (id = ANY($1::text[])) \
+                     ORDER BY id COLLATE \"C\" LIMIT $2",
+                    [seeds.clone().into(), remaining.into()],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                let id: String = row
+                    .try_get("", "id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                seeds.push(id);
+            }
+        }
+        Ok(seeds)
+    }
+
+    /// Python's SQL membership walk (SDK-786): one id-only query per hop,
+    /// reading at most `max_nodes` neighbours per frontier node (in id
+    /// order, which the shared walk proves enough), stopping once
+    /// `max_nodes` ids are held; then the member rows — projected in SQL when
+    /// `property_keys` is given, so large properties such as chunk text never
+    /// leave the database — and the edges among them.
+    async fn get_bounded_neighborhood(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        max_nodes: usize,
+        property_keys: Option<&[String]>,
+    ) -> GraphDBResult<crate::BoundedNeighborhood> {
+        crate::validate_bounded_neighborhood_args(depth, max_nodes)?;
+        let seeds = crate::unique_node_ids(node_ids);
+        if seeds.is_empty() {
+            return Ok(crate::BoundedNeighborhood::default());
+        }
+
+        let mut existing: HashSet<String> = HashSet::new();
+        for chunk in seeds.chunks(ID_BATCH) {
+            let rows = self
+                .query_all_tuned(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT id FROM graph_node WHERE id = ANY($1::text[])",
+                    [chunk.to_vec().into()],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                let id: String = row
+                    .try_get("", "id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                existing.insert(id);
+            }
+        }
+        let existing_seeds: Vec<String> = seeds
+            .into_iter()
+            .filter(|id| existing.contains(id))
+            .collect();
+
+        let fan_out = i64::try_from(max_nodes).unwrap_or(i64::MAX);
+        let mut bfs = crate::bounded::BoundedBfs::new(existing_seeds, max_nodes);
+        for _ in 0..depth {
+            if bfs.is_done() {
+                break;
+            }
+            let mut neighbors: HashMap<String, Vec<String>> = HashMap::new();
+            for chunk in bfs.frontier().chunks(ID_BATCH) {
+                let rows = self
+                    .query_all_tuned(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT f.id AS frontier_id, c.nbr AS neighbor_id \
+                         FROM unnest($1::text[]) AS f(id) \
+                         CROSS JOIN LATERAL ( \
+                             SELECT u.nbr FROM ( \
+                                 SELECT e.target_id AS nbr FROM graph_edge e WHERE e.source_id = f.id \
+                                 UNION SELECT e.source_id FROM graph_edge e WHERE e.target_id = f.id) u \
+                             WHERE u.nbr <> f.id \
+                             ORDER BY u.nbr COLLATE \"C\" LIMIT $2) c",
+                        [chunk.to_vec().into(), fan_out.into()],
+                    ))
+                    .await
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                for row in &rows {
+                    let frontier: String = row
+                        .try_get("", "frontier_id")
+                        .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                    let neighbor: String = row
+                        .try_get("", "neighbor_id")
+                        .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                    neighbors.entry(frontier).or_default().push(neighbor);
+                }
+            }
+            bfs.advance(&neighbors);
+        }
+        let members = bfs.into_members();
+        if members.is_empty() {
+            return Ok(crate::BoundedNeighborhood::default());
+        }
+        let member_ids: Vec<String> = members.iter().map(|(id, _)| id.clone()).collect();
+
+        let mut rows_out: Vec<NodeData> = Vec::with_capacity(member_ids.len());
+        for chunk in member_ids.chunks(ID_BATCH) {
+            let rows = match property_keys {
+                None => self
+                    .query_all_tuned(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT id, name, type, properties FROM graph_node WHERE id = ANY($1::text[])",
+                        [chunk.to_vec().into()],
+                    ))
+                    .await,
+                Some(keys) => self
+                    .query_all_tuned(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        "SELECT id, name, type, \
+                                (SELECT jsonb_object_agg(key, value) FROM jsonb_each(properties) \
+                                  WHERE key = ANY($2::text[])) AS properties \
+                         FROM graph_node WHERE id = ANY($1::text[])",
+                        [chunk.to_vec().into(), keys.to_vec().into()],
+                    ))
+                    .await,
+            }
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                rows_out.push(Self::parse_node_row(row)?);
+            }
+        }
+
+        let rows = self
+            .query_all_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT source_id, target_id, relationship_name, properties FROM graph_edge \
+                 WHERE source_id = ANY($1::text[]) AND target_id = ANY($1::text[])",
+                [member_ids.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+        let edges = rows
+            .iter()
+            .map(Self::parse_edge_row)
+            .collect::<GraphDBResult<Vec<_>>>()?;
+
+        Ok(crate::BoundedNeighborhood::assemble(
+            &members,
+            rows_out,
+            edges,
+            property_keys,
+        ))
+    }
+
+    /// Python's one-hop `is_a` join, one array parameter per `ID_BATCH` ids.
+    async fn get_entity_type_names(
+        &self,
+        entity_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, String>> {
+        let entities = crate::unique_node_ids(entity_ids);
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for chunk in entities.chunks(ID_BATCH) {
+            let rows = self
+                .query_all_tuned(Statement::from_sql_and_values(
+                    DatabaseBackend::Postgres,
+                    "SELECT e.source_id AS entity_id, t.name AS type_name \
+                     FROM graph_edge e JOIN graph_node t ON t.id = e.target_id \
+                     WHERE e.source_id = ANY($1::text[]) \
+                       AND e.relationship_name = $2 AND t.type = $3",
+                    [
+                        chunk.to_vec().into(),
+                        crate::IS_A_RELATIONSHIP.into(),
+                        crate::ENTITY_TYPE_NODE_TYPE.into(),
+                    ],
+                ))
+                .await
+                .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+            for row in &rows {
+                let entity: String = row
+                    .try_get("", "entity_id")
+                    .map_err(|e| GraphDBError::QueryError(e.to_string()))?;
+                let name: String = row.try_get("", "type_name").unwrap_or_default();
+                pairs.push((entity, name));
+            }
+        }
+        Ok(crate::bounded::fold_entity_type_rows(pairs))
+    }
+
     /// One read of the `Timestamp` rows with the window test in SQL. Port of
     /// Python's `postgres_demo` adapter query, with its plain
     /// `(properties->>'time_at')::bigint` casts made total (see

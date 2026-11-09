@@ -1036,6 +1036,101 @@ pub trait GraphDBTrait: Send + Sync {
         crate::temporal::default_temporal_anchors(self, chunk_ids, entity_ids, start_ms, end_ms)
             .await
     }
+
+    /// Ids of up to `top_k` well-connected nodes, to seed a graph view when
+    /// the caller names no seed. Port of Python's
+    /// `GraphDBInterface.get_top_degree_node_ids` (SDK-610).
+    ///
+    /// Ranked by degree (edges in either direction; a self-loop counts
+    /// twice), highest first, ties by id in byte order; when fewer than
+    /// `top_k` nodes have an edge, nodes without one fill the rest in id
+    /// order, so an edgeless graph with nodes still yields seeds.
+    ///
+    /// **Approximate by contract**, as in Python: a native override ranks a
+    /// bounded sample of [`DEGREE_SEED_EDGE_SAMPLE_ROWS`] stored edges rather
+    /// than the whole edge table, because an exact aggregate does not scale
+    /// (57 s and 8.5 GB of temp on a 35.6M-edge graph). Below that many edges
+    /// the sample is the whole table and every implementation returns the
+    /// same ids. Callers must treat the result as "some nodes worth starting
+    /// from", not as a ranking.
+    ///
+    /// `top_k` must be positive ([`GraphDBError::InvalidArgument`]
+    /// otherwise). The default reads the whole graph
+    /// ([`default_top_degree_node_ids`]); `LadybugAdapter` and
+    /// `PgGraphAdapter` override it with the sampled aggregate.
+    ///
+    /// [`DEGREE_SEED_EDGE_SAMPLE_ROWS`]: crate::DEGREE_SEED_EDGE_SAMPLE_ROWS
+    /// [`GraphDBError::InvalidArgument`]: crate::GraphDBError::InvalidArgument
+    /// [`default_top_degree_node_ids`]: crate::default_top_degree_node_ids
+    async fn get_top_degree_node_ids(&self, top_k: usize) -> GraphDBResult<Vec<String>> {
+        crate::bounded::default_top_degree_node_ids(self, top_k).await
+    }
+
+    /// The neighbourhood of `node_ids` within `depth` hops, capped at
+    /// `max_nodes` nodes: what a graph view reads instead of the unbounded
+    /// [`get_neighborhood`](GraphDBTrait::get_neighborhood). Port of Python's
+    /// `GraphDBInterface.iter_bounded_neighborhood` (SDK-786), returned whole;
+    /// [`BoundedNeighborhood::into_chunks`] gives Python's chunks.
+    ///
+    /// Membership is the seeds that exist, in the given order, then nodes hop
+    /// by hop with the budget shared round robin over the frontier — the
+    /// exact rule is documented on [`BoundedNeighborhood`], and every
+    /// implementation must follow it, so a native override
+    /// returns the same nodes, hops and edges as the default. Edges are every
+    /// stored edge between two members, once, in stored direction.
+    ///
+    /// `property_keys = None` returns every property; a list keeps only those
+    /// keys plus `id`, `name` and `type`. `depth` and `max_nodes` must be
+    /// positive ([`GraphDBError::InvalidArgument`] otherwise), checked before
+    /// anything is read; no seeds yields an empty result.
+    ///
+    /// The default ([`default_bounded_neighborhood`]) reads the whole
+    /// `depth`-hop neighbourhood and caps it in memory. `LadybugAdapter` and
+    /// `PgGraphAdapter` override it to walk ids only, stop at `max_nodes`, and
+    /// read node content for the members alone.
+    ///
+    /// [`BoundedNeighborhood`]: crate::BoundedNeighborhood
+    /// [`BoundedNeighborhood::into_chunks`]: crate::BoundedNeighborhood::into_chunks
+    /// [`GraphDBError::InvalidArgument`]: crate::GraphDBError::InvalidArgument
+    /// [`default_bounded_neighborhood`]: crate::default_bounded_neighborhood
+    async fn get_bounded_neighborhood(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        max_nodes: usize,
+        property_keys: Option<&[String]>,
+    ) -> GraphDBResult<crate::BoundedNeighborhood> {
+        crate::bounded::default_bounded_neighborhood(
+            self,
+            node_ids,
+            depth,
+            max_nodes,
+            property_keys,
+        )
+        .await
+    }
+
+    /// The EntityType name each of `entity_ids` points to through an
+    /// outgoing `is_a` edge, keyed by entity id. Port of Python's
+    /// `GraphDBInterface.get_entity_type_names` (SDK-794): a bounded view uses
+    /// it to label entities whose EntityType node was not admitted.
+    ///
+    /// Only targets whose `type` is `EntityType` and whose name is non-empty
+    /// count; an entity without one is absent. An entity with several such
+    /// targets maps to the smallest name (Python leaves this to row order).
+    /// Reads one hop, never outward from a type node.
+    ///
+    /// The default ([`default_entity_type_names`]) reads the entities' whole
+    /// one-hop neighbourhood; `LadybugAdapter` and `PgGraphAdapter` read just the `is_a` edges and
+    /// the target names in one query per batch.
+    ///
+    /// [`default_entity_type_names`]: crate::default_entity_type_names
+    async fn get_entity_type_names(
+        &self,
+        entity_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, String>> {
+        crate::bounded::default_entity_type_names(self, entity_ids).await
+    }
 }
 
 /// Narrowing options for [`GraphDBTrait::get_neighborhood_scoped`].

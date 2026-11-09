@@ -163,6 +163,9 @@ pggraph_test!(test_nul_bytes_in_text_are_persistable);
 pggraph_test!(test_get_neighborhood_scoped_cap_is_deterministic);
 pggraph_test!(test_get_timestamps_in_range_matches_default);
 pggraph_test!(test_get_temporal_anchors_matches_default);
+pggraph_test!(test_get_top_degree_node_ids_matches_default);
+pggraph_test!(test_get_bounded_neighborhood_matches_default);
+pggraph_test!(test_get_entity_type_names_matches_default);
 
 /// The same shared cases through [`PgGraphAdapter::from_connection`] — the
 /// constructor the single-shared-Postgres layout actually uses, and the one
@@ -239,4 +242,5 @@ mod from_connection {
     pggraph_from_connection_test!(test_get_candidate_nodes_by_label);
     pggraph_from_connection_test!(test_get_timestamps_in_range_matches_default);
     pggraph_from_connection_test!(test_get_temporal_anchors_matches_default);
+    pggraph_from_connection_test!(test_get_bounded_neighborhood_matches_default);
 }

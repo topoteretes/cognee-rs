@@ -185,6 +185,27 @@ pub trait SessionLifecycleDb: Send + Sync {
         filters: SessionListFilters,
     ) -> Result<SessionListPage, DatabaseError>;
 
+    /// The caller's most recently active session ids, newest first, at most
+    /// `limit` — the session listing of Python's visualization
+    /// `session_events._list_recent_session_ids` (COG-6121).
+    ///
+    /// Strictly the caller's own rows (`user_id == user_id`): unlike
+    /// [`list_session_rows`](Self::list_session_rows), no dataset grant
+    /// widens it, so another user's session on a shared dataset is never
+    /// listed. With `dataset_id`, a row is kept when its `dataset_id` is that
+    /// dataset **or** its `session_id` ends with `_{dataset_id}` (hyphenated
+    /// UUID), the per-dataset default session id that sessions written before
+    /// dataset threading are still found by; a row with neither is left out.
+    /// The predicate runs inside the `ORDER BY last_activity_at DESC LIMIT`
+    /// query, so the newest sessions *for that dataset* survive the limit.
+    /// Ties are broken by `session_id`.
+    async fn list_recent_session_ids_for_dataset(
+        &self,
+        user_id: Uuid,
+        dataset_id: Option<Uuid>,
+        limit: u32,
+    ) -> Result<Vec<String>, DatabaseError>;
+
     /// Dashboard counters for `GET /sessions/stats`. Mirrors
     /// `get_sessions_router.py:112-196`.
     async fn aggregate_stats(

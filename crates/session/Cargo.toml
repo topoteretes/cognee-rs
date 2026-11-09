@@ -22,6 +22,9 @@ redis = ["dep:redis"]
 fs = []
 # Session entries in the relational database, through `cognee_database::SessionQaDb`.
 relational-store = ["dep:cognee-database"]
+# `collect_session_events`: the visualization's session events, listed
+# through `cognee_database::SessionLifecycleDb`.
+session-events = ["dep:cognee-database"]
 # Former name of `relational-store`.
 sea-orm-store = ["relational-store"]
 telemetry = ["cognee-telemetry/telemetry"]
@@ -54,6 +57,11 @@ redis = { version = "0.29", features = ["aio", "tokio-comp", "connection-manager
 # then fails with the feature to pass rather than reporting a green zero.
 # Every other test target here is still auto-discovered; listing these does not
 # opt out of that (`autotests` stays at its edition-2018+ default of `true`).
+
+[[test]]
+name = "session_events_collect"
+path = "tests/session_events_collect.rs"
+required-features = ["session-events", "relational-store"]
 
 [[test]]
 name = "fs_store_tests"

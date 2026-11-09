@@ -2327,6 +2327,172 @@ impl GraphDBTrait for LadybugAdapter {
         ))
     }
 
+    /// Python's `cypher_degree_seeds`: rank the endpoints of one bounded
+    /// sample of stored edges in the store, then fill with ids only when the
+    /// sample has fewer than `top_k` distinct endpoints. Ties and the fill
+    /// are ordered by id so the result equals the default on any graph the
+    /// sample covers whole.
+    async fn get_top_degree_node_ids(&self, top_k: usize) -> GraphDBResult<Vec<String>> {
+        crate::validate_top_k(top_k)?;
+        let sample = crate::DEGREE_SEED_EDGE_SAMPLE_ROWS;
+        let ranked = self.execute_query(&format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) \
+             WITH a.id AS source_id, b.id AS target_id LIMIT {sample} \
+             UNWIND [source_id, target_id] AS id \
+             WITH id WHERE id IS NOT NULL \
+             RETURN id, count(*) AS degree ORDER BY degree DESC, id LIMIT {top_k}"
+        ))?;
+        let mut seeds: Vec<String> = ranked
+            .iter()
+            .filter_map(|row| row.first().and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        if seeds.len() < top_k {
+            let exclude = if seeds.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " AND NOT n.id IN [{}]",
+                    Self::cypher_id_list(seeds.iter().map(String::as_str))
+                )
+            };
+            let remaining = top_k - seeds.len();
+            let fill = self.execute_query(&format!(
+                "MATCH (n:Node) WHERE n.id IS NOT NULL{exclude} \
+                 RETURN n.id ORDER BY n.id LIMIT {remaining}"
+            ))?;
+            seeds.extend(
+                fill.iter()
+                    .filter_map(|row| row.first().and_then(|v| v.as_str()).map(str::to_string)),
+            );
+        }
+        Ok(seeds)
+    }
+
+    /// The shared membership walk with each hop read as id pairs only, then
+    /// node rows for the members alone and the edges among them. Unlike the
+    /// default, nothing outside the admitted members is ever hydrated.
+    async fn get_bounded_neighborhood(
+        &self,
+        node_ids: &[String],
+        depth: usize,
+        max_nodes: usize,
+        property_keys: Option<&[String]>,
+    ) -> GraphDBResult<crate::BoundedNeighborhood> {
+        const BATCH: usize = 500;
+        crate::validate_bounded_neighborhood_args(depth, max_nodes)?;
+        let seeds = crate::unique_node_ids(node_ids);
+        if seeds.is_empty() {
+            return Ok(crate::BoundedNeighborhood::default());
+        }
+
+        let mut existing: HashSet<String> = HashSet::new();
+        for chunk in seeds.chunks(BATCH) {
+            let rows = self.execute_query(&format!(
+                "MATCH (n:Node) WHERE n.id IN [{}] RETURN n.id",
+                Self::cypher_id_list(chunk.iter().map(String::as_str))
+            ))?;
+            existing.extend(
+                rows.iter()
+                    .filter_map(|row| row.first().and_then(|v| v.as_str()).map(str::to_string)),
+            );
+        }
+        let existing_seeds: Vec<String> = seeds
+            .into_iter()
+            .filter(|id| existing.contains(id))
+            .collect();
+
+        let mut bfs = crate::bounded::BoundedBfs::new(existing_seeds, max_nodes);
+        for _ in 0..depth {
+            if bfs.is_done() {
+                break;
+            }
+            let mut neighbors: HashMap<String, Vec<String>> = HashMap::new();
+            for chunk in bfs.frontier().chunks(BATCH) {
+                let rows = self.execute_query(&format!(
+                    "MATCH (a:Node)-[r:EDGE]-(b:Node) WHERE a.id IN [{}] RETURN DISTINCT a.id, b.id",
+                    Self::cypher_id_list(chunk.iter().map(String::as_str))
+                ))?;
+                for row in rows {
+                    if let (Some(a), Some(b)) = (
+                        row.first().and_then(|v| v.as_str()),
+                        row.get(1).and_then(|v| v.as_str()),
+                    ) {
+                        neighbors
+                            .entry(a.to_string())
+                            .or_default()
+                            .push(b.to_string());
+                    }
+                }
+            }
+            bfs.advance(&neighbors);
+        }
+        let members = bfs.into_members();
+        if members.is_empty() {
+            return Ok(crate::BoundedNeighborhood::default());
+        }
+
+        let member_ids: Vec<String> = members.iter().map(|(id, _)| id.clone()).collect();
+        let rows = self.get_nodes(&member_ids).await?;
+        let id_list = Self::cypher_id_list(member_ids.iter().map(String::as_str));
+        // The directed pattern keeps the stored direction (see
+        // `get_neighborhood`, which induces its edges the same way).
+        let query = format!(
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{id_list}] AND b.id IN [{id_list}] \
+             RETURN a.id, b.id, r.relationship_name, r.properties"
+        );
+        let mut edges = Vec::new();
+        for row in self.execute_query(&query)? {
+            if row.len() >= Self::EDGE_QUERY_COLUMN_COUNT {
+                let source_id = row[0].as_str().unwrap_or("").to_string();
+                let target_id = row[1].as_str().unwrap_or("").to_string();
+                let rel_name = row[2].as_str().unwrap_or("").to_string();
+                let props = if let Some(props_str) = row[3].as_str() {
+                    let clean = sanitize_json_control_chars(props_str);
+                    serde_json::from_str(&clean).unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
+                edges.push((source_id, target_id, rel_name, props));
+            }
+        }
+        Ok(crate::BoundedNeighborhood::assemble(
+            &members,
+            rows,
+            edges,
+            property_keys,
+        ))
+    }
+
+    /// Python's one-hop `is_a` query, batched: the `is_a` edges and the
+    /// target names only, instead of the default's whole one-hop
+    /// neighbourhood.
+    async fn get_entity_type_names(
+        &self,
+        entity_ids: &[String],
+    ) -> GraphDBResult<HashMap<String, String>> {
+        const BATCH: usize = 500;
+        let entities = crate::unique_node_ids(entity_ids);
+        let mut rows_out: Vec<(String, String)> = Vec::new();
+        for chunk in entities.chunks(BATCH) {
+            let query = format!(
+                "MATCH (n:Node)-[r:EDGE]->(t:Node) WHERE n.id IN [{}] \
+                 AND r.relationship_name = '{}' AND t.type = '{}' RETURN n.id, t.name",
+                Self::cypher_id_list(chunk.iter().map(String::as_str)),
+                Self::escape_cypher_string(crate::IS_A_RELATIONSHIP),
+                Self::escape_cypher_string(crate::ENTITY_TYPE_NODE_TYPE),
+            );
+            for row in self.execute_query(&query)? {
+                if let (Some(entity), Some(name)) = (
+                    row.first().and_then(|v| v.as_str()),
+                    row.get(1).and_then(|v| v.as_str()),
+                ) {
+                    rows_out.push((entity.to_string(), name.to_string()));
+                }
+            }
+        }
+        Ok(crate::bounded::fold_entity_type_rows(rows_out))
+    }
+
     // -----------------------------------------------------------------
     // In-place property updates
     // -----------------------------------------------------------------
