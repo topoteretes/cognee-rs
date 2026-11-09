@@ -223,6 +223,11 @@ name = "config_key_golden_session_stores"
 path = "tests/config_key_golden_session_stores.rs"
 required-features = ["session-fs", "session-redis"]
 
+[[test]]
+name = "visualization_improve_stages"
+path = "tests/visualization_improve_stages.rs"
+required-features = ["visualization"]
+
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
 cognee-storage = { path = "../storage", features = ["testing"] }

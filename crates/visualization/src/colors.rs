@@ -6,6 +6,7 @@
 //!     `_UNKNOWN_TYPE_COLOR` (lines 125–126)
 //!   * `_MEMORY_NODESET_COLORS` (lines 134–138)
 //!   * `generate_provenance_colors()` (lines 170–182)
+//!   * `build_node_set_colors()`
 //!
 //! Provenance color values are generated via the golden-angle HSL hue rotation
 //! used by Python. We port Python's `colorsys.hls_to_rgb` exactly so the
@@ -36,10 +37,11 @@ pub(crate) const DEFAULT_TYPE_COLOR: &str = "#7c3aed";
 /// pinned so they stay recognizable across graphs instead of following the
 /// deterministic hue rotation. Port of Python `_MEMORY_NODESET_COLORS`
 /// (`preprocessor.py:134-138`).
-pub(crate) const MEMORY_NODESET_COLORS: [(&str, &str); 3] = [
+pub(crate) const MEMORY_NODESET_COLORS: [(&str, &str); 4] = [
     ("session_learnings", "#FFC53D"),        // distilled lessons (gold)
     ("user_sessions_from_cache", "#00C2AA"), // persisted session Q&A (teal)
     ("agent_trace_feedbacks", "#FF7A59"),    // persisted agent trace feedback (coral)
+    ("skills", "#7DD3FC"),                   // ingested / improved skills (sky)
 ];
 
 /// Look up the static node-type → color mapping.
@@ -75,8 +77,12 @@ pub(crate) fn type_color(node_type: Option<&Value>, ontology_valid: bool) -> &'s
             "TableRow" => "#A550FF",
             "TableType" => "#6510F4",
             "ColumnValue" => "#747470",
+            "DltColumn" => "#747470",
+            "DltRow" => "#0DFF00",
             "SchemaTable" => "#A550FF",
+            "SchemaColumn" => "#00C2FF",
             "DatabaseSchema" => "#6510F4",
+            "StructureContainer" => "#0EA5A4",
             "SchemaRelationship" => "#323332",
             "default" => DEFAULT_TYPE_COLOR,
             _ => UNKNOWN_TYPE_COLOR,
@@ -165,6 +171,32 @@ where
         .collect()
 }
 
+/// The `node_set` color map: hue rotation, with the self-improvement memory
+/// sets pinned to their stable colors.
+///
+/// Port of Python `build_node_set_colors()`. Split out of `preprocess` so a
+/// caller that derives the same map from somewhere other than fetched graph
+/// nodes (Python's brains summary reads the node sets relationally) produces
+/// colors identical to the ones the rendered graph uses.
+///
+/// `values` are raw `source_node_set` values (a node set name, or the
+/// comma-joined string a multi-set document carries); the returned map is keyed
+/// by those same raw values. `None` and empty values never become a key.
+pub fn build_node_set_colors<I>(values: I) -> BTreeMap<String, String>
+where
+    I: IntoIterator<Item = Option<String>>,
+{
+    let mut color_map = provenance_colors(values);
+    // Pin stable, meaningful colors for self-improvement node sets, overriding
+    // the hue rotation only for sets actually present.
+    for (set_name, color) in MEMORY_NODESET_COLORS {
+        if let Some(entry) = color_map.get_mut(set_name) {
+            *entry = color.to_string();
+        }
+    }
+    color_map
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -195,6 +227,10 @@ mod tests {
         assert_eq!(color_of("SchemaTable", false), "#A550FF");
         assert_eq!(color_of("DatabaseSchema", false), "#6510F4");
         assert_eq!(color_of("SchemaRelationship", false), "#323332");
+        assert_eq!(color_of("DltColumn", false), "#747470");
+        assert_eq!(color_of("DltRow", false), "#0DFF00");
+        assert_eq!(color_of("SchemaColumn", false), "#00C2FF");
+        assert_eq!(color_of("StructureContainer", false), "#0EA5A4");
     }
 
     #[test]
@@ -232,6 +268,7 @@ mod tests {
                 ("session_learnings", "#FFC53D"),
                 ("user_sessions_from_cache", "#00C2AA"),
                 ("agent_trace_feedbacks", "#FF7A59"),
+                ("skills", "#7DD3FC"),
             ]
         );
     }

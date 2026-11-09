@@ -30,19 +30,21 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
-use super::operations_catalog::{Effect, OPERATIONS, Operation};
-use super::{ENTITY_TYPE_RELATION, link_relation, py_str};
+use super::operations_catalog::{Effect, Operation, catalog_operations};
+use super::{ENTITY_TYPE_RELATION, SEMANTIC_TYPE_KEY, link_relation, py_str};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/// Node types that make the schema view render the DLT/structured-schema graph
-/// instead of the collapsed type graph (`preprocessor.py:24-29`).
-pub const SCHEMA_GRAPH_NODE_TYPES: [&str; 4] = [
-    "DatabaseSchema",
-    "SchemaTable",
-    "SchemaRelationship",
-    "TableType",
-];
+/// Node types drawn as one Schema-view card per database table
+/// (`preprocessor.py` `SCHEMA_TABLE_NODE_TYPES`). Their presence switches the
+/// Schema view from the collapsed type graph to the table graph.
+pub const SCHEMA_TABLE_NODE_TYPES: [&str; 2] = ["SchemaTable", "TableType"];
+
+/// Schema-view column for database tables, after the Context column, so a SQL
+/// dataset's tables are not titled "Chunks" like the rank their nodes carry in
+/// the Story view (`preprocessor.py` `SCHEMA_TABLE_RANK`; the vendored
+/// `schema_view.js` titles column `6` "Tables").
+pub const SCHEMA_TABLE_RANK: i32 = 6;
 
 /// Maximum sample instance names attached to each schema type node
 /// (`preprocessor.py:32`).
@@ -259,13 +261,16 @@ pub fn node_type_rank(node_type: Option<&str>) -> i32 {
         Some("EntityType") => 3,
         Some("TextSummary") => 4,
         Some("GlobalContextSummary") => 5,
-        // Structured-schema (DLT) taxonomy
+        // Structured-schema (DLT / SQL) taxonomy
         Some("DatabaseSchema") => 0,
         Some("SchemaTable") => 1,
+        Some("SchemaColumn") => 2,
         Some("SchemaRelationship") => 2,
         Some("TableType") => 1,
         Some("TableRow") => 2,
         Some("ColumnValue") => 3,
+        Some("DltColumn") => 3,
+        Some("DltRow") => 1,
         _ => 4,
     }
 }
@@ -392,64 +397,83 @@ pub fn extract_schema_fields(node: &Value) -> Vec<Value> {
 
 // ── extract_schema_graph_data ────────────────────────────────────────────────
 
-/// Build the DLT/structured-schema graph from `SchemaTable`/`SchemaRelationship`
-/// nodes, falling back to [`extract_type_schema_graph_data`] when no schema
-/// nodes are present (`preprocessor.py:332-377`).
+/// Build the Schema view's graph: one card per table for DLT/SQL-ingested
+/// data, falling back to [`extract_type_schema_graph_data`] when there are no
+/// tables (`preprocessor.py` `extract_schema_graph_data`).
 ///
-/// The DLT branch emits only `{nodes, links}`; the (far more common) type-graph
-/// fallback additionally emits `instances_by_type` and `instance_index`.
-/// [`build_operation_layer`] then injects `operations` / `operation_links` into
-/// whichever object was produced.
+/// A dataset ingested from a database carries `SchemaTable` and
+/// `SchemaRelationship` nodes. They come out in the shape the Schema view
+/// already draws for the type graph — `GraphNodeType` cards at
+/// [`SCHEMA_TABLE_RANK`] followed by `GraphRelationshipType` entries in
+/// `nodes`, and an empty `links` — so the view has one shape to read. A
+/// relationship is only drawn when both its `source_table` and `target_table`
+/// name a table card that is present.
+///
+/// The table branch emits only `{nodes, links}`; the (far more common)
+/// type-graph fallback additionally emits `instances_by_type` and
+/// `instance_index`. [`build_operation_layer`] then injects `operations` /
+/// `operation_links` into whichever object was produced.
 pub fn extract_schema_graph_data(nodes: &[Value], links: &[Value]) -> Value {
-    let mut schema_nodes: Vec<Value> = Vec::new();
-    let mut schema_node_ids: HashSet<String> = HashSet::new();
-
-    for node in nodes {
-        let is_schema_node = node
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|node_type| SCHEMA_GRAPH_NODE_TYPES.contains(&node_type));
-        if !is_schema_node {
-            continue;
-        }
-        let Some(id) = node_id(node) else { continue };
-
-        schema_node_ids.insert(id.clone());
-        let name = truthy(node.get("name"))
-            .cloned()
-            .unwrap_or_else(|| Value::String(id.clone()));
-        schema_nodes.push(json!({
-            "id": id,
-            "name": name,
-            "type": node.get("type").cloned().unwrap_or(Value::Null),
-            "description": node.get("description").cloned().unwrap_or(Value::Null),
-            "fields": extract_schema_fields(node),
-            "source_table": node.get("source_table").cloned().unwrap_or(Value::Null),
-            "target_table": node.get("target_table").cloned().unwrap_or(Value::Null),
-            "relationship_type": node.get("relationship_type").cloned().unwrap_or(Value::Null),
-        }));
-    }
-
-    if schema_nodes.is_empty() {
+    let table_nodes: Vec<&Value> = nodes
+        .iter()
+        .filter(|node| {
+            node.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|node_type| SCHEMA_TABLE_NODE_TYPES.contains(&node_type))
+        })
+        .collect();
+    if table_nodes.is_empty() {
         return extract_type_schema_graph_data(nodes, links);
     }
 
-    let mut schema_links: Vec<Value> = Vec::new();
-    let mut seen_links: HashSet<(String, String, String)> = HashSet::new();
-    for link in links {
-        let source = link_endpoint(link, "source");
-        let target = link_endpoint(link, "target");
-        if !schema_node_ids.contains(&source) || !schema_node_ids.contains(&target) {
-            continue;
-        }
-        let label = link_relation(link);
-        if !seen_links.insert((source.clone(), target.clone(), label.clone())) {
-            continue;
-        }
-        schema_links.push(json!({ "source": source, "target": target, "label": label }));
+    let mut schema_nodes: Vec<Value> = Vec::with_capacity(table_nodes.len());
+    let mut table_names: Vec<Value> = Vec::with_capacity(table_nodes.len());
+    for node in table_nodes {
+        let id = node.get("id").cloned().unwrap_or(Value::Null);
+        // `node.get("name") or node["id"]`
+        let name = truthy(node.get("name"))
+            .cloned()
+            .unwrap_or_else(|| id.clone());
+        table_names.push(name.clone());
+        schema_nodes.push(json!({
+            "id": id,
+            "name": name,
+            "type": "GraphNodeType",
+            "rank": SCHEMA_TABLE_RANK,
+            "fields": extract_schema_fields(node),
+            "instance_count": Value::Null,
+            "samples": [],
+            "relationships": [],
+        }));
     }
 
-    json!({ "nodes": schema_nodes, "links": schema_links })
+    // Python: `node.get("source_table") in table_names`. A missing key is
+    // `None`, which never equals a (truthy) table name.
+    let names_a_table = |value: Option<&Value>| value.is_some_and(|v| table_names.contains(v));
+    for node in nodes {
+        if node.get("type").and_then(Value::as_str) != Some("SchemaRelationship") {
+            continue;
+        }
+        let source_table = node.get("source_table");
+        let target_table = node.get("target_table");
+        if !names_a_table(source_table) || !names_a_table(target_table) {
+            continue;
+        }
+        let relationship_label = truthy(node.get("relationship_type"))
+            .or_else(|| truthy(node.get("name")))
+            .cloned()
+            .unwrap_or_else(|| Value::String("related".to_string()));
+        schema_nodes.push(json!({
+            "id": node.get("id").cloned().unwrap_or(Value::Null),
+            "type": "GraphRelationshipType",
+            "source_type": source_table.cloned().unwrap_or(Value::Null),
+            "target_type": target_table.cloned().unwrap_or(Value::Null),
+            "relationship_label": relationship_label,
+            "edge_count": 1,
+        }));
+    }
+
+    json!({ "nodes": schema_nodes, "links": [] })
 }
 
 // ── Type-graph aggregation ───────────────────────────────────────────────────
@@ -611,10 +635,13 @@ fn relationship_label(relation_counts: &OrderedCounter<String>) -> String {
     }
 }
 
-/// Map each node id to its semantic type name (`preprocessor.py:486-516`).
+/// Map each node id to its semantic type name (`preprocessor.py`
+/// `resolve_semantic_types`).
 ///
 /// Non-`Entity` nodes keep their raw `type` property. `Entity` nodes resolve to
-/// the `EntityType` `name` reached via the [`ENTITY_TYPE_RELATION`] edge, so
+/// their [`SEMANTIC_TYPE_KEY`] property when a bounded read stamped one (it
+/// wins over the edges, since the `EntityType` node may be outside the read),
+/// else to the `EntityType` `name` reached via the [`ENTITY_TYPE_RELATION`] edge, so
 /// semantic types (Person/Tool/Broker) surface instead of the literal
 /// `"Entity"`; a missing or falsy `EntityType` name leaves the raw type in
 /// place, and a missing raw type becomes the literal `"Node"`.
@@ -650,10 +677,14 @@ pub fn resolve_semantic_types(nodes: &[Value], links: &[Value]) -> BTreeMap<Stri
         let Some(id) = node_id(node) else { continue };
         let raw_type = node.get("type");
         let is_entity = raw_type.and_then(Value::as_str) == Some("Entity");
-        let resolved = entity_type_name
-            .get(&id)
-            .and_then(Option::as_ref)
-            .and_then(|name| truthy(Some(name)));
+        // The store-resolved type a bounded read stamps wins over the edges,
+        // since the EntityType node may be outside the read.
+        let resolved = truthy(node.get(SEMANTIC_TYPE_KEY)).or_else(|| {
+            entity_type_name
+                .get(&id)
+                .and_then(Option::as_ref)
+                .and_then(|name| truthy(Some(name)))
+        });
         if is_entity && let Some(name) = resolved {
             node_type.insert(id, py_str(name));
         } else {
@@ -666,6 +697,38 @@ pub fn resolve_semantic_types(nodes: &[Value], links: &[Value]) -> BTreeMap<Stri
         }
     }
     node_type
+}
+
+/// Names of the semantic entity types (Person/Broker/…) in this graph
+/// (`preprocessor.py` `semantic_entity_type_names`).
+///
+/// Those reached via an [`ENTITY_TYPE_RELATION`] edge in the read, plus those a
+/// bounded read resolved from the store (the [`SEMANTIC_TYPE_KEY`] property on
+/// an `Entity` node) for entities whose type node was not admitted.
+pub fn semantic_entity_type_names(nodes: &[Value], links: &[Value]) -> HashSet<String> {
+    let mut nodes_by_id: HashMap<String, &Value> = HashMap::new();
+    let mut names: HashSet<String> = HashSet::new();
+    for node in nodes {
+        if let Some(id) = node_id(node) {
+            nodes_by_id.insert(id, node);
+        }
+        if node.get("type").and_then(Value::as_str) == Some("Entity")
+            && let Some(name) = truthy(node.get(SEMANTIC_TYPE_KEY))
+        {
+            names.insert(py_str(name));
+        }
+    }
+    for link in links {
+        if link_relation(link) != ENTITY_TYPE_RELATION {
+            continue;
+        }
+        if let Some(target) = nodes_by_id.get(&link_endpoint(link, "target"))
+            && let Some(name) = truthy(target.get("name"))
+        {
+            names.insert(py_str(name));
+        }
+    }
+    names
 }
 
 /// Per-instance adjacency record backing `instance_index`.
@@ -701,26 +764,11 @@ pub fn extract_type_schema_graph_data(nodes: &[Value], links: &[Value]) -> Value
         }
     }
 
-    // Names reached via the is_a edge are semantic *entity* types (Person,
-    // Broker, …) — rank them in the Entity column rather than letting them fall
-    // through to the default ("Summaries") rank.
-    let mut nodes_by_id_lookup: HashMap<String, &Value> = HashMap::new();
-    for node in nodes {
-        if let Some(id) = node_id(node) {
-            nodes_by_id_lookup.insert(id, node);
-        }
-    }
-    let mut semantic_type_names: HashSet<String> = HashSet::new();
-    for link in links {
-        if link_relation(link) != ENTITY_TYPE_RELATION {
-            continue;
-        }
-        if let Some(target_node) = nodes_by_id_lookup.get(&link_endpoint(link, "target"))
-            && let Some(name) = truthy(target_node.get("name"))
-        {
-            semantic_type_names.insert(py_str(name));
-        }
-    }
+    // Names reached via the is_a edge, or resolved from the store by a bounded
+    // read, are semantic *entity* types (Person, Broker, …) — rank them in the
+    // Entity column rather than letting them fall through to the default
+    // ("Summaries") rank.
+    let mut semantic_type_names = semantic_entity_type_names(nodes, links);
 
     // Bound the Entity column: keep the most-populated semantic entity types as
     // their own cards and remap the long tail onto one rollup type. The remap
@@ -1138,33 +1186,23 @@ pub fn build_operation_layer(schema_graph: &mut Value, nodes: &[Value], links: &
         }
     }
 
-    // Semantic entity types are those reached via the is_a edge (Person/Broker/…).
-    let mut nodes_by_id: HashMap<String, &Value> = HashMap::new();
-    for node in nodes {
-        if let Some(id) = node_id(node) {
-            nodes_by_id.insert(id, node);
-        }
-    }
-    let mut semantic_entity_types: BTreeSet<String> = BTreeSet::new();
-    for link in links {
-        if link_relation(link) != ENTITY_TYPE_RELATION {
-            continue;
-        }
-        if let Some(target) = nodes_by_id.get(&link_endpoint(link, "target"))
-            && let Some(name) = truthy(target.get("name"))
-        {
-            semantic_entity_types.insert(py_str(name));
-        }
-    }
+    let semantic_entity_types: BTreeSet<String> = semantic_entity_type_names(nodes, links)
+        .into_iter()
+        .collect();
 
     let resolve_targets = |effect: &Effect| -> BTreeSet<String> {
         let mut names: BTreeSet<String> = BTreeSet::new();
-        if effect.target_type == "Entity" {
+        // A node set on the effect SCOPES it: the operation touches only that
+        // set's subgraph, so expanding "Entity" to every semantic entity type
+        // would mark e.g. distill_sessions as the observed producer of any
+        // cognify-built graph's types (both publish through cognify_pipeline).
+        let node_set = effect.target_node_set.filter(|set| !set.is_empty());
+        if effect.target_type == "Entity" && node_set.is_none() {
             names.extend(semantic_entity_types.intersection(&present).cloned());
             if present.contains("Entity") {
                 names.insert("Entity".to_string());
             }
-        } else if present.contains(effect.target_type) {
+        } else if effect.target_type != "Entity" && present.contains(effect.target_type) {
             names.insert(effect.target_type.to_string());
         }
         if let Some(node_set) = effect.target_node_set
@@ -1177,7 +1215,7 @@ pub fn build_operation_layer(schema_graph: &mut Value, nodes: &[Value], links: &
 
     let mut operations: Vec<Value> = Vec::new();
     let mut operation_links: Vec<Value> = Vec::new();
-    for operation in OPERATIONS {
+    for operation in catalog_operations() {
         let Operation {
             name,
             label,
@@ -1187,16 +1225,17 @@ pub fn build_operation_layer(schema_graph: &mut Value, nodes: &[Value], links: &
             summary,
             effects,
         } = operation;
-        let mut seen: HashSet<(&str, String)> = HashSet::new();
+        // Keyed by property too: two effects of the same kind on the same type
+        // are distinct rows when they touch different properties.
+        let mut seen: HashSet<(&str, String, Option<&str>)> = HashSet::new();
         let mut links_for_op: Vec<Value> = Vec::new();
-        for effect in *effects {
+        for effect in effects {
             for type_name in resolve_targets(effect) {
-                if !seen.insert((effect.effect, type_name.clone())) {
+                if !seen.insert((effect.effect, type_name.clone(), effect.property)) {
                     continue;
                 }
                 let observed = pipeline_name.is_some()
-                    && pipeline_by_type.get(&type_name).and_then(Option::as_deref)
-                        == *pipeline_name;
+                    && pipeline_by_type.get(&type_name).and_then(Option::as_deref) == pipeline_name;
                 links_for_op.push(json!({
                     "source": format!("op:{name}"),
                     "target": format!("type:{type_name}"),
@@ -1450,7 +1489,7 @@ mod tests {
     }
 
     #[test]
-    fn dlt_branch_wins_over_the_type_graph() {
+    fn table_branch_wins_over_the_type_graph() {
         let nodes = vec![
             json!({
                 "id": "tbl",
@@ -1459,31 +1498,49 @@ mod tests {
                 "description": "order rows",
                 "columns": [{ "name": "id", "type": "bigint", "primary_key": true }],
             }),
-            json!({ "id": "rel", "type": "SchemaRelationship", "relationship_type": "fk" }),
+            json!({ "id": "cust", "type": "TableType", "name": "customers" }),
+            json!({
+                "id": "rel",
+                "type": "SchemaRelationship",
+                "source_table": "orders",
+                "target_table": "customers",
+            }),
             node("e1", "Entity", "Alice"),
         ];
-        let links = vec![
-            link("tbl", "rel", "has_relationship"),
-            // Duplicate triple is dropped.
-            link("tbl", "rel", "has_relationship"),
-            // Endpoint outside the schema node set is dropped.
-            link("tbl", "e1", "contains"),
-        ];
+        // Graph links never reach the table graph: its `links` is always [].
+        let links = vec![link("tbl", "rel", "has_relationship")];
         let graph = extract_schema_graph_data(&nodes, &links);
 
         assert!(graph.get("instances_by_type").is_none());
         assert!(graph.get("instance_index").is_none());
+        assert_eq!(graph["links"], json!([]));
         let graph_nodes = graph["nodes"].as_array().expect("nodes is an array");
-        assert_eq!(graph_nodes.len(), 2);
-        assert_eq!(graph_nodes[0]["name"], "orders");
-        assert_eq!(graph_nodes[0]["fields"][0]["name"], "id");
-        // The nameless relationship node falls back to its id.
-        assert_eq!(graph_nodes[1]["name"], "rel");
+        assert_eq!(graph_nodes.len(), 3);
         assert_eq!(
-            graph["links"],
-            json!([
-                { "source": "tbl", "target": "rel", "label": "has_relationship" }
-            ])
+            graph_nodes[0],
+            json!({
+                "id": "tbl",
+                "name": "orders",
+                "type": "GraphNodeType",
+                "rank": SCHEMA_TABLE_RANK,
+                "fields": [{ "name": "id", "type": "bigint", "required": true }],
+                "instance_count": null,
+                "samples": [],
+                "relationships": [],
+            })
+        );
+        assert_eq!(graph_nodes[1]["name"], "customers");
+        // No relationship_type and no name: the label falls back to "related".
+        assert_eq!(
+            graph_nodes[2],
+            json!({
+                "id": "rel",
+                "type": "GraphRelationshipType",
+                "source_type": "orders",
+                "target_type": "customers",
+                "relationship_label": "related",
+                "edge_count": 1,
+            })
         );
     }
 
