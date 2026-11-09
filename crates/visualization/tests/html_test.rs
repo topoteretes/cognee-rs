@@ -123,6 +123,11 @@ async fn all_view_modules_contribute() {
         html.contains("_renderSchemaGraph"),
         "schema_view.js missing"
     );
+    // schema_view.js: the "Tables" column for SQL/DLT tables (SCHEMA_TABLE_RANK).
+    assert!(
+        html.contains("'6': 'Tables'"),
+        "schema_view.js is missing the Tables column label"
+    );
     // story_view.js: canvas renderer, label budget, and the data globals the
     // Memory/Semantic tabs read back out of it.
     assert!(

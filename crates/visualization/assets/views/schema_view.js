@@ -51,6 +51,7 @@
     '3': 'Types',
     '4': 'Summaries',
     '5': 'Context',
+    '6': 'Tables',
   };
   function stageLabel(rank){
     if (typeof rank !== 'number' || !isFinite(rank)) return '';
@@ -763,7 +764,7 @@
   window._schemaSpotlight = null;
 
   // ── Transformation impact-layer ──────────────────────────────────
-  // Operations (cognify, improve, …) shown as a rail of chips with
+  // Operations (cognify, memify, improve, …) shown as a rail of chips with
   // color-coded edges to the schema types they affect. Off by default.
   window._schemaShowOps = window._schemaShowOps || false;
   window._opRects = window._opRects || {};
