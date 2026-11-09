@@ -45,4 +45,14 @@ pub enum VisualizationError {
     /// tokenizer finds its end.
     #[error("bundled d3 contains `</script`, `<!--` or `<script` and cannot be inlined verbatim")]
     UnsafeInlineScript,
+
+    /// The visualization bounds are out of range (Python raises `ValueError`;
+    /// the HTTP layer maps this to a 400).
+    #[error("invalid visualization bounds: {0}")]
+    InvalidBounds(#[from] crate::subgraph::BoundsError),
+
+    /// The [`SeedSearcher`](crate::subgraph::SeedSearcher) failed to turn the
+    /// query into seed nodes.
+    #[error("seed search failed: {0}")]
+    SeedSearch(#[source] crate::subgraph::SeedSearchError),
 }

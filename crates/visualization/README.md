@@ -2,8 +2,10 @@
 
 Interactive HTML knowledge-graph visualization for Cognee-Rust.
 
-Reads all nodes and edges from any `GraphDBTrait` implementation, enriches them,
-and renders a single HTML file. The frontend is **vendored verbatim** from the
+Reads the graph from any `GraphDBTrait` implementation — the whole graph, or a
+bounded subgraph around seed nodes — enriches it, and renders a single HTML file,
+the JSON payloads of `/visualize/json` and `/visualize/brains`, or the event
+sequence of the streamed `/visualize/json`. The frontend is **vendored verbatim** from the
 Python `cognee` repo — this crate is the preprocessor plus the orchestrator that
 stitches the vendored assets around the data.
 
@@ -14,13 +16,18 @@ Parity mapping:
 | `src/preprocessor/` | `cognee/modules/visualization/preprocessor.py` |
 | `src/html.rs` | `cognee/modules/visualization/cognee_network_visualization.py` |
 | `src/colors.rs` | the `color_map` dict + `_generate_provenance_colors()` |
+| `src/subgraph.rs` | `cognee/modules/visualization/subgraph_data.py` |
+| `src/payload.rs` | `build_visualization_payload` / `build_brain_summary_payload` in `cognee_network_visualization.py` |
+| `src/preprocessor/compact.rs` | the "Streamed payload" section of `preprocessor.py` |
+| `src/stream.rs` | `stream_graph_events` in `cognee/modules/visualization/graph_stream.py` (events only; the SSE transport is the HTTP server's) |
 | `assets/template.html`, `assets/views/*.js` | vendored byte-for-byte, not ported |
 | `assets/vendor/d3.v7.9.0.min.js` | d3 v7.9.0 release, inlined by the offline transform |
 
 ## Fully offline output
 
-Every HTML this crate produces — `render`, `render_graph_data`,
-`render_multi_user`, `visualize` — works with no network: no external script,
+Every HTML this crate produces — `render`, `render_bounded`,
+`render_graph_data`, `render_graph_data_with_events`, `render_multi_user`,
+`visualize`, `visualize_bounded` — works with no network: no external script,
 stylesheet, font, image or fetch. The vendored `template.html` loads d3 from
 `https://d3js.org` and the Inter webfont from Google Fonts, exactly as Python
 does, so `src/html.rs` applies an **offline transform** to the shell before any
@@ -40,7 +47,8 @@ therefore breaks loudly instead of silently re-enabling the CDN. The vendored
 files themselves stay byte-identical to upstream.
 
 `tests/offline_test.rs` pins this on an empty graph, a non-trivial graph, a
-table dataset and `render_multi_user`: it locates the inline d3 by its exact
+table dataset, a graph with session events, a bounded read and
+`render_multi_user`: it locates the inline d3 by its exact
 bundled content and checks its SHA-256, scans the rest of the page for any
 resource-loading construct (`<script src`, `<link href`, non-`data:` `<img>`,
 `<iframe>`/`<object>`/`<embed>`, CSS `url(http`/`url(//`/`@import`, `fetch(`,
@@ -54,7 +62,7 @@ fixed allowlist (d3's banner comment and the five w3.org XML namespace URIs).
 | --- | --- | --- |
 | **Graph** | `views/story_view.js` | Full. Canvas renderer with Story / Flow / Force layouts, quadtree hit-testing, minimap, label budget, density layers, search and hover. The Flow layout keys off the preprocessor's `visual_rank` (the runtime-stamped `topological_rank` when present, otherwise a stage-order fallback). |
 | **Schema** | `views/schema_view.js` + `views/inspector.js` | Full. Ontology diagram of node types in canonical pipeline order, labelled relationship curves, edge-type cards, and a side-panel inspector with type → instance drill-down. Fed by the preprocessor's derived type-schema graph, so it works without any caller-supplied schema. A DLT/SQL dataset (`SchemaTable` / `TableType` nodes) is drawn as one card per table in a "Tables" column, with its foreign keys as relationship edges. The **Transformations** overlay is fed by the operations catalog: hand-curated rows plus one generated row per improve stage (`crates/lib/tests/visualization_improve_stages.rs` keeps those in step with the improve registry). |
-| **Memory** | `views/memory_map.js` | Renders. Deterministic column map: documents (with ordered chunk cells) → entity-type groups → summaries → global context, plus the run timeline the preprocessor gap-clusters from each node's `t_created`. Only the *search-retrieval* half of the timeline rail (and the recall overlay) is inert, because `__SEARCH_EVENTS__` is empty (see Deferred). |
+| **Memory** | `views/memory_map.js` | Renders. Deterministic column map: documents (with ordered chunk cells) → entity-type groups → summaries → global context, plus the run timeline the preprocessor gap-clusters from each node's `t_created`. The *search-retrieval* half of the timeline rail (and the recall overlay) shows the `search_events` the caller passes (`cognee_session::collect_session_events`); the plain `render`/`visualize` pass none. |
 | **Semantic** | `views/semantic_map.js` | Empty state only. See Deferred. |
 
 ## The 20 tokens
@@ -90,7 +98,7 @@ tokens live *inside* those chunks and would otherwise never be reached.
 | `__SCHEMA_DATA__` | the caller-supplied opaque passthrough, or the literal `null` |
 | `__SCHEMA_GRAPH_DATA__` | `pre.schema_graph`, falling back to `{"nodes":[],"links":[]}` |
 | `__MEMORY_DATA__` | `pre.memory_map`, falling back to `{}` |
-| `__SEARCH_EVENTS__` | the literal `[]` (deferred) |
+| `__SEARCH_EVENTS__` | the caller's `search_events`, `[]` when none |
 | `__SEMANTIC_POSITIONS__` | the literal `null` (deferred) |
 | `__SEMANTIC_CLUSTERS__` | the literal `null` (deferred) |
 
@@ -142,17 +150,6 @@ files.
   PCG64 would also be required. This is the same state Python reaches whenever
   its own best-effort `_semantic_payload` raises, so it is a legal, upstream
   test-passing configuration.
-- **Session events** — `__SEARCH_EVENTS__` is the literal `[]`. There is no Rust
-  counterpart to Python's `visualization/session_events.py`, so the Semantic
-  recall overlay has nothing to display and the Memory timeline rail shows only
-  its run events (`memory_map.js:464-471` concatenates the two sources). The run
-  events themselves are *not* deferred: they are gap-clustered from each node's
-  `t_created`, which the graph adapters surface as the `DataPoint`'s epoch-ms
-  `created_at` (`crates/graph/tests/common/mod.rs::
-  test_get_graph_data_surfaces_created_at` pins that contract).
-- **Subgraph bounding** — Python's `subgraph_data.py` (bounded per-dataset
-  subgraph extraction) is not ported; Rust always renders the whole graph
-  returned by `get_graph_data()`.
 
 ## Usage
 
@@ -173,6 +170,77 @@ async fn example(graph_db: &dyn GraphDBTrait) -> Result<(), Box<dyn std::error::
 }
 ```
 
+## Bounded subgraph (`subgraph`)
+
+Port of `subgraph_data.py`. `VisualizationBounds` holds Python's knobs:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `full` | `false` | read the whole graph (`get_graph_data()`), ignore the rest |
+| `query` | `None` | seed from the query's nearest vector hits (needs a `SeedSearcher`) |
+| `seed_node_ids` | `[]` | explicit seeds |
+| `recall_node_ids` | `[]` | seeds from a recall result's provenance (`resolve_seeds_from_recall(&json)`) |
+| `depth` | 2 | k-hop expansion |
+| `seed_top_k` | 10 | max seeds |
+| `max_nodes` | 500 | node cap |
+
+`VisualizationBounds::default()` is Python's bounded default;
+`VisualizationBounds::full_graph()` the whole graph. `validate()` makes the
+`>= 1` checks of Python's fetch; `validate_request(cap)` the routes' ranges
+(depth `1..=10`, seed_top_k `1..=100`, max_nodes `1..=cap` with
+`JSON_MAX_NODES = 5000` / `STREAM_MAX_NODES = 20000`).
+
+Seeds resolve by priority **explicit > recall > query > top degree**, labelled
+`explicit` / `recall` / `query` / `degree` / `none` (`SeedSource`). Query
+seeding goes through the `SeedSearcher` trait — the caller searches the four
+node collections (`SEED_VECTOR_COLLECTIONS`: `Entity_name`, `TextSummary_text`,
+`EntityType_name`, `DocumentChunk_text`) and returns ids nearest first
+(`rank_seed_hits` ranks raw `(id, distance)` hits as Python does), so this crate
+needs no vector engine. Without a searcher a query falls through to degree.
+
+`fetch_visualization_graph_data(graph_db, &bounds, seed_searcher)` returns
+`VisualizationGraph { nodes, edges, meta }`: a full read is `get_graph_data()`
+unchanged (`meta: None`); otherwise the seeds' neighbourhood from
+`GraphDBTrait::get_bounded_neighborhood`, with each `Entity` typed from the store
+(`resolve_entity_types` → `_semantic_type`, SDK-794) and `meta` =
+`{seeds, seed_source, depth, max_nodes}`. `truncate_subgraph` (seeds, then
+nearest by hop) is also exposed.
+
+## JSON payloads (`payload`)
+
+- `build_visualization_payload(nodes, edges, schema_data, search_events)` — every
+  `PreprocessedGraph` field then `search_events`, keyed and ordered exactly as
+  Python (`VISUALIZATION_PAYLOAD_KEYS`). No semantic positions/clusters.
+- `build_brain_summary_payload(dataset_name, nodes, edges)` —
+  `{name, nodes, links, node_set_colors}`.
+- `build_node_set_colors(values)` — the node-set color rule, for callers that
+  read node sets from elsewhere (brains summary).
+
+## Streamed read (`stream`, `preprocessor::compact`)
+
+`prepare_graph_stream(graph_db, &bounds, seed_searcher, chunk_size)` does
+everything before the first event — seeds, a bounded read projected to
+`COMPACT_PROPERTY_KEYS`, entity typing — and fails there (so the route keeps
+its status code; `full` is refused). It returns `GraphStreamEvents`, an
+iterator of `GraphStreamEvent { event, data }` in Python's order:
+
+1. `meta` `{seeds, seed_source, depth, max_nodes, chunk_size}`
+2. `chunk` `{index, nodes, links}` per `chunk_size` nodes (compact shape, every
+   link after both its endpoints)
+3. `summary` `{nodes: {id: {importance, label_priority[, entity_type]}}}`, at
+   most `chunk_size` entries each, at least one event; the first also carries
+   `color_maps: {node_set}`
+4. `done` `{nodes, links, chunks}`
+
+`GraphStreamEvents::new(meta, neighborhood)` builds the same sequence from data
+in hand. `error_event(message, status)` and the transport constants
+(`STREAM_CHUNK_SIZE`, `STREAM_KEEPALIVE_SECONDS`, `MAX_STREAMS_IN_FLIGHT`,
+`STREAM_LIFETIME_SECONDS`, the 409/408 messages) match Python;
+`tests/graph_stream_test.rs` replays cognee-frontend's `readGraphStream.ts`
+checks (totals equal what was received, every node summarised) on every
+stream. The summary equals what `preprocess` gives the same graph in one piece
+(`tests/compact_payload_test.rs`).
+
 ## API
 
 - `visualize(graph_db, output_path) -> PathBuf` — render and write the HTML file.
@@ -180,6 +248,13 @@ async fn example(graph_db: &dyn GraphDBTrait) -> Result<(), Box<dyn std::error::
   (`%USERPROFILE%` on Windows). Returns the path written.
 - `render(graph_db) -> String` — render the HTML string without writing it
   (useful for streaming over HTTP or embedding in a larger page).
+- `render_graph_data(nodes, edges)` — the same over graph data in hand.
+- `render_bounded(graph_db, &bounds, seed_searcher, search_events)`,
+  `visualize_bounded(graph_db, output_path, &bounds, seed_searcher,
+  search_events)`, `render_graph_data_with_events(nodes, edges, schema_data,
+  search_events)` — the variants with Python `visualize_graph`'s bounds and
+  session events. `render`, `render_graph_data` and `visualize` are wrappers
+  that read the whole graph and pass no events (unchanged behaviour).
 - `render_multi_user(pairs) -> String` — aggregate multiple
   `(user_label, Arc<dyn GraphDBTrait>)` pairs into one HTML document. Nodes are
   deduplicated by stringified id (first-write-wins) and tagged with a

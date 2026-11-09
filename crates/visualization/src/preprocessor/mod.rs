@@ -11,9 +11,12 @@
 //!     / `_visual_rank` / `_edge_class` / `_bundle_key` / `_compact_provenance`
 //!     / `_link_relation` helpers (`preprocessor.py:848-892`, `1219-1399`);
 //!   * [`naming`] — `derive_node_name` and friends;
+//!   * [`compact`] — the streamed read's compact chunk payload and its
+//!     summary accumulator (SDK-787);
 //!   * [`memory_map`] — the Memory-tab payload (`preprocessor.py:913-1175`);
 //!   * [`schema_graph`] / [`operations_catalog`] — the Schema view layers.
 
+pub mod compact;
 pub mod memory_map;
 pub mod naming;
 pub mod operations_catalog;
@@ -26,6 +29,10 @@ use serde_json::{Map, Value};
 
 pub use crate::colors::build_node_set_colors;
 use crate::colors::{provenance_colors, type_color};
+pub use compact::{
+    COMPACT_PROPERTY_KEYS, CompactGraphAccumulator, compact_chunk, compact_link, compact_node,
+    compact_property_keys,
+};
 
 // ── Constants (verbatim from preprocessor.py) ────────────────────────────────
 

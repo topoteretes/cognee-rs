@@ -42,9 +42,9 @@
 //! Python does it this way (`cognee_network_visualization.py:156-167`) and why
 //! `tests/html_test.rs` scans the whole output for surviving tokens.
 //!
-//! # Deferred payloads (three tokens are structurally `null`/`[]`)
+//! # Deferred payloads (two tokens are structurally `null`)
 //!
-//! Three payloads are deliberately out of scope for this crate today. All three
+//! Two payloads are deliberately out of scope for this crate today. Both
 //! are substituted with valid JSON so no token leaks, and the vendored JS
 //! renders a friendly empty state for each — the same state Python reaches
 //! whenever its own best-effort computation fails (Python wraps
@@ -60,11 +60,12 @@
 //! * `__SEMANTIC_CLUSTERS__` → `null`. Needs the same embeddings plus k-means
 //!   seeded by NumPy's PCG64 to match Python's cluster ids; neither the
 //!   clustering nor a PCG64 generator exists in the workspace.
-//! * `__SEARCH_EVENTS__` → `[]`. Needs the session/operation event log
-//!   (Python's `visualization/session_events.py`) that drives the Memory tab's
-//!   timeline rail and the Semantic tab's recall overlay.
 //!
-//! With the first two `null`, `views/semantic_map.js` shows its empty state and
+//! `__SEARCH_EVENTS__` carries the caller's session events (Python's
+//! `search_events`; `cognee_session::collect_session_events` builds them) and
+//! is `[]` when none are given.
+//!
+//! With both `null`, `views/semantic_map.js` shows its empty state and
 //! the Semantic tab is inert; the Graph, Schema and Memory tabs are fully
 //! functional.
 //!
@@ -288,8 +289,11 @@ fn substitute_once(source: &str, replacements: &[(&str, Cow<'_, str>)]) -> Strin
 /// the twelve data payloads — mirroring
 /// `cognee_network_visualization.py:136-168` step for step. See the module docs
 /// for why the phase order matters, why each phase is a single pass, and which
-/// three payloads are deferred.
-pub(crate) fn build_html(pre: &PreprocessedGraph) -> Result<String, VisualizationError> {
+/// two payloads are deferred. `search_events` fills `__SEARCH_EVENTS__`.
+pub(crate) fn build_html(
+    pre: &PreprocessedGraph,
+    search_events: &[serde_json::Value],
+) -> Result<String, VisualizationError> {
     // 0) Offline transform: inline d3, drop the webfont links. Fails loudly
     //    when a resync changed the tags it rewrites.
     let template = offline_template(HTML_TEMPLATE)?;
@@ -373,8 +377,11 @@ pub(crate) fn build_html(pre: &PreprocessedGraph) -> Result<String, Visualizatio
             ("__SCHEMA_DATA__", Cow::Owned(schema_data)),
             ("__SCHEMA_GRAPH_DATA__", Cow::Owned(schema_graph)),
             ("__MEMORY_DATA__", Cow::Owned(memory_data)),
-            // Deferred: no session-event source in Rust yet (see module docs).
-            ("__SEARCH_EVENTS__", Cow::Borrowed("[]")),
+            // Memory-tab timeline events (Python `_safe_json_embed(search_events or [])`).
+            (
+                "__SEARCH_EVENTS__",
+                Cow::Owned(safe_json_embed(&search_events)?),
+            ),
             // Deferred: no readable stored embeddings, hence no projection or
             // clustering. `null` is the same state Python reaches when its
             // best-effort `_semantic_payload` raises; `semantic_map.js` renders
