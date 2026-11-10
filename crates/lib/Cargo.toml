@@ -231,6 +231,8 @@ cognee-vector = { path = "../vector", features = ["testing"] }
 cognee-session = { path = "../session", features = ["fs"] }
 cognee-database = { path = "../database", features = ["sqlite"] }
 mockito = "1"
+# Decodes built Postgres URLs in config tests exactly as sqlx does.
+percent-encoding = "2"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serial_test = { workspace = true }

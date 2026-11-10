@@ -61,12 +61,23 @@ fn build_postgres_url(
     parsed
         .set_port(Some(port))
         .map_err(|_| format!("invalid port {port}"))?;
-    parsed.set_path(&format!("/{name}"));
+    // A single path segment: `/` and `%` in the name are encoded too, so the
+    // name round-trips through the driver's percent-decoding unchanged.
     parsed
-        .set_username(user)
+        .path_segments_mut()
+        .map_err(|()| "static URL cannot carry a path".to_string())?
+        .clear()
+        .push(name);
+    // `url`'s userinfo encode set leaves `%` alone (it assumes the input may
+    // already be percent-encoded), but sqlx percent-decodes the userinfo — so
+    // a literal `%41` would reach the server as `A`. Credentials here are raw
+    // values, so escape `%` first; `url` then encodes the rest.
+    let user_escaped = user.replace('%', "%25");
+    parsed
+        .set_username(&user_escaped)
         .map_err(|_| format!("invalid username '{user}'"))?;
     parsed
-        .set_password(Some(pass))
+        .set_password(Some(&pass.replace('%', "%25")))
         .map_err(|_| "invalid password".to_string())?;
     Ok(parsed.to_string())
 }
@@ -4814,53 +4825,77 @@ mod tests {
                 .query_pairs()
                 .any(|(k, v)| k == "sslmode" && v == "require")
         );
-        let decoded_path = url::form_urlencoded::parse(parsed.path().as_bytes())
-            .next()
-            .map(|(k, _)| k.into_owned());
-        assert_eq!(decoded_path.as_deref(), Some("/db#x?y/z"));
+        // Decoded the way sqlx does: strip the leading `/`, percent-decode.
+        assert_eq!(
+            pct_decode(parsed.path().trim_start_matches('/')),
+            "db#x?y/z"
+        );
+        assert_eq!(parsed.path_segments().map(Iterator::count), Some(1));
+    }
+
+    /// Percent-decode a URL component the way sqlx's Postgres URL parser does
+    /// (`+` stays `+`, unlike form decoding).
+    fn pct_decode(raw: &str) -> String {
+        percent_encoding::percent_decode_str(raw)
+            .decode_utf8()
+            .expect("test inputs are UTF-8")
+            .into_owned()
     }
 
     #[test]
-    fn relational_postgres_url_percent_encodes_password() {
-        // Reserved characters in the password must round-trip through the
-        // built URL instead of reshaping it: a raw `@` or `#` would otherwise
-        // split authority or start a fragment.
-        let password = "p@:/#?%w";
-        let s = Settings {
-            sections: [
-                (
-                    "relational.provider".to_string(),
-                    serde_json::json!("postgres".to_string()),
-                ),
-                (
-                    "relational.host".to_string(),
-                    serde_json::json!("db.internal".to_string()),
-                ),
-                ("relational.port".to_string(), serde_json::json!(5432)),
-                (
-                    "relational.name".to_string(),
-                    serde_json::json!("cognee".to_string()),
-                ),
-                (
-                    "relational.username".to_string(),
-                    serde_json::json!("postgres".to_string()),
-                ),
-                (
-                    "relational.password".to_string(),
-                    serde_json::json!(password.to_string()),
-                ),
-            ]
-            .into(),
-            ..Settings::default()
-        };
-        let parsed =
-            url::Url::parse(&s.resolved_relational_db_url()).expect("built URL must parse");
-        let decoded = parsed.password().and_then(|raw| {
-            url::form_urlencoded::parse(raw.as_bytes())
-                .next()
-                .map(|(k, _)| k.into_owned())
-        });
-        assert_eq!(decoded.as_deref(), Some(password));
+    fn relational_postgres_url_percent_encodes_credentials_and_name() {
+        // Reserved characters must round-trip through the built URL instead of
+        // reshaping it: a raw `@` or `#` would otherwise split the authority or
+        // start a fragment. A literal `%41` must stay `%41` — `url` leaves `%`
+        // unencoded in userinfo, and the driver percent-decodes it, so without
+        // escaping it would reach the server as `A`. `+` must stay `+`.
+        for (user, password, name) in [
+            ("postgres", "p@:/#?%w", "cognee"),
+            ("us%41er", "ab%41cd", "db%41"),
+            ("u+v", "a+b c", "db/with/slashes"),
+        ] {
+            let s = Settings {
+                sections: [
+                    (
+                        "relational.provider".to_string(),
+                        serde_json::json!("postgres".to_string()),
+                    ),
+                    (
+                        "relational.host".to_string(),
+                        serde_json::json!("db.internal".to_string()),
+                    ),
+                    ("relational.port".to_string(), serde_json::json!(5432)),
+                    (
+                        "relational.name".to_string(),
+                        serde_json::json!(name.to_string()),
+                    ),
+                    (
+                        "relational.username".to_string(),
+                        serde_json::json!(user.to_string()),
+                    ),
+                    (
+                        "relational.password".to_string(),
+                        serde_json::json!(password.to_string()),
+                    ),
+                ]
+                .into(),
+                ..Settings::default()
+            };
+            let built = s.resolved_relational_db_url();
+            let parsed = url::Url::parse(&built).expect("built URL must parse");
+            assert_eq!(parsed.host_str(), Some("db.internal"), "{built}");
+            assert_eq!(pct_decode(parsed.username()), user, "{built}");
+            assert_eq!(
+                parsed.password().map(pct_decode).as_deref(),
+                Some(password),
+                "{built}"
+            );
+            assert_eq!(
+                pct_decode(parsed.path().trim_start_matches('/')),
+                name,
+                "{built}"
+            );
+        }
     }
 
     #[test]
