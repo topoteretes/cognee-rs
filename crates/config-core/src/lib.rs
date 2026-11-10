@@ -147,6 +147,12 @@ impl EnvSource for MapEnv {
 
 /// Name of the environment variable that opts a process out of `.env`
 /// auto-loading: `COGNEE_DISABLE_DOTENV`.
+///
+/// Deliberately *not* a `Settings` field or a key-registry entry
+/// (`crates/lib/src/config/keys.rs`): it decides whether `.env` is merged into
+/// the process environment *before* `Settings` is read from it, so it cannot
+/// be one of the values that read produces, nor be set through
+/// `ConfigManager`. It is only ever read from the real process environment.
 pub const DISABLE_DOTENV_ENV: &str = "COGNEE_DISABLE_DOTENV";
 
 /// Whether `env` opts out of `.env` auto-loading.
@@ -186,14 +192,38 @@ pub fn load_dotenv() {
 /// skipped.
 #[cfg(feature = "dotenv")]
 pub fn load_dotenv_unless_disabled(env: &dyn EnvSource) {
+    run_unless_dotenv_disabled(env, load_dotenv);
+}
+
+/// Run `load` unless `env` opts out via [`DISABLE_DOTENV_ENV`]: the gate of
+/// [`load_dotenv_unless_disabled`], split out so tests can observe it
+/// without touching the process environment.
+#[cfg_attr(not(feature = "dotenv"), allow(dead_code))]
+fn run_unless_dotenv_disabled(env: &dyn EnvSource, load: impl FnOnce()) {
     if !dotenv_disabled(env) {
-        load_dotenv();
+        load();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DISABLE_DOTENV_ENV, EnvSource, MapEnv, dotenv_disabled};
+    use super::{
+        DISABLE_DOTENV_ENV, EnvSource, MapEnv, dotenv_disabled, run_unless_dotenv_disabled,
+    };
+
+    #[test]
+    fn dotenv_load_is_skipped_only_when_disabled() {
+        let loads = |env: &MapEnv| {
+            let mut loaded = false;
+            run_unless_dotenv_disabled(env, || loaded = true);
+            loaded
+        };
+        assert!(loads(&MapEnv::new()), "unset must load");
+        assert!(loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "0")));
+        assert!(loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "false")));
+        assert!(!loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "1")));
+        assert!(!loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, " On ")));
+    }
 
     #[test]
     fn dotenv_disabled_only_on_truthy_values() {
