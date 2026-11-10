@@ -118,24 +118,33 @@ impl Drop for StoreClaim {
     }
 }
 
-/// The registry key of a store root: its canonical path, or — for a root that
-/// does not exist yet — its canonical parent joined with its name, so the key
-/// does not change when the first open creates it.
+/// The registry key of a store root: the canonical form of its nearest
+/// existing ancestor, joined with the components that do not exist yet.
+///
+/// Resolving the ancestor matters when the root is created after the claim:
+/// a path under a symlinked directory (Android's `/data/user/0` ->
+/// `/data/data`, macOS `/var` -> `/private/var`) must get the same key before
+/// and after it exists, or a second claim through the resolved path is let in.
 fn store_key(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
-        let parent = if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        };
-        if let Ok(parent) = parent.canonicalize() {
-            return parent.join(name);
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut missing = Vec::new();
+    let mut cursor = absolute.as_path();
+    loop {
+        if let Ok(canonical) = cursor.canonicalize() {
+            return missing
+                .iter()
+                .rev()
+                .fold(canonical, |key, name| key.join(name));
+        }
+        match (cursor.parent(), cursor.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_os_string());
+                cursor = parent;
+            }
+            // Nothing on the path exists (or it ends in `..`): key it as given.
+            _ => return absolute,
         }
     }
-    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -169,6 +178,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _a = StoreClaim::acquire(&dir.path().join("a"), "test").unwrap();
         let _b = StoreClaim::acquire(&dir.path().join("b"), "test").unwrap();
+    }
+
+    /// A root whose missing part sits under a symlinked ancestor (Android's
+    /// `/data/user/0` -> `/data/data` on a fresh install, macOS `/var`): the
+    /// key must resolve the symlink before the store exists, or a later claim
+    /// through the resolved path gets a different key and is let in.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_root_under_a_symlinked_ancestor_keys_like_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let _first = StoreClaim::acquire(&link.join("files").join("graph"), "test").unwrap();
+        std::fs::create_dir_all(real.join("files")).unwrap();
+        std::fs::write(real.join("files").join("graph"), b"").unwrap();
+        assert!(
+            StoreClaim::acquire(&real.join("files").join("graph"), "test").is_err(),
+            "the same store through its resolved path must be refused"
+        );
     }
 
     #[test]

@@ -774,12 +774,21 @@ fn db_error(error: cognee_database::DatabaseError) -> ComponentError {
     ComponentError::Database(error.to_string())
 }
 
+/// A per-dataset binding failure as a graph error. A refused second open of
+/// the dataset's store keeps its type (and so its `STORE_IN_USE` code).
 fn graph_error(error: ComponentError) -> GraphDBError {
-    GraphDBError::ConnectionError(format!("per-dataset storage: {error}"))
+    match error {
+        ComponentError::StoreInUse(in_use) => GraphDBError::StoreInUse(in_use),
+        other => GraphDBError::ConnectionError(format!("per-dataset storage: {other}")),
+    }
 }
 
+/// The vector twin of [`graph_error`].
 fn vector_error(error: ComponentError) -> VectorDBError {
-    VectorDBError::StorageError(format!("per-dataset storage: {error}"))
+    match error {
+        ComponentError::StoreInUse(in_use) => VectorDBError::StoreInUse(in_use),
+        other => VectorDBError::StorageError(format!("per-dataset storage: {other}")),
+    }
 }
 
 #[async_trait]
@@ -962,6 +971,26 @@ mod tests {
         let other = super::tests::storage(&fx);
         other.graph_for(id).await.unwrap();
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_second_open_keeps_its_type_through_the_routing_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let _held = cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap();
+        let in_use = || {
+            ComponentError::StoreInUse(
+                cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap_err(),
+            )
+        };
+        assert!(matches!(graph_error(in_use()), GraphDBError::StoreInUse(_)));
+        assert!(matches!(
+            vector_error(in_use()),
+            VectorDBError::StoreInUse(_)
+        ));
+        assert!(matches!(
+            graph_error(ComponentError::Config("x".into())),
+            GraphDBError::ConnectionError(_)
+        ));
     }
 
     #[tokio::test]

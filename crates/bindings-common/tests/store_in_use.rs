@@ -115,3 +115,34 @@ async fn a_config_change_after_warm_rebuilds_onto_the_same_store() {
     drop(after);
     state.close().await;
 }
+
+/// A config change while an operation still holds the services (a background
+/// improve can hold them for a minute) rebuilds the bundle without failing
+/// STORE_IN_USE: the unchanged store is kept and shared with the operation.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_config_change_while_an_operation_holds_the_store_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = handle_under(dir.path());
+    let in_flight = state.services().await.expect("first warm");
+
+    state
+        .cm
+        .config()
+        .set("monitoring_tool", serde_json::json!("none"))
+        .expect("a known key");
+    let after = state
+        .services()
+        .await
+        .expect("no STORE_IN_USE while the operation holds the store");
+    assert!(
+        std::sync::Arc::ptr_eq(&in_flight.graph_db, &after.graph_db),
+        "the unchanged store is kept"
+    );
+    in_flight
+        .graph_db
+        .is_empty()
+        .await
+        .expect("the operation's store was not closed");
+    drop((in_flight, after));
+    state.close().await;
+}

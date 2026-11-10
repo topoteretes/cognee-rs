@@ -6,13 +6,13 @@
 //! to plug in external adapter factories;
 //! [`ComponentManager::new`] uses [`ComponentRegistry::with_builtins`].
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use async_trait::async_trait;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::instrument;
 
-use cognee_components::{ComponentRegistry, DatasetStorage};
+use cognee_components::{BackendBuildContext, ComponentRegistry, DatasetStorage};
 use cognee_database::RelationalDb;
 use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
@@ -55,6 +55,81 @@ impl CloseSharedStores {
     }
 }
 
+/// A cached graph or vector engine together with what it was built from.
+///
+/// A configuration version bump does not by itself rebuild a store: only a
+/// change of the store's own inputs ([`ComponentRegistry::graph_store_fingerprint`]
+/// / [`ComponentRegistry::vector_store_fingerprint`], or a different
+/// per-dataset storage) does. Rebuilding an embedded store on every unrelated
+/// setter call would close it under the operations using it, and a second
+/// instance next to it is refused (`StoreInUse`).
+struct StoreSlot<T: ?Sized> {
+    ver: u64,
+    fingerprint: String,
+    /// The context it was built from, to rebuild it if a replacement fails;
+    /// `None` for a per-dataset routing engine, which is rebuilt from its storage.
+    ctx: Option<BackendBuildContext>,
+    engine: Arc<T>,
+}
+
+/// A graph or vector engine, for the teardown paths both kinds share.
+enum StoreEngine {
+    Graph(Arc<dyn GraphDBTrait>),
+    Vector(Arc<dyn VectorDB>),
+}
+
+impl StoreEngine {
+    fn what(&self) -> &'static str {
+        match self {
+            StoreEngine::Graph(_) => "graph database",
+            StoreEngine::Vector(_) => "vector database",
+        }
+    }
+
+    fn strong_count(&self) -> usize {
+        match self {
+            StoreEngine::Graph(engine) => Arc::strong_count(engine),
+            StoreEngine::Vector(engine) => Arc::strong_count(engine),
+        }
+    }
+
+    fn downgrade(&self) -> RetiredStore {
+        match self {
+            StoreEngine::Graph(engine) => RetiredStore::Graph(Arc::downgrade(engine)),
+            StoreEngine::Vector(engine) => RetiredStore::Vector(Arc::downgrade(engine)),
+        }
+    }
+
+    async fn close(&self) -> Result<(), String> {
+        match self {
+            StoreEngine::Graph(engine) => engine.close().await.map_err(|e| e.to_string()),
+            StoreEngine::Vector(engine) => engine.close().await.map_err(|e| e.to_string()),
+        }
+    }
+}
+
+/// A [`StoreEngine`] the manager no longer serves, held weakly.
+enum RetiredStore {
+    Graph(Weak<dyn GraphDBTrait>),
+    Vector(Weak<dyn VectorDB>),
+}
+
+impl RetiredStore {
+    fn upgrade(&self) -> Option<StoreEngine> {
+        match self {
+            RetiredStore::Graph(engine) => engine.upgrade().map(StoreEngine::Graph),
+            RetiredStore::Vector(engine) => engine.upgrade().map(StoreEngine::Vector),
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        match self {
+            RetiredStore::Graph(engine) => engine.strong_count() > 0,
+            RetiredStore::Vector(engine) => engine.strong_count() > 0,
+        }
+    }
+}
+
 /// Manages shared, lazily-initialized pipeline components.
 ///
 /// Each component is created on first access and cached for subsequent calls.
@@ -71,8 +146,14 @@ pub struct ComponentManager {
     // component is lazily re-created on next access.
     storage: TokioRwLock<Option<(u64, Arc<dyn StorageTrait>)>>,
     database: TokioRwLock<Option<(u64, Arc<dyn RelationalDb>)>>,
-    graph_db: TokioRwLock<Option<(u64, Arc<dyn GraphDBTrait>)>>,
-    vector_db: TokioRwLock<Option<(u64, Arc<dyn VectorDB>)>>,
+    // The embedded stores are keyed on what they are built from as well as on
+    // the version: see [`StoreSlot`].
+    graph_db: TokioRwLock<Option<StoreSlot<dyn GraphDBTrait>>>,
+    vector_db: TokioRwLock<Option<StoreSlot<dyn VectorDB>>>,
+    // Stores replaced (or torn down) while an operation still held them: not
+    // kept alive, but still reachable, so `close()` checkpoints them and
+    // `has_cached_components` reports them. See [`ComponentManager::retire`].
+    retired: Mutex<Vec<RetiredStore>>,
     embedding_engine: TokioRwLock<Option<(u64, Arc<dyn EmbeddingEngine>)>>,
     llm: TokioRwLock<Option<(u64, Arc<dyn Llm>)>>,
     // Stores Option<Arc<dyn Transcriber>>: None when the provider does not
@@ -127,6 +208,7 @@ impl ComponentManager {
             database: TokioRwLock::new(None),
             graph_db: TokioRwLock::new(None),
             vector_db: TokioRwLock::new(None),
+            retired: Mutex::new(Vec::new()),
             embedding_engine: TokioRwLock::new(None),
             llm: TokioRwLock::new(None),
             transcriber: TokioRwLock::new(None),
@@ -230,28 +312,6 @@ impl ComponentManager {
     async fn init_database(&self) -> Result<Arc<dyn RelationalDb>, ComponentError> {
         let ctx = self.build_context().await?;
         self.registry.build_database(&ctx).await
-    }
-
-    /// The shared graph store, or — with `enable_access_control` — the engine
-    /// that routes every call to the current dataset's own graph.
-    #[instrument(name = "cognee.component.graph_db", level = "info", skip_all, err)]
-    async fn init_graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        if let Some(storage) = self.dataset_storage().await? {
-            return Ok(storage.graph_db());
-        }
-        let ctx = self.build_context().await?;
-        self.registry.build_graph(&ctx).await
-    }
-
-    /// The shared vector store, or the per-dataset routing engine; see
-    /// [`Self::init_graph_db`].
-    #[instrument(name = "cognee.component.vector_db", level = "info", skip_all, err)]
-    async fn init_vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        if let Some(storage) = self.dataset_storage().await? {
-            return Ok(storage.vector_db());
-        }
-        let ctx = self.build_context().await?;
-        self.registry.build_vector(&ctx).await
     }
 
     /// Per-dataset storage when `enable_access_control`
@@ -682,6 +742,12 @@ impl ComponentManager {
         occupied(&self.database)
             || occupied(&self.graph_db)
             || occupied(&self.vector_db)
+            || self
+                .retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .any(RetiredStore::is_alive)
             || occupied(&self.embedding_engine)
             || occupied(&self.llm)
             || occupied(&self.transcriber)
@@ -768,23 +834,14 @@ impl ComponentManager {
         // outlive the config version it was built for; clear it with the rest.
         let _ = self.context.write().await.take();
 
-        if let Some((_, graph)) = graph {
-            if shared.may_close(&graph)
-                && let Err(e) = graph.close().await
-            {
-                tracing::warn!(error = %e, "failed to close the graph database");
-            }
-            Self::drop_off_runtime(graph, "graph database").await;
+        if let Some(slot) = graph {
+            self.retire(StoreEngine::Graph(slot.engine), shared).await;
         }
-
-        if let Some((_, vector)) = vector {
-            if shared.may_close(&vector)
-                && let Err(e) = vector.close().await
-            {
-                tracing::warn!(error = %e, "failed to close the vector database");
-            }
-            Self::drop_off_runtime(vector, "vector database").await;
+        if let Some(slot) = vector {
+            self.retire(StoreEngine::Vector(slot.engine), shared).await;
         }
+        // Stores replaced earlier while an operation held them.
+        self.sweep_retired(shared).await;
 
         if let Some((_, embedding)) = embedding {
             Self::drop_off_runtime(embedding, "embedding engine").await;
@@ -797,6 +854,65 @@ impl ComponentManager {
         }
         if let Some((_, storage)) = storage {
             Self::drop_off_runtime(storage, "storage").await;
+        }
+    }
+
+    /// Let go of a store engine the manager no longer serves.
+    ///
+    /// It is closed (checkpointed, its files released) and dropped off the
+    /// runtime when `shared` allows — always for the explicit teardown, and
+    /// otherwise only when this is the last reference, so an operation still
+    /// using it never has it closed underneath it. One still held is
+    /// remembered weakly in `retired`: its holder's last drop releases it, and
+    /// an explicit [`close`](Self::close) in the meantime closes it, so it is
+    /// never orphaned out of the manager's reach.
+    async fn retire(&self, engine: StoreEngine, shared: CloseSharedStores) {
+        let what = engine.what();
+        let close = match shared {
+            CloseSharedStores::Yes => true,
+            CloseSharedStores::No => engine.strong_count() == 1,
+        };
+        if close {
+            if let Err(error) = engine.close().await {
+                tracing::warn!(%error, component = what, "failed to close the store");
+            }
+            Self::drop_off_runtime(Arc::new(engine), what).await;
+        } else {
+            self.retired
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(engine.downgrade());
+        }
+    }
+
+    /// Close the retired stores `shared` allows (see [`Self::retire`]) and
+    /// forget the ones already gone.
+    async fn sweep_retired(&self, shared: CloseSharedStores) {
+        let retired =
+            std::mem::take(&mut *self.retired.lock().unwrap_or_else(PoisonError::into_inner));
+        for store in retired {
+            let Some(engine) = store.upgrade() else {
+                continue;
+            };
+            // Our upgrade is one reference; the holder that kept it is another.
+            let close = match shared {
+                CloseSharedStores::Yes => true,
+                CloseSharedStores::No => engine.strong_count() == 1,
+            };
+            if close {
+                let what = engine.what();
+                if let Err(error) = engine.close().await {
+                    tracing::warn!(%error, component = what, "failed to close a retired store");
+                }
+                Self::drop_off_runtime(Arc::new(engine), what).await;
+            } else {
+                let weak = engine.downgrade();
+                drop(engine);
+                self.retired
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(weak);
+            }
         }
     }
 
@@ -849,47 +965,129 @@ macro_rules! versioned_accessor {
     }};
 }
 
-/// [`versioned_accessor`] for a slot holding an embedded **store** (graph,
-/// vector): the stale engine is retired *before* its replacement is built.
+/// The accessor of an embedded-store slot (graph, vector); see [`StoreSlot`].
 ///
-/// An embedded store may be open only once per process — a second instance on
-/// the same file is refused with `StoreInUse` (lbug would otherwise grant it
-/// and the two would destroy each other's writes). Building the replacement
-/// first, as the plain accessor does, therefore failed on every config change,
-/// even one unrelated to the store (it bumps the version all the same). So the
-/// stale engine is taken out first and, when the cache holds its last
-/// reference, closed and dropped (off the runtime), which frees its file; one
-/// still held by an in-flight operation is left to that operation (the same
-/// rule as [`ComponentManager::release`]), and the rebuild reports
-/// `StoreInUse` until it lets go.
-macro_rules! versioned_store_accessor {
-    ($self:ident, $field:ident, $init_fn:ident, $what:literal) => {{
+/// - Same version: the cached engine.
+/// - New version, same store inputs (the fingerprint, or the same per-dataset
+///   storage): the cached engine, re-stamped. An unrelated setter call never
+///   touches a store an operation is using.
+/// - The store's own inputs changed: the replacement is built while the old
+///   engine stays in the slot; the old one is then retired *after* the slot
+///   lock is released ([`ComponentManager::retire`]). A failed build leaves the
+///   old engine in the slot (at its old version, so the next access retries).
+/// - The replacement is the very store the old engine holds open (refused with
+///   `StoreInUse`): if an operation still holds the old engine, it keeps being
+///   served and the change is applied on a later access; otherwise it is closed
+///   first — under the lock, so nothing reopens it in between — and if the
+///   replacement still fails, the old store is reopened from its own context.
+///   The slot is never left empty by a rebuild.
+macro_rules! store_accessor {
+    ($self:ident, $field:ident, $variant:ident, $routed:ident, $build:ident, $fingerprint:ident) => {{
         let current_ver = $self.config.version();
         {
             let guard = $self.$field.read().await;
-            if let Some((ver, ref component)) = *guard {
-                if ver == current_ver {
-                    return Ok(Arc::clone(component));
+            if let Some(slot) = &*guard
+                && slot.ver == current_ver
+            {
+                return Ok(Arc::clone(&slot.engine));
+            }
+        }
+        // Inputs first, without this slot's lock: they take other slots' locks.
+        let storage = $self.dataset_storage().await?;
+        let ctx = $self.build_context().await?;
+        let fingerprint = match &storage {
+            Some(storage) => format!("dataset-storage:{:p}", Arc::as_ptr(storage)),
+            None => $self.registry.$fingerprint(&ctx),
+        };
+        let mut guard = $self.$field.write().await;
+        if let Some(slot) = guard.as_mut() {
+            if slot.ver == current_ver {
+                return Ok(Arc::clone(&slot.engine));
+            }
+            if slot.fingerprint == fingerprint {
+                slot.ver = current_ver;
+                return Ok(Arc::clone(&slot.engine));
+            }
+        }
+        let own_ctx = storage.is_none().then(|| ctx.clone());
+        let built = match &storage {
+            Some(storage) => Ok(storage.$routed()),
+            None => $self.registry.$build(&ctx).await,
+        };
+        match built {
+            Ok(new) => {
+                let old = guard.replace(StoreSlot {
+                    ver: current_ver,
+                    fingerprint,
+                    ctx: own_ctx,
+                    engine: Arc::clone(&new),
+                });
+                drop(guard);
+                if let Some(old) = old {
+                    $self
+                        .retire(StoreEngine::$variant(old.engine), CloseSharedStores::No)
+                        .await;
+                }
+                Ok(new)
+            }
+            Err(ComponentError::StoreInUse(in_use)) => {
+                let Some(old) = guard.take() else {
+                    return Err(ComponentError::StoreInUse(in_use));
+                };
+                if Arc::strong_count(&old.engine) > 1 {
+                    tracing::warn!(
+                        component = StoreEngine::$variant(Arc::clone(&old.engine)).what(),
+                        "the store's configuration changed, but an operation still uses it; \
+                         serving it unchanged until that operation finishes"
+                    );
+                    let engine = Arc::clone(&old.engine);
+                    *guard = Some(old);
+                    return Ok(engine);
+                }
+                let StoreSlot {
+                    ver: old_ver,
+                    fingerprint: old_fingerprint,
+                    ctx: old_ctx,
+                    engine: old_engine,
+                } = old;
+                $self
+                    .retire(StoreEngine::$variant(old_engine), CloseSharedStores::Yes)
+                    .await;
+                match $self.registry.$build(&ctx).await {
+                    Ok(new) => {
+                        *guard = Some(StoreSlot {
+                            ver: current_ver,
+                            fingerprint,
+                            ctx: own_ctx,
+                            engine: Arc::clone(&new),
+                        });
+                        Ok(new)
+                    }
+                    Err(error) => {
+                        if let Some(old_ctx) = old_ctx {
+                            match $self.registry.$build(&old_ctx).await {
+                                Ok(restored) => {
+                                    *guard = Some(StoreSlot {
+                                        ver: old_ver,
+                                        fingerprint: old_fingerprint,
+                                        ctx: Some(old_ctx),
+                                        engine: restored,
+                                    });
+                                }
+                                Err(restore_error) => tracing::error!(
+                                    error = %restore_error,
+                                    "the store's replacement failed and the previous store \
+                                     could not be reopened"
+                                ),
+                            }
+                        }
+                        Err(error)
+                    }
                 }
             }
+            // The old engine stays in the slot.
+            Err(error) => Err(error),
         }
-        let mut guard = $self.$field.write().await;
-        if let Some((ver, ref component)) = *guard {
-            if ver == current_ver {
-                return Ok(Arc::clone(component));
-            }
-        }
-        if let Some((_, stale)) = guard.take() {
-            if CloseSharedStores::No.may_close(&stale)
-                && let Err(e) = stale.close().await
-            {
-                tracing::warn!(error = %e, component = $what, "failed to close the stale engine before its rebuild");
-            }
-            Self::drop_off_runtime(stale, $what).await;
-        }
-        let new = $self.$init_fn().await?;
-        *guard = Some((current_ver, Arc::clone(&new)));
-        Ok(new)
     }};
 }
 
@@ -903,12 +1101,32 @@ impl PipelineContext for ComponentManager {
         versioned_accessor!(self, database, init_database)
     }
 
+    /// The shared graph store, or — with `enable_access_control` — the engine
+    /// that routes every call to the current dataset's own graph.
+    #[instrument(name = "cognee.component.graph_db", level = "info", skip_all, err)]
     async fn graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        versioned_store_accessor!(self, graph_db, init_graph_db, "graph database")
+        store_accessor!(
+            self,
+            graph_db,
+            Graph,
+            graph_db,
+            build_graph,
+            graph_store_fingerprint
+        )
     }
 
+    /// The shared vector store, or the per-dataset routing engine; see
+    /// [`PipelineContext::graph_db`].
+    #[instrument(name = "cognee.component.vector_db", level = "info", skip_all, err)]
     async fn vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        versioned_store_accessor!(self, vector_db, init_vector_db, "vector database")
+        store_accessor!(
+            self,
+            vector_db,
+            Vector,
+            vector_db,
+            build_vector,
+            vector_store_fingerprint
+        )
     }
 
     async fn embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {
@@ -1861,5 +2079,183 @@ mod tests {
             "gpt-4o-mini",
             "recorder delegates model() to the wrapped adapter"
         );
+    }
+
+    // ---- embedded stores across configuration changes ---------------------
+
+    /// A hermetic manager whose stores live under `root`: Ladybug graph,
+    /// brute-force vectors, SQLite, mock embeddings.
+    #[cfg(feature = "ladybug")]
+    fn store_manager(root: &std::path::Path, access_control: bool) -> ComponentManager {
+        let mut settings = Settings::default();
+        settings.overlay_from(
+            &cognee_config_core::MapEnv::new()
+                .with(
+                    "ENABLE_BACKEND_ACCESS_CONTROL",
+                    if access_control { "true" } else { "false" },
+                )
+                .with("GRAPH_DATABASE_PROVIDER", "ladybug")
+                .with("VECTOR_DB_PROVIDER", "brute-force")
+                .with("EMBEDDING_PROVIDER", "mock")
+                .with("COGNEE_SKIP_PREFLIGHT", "true"),
+        );
+        let cm = ComponentManager::new(ConfigManager::new(settings));
+        cm.config()
+            .set_system_root_directory(&root.to_string_lossy());
+        cm.config()
+            .set(
+                "relational_db_url",
+                serde_json::json!(format!(
+                    "sqlite:{}?mode=rwc",
+                    root.join("cognee.db").display()
+                )),
+            )
+            .unwrap();
+        cm
+    }
+
+    /// An unrelated setter call while an operation holds the graph (an
+    /// Android background improve holds it for 30-90 s) must neither fail
+    /// with STORE_IN_USE nor leave the slot empty: the store is unchanged, so
+    /// the same engine keeps being served.
+    #[cfg(feature = "ladybug")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unrelated_config_change_keeps_a_store_an_operation_holds() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), false);
+        let in_flight = cm.graph_db().await.unwrap();
+        cm.config()
+            .set("monitoring_tool", serde_json::json!("none"))
+            .unwrap();
+        let after = cm.graph_db().await.expect("no STORE_IN_USE");
+        assert!(Arc::ptr_eq(&in_flight, &after), "the same engine is kept");
+        in_flight.is_empty().await.expect("and it was never closed");
+        drop((in_flight, after));
+        cm.close().await;
+    }
+
+    /// A replacement that fails to build (a bad provider) leaves the healthy
+    /// store in place and open; fixing the setting brings it straight back.
+    #[cfg(feature = "ladybug")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_rebuild_keeps_the_old_store() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), false);
+        let before = cm.graph_db().await.unwrap();
+        before
+            .add_node_raw(serde_json::json!({"id": "n1", "name": "N", "type": "T"}))
+            .await
+            .unwrap();
+
+        cm.config()
+            .set(
+                "graph_database_provider",
+                serde_json::json!("no-such-provider"),
+            )
+            .unwrap();
+        assert!(cm.graph_db().await.is_err(), "the bad provider is reported");
+        assert!(
+            before.has_node("n1").await.unwrap(),
+            "the old store was neither closed nor dropped"
+        );
+
+        cm.config()
+            .set("graph_database_provider", serde_json::json!("ladybug"))
+            .unwrap();
+        let after = cm.graph_db().await.unwrap();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "the kept store is served again"
+        );
+        drop((before, after));
+        cm.close().await;
+    }
+
+    /// The store's own location changes: the new store is built first, and
+    /// the old one is closed once nobody uses it — or, while an operation
+    /// still holds it, tracked so that `close()` still checkpoints it.
+    #[cfg(feature = "ladybug")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_moved_store_retires_the_old_engine_without_orphaning_it() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), false);
+        let old = cm.graph_db().await.unwrap();
+        cm.config()
+            .set(
+                "graph_file_path",
+                serde_json::json!(root.path().join("moved").display().to_string()),
+            )
+            .unwrap();
+        let new = cm.graph_db().await.unwrap();
+        assert!(!Arc::ptr_eq(&old, &new), "a new store at the new path");
+        old.is_empty()
+            .await
+            .expect("the old store stays usable while an operation holds it");
+        assert!(cm.has_cached_components());
+
+        drop(new);
+        cm.close().await;
+        assert!(
+            old.is_empty().await.is_err(),
+            "close() reaches the retired store an operation still held"
+        );
+    }
+
+    /// The store's options change on the same path while an operation holds
+    /// it: it keeps being served (no second instance, no empty slot), and the
+    /// change lands on the first access after the operation lets go.
+    #[cfg(feature = "ladybug")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_same_path_store_change_waits_for_the_operation_holding_it() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), false);
+        let in_flight = cm.graph_db().await.unwrap();
+        cm.config()
+            .set("graph.ladybug.max_db_size", serde_json::json!(1u64 << 33))
+            .unwrap();
+        let served = cm.graph_db().await.expect("no STORE_IN_USE");
+        assert!(Arc::ptr_eq(&in_flight, &served));
+        drop((in_flight, served));
+
+        let rebuilt = cm.graph_db().await.unwrap();
+        rebuilt.is_empty().await.unwrap();
+        drop(rebuilt);
+        cm.close().await;
+    }
+
+    /// With per-dataset storage, an unrelated setter call must not close the
+    /// dataset engines the (kept) storage still hands out.
+    #[cfg(all(feature = "ladybug", feature = "testing"))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn per_dataset_engines_survive_an_unrelated_config_change() {
+        let root = tempfile::tempdir().unwrap();
+        let cm = store_manager(root.path(), true);
+        let owner = uuid::Uuid::new_v4();
+        let dataset = cognee_models::Dataset::new("ds".into(), owner, None, uuid::Uuid::new_v4());
+        let id = dataset.id;
+        let db = cm.database().await.unwrap();
+        cognee_database::IngestDb::create_dataset(&*db, dataset)
+            .await
+            .unwrap();
+        let graph = cm.graph_db().await.unwrap();
+        cognee_models::dataset_scope::with_dataset(
+            id,
+            graph.add_node_raw(serde_json::json!({"id": "n1", "name": "N", "type": "T"})),
+        )
+        .await
+        .unwrap();
+        drop(graph);
+
+        cm.config()
+            .set("monitoring_tool", serde_json::json!("none"))
+            .unwrap();
+        let graph = cm.graph_db().await.unwrap();
+        assert!(
+            cognee_models::dataset_scope::with_dataset(id, graph.has_node("n1"))
+                .await
+                .expect("the bound dataset engine is still open"),
+        );
+        drop(graph);
+        cm.close().await;
     }
 }

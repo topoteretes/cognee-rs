@@ -603,6 +603,54 @@ impl ComponentRegistry {
         factory.build(ctx).await
     }
 
+    /// What the graph engine selected by `ctx` is built from: its provider, its
+    /// locations and every value of the `graph.*` sections and of the sections
+    /// the selected factory declares. Two contexts with equal fingerprints build
+    /// the same store, so a configuration change that leaves it alone (an LLM
+    /// key, a chunk size, `monitoring_tool`) keeps the open engine instead of
+    /// replacing it. In memory only: it carries resolved URLs, credentials
+    /// included.
+    pub fn graph_store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        let key = ctx.graph_provider.to_lowercase();
+        let own = self
+            .graph
+            .get(&key)
+            .map(|factory| factory.config_sections())
+            .unwrap_or_default();
+        format!(
+            "{:?}",
+            (
+                &key,
+                &ctx.graph_file_path,
+                &ctx.graph_postgres_url,
+                &ctx.system_root_directory,
+                store_sections(ctx, "graph", &own),
+            )
+        )
+    }
+
+    /// The vector twin of [`Self::graph_store_fingerprint`]; the embedding
+    /// width is part of it, since a store is created for one width.
+    pub fn vector_store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        let key = ctx.vector_provider.to_lowercase();
+        let own = self
+            .vector
+            .get(&key)
+            .map(|factory| factory.config_sections())
+            .unwrap_or_default();
+        format!(
+            "{:?}",
+            (
+                &key,
+                &ctx.vector_db_url,
+                &ctx.vector_postgres_url,
+                &ctx.system_root_directory,
+                ctx.embedding_dimensions,
+                store_sections(ctx, "vector", &own),
+            )
+        )
+    }
+
     /// Whether the LLM selected by `ctx.llm.provider` can make calls: it needs
     /// no API key, or has one. Reads the configuration only; it does not check
     /// that the key works.
@@ -1062,6 +1110,23 @@ fn canonical_vector_provider(provider: &str) -> String {
 
 fn llm_factory_available(factory: &dyn LlmFactory, ctx: &BackendBuildContext) -> bool {
     !factory.requires_api_key(ctx) || !ctx.llm.api_key.trim().is_empty()
+}
+
+/// The values of `ctx` in the `kind` section (and its subsections) and in
+/// the sections `own` names, in key order.
+fn store_sections<'a>(
+    ctx: &'a BackendBuildContext,
+    kind: &str,
+    own: &[&'static cognee_config_core::SectionSchema],
+) -> Vec<(&'a String, &'a serde_json::Value)> {
+    let in_section = |key: &str, name: &str| {
+        key.strip_prefix(name)
+            .is_some_and(|rest| rest.starts_with('.'))
+    };
+    ctx.sections
+        .iter()
+        .filter(|(key, _)| in_section(key, kind) || own.iter().any(|s| in_section(key, s.name)))
+        .collect()
 }
 
 fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String {
