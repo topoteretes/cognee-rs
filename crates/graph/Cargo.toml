@@ -92,6 +92,11 @@ path = "tests/ladybug_stale_instance.rs"
 required-features = ["ladybug"]
 
 [[test]]
+name = "ladybug_store_in_use"
+path = "tests/ladybug_store_in_use.rs"
+required-features = ["ladybug"]
+
+[[test]]
 name = "ladybug_integration"
 path = "tests/ladybug_integration.rs"
 required-features = ["ladybug"]

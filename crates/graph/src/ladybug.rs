@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cognee_utils::redact::redact;
+use cognee_utils::store_claim::StoreClaim;
 use cognee_utils::tracing_keys::{COGNEE_DB_QUERY, COGNEE_DB_ROW_COUNT};
 use lbug::{Connection, Database, SystemConfig, Value as LbugValue};
 use serde_json::{Value, json};
@@ -113,6 +114,13 @@ fn sanitize_json_control_chars(s: &str) -> Cow<'_, str> {
 /// overlapping writes are serialized in-process, and cross-process locking is
 /// intentionally out of scope.
 ///
+/// Within one process there is exactly one live adapter per database file: a
+/// second open of a path this process already holds fails with
+/// [`GraphDBError::StoreInUse`] (see `OpenDatabase`). Python reaches the same
+/// end differently — its process-wide engine cache hands every caller with the
+/// same config one shared adapter — whereas each Rust engine handle builds its
+/// own, so a second one is refused rather than shared.
+///
 /// # Schema
 ///
 /// The adapter creates the following schema:
@@ -165,7 +173,7 @@ pub struct LadybugAdapter {
     /// across an `.await` (every accessor clones the `Arc` out and releases it
     /// immediately), and a tokio lock would force the accessor to be `async` and
     /// churn all ten query sites for no gain.
-    db: std::sync::RwLock<Option<Arc<Database>>>,
+    db: std::sync::RwLock<Option<Arc<OpenDatabase>>>,
     /// Serializes overlapping writes within one process. Single-process
     /// assumption: cross-process locking is intentionally out of scope.
     ///
@@ -209,6 +217,36 @@ pub struct LadybugAdapter {
     read_gate: Arc<RwLock<()>>,
 }
 
+/// The lbug `Database` together with this process's claim on its file.
+///
+/// lbug's own lock is a POSIX `fcntl` record lock, which is owned by the
+/// process, so it never stops a second `Database` on a path this process
+/// already has open — and two instances on one file destroy each other's
+/// writes (`tests/ladybug_stale_instance.rs`). The [`StoreClaim`] is the
+/// in-process guard: [`LadybugAdapter::with_max_db_size`] takes it before
+/// opening, and a second open of the same path fails with
+/// [`GraphDBError::StoreInUse`] while it is held.
+///
+/// It lives *next to the `Database`*, not in the adapter, because the database
+/// can outlive the adapter's slot: [`LadybugAdapter::close`] empties the slot,
+/// but a query still in flight holds its own `Arc` and keeps the file open
+/// until it finishes. The claim is released exactly when the last such `Arc`
+/// drops. Field order is load-bearing: `db` drops (and runs lbug's destructor
+/// checkpoint) before `_claim` lets a new open in.
+struct OpenDatabase {
+    db: Database,
+    /// `None` for an in-memory database, which has no file to share.
+    _claim: Option<StoreClaim>,
+}
+
+impl std::ops::Deref for OpenDatabase {
+    type Target = Database;
+
+    fn deref(&self) -> &Database {
+        &self.db
+    }
+}
+
 /// How many times [`LadybugAdapter::flush`] re-checks for a quiet moment before
 /// giving up, and how long it waits between the attempts.
 ///
@@ -245,8 +283,21 @@ impl LadybugAdapter {
     /// (see [`LadybugConfig::max_db_size`]).
     ///
     /// # Errors
-    /// Returns GraphDBError::InitializationError if database creation fails
+    /// [`GraphDBError::StoreInUse`] if this process already has `db_path` open
+    /// (an earlier adapter that is not closed yet, or a closed one whose last
+    /// in-flight query has not finished); see [`OpenDatabase`].
+    /// [`GraphDBError::InitializationError`] if database creation fails.
     pub async fn with_max_db_size(db_path: &str, max_db_size: u64) -> GraphDBResult<Self> {
+        // lbug opens an in-memory database for an empty path or `:memory:`;
+        // each is private to its instance, so there is nothing to claim.
+        let claim = if db_path.is_empty() || db_path == ":memory:" {
+            None
+        } else {
+            Some(StoreClaim::acquire(
+                std::path::Path::new(db_path),
+                "ladybug graph",
+            )?)
+        };
         let config = SystemConfig::default().max_db_size(max_db_size);
         let db = Database::new(db_path, config).map_err(|e| {
             GraphDBError::InitializationError(format!("Failed to create database: {e}"))
@@ -254,7 +305,7 @@ impl LadybugAdapter {
 
         Ok(Self {
             db_path: db_path.to_string(),
-            db: std::sync::RwLock::new(Some(Arc::new(db))),
+            db: std::sync::RwLock::new(Some(Arc::new(OpenDatabase { db, _claim: claim }))),
             write_lock: Arc::new(Mutex::new(())),
             read_gate: Arc::new(RwLock::new(())),
         })
@@ -270,7 +321,7 @@ impl LadybugAdapter {
     /// Returning an owned `Arc` (rather than a guard) is what keeps the lock off
     /// the query path: the handle stays alive for the whole query via the clone,
     /// while the `RwLock` is released before `Connection::new` is even called.
-    fn db(&self) -> GraphDBResult<Arc<Database>> {
+    fn db(&self) -> GraphDBResult<Arc<OpenDatabase>> {
         // Poison means a previous holder panicked mid-query; there is nothing to
         // recover, so surface it the same way the adjacent `write_lock` does
         // rather than panicking a second time.
@@ -316,7 +367,10 @@ impl LadybugAdapter {
     /// rather than the last one, and the descriptor closes when that query
     /// finishes. `Ok(())` therefore means "closed to new work and checkpointed",
     /// not "the file is free"; a caller that needs the file free (to reopen it,
-    /// or to delete its directory) must first stop issuing queries.
+    /// or to delete its directory) must first stop issuing queries. A reopen of
+    /// the same path in that window is refused with [`GraphDBError::StoreInUse`]
+    /// rather than opening a second instance next to the first; the path is
+    /// claimable again the moment the last query lets go.
     ///
     /// Idempotent.
     pub async fn close(&self) -> GraphDBResult<()> {

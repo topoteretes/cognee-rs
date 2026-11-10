@@ -956,6 +956,9 @@ mod tests {
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
 
         // A second storage (another process, or a rebuilt one) reuses the row.
+        // In one process an embedded graph may be open only once (a second
+        // instance is refused with `StoreInUse`), so the first lets go of it.
+        storage.evict(id).await;
         let other = super::tests::storage(&fx);
         other.graph_for(id).await.unwrap();
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
@@ -1100,11 +1103,15 @@ mod tests {
         assert!(storage.existing_vector_for(id).await.unwrap().is_some());
         assert_eq!(storage.open_dataset_count(), 1);
 
-        // Another storage (another process) binds from the row it finds.
+        // Another storage (another process) binds from the row it finds. In
+        // one process an embedded graph may be open only once (a second
+        // instance is refused with `StoreInUse`), so each lets go in turn.
+        storage.evict(id).await;
         let other = super::tests::storage(&fx);
         assert!(other.existing_graph_for(id).await.unwrap().is_some());
         assert_eq!(other.open_dataset_count(), 1);
         assert_eq!(fx.database.list_dataset_databases().await.unwrap().len(), 1);
+        other.evict(id).await;
 
         assert!(storage.delete_dataset_storage(id).await.unwrap());
         assert_eq!(storage.open_dataset_count(), 0);

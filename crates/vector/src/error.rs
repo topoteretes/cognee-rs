@@ -33,6 +33,11 @@ pub enum VectorDBError {
     /// A serialization or deserialization error occurred.
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+
+    /// The embedded store is already open in this process (a second live
+    /// open of the same path); see [`cognee_utils::store_claim`].
+    #[error(transparent)]
+    StoreInUse(#[from] cognee_utils::StoreInUse),
 }
 
 /// Convenience `Result` alias for vector database operations.

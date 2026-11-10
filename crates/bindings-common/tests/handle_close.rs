@@ -546,8 +546,19 @@ async fn release_does_not_break_an_operation_still_holding_the_services() {
         .await
         .expect("release() must leave an in-flight op's graph usable");
 
-    // The handle itself is still usable too, and re-warms cold.
+    // The handle itself is still usable too, and re-warms cold — but not while
+    // the in-flight op still holds the embedded graph: a re-warm then would be
+    // a second lbug instance on the same file, which lbug does not refuse and
+    // which destroys writes (`cognee-graph/tests/ladybug_stale_instance.rs`).
+    // The graph adapter's in-process claim refuses it with STORE_IN_USE, and
+    // the path is free again the moment the op lets go.
     assert!(!state.is_closed());
+    let refused = match state.services().await {
+        Ok(_) => panic!("a re-warm next to a live embedded graph must be refused"),
+        Err(err) => err,
+    };
+    assert_eq!(refused.code(), "STORE_IN_USE", "{refused}");
+    drop(in_flight);
     state.services().await.expect("re-warm after release");
 }
 

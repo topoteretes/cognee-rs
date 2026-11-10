@@ -75,6 +75,12 @@ impl SdkError {
     /// decision D5).
     pub fn code(&self) -> &'static str {
         match self {
+            // A refused second open of an embedded store keeps the component
+            // tier everywhere a binding maps variants (C, Python), and gets its
+            // own code where a binding carries the string (Java, TypeScript).
+            SdkError::Component(cognee::ComponentError::StoreInUse(_)) => {
+                cognee_utils::STORE_IN_USE_CODE
+            }
             SdkError::Component(_) => "COMPONENT_ERROR",
             SdkError::ServiceBuild(_) => "SERVICE_BUILD_ERROR",
             SdkError::UserBootstrap(_) => "USER_BOOTSTRAP_ERROR",
