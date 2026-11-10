@@ -138,7 +138,7 @@ describe("memory ops (Tier-A — no LLM)", () => {
           (s: any) => s.stage === "global_context_index"
         );
         expect(stage).toBeDefined();
-        expect(stage.status).not.toBe("skipped");
+        expect(stage?.status).not.toBe("skipped");
         expect(result.status).toBe("completed");
       } finally {
         cleanup(h.tmpDir);
