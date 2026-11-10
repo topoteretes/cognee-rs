@@ -53,7 +53,7 @@ pub enum LlmError {
     LocalModelError(String),
 
     #[error(
-        "Unsupported audio format: {0}. Supported formats: mp3, mp4, mpeg, mpga, m4a, wav, webm"
+        "Unsupported audio format: {0}. Supported formats: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm"
     )]
     InvalidAudioFormat(String),
 }

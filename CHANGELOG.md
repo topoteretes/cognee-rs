@@ -1243,6 +1243,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Re-adding audio reuses its stored transcript.** The audio loader calls a
+  paid model at `add`, and running it again can change the text. A re-add of
+  the same content into the same dataset (the row `persist_data` deduplicates
+  against) now reuses the transcript when the audio loader wrote it and it is
+  still in storage, also when no transcriber is configured any more, so
+  sequential re-adds transcribe the file once. A transcript that is gone, or a
+  row that holds raw audio (as a URL add stores it), is transcribed again and
+  the re-add points the row at the new file. A storage error while checking
+  transcribes again instead of failing the add. Two concurrent adds of the same
+  new file can still both transcribe it.
+
 - **Concurrent session-turn execution parity (SDK-1045).** Eligible built-in
   RAG, graph, and hybrid completions now overlap turn analysis with retrieval
   and answering, serialize turns per user/session identity, and retain
@@ -1425,6 +1436,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **`cognee-llm`: `flac` and `ogg` audio are transcribed.** The Whisper format
+  whitelist left out two formats the OpenAI transcription API and Python's
+  audio loader accept, so both failed with `Unsupported audio format`.
+
+- **An audio `add` without a usable transcriber says why.** When the provider
+  transcribes but its transcriber cannot be built (no API key, say),
+  `ComponentManager::add_loader_registry` registers an audio loader that fails
+  with the build error, as a keyless LLM already does for images. An audio
+  input now fails with `audio needs a transcriber, which could not be built:
+  llm_api_key must be configured` instead of `Unsupported document type at
+  ingest: audio`; text adds stay quiet. A provider without transcription still
+  leaves the audio loader out.
 
 - **Delete counts an `EdgeType` point only when it exists, once (SDK-1039).**
   The delete preview counted one `EdgeType_relationship_name` point per
