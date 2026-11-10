@@ -144,11 +144,7 @@ pub fn build_graph_entry(
     let kind = RecallResultKind::for_search_type(search_type);
     let score = score_from(&entry);
 
-    // Python branches on the *Python* type of the entry. A `BaseModel` entry
-    // (its `structured` / `kind = STRUCTURED` branch) has no analogue here:
-    // `response_schema` is not on recall's wire, so `SearchOutput::Structured`
-    // is unreachable from this router and a JSON object lands in the dict
-    // branch below, exactly as an already-dumped model would.
+    // A structured answer goes through `build_structured_entry` instead.
     let (text, raw) = match entry {
         Value::String(s) => {
             let mut raw = Map::new();
@@ -187,6 +183,22 @@ pub fn build_graph_entry(
         structured: None,
         source: "graph",
     }
+}
+
+/// Build the entry for a structured answer (`SearchOutput::Structured`):
+/// kind `STRUCTURED`, the answer in `structured` and `raw`, `text` drawn from
+/// it as from any object, and no score.
+pub fn build_structured_entry(
+    answer: Value,
+    search_type: SearchType,
+    dataset_id: Option<String>,
+    dataset_name: Option<String>,
+) -> NormalizedResult {
+    let mut entry = build_graph_entry(answer.clone(), search_type, dataset_id, dataset_name);
+    entry.kind = RecallResultKind::Structured;
+    entry.score = None;
+    entry.structured = Some(answer);
+    entry
 }
 
 /// The `system_prompt` every entry of one search response carries.
@@ -583,6 +595,26 @@ mod tests {
             let wire = serde_json::to_value(kind).expect("to_value");
             assert_eq!(wire, expected, "{search_type:?}");
         }
+    }
+
+    /// A structured answer is kind `STRUCTURED`, carries the answer in
+    /// `structured` and `raw`, draws `text` from it, and has no score even
+    /// when the answer has a `score` field.
+    #[test]
+    fn structured_entry_carries_the_answer_without_a_score() {
+        let answer = json!({ "text": "Alice is the CTO", "score": 0.9 });
+        let entry = build_structured_entry(
+            answer.clone(),
+            CoreSearchType::GraphCompletion,
+            Some("ds".into()),
+            None,
+        );
+        assert_eq!(entry.kind, RecallResultKind::Structured);
+        assert_eq!(entry.structured, Some(answer.clone()));
+        assert_eq!(Value::Object(entry.raw), answer);
+        assert_eq!(entry.text, "Alice is the CTO");
+        assert_eq!(entry.score, None);
+        assert_eq!(entry.dataset_id.as_deref(), Some("ds"));
     }
 
     /// A dict entry keeps its payload verbatim under `raw`, picks `text` by

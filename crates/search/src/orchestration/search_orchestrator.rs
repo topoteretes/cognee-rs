@@ -1021,6 +1021,11 @@ impl SearchOrchestrator {
             request.neighborhood_depth,
             request.neighborhood_seed_top_k,
         )?;
+        // A bad `response_schema` is refused before any dataset is searched,
+        // not when the first structured completion is asked for.
+        if let Some(schema) = &request.response_schema {
+            crate::response_schema::ResponseSchema::compile(schema)?;
+        }
 
         emit_search_started(request);
 
@@ -7333,5 +7338,25 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, SearchError::InvalidHybridSearchConfig(_)));
+    }
+
+    /// A `response_schema` outside the supported subset is refused before
+    /// any dataset is searched.
+    #[tokio::test]
+    async fn an_unsupported_response_schema_is_rejected_up_front() {
+        let error = hybrid_orchestrator(None)
+            .search(&untyped_request(
+                r#", "response_schema": {"type": "object"}"#,
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, SearchError::InvalidResponseSchema(_)),
+            "got {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "response_schema: object schemas must declare non-empty 'properties'"
+        );
     }
 }

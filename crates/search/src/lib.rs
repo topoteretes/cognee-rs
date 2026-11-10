@@ -14,6 +14,8 @@ pub mod query_router;
 pub mod recall_normalize;
 /// `RecallScope` and related types for scoping search results.
 pub mod recall_scope;
+/// A caller's `response_schema` for structured completions.
+pub mod response_schema;
 /// Individual retriever implementations for each `SearchType`.
 pub mod retrievers;
 #[cfg(test)]
@@ -38,8 +40,8 @@ pub use query_router::{
     pinned_route, route_query,
 };
 pub use recall_normalize::{
-    NormalizedResult, RecallResultKind, build_graph_entry, entry_dataset_ids, entry_evidence,
-    item_dataset_id, only_context_system_prompt,
+    NormalizedResult, RecallResultKind, build_graph_entry, build_structured_entry,
+    entry_dataset_ids, entry_evidence, item_dataset_id, only_context_system_prompt,
 };
 pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
 pub use retrievers::{
