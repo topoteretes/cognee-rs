@@ -849,6 +849,50 @@ macro_rules! versioned_accessor {
     }};
 }
 
+/// [`versioned_accessor`] for a slot holding an embedded **store** (graph,
+/// vector): the stale engine is retired *before* its replacement is built.
+///
+/// An embedded store may be open only once per process — a second instance on
+/// the same file is refused with `StoreInUse` (lbug would otherwise grant it
+/// and the two would destroy each other's writes). Building the replacement
+/// first, as the plain accessor does, therefore failed on every config change,
+/// even one unrelated to the store (it bumps the version all the same). So the
+/// stale engine is taken out first and, when the cache holds its last
+/// reference, closed and dropped (off the runtime), which frees its file; one
+/// still held by an in-flight operation is left to that operation (the same
+/// rule as [`ComponentManager::release`]), and the rebuild reports
+/// `StoreInUse` until it lets go.
+macro_rules! versioned_store_accessor {
+    ($self:ident, $field:ident, $init_fn:ident, $what:literal) => {{
+        let current_ver = $self.config.version();
+        {
+            let guard = $self.$field.read().await;
+            if let Some((ver, ref component)) = *guard {
+                if ver == current_ver {
+                    return Ok(Arc::clone(component));
+                }
+            }
+        }
+        let mut guard = $self.$field.write().await;
+        if let Some((ver, ref component)) = *guard {
+            if ver == current_ver {
+                return Ok(Arc::clone(component));
+            }
+        }
+        if let Some((_, stale)) = guard.take() {
+            if CloseSharedStores::No.may_close(&stale)
+                && let Err(e) = stale.close().await
+            {
+                tracing::warn!(error = %e, component = $what, "failed to close the stale engine before its rebuild");
+            }
+            Self::drop_off_runtime(stale, $what).await;
+        }
+        let new = $self.$init_fn().await?;
+        *guard = Some((current_ver, Arc::clone(&new)));
+        Ok(new)
+    }};
+}
+
 #[async_trait]
 impl PipelineContext for ComponentManager {
     async fn storage(&self) -> Result<Arc<dyn StorageTrait>, ComponentError> {
@@ -860,11 +904,11 @@ impl PipelineContext for ComponentManager {
     }
 
     async fn graph_db(&self) -> Result<Arc<dyn GraphDBTrait>, ComponentError> {
-        versioned_accessor!(self, graph_db, init_graph_db)
+        versioned_store_accessor!(self, graph_db, init_graph_db, "graph database")
     }
 
     async fn vector_db(&self) -> Result<Arc<dyn VectorDB>, ComponentError> {
-        versioned_accessor!(self, vector_db, init_vector_db)
+        versioned_store_accessor!(self, vector_db, init_vector_db, "vector database")
     }
 
     async fn embedding_engine(&self) -> Result<Arc<dyn EmbeddingEngine>, ComponentError> {

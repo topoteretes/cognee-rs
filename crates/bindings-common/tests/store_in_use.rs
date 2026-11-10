@@ -86,3 +86,32 @@ async fn handles_on_different_stores_coexist() {
     a.close().await;
     b.close().await;
 }
+
+/// A config change after warm rebuilds every engine at the new version. The
+/// rebuild must retire the handle's own stale embedded graph first instead of
+/// meeting it as a second instance (which lbug would grant and the guard
+/// refuses) — even for a key that has nothing to do with the store.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_config_change_after_warm_rebuilds_onto_the_same_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = handle_under(dir.path());
+    let before = state.services().await.expect("first warm");
+    drop(before);
+
+    state
+        .cm
+        .config()
+        .set("monitoring_tool", serde_json::json!("none"))
+        .expect("a known key");
+    let after = state
+        .services()
+        .await
+        .expect("the rebuild retires the stale store and reopens it");
+    after
+        .graph_db
+        .is_empty()
+        .await
+        .expect("the rebuilt graph serves");
+    drop(after);
+    state.close().await;
+}

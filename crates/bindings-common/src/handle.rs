@@ -208,6 +208,13 @@ impl HandleState {
             return Ok(Arc::clone(svc));
         }
 
+        // Drop the stale bundle before building its replacement. It holds a
+        // clone of every engine, and the manager can retire a stale embedded
+        // store (close it, freeing its file for the rebuild) only when its
+        // cache holds the last reference; with the bundle still cached the
+        // rebuild would meet its own previous store and fail `STORE_IN_USE`.
+        // An operation still in flight keeps its own clone of the bundle.
+        drop(guard.take());
         let (svc, owner_id) = CogneeServices::build(&self.cm).await?;
         let svc = Arc::new(svc);
 
