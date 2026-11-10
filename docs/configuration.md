@@ -30,6 +30,10 @@ Lowest precedence first:
    `Settings::overlay_from_env()` (via `cognee_config_core::load_dotenv`). The file
    is found in the working directory or any ancestor. Variables already set in the
    process environment win over `.env`.
+   Set `COGNEE_DISABLE_DOTENV` to `1`, `true`, `yes` or `on` (trimmed,
+   case-insensitive) to skip `.env` loading entirely — the opt-out applies in
+   the native SDK, the CLI and every binding (Python, TypeScript, Java, C),
+   for hosts that manage env loading themselves.
 4. **Process environment:** bound by `Settings::overlay_from_env()`.
 5. **Explicit code:** `ConfigManager` setters (below), a binding's constructor
    settings object, the binding config APIs, and CLI `--flags`.

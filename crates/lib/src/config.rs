@@ -323,7 +323,8 @@ impl Settings {
     /// starts from defaults and overlays every env var that is set.
     /// The `.env` file in the current working directory (or any ancestor) is loaded
     /// automatically before env vars are read — callers do not need to call
-    /// `dotenv::dotenv()` themselves.
+    /// `dotenv::dotenv()` themselves — unless the process environment sets
+    /// `COGNEE_DISABLE_DOTENV` to a truthy value (`1`/`true`/`yes`/`on`).
     pub fn load_from_env() -> Self {
         let mut s = Self::default();
         s.overlay_from_env();
@@ -334,7 +335,8 @@ impl Settings {
     ///
     /// Only fields whose corresponding env var is set are modified; everything
     /// else keeps its current value.  The `.env` file is loaded first (idempotent —
-    /// safe to call multiple times).
+    /// safe to call multiple times), unless `COGNEE_DISABLE_DOTENV` is truthy in
+    /// the process environment.
     ///
     /// Env-var naming follows the Python SDK conventions (`LLM_*`, `EMBEDDING_*`,
     /// `GRAPH_DATABASE_*`, `VECTOR_DB_*`, `DB_*`, `COGNEE_*`).  A handful of
@@ -364,9 +366,13 @@ impl Settings {
         reason = "config boundary: Settings is resolved from the process env here"
     )]
     pub fn overlay_from_env_with_schema(&mut self, schema: &ConfigSchema) {
-        // Load .env (no-op if absent or if the vars are already in the environment).
-        cognee_config_core::load_dotenv();
-        self.overlay_from_with_schema(&cognee_config_core::ProcessEnv::new(), schema);
+        // Load .env unless the process opted out via COGNEE_DISABLE_DOTENV
+        // (no-op if the file is absent or the vars are already set).
+        // `ProcessEnv::get` reads the live process env at call time, so one
+        // instance sees both the pre-load opt-out and the just-loaded vars.
+        let env = cognee_config_core::ProcessEnv::new();
+        cognee_config_core::load_dotenv_unless_disabled(&env);
+        self.overlay_from_with_schema(&env, schema);
     }
 
     /// The typed component config section `T`: its values from
