@@ -1373,7 +1373,7 @@ fn extract_file_metadata(input: &DataInput) -> (String, String, String, Option<S
         }
         DataInput::DataItem { data, label, .. } => {
             let (file_name, ext, mime, _) = extract_file_metadata(data);
-            (file_name, ext, mime, Some(label.clone()))
+            (file_name, ext, mime, label.clone())
         }
     }
 }
@@ -1466,7 +1466,7 @@ async fn resolve_input_for_processing(
                     Ok((
                         resolved.input,
                         Some(resolved.metadata),
-                        Some(label.clone()),
+                        label.clone(),
                         external_metadata.clone(),
                     ))
                 }
@@ -1478,7 +1478,7 @@ async fn resolve_input_for_processing(
                 Ok((
                     input.clone(),
                     None,
-                    Some(label.clone()),
+                    label.clone(),
                     external_metadata.clone(),
                 ))
             }
@@ -2853,7 +2853,7 @@ mod tests {
         let processed = process_input(
             &DataInput::DataItem {
                 data: Box::new(DataInput::Url(url.clone())),
-                label: "wrapped-label".to_string(),
+                label: Some("wrapped-label".to_string()),
                 external_metadata: Some(r#"{"custom":"keep","rank":7}"#.to_string()),
             },
             &storage,
@@ -2902,7 +2902,7 @@ mod tests {
             let processed = process_input(
                 &DataInput::DataItem {
                     data: Box::new(DataInput::Url(url.clone())),
-                    label: "invalid-meta".to_string(),
+                    label: Some("invalid-meta".to_string()),
                     external_metadata: Some(user_metadata.to_string()),
                 },
                 &storage,
@@ -3298,7 +3298,7 @@ mod tests {
             .add(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("Wrapped audit text".to_string())),
-                    label: "wrapped".to_string(),
+                    label: Some("wrapped".to_string()),
                     external_metadata: None,
                 }],
                 "audit_wrapped",
@@ -3678,7 +3678,7 @@ mod tests {
             .add(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("labelled content".to_string())),
-                    label: "my-label".to_string(),
+                    label: Some("my-label".to_string()),
                     external_metadata: None,
                 }],
                 "ds",
@@ -3780,7 +3780,7 @@ mod tests {
             .add(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("dlt content".to_string())),
-                    label: "dlt-label".to_string(),
+                    label: Some("dlt-label".to_string()),
                     external_metadata: Some(meta_json.clone()),
                 }],
                 "ds",
@@ -3807,7 +3807,7 @@ mod tests {
             .add(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("no metadata".to_string())),
-                    label: "plain-label".to_string(),
+                    label: Some("plain-label".to_string()),
                     external_metadata: None,
                 }],
                 "ds",
@@ -4015,7 +4015,7 @@ mod tests {
         let item = |label: &str, meta: Option<&str>| {
             vec![DataInput::DataItem {
                 data: Box::new(DataInput::Text("Refreshed content".into())),
-                label: label.into(),
+                label: Some(label.into()),
                 external_metadata: meta.map(String::from),
             }]
         };
@@ -4161,7 +4161,7 @@ mod tests {
             .add_with_params(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("Empty node set".into())),
-                    label: "item".into(),
+                    label: Some("item".into()),
                     external_metadata: Some(r#"{"source":"crm"}"#.into()),
                 }],
                 "empty_set_ds",
@@ -4217,7 +4217,7 @@ mod tests {
                 .add(
                     vec![DataInput::DataItem {
                         data: Box::new(DataInput::Text("Bad item key".into())),
-                        label: "item".into(),
+                        label: Some("item".into()),
                         external_metadata: Some(bad.into()),
                     }],
                     "invalid_set_ds",
@@ -4253,7 +4253,7 @@ mod tests {
             .add(
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("Null item key".into())),
-                    label: "item".into(),
+                    label: Some("item".into()),
                     external_metadata: Some(r#"{"node_set": null}"#.into()),
                 }],
                 "null_set_ds",
@@ -4353,7 +4353,7 @@ mod tests {
     fn source_uri_follows_python() {
         let item = |meta: &str, data: DataInput| DataInput::DataItem {
             data: Box::new(data),
-            label: "l".into(),
+            label: Some("l".into()),
             external_metadata: Some(meta.to_string()),
         };
         assert_eq!(
@@ -4430,7 +4430,7 @@ mod tests {
         let mut processed = process_input(
             &DataInput::DataItem {
                 data: Box::new(DataInput::Text("Direct persist".into())),
-                label: "item".into(),
+                label: Some("item".into()),
                 external_metadata: Some(r#"{"source":"crm","node_set":["stale"]}"#.into()),
             },
             &storage,
@@ -4757,7 +4757,7 @@ mod tests {
         let first = process_input(
             &DataInput::DataItem {
                 data: Box::new(DataInput::Text("old content".into())),
-                label: "item".into(),
+                label: Some("item".into()),
                 external_metadata: Some(r#"{"source":"crm"}"#.into()),
             },
             &storage,
@@ -4797,6 +4797,52 @@ mod tests {
             uri.starts_with("file://") && uri.ends_with("/new.txt"),
             "{uri}"
         );
+    }
+
+    /// A re-add whose item carries metadata but no label keeps the stored
+    /// label (Python `ingest_data.py`: an absent label leaves it unchanged).
+    #[tokio::test]
+    async fn a_re_add_without_a_label_keeps_the_stored_label() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let item = |label: Option<&str>, metadata: &str| DataInput::DataItem {
+            data: Box::new(DataInput::Text("same content".into())),
+            label: label.map(str::to_string),
+            external_metadata: Some(metadata.into()),
+        };
+
+        let first = process_input(
+            &item(Some("first"), r#"{"source":"crm"}"#),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let stored = persist_data(&first, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+        let again = process_input(
+            &item(None, r#"{"source":"erp"}"#),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.id, stored.id);
+        assert_eq!(refreshed.label.as_deref(), Some("first"));
+        let meta: serde_json::Value =
+            serde_json::from_str(refreshed.external_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["source"], "erp", "the new metadata is written: {meta}");
     }
 
     /// A pinned add takes exactly one item.

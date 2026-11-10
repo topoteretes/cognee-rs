@@ -101,6 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously `not_ported`), then `not_ported`. The CLI also accepts Python's
   `--no-review-conflicts` spelling.
 
+- **`DataInput::DataItem.label` is `Option<String>` (SDK-1043).** It was
+  `String`. `None` sets no label and, on a re-add, keeps the stored one, as
+  in Python; wrap an existing label in `Some`.
+
 - **`feedback_weights` public API (SDK-1051).**
   - `FeedbackApplyResult` has new public fields (`done`, `errored`,
     `elements_moved`, `elements_pruned`, `elements_failed`): struct-literal

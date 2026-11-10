@@ -552,7 +552,7 @@ mod tests {
             (
                 vec![DataInput::DataItem {
                     data: Box::new(DataInput::Text("replacement".into())),
-                    label: "item".into(),
+                    label: Some("item".into()),
                     external_metadata: Some(r#"{"node_set": "alpha"}"#.into()),
                 }],
                 None,
