@@ -377,9 +377,16 @@ async fn remember_auto_improve_follows_the_stage_settings() {
         r.0 == cognee::api::StageStatus::Skipped && r.1.as_deref() == Some("turned_off")
     };
     let (on, off) = (&reasons[0], &reasons[1]);
-    assert!(
-        !turned_off(&on.0) && !turned_off(&on.1),
-        "settings on: {on:?}"
+    // On: the index builds, and the review passes every gate to `not_ported`.
+    assert_eq!(
+        on.1.0,
+        cognee::api::StageStatus::Completed,
+        "global_context_index on: {on:?}"
+    );
+    assert_eq!(
+        (on.0.0, on.0.1.as_deref()),
+        (cognee::api::StageStatus::Skipped, Some("not_ported")),
+        "review_conflicts on: {on:?}"
     );
     assert!(
         turned_off(&off.0) && turned_off(&off.1),
