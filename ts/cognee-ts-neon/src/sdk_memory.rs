@@ -115,7 +115,7 @@ pub fn cognee_remember_entry(mut cx: FunctionContext) -> JsResult<JsPromise> {
 /// `cogneeImprove(handle, opts) -> Promise<ImproveResult>`
 ///
 /// opts: `{ datasetName, datasetId?, sessionIds?, feedbackAlpha?, tenant?,
-/// buildGlobalContextIndex?, buildTruthSubspace?, runInBackground? }`
+/// buildGlobalContextIndex?, reviewConflicts?, buildTruthSubspace?, runInBackground? }`
 ///
 /// The camelCase result JSON is built by the shared `run_improve` in
 /// bindings-common (`improve_result_json`).

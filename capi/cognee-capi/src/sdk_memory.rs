@@ -158,7 +158,9 @@ pub unsafe extern "C" fn cg_sdk_remember_entry(
 ///   `"datasetId"` (UUID string, a dataset the caller already resolved),
 ///   `"sessionIds"` (string array),
 ///   `"feedbackAlpha"` (float in (0, 1], default the `improve.feedback_alpha` setting, 0.1), `"tenant"` (UUID string),
-///   `"buildGlobalContextIndex"` / `"buildTruthSubspace"` (bool, default false: opt in to those stages),
+///   `"buildGlobalContextIndex"` / `"reviewConflicts"` (bool; omitted follows the `improve.global_context_index` /
+///   `improve.review_conflicts` setting, default on; an explicit value wins either way),
+///   `"buildTruthSubspace"` (bool, default false: opt in to that stage),
 ///   `"runInBackground"` (bool, default false: resolve the dataset and validate the options,
 ///   then return a `running` result at once; wait for the run with
 ///   [`cg_sdk_wait_for_background_tasks`], closing the handle waits too).

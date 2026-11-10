@@ -858,9 +858,15 @@ config_section! {
         pub auto_enabled: StrictBool = StrictBool(true) => {
             env: ["IMPROVE_AUTO_ENABLED"], alias: [], secret: false,
         },
-        /// Opt in to the `review_conflicts` stage for every run.
-        pub review_conflicts: StrictBool = StrictBool(false) => {
+        /// Default of `improve(review_conflicts=None)`: run the
+        /// `review_conflicts` stage (an explicit per-call value wins).
+        pub review_conflicts: StrictBool = StrictBool(true) => {
             env: ["IMPROVE_REVIEW_CONFLICTS"], alias: [], secret: false,
+        },
+        /// Default of `improve(build_global_context_index=None)`: run the
+        /// `global_context_index` stage (an explicit per-call value wins).
+        pub global_context_index: StrictBool = StrictBool(true) => {
+            env: ["IMPROVE_GLOBAL_CONTEXT_INDEX"], alias: [], secret: false,
         },
         /// Document metadata key holding a source's effective date.
         pub effective_date_key: String = "effective_date".to_string() => {

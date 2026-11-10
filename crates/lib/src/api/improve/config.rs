@@ -27,8 +27,10 @@ pub struct ImproveConfigError(pub String);
 pub struct ImproveConfig {
     /// Run `improve()` automatically after a session `remember()`.
     pub auto_enabled: bool,
-    /// Opt in to `review_conflicts` for every run.
+    /// Default of `improve(review_conflicts=None)`.
     pub review_conflicts: bool,
+    /// Default of `improve(build_global_context_index=None)`.
+    pub global_context_index: bool,
     /// Document metadata key holding a source's effective date.
     pub effective_date_key: String,
     /// Auto-improve fires after this many new session entries (0: off).
@@ -51,7 +53,8 @@ impl Default for ImproveConfig {
     fn default() -> Self {
         Self {
             auto_enabled: true,
-            review_conflicts: false,
+            review_conflicts: true,
+            global_context_index: true,
             effective_date_key: "effective_date".to_string(),
             debounce_entries: 1,
             debounce_seconds: 0.0,
@@ -143,6 +146,7 @@ impl ImproveConfig {
         let config = Self {
             auto_enabled: raw.auto_enabled.get(),
             review_conflicts: raw.review_conflicts.get(),
+            global_context_index: raw.global_context_index.get(),
             effective_date_key: raw.effective_date_key.clone(),
             debounce_entries: non_negative(raw.debounce_entries, "debounce_entries", "")?,
             debounce_seconds: raw.debounce_seconds,
@@ -244,7 +248,8 @@ mod tests {
         assert_eq!(config.feedback_alpha, DEFAULT_FEEDBACK_ALPHA);
         assert_eq!(DEFAULT_FEEDBACK_ALPHA, 0.1);
         assert_eq!(config.distill_max_batches_per_run, 0);
-        assert!(!config.review_conflicts);
+        assert!(config.review_conflicts);
+        assert!(config.global_context_index);
         assert_eq!(config.effective_date_key, "effective_date");
     }
 
@@ -259,7 +264,8 @@ mod tests {
                 " feedback_weights, distill_sessions ,,",
             ),
             ("IMPROVE_FEEDBACK_ALPHA", "0.25"),
-            ("IMPROVE_REVIEW_CONFLICTS", "true"),
+            ("IMPROVE_REVIEW_CONFLICTS", "false"),
+            ("IMPROVE_GLOBAL_CONTEXT_INDEX", "false"),
             ("IMPROVE_EFFECTIVE_DATE_KEY", "published"),
             ("IMPROVE_TRACE_WINDOW_STEPS", "4"),
             ("IMPROVE_TRACE_WINDOWS_PER_RUN", "2"),
@@ -273,7 +279,8 @@ mod tests {
             ["feedback_weights", "distill_sessions"]
         );
         assert_eq!(config.feedback_alpha, 0.25);
-        assert!(config.review_conflicts);
+        assert!(!config.review_conflicts);
+        assert!(!config.global_context_index);
         assert_eq!(config.effective_date_key, "published");
         assert_eq!(config.trace_window_steps, 4);
         assert_eq!(config.trace_windows_per_run, 2);
@@ -343,6 +350,7 @@ mod tests {
                 "distill_max_batches_per_run",
                 "effective_date_key",
                 "feedback_alpha",
+                "global_context_index",
                 "review_conflicts",
                 "stages_disabled",
                 "trace_window_steps",

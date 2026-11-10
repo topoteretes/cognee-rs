@@ -800,7 +800,8 @@ class Cognee:
         *opts* must contain ``"datasetName"`` (camelCase) or
         ``"dataset_name"`` (normalised). Optional keys: ``sessionIds``,
         ``feedbackAlpha``, ``tenant``, ``datasetId``, ``buildGlobalContextIndex``,
-        ``buildTruthSubspace`` (bool opt-ins) and ``runInBackground`` (bool:
+        ``reviewConflicts`` (bool; omitted follows the ``improve.*`` setting,
+        default on), ``buildTruthSubspace`` (bool opt-in) and ``runInBackground`` (bool:
         resolve the dataset and validate the options, then return a ``running``
         result at once; wait for the run with :meth:`wait_for_background_tasks`,
         ``close()`` waits too).

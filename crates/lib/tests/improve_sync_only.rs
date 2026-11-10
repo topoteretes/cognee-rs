@@ -128,7 +128,8 @@ async fn improve_with_sessions_records_every_stage_in_order() {
         add_pipeline: Some(&h.add_pipeline),
         dataset_locks: None,
         cognify_config: &config,
-        build_global_context_index: false,
+        build_global_context_index: Some(false),
+        review_conflicts: Some(false),
         build_truth_subspace: false,
         run_in_background: false,
     })
@@ -189,7 +190,8 @@ async fn improve_without_sessions_skips_every_stage() {
         add_pipeline: Some(&h.add_pipeline),
         dataset_locks: None,
         cognify_config: &config,
-        build_global_context_index: false,
+        build_global_context_index: Some(false),
+        review_conflicts: Some(false),
         build_truth_subspace: false,
         run_in_background: false,
     })
@@ -245,7 +247,8 @@ async fn improve_waits_for_a_held_session_then_runs_every_stage() {
         add_pipeline: Some(&h.add_pipeline),
         dataset_locks: None,
         cognify_config: &config,
-        build_global_context_index: false,
+        build_global_context_index: Some(false),
+        review_conflicts: Some(false),
         build_truth_subspace: false,
         run_in_background: false,
     });

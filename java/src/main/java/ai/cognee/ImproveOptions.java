@@ -16,8 +16,10 @@ public final class ImproveOptions extends Options {
     public ImproveOptions sessionIds(List<String> ids) { put("sessionIds", ids); return this; }
     public ImproveOptions feedbackAlpha(double a) { put("feedbackAlpha", a); return this; }
     public ImproveOptions tenant(String t) { put("tenant", t); return this; }
-    /** Opt in to the {@code global_context_index} stage (default false). */
+    /** Run the {@code global_context_index} stage; leaving it out follows the {@code improve.global_context_index} setting (default on). */
     public ImproveOptions buildGlobalContextIndex(boolean b) { put("buildGlobalContextIndex", b); return this; }
+    /** Run the {@code review_conflicts} stage; leaving it out follows the {@code improve.review_conflicts} setting (default on). */
+    public ImproveOptions reviewConflicts(boolean b) { put("reviewConflicts", b); return this; }
     /** Opt in to the {@code build_truth_subspace} stage (default false). */
     public ImproveOptions buildTruthSubspace(boolean b) { put("buildTruthSubspace", b); return this; }
     /**

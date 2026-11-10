@@ -113,11 +113,33 @@ describe("memory ops (Tier-A — no LLM)", () => {
       try {
         const result = await native.cogneeImprove(h.handle, {
           datasetName: "improve_test_ds",
+          // global_context_index and review_conflicts run by default
+          // (SDK-1206); turn them off to keep every stage skipped here.
+          buildGlobalContextIndex: false,
+          reviewConflicts: false,
         });
         expect(typeof result).toBe("object");
         expect(Array.isArray(result.stages)).toBe(true);
         expect(result.datasetName).toBe("improve_test_ds");
         expect(result.status).toBe("skipped");
+      } finally {
+        cleanup(h.tmpDir);
+      }
+    });
+
+    it("improve with no stage flags runs global_context_index by default", async () => {
+      const h = makeTempHandle("improve_default@example.com");
+      await native.cogneeWarm(h.handle);
+      try {
+        const result = await native.cogneeImprove(h.handle, {
+          datasetName: "improve_default_ds",
+        });
+        const stage = result.stages.find(
+          (s: any) => s.stage === "global_context_index"
+        );
+        expect(stage).toBeDefined();
+        expect(stage?.status).not.toBe("skipped");
+        expect(result.status).toBe("completed");
       } finally {
         cleanup(h.tmpDir);
       }

@@ -672,7 +672,10 @@ void cg_sdk_remember_entry(const CgSdk*        sdk,
  *   "sessionIds"  (string array, optional),
  *   "feedbackAlpha" (float in (0, 1], default the improve.feedback_alpha setting, 0.1),
  *   "tenant"      (UUID string, optional),
- *   "buildGlobalContextIndex" (bool, default false: opt in to that stage),
+ *   "buildGlobalContextIndex" (bool; omitted follows the improve.global_context_index
+ *                  setting, default on; an explicit value wins either way),
+ *   "reviewConflicts"         (bool; omitted follows the improve.review_conflicts
+ *                  setting, default on; an explicit value wins either way),
  *   "buildTruthSubspace"      (bool, default false: opt in to that stage),
  *   "runInBackground"         (bool, default false: resolve the dataset --
  *                  an unknown or unwritable "datasetId" fails with

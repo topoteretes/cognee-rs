@@ -166,8 +166,14 @@ class ImproveOpts(TypedDict, total=False):
     session_ids: list[str]
     feedback_alpha: float
     tenant: str
-    # Opt in to the ``global_context_index`` stage (default ``False``).
+    # Run the ``global_context_index`` stage; omitted follows the
+    # ``improve.global_context_index`` setting (default on), an explicit value
+    # wins either way.
     build_global_context_index: bool
+    # Run the ``review_conflicts`` stage; omitted follows the
+    # ``improve.review_conflicts`` setting (default on), an explicit value
+    # wins either way.
+    review_conflicts: bool
     # Opt in to the ``build_truth_subspace`` stage (default ``False``).
     build_truth_subspace: bool
     # Resolve the dataset and validate the options, then return a ``running``
