@@ -188,7 +188,9 @@ CgSdkWaiter* cg_sdk_waiter_new(void);
  *
  * @param code          Result code from the completed op.
  * @param result_json   JSON result (valid only inside callback; copied).
- * @param error_message Error message (ignored here; waiter returns the code).
+ * @param error_message Error message (copied; on a non-OK code
+ *                      `cg_sdk_waiter_wait` stores it in the waiting thread's
+ *                      last-error slot, readable via `cg_last_error_message`).
  * @param user_data     Must be a valid `CgSdkWaiter*`.
  */
 void cg_sdk_waiter_callback(
@@ -221,8 +223,15 @@ CgErrorCode cg_sdk_waiter_wait(CgSdkWaiter* waiter, char** out_result_json);
 /**
  * Destroy a waiter.  No-op if `waiter` is NULL.
  *
+ * Safe to call as soon as `cg_sdk_waiter_wait` has returned on this waiter,
+ * even if `cg_sdk_waiter_callback` is still running on the SDK's worker
+ * thread: the callback keeps the state it touches alive on its own.
+ *
  * Must not be called while `cg_sdk_waiter_wait` is blocking on the same
- * waiter from another thread.
+ * waiter from another thread, and must not be called before the callback
+ * has fired: once a waiter has been passed as `user_data` to an async op,
+ * destroy it only after `cg_sdk_waiter_wait` on it has returned. Destroying
+ * it earlier leaves the callback with a dangling pointer.
  */
 void cg_sdk_waiter_destroy(CgSdkWaiter* waiter);
 

@@ -66,6 +66,10 @@ pub type CgSdkResultCallback = unsafe extern "C" fn(
 
 // ── CgSdkWaiter ─────────────────────────────────────────────────────────────
 
+/// What a waiter's callback publishes: the code, the owned result JSON and the
+/// owned error message.
+type WaiterResult = (CgErrorCode, Option<CString>, Option<CString>);
+
 /// Internal state for the single-use sync waiter.
 struct WaiterInner {
     /// `None` = not yet fired; `Some((code, result_json_owned, error_message_owned))`.
@@ -73,7 +77,7 @@ struct WaiterInner {
     /// The third element stores the error message text so that
     /// `cg_sdk_waiter_wait` can call `set_last_error` on the *calling* thread
     /// before returning the non-OK code (classic sync-style error-query pattern).
-    result: Option<(CgErrorCode, Option<CString>, Option<CString>)>,
+    result: Option<WaiterResult>,
     /// Set to `true` once `cg_sdk_waiter_wait` has consumed the result.
     consumed: bool,
 }
@@ -560,11 +564,11 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
     if user_data.is_null() {
         return;
     }
-    let waiter = unsafe { &*(user_data as *const CgSdkWaiter) };
     // Keep the shared state alive past `cg_sdk_waiter_destroy`: `wait` may
     // observe the result and the caller may destroy the waiter while this
-    // callback is still running. Never touch `waiter` again after this line.
-    let shared = Arc::clone(&waiter.shared);
+    // callback is still running. The `CgSdkWaiter` reference never escapes
+    // `waiter_shared`, so nothing below can touch the freed box.
+    let shared = unsafe { waiter_shared(user_data) };
 
     // Copy the result_json string into owned storage so the caller can use
     // it after the callback returns (the pointer from the op is only valid
@@ -587,11 +591,30 @@ pub unsafe extern "C" fn cg_sdk_waiter_callback(
         s.to_str().ok().and_then(|s| CString::new(s).ok())
     };
 
+    waiter_publish(&shared, (code, owned_json, owned_err));
+}
+
+/// The callback's own reference to the waiter's shared state, taken while the
+/// `CgSdkWaiter` is still guaranteed alive (before the result is published,
+/// `cg_sdk_waiter_wait` cannot return, so the waiter cannot be destroyed).
+///
+/// # Safety
+/// `user_data` must be a valid, non-null `*mut CgSdkWaiter` allocated by
+/// `cg_sdk_waiter_new` and not yet destroyed.
+unsafe fn waiter_shared(user_data: *mut std::ffi::c_void) -> Arc<WaiterShared> {
+    let waiter = unsafe { &*(user_data as *const CgSdkWaiter) };
+    Arc::clone(&waiter.shared)
+}
+
+/// Publish the result and wake `cg_sdk_waiter_wait`. Touches only `shared`,
+/// never the `CgSdkWaiter`, which may already be destroyed by the time the
+/// notify runs.
+fn waiter_publish(shared: &WaiterShared, result: WaiterResult) {
     let mut guard = shared.inner.lock().unwrap_or_else(|p| {
         // lock poison is unrecoverable
         p.into_inner()
     });
-    guard.result = Some((code, owned_json, owned_err));
+    guard.result = Some(result);
     shared.condvar.notify_one();
     drop(guard);
 }
@@ -692,7 +715,9 @@ pub unsafe extern "C" fn cg_sdk_waiter_wait(
 ///
 /// # Safety
 /// `waiter` must be a pointer previously returned by `cg_sdk_waiter_new`,
-/// or null. Must not be called concurrently with `cg_sdk_waiter_wait`.
+/// or null. Must not be called concurrently with `cg_sdk_waiter_wait`, and,
+/// once the waiter was handed to an async op as `user_data`, not before
+/// `cg_sdk_waiter_wait` on it has returned — the callback dereferences it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cg_sdk_waiter_destroy(waiter: *mut CgSdkWaiter) {
     if !waiter.is_null() {
@@ -867,9 +892,43 @@ mod tests {
     /// that destroy is safe from the moment `wait` returns. The freed-memory
     /// access this guards against is a race, so this loop is a smoke test,
     /// not a deterministic repro — the real guarantee is structural.
+    /// Deterministic check of the use-after-free fix: the callback's own
+    /// reference must keep the shared state alive after the waiter is
+    /// destroyed, so the publish/notify that may run after
+    /// `cg_sdk_waiter_destroy` operates on live memory. Before the fix the
+    /// callback held no reference of its own (the count would drop to 0).
+    #[test]
+    fn waiter_callback_reference_outlives_destroy() {
+        let waiter = cg_sdk_waiter_new();
+        let shared = unsafe { waiter_shared(waiter.cast()) };
+        assert_eq!(Arc::strong_count(&shared), 2);
+
+        unsafe { cg_sdk_waiter_destroy(waiter) };
+        assert_eq!(
+            Arc::strong_count(&shared),
+            1,
+            "the callback's reference must keep the shared state alive"
+        );
+
+        // The publish half of the callback after destroy: must only touch
+        // `shared`.
+        waiter_publish(&shared, (CgErrorCode::Ok, None, None));
+        let guard = shared
+            .inner
+            .lock()
+            .expect("lock is not poisoned in this test");
+        assert!(guard.result.is_some());
+    }
+
+    /// Race smoke test for the same fix, end to end through the C entry
+    /// points. Racy by nature, so it cannot fail deterministically on its
+    /// own (see `waiter_callback_reference_outlives_destroy`), but under Miri
+    /// (`cargo miri test -p cognee-capi waiter_destroy`) a dangling access is
+    /// reported reliably, and a few iterations suffice there.
     #[test]
     fn waiter_destroy_may_race_with_callback_notify() {
-        for _ in 0..2_000 {
+        let iterations = if cfg!(miri) { 10 } else { 2_000 };
+        for _ in 0..iterations {
             let waiter = cg_sdk_waiter_new();
             let ud = waiter as usize;
             let cb_thread = std::thread::spawn(move || {
