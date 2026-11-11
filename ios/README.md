@@ -4,7 +4,7 @@ Swift async/await wrapper for [cognee-rs](https://github.com/topoteretes/cognee-
 
 ## Requirements
 
-- Xcode 15 or later
+- Xcode 16.4 (the version CI verifies); earlier versions are untested
 - iOS 13+ deployment target
 - `CogneeSDK.xcframework` built locally (see below — the binary is not committed to git)
 
@@ -97,7 +97,7 @@ Test Suite 'All tests' passed at …
 
 ## CI
 
-The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-14` Apple Silicon runner. CI **links** both iOS targets rather than only type-checking them:
+The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-15` Apple Silicon runner (default Xcode 16.4). CI **links** both iOS targets rather than only type-checking them:
 
 - `cargo rustc --crate-type cdylib --target aarch64-apple-ios` — compiles *and links* the Rust C API for the device target
 - `cargo rustc --crate-type cdylib --target aarch64-apple-ios-sim` — same for the simulator target
@@ -107,7 +107,7 @@ The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a 
 
 `cdylib` is the crate type that exercises the linker: rustc emits a staticlib by archiving objects without resolving symbols, so building one runs no linker at all and would therefore catch no unresolved-symbol errors. The shipped staticlib slices are a separate, release build performed by `capi/scripts/build_xcframework.sh`.
 
-This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~4.0 GB of `capi/target` against ~34 GB of free space on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
+This catches Rust type errors, unresolved symbols, C API signature drift, and Swift syntax mistakes without assembling the ~6.6 GB xcframework on the runner. The two debug link builds together occupy ~4.3 GB of `capi/target` against ~45 GB of free space (40 GB left after linking) on the runner, so disk is not the constraint it once was — an earlier revision of this job used `cargo check` on the assumption that a full build would not fit. What CI still cannot do is *run* the tests: XCTest behavioral tests are executed manually via `xcodebuild test` before each push.
 
 ## Architecture
 

@@ -26,12 +26,30 @@ env:
 jobs:
   ios-check:
     name: iOS targets (link + Swift typecheck)
-    # macos-14 = Apple Silicon (M1).  Required for aarch64-apple-ios targets.
-    runs-on: macos-14
+    # macos-15 = Apple Silicon (arm64). Pinned rather than macos-latest so an
+    # image migration cannot silently swap the OS under this lane; the Xcode
+    # version is pinned separately by the "Select Xcode" step below (the image
+    # default can change between image releases). macos-14 was retired from GitHub Actions on 2026-11-02
+    # (actions/runner-images#15226); jobs on it are cancelled at queue time
+    # with "The configuration 'macos-14-arm64-us-default' is not supported".
+    # macos-15 is the oldest arm64 image still offered, and matches the
+    # darwin-arm64 runner in capi-release.yml / ts-prebuild.yml / java-prebuild.yml.
+    runs-on: macos-15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # Xcode_16.4.app is listed in the actions/runner-images macos-15-arm64
+      # README (it is also that image's default). Selecting it explicitly keeps
+      # the Xcode/SDK stable when the image default moves.
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Log Xcode and iOS Simulator SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
 
       - name: Install Rust toolchain (1.91.1 + iOS targets)
         uses: dtolnay/rust-toolchain@master
@@ -41,7 +59,7 @@ jobs:
           components: rustfmt,clippy
 
       - name: Cache Cargo registry + git sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -52,7 +70,7 @@ jobs:
             ${{ runner.os }}-cargo-ios-
 
       # lance-encoding v6.0.0 has a build script that calls `protoc`;
-      # it is not pre-installed on macos-14 runners.
+      # it is not pre-installed on macos-15 runners.
       - name: Install protoc (required by lance-encoding build script)
         run: brew install protobuf
 
@@ -105,12 +123,11 @@ jobs:
       # one failure it exists to diagnose.
       #
       # `/System/Volumes/Data` is the writable volume the build lands on. `/` is
-      # the read-only system snapshot: across both builds of run 33517170717 its
-      # `Used` column sat unchanged at 9.6Gi while capi/target grew to 4.0G, so
-      # only the container-shared `Avail` there carried any signal. Note those
-      # figures were taken *between* the two builds, so they are mid-run
-      # readings rather than starting headroom — which is what the baseline
-      # step above now records. Peak usage is nowhere near the runner's limit —
+      # the read-only system snapshot, so its `Used` column does not track the
+      # build (historical, macos-14 run 33517170717: it sat unchanged at 9.6Gi
+      # while capi/target grew to 4.0G). Measured on macos-15 (run 42979699807):
+      # 45Gi available before linking, 40Gi after both builds, capi/target 4.3G.
+      # Peak usage is nowhere near the runner's limit —
       # the "full builds do not fit" premise this job was originally written
       # against no longer holds.
       - name: Disk usage after linking
