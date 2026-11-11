@@ -386,9 +386,9 @@ jobs:
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
           OPENAI_MODEL: gpt-4o-mini
-          LLM_PROVIDER: openai
-          # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via
-          # the image's ONNX model (see the COGX roundtrip step).
+          # Only these three reach the tests: helpers.py fixes the provider to
+          # openai for both CLIs, and both embed with the same key through
+          # OpenAI's text-embedding-3-small.
         run: |
           docker compose \
             -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
@@ -396,7 +396,6 @@ jobs:
             -e OPENAI_TOKEN="$OPENAI_TOKEN" \
             -e OPENAI_URL="$OPENAI_URL" \
             -e OPENAI_MODEL="$OPENAI_MODEL" \
-            -e LLM_PROVIDER="$LLM_PROVIDER" \
             -e HARNESS_FAIL_ON_SKIP=1 \
             e2e-tests \
             pytest -vs -rs \
