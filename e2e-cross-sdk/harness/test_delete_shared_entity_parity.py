@@ -18,6 +18,8 @@ from helpers import (
     python_db_path,
     python_graph,
     rust_graph,
+    document_neighbourhood,
+    _normalize_uuid,
     rust_db_path,
     run_python_cli,
     run_rust_cli,
@@ -31,6 +33,35 @@ DATASET_A = "shared_entities_a"
 DATASET_B = "shared_entities_b"
 
 
+def _neighbourhoods(db_path, graph):
+    """(a_nodes, b_nodes): graph node ids near each dataset's documents.
+
+    A document's graph node id is its data row id in both SDKs, and a
+    data row belongs to one dataset (data.dataset_id).
+    """
+    conn = open_db(db_path)
+    datasets = {d["name"]: _normalize_uuid(d["id"]) for d in query_datasets(conn)}
+    data = query_data(conn)
+    conn.close()
+    nodes, edges = graph
+
+    def docs(name):
+        return {
+            _normalize_uuid(d["id"])
+            for d in data
+            if _normalize_uuid(d.get("dataset_id")) == datasets[name]
+        }
+
+    a_docs, b_docs = docs(DATASET_A), docs(DATASET_B)
+    a = document_neighbourhood(nodes, edges, a_docs)
+    b = document_neighbourhood(nodes, edges, b_docs)
+    assert len(b) > len(b_docs), (
+        f"dataset_b's documents have no chunks in the graph before the delete "
+        f"(documents {sorted(b_docs)}, reached {len(b)} node(s))"
+    )
+    return a, b
+
+
 @requires_openai
 def test_shared_entity_delete_parity(tmp_path):
     """After deleting one of two overlapping datasets, remaining node types
@@ -41,7 +72,11 @@ def test_shared_entity_delete_parity(tmp_path):
          text) to dataset_b.
       2. Cognify both datasets.
       3. Delete dataset_a only.
-      4. Verify dataset_b's data still exists.
+      3a. Snapshot the graph nodes within two hops of each dataset's
+          documents.
+      4. Verify dataset_b's data, and every graph node near its documents
+         (shared entities included), still exists, and that nodes only
+         dataset_a reached are gone (SDK-948).
       5. Collect remaining node types and compare across SDKs.
     """
     py_ws = tmp_path / "python"
@@ -116,6 +151,15 @@ def test_shared_entity_delete_parity(tmp_path):
     assert len(query_datasets(open_db(py_db))) >= 2, "Python has < 2 datasets"
     assert len(query_datasets(open_db(rust_db))) >= 2, "Rust has < 2 datasets"
 
+    # ── Snapshot what each dataset owns in the graph ────────────────────
+    # SDK-948: deleting dataset_a must not remove anything dataset_b's
+    # documents reach (their chunks, and the entities and summaries those
+    # chunks link to, shared entities included), and must remove what only
+    # dataset_a reached. Ids, not names, so this holds whatever the LLM
+    # extracted.
+    py_a, py_b = _neighbourhoods(py_db, python_graph(py_ws))
+    rust_a, rust_b = _neighbourhoods(rust_db, rust_graph(rust_ws))
+
     # ── Delete dataset_a only ────────────────────────────────────────────
     result = run_python_cli(
         py_ws, ["delete", "-d", DATASET_A, "-f"], check=False
@@ -171,6 +215,24 @@ def test_shared_entity_delete_parity(tmp_path):
     # Data rows: at least one should remain (from dataset_b)
     assert len(py_data) >= 1, "Python has no data rows after partial delete"
     assert len(rust_data) >= 1, "Rust has no data rows after partial delete"
+
+    # ── dataset_b's part of the graph survives; dataset_a's alone is gone ─
+    for sdk, a_hood, b_hood, nodes in (
+        ("Python", py_a, py_b, py_nodes),
+        ("Rust", rust_a, rust_b, rust_nodes),
+    ):
+        remaining = {n["id"] for n in nodes}
+        lost = b_hood - remaining
+        assert not lost, (
+            f"{sdk}: deleting dataset_a removed {len(lost)} of dataset_b's "
+            f"{len(b_hood)} graph node(s) ({len(a_hood & b_hood)} shared with "
+            f"dataset_a): {sorted(lost)}"
+        )
+        left = (a_hood - b_hood) & remaining
+        assert not left, (
+            f"{sdk}: {len(left)} graph node(s) only dataset_a reached survive "
+            f"its delete: {sorted(left)}"
+        )
 
     # ── Tolerance-based node type comparison ─────────────────────────────
     py_types = {

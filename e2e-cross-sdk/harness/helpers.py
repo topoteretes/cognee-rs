@@ -716,6 +716,30 @@ def rust_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
     return nodes, edges
 
 
+def document_neighbourhood(
+    nodes: list[dict], edges: list[dict], document_ids: set[str]
+) -> set[str]:
+    """Ids of the graph nodes within two hops of the given document nodes.
+
+    Edge direction is ignored. Two hops from a ``TextDocument`` reach its
+    chunks (hop 1) and what those chunks link to (hop 2): the entities they
+    contain and their summaries. This is the part of the graph a document's
+    dataset owns or shares, independent of what the LLM extracted.
+    """
+    adjacent: dict[str, set[str]] = {}
+    for e in edges:
+        s, d = e["source_node_id"], e["destination_node_id"]
+        adjacent.setdefault(s, set()).add(d)
+        adjacent.setdefault(d, set()).add(s)
+    node_ids = {n["id"] for n in nodes}
+    seen = {i for i in document_ids if i in node_ids}
+    frontier = set(seen)
+    for _ in range(2):
+        frontier = {n for f in frontier for n in adjacent.get(f, ())} - seen
+        seen |= frontier
+    return seen
+
+
 # Reads every LanceDB table under a workspace. A LanceDB database is a
 # directory of ``<table>.lance`` directories; each SDK may keep one per dataset,
 # so rows of the same collection are pooled. Python's rows hold the payload in a
