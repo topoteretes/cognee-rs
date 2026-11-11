@@ -21,13 +21,12 @@ payloads per collection:
 They need ``OPENAI_API_KEY`` because cognify calls the LLM.
 """
 
-import json
 from pathlib import Path
 
 import pytest
 
 from conftest import requires_openai
-from helpers import run_python_script
+from helpers import vector_rows
 
 # Keys Rust adds to Python's IndexSchema row (cognee_models::RUST_ONLY_PAYLOAD_KEYS,
 # plus the adapter-maintained dataset union).
@@ -66,42 +65,9 @@ KNOWN_TYPE_GAPS = {
     ("DocumentChunk_text", "external_metadata"),
 }
 
-_START, _END = "<<<PAYLOADS>>>", "<<<END>>>"
-
-# Reads every LanceDB table under a workspace. A LanceDB database is a
-# directory of ``<table>.lance`` directories; each SDK may keep one per dataset,
-# so rows of the same collection are pooled. Python's rows hold the payload in a
-# ``payload`` struct column; Rust's in a ``metadata`` JSON string column.
-_DUMP_SCRIPT = """
-import json, pathlib, lancedb
-root = pathlib.Path({root!r})
-out = {{}}
-for table_dir in sorted(root.rglob("*.lance")):
-    if not table_dir.is_dir() or table_dir.parent.suffix == ".lance":
-        continue
-    db = lancedb.connect(str(table_dir.parent))
-    for row in db.open_table(table_dir.stem).to_arrow().to_pylist():
-        if "payload" in row:
-            payload = row["payload"]
-        else:
-            payload = json.loads(row["metadata"])
-        out.setdefault(table_dir.stem, []).append(payload)
-print({start!r} + json.dumps(out, default=str) + {end!r})
-"""
-
-
 def lancedb_payloads(workspace: Path) -> dict[str, list[dict]]:
-    """Stored payloads per collection, read with the lancedb Python package."""
-    script = _DUMP_SCRIPT.format(root=str(workspace), start=_START, end=_END)
-    result = run_python_script(workspace, script, check=False)
-    out = result.stdout
-    start, end = out.find(_START), out.find(_END)
-    if result.returncode != 0 or start == -1 or end < start:
-        raise RuntimeError(
-            f"Reading LanceDB under {workspace} failed (exit {result.returncode}):\n"
-            f"--- stdout ---\n{out}\n--- stderr ---\n{result.stderr}"
-        )
-    return json.loads(out[start + len(_START) : end])
+    """Stored payloads per collection (see ``helpers.vector_rows``)."""
+    return vector_rows(workspace)
 
 
 def json_kind(value) -> str:
