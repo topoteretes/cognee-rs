@@ -46,6 +46,10 @@ impl GraphDbFactory for LadybugGraphFactory {
         self.provider
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
+    }
+
     fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
         vec![<cognee_graph::LadybugConfig as cognee_config_core::ConfigSection>::schema()]
     }
@@ -102,6 +106,10 @@ impl GraphDbFactory for PgGraphFactory {
         self.provider
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
+    }
+
     async fn build(
         &self,
         ctx: &BackendBuildContext,
@@ -134,6 +142,10 @@ pub struct MockGraphFactory;
 impl GraphDbFactory for MockGraphFactory {
     fn provider(&self) -> &str {
         "mock"
+    }
+
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::graph_store_inputs(ctx, &self.config_sections())
     }
 
     async fn build(

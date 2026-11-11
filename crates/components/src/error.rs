@@ -69,3 +69,47 @@ impl ComponentError {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    fn in_use(dir: &std::path::Path) -> cognee_utils::StoreInUse {
+        cognee_utils::StoreClaim::acquire(dir, "test").unwrap_err()
+    }
+
+    /// Both factory helpers keep a refused open typed (the bindings report
+    /// it as STORE_IN_USE) and flatten everything else into their kind's
+    /// string error. `from_vector_db` is the seam a vector factory outside
+    /// this repository uses, exactly as the Ladybug factory uses its twin.
+    #[test]
+    fn the_factory_helpers_keep_store_in_use_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _held = cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap();
+
+        let graph = ComponentError::from_graph_db(
+            "init",
+            cognee_graph::GraphDBError::StoreInUse(in_use(dir.path())),
+        );
+        assert!(matches!(graph, ComponentError::StoreInUse(_)));
+        let vector = ComponentError::from_vector_db(
+            "init",
+            cognee_vector::VectorDBError::StoreInUse(in_use(dir.path())),
+        );
+        assert!(matches!(vector, ComponentError::StoreInUse(_)));
+
+        let other = ComponentError::from_vector_db(
+            "init",
+            cognee_vector::VectorDBError::StorageError("disk".into()),
+        );
+        assert!(
+            matches!(&other, ComponentError::VectorDb(m) if m.starts_with("init: ")),
+            "{other}"
+        );
+    }
+}

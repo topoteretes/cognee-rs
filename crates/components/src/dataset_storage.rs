@@ -711,26 +711,20 @@ impl DatasetStorage {
     }
 }
 
-/// What a [`DatasetStorage`] depends on in a build context. In memory only:
-/// it carries the resolved database URLs, credentials included.
+/// What a [`DatasetStorage`] depends on in a build context: the shared-store
+/// inputs of both kinds ([`crate::graph_store_inputs`] /
+/// [`crate::vector_store_inputs`], the same ones the shared stores are keyed
+/// on), plus what only per-dataset storage reads — the relational database
+/// its `dataset_database` rows live in, and the embedding model it records
+/// and checks per dataset. In memory only: it carries resolved URLs.
 fn storage_fingerprint(ctx: &BackendBuildContext) -> String {
-    let graph = ctx.section::<crate::sections::GraphConfig>();
-    let vector = ctx.section::<crate::sections::VectorConfig>();
     format!(
         "{:?}",
         (
-            ctx.graph_provider.to_lowercase(),
-            ctx.vector_provider.to_lowercase(),
-            &ctx.graph_file_path,
-            &ctx.vector_db_url,
-            &ctx.graph_postgres_url,
-            &ctx.vector_postgres_url,
+            crate::graph_store_inputs(ctx, &[]),
+            crate::vector_store_inputs(ctx, &[]),
             &ctx.relational_db_url,
-            &ctx.system_root_directory,
-            ctx.embedding_dimensions,
             &ctx.embedding.model,
-            graph.dataset_database_handler,
-            vector.dataset_database_handler,
         )
     )
 }

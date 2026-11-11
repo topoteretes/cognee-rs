@@ -146,3 +146,53 @@ async fn a_config_change_while_an_operation_holds_the_store_keeps_it() {
     drop((in_flight, after));
     state.close().await;
 }
+
+/// A store option change (same file) while an operation holds the services:
+/// the open store keeps being served — no STORE_IN_USE, no second instance —
+/// and the change applies once the operation lets go and the handle releases
+/// the store.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_store_change_applies_through_services_after_the_op_lets_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = handle_under(dir.path());
+    let in_flight = state.services().await.expect("first warm");
+    let old = std::sync::Arc::downgrade(&in_flight.graph_db);
+
+    state
+        .cm
+        .config()
+        .set("graph.ladybug.max_db_size", serde_json::json!(1u64 << 33))
+        .expect("a known key");
+    let during = state.services().await.expect("no STORE_IN_USE");
+    assert!(std::sync::Arc::ptr_eq(
+        &during.graph_db,
+        &in_flight.graph_db
+    ));
+    drop((during, in_flight));
+
+    state.release().await;
+    let after = state.services().await.expect("re-warm");
+    assert!(
+        old.upgrade().is_none(),
+        "the old store was closed and dropped"
+    );
+    after.graph_db.is_empty().await.unwrap();
+    drop(after);
+    state.close().await;
+}
+
+/// A STORE_IN_USE raised mid-operation reaches the bindings inside another
+/// error's message (`cognify failed: …`); it still carries its code, so Java
+/// throws `STORE_IN_USE` and TypeScript a `StoreInUseError`.
+#[test]
+fn an_op_time_store_in_use_keeps_its_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let _held = cognee_utils::StoreClaim::acquire(dir.path(), "ladybug graph").unwrap();
+    let in_use = cognee_utils::StoreClaim::acquire(dir.path(), "ladybug graph").unwrap_err();
+    let err = cognee_bindings_common::SdkError::Runtime(format!("cognify failed: {in_use}"));
+    assert_eq!(err.code(), "STORE_IN_USE");
+    assert_eq!(
+        cognee_bindings_common::SdkError::Runtime("cognify failed: boom".into()).code(),
+        "RUNTIME_ERROR"
+    );
+}

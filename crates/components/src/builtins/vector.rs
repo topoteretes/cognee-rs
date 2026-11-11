@@ -21,6 +21,10 @@ impl VectorDbFactory for PgVectorFactory {
         "pgvector"
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::vector_store_inputs(ctx, &self.config_sections())
+    }
+
     fn config_sections(&self) -> Vec<&'static cognee_config_core::SectionSchema> {
         vec![<cognee_vector::PgVectorConfig as cognee_config_core::ConfigSection>::schema()]
     }
@@ -64,6 +68,10 @@ impl VectorDbFactory for LanceDbFactory {
         "lancedb"
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::vector_store_inputs(ctx, &self.config_sections())
+    }
+
     async fn build(&self, ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
         if ctx.vector_db_url == ":memory:" {
             return Ok(Arc::new(BruteForceVectorDB::new()));
@@ -105,6 +113,10 @@ impl VectorDbFactory for BruteForceFactory {
         "brute-force"
     }
 
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::vector_store_inputs(ctx, &self.config_sections())
+    }
+
     async fn build(&self, _ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {
         Ok(Arc::new(BruteForceVectorDB::new()))
     }
@@ -119,6 +131,10 @@ pub struct MockVectorFactory;
 impl VectorDbFactory for MockVectorFactory {
     fn provider(&self) -> &str {
         "mock"
+    }
+
+    fn store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
+        crate::vector_store_inputs(ctx, &self.config_sections())
     }
 
     async fn build(&self, _ctx: &BackendBuildContext) -> Result<Arc<dyn VectorDB>, ComponentError> {

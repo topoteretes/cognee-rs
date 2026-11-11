@@ -232,11 +232,11 @@ pub struct LadybugAdapter {
 /// but a query still in flight holds its own `Arc` and keeps the file open
 /// until it finishes. The claim is released exactly when the last such `Arc`
 /// drops. Field order is load-bearing: `db` drops (and runs lbug's destructor
-/// checkpoint) before `_claim` lets a new open in.
+/// checkpoint) before `claim` lets a new open in.
 struct OpenDatabase {
     db: Database,
     /// `None` for an in-memory database, which has no file to share.
-    _claim: Option<StoreClaim>,
+    claim: Option<StoreClaim>,
 }
 
 impl std::ops::Deref for OpenDatabase {
@@ -305,7 +305,7 @@ impl LadybugAdapter {
 
         Ok(Self {
             db_path: db_path.to_string(),
-            db: std::sync::RwLock::new(Some(Arc::new(OpenDatabase { db, _claim: claim }))),
+            db: std::sync::RwLock::new(Some(Arc::new(OpenDatabase { db, claim }))),
             write_lock: Arc::new(Mutex::new(())),
             read_gate: Arc::new(RwLock::new(())),
         })
@@ -1100,6 +1100,19 @@ impl GraphDBTrait for LadybugAdapter {
     /// downcasting.
     async fn close(&self) -> GraphDBResult<()> {
         LadybugAdapter::close(self).await
+    }
+
+    fn store_paths(&self) -> Vec<std::path::PathBuf> {
+        // Poisoned or closed: nothing this adapter can still be asked about.
+        let Ok(guard) = self.db.read() else {
+            return Vec::new();
+        };
+        guard
+            .as_ref()
+            .and_then(|db| db.claim.as_ref())
+            .map(|claim| claim.path().to_path_buf())
+            .into_iter()
+            .collect()
     }
 
     /// Delegates to the inherent [`LadybugAdapter::flush`], so a pipeline holding

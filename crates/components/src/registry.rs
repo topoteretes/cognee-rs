@@ -603,52 +603,35 @@ impl ComponentRegistry {
         factory.build(ctx).await
     }
 
-    /// What the graph engine selected by `ctx` is built from: its provider, its
-    /// locations and every value of the `graph.*` sections and of the sections
-    /// the selected factory declares. Two contexts with equal fingerprints build
-    /// the same store, so a configuration change that leaves it alone (an LLM
-    /// key, a chunk size, `monitoring_tool`) keeps the open engine instead of
-    /// replacing it. In memory only: it carries resolved URLs, credentials
-    /// included.
+    /// The fingerprint of the graph store `ctx` selects
+    /// ([`GraphDbFactory::store_fingerprint`], under the same factory lookup
+    /// as [`Self::build_graph`]).
     pub fn graph_store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
         let key = ctx.graph_provider.to_lowercase();
         let own = self
             .graph
             .get(&key)
-            .map(|factory| factory.config_sections())
+            .map(|factory| factory.store_fingerprint(ctx))
             .unwrap_or_default();
-        format!(
-            "{:?}",
-            (
-                &key,
-                &ctx.graph_file_path,
-                &ctx.graph_postgres_url,
-                &ctx.system_root_directory,
-                store_sections(ctx, "graph", &own),
-            )
-        )
+        format!("{key}|{own}")
     }
 
-    /// The vector twin of [`Self::graph_store_fingerprint`]; the embedding
-    /// width is part of it, since a store is created for one width.
+    /// The fingerprint of the vector store `ctx` selects
+    /// ([`VectorDbFactory::store_fingerprint`], under the same factory
+    /// resolution as [`Self::build_vector`], Android fallback included).
     pub fn vector_store_fingerprint(&self, ctx: &BackendBuildContext) -> String {
-        let key = ctx.vector_provider.to_lowercase();
-        let own = self
-            .vector
-            .get(&key)
-            .map(|factory| factory.config_sections())
-            .unwrap_or_default();
-        format!(
-            "{:?}",
-            (
-                &key,
-                &ctx.vector_db_url,
-                &ctx.vector_postgres_url,
-                &ctx.system_root_directory,
-                ctx.embedding_dimensions,
-                store_sections(ctx, "vector", &own),
-            )
-        )
+        match self.resolve_vector_key(&ctx.vector_provider, ANDROID_LANCEDB_FALLBACK) {
+            Ok(key) => {
+                let own = self
+                    .vector
+                    .get(&key)
+                    .map(|factory| factory.store_fingerprint(ctx))
+                    .unwrap_or_default();
+                format!("{key}|{own}")
+            }
+            // Unresolvable: the build fails the same way; any stable value does.
+            Err(_) => format!("unresolved|{}", ctx.vector_provider.to_lowercase()),
+        }
     }
 
     /// Whether the LLM selected by `ctx.llm.provider` can make calls: it needs
@@ -1127,6 +1110,47 @@ fn store_sections<'a>(
         .iter()
         .filter(|(key, _)| in_section(key, kind) || own.iter().any(|s| in_section(key, s.name)))
         .collect()
+}
+
+/// What a graph store at `ctx`'s graph location is built from: the provider,
+/// the file path and Postgres URL, the system root (which a default path is
+/// derived from) and every value of the `graph.*` sections and of `own` (the
+/// factory's sections). The narrow [`GraphDbFactory::store_fingerprint`] of
+/// the built-in graph factories, and the graph half of the per-dataset
+/// storage fingerprint. In memory only: it carries resolved URLs.
+pub fn graph_store_inputs(
+    ctx: &BackendBuildContext,
+    own: &[&'static cognee_config_core::SectionSchema],
+) -> String {
+    format!(
+        "{:?}",
+        (
+            ctx.graph_provider.to_lowercase(),
+            &ctx.graph_file_path,
+            &ctx.graph_postgres_url,
+            &ctx.system_root_directory,
+            store_sections(ctx, "graph", own),
+        )
+    )
+}
+
+/// The vector twin of [`graph_store_inputs`]; the embedding width is part of
+/// it, since a store is created for one width.
+pub fn vector_store_inputs(
+    ctx: &BackendBuildContext,
+    own: &[&'static cognee_config_core::SectionSchema],
+) -> String {
+    format!(
+        "{:?}",
+        (
+            ctx.vector_provider.to_lowercase(),
+            &ctx.vector_db_url,
+            &ctx.vector_postgres_url,
+            &ctx.system_root_directory,
+            ctx.embedding_dimensions,
+            store_sections(ctx, "vector", own),
+        )
+    )
 }
 
 fn unsupported_msg(field: &str, provider: &str, supported: &[String]) -> String {

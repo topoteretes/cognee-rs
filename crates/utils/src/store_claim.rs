@@ -38,6 +38,17 @@ use std::sync::{LazyLock, Mutex, PoisonError};
 /// report it.
 pub const STORE_IN_USE_CODE: &str = "STORE_IN_USE";
 
+/// Whether `message` carries a [`StoreInUse`] error's text. Errors raised
+/// mid-operation reach the bindings flattened into another error's message
+/// (`cognify failed: …`); its `Display` starts with this marker, so the
+/// bindings can still report [`STORE_IN_USE_CODE`].
+pub fn mentions_store_in_use(message: &str) -> bool {
+    message.contains(STORE_IN_USE_MARKER)
+}
+
+/// The prefix of every [`StoreInUse`] message.
+const STORE_IN_USE_MARKER: &str = "STORE_IN_USE: the ";
+
 /// The canonical roots of every store currently claimed in this process.
 static CLAIMED: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
 
@@ -118,32 +129,101 @@ impl Drop for StoreClaim {
     }
 }
 
-/// The registry key of a store root: the canonical form of its nearest
-/// existing ancestor, joined with the components that do not exist yet.
+/// The registry key of a store root, so that every spelling of one store gets
+/// one key, whether or not it exists yet:
 ///
-/// Resolving the ancestor matters when the root is created after the claim:
-/// a path under a symlinked directory (Android's `/data/user/0` ->
-/// `/data/data`, macOS `/var` -> `/private/var`) must get the same key before
-/// and after it exists, or a second claim through the resolved path is let in.
+/// - its nearest existing ancestor is canonicalized (symlinks resolved — a
+///   root under Android's `/data/user/0` -> `/data/data`, or macOS `/var`,
+///   keys the same before and after it is created);
+/// - the components that do not exist yet are resolved lexically (`.`
+///   dropped, `..` applied), since there is no file to resolve them against;
+/// - on a case-insensitive filesystem (macOS APFS by default, Android shared
+///   storage) the whole key is lower-cased, since `Graph` and `graph` are one
+///   file there.
 fn store_key(path: &Path) -> PathBuf {
+    store_key_with(path, is_case_insensitive)
+}
+
+/// [`store_key`] with the case-sensitivity probe injected (for tests).
+fn store_key_with(path: &Path, case_insensitive: impl Fn(&Path) -> bool) -> PathBuf {
+    use std::path::Component;
+
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut missing = Vec::new();
-    let mut cursor = absolute.as_path();
-    loop {
-        if let Ok(canonical) = cursor.canonicalize() {
-            return missing
-                .iter()
-                .rev()
-                .fold(canonical, |key, name| key.join(name));
-        }
-        match (cursor.parent(), cursor.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_os_string());
-                cursor = parent;
+    let components: Vec<Component<'_>> = absolute.components().collect();
+    // The longest prefix that exists, canonicalized.
+    let (mut key, rest) = (0..=components.len())
+        .rev()
+        .find_map(|n| {
+            let prefix: PathBuf = components[..n].iter().collect();
+            if n == 0 {
+                return None;
             }
-            // Nothing on the path exists (or it ends in `..`): key it as given.
-            _ => return absolute,
+            prefix
+                .canonicalize()
+                .ok()
+                .map(|canonical| (canonical, &components[n..]))
+        })
+        .unwrap_or_else(|| (PathBuf::new(), &components[..]));
+    let base_exists = !key.as_os_str().is_empty();
+    let insensitive = base_exists && case_insensitive(&key);
+    for component in rest {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                key.pop();
+            }
+            other => key.push(other.as_os_str()),
         }
+    }
+    if insensitive {
+        PathBuf::from(key.to_string_lossy().to_lowercase())
+    } else {
+        key
+    }
+}
+
+/// Whether the filesystem holding the existing directory `dir` ignores case:
+/// some component of `dir` with a cased letter is looked up under the other
+/// case and found to be the same file. `false` when it cannot tell.
+fn is_case_insensitive(dir: &Path) -> bool {
+    let mut probe = dir.to_path_buf();
+    loop {
+        if let Some(name) = probe.file_name().and_then(|n| n.to_str()) {
+            let swapped: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_lowercase() {
+                        c.to_uppercase().next().unwrap_or(c)
+                    } else {
+                        c.to_lowercase().next().unwrap_or(c)
+                    }
+                })
+                .collect();
+            if swapped != name {
+                let alternate = probe.with_file_name(&swapped);
+                return same_file(&probe, &alternate);
+            }
+        }
+        if !probe.pop() {
+            return false;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -200,6 +280,42 @@ mod tests {
             StoreClaim::acquire(&real.join("files").join("graph"), "test").is_err(),
             "the same store through its resolved path must be refused"
         );
+    }
+
+    /// `..` and `.` in the part that does not exist yet resolve lexically:
+    /// two spellings of one future store are one key.
+    #[test]
+    fn dot_components_in_a_missing_part_are_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("stores").join("graph");
+        let dotted = dir
+            .path()
+            .join("stores")
+            .join("tmp")
+            .join("..")
+            .join(".")
+            .join("graph");
+        assert_eq!(store_key(&plain), store_key(&dotted));
+        let _first = StoreClaim::acquire(&plain, "test").unwrap();
+        assert!(StoreClaim::acquire(&dotted, "test").is_err());
+    }
+
+    /// On a case-insensitive filesystem two case spellings are one store.
+    #[test]
+    fn case_spellings_are_one_key_on_a_case_insensitive_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let lower = dir.path().join("stores").join("graph");
+        let upper = dir.path().join("Stores").join("GRAPH");
+        let insensitive = |_: &Path| true;
+        assert_eq!(
+            store_key_with(&lower, insensitive),
+            store_key_with(&upper, insensitive)
+        );
+        // ...and two stores where case matters (this test's own filesystem,
+        // as the probe reports it).
+        if !is_case_insensitive(dir.path()) {
+            assert_ne!(store_key(&lower), store_key(&upper));
+        }
     }
 
     #[test]

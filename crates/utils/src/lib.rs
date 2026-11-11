@@ -24,4 +24,4 @@ pub use id_generation::{
 pub use redact::redact;
 pub use retry::{RetryConfig, RetryDecision, retry_with_backoff};
 pub use sanitize::{sanitize_json, sanitize_json_in_place, sanitize_str, sanitize_string};
-pub use store_claim::{STORE_IN_USE_CODE, StoreClaim, StoreInUse};
+pub use store_claim::{STORE_IN_USE_CODE, StoreClaim, StoreInUse, mentions_store_in_use};
