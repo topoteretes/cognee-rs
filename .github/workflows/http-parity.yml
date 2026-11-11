@@ -6,12 +6,14 @@ name: Cross-SDK Parity
 # The HTTP half of this lane is GONE from OSS. `cognee-http-server` moved out
 # of this repository, taking the 28 `test_http_*.py` files, their fixtures and
 # the dual-server entrypoint with it. What is left here is the CLI/DB lane: the COGX
-# import + roundtrip contracts, telemetry parity, provenance parity and logging
-# parity.
+# import + roundtrip contracts, telemetry parity, provenance parity, logging
+# parity and the cross-SDK delete family (SDK-1166).
 #
-# The telemetry-parity and COGX-import steps need no secrets and are the
-# unconditional release gate. LLM-gated steps use secrets.OPENAI_KEY (same as
-# ci.yml) and skip cleanly when absent (fork-safe).
+# The telemetry-parity, COGX-import and relational-delete steps need no secrets
+# and are the unconditional release gate. LLM-gated steps use
+# secrets.OPENAI_KEY (same as ci.yml) and skip cleanly when absent (fork-safe).
+# Both delete steps set HARNESS_FAIL_ON_SKIP=1, so a delete test that skips
+# fails its step instead of passing having checked nothing.
 #
 # The workflow file name, the job id `http-parity` and the concurrency group are
 # deliberately UNCHANGED even though the HTTP half is gone, so that run history,
