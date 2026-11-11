@@ -415,6 +415,21 @@ impl DeleteService {
         self
     }
 
+    /// Which ownership rows protect an artifact from a data-scoped delete.
+    ///
+    /// One shared store (the default) holds every dataset's graph, and entity
+    /// ids carry no dataset, so a row of *any* other dataset names the same
+    /// physical node and must protect it (SDK-948). Under per-dataset storage
+    /// each dataset has its own databases, so only rows of the same dataset
+    /// do. Python makes the same switch on `backend_access_control_enabled()`.
+    fn claimant_scope(&self) -> ClaimantScope {
+        if self.dataset_storage.is_some() {
+            ClaimantScope::SameDataset
+        } else {
+            ClaimantScope::AnyDataset
+        }
+    }
+
     /// Take the per-dataset lock of every dataset a delete touches, from the
     /// shared registry `locks` — the one the embedder's pipelines and creates
     /// use (`AddPipeline::with_dataset_locks`), so a delete waits for them and
@@ -1638,7 +1653,8 @@ impl DeleteService {
     }
 
     /// Data-scoped cleanup: remove graph nodes and vector points for a single
-    /// data item, using only non-shared slugs. Returns `(graph_nodes_deleted,
+    /// data item, using only the slugs no other owner claims
+    /// ([`Self::claimant_scope`]). Returns `(graph_nodes_deleted,
     /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
     /// warnings)`.
     ///
@@ -1666,7 +1682,7 @@ impl DeleteService {
 
         let nodes = self
             .database
-            .get_unique_nodes_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
+            .get_unique_nodes_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1676,7 +1692,7 @@ impl DeleteService {
 
         let edges = self
             .database
-            .get_unique_edges_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
+            .get_unique_edges_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1690,7 +1706,7 @@ impl DeleteService {
         // Triplet is indexed for a structural edge.
         let structural_edges = self
             .database
-            .get_structural_edges_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
+            .get_structural_edges_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1827,7 +1843,7 @@ impl DeleteService {
             .get_edge_retrieval_texts_claimed_outside_data(
                 data_id,
                 dataset_id,
-                ClaimantScope::SameDataset,
+                self.claimant_scope(),
                 &candidates,
             )
             .await
@@ -8361,5 +8377,167 @@ mod tests {
                 "the delete must name the point `Triplet::new` derived (edge_text={edge_text:?})"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // SDK-948: artifacts another dataset still references
+    // ------------------------------------------------------------------
+
+    /// Two datasets of one owner in one shared store. Each has one data item;
+    /// `berlin` (an `Entity`, indexed on `name`) is named by both, `own_a` and
+    /// `own_b` by one each. The graph holds the three nodes and the vector
+    /// store their three `Entity_name` points.
+    struct SharedEntityStore {
+        svc: DeleteService,
+        db: Arc<cognee_database::DatabaseConnection>,
+        graph_db: Arc<MockGraphDB>,
+        vector_db: Arc<MockVectorDB>,
+        dataset_a: Uuid,
+        data_a: Uuid,
+        dataset_b: Uuid,
+        berlin: Uuid,
+        own_a: Uuid,
+        own_b: Uuid,
+    }
+
+    impl SharedEntityStore {
+        async fn new() -> Self {
+            Self::with_storage(false).await
+        }
+
+        /// With `per_dataset_storage`, the service runs as under
+        /// `ENABLE_BACKEND_ACCESS_CONTROL` (each dataset's store dropped whole).
+        async fn with_storage(per_dataset_storage: bool) -> Self {
+            let (svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+            let svc = if per_dataset_storage {
+                svc.with_dataset_storage(Arc::new(DroppingStorage))
+            } else {
+                svc
+            };
+            let owner = Uuid::new_v4();
+            let (dataset_a, data_a) = seed_dataset_with_data(&db, &storage, owner, "ds_a").await;
+            let (dataset_b, data_b) = seed_dataset_with_data(&db, &storage, owner, "ds_b").await;
+            let (berlin, own_a, own_b) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            for (dataset, data, slugs) in [
+                (dataset_a, data_a, [berlin, own_a]),
+                (dataset_b, data_b, [berlin, own_b]),
+            ] {
+                seed_provenance_nodes(
+                    &db,
+                    dataset,
+                    data,
+                    owner,
+                    &slugs,
+                    "Entity",
+                    serde_json::json!(["name"]),
+                )
+                .await;
+            }
+            vector_db
+                .create_collection("Entity", "name", 3)
+                .await
+                .unwrap();
+            for slug in [berlin, own_a, own_b] {
+                graph_db
+                    .add_node_raw(serde_json::json!({"id": slug.to_string(), "name": "n"}))
+                    .await
+                    .unwrap();
+                vector_db
+                    .index_points(
+                        "Entity",
+                        "name",
+                        &[cognee_vector::VectorPoint::new(slug, vec![1.0, 0.0, 0.0])],
+                    )
+                    .await
+                    .unwrap();
+            }
+            Self {
+                svc,
+                db,
+                graph_db,
+                vector_db,
+                dataset_a,
+                data_a,
+                dataset_b,
+                berlin,
+                own_a,
+                own_b,
+            }
+        }
+
+        async fn graph_slugs(&self) -> BTreeSet<Uuid> {
+            let (nodes, _) = self.graph_db.get_graph_data().await.unwrap();
+            nodes
+                .iter()
+                .map(|(id, _)| Uuid::parse_str(id).unwrap())
+                .collect()
+        }
+
+        async fn vector_slugs(&self) -> BTreeSet<Uuid> {
+            self.vector_db
+                .retrieve("Entity", "name", &[self.berlin, self.own_a, self.own_b])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|found| found.id)
+                .collect()
+        }
+    }
+
+    /// Deleting A's data item keeps `berlin` for dataset B too (Python's
+    /// `get_global_data_related_nodes(data_id, dataset_id=…)`).
+    #[tokio::test]
+    async fn data_delete_keeps_an_entity_another_dataset_names() {
+        let store = SharedEntityStore::new().await;
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id: store.dataset_a,
+                data_id: store.data_a,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = store.svc.execute(&request).await.unwrap();
+
+        let survivors: BTreeSet<Uuid> = [store.berlin, store.own_b].into_iter().collect();
+        assert_eq!(store.graph_slugs().await, survivors);
+        assert_eq!(store.vector_slugs().await, survivors);
+        assert_eq!(result.deleted_graph_nodes, 1);
+        assert_eq!(
+            ops::graph_storage::get_nodes_by_dataset(&store.db, store.dataset_b)
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "B's ledger rows are untouched"
+        );
+    }
+
+    /// Per-dataset storage keeps Python's multi-user rule: each dataset has
+    /// its own graph, so another dataset's row names a different physical
+    /// node and does not protect this one. A data delete removes the item's
+    /// `berlin` from the dataset's store.
+    #[tokio::test]
+    async fn per_dataset_storage_data_delete_ignores_other_datasets() {
+        let store = SharedEntityStore::with_storage(true).await;
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id: store.dataset_a,
+                data_id: store.data_a,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = store.svc.execute(&request).await.unwrap();
+
+        assert_eq!(result.deleted_graph_nodes, 2);
+        assert_eq!(
+            store.graph_slugs().await,
+            [store.own_b].into_iter().collect::<BTreeSet<_>>()
+        );
     }
 }
