@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use cognee_core::dataset_locks::DatasetLocks;
 use cognee_database::{
-    DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
+    ClaimantScope, DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
     PipelineRunStatus,
 };
 use cognee_graph::GraphDBTrait;
@@ -1666,7 +1666,7 @@ impl DeleteService {
 
         let nodes = self
             .database
-            .get_unique_nodes_for_data(data_id, dataset_id)
+            .get_unique_nodes_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1676,7 +1676,7 @@ impl DeleteService {
 
         let edges = self
             .database
-            .get_unique_edges_for_data(data_id, dataset_id)
+            .get_unique_edges_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1690,7 +1690,7 @@ impl DeleteService {
         // Triplet is indexed for a structural edge.
         let structural_edges = self
             .database
-            .get_structural_edges_for_data(data_id, dataset_id)
+            .get_structural_edges_for_data(data_id, dataset_id, ClaimantScope::SameDataset)
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1824,7 +1824,12 @@ impl DeleteService {
         }
         let claimed: HashSet<String> = self
             .database
-            .get_edge_retrieval_texts_claimed_outside_data(data_id, dataset_id, &candidates)
+            .get_edge_retrieval_texts_claimed_outside_data(
+                data_id,
+                dataset_id,
+                ClaimantScope::SameDataset,
+                &candidates,
+            )
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(

@@ -39,7 +39,7 @@ pub fn database_system_label(db: &DatabaseConnection) -> &'static str {
 /// The run-scoped sweep selector. Re-exported because it is the only argument
 /// every run-scoped provenance query takes, and callers outside this crate
 /// should not have to name `ops::graph_storage` to build one.
-pub use ops::graph_storage::RunScope;
+pub use ops::graph_storage::{ClaimantScope, RunScope};
 pub use ops::session_lifecycle::DEFAULT_ABANDON_AFTER_SECONDS;
 pub use pipelines::sea_orm_impl::{
     LIST_RUNS_CHUNKED_WINDOW, LIST_RUNS_MAX_BINDS, SeaOrmPipelineRunRepository,

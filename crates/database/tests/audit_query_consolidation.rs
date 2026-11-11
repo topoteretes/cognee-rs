@@ -18,7 +18,7 @@ use cognee_database::ops::datasets::create_dataset;
 use cognee_database::ops::graph_storage::{
     get_unique_edges_for_data, get_unique_nodes_for_data, upsert_edges, upsert_nodes,
 };
-use cognee_database::{DatabaseError, GraphEdge, GraphNode, connect, initialize};
+use cognee_database::{ClaimantScope, DatabaseError, GraphEdge, GraphNode, connect, initialize};
 use cognee_models::{Data, Dataset};
 use serde_json::json;
 use uuid::Uuid;
@@ -99,7 +99,7 @@ async fn get_unique_nodes_excludes_slugs_shared_with_other_data() {
         .await
         .expect("upsert");
 
-    let unique = get_unique_nodes_for_data(&db, data_a, dataset)
+    let unique = get_unique_nodes_for_data(&db, data_a, dataset, ClaimantScope::AnyDataset)
         .await
         .expect("query");
     assert_eq!(
@@ -153,7 +153,7 @@ async fn get_unique_edges_excludes_slugs_shared_with_other_data() {
     .await
     .expect("upsert");
 
-    let unique = get_unique_edges_for_data(&db, data_a, dataset)
+    let unique = get_unique_edges_for_data(&db, data_a, dataset, ClaimantScope::AnyDataset)
         .await
         .expect("query");
     assert_eq!(

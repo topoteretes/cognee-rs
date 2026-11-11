@@ -10,7 +10,13 @@
 //! * `get_edge_retrieval_texts_claimed_outside_data` answers which candidate
 //!   `EdgeType` texts surviving rows still claim, reading only rows that could
 //!   produce a candidate and ignoring orphaned structural rows;
-//! * `delete_edges_by_ids` deletes exactly the named rows and counts them.
+//! * `delete_edges_by_ids` deletes exactly the named rows and counts them;
+//! * SDK-948: in one shared store a row of *another dataset* protects an
+//!   artifact. `get_unique_{nodes,edges}_for_data` under
+//!   `ClaimantScope::AnyDataset`, `get_unique_{nodes,edges}_for_datasets` and
+//!   `get_edge_retrieval_texts_claimed_outside_datasets` honour it, while
+//!   `ClaimantScope::SameDataset` (per-dataset storage) keeps the narrower
+//!   rule.
 //!
 //! Every case runs on in-memory SQLite and, when `TEST_POSTGRES_URL` is set,
 //! on a throwaway Postgres database, because the queries are correlated
@@ -20,13 +26,18 @@
 use chrono::Utc;
 use cognee_database::ops::datasets::create_dataset;
 use cognee_database::ops::graph_storage::{
-    delete_edges_by_ids, get_edge_retrieval_texts_claimed_outside_data, get_edges_by_dataset,
-    get_structural_edges_for_data, upsert_edges, upsert_nodes,
+    delete_edges_by_ids, get_edge_retrieval_texts_claimed_outside_data,
+    get_edge_retrieval_texts_claimed_outside_datasets, get_edges_by_dataset,
+    get_structural_edges_for_data, get_unique_edges_for_data, get_unique_edges_for_datasets,
+    get_unique_nodes_for_data, get_unique_nodes_for_datasets, upsert_edges, upsert_nodes,
 };
-use cognee_database::{DatabaseConnection, GraphEdge, GraphNode, connect, initialize};
+use cognee_database::{
+    ClaimantScope, DatabaseConnection, GraphEdge, GraphNode, connect, initialize,
+};
 use cognee_models::Dataset;
 use sea_orm::ConnectionTrait;
 use serde_json::json;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 struct Fixture<'a> {
@@ -111,21 +122,28 @@ impl<'a> Fixture<'a> {
     }
 
     async fn structural_for_a(&self) -> Vec<Uuid> {
-        let mut ids: Vec<Uuid> = get_structural_edges_for_data(self.db, self.a, self.dataset)
-            .await
-            .expect("structural rows")
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
+        let mut ids: Vec<Uuid> =
+            get_structural_edges_for_data(self.db, self.a, self.dataset, ClaimantScope::AnyDataset)
+                .await
+                .expect("structural rows")
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
         ids.sort();
         ids
     }
 
     async fn claimed_outside_a(&self, candidates: &[&str]) -> Vec<String> {
         let candidates: Vec<String> = candidates.iter().map(|text| text.to_string()).collect();
-        get_edge_retrieval_texts_claimed_outside_data(self.db, self.a, self.dataset, &candidates)
-            .await
-            .expect("claimed texts")
+        get_edge_retrieval_texts_claimed_outside_data(
+            self.db,
+            self.a,
+            self.dataset,
+            ClaimantScope::AnyDataset,
+            &candidates,
+        )
+        .await
+        .expect("claimed texts")
     }
 }
 
@@ -333,9 +351,15 @@ async fn candidates_are_batched(db: &DatabaseConnection) {
         )
         .await;
     }
-    let claimed = get_edge_retrieval_texts_claimed_outside_data(f.db, f.a, f.dataset, &candidates)
-        .await
-        .expect("claimed texts");
+    let claimed = get_edge_retrieval_texts_claimed_outside_data(
+        f.db,
+        f.a,
+        f.dataset,
+        ClaimantScope::AnyDataset,
+        &candidates,
+    )
+    .await
+    .expect("claimed texts");
     assert_eq!(claimed, vec!["text 0003", "text 0260", "text 0699"]);
 }
 
@@ -374,6 +398,231 @@ async fn clear_ledger(db: &DatabaseConnection) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SDK-948: claimants in another dataset
+// ---------------------------------------------------------------------------
+
+/// The slugs of `rows`, deduplicated and sorted.
+fn slugs<T>(rows: &[T], slug: impl Fn(&T) -> Uuid) -> Vec<Uuid> {
+    rows.iter()
+        .map(slug)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Insert a copy of `row` owned by `(dataset, data)`: the same edge slug, as
+/// two datasets that extract the same triplet write it.
+async fn copy_edge(db: &DatabaseConnection, row: &GraphEdge, dataset: Uuid, data: Uuid) {
+    let mut copy = row.clone();
+    copy.id = Uuid::new_v4();
+    copy.dataset_id = dataset;
+    copy.data_id = data;
+    upsert_edges(db, std::slice::from_ref(&copy))
+        .await
+        .expect("upsert edge copy");
+}
+
+/// A data-scoped delete: `berlin` is named by item A in the dataset and by
+/// item B in the other dataset. In one shared store the other dataset's row
+/// protects it, as Python's `get_global_data_related_nodes` does; under
+/// per-dataset storage it does not, as Python's `get_data_related_nodes`.
+async fn data_delete_honours_other_datasets_claims(db: &DatabaseConnection) {
+    let f = Fixture::new(db).await;
+    let (berlin, own) = (Uuid::new_v4(), Uuid::new_v4());
+    f.claim(f.dataset, f.a, berlin).await;
+    f.claim(f.dataset, f.a, own).await;
+    f.claim(f.other_dataset, f.b, berlin).await;
+    let shared_edge = f
+        .edge(f.dataset, f.a, own, berlin, "located_in", None)
+        .await;
+    copy_edge(db, &shared_edge, f.other_dataset, f.b).await;
+    let own_edge = f.edge(f.dataset, f.a, own, own, "self", None).await;
+
+    let nodes = |scope| get_unique_nodes_for_data(db, f.a, f.dataset, scope);
+    let edges = |scope| get_unique_edges_for_data(db, f.a, f.dataset, scope);
+    let any_nodes = nodes(ClaimantScope::AnyDataset).await.expect("nodes");
+    let same_nodes = nodes(ClaimantScope::SameDataset).await.expect("nodes");
+    assert_eq!(slugs(&any_nodes, |n| n.slug), vec![own]);
+    let mut both = vec![berlin, own];
+    both.sort();
+    assert_eq!(slugs(&same_nodes, |n| n.slug), both);
+
+    let any_edges = edges(ClaimantScope::AnyDataset).await.expect("edges");
+    let same_edges = edges(ClaimantScope::SameDataset).await.expect("edges");
+    assert_eq!(slugs(&any_edges, |e| e.slug), vec![own_edge.slug]);
+    let mut both = vec![own_edge.slug, shared_edge.slug];
+    both.sort();
+    assert_eq!(slugs(&same_edges, |e| e.slug), both);
+}
+
+/// A dataset delete selects only the rows whose slug no other dataset
+/// claims: the shared entity and the shared nil-`data_id` `EntityType` row
+/// stay. For a set of datasets, a slug only they share is selected, every
+/// row of it.
+async fn dataset_delete_selects_only_unclaimed_slugs(db: &DatabaseConnection) {
+    let f = Fixture::new(db).await;
+    let (berlin, own, person) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    f.claim(f.dataset, f.a, own).await;
+    f.claim(f.dataset, f.a, berlin).await;
+    f.claim(f.other_dataset, f.b, berlin).await;
+    f.claim(f.dataset, Uuid::nil(), person).await;
+    f.claim(f.other_dataset, Uuid::nil(), person).await;
+    let shared_edge = f
+        .edge(f.dataset, f.a, own, berlin, "located_in", None)
+        .await;
+    copy_edge(db, &shared_edge, f.other_dataset, f.b).await;
+    let own_edge = f.edge(f.dataset, f.a, own, own, "self", None).await;
+
+    let one = get_unique_nodes_for_datasets(db, &[f.dataset])
+        .await
+        .expect("nodes");
+    assert_eq!(slugs(&one, |n| n.slug), vec![own]);
+    let one_edges = get_unique_edges_for_datasets(db, &[f.dataset])
+        .await
+        .expect("edges");
+    assert_eq!(slugs(&one_edges, |e| e.slug), vec![own_edge.slug]);
+
+    let both = get_unique_nodes_for_datasets(db, &[f.dataset, f.other_dataset])
+        .await
+        .expect("nodes");
+    assert_eq!(both.len(), 5, "every row of the shared slugs: {both:?}");
+    let mut all = vec![berlin, own, person];
+    all.sort();
+    assert_eq!(slugs(&both, |n| n.slug), all);
+    let both_edges = get_unique_edges_for_datasets(db, &[f.dataset, f.other_dataset])
+        .await
+        .expect("edges");
+    assert_eq!(both_edges.len(), 3);
+
+    assert!(
+        get_unique_nodes_for_datasets(db, &[])
+            .await
+            .expect("nodes")
+            .is_empty()
+    );
+    assert!(
+        get_unique_edges_for_datasets(db, &[])
+            .await
+            .expect("edges")
+            .is_empty()
+    );
+}
+
+/// A dataset delete keeps the `EdgeType` text a live row of another dataset
+/// produces (every dataset's `is_part_of`), and frees the texts only the
+/// deleted datasets produce and the text of an orphaned outside row.
+async fn dataset_delete_keeps_texts_other_datasets_claim(db: &DatabaseConnection) {
+    let f = Fixture::new(db).await;
+    let (chunk_a, doc_a, chunk_b, doc_b) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    f.claim(f.dataset, f.a, chunk_a).await;
+    f.claim(f.dataset, f.a, doc_a).await;
+    f.edge(f.dataset, Uuid::nil(), chunk_a, doc_a, "is_part_of", None)
+        .await;
+    f.edge(
+        f.dataset,
+        f.a,
+        chunk_a,
+        doc_a,
+        "rel",
+        Some("only in the dataset"),
+    )
+    .await;
+    f.claim(f.other_dataset, f.b, chunk_b).await;
+    f.claim(f.other_dataset, f.b, doc_b).await;
+    f.edge(
+        f.other_dataset,
+        Uuid::nil(),
+        chunk_b,
+        doc_b,
+        "is_part_of",
+        None,
+    )
+    .await;
+    // No node row names either endpoint: the row claims nothing.
+    f.edge(
+        f.other_dataset,
+        Uuid::nil(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "orphan text",
+        None,
+    )
+    .await;
+
+    let candidates: Vec<String> = ["is_part_of", "only in the dataset", "orphan text"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let claimed = get_edge_retrieval_texts_claimed_outside_datasets(db, &[f.dataset], &candidates)
+        .await
+        .expect("claimed texts");
+    assert_eq!(claimed, vec!["is_part_of".to_string()]);
+    let claimed = get_edge_retrieval_texts_claimed_outside_datasets(
+        db,
+        &[f.dataset, f.other_dataset],
+        &candidates,
+    )
+    .await
+    .expect("claimed texts");
+    assert!(claimed.is_empty(), "{claimed:?}");
+}
+
+/// A structural edge between two entities the other dataset also names is
+/// not the item's in a shared store (neither endpoint leaves the graph), but
+/// is under per-dataset storage, where both endpoints are the item's alone.
+async fn structural_ownership_follows_the_claimant_scope(db: &DatabaseConnection) {
+    let f = Fixture::new(db).await;
+    let (alice, person) = (Uuid::new_v4(), Uuid::new_v4());
+    for slug in [alice, person] {
+        f.claim(f.dataset, f.a, slug).await;
+        f.claim(f.other_dataset, f.b, slug).await;
+    }
+    let is_a = f
+        .edge(
+            f.dataset,
+            Uuid::nil(),
+            alice,
+            person,
+            "is_a",
+            Some("alice is a person."),
+        )
+        .await;
+
+    let owned = |scope| get_structural_edges_for_data(db, f.a, f.dataset, scope);
+    assert!(
+        owned(ClaimantScope::AnyDataset)
+            .await
+            .expect("structural rows")
+            .is_empty()
+    );
+    let same: Vec<Uuid> = owned(ClaimantScope::SameDataset)
+        .await
+        .expect("structural rows")
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(same, vec![is_a.id]);
+
+    // The row the shared store keeps still claims its text there.
+    let candidates = vec!["alice is a person.".to_string()];
+    let claimed = get_edge_retrieval_texts_claimed_outside_data(
+        db,
+        f.a,
+        f.dataset,
+        ClaimantScope::AnyDataset,
+        &candidates,
+    )
+    .await
+    .expect("claimed texts");
+    assert_eq!(claimed, candidates);
+}
+
 async fn run_all(db: &DatabaseConnection) {
     either_endpoint_attributes_the_row(db).await;
     clear_ledger(db).await;
@@ -386,6 +635,14 @@ async fn run_all(db: &DatabaseConnection) {
     candidates_are_batched(db).await;
     clear_ledger(db).await;
     delete_by_ids_counts_what_went(db).await;
+    clear_ledger(db).await;
+    data_delete_honours_other_datasets_claims(db).await;
+    clear_ledger(db).await;
+    dataset_delete_selects_only_unclaimed_slugs(db).await;
+    clear_ledger(db).await;
+    dataset_delete_keeps_texts_other_datasets_claim(db).await;
+    clear_ledger(db).await;
+    structural_ownership_follows_the_claimant_scope(db).await;
 }
 
 #[tokio::test]

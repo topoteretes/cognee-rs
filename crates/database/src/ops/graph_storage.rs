@@ -635,10 +635,54 @@ pub async fn count_edges_for_data(
 // Unique (non-shared) node/edge queries for safe single-data deletion
 // ---------------------------------------------------------------------------
 
-/// Return nodes belonging to `(data_id, dataset_id)` whose slug does NOT
-/// appear in any other row within the same dataset with a different `data_id`.
+/// Which other provenance rows protect an artifact from a data-scoped delete.
 ///
-/// This is the Rust equivalent of Python's shared-slug exclusion logic.
+/// Entity ids are content-addressed and carry no dataset, so two datasets that
+/// name the same entity write ownership rows for the same `slug`. Whether the
+/// other dataset's rows protect the artifact depends on whether the two
+/// datasets share one physical graph and vector store. Python makes the same
+/// choice on `backend_access_control_enabled()`
+/// (`delete_data_nodes_and_edges.py`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimantScope {
+    /// Only rows of another data item in the *same* dataset protect an
+    /// artifact: Python's `get_data_related_nodes`. Right under per-dataset
+    /// storage, where each dataset has its own graph and vector databases and
+    /// the same `slug` in another dataset names a different physical artifact.
+    SameDataset,
+    /// A row of any other `(dataset_id, data_id)` pair protects it: Python's
+    /// `get_global_data_related_nodes`. Right for one shared store (the
+    /// default), where deleting a node another dataset's row still names would
+    /// corrupt that dataset (SDK-948).
+    AnyDataset,
+}
+
+/// The rows of table alias `row` (`nodes` or `edges`) that belong to some
+/// owner other than `(data_hex, dataset_hex)` and, under `scope`, count as
+/// claimants. Both tables name their owner columns `dataset_id` and `data_id`.
+fn claimed_elsewhere(
+    row: &Alias,
+    scope: ClaimantScope,
+    data_hex: &str,
+    dataset_hex: &str,
+) -> Condition {
+    let dataset = || Expr::col((row.clone(), Alias::new("dataset_id")));
+    let data = || Expr::col((row.clone(), Alias::new("data_id")));
+    match scope {
+        ClaimantScope::SameDataset => Condition::all()
+            .add(dataset().eq(dataset_hex))
+            .add(data().ne(data_hex)),
+        ClaimantScope::AnyDataset => Condition::any()
+            .add(dataset().ne(dataset_hex))
+            .add(data().ne(data_hex)),
+    }
+}
+
+/// Return nodes belonging to `(data_id, dataset_id)` whose slug no other
+/// owner claims, with "other owner" as `scope` defines it.
+///
+/// Python's `get_data_related_nodes` (`SameDataset`) and
+/// `get_global_data_related_nodes(data_id, dataset_id=…)` (`AnyDataset`).
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_nodes_for_data",
     level = "info",
@@ -653,24 +697,25 @@ pub async fn get_unique_nodes_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
+    scope: ClaimantScope,
 ) -> Result<Vec<GraphNode>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
-    // One query instead of two: select the (data_id, dataset_id) nodes whose slug
-    // is NOT shared by any other data_id in the same dataset. The correlated
-    // NOT EXISTS replaces the previous fetch-all + fetch-shared-slugs + in-memory
-    // filter.
+    // One correlated NOT EXISTS: the item's rows whose slug no claimant row
+    // also names.
     let n2 = Alias::new("n2");
     let shared = Query::select()
         .expr(Expr::val(1))
         .from_as(Alias::new("nodes"), n2.clone())
-        .and_where(Expr::col((n2.clone(), node::Column::DatasetId)).eq(dataset_hex.clone()))
-        .and_where(Expr::col((n2.clone(), node::Column::DataId)).ne(data_hex.clone()))
-        .and_where(
-            Expr::col((n2.clone(), node::Column::Slug))
-                .equals((Alias::new("nodes"), node::Column::Slug)),
+        .cond_where(
+            Condition::all()
+                .add(
+                    Expr::col((n2.clone(), node::Column::Slug))
+                        .equals((Alias::new("nodes"), node::Column::Slug)),
+                )
+                .add(claimed_elsewhere(&n2, scope, &data_hex, &dataset_hex)),
         )
         .to_owned();
 
@@ -688,8 +733,8 @@ pub async fn get_unique_nodes_for_data(
     Ok(rows)
 }
 
-/// Return edges belonging to `(data_id, dataset_id)` whose slug does NOT
-/// appear in any other row within the same dataset with a different `data_id`.
+/// Return edges belonging to `(data_id, dataset_id)` whose slug no other
+/// owner claims; see [`get_unique_nodes_for_data`].
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_unique_edges_for_data",
     level = "info",
@@ -704,23 +749,23 @@ pub async fn get_unique_edges_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
+    scope: ClaimantScope,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
 
-    // One query instead of two (see `get_unique_nodes_for_data`): edges for
-    // (data_id, dataset_id) whose slug is not shared by another data_id in the
-    // same dataset, via a correlated NOT EXISTS.
     let e2 = Alias::new("e2");
     let shared = Query::select()
         .expr(Expr::val(1))
         .from_as(Alias::new("edges"), e2.clone())
-        .and_where(Expr::col((e2.clone(), edge::Column::DatasetId)).eq(dataset_hex.clone()))
-        .and_where(Expr::col((e2.clone(), edge::Column::DataId)).ne(data_hex.clone()))
-        .and_where(
-            Expr::col((e2.clone(), edge::Column::Slug))
-                .equals((Alias::new("edges"), edge::Column::Slug)),
+        .cond_where(
+            Condition::all()
+                .add(
+                    Expr::col((e2.clone(), edge::Column::Slug))
+                        .equals((Alias::new("edges"), edge::Column::Slug)),
+                )
+                .add(claimed_elsewhere(&e2, scope, &data_hex, &dataset_hex)),
         )
         .to_owned();
 
@@ -738,6 +783,108 @@ pub async fn get_unique_edges_for_data(
     Ok(rows)
 }
 
+/// Return the node rows of `dataset_ids` whose slug no row of any *other*
+/// dataset claims: the graph nodes and vector points a delete of those
+/// datasets may remove from a shared store.
+///
+/// Python's `get_global_dataset_related_nodes` for one dataset. Taking a set
+/// lets a preview of several datasets count a slug that only they share once,
+/// as the run (one dataset after another, each removing its ledger rows)
+/// deletes it once: with the last of them. Not for per-dataset storage, where
+/// a dataset's own databases are dropped whole. An empty set selects nothing.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_nodes_for_datasets",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_unique_nodes_for_datasets(
+    db: &DatabaseConnection,
+    dataset_ids: &[Uuid],
+) -> Result<Vec<GraphNode>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if dataset_ids.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let dataset_hexes: Vec<String> = dataset_ids.iter().copied().map(uuid_hex::to_hex).collect();
+    let n2 = Alias::new("n2");
+    let claimed_outside = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("nodes"), n2.clone())
+        .and_where(
+            Expr::col((n2.clone(), node::Column::Slug))
+                .equals((Alias::new("nodes"), node::Column::Slug)),
+        )
+        .and_where(Expr::col((n2, node::Column::DatasetId)).is_not_in(dataset_hexes.clone()))
+        .to_owned();
+
+    let rows: Vec<GraphNode> = node::Entity::find()
+        .filter(node::Column::DatasetId.is_in(dataset_hexes))
+        .filter(Expr::exists(claimed_outside).not())
+        .order_by_asc(node::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphNode::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
+/// Return the edge rows of `dataset_ids` whose slug no row of any other
+/// dataset claims; see [`get_unique_nodes_for_datasets`]. Python's
+/// `get_global_dataset_related_edges` for one dataset.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_unique_edges_for_datasets",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_unique_edges_for_datasets(
+    db: &DatabaseConnection,
+    dataset_ids: &[Uuid],
+) -> Result<Vec<GraphEdge>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    if dataset_ids.is_empty() {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(Vec::new());
+    }
+    let dataset_hexes: Vec<String> = dataset_ids.iter().copied().map(uuid_hex::to_hex).collect();
+    let e2 = Alias::new("e2");
+    let claimed_outside = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("edges"), e2.clone())
+        .and_where(
+            Expr::col((e2.clone(), edge::Column::Slug))
+                .equals((Alias::new("edges"), edge::Column::Slug)),
+        )
+        .and_where(Expr::col((e2, edge::Column::DatasetId)).is_not_in(dataset_hexes.clone()))
+        .to_owned();
+
+    let rows: Vec<GraphEdge> = edge::Entity::find()
+        .filter(edge::Column::DatasetId.is_in(dataset_hexes))
+        .filter(Expr::exists(claimed_outside).not())
+        .order_by_asc(edge::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(GraphEdge::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
 /// `EXISTS (SELECT 1 FROM nodes AS n WHERE n.slug = edges.<endpoint> AND ...)`:
 /// whether some node row, narrowed by `narrow`, claims the edge row's
 /// `endpoint`. Correlated, so both backends can plan it per edge row through
@@ -745,43 +892,44 @@ pub async fn get_unique_edges_for_data(
 /// dataset) instead of materializing a slug list.
 fn endpoint_claimed(
     endpoint: edge::Column,
-    narrow: impl FnOnce(&Alias) -> Vec<SimpleExpr>,
+    narrow: impl FnOnce(&Alias) -> Option<Condition>,
 ) -> SimpleExpr {
     let n = Alias::new("n");
-    let mut claim = Query::select();
-    claim
-        .expr(Expr::val(1))
-        .from_as(Alias::new("nodes"), n.clone())
-        .and_where(
-            Expr::col((n.clone(), node::Column::Slug)).equals((Alias::new("edges"), endpoint)),
-        );
-    for condition in narrow(&n) {
-        claim.and_where(condition);
+    let mut condition = Condition::all()
+        .add(Expr::col((n.clone(), node::Column::Slug)).equals((Alias::new("edges"), endpoint)));
+    if let Some(narrow) = narrow(&n) {
+        condition = condition.add(narrow);
     }
-    Expr::exists(claim.to_owned())
+    let claim = Query::select()
+        .expr(Expr::val(1))
+        .from_as(Alias::new("nodes"), n)
+        .cond_where(condition)
+        .to_owned();
+    Expr::exists(claim)
 }
 
 /// The edge row's `endpoint` is exclusively owned by `(data_hex, dataset_hex)`:
-/// that item's node rows claim it and no other item's node rows in the dataset
-/// do. This is exactly the set [`get_unique_nodes_for_data`] returns, which is
-/// the set a data-scoped delete detach-deletes from the graph.
-fn endpoint_exclusive_to(endpoint: edge::Column, data_hex: &str, dataset_hex: &str) -> Condition {
-    let in_dataset_with = |data_eq: bool| {
-        move |n: &Alias| {
-            let data = Expr::col((n.clone(), node::Column::DataId));
-            vec![
-                Expr::col((n.clone(), node::Column::DatasetId)).eq(dataset_hex),
-                if data_eq {
-                    data.eq(data_hex)
-                } else {
-                    data.ne(data_hex)
-                },
-            ]
-        }
+/// that item's node rows claim it and no claimant node row (under `scope`)
+/// does. This is exactly the set [`get_unique_nodes_for_data`] returns for the
+/// same `scope`, which is the set a data-scoped delete detach-deletes from the
+/// graph.
+fn endpoint_exclusive_to(
+    endpoint: edge::Column,
+    data_hex: &str,
+    dataset_hex: &str,
+    scope: ClaimantScope,
+) -> Condition {
+    let owned_by_item = |n: &Alias| {
+        Some(
+            Condition::all()
+                .add(Expr::col((n.clone(), node::Column::DatasetId)).eq(dataset_hex))
+                .add(Expr::col((n.clone(), node::Column::DataId)).eq(data_hex)),
+        )
     };
+    let claimed_by_other = |n: &Alias| Some(claimed_elsewhere(n, scope, data_hex, dataset_hex));
     Condition::all()
-        .add(endpoint_claimed(endpoint, in_dataset_with(true)))
-        .add(endpoint_claimed(endpoint, in_dataset_with(false)).not())
+        .add(endpoint_claimed(endpoint, owned_by_item))
+        .add(endpoint_claimed(endpoint, claimed_by_other).not())
 }
 
 /// Selection predicate for the structural edge rows (`is_part_of`, `contains`,
@@ -802,7 +950,7 @@ fn endpoint_exclusive_to(endpoint: edge::Column, data_hex: &str, dataset_hex: &s
 ///
 /// Because the predicate reads the node rows, it has to be evaluated before
 /// the data item's node rows are deleted.
-fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str) -> Condition {
+fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str, scope: ClaimantScope) -> Condition {
     Condition::all()
         .add(edge::Column::DataId.eq(uuid_hex::to_hex(Uuid::nil())))
         .add(edge::Column::DatasetId.eq(dataset_hex))
@@ -812,11 +960,13 @@ fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str) -> Condition {
                     edge::Column::SourceNodeId,
                     data_hex,
                     dataset_hex,
+                    scope,
                 ))
                 .add(endpoint_exclusive_to(
                     edge::Column::DestinationNodeId,
                     data_hex,
                     dataset_hex,
+                    scope,
                 )),
         )
 }
@@ -842,14 +992,13 @@ fn structural_edges_owned_by(data_hex: &str, dataset_hex: &str) -> Condition {
 fn edge_row_is_live_claim() -> Condition {
     Condition::any()
         .add(edge::Column::DataId.ne(uuid_hex::to_hex(Uuid::nil())))
-        .add(endpoint_claimed(edge::Column::SourceNodeId, |_| Vec::new()))
-        .add(endpoint_claimed(edge::Column::DestinationNodeId, |_| {
-            Vec::new()
-        }))
+        .add(endpoint_claimed(edge::Column::SourceNodeId, |_| None))
+        .add(endpoint_claimed(edge::Column::DestinationNodeId, |_| None))
 }
 
 /// The nil-`data_id` structural edge rows that belong to `(data_id, dataset_id)`
-/// by their endpoints; see [`structural_edges_owned_by`].
+/// by their endpoints, with exclusivity decided under `scope`; see
+/// [`structural_edges_owned_by`].
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_structural_edges_for_data",
     level = "info",
@@ -864,12 +1013,14 @@ pub async fn get_structural_edges_for_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
+    scope: ClaimantScope,
 ) -> Result<Vec<GraphEdge>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let rows: Vec<GraphEdge> = edge::Entity::find()
         .filter(structural_edges_owned_by(
             &uuid_hex::to_hex(data_id),
             &uuid_hex::to_hex(dataset_id),
+            scope,
         ))
         .all(db)
         .await
@@ -938,23 +1089,17 @@ const CANDIDATE_TEXT_BATCH: usize = 250;
 /// `(data_id, dataset_id)` still claim as `EdgeType` retrieval texts.
 ///
 /// A row survives unless it is the item's own (`data_id`/`dataset_id` match) or
-/// a structural row [`get_structural_edges_for_data`] attributes to it. Rows of
-/// the same data item in another dataset, and of other items anywhere, survive;
-/// a nil-`data_id` row whose endpoints are both gone does not claim anything
-/// (see [`edge_row_is_live_claim`]).
+/// a structural row [`get_structural_edges_for_data`] attributes to it under
+/// the same `scope`. Rows of the same data item in another dataset, and of
+/// other items anywhere, survive; a nil-`data_id` row whose endpoints are both
+/// gone does not claim anything (see [`edge_row_is_live_claim`]).
 ///
 /// The `EdgeType` point id is many-to-one over edges (every `is_part_of` shares
 /// one), so slug exclusivity does not say whether the point may go; a caller
 /// keeps the point of every text returned here. See
-/// [`get_edge_retrieval_texts_claimed_outside_run`] for the run-scoped sibling.
-///
-/// Only rows that could produce a candidate are read: a row's retrieval text is
-/// its trimmed `edge_text` attribute or, failing that, its trimmed
-/// `relationship_name`, so `trim(relationship_name) IN (...) OR
-/// trim(edge_text) IN (...)` is a superset of the producing rows, and the text
-/// is then derived exactly as [`retrieval_texts_where`] always does. A backend
-/// with no JSON extraction reads every surviving row instead, which gives the
-/// same answer.
+/// [`get_edge_retrieval_texts_claimed_outside_run`] for the run-scoped sibling
+/// and [`get_edge_retrieval_texts_claimed_outside_datasets`] for the dataset
+/// one; [`candidate_texts_claimed_where`] says which rows are read.
 #[instrument(
     name = "cognee.db.relational.graph_storage.get_edge_retrieval_texts_claimed_outside_data",
     level = "info",
@@ -969,12 +1114,12 @@ pub async fn get_edge_retrieval_texts_claimed_outside_data(
     db: &DatabaseConnection,
     data_id: Uuid,
     dataset_id: Uuid,
+    scope: ClaimantScope,
     candidates: &[String],
 ) -> Result<Vec<String>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let data_hex = uuid_hex::to_hex(data_id);
     let dataset_hex = uuid_hex::to_hex(dataset_id);
-    let wanted: BTreeSet<&str> = candidates.iter().map(String::as_str).collect();
     let surviving = || {
         Condition::all()
             .add(
@@ -982,13 +1127,71 @@ pub async fn get_edge_retrieval_texts_claimed_outside_data(
                     .add(edge::Column::DataId.ne(&data_hex))
                     .add(edge::Column::DatasetId.ne(&dataset_hex)),
             )
-            .add(structural_edges_owned_by(&data_hex, &dataset_hex).not())
+            .add(structural_edges_owned_by(&data_hex, &dataset_hex, scope).not())
             .add(edge_row_is_live_claim())
     };
+    let claimed = candidate_texts_claimed_where(db, surviving, candidates).await?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, claimed.len() as i64);
+    Ok(claimed)
+}
 
+/// The subset of `candidates` (`EdgeType` retrieval texts) that edge rows
+/// *outside* `dataset_ids` still claim: what a delete of those datasets must
+/// keep the `EdgeType` point of.
+///
+/// The dataset-delete sibling of
+/// [`get_edge_retrieval_texts_claimed_outside_data`]: every row of another
+/// dataset survives the delete, and a nil-`data_id` row whose endpoints are
+/// all gone claims nothing ([`edge_row_is_live_claim`]). Python keeps no such
+/// check on this path (`delete_from_graph_and_vector` deletes the point of
+/// every deleted edge's text); Rust keeps the stricter one its data-scoped
+/// delete and run sweep already apply, because the point is many-to-one over
+/// edges and every dataset shares the structural ones (`is_part_of`, ...).
+#[instrument(
+    name = "cognee.db.relational.graph_storage.get_edge_retrieval_texts_claimed_outside_datasets",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn get_edge_retrieval_texts_claimed_outside_datasets(
+    db: &DatabaseConnection,
+    dataset_ids: &[Uuid],
+    candidates: &[String],
+) -> Result<Vec<String>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let dataset_hexes: Vec<String> = dataset_ids.iter().copied().map(uuid_hex::to_hex).collect();
+    let surviving = || {
+        Condition::all()
+            .add(edge::Column::DatasetId.is_not_in(dataset_hexes.clone()))
+            .add(edge_row_is_live_claim())
+    };
+    let claimed = candidate_texts_claimed_where(db, surviving, candidates).await?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, claimed.len() as i64);
+    Ok(claimed)
+}
+
+/// The members of `candidates` that some edge row matching `surviving()`
+/// produces as its `EdgeType` retrieval text.
+///
+/// Only rows that could produce a candidate are read: a row's retrieval text
+/// is its trimmed `edge_text` attribute or, failing that, its trimmed
+/// `relationship_name`, so `trim(relationship_name) IN (...) OR
+/// trim(edge_text) IN (...)` is a superset of the producing rows, and the text
+/// is then derived exactly as [`retrieval_texts_where`] always does. A backend
+/// with no JSON extraction reads every surviving row instead, which gives the
+/// same answer.
+async fn candidate_texts_claimed_where(
+    db: &DatabaseConnection,
+    surviving: impl Fn() -> Condition,
+    candidates: &[String],
+) -> Result<Vec<String>, DatabaseError> {
+    let wanted: BTreeSet<&str> = candidates.iter().map(String::as_str).collect();
     let mut claimed = BTreeSet::new();
     if wanted.is_empty() {
-        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(Vec::new());
     }
     let backend = db.get_database_backend();
@@ -1031,7 +1234,6 @@ pub async fn get_edge_retrieval_texts_claimed_outside_data(
             }
         }
     }
-    Span::current().record(COGNEE_DB_ROW_COUNT, claimed.len() as i64);
     Ok(claimed.into_iter().collect())
 }
 
