@@ -9,8 +9,6 @@ non-deterministic.
 All tests require an OpenAI API key (cognify invokes the LLM).
 """
 
-import pytest
-
 from helpers import (
     open_db,
     query_data,
@@ -242,8 +240,11 @@ def test_shared_entity_delete_parity(tmp_path):
         n["type"] for n in rust_nodes if n.get("type")
     }
 
-    if not py_types and not rust_types:
-        pytest.skip("Both SDKs produced zero typed nodes after partial delete")
+    # dataset_b survived (checked above), so each graph still holds its
+    # document, chunks and entities. No typed nodes on a side is a failure,
+    # not a reason to skip: it would mean the delete emptied that graph.
+    assert py_types, "Python's graph has no typed nodes after the partial delete"
+    assert rust_types, "Rust's graph has no typed nodes after the partial delete"
 
     intersection = py_types & rust_types
     union = py_types | rust_types
