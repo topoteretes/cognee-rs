@@ -75,15 +75,25 @@ Two things about the current Python that the harness accounts for:
 
 Read this before citing a green run as evidence of parity.
 
-**Most of these test files are run by nothing.** MEASURED at the time this
-section was written: of the 20 files in `harness/`, only **five** are selected
-by any workflow step — `test_telemetry_parity`, `test_cogx_import_contract`,
-`test_cogx_roundtrip`, `test_provenance_parity` and `test_logging_parity`.
-`test_add_parity`, `test_cross_read`, `test_search_parity` and the other dozen
+**Most of these test files are run by nothing.** Of the 20 `test_*.py` files
+in `harness/`, only **nine** are selected by any workflow step:
+
+- every PR, no secrets: `test_telemetry_parity`, `test_cogx_import_contract`,
+  and the relational delete pair `test_cross_delete` and
+  `test_readd_after_delete` (SDK-1166);
+- only when `OPENAI_KEY` is set: `test_cogx_roundtrip`,
+  `test_provenance_parity`, `test_logging_parity`, and the delete parity pair
+  `test_delete_parity` and `test_delete_shared_entity_parity` (SDK-1166).
+
+`test_add_parity`, `test_cross_read`, `test_search_parity` and the other eight
 are collected by no CI lane at all. This is a pre-existing gap, not something
 the HTTP move caused, but it is the single most important caveat on this
 directory: "the cross-SDK parity lane is green" does not mean these files
-passed, it means those five did.
+passed, it means those nine did. The two delete steps fail on any skipped
+test, so their green does mean the tests ran. The provenance step sets
+`OPENAI_TOKEN` on the runner but does not pass it into the container with
+`-e`, so check its log for skips (see the note on `e2e-tests` in
+`docker-compose.yml`).
 
 **The CLI/DB comparison is the strong kind.** `test_*_parity`, `test_cross_*`
 and `test_readd_*` shell out to both CLIs and compare SQLite state directly,
