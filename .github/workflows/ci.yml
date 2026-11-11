@@ -1503,8 +1503,7 @@ jobs:
       #      until their 7-day expiry — PR #127's caches alone were still
       #      holding 4.61 GB of a 10.35 GB quota hours after it merged.
       # Key bumped to v2: the tree no longer contains the check-slim target dir
-      # (removed with the redundant cargo check passes). It holds no cargo test
-      # artifacts: the capi unit tests run in `capi-rust-tests`, under its own key.
+      # (removed with the redundant cargo check passes).
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: capi-check-v3
@@ -1540,6 +1539,19 @@ jobs:
           ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
         run: bash capi/scripts/check.sh
 
+      # The capi crate's Rust unit tests (inline #[cfg(test)] modules). Nothing
+      # else runs them: capi/ is a separate Cargo workspace, so `test` never
+      # reaches it, and check.sh above only does CMake `cargo build`s. Slim
+      # feature set (see capi/scripts/test.sh) because the tests need none of
+      # lancedb / lbug / ort; the panic=unwind tree shares nothing with the
+      # panic=abort builds above, so it goes to RUNNER_TEMP -- outside every
+      # cached dir -- and is rebuilt cold each run instead of bloating the
+      # cache. The script asserts the test count and every case name itself.
+      - name: Run C API Rust unit tests (slim)
+        env:
+          COGNEE_CAPI_TEST_TARGET_DIR: ${{ runner.temp }}/capi-rust-tests
+        run: bash capi/scripts/test.sh
+
       # The x86_64 glibc floor (ci/linux-glibc-floor.txt), on every PR. The
       # release legs that enforce it on shipped artifacts only run on tags and
       # on PRs touching their build environment, so a dependency bump that
@@ -1552,69 +1564,6 @@ jobs:
       # from release; a dependency that newly needs a symbol shows up in both.)
       - name: Assert the x86_64 glibc floor on the C API build
         run: bash ci/assert-glibc-floor.sh --target x86_64-unknown-linux-gnu capi/target/debug/libcognee_capi.so
-
-  # The capi workspace's Rust unit tests (inline #[cfg(test)] modules in
-  # cognee-capi). Nothing else runs them: capi/ is a separate Cargo workspace,
-  # so `test` never reaches it, and capi-check only does CMake `cargo build`s.
-  #
-  # A job of its own rather than a step of capi-check: the test build shares
-  # no artifacts with the CMake build (capi's dev profile is `panic = "abort"`
-  # and the libtest harness forces the whole dependency graph to be rebuilt
-  # with unwinding), and that rebuild was measured at ~819s. capi-check is
-  # already CI's critical path, so as a step it would add ~14 min to every
-  # run; in parallel it adds none. No secrets — mirrored in community.yml.
-  capi-rust-tests:
-    name: C API Rust Tests
-    needs: lint
-    runs-on: ubuntu-24.04
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-        with:
-          make-default: true
-      - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
-      # Same full-stack dependency graph (lancedb, lbug, ort) as capi-check.
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          swap-storage: false
-          docker-images: true
-      - name: ccache (lbug bundled C++, restore-only)
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: lbug-cxx
-          max-size: 1G
-          save: false
-      # Its own key: the panic=unwind test tree cannot reuse capi-check-v3's
-      # panic=abort artifacts. Main-only save, like every other writer here.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: capi-rust-tests-v1
-          workspaces: |
-            capi -> target
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Same ORT archive/key as capi-check (see the note there).
-      - uses: actions/cache@v4
-        with:
-          path: capi/target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
-      - name: Ensure the restored ORT cache is usable
-        shell: bash
-        run: bash ci/ort/ensure-cache-usable.sh capi/target/ort-cache
-      # The script asserts the test count and the named waiter cases itself
-      # (scripts/ci/assert_pg_suite_ran.sh), so a green `running 0 tests`
-      # cannot pass.
-      - name: Run C API Rust unit tests
-        env:
-          ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
-        run: bash capi/scripts/test.sh
 
   python-check:
     name: Python Bindings Check (${{ matrix.python-version }})
@@ -1829,7 +1778,7 @@ jobs:
   # cognee `notify` aggregator.
   notify:
     name: Test Suite Status
-    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-postgres, pg-single-db-postgres, pggraph-postgres, redis-session, capi-check, capi-rust-tests, python-check, ts-check, java-check ]
+    needs: [ lint, msrv, wasm, test, docs-and-extras, pgvector-postgres, pg-single-db-postgres, pggraph-postgres, redis-session, capi-check, python-check, ts-check, java-check ]
     runs-on: ubuntu-24.04
     if: >-
       !cancelled() &&
@@ -1848,7 +1797,6 @@ jobs:
                 "${{ needs.pggraph-postgres.result }}" == "success" &&
                 "${{ needs.redis-session.result }}" == "success" &&
                 "${{ needs.capi-check.result }}" == "success" &&
-                "${{ needs.capi-rust-tests.result }}" == "success" &&
                 "${{ needs.python-check.result }}" == "success" &&
                 "${{ needs.ts-check.result }}" == "success" &&
                 "${{ needs.java-check.result }}" == "success" ]]; then

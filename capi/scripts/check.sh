@@ -26,8 +26,9 @@ CAPI_DIR="$(dirname "$SCRIPT_DIR")"
 # because the test harness needs `panic = "unwind"` while capi's dev profile is
 # `panic = "abort"`, so cargo rebuilds the whole dependency graph rather than
 # reusing the CMake build's artifacts. So the tests are not compiled here at
-# all: they are *run* by capi/scripts/test.sh, in CI as the separate, parallel
-# `capi-rust-tests` job (and locally after this script in check_all.sh).
+# all: they are *run* by capi/scripts/test.sh (slim features, so a cheap build),
+# in CI as a step of `capi-check` right after this script, and locally from
+# check_all.sh.
 echo ""
 echo "================================================================"
 echo "=== C API: Header sync check (exported vs. declared symbols) ==="

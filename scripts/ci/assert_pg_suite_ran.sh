@@ -30,7 +30,7 @@
 # `pg-single-db-postgres` lanes in .github/workflows/ci.yml and their mirrors in
 # .github/workflows/community.yml.
 #
-# Also called by capi/scripts/test.sh (the `capi-rust-tests` lane), purely for
+# Also called by capi/scripts/test.sh (a `capi-check` step; `capi-rust-tests` in community.yml), purely for
 # its test-count floor and named-case checks — those tests have no env gate.
 #
 # Also called by the `test` job's retrieval step, which is not Postgres-gated at

@@ -701,13 +701,12 @@ jobs:
             --require-test redis_memify_metadata_round_trips_and_merges \
             --require-test the_redis_session_store_applies_the_session_ttl
 
-  # ── C API Rust unit tests (mirror of ci.yml's `capi-rust-tests`) ───────
-  # Needs no secrets, network or models. Fork PRs only, like the Postgres and
-  # Redis lanes above: on an in-repo PR ci.yml already runs the identical job,
-  # and this one builds the full capi dependency graph (~14 min cold), so
-  # running it twice would buy nothing. `notify` accepts `skipped` for it.
-  # The count/name guard lives in capi/scripts/test.sh, so it cannot drift
-  # between the two copies.
+  # ── C API Rust unit tests (fork-PR copy of ci.yml's `capi-check` step) ──
+  # Needs no secrets, network or models. Fork PRs only: capi-check lives in
+  # ci.yml, which fork PRs skip wholesale, and on an in-repo PR it already runs
+  # the identical script. Slim feature set, so no lbug ccache / ORT / disk
+  # freeing / rust-cache is needed. `notify` accepts `skipped` for it. The
+  # count/name guard lives in capi/scripts/test.sh, so it cannot drift.
   capi-rust-tests:
     name: C API Rust Tests
     runs-on: ubuntu-24.04
@@ -719,40 +718,10 @@ jobs:
       - uses: rui314/setup-mold@v1
         with:
           make-default: true
-      - run: sudo apt-get update && sudo apt-get install -y cmake protobuf-compiler
-      - name: Free disk space
-        uses: ./.github/actions/free-disk-space
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          swap-storage: false
-          docker-images: true
-      - name: ccache (lbug bundled C++, restore-only)
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: lbug-cxx
-          max-size: 1G
-          save: false
-      # Restore-only from the key ci.yml's job saves on main.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: capi-rust-tests-v1
-          workspaces: |
-            capi -> target
-          save-if: "false"
-      - uses: actions/cache@v4
-        with:
-          path: capi/target/ort-cache
-          key: ort-v2.0.0-rc.12-cpu-linux-x86_64
-      - name: Ensure the restored ORT cache is usable
-        shell: bash
-        run: bash ci/ort/ensure-cache-usable.sh capi/target/ort-cache
-      - name: Run C API Rust unit tests
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Run C API Rust unit tests (slim)
         env:
-          ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
+          COGNEE_CAPI_TEST_TARGET_DIR: ${{ runner.temp }}/capi-rust-tests
         run: bash capi/scripts/test.sh
 
   notify:
