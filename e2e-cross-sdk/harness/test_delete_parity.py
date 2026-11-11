@@ -1,7 +1,8 @@
 """Cross-SDK parity tests for the ``delete`` operation (Gap E1).
 
 Both SDKs independently run ``add -> cognify -> delete --all`` and verify
-that the relational database is cleaned up afterwards.  Each SDK uses its
+that the relational database, the graph store and the vector store are all
+cleaned up afterwards.  Each SDK uses its
 own workspace — no cross-SDK storage sharing is involved.
 
 All tests require an OpenAI API key (cognify invokes the LLM).
@@ -14,8 +15,9 @@ from helpers import (
     query_data,
     query_datasets,
     query_dataset_data,
-    query_nodes,
-    query_edges,
+    python_graph,
+    rust_graph,
+    vector_rows,
     python_db_path,
     rust_db_path,
     run_python_cli,
@@ -99,13 +101,30 @@ def test_delete_parity_both_sdks_clean_up(both_cognified):
 
 @requires_openai
 def test_search_empty_after_delete(both_cognified):
-    """After delete --all, CHUNKS search must return zero results in both SDKs.
+    """After delete --all, both SDKs' graph and vector stores must be empty.
 
-    This tests the full cascading behavior: delete must remove not only
-    relational metadata but also graph/vector data so that search finds
-    nothing.
+    Search cannot show this on its own: searching a dataset that no longer
+    exists fails, and the search helpers turn a failed search into ``[]``,
+    so an "empty search" passes whether or not the chunks are still stored.
+    The test therefore:
+
+      1. proves search works before the delete (non-empty CHUNKS results),
+      2. deletes with both SDKs,
+      3. reads each SDK's graph store and LanceDB tables directly and
+         requires both to be empty.
     """
     py_ws, rust_ws = both_cognified
+    question = "What is natural language processing?"
+
+    # ── Precondition: search finds the chunks before the delete ──────────
+    py_before = run_python_search(py_ws, question, query_type="CHUNKS", dataset=DATASET_NAME)
+    rust_before = run_rust_search(rust_ws, question, query_type="CHUNKS", dataset=DATASET_NAME)
+    assert py_before, "Python CHUNKS search found nothing before the delete"
+    assert rust_before, "Rust CHUNKS search found nothing before the delete"
+    assert python_graph(py_ws)[0], "Python's graph is empty before the delete"
+    assert rust_graph(rust_ws)[0], "Rust's graph is empty before the delete"
+    assert vector_rows(py_ws), "Python's vector store is empty before the delete"
+    assert vector_rows(rust_ws), "Rust's vector store is empty before the delete"
 
     # ── Delete in both SDKs ───────────────────────────────────────────────
     result = run_python_cli(py_ws, ["delete", "--all", "-f"], check=False)
@@ -118,27 +137,16 @@ def test_search_empty_after_delete(both_cognified):
         f"Rust delete failed:\n{result.stdout}\n{result.stderr}"
     )
 
-    # ── Search: expect empty results ──────────────────────────────────────
-    py_results = run_python_search(
-        py_ws,
-        "What is natural language processing?",
-        query_type="CHUNKS",
-        dataset=DATASET_NAME,
-        check=False,
-    )
-    rust_results = run_rust_search(
-        rust_ws,
-        "What is natural language processing?",
-        query_type="CHUNKS",
-        dataset=DATASET_NAME,
-        check=False,
-    )
-
-    assert len(py_results) == 0, (
-        f"Python CHUNKS search returned {len(py_results)} result(s) after delete: "
-        f"{py_results!r}"
-    )
-    assert len(rust_results) == 0, (
-        f"Rust CHUNKS search returned {len(rust_results)} result(s) after delete: "
-        f"{rust_results!r}"
-    )
+    # ── Both stores must be empty ─────────────────────────────────────────
+    for sdk, nodes, vectors in (
+        ("Python", python_graph(py_ws)[0], vector_rows(py_ws)),
+        ("Rust", rust_graph(rust_ws)[0], vector_rows(rust_ws)),
+    ):
+        assert not nodes, (
+            f"{sdk} graph keeps {len(nodes)} node(s) after delete --all: "
+            f"{sorted({n.get('type') or '?' for n in nodes})}"
+        )
+        assert not vectors, (
+            f"{sdk} vector store keeps rows after delete --all: "
+            f"{ {name: len(rows) for name, rows in vectors.items()} }"
+        )
