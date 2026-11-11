@@ -97,7 +97,7 @@ Test Suite 'All tests' passed at …
 
 ## CI
 
-The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-14` Apple Silicon runner. CI **links** both iOS targets rather than only type-checking them:
+The `ios` workflow (`.github/workflows/ios.yml`) runs on every push and PR on a `macos-15` Apple Silicon runner (default Xcode 16.4). CI **links** both iOS targets rather than only type-checking them:
 
 - `cargo rustc --crate-type cdylib --target aarch64-apple-ios` — compiles *and links* the Rust C API for the device target
 - `cargo rustc --crate-type cdylib --target aarch64-apple-ios-sim` — same for the simulator target

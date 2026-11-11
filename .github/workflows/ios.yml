@@ -26,8 +26,14 @@ env:
 jobs:
   ios-check:
     name: iOS targets (link + Swift typecheck)
-    # macos-14 = Apple Silicon (M1).  Required for aarch64-apple-ios targets.
-    runs-on: macos-14
+    # macos-15 = Apple Silicon (arm64), default Xcode 16.4. Pinned rather than
+    # macos-latest so an image migration cannot silently swap the Xcode/SDK
+    # under this lane. macos-14 was retired from GitHub Actions on 2026-11-02
+    # (actions/runner-images#15226); jobs on it are cancelled at queue time
+    # with "The configuration 'macos-14-arm64-us-default' is not supported".
+    # macos-15 is the oldest arm64 image still offered, and matches the
+    # darwin-arm64 runner in capi-release.yml / ts-prebuild.yml / java-prebuild.yml.
+    runs-on: macos-15
 
     steps:
       - name: Checkout
@@ -52,7 +58,7 @@ jobs:
             ${{ runner.os }}-cargo-ios-
 
       # lance-encoding v6.0.0 has a build script that calls `protoc`;
-      # it is not pre-installed on macos-14 runners.
+      # it is not pre-installed on macos-15 runners.
       - name: Install protoc (required by lance-encoding build script)
         run: brew install protobuf
 
