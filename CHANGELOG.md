@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured answers with `response_schema`, in search and recall
+  (SDK-1043).** `cognee_search::response_schema::ResponseSchema` accepts the
+  structural subset Python does (objects, primitives, arrays, enums, unions,
+  `$defs` references; at most 10 levels and 200 properties) and refuses the
+  rest with Python's `response_schema: …` messages. Completion retrievers
+  conform the LLM's answer to it, as Python's model dump does: absent optional
+  fields are `null`, undeclared keys are dropped, and a non-conforming answer
+  is re-asked through the adapter's repair loop. Checking is strict (no
+  string-to-number coercion). `RecallOptions.response_schema` brings it to
+  `recall()`, whose normalised entries for such an answer are kind
+  `STRUCTURED` with the answer in `structured`.
+
 - **`improve` binding opts `runInBackground`, `buildGlobalContextIndex`,
   `buildTruthSubspace` (SDK-1051).** The TS, Python, Java and C bindings
   forward them, as Python's `improve()` does. With `runInBackground` the op
@@ -100,6 +112,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `edge_evidence_disabled` (with an LLM and `EDGE_EVIDENCE_ENABLED=false`;
   previously `not_ported`), then `not_ported`. The CLI also accepts Python's
   `--no-review-conflicts` spelling.
+
+- **Optional `DataItem` label and a checked `response_schema` (SDK-1043).**
+  - `DataInput::DataItem.label` is `Option<String>` (was `String`). `None`
+    sets no label and, on a re-add, keeps the stored one, as in Python; wrap
+    an existing label in `Some`.
+  - `SearchError` gains `InvalidResponseSchema`: exhaustive matches need a
+    new arm.
+  - `RecallOptions` gains `response_schema`: struct literals without
+    `..Default::default()` no longer compile.
+  - A `response_schema` outside the supported subset is now refused before
+    the search runs (it used to reach the LLM as-is).
 
 - **`feedback_weights` public API (SDK-1051).**
   - `FeedbackApplyResult` has new public fields (`done`, `errored`,

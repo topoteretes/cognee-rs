@@ -53,6 +53,10 @@ pub struct RecallOptions {
     /// [`SearchResponse::evidence`] and in each normalized entry's
     /// `metadata.evidence`.
     pub include_references: bool,
+    /// JSON Schema for a structured answer from the graph search
+    /// (`SearchRequest::response_schema`): completion types return it as
+    /// `SearchOutput::Structured`, conformed to the schema.
+    pub response_schema: Option<serde_json::Value>,
     /// Retriever-specific per-request overrides forwarded unchanged to the
     /// selected graph retriever. HTTP and binding adapters should expose a
     /// typed, allowlisted surface rather than accepting arbitrary JSON.
@@ -572,7 +576,7 @@ pub async fn run_graph(
         verbose: None,
         feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: options.and_then(|o| o.retriever_specific_config.clone()),
-        response_schema: None,
+        response_schema: options.and_then(|o| o.response_schema.clone()),
         custom_search_type: None,
         auto_feedback_detection: options.and_then(|o| o.auto_feedback_detection),
         node_name_filter_operator: options.and_then(|o| o.node_name_filter_operator.clone()),
@@ -616,6 +620,12 @@ pub async fn run_graph(
                 score: 1.0 - (i as f64 * 0.01),
             })
             .collect(),
+        // The answer itself, not its tagged `{"kind", "data"}` form.
+        crate::SearchOutput::Structured(answer) => vec![RecallItem {
+            source: RecallSource::Graph,
+            content: answer.clone(),
+            score: 1.0,
+        }],
         other => vec![RecallItem {
             source: RecallSource::Graph,
             content: serde_json::to_value(other)
@@ -1237,6 +1247,11 @@ mod tests {
             params: &SearchParams,
         ) -> Result<SearchOutput, SearchError> {
             *self.seen.lock().expect("test mutex") = Some(params.clone());
+            if params.response_schema.is_some() {
+                return Ok(SearchOutput::Structured(
+                    serde_json::json!({ "answer": "structured" }),
+                ));
+            }
             Ok(SearchOutput::Text("graph-stub".to_string()))
         }
     }
@@ -1471,6 +1486,53 @@ mod tests {
             .expect("retriever must have been invoked");
         assert_eq!(seen.include_global_context_index, Some(true));
         assert_eq!(seen.global_context_index_top_k, Some(2));
+    }
+
+    #[tokio::test]
+    async fn run_graph_forwards_response_schema() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } }
+        });
+        let options = RecallOptions {
+            response_schema: Some(schema.clone()),
+            ..Default::default()
+        };
+
+        let (items, ..) = plan_and_run(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            Some(&options),
+        )
+        .await
+        .expect("a valid schema must be accepted");
+
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(seen.response_schema, Some(schema));
+        // The structured answer is the item's content, not its tagged form.
+        let contents: Vec<_> = items.iter().map(|item| item.content.clone()).collect();
+        assert_eq!(
+            contents,
+            vec![serde_json::json!({ "answer": "structured" })]
+        );
     }
 
     /// Ids are authorized against the caller: another user's dataset id is

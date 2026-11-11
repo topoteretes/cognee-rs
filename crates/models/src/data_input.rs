@@ -24,10 +24,10 @@ pub enum DataInput {
     /// In-memory binary data with a filename for MIME detection
     Binary { data: Vec<u8>, name: String },
 
-    /// DataItem wrapper — wraps any other input with a custom label and optional metadata
+    /// DataItem wrapper — wraps any other input with an optional label and metadata
     DataItem {
         data: Box<DataInput>,
-        label: String,
+        label: Option<String>,
         external_metadata: Option<String>,
     },
 }
@@ -207,7 +207,7 @@ mod tests {
         let inner = DataInput::Text("hello".to_string());
         let item = DataInput::DataItem {
             data: Box::new(inner),
-            label: "my label".to_string(),
+            label: Some("my label".to_string()),
             external_metadata: None,
         };
         assert_eq!(item.classify(), "text");

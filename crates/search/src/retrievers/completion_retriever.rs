@@ -12,6 +12,7 @@ use cognee_session::SessionContext;
 
 use crate::retrievers::SearchRetriever;
 use crate::retrievers::context_items::search_node_filtered;
+use crate::retrievers::graph_core::complete;
 use crate::types::{
     EvidenceReference, SearchContext, SearchError, SearchOutput, SearchParams, SearchType,
 };
@@ -311,27 +312,13 @@ impl SearchRetriever for CompletionRetriever {
             return Ok(skip_completion_on_empty_context());
         };
 
-        if let Some(schema) = &params.response_schema {
-            let structured_value = self
-                .llm
-                .create_structured_output_with_messages_raw(
-                    messages,
-                    schema,
-                    self.generation_options.clone(),
-                )
-                .await
-                .map_err(|e| SearchError::LlmError(e.to_string()))?;
-            Ok(SearchOutput::Structured(structured_value))
-        } else {
-            // The turn's answer: streams into a promoted token sink, if any.
-            let completion = cognee_llm::generate_answer(
-                self.llm.as_ref(),
-                messages,
-                self.generation_options.clone(),
-            )
-            .await?;
-            Ok(SearchOutput::Text(completion.content))
-        }
+        complete(
+            self.llm.as_ref(),
+            messages,
+            params,
+            self.generation_options.clone(),
+        )
+        .await
     }
 }
 

@@ -257,7 +257,10 @@ async fn flag_on_attaches_evidence_and_appends_the_block_to_a_text_answer() {
 #[tokio::test]
 async fn structured_answers_are_untouched_but_still_get_evidence() {
     let mut structured = request(SearchType::RagCompletion, true);
-    structured.response_schema = Some(json!({"type": "object"}));
+    structured.response_schema = Some(json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}}
+    }));
     let response = orchestrator(ChunkRetriever)
         .search(&structured)
         .await
