@@ -362,11 +362,11 @@ pub(crate) fn pre_stamp_extraction(
 /// references it. A caller that drops this list re-creates, across runs, the
 /// cross-file damage per-producer ownership rows exist to prevent.
 ///
-/// The claim is dataset-scoped, like every other ownership row: exclusivity is
-/// decided by `get_unique_edges_for_data` within one dataset, so an edge shared
-/// between two *datasets* stays unprotected in either direction. That
-/// pre-existing limitation is the one entity ownership rows already have and is
-/// not addressed here.
+/// The row is dataset-scoped, like every other ownership row, but it protects
+/// the edge across datasets too: in one shared store a delete counts rows of
+/// any other dataset as claimants (`ClaimantScope::AnyDataset`, SDK-948), so
+/// an edge two datasets produced survives deleting either. Under per-dataset
+/// storage each dataset has its own graph and only same-dataset rows count.
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_with_nodes_and_edges(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
