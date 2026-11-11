@@ -61,12 +61,23 @@ fn build_postgres_url(
     parsed
         .set_port(Some(port))
         .map_err(|_| format!("invalid port {port}"))?;
-    parsed.set_path(&format!("/{name}"));
+    // A single path segment: `/` and `%` in the name are encoded too, so the
+    // name round-trips through the driver's percent-decoding unchanged.
     parsed
-        .set_username(user)
+        .path_segments_mut()
+        .map_err(|()| "static URL cannot carry a path".to_string())?
+        .clear()
+        .push(name);
+    // `url`'s userinfo encode set leaves `%` alone (it assumes the input may
+    // already be percent-encoded), but sqlx percent-decodes the userinfo — so
+    // a literal `%41` would reach the server as `A`. Credentials here are raw
+    // values, so escape `%` first; `url` then encodes the rest.
+    let user_escaped = user.replace('%', "%25");
+    parsed
+        .set_username(&user_escaped)
         .map_err(|_| format!("invalid username '{user}'"))?;
     parsed
-        .set_password(Some(pass))
+        .set_password(Some(&pass.replace('%', "%25")))
         .map_err(|_| "invalid password".to_string())?;
     Ok(parsed.to_string())
 }
@@ -323,7 +334,8 @@ impl Settings {
     /// starts from defaults and overlays every env var that is set.
     /// The `.env` file in the current working directory (or any ancestor) is loaded
     /// automatically before env vars are read — callers do not need to call
-    /// `dotenv::dotenv()` themselves.
+    /// `dotenv::dotenv()` themselves — unless the process environment sets
+    /// `COGNEE_DISABLE_DOTENV` to a truthy value (`1`/`true`/`yes`/`on`).
     pub fn load_from_env() -> Self {
         let mut s = Self::default();
         s.overlay_from_env();
@@ -334,7 +346,8 @@ impl Settings {
     ///
     /// Only fields whose corresponding env var is set are modified; everything
     /// else keeps its current value.  The `.env` file is loaded first (idempotent —
-    /// safe to call multiple times).
+    /// safe to call multiple times), unless `COGNEE_DISABLE_DOTENV` is truthy in
+    /// the process environment.
     ///
     /// Env-var naming follows the Python SDK conventions (`LLM_*`, `EMBEDDING_*`,
     /// `GRAPH_DATABASE_*`, `VECTOR_DB_*`, `DB_*`, `COGNEE_*`).  A handful of
@@ -364,9 +377,13 @@ impl Settings {
         reason = "config boundary: Settings is resolved from the process env here"
     )]
     pub fn overlay_from_env_with_schema(&mut self, schema: &ConfigSchema) {
-        // Load .env (no-op if absent or if the vars are already in the environment).
-        cognee_config_core::load_dotenv();
-        self.overlay_from_with_schema(&cognee_config_core::ProcessEnv::new(), schema);
+        // Load .env unless the process opted out via COGNEE_DISABLE_DOTENV
+        // (no-op if the file is absent or the vars are already set).
+        // `ProcessEnv::get` reads the live process env at call time, so one
+        // instance sees both the pre-load opt-out and the just-loaded vars.
+        let env = cognee_config_core::ProcessEnv::new();
+        cognee_config_core::load_dotenv_unless_disabled(&env);
+        self.overlay_from_with_schema(&env, schema);
     }
 
     /// The typed component config section `T`: its values from
@@ -693,23 +710,36 @@ impl Settings {
     /// case-insensitive, the same normalisation the component registry uses
     /// to pick the relational factory), builds
     /// `postgres://username:password@host:port/name` from the individual
-    /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars).
+    /// `db_*` fields (matching Python's `DB_PROVIDER`/`DB_HOST`/… env vars)
+    /// with each component percent-encoded — reserved characters can no
+    /// longer break the URL shape (e.g. a `#` in the name would otherwise
+    /// turn a following `?sslmode=` into fragment text and silently drop the
+    /// TLS requirement).
+    ///
+    /// When a field cannot be encoded into a URL the method logs the reason
+    /// (never the password) and returns an empty string: the postgres
+    /// factory is selected by `relational.provider`, not by the URL, so the
+    /// empty URL fails at connect instead of silently falling back to any
+    /// other backend.
+    ///
     /// Otherwise returns `relational_db_url` verbatim.
     pub fn resolved_relational_db_url(&self) -> String {
         let relational = self.relational();
         let provider = relational.provider.trim().to_ascii_lowercase();
         if matches!(provider.as_str(), "postgres" | "postgresql") {
-            with_sslmode(
-                format!(
-                    "postgres://{}:{}@{}:{}/{}",
-                    relational.username,
-                    relational.password,
-                    relational.host,
-                    relational.port,
-                    relational.name
-                ),
-                &self.db_sslmode,
-            )
+            match build_postgres_url(
+                &relational.host,
+                relational.port,
+                &relational.name,
+                &relational.username,
+                &relational.password,
+            ) {
+                Ok(url) => with_sslmode(url, &self.db_sslmode),
+                Err(reason) => {
+                    tracing::warn!("cannot build relational postgres URL: {reason}");
+                    String::new()
+                }
+            }
         } else {
             relational.url.clone()
         }
@@ -4723,6 +4753,120 @@ mod tests {
                 s.resolved_relational_db_url(),
                 "postgres://postgres:pw@db.internal:5432/cognee",
                 "provider {provider:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn relational_postgres_url_percent_encodes_reserved_characters() {
+        // A `#` in the database name used to start a fragment, turning a
+        // following `?sslmode=` into fragment text and silently dropping the
+        // TLS requirement. With structured URL building it must stay a real
+        // query parameter, and the name round-trips percent-encoded.
+        let s = Settings {
+            sections: [
+                (
+                    "relational.provider".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.host".to_string(),
+                    serde_json::json!("db.internal".to_string()),
+                ),
+                ("relational.port".to_string(), serde_json::json!(5432)),
+                (
+                    "relational.name".to_string(),
+                    serde_json::json!("db#x?y/z".to_string()),
+                ),
+                (
+                    "relational.username".to_string(),
+                    serde_json::json!("postgres".to_string()),
+                ),
+                (
+                    "relational.password".to_string(),
+                    serde_json::json!("pw".to_string()),
+                ),
+            ]
+            .into(),
+            db_sslmode: "require".to_string(),
+            ..Settings::default()
+        };
+        let parsed =
+            url::Url::parse(&s.resolved_relational_db_url()).expect("built URL must parse");
+        assert!(
+            parsed
+                .query_pairs()
+                .any(|(k, v)| k == "sslmode" && v == "require")
+        );
+        // Decoded the way sqlx does: strip the leading `/`, percent-decode.
+        assert_eq!(
+            pct_decode(parsed.path().trim_start_matches('/')),
+            "db#x?y/z"
+        );
+        assert_eq!(parsed.path_segments().map(Iterator::count), Some(1));
+    }
+
+    /// Percent-decode a URL component the way sqlx's Postgres URL parser does
+    /// (`+` stays `+`, unlike form decoding).
+    fn pct_decode(raw: &str) -> String {
+        percent_encoding::percent_decode_str(raw)
+            .decode_utf8()
+            .expect("test inputs are UTF-8")
+            .into_owned()
+    }
+
+    #[test]
+    fn relational_postgres_url_percent_encodes_credentials_and_name() {
+        // Reserved characters must round-trip through the built URL instead of
+        // reshaping it: a raw `@` or `#` would otherwise split the authority or
+        // start a fragment. A literal `%41` must stay `%41` — `url` leaves `%`
+        // unencoded in userinfo, and the driver percent-decodes it, so without
+        // escaping it would reach the server as `A`. `+` must stay `+`.
+        for (user, password, name) in [
+            ("postgres", "p@:/#?%w", "cognee"),
+            ("us%41er", "ab%41cd", "db%41"),
+            ("u+v", "a+b c", "db/with/slashes"),
+        ] {
+            let s = Settings {
+                sections: [
+                    (
+                        "relational.provider".to_string(),
+                        serde_json::json!("postgres".to_string()),
+                    ),
+                    (
+                        "relational.host".to_string(),
+                        serde_json::json!("db.internal".to_string()),
+                    ),
+                    ("relational.port".to_string(), serde_json::json!(5432)),
+                    (
+                        "relational.name".to_string(),
+                        serde_json::json!(name.to_string()),
+                    ),
+                    (
+                        "relational.username".to_string(),
+                        serde_json::json!(user.to_string()),
+                    ),
+                    (
+                        "relational.password".to_string(),
+                        serde_json::json!(password.to_string()),
+                    ),
+                ]
+                .into(),
+                ..Settings::default()
+            };
+            let built = s.resolved_relational_db_url();
+            let parsed = url::Url::parse(&built).expect("built URL must parse");
+            assert_eq!(parsed.host_str(), Some("db.internal"), "{built}");
+            assert_eq!(pct_decode(parsed.username()), user, "{built}");
+            assert_eq!(
+                parsed.password().map(pct_decode).as_deref(),
+                Some(password),
+                "{built}"
+            );
+            assert_eq!(
+                pct_decode(parsed.path().trim_start_matches('/')),
+                name,
+                "{built}"
             );
         }
     }

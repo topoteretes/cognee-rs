@@ -801,11 +801,36 @@ pub struct ImproveArgs {
     #[arg(long = "feedback-alpha")]
     pub feedback_alpha: Option<f64>,
 
-    /// Opt in to the `global_context_index` stage. Default off, unlike Python,
-    /// where the flag only forces it on and the default follows
-    /// `IMPROVE_GLOBAL_CONTEXT_INDEX`.
-    #[arg(long = "build-global-context-index")]
-    pub build_global_context_index: bool,
+    /// Run the `global_context_index` stage: bare flag or `=true` forces it
+    /// on, `=false` forces it off. Absent follows the
+    /// `improve.global_context_index` setting (`IMPROVE_GLOBAL_CONTEXT_INDEX`,
+    /// default on).
+    #[arg(
+        long = "build-global-context-index",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    pub build_global_context_index: Option<bool>,
+
+    /// Run the `review_conflicts` stage: bare flag or `=true` forces it on,
+    /// `=false` forces it off. Absent follows the `improve.review_conflicts`
+    /// setting (`IMPROVE_REVIEW_CONFLICTS`, default on).
+    #[arg(
+        long = "review-conflicts",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    pub review_conflicts: Option<bool>,
+
+    /// Python's spelling of `--review-conflicts=false`.
+    #[arg(
+        long = "no-review-conflicts",
+        hide = true,
+        conflicts_with = "review_conflicts"
+    )]
+    pub no_review_conflicts: bool,
 
     /// Opt in to the `build_truth_subspace` stage (needs `--session-id`).
     #[arg(long = "build-truth-subspace")]
@@ -813,6 +838,17 @@ pub struct ImproveArgs {
 
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
+}
+
+impl ImproveArgs {
+    /// Resolved `review_conflicts` override: `None` follows the setting.
+    pub fn review_conflicts(&self) -> Option<bool> {
+        if self.no_review_conflicts {
+            Some(false)
+        } else {
+            self.review_conflicts
+        }
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -948,6 +984,53 @@ mod tests {
         assert!(!parse(&["cognee-cli", "search", "q"]).no_telemetry);
         assert!(parse(&["cognee-cli", "--no-telemetry", "search", "q"]).no_telemetry);
         assert!(parse(&["cognee-cli", "search", "q", "--no-telemetry"]).no_telemetry);
+    }
+
+    /// SDK-1206: the stage flags are tri-state: absent follows the setting,
+    /// a bare flag or `=true` forces on, `=false` forces off.
+    #[test]
+    fn improve_stage_flags_are_tri_state() {
+        let flags = |extra: &[&str]| {
+            let mut argv = vec!["cognee-cli", "improve"];
+            argv.extend_from_slice(extra);
+            match parse(&argv).command {
+                Commands::Improve(args) => (args.build_global_context_index, args.review_conflicts),
+                other => panic!("not improve: {other:?}"),
+            }
+        };
+        assert_eq!(flags(&[]), (None, None));
+        let resolved = |extra: &[&str]| {
+            let mut argv = vec!["cognee-cli", "improve"];
+            argv.extend_from_slice(extra);
+            match parse(&argv).command {
+                Commands::Improve(a) => a.review_conflicts(),
+                other => panic!("not improve: {other:?}"),
+            }
+        };
+        assert_eq!(resolved(&[]), None);
+        assert_eq!(resolved(&["--review-conflicts"]), Some(true));
+        assert_eq!(resolved(&["--review-conflicts=false"]), Some(false));
+        assert_eq!(resolved(&["--no-review-conflicts"]), Some(false));
+        assert!(
+            Cli::try_parse_from([
+                "cognee-cli",
+                "improve",
+                "--no-review-conflicts",
+                "--review-conflicts"
+            ])
+            .is_err()
+        );
+        assert_eq!(
+            flags(&["--build-global-context-index", "--review-conflicts"]),
+            (Some(true), Some(true))
+        );
+        assert_eq!(
+            flags(&[
+                "--build-global-context-index=false",
+                "--review-conflicts=false"
+            ]),
+            (Some(false), Some(false))
+        );
     }
 
     /// `TRIPLET_COMPLETION` was removed (SDK-1039): `search` and `recall`

@@ -45,10 +45,12 @@
 //! ```json
 //! {"datasetName":"...", "datasetId":"<uuid>", "sessionIds":["..."],
 //!  "feedbackAlpha":0.1, "tenant":"<uuid>", "buildGlobalContextIndex":bool,
-//!  "buildTruthSubspace":bool, "runInBackground":bool}
+//!  "reviewConflicts":bool, "buildTruthSubspace":bool, "runInBackground":bool}
 //! ```
 //!
-//! `buildGlobalContextIndex` / `buildTruthSubspace` opt in to those stages
+//! `buildGlobalContextIndex` / `reviewConflicts` follow
+//! `improve.global_context_index` / `improve.review_conflicts` when absent
+//! (an explicit value wins either way); only `buildTruthSubspace` is an opt-in
 //! (default `false`). With `runInBackground: true` the dataset is resolved
 //! (a name resolves or is created; an unknown or unwritable `datasetId` is a
 //! validation error) and the options are validated first, as Python does,
@@ -471,6 +473,7 @@ impl ImproveRun {
             personalization: self.personalization,
             auto_feedback: self.auto_feedback,
             build_global_context_index: self.flags.build_global_context_index,
+            review_conflicts: self.flags.review_conflicts,
             build_truth_subspace: self.flags.build_truth_subspace,
             llm: svc.llm.clone(),
             storage: svc.storage.clone(),
@@ -508,6 +511,7 @@ impl ImproveRun {
             personalization: self.personalization,
             auto_feedback: self.auto_feedback,
             build_global_context_index: self.flags.build_global_context_index,
+            review_conflicts: self.flags.review_conflicts,
             build_truth_subspace: self.flags.build_truth_subspace,
             run_in_background: false,
             llm: svc.llm.clone(),
@@ -528,20 +532,25 @@ impl ImproveRun {
 }
 
 /// The boolean `improve` opts that are not part of the dataset selection.
+/// The two `Option` flags follow their settings when absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct ImproveFlags {
     run_in_background: bool,
-    build_global_context_index: bool,
+    build_global_context_index: Option<bool>,
+    review_conflicts: Option<bool>,
     build_truth_subspace: bool,
 }
 
-/// Parse `runInBackground`, `buildGlobalContextIndex` and `buildTruthSubspace`
-/// (all default `false`); a present non-boolean is rejected.
+/// Parse `runInBackground` and `buildTruthSubspace` (default `false`), and
+/// `buildGlobalContextIndex` / `reviewConflicts` (absent or null follows the
+/// `improve.*` setting; an explicit value wins either way). A present
+/// non-boolean is rejected.
 fn improve_flags(opts: &serde_json::Value) -> Result<ImproveFlags, SdkError> {
     let flag = |key: &str| super::pipeline::opt_bool(opts, key).map(Option::unwrap_or_default);
     Ok(ImproveFlags {
         run_in_background: flag("runInBackground")?,
-        build_global_context_index: flag("buildGlobalContextIndex")?,
+        build_global_context_index: super::pipeline::opt_bool(opts, "buildGlobalContextIndex")?,
+        review_conflicts: super::pipeline::opt_bool(opts, "reviewConflicts")?,
         build_truth_subspace: flag("buildTruthSubspace")?,
     })
 }
@@ -624,7 +633,7 @@ mod tests {
     use cognee::api::StageResult;
 
     #[test]
-    fn improve_flags_default_off_and_reach_each_field() {
+    fn improve_flags_default_unset_and_reach_each_field() {
         assert_eq!(improve_flags(&json!({})).unwrap(), ImproveFlags::default());
         assert_eq!(
             improve_flags(&json!({"runInBackground": null})).unwrap(),
@@ -633,15 +642,21 @@ mod tests {
         let flags = improve_flags(&json!({
             "runInBackground": true,
             "buildGlobalContextIndex": true,
+            "reviewConflicts": false,
             "buildTruthSubspace": true,
         }))
         .unwrap();
         assert!(flags.run_in_background);
-        assert!(flags.build_global_context_index);
+        assert_eq!(flags.build_global_context_index, Some(true));
+        assert_eq!(flags.review_conflicts, Some(false));
         assert!(flags.build_truth_subspace);
         let only_truth = improve_flags(&json!({"buildTruthSubspace": true})).unwrap();
         assert!(only_truth.build_truth_subspace);
-        assert!(!only_truth.build_global_context_index);
+        // Absent follows the setting; an explicit `false` overrides it.
+        assert_eq!(only_truth.build_global_context_index, None);
+        assert_eq!(only_truth.review_conflicts, None);
+        let off = improve_flags(&json!({"buildGlobalContextIndex": false})).unwrap();
+        assert_eq!(off.build_global_context_index, Some(false));
     }
 
     #[test]
@@ -649,6 +664,7 @@ mod tests {
         for key in [
             "runInBackground",
             "buildGlobalContextIndex",
+            "reviewConflicts",
             "buildTruthSubspace",
         ] {
             for bad in [json!("true"), json!(1)] {
@@ -691,7 +707,7 @@ mod tests {
         let mut result = ImproveResult::new("docs", vec!["s1".to_string()]);
         result
             .stages
-            .push(StageResult::skipped("review_conflicts", "opt_in_disabled"));
+            .push(StageResult::skipped("review_conflicts", "turned_off"));
         let wire = improve_result_json(&result);
         assert_eq!(
             wire,
@@ -700,7 +716,7 @@ mod tests {
                 "datasetName": "docs",
                 "sessionIds": ["s1"],
                 "stages": [{"stage": "review_conflicts", "status": "skipped",
-                            "reason": "opt_in_disabled", "error": null, "counts": {},
+                            "reason": "turned_off", "error": null, "counts": {},
                             "durationMs": 0}],
                 "background": false,
                 "finished": true,

@@ -45,6 +45,14 @@ pub const REASON_AUTO_FEEDBACK_DISABLED: &str = "auto_feedback_disabled";
 pub const REASON_PERSONALIZATION_DISABLED: &str = "personalization_disabled";
 /// Skip reason of an opt-in stage the caller did not opt into.
 pub const REASON_OPT_IN_DISABLED: &str = "opt_in_disabled";
+/// Skip reason of a stage that is switched off, by its argument or its
+/// setting (`review_conflicts`, `global_context_index`). Python's
+/// `REASON_TURNED_OFF`; `build_truth_subspace` keeps `opt_in_disabled`.
+pub const REASON_TURNED_OFF: &str = "turned_off";
+/// Skip reason of `review_conflicts` while provenance edge evidence
+/// (`cognify.edge_evidence_enabled`) is off. Python's
+/// `REASON_EDGE_EVIDENCE_DISABLED`.
+pub const REASON_EDGE_EVIDENCE_DISABLED: &str = "edge_evidence_disabled";
 /// Skip reason of a stage that drafts text with an LLM when none is
 /// configured (keyless installs).
 pub const REASON_NO_LLM_CONFIGURED: &str = "no_llm_configured";
@@ -233,8 +241,11 @@ pub(crate) struct ImproveStages<'a> {
     pub session_ids: Vec<String>,
     pub feedback_alpha: f64,
     pub build_truth_subspace: bool,
+    /// `global_context_index` is on (the call's argument, else
+    /// `improve.global_context_index`).
     pub build_global_context_index: bool,
-    /// Opt in to `review_conflicts` (`improve.review_conflicts`).
+    /// `review_conflicts` is on (the call's argument, else
+    /// `improve.review_conflicts`).
     pub review_conflicts: bool,
     /// The personalization settings (`personalization_enabled`,
     /// `preference_alpha`, `preference_beta`).
@@ -289,16 +300,20 @@ impl StageExecutor for ImproveStages<'_> {
             StageKind::BuildTruthSubspace if !self.capabilities.supports_truth_state => {
                 Some(REASON_BACKEND_UNSUPPORTED)
             }
-            // Conflict review is opt-in and not ported yet (SDK-1038).
+            // Python's gate order: turned_off, no_llm_configured,
+            // edge_evidence_disabled. The review itself is not ported yet
+            // (SDK-1038), so a run that passes them reports `not_ported`.
             StageKind::ReviewConflicts => Some(if !self.review_conflicts {
-                REASON_OPT_IN_DISABLED
+                REASON_TURNED_OFF
             } else if !self.llm.is_configured() {
                 REASON_NO_LLM_CONFIGURED
+            } else if !self.cognify_config.edge_evidence_enabled {
+                REASON_EDGE_EVIDENCE_DISABLED
             } else {
                 REASON_NOT_PORTED
             }),
             StageKind::GlobalContextIndex if !self.build_global_context_index => {
-                Some(REASON_OPT_IN_DISABLED)
+                Some(REASON_TURNED_OFF)
             }
             _ => None,
         }
@@ -798,7 +813,7 @@ impl ImproveStages<'_> {
         truth_subspace_stage_result(&ts)
     }
 
-    /// Stage 9: the global context index (opt-in).
+    /// Stage 9: the global context index (on by default, `improve.global_context_index`).
     ///
     /// `already_completed` (`no_writes_since_last_improve`) when only reads
     /// ran since its last build, which a completed run stamps (see

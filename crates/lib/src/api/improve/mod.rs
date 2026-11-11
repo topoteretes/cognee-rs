@@ -66,10 +66,10 @@ pub use result::{
     StageStatus,
 };
 pub use stages::{
-    DEFAULT_STAGES, REASON_AUTO_FEEDBACK_DISABLED, REASON_NO_LLM_CONFIGURED,
-    REASON_NO_NEW_TRACE_STEPS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
-    REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, REMOVED_STAGE_NAMES,
-    StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
+    DEFAULT_STAGES, REASON_AUTO_FEEDBACK_DISABLED, REASON_EDGE_EVIDENCE_DISABLED,
+    REASON_NO_LLM_CONFIGURED, REASON_NO_NEW_TRACE_STEPS, REASON_NOT_PORTED, REASON_OPT_IN_DISABLED,
+    REASON_PERSONALIZATION_DISABLED, REASON_SESSION_MANAGER_UNAVAILABLE, REASON_TURNED_OFF,
+    REMOVED_STAGE_NAMES, StageKind, TRUTH_SUBSPACE_STAGE, truth_subspace_stage_result,
 };
 pub use user_preferences::{
     PreferenceUpdateResult, REASON_NO_CHANGES, STATUS_COMPLETED, build_rating_map,
@@ -106,7 +106,8 @@ pub struct ImproveParams<'a> {
     pub feedback_alpha: Option<f64>,
     /// The improve settings (`improve.*`, usually
     /// [`Settings::improve_config`](crate::config::Settings::improve_config)):
-    /// `stages_disabled`, the default `feedback_alpha`, `review_conflicts`.
+    /// `stages_disabled`, the default `feedback_alpha`, and the defaults of
+    /// `review_conflicts` / `build_global_context_index`.
     /// Checked again before the first stage.
     pub config: ImproveConfig,
     /// The personalization settings
@@ -119,9 +120,18 @@ pub struct ImproveParams<'a> {
     /// gates `extract_agent_context` (`auto_feedback_disabled`).
     pub auto_feedback: bool,
 
-    /// Opt in to the `global_context_index` stage (Python's
-    /// `build_global_context_index`). Default `false`.
-    pub build_global_context_index: bool,
+    /// Run the `global_context_index` stage (Python's
+    /// `build_global_context_index`). `None` follows
+    /// [`ImproveConfig::global_context_index`]
+    /// (`IMPROVE_GLOBAL_CONTEXT_INDEX`, default on); an explicit value wins
+    /// in either direction.
+    pub build_global_context_index: Option<bool>,
+
+    /// Run the `review_conflicts` stage (Python's `review_conflicts`).
+    /// `None` follows [`ImproveConfig::review_conflicts`]
+    /// (`IMPROVE_REVIEW_CONFLICTS`, default on); an explicit value wins in
+    /// either direction.
+    pub review_conflicts: Option<bool>,
 
     /// Opt in to the `build_truth_subspace` stage (Python's
     /// `build_truth_subspace`). Default `false`.
@@ -361,6 +371,7 @@ async fn run_improve(
         add_pipeline,
         cognify_config,
         build_global_context_index,
+        review_conflicts,
         build_truth_subspace,
         run_in_background,
     } = params;
@@ -445,10 +456,10 @@ async fn run_improve(
                 session_ids,
                 feedback_alpha,
                 build_truth_subspace,
-                build_global_context_index,
-                // `improve.review_conflicts` (IMPROVE_REVIEW_CONFLICTS) opts in;
-                // Rust has no per-call `review_conflicts` argument yet.
-                review_conflicts: config.review_conflicts,
+                // `None` follows the setting, as Python's `improve()` does.
+                build_global_context_index: build_global_context_index
+                    .unwrap_or(config.global_context_index),
+                review_conflicts: review_conflicts.unwrap_or(config.review_conflicts),
                 personalization,
                 auto_feedback,
                 capabilities,
@@ -641,10 +652,7 @@ mod tests {
                 StageKind::FeedbackWeights,
                 Script::Gate("backend_unsupported"),
             )
-            .with(
-                StageKind::ReviewConflicts,
-                Script::Gate(REASON_OPT_IN_DISABLED),
-            );
+            .with(StageKind::ReviewConflicts, Script::Gate(REASON_TURNED_OFF));
         let (result, _) = run_loop(
             &mut executor,
             false,
@@ -674,7 +682,7 @@ mod tests {
         // The stage's own gate.
         assert_eq!(
             result.stage("review_conflicts").unwrap().reason.as_deref(),
-            Some(REASON_OPT_IN_DISABLED)
+            Some(REASON_TURNED_OFF)
         );
         // Nothing ran: every stage was gated.
         assert!(executor.calls.is_empty());

@@ -30,6 +30,10 @@ Lowest precedence first:
    `Settings::overlay_from_env()` (via `cognee_config_core::load_dotenv`). The file
    is found in the working directory or any ancestor. Variables already set in the
    process environment win over `.env`.
+   Set `COGNEE_DISABLE_DOTENV` to `1`, `true`, `yes` or `on` (trimmed,
+   case-insensitive) to skip `.env` loading entirely — the opt-out applies in
+   the native SDK, the CLI and every binding (Python, TypeScript, Java, C),
+   for hosts that manage env loading themselves.
 4. **Process environment:** bound by `Settings::overlay_from_env()`.
 5. **Explicit code:** `ConfigManager` setters (below), a binding's constructor
    settings object, the binding config APIs, and CLI `--flags`.
@@ -1484,7 +1488,8 @@ with a warning.
 | `IMPROVE_DEBOUNCE_SECONDS` | `improve.debounce_seconds` | `0` | ... or once this many seconds passed; `0` turns the time trigger off. Checked only on the next `remember()`: there is no timer. |
 | `IMPROVE_STAGES_DISABLED` | `improve.stages_disabled` | _(empty)_ | Comma-separated stage names skipped with `disabled_by_config`. |
 | `IMPROVE_FEEDBACK_ALPHA` | `improve.feedback_alpha` | `0.1` | `feedback_weights` learning rate, in (0, 1], when a run passes none. |
-| `IMPROVE_REVIEW_CONFLICTS` | `improve.review_conflicts` | `false` | Opt every run into `review_conflicts` (not ported yet: SDK-1038). |
+| `IMPROVE_REVIEW_CONFLICTS` | `improve.review_conflicts` | `true` | Default of the per-call `review_conflicts` argument (an explicit value wins either way); off reports `turned_off`. The stage is not ported yet (SDK-1038), so on reports `no_llm_configured`, `edge_evidence_disabled` (`EDGE_EVIDENCE_ENABLED` off) or `not_ported`. |
+| `IMPROVE_GLOBAL_CONTEXT_INDEX` | `improve.global_context_index` | `true` | Default of the per-call `build_global_context_index` argument (an explicit value wins either way), including the automatic improve after `remember()`; off reports `turned_off`. |
 | `IMPROVE_EFFECTIVE_DATE_KEY` | `improve.effective_date_key` | `effective_date` | Document metadata key of a source's date (read by `review_conflicts`; not ported yet). |
 | `IMPROVE_TRACE_WINDOW_STEPS` | `improve.trace_window_steps` | `0` | Agent trace steps per persisted document; `0` = all pending. Not read yet (SDK-1047). |
 | `IMPROVE_TRACE_WINDOWS_PER_RUN` | `improve.trace_windows_per_run` | `0` | Trace documents one run may cognify; `0` = drain. Not read yet (SDK-1047). |

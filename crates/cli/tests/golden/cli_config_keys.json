@@ -80,6 +80,7 @@
     "improve.distill_max_batches_per_run",
     "improve.effective_date_key",
     "improve.feedback_alpha",
+    "improve.global_context_index",
     "improve.review_conflicts",
     "improve.stages_disabled",
     "improve.trace_window_steps",
@@ -317,6 +318,7 @@
     "cognify.cascade_rounds",
     "improve.auto_enabled",
     "improve.review_conflicts",
+    "improve.global_context_index",
     "improve.effective_date_key",
     "improve.debounce_entries",
     "improve.debounce_seconds",
@@ -7312,6 +7314,53 @@
   "set improve.feedback_alpha <- {\"a\":1}": {
     "err": true
   },
+  "set improve.global_context_index <- \"\"": {
+    "err": true
+  },
+  "set improve.global_context_index <- \"1\"": {
+    "err": true
+  },
+  "set improve.global_context_index <- \"s\"": {
+    "err": true
+  },
+  "set improve.global_context_index <- \"true\"": {
+    "err": true
+  },
+  "set improve.global_context_index <- -1": {
+    "err": true
+  },
+  "set improve.global_context_index <- 0": {
+    "err": true
+  },
+  "set improve.global_context_index <- 1": {
+    "err": true
+  },
+  "set improve.global_context_index <- 1.5": {
+    "err": true
+  },
+  "set improve.global_context_index <- 5000000000": {
+    "err": true
+  },
+  "set improve.global_context_index <- 70000": {
+    "err": true
+  },
+  "set improve.global_context_index <- [1]": {
+    "err": true
+  },
+  "set improve.global_context_index <- false": {
+    "ok": {
+      "improve.global_context_index": false
+    }
+  },
+  "set improve.global_context_index <- null": {
+    "err": true
+  },
+  "set improve.global_context_index <- true": {
+    "ok": {}
+  },
+  "set improve.global_context_index <- {\"a\":1}": {
+    "err": true
+  },
   "set improve.review_conflicts <- \"\"": {
     "err": true
   },
@@ -7346,15 +7395,15 @@
     "err": true
   },
   "set improve.review_conflicts <- false": {
-    "ok": {}
+    "ok": {
+      "improve.review_conflicts": false
+    }
   },
   "set improve.review_conflicts <- null": {
     "err": true
   },
   "set improve.review_conflicts <- true": {
-    "ok": {
-      "improve.review_conflicts": true
-    }
+    "ok": {}
   },
   "set improve.review_conflicts <- {\"a\":1}": {
     "err": true
@@ -16293,6 +16342,13 @@
     }
   },
   "unset improve.feedback_alpha": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset improve.global_context_index": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

@@ -145,6 +145,29 @@ impl EnvSource for MapEnv {
     }
 }
 
+/// Name of the environment variable that opts a process out of `.env`
+/// auto-loading: `COGNEE_DISABLE_DOTENV`.
+///
+/// Deliberately *not* a `Settings` field or a key-registry entry
+/// (`crates/lib/src/config/keys.rs`): it decides whether `.env` is merged into
+/// the process environment *before* `Settings` is read from it, so it cannot
+/// be one of the values that read produces, nor be set through
+/// `ConfigManager`. It is only ever read from the real process environment.
+pub const DISABLE_DOTENV_ENV: &str = "COGNEE_DISABLE_DOTENV";
+
+/// Whether `env` opts out of `.env` auto-loading.
+///
+/// True when [`DISABLE_DOTENV_ENV`] is set to a truthy value — `1`, `true`,
+/// `yes` or `on`, trimmed and case-insensitive (the same set
+/// [`ConfigValue::parse_env`] accepts for `bool`). Anything else, including
+/// an explicit `0`/`false`, means `.env` is still loaded.
+#[must_use]
+pub fn dotenv_disabled(env: &dyn EnvSource) -> bool {
+    env.get(DISABLE_DOTENV_ENV)
+        .and_then(|raw| <bool as ConfigValue>::parse_env(&raw))
+        .unwrap_or(false)
+}
+
 /// Load a `.env` file from the current directory (or any ancestor) into the
 /// process environment. Variables already set in the process env win; a
 /// missing file is not an error.
@@ -162,9 +185,60 @@ pub fn load_dotenv() {
     let _ = dotenv::dotenv();
 }
 
+/// [`load_dotenv`] unless `env` opts out via [`DISABLE_DOTENV_ENV`].
+///
+/// `env` is read before the file is loaded: the opt-out variable itself must
+/// come from the real process environment, not from the `.env` file being
+/// skipped.
+#[cfg(feature = "dotenv")]
+pub fn load_dotenv_unless_disabled(env: &dyn EnvSource) {
+    run_unless_dotenv_disabled(env, load_dotenv);
+}
+
+/// Run `load` unless `env` opts out via [`DISABLE_DOTENV_ENV`]: the gate of
+/// [`load_dotenv_unless_disabled`], split out so tests can observe it
+/// without touching the process environment.
+#[cfg_attr(not(feature = "dotenv"), allow(dead_code))]
+fn run_unless_dotenv_disabled(env: &dyn EnvSource, load: impl FnOnce()) {
+    if !dotenv_disabled(env) {
+        load();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EnvSource, MapEnv};
+    use super::{
+        DISABLE_DOTENV_ENV, EnvSource, MapEnv, dotenv_disabled, run_unless_dotenv_disabled,
+    };
+
+    #[test]
+    fn dotenv_load_is_skipped_only_when_disabled() {
+        let loads = |env: &MapEnv| {
+            let mut loaded = false;
+            run_unless_dotenv_disabled(env, || loaded = true);
+            loaded
+        };
+        assert!(loads(&MapEnv::new()), "unset must load");
+        assert!(loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "0")));
+        assert!(loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "false")));
+        assert!(!loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, "1")));
+        assert!(!loads(&MapEnv::new().with(DISABLE_DOTENV_ENV, " On ")));
+    }
+
+    #[test]
+    fn dotenv_disabled_only_on_truthy_values() {
+        let env = MapEnv::new();
+        assert!(!dotenv_disabled(&env));
+
+        for value in ["", "0", "false", "no", "off", "2", "enabled"] {
+            let env = MapEnv::new().with(DISABLE_DOTENV_ENV, value);
+            assert!(!dotenv_disabled(&env), "{value:?} must not disable");
+        }
+        for value in ["1", "true", "TRUE", " yes ", "on", "On"] {
+            let env = MapEnv::new().with(DISABLE_DOTENV_ENV, value);
+            assert!(dotenv_disabled(&env), "{value:?} must disable");
+        }
+    }
 
     #[test]
     fn map_env_reads_back_what_was_set() {

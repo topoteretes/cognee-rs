@@ -8450,6 +8450,66 @@
     "err": "TypeMismatch",
     "key": "improve.feedback_alpha"
   },
+  "improve.global_context_index <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- -1": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- 0": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- 1": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- 70000": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- [1]": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- false": {
+    "ok": {
+      "improve.global_context_index": false
+    }
+  },
+  "improve.global_context_index <- null": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
+  "improve.global_context_index <- true": {
+    "ok": {}
+  },
+  "improve.global_context_index <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "improve.global_context_index"
+  },
   "improve.review_conflicts <- \"\"": {
     "err": "TypeMismatch",
     "key": "improve.review_conflicts"
@@ -8495,16 +8555,16 @@
     "key": "improve.review_conflicts"
   },
   "improve.review_conflicts <- false": {
-    "ok": {}
+    "ok": {
+      "improve.review_conflicts": false
+    }
   },
   "improve.review_conflicts <- null": {
     "err": "TypeMismatch",
     "key": "improve.review_conflicts"
   },
   "improve.review_conflicts <- true": {
-    "ok": {
-      "improve.review_conflicts": true
-    }
+    "ok": {}
   },
   "improve.review_conflicts <- {\"a\":1}": {
     "err": "TypeMismatch",

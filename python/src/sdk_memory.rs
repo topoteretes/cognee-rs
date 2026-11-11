@@ -187,8 +187,9 @@ impl PyCognee {
     /// ``datasetName`` (required), ``sessionIds`` (list of str),
     /// ``feedbackAlpha`` (float in (0, 1], default the ``improve.feedback_alpha`` setting, 0.1),
     /// ``tenant`` (UUID str), ``datasetId`` (UUID str of an already-resolved dataset),
-    /// ``buildGlobalContextIndex`` / ``buildTruthSubspace`` (bool, default False: opt in
-    /// to those stages), ``runInBackground`` (bool, default False: resolve the
+    /// ``buildGlobalContextIndex`` / ``reviewConflicts`` (bool; omitted follows the
+    /// ``improve.global_context_index`` / ``improve.review_conflicts`` setting, default on; an
+    /// explicit value wins either way), ``buildTruthSubspace`` (bool, default False: opt in), ``runInBackground`` (bool, default False: resolve the
     /// dataset and validate the options, then return a ``running`` result at once;
     /// wait for the run with ``wait_for_background_tasks()``, ``close()`` waits too).
     ///

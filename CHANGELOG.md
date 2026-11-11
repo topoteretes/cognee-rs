@@ -81,6 +81,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`improve()` follows Python 1.6.7 stage defaults (SDK-1206).**
+  `review_conflicts` and `global_context_index` now run by default
+  (`IMPROVE_REVIEW_CONFLICTS` and the new `IMPROVE_GLOBAL_CONTEXT_INDEX`,
+  both `true`). When off they report the skip reason `turned_off` instead of
+  `opt_in_disabled` (`build_truth_subspace` keeps `opt_in_disabled`).
+  `ImproveParams::build_global_context_index` is now `Option<bool>` and
+  `ImproveParams` / `OwnedImproveParams` gain `review_conflicts: Option<bool>`;
+  `None` follows the setting, an explicit value wins in either direction.
+  The automatic improve after `remember()` no longer hardcodes the index off,
+  so the setting decides. `ImproveConfig` gains `global_context_index`.
+  CLI: `--build-global-context-index` takes an optional `=BOOL` (bare flag
+  still means on) and `--review-conflicts[=BOOL]` is new. Bindings: the
+  `buildGlobalContextIndex` opt, when omitted, now follows the setting, and
+  `reviewConflicts` is new. Set `IMPROVE_GLOBAL_CONTEXT_INDEX=false` and
+  `IMPROVE_REVIEW_CONFLICTS=false` to keep the old behaviour.
+  `review_conflicts` gate order is now `turned_off`, `no_llm_configured`,
+  `edge_evidence_disabled` (with an LLM and `EDGE_EVIDENCE_ENABLED=false`;
+  previously `not_ported`), then `not_ported`. The CLI also accepts Python's
+  `--no-review-conflicts` spelling.
+
 - **`feedback_weights` public API (SDK-1051).**
   - `FeedbackApplyResult` has new public fields (`done`, `errored`,
     `elements_moved`, `elements_pruned`, `elements_failed`): struct-literal

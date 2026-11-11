@@ -617,7 +617,8 @@ async fn run_permanent_inner(
             add_pipeline: Some(add_pipeline),
             dataset_locks: None,
             cognify_config,
-            build_global_context_index: false,
+            build_global_context_index: None,
+            review_conflicts: None,
             build_truth_subspace: false,
             run_in_background: false,
         }))
@@ -994,7 +995,8 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> Session
             // The add pipeline's registry, else the process-wide one.
             dataset_locks: None,
             cognify_config: &cognify_config,
-            build_global_context_index: false,
+            build_global_context_index: None,
+            review_conflicts: None,
             build_truth_subspace: false,
             run_in_background: false,
         })
