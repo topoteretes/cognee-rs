@@ -377,9 +377,11 @@ jobs:
       # guard for SDK-948). Credentials go per invocation (see the note on
       # e2e-tests in docker-compose.yml). HARNESS_FAIL_ON_SKIP=1 turns any
       # skip into a failure (conftest.py) whose message carries the skip
-      # reason, so a step that checked nothing cannot go green.
+      # reason, so a step that checked nothing cannot go green. `!cancelled()`
+      # runs it even when an earlier LLM-gated step failed, so a COGX or
+      # provenance failure cannot hide a delete regression in the same run.
       - name: Cross-SDK delete parity after cognify (LLM-gated)
-        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        if: ${{ !cancelled() && env.HAS_OPENAI_KEY == 'true' }}
         env:
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
