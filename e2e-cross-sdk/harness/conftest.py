@@ -31,6 +31,27 @@ requires_openai = pytest.mark.skipif(
 )
 
 
+# ── Fail on skip (HARNESS_FAIL_ON_SKIP=1) ────────────────────────────────────
+#
+# A CI step that runs only skipped tests exits 0 having checked nothing. A
+# step that must not skip passes `-e HARNESS_FAIL_ON_SKIP=1`, and every skip,
+# from a marker or a `pytest.skip()` call, is reported as a failure carrying
+# the skip reason. Expected failures (xfail) are untouched. Off by default, so
+# a local run without credentials still skips the LLM tests.
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    if os.environ.get("HARNESS_FAIL_ON_SKIP") != "1":
+        return
+    report = outcome.get_result()
+    if report.skipped and not hasattr(report, "wasxfail"):
+        reason = report.longrepr[2] if isinstance(report.longrepr, tuple) else report.longrepr
+        report.outcome = "failed"
+        report.longrepr = f"skipped under HARNESS_FAIL_ON_SKIP=1: {reason}"
+
+
 # ── Fixtures: workspaces ─────────────────────────────────────────────────────
 
 

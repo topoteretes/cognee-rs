@@ -292,24 +292,20 @@ jobs:
       # alembic d6e8f0a2b4c6 / Rust m20261028_000001_dataset_scoped_data): if
       # either side reads membership the other no longer writes, the delete
       # leaves rows behind and this step fails. No credentials are needed, so
-      # it runs on every PR, forks included. A skipped test fails the step:
-      # these tests have no reason to skip, and a silent skip is how the
-      # delete family went unrun before.
+      # it runs on every PR, forks included. HARNESS_FAIL_ON_SKIP=1 turns any
+      # skip into a failure (conftest.py): these tests have no reason to skip,
+      # and a silent skip is how the delete family went unrun before.
       - name: Cross-SDK delete — relational layer (no LLM)
-        shell: bash
         run: |
-          log="$RUNNER_TEMP/delete-relational.log"
           docker compose \
             -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
-            run --rm e2e-tests \
+            run --rm \
+            -e HARNESS_FAIL_ON_SKIP=1 \
+            e2e-tests \
             pytest -vs -rs \
             /harness/test_cross_delete.py \
             /harness/test_readd_after_delete.py \
-            --tb=short 2>&1 | tee "$log"
-          if grep -q 'SKIPPED' "$log"; then
-            echo "::error::a cross-SDK delete test skipped; see the summary above"
-            exit 1
-          fi
+            --tb=short
 
       # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
       # The end-to-end path: Rust add + cognify + `export --pack`, then Python
@@ -379,12 +375,11 @@ jobs:
       # state must be clean on both sides, and deleting one of two datasets
       # that share an entity must keep the other's (SDK-1166, the regression
       # guard for SDK-948). Credentials go per invocation (see the note on
-      # e2e-tests in docker-compose.yml). A skipped test fails the step: with
-      # the key passed, a skip means the credentials did not reach the
-      # container and nothing was checked.
+      # e2e-tests in docker-compose.yml). HARNESS_FAIL_ON_SKIP=1 turns any
+      # skip into a failure (conftest.py) whose message carries the skip
+      # reason, so a step that checked nothing cannot go green.
       - name: Cross-SDK delete parity after cognify (LLM-gated)
         if: ${{ env.HAS_OPENAI_KEY == 'true' }}
-        shell: bash
         env:
           OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
           OPENAI_URL: https://api.openai.com/v1
@@ -393,7 +388,6 @@ jobs:
           # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via
           # the image's ONNX model (see the COGX roundtrip step).
         run: |
-          log="$RUNNER_TEMP/delete-parity.log"
           docker compose \
             -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
             run --rm \
@@ -401,13 +395,10 @@ jobs:
             -e OPENAI_URL="$OPENAI_URL" \
             -e OPENAI_MODEL="$OPENAI_MODEL" \
             -e LLM_PROVIDER="$LLM_PROVIDER" \
+            -e HARNESS_FAIL_ON_SKIP=1 \
             e2e-tests \
             pytest -vs -rs \
             /harness/test_delete_parity.py \
             /harness/test_delete_shared_entity_parity.py \
-            --tb=short 2>&1 | tee "$log"
-          if grep -q 'SKIPPED' "$log"; then
-            echo "::error::a cross-SDK delete parity test skipped; see the summary above"
-            exit 1
-          fi
+            --tb=short
 
