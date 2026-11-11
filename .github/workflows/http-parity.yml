@@ -374,3 +374,40 @@ jobs:
           pytest -vs /harness/test_logging_parity.py
           --tb=short
 
+      # ── Cross-SDK delete parity after cognify (LLM-gated) ───────────────
+      # Both SDKs add + cognify, then delete; graph, vector and relational
+      # state must be clean on both sides, and deleting one of two datasets
+      # that share an entity must keep the other's (SDK-1166, the regression
+      # guard for SDK-948). Credentials go per invocation (see the note on
+      # e2e-tests in docker-compose.yml). A skipped test fails the step: with
+      # the key passed, a skip means the credentials did not reach the
+      # container and nothing was checked.
+      - name: Cross-SDK delete parity after cognify (LLM-gated)
+        if: ${{ env.HAS_OPENAI_KEY == 'true' }}
+        shell: bash
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          LLM_PROVIDER: openai
+          # No EMBEDDING_* here on purpose: the Rust CLI embeds locally via
+          # the image's ONNX model (see the COGX roundtrip step).
+        run: |
+          log="$RUNNER_TEMP/delete-parity.log"
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e OPENAI_TOKEN="$OPENAI_TOKEN" \
+            -e OPENAI_URL="$OPENAI_URL" \
+            -e OPENAI_MODEL="$OPENAI_MODEL" \
+            -e LLM_PROVIDER="$LLM_PROVIDER" \
+            e2e-tests \
+            pytest -vs -rs \
+            /harness/test_delete_parity.py \
+            /harness/test_delete_shared_entity_parity.py \
+            --tb=short 2>&1 | tee "$log"
+          if grep -q 'SKIPPED' "$log"; then
+            echo "::error::a cross-SDK delete parity test skipped; see the summary above"
+            exit 1
+          fi
+
