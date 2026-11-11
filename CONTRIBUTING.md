@@ -220,7 +220,7 @@ Each binding has its own check script (also invoked by `scripts/check_all.sh`):
 
 | Binding | Source | Check | Notes |
 |---|---|---|---|
-| **C API** (`capi/`) | separate Cargo workspace | `bash capi/scripts/check.sh` | FFI must never panic across the boundary — sanitize/propagate, never `unwrap()` caller data. Headers + built lib are the artifact. |
+| **C API** (`capi/`) | separate Cargo workspace | `bash capi/scripts/check.sh` (CMake build + C examples/smokes); `bash capi/scripts/test.sh` (the crate's Rust unit tests — CI job `capi-rust-tests`) | FFI must never panic across the boundary — sanitize/propagate, never `unwrap()` caller data. Headers + built lib are the artifact. |
 | **JavaScript/TypeScript** (`ts/`) | Neon (`ts/cognee-ts-neon/`, member of the `bindings/` workspace) | `bash ts/scripts/check.sh` | Return JS errors instead of panicking into the V8 runtime. |
 | **Python** (`python/`) | PyO3 (`cognee-python`, workspace member) | `bash python/scripts/check.sh` | Exercised by pytest (the Rust test harness is disabled for the extension module — it has no libpython at link time). |
 

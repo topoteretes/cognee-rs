@@ -140,7 +140,9 @@ against the live API and commits the refreshed cassettes back to the branch.
 GitHub allows **10 GB of Actions cache per repo** and evicts least-recently-used
 entries past that. The steady-state working set here is healthy — roughly
 `capi-check` 3 GB + `workspace-test-v7` ~1 GB + `workspace-lint-v7` ~1 GB +
-`workspace-msrv-v2` 0.5 GB + small (ort, ccache, node) ≈ 6–7 GB.
+`workspace-msrv-v2` 0.5 GB + small (ort, ccache, node) ≈ 6–7 GB, plus
+`capi-rust-tests-v1` (the C API unit-test tree, which cannot share
+`capi-check`'s `panic = "abort"` artifacts — see `capi/scripts/test.sh`).
 
 It blows past 10 GB during **bursts of rapid pushes**: each change to a
 `Cargo.toml` (or the lockfile) shifts the dependency resolution, so
