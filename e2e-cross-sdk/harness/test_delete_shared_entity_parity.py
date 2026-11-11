@@ -2,8 +2,8 @@
 
 Both SDKs add two documents whose content shares entities (e.g. NLP and
 quantum computing both mention "computer"), cognify them, then delete one
-document's dataset.  We compare the remaining provenance (nodes) between
-SDKs with tolerance-based Jaccard similarity, since LLM extraction is
+document's dataset.  We compare the nodes left in each SDK's graph store
+between SDKs with tolerance-based Jaccard similarity, since LLM extraction is
 non-deterministic.
 
 All tests require an OpenAI API key (cognify invokes the LLM).
@@ -15,11 +15,9 @@ from helpers import (
     open_db,
     query_data,
     query_datasets,
-    distinct_graph_nodes,
-    query_nodes,
-    query_edges,
     python_db_path,
     python_graph,
+    rust_graph,
     rust_db_path,
     run_python_cli,
     run_rust_cli,
@@ -144,8 +142,10 @@ def test_shared_entity_delete_parity(tmp_path):
     rust_conn = open_db(rust_db)
     rust_datasets = query_datasets(rust_conn)
     rust_data = query_data(rust_conn)
-    rust_nodes = distinct_graph_nodes(query_nodes(rust_conn))
     rust_conn.close()
+    # Rust's graph store itself, not its relational provenance ledger: a
+    # delete that drops graph nodes but keeps their ledger rows must fail.
+    rust_nodes = rust_graph(rust_ws)[0]
 
     # At least dataset_b should survive
     py_ds_names = {d["name"] for d in py_datasets}
