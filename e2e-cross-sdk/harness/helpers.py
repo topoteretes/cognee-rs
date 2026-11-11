@@ -670,6 +670,119 @@ def python_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
     return nodes, edges
 
 
+def rust_graph(workdir: Path) -> tuple[list[dict], list[dict]]:
+    """Read the Rust CLI's graph store, in the shape ``python_graph`` returns.
+
+    Goes through ``cognee-cli export``, which writes the whole graph store
+    (cognee-rs keeps one store unless ``ENABLE_BACKEND_ACCESS_CONTROL`` is on,
+    and the harness leaves it off): ``nodes.jsonl`` holds every graph node and
+    ``facts.jsonl`` every edge. Read the graph, not the relational ``nodes``
+    ledger: a delete that drops graph nodes but keeps their ledger rows (or the
+    reverse) must not look clean.
+    """
+    out_dir = workdir / f"graph_export_{os.urandom(4).hex()}"
+    result = run_rust_cli(workdir, ["export", "-o", str(out_dir)], check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Reading Rust's graph failed (exit {result.returncode}):\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+
+    def jsonl(name: str) -> list[dict]:
+        path = out_dir / name
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    nodes = []
+    for n in jsonl("nodes.jsonl"):
+        n["id"] = _normalize_uuid(n["id"])
+        n["graph_id"] = n["id"]
+        n.setdefault("type", None)
+        n["node_type"] = n["type"]
+        n.setdefault("label", n.get("name"))
+        nodes.append(n)
+    nodes.sort(key=lambda r: (r.get("type") or "", r.get("label") or ""))
+
+    edges = [
+        {
+            "source_node_id": _normalize_uuid(f["subject_ref"]),
+            "destination_node_id": _normalize_uuid(f["object_ref"]),
+            "relationship_name": f["predicate"],
+        }
+        for f in jsonl("facts.jsonl")
+    ]
+    edges.sort(key=lambda r: r.get("relationship_name") or "")
+    return nodes, edges
+
+
+def document_neighbourhood(
+    nodes: list[dict], edges: list[dict], document_ids: set[str]
+) -> set[str]:
+    """Ids of the graph nodes within two hops of the given document nodes.
+
+    Edge direction is ignored. Two hops from a ``TextDocument`` reach its
+    chunks (hop 1) and what those chunks link to (hop 2): the entities they
+    contain and their summaries. This is the part of the graph a document's
+    dataset owns or shares, independent of what the LLM extracted.
+    """
+    adjacent: dict[str, set[str]] = {}
+    for e in edges:
+        s, d = e["source_node_id"], e["destination_node_id"]
+        adjacent.setdefault(s, set()).add(d)
+        adjacent.setdefault(d, set()).add(s)
+    node_ids = {n["id"] for n in nodes}
+    seen = {i for i in document_ids if i in node_ids}
+    frontier = set(seen)
+    for _ in range(2):
+        frontier = {n for f in frontier for n in adjacent.get(f, ())} - seen
+        seen |= frontier
+    return seen
+
+
+# Reads every LanceDB table under a workspace. A LanceDB database is a
+# directory of ``<table>.lance`` directories; each SDK may keep one per dataset,
+# so rows of the same collection are pooled. Python's rows hold the payload in a
+# ``payload`` struct column; Rust's in a ``metadata`` JSON string column.
+_VECTOR_START, _VECTOR_END = "<<<PAYLOADS>>>", "<<<END>>>"
+_VECTOR_DUMP_SCRIPT = """
+import json, pathlib, lancedb
+root = pathlib.Path({root!r})
+out = {{}}
+for table_dir in sorted(root.rglob("*.lance")):
+    if not table_dir.is_dir() or table_dir.parent.suffix == ".lance":
+        continue
+    db = lancedb.connect(str(table_dir.parent))
+    for row in db.open_table(table_dir.stem).to_arrow().to_pylist():
+        if "payload" in row:
+            payload = row["payload"]
+        else:
+            payload = json.loads(row["metadata"])
+        out.setdefault(table_dir.stem, []).append(payload)
+print({start!r} + json.dumps(out, default=str) + {end!r})
+"""
+
+
+def vector_rows(workspace: Path) -> dict[str, list[dict]]:
+    """Stored vector payloads per collection, read with the lancedb package.
+
+    Both SDKs use LanceDB in this harness. A collection with no rows (or no
+    table at all) is absent from the result.
+    """
+    script = _VECTOR_DUMP_SCRIPT.format(
+        root=str(workspace), start=_VECTOR_START, end=_VECTOR_END
+    )
+    result = run_python_script(workspace, script, check=False)
+    out = result.stdout
+    start, end = out.find(_VECTOR_START), out.find(_VECTOR_END)
+    if result.returncode != 0 or start == -1 or end < start:
+        raise RuntimeError(
+            f"Reading LanceDB under {workspace} failed (exit {result.returncode}):\n"
+            f"--- stdout ---\n{out}\n--- stderr ---\n{result.stderr}"
+        )
+    return json.loads(out[start + len(_VECTOR_START) : end])
+
+
 # ── DB path resolvers ────────────────────────────────────────────────────────
 
 

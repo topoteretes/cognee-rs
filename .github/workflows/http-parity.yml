@@ -6,12 +6,14 @@ name: Cross-SDK Parity
 # The HTTP half of this lane is GONE from OSS. `cognee-http-server` moved out
 # of this repository, taking the 28 `test_http_*.py` files, their fixtures and
 # the dual-server entrypoint with it. What is left here is the CLI/DB lane: the COGX
-# import + roundtrip contracts, telemetry parity, provenance parity and logging
-# parity.
+# import + roundtrip contracts, telemetry parity, provenance parity, logging
+# parity and the cross-SDK delete family (SDK-1166).
 #
-# The telemetry-parity and COGX-import steps need no secrets and are the
-# unconditional release gate. LLM-gated steps use secrets.OPENAI_KEY (same as
-# ci.yml) and skip cleanly when absent (fork-safe).
+# The telemetry-parity, COGX-import and relational-delete steps need no secrets
+# and are the unconditional release gate. LLM-gated steps use
+# secrets.OPENAI_KEY (same as ci.yml) and skip cleanly when absent (fork-safe).
+# Both delete steps set HARNESS_FAIL_ON_SKIP=1, so a delete test that skips
+# fails its step instead of passing having checked nothing.
 #
 # The workflow file name, the job id `http-parity` and the concurrency group are
 # deliberately UNCHANGED even though the HTTP half is gone, so that run history,
@@ -285,6 +287,28 @@ jobs:
             e2e-tests \
             pytest -vs /harness/test_cogx_import_contract.py --tb=short
 
+      # ── Cross-SDK delete, relational layer (no LLM) ─────────────────────
+      # One SDK adds, the other deletes the same SQLite database, then a
+      # re-add mints fresh rows (SDK-1166). This is the guard for the
+      # dataset-membership model both SDKs share (`data.dataset_id`, Python
+      # alembic d6e8f0a2b4c6 / Rust m20261028_000001_dataset_scoped_data): if
+      # either side reads membership the other no longer writes, the delete
+      # leaves rows behind and this step fails. No credentials are needed, so
+      # it runs on every PR, forks included. HARNESS_FAIL_ON_SKIP=1 turns any
+      # skip into a failure (conftest.py): these tests have no reason to skip,
+      # and a silent skip is how the delete family went unrun before.
+      - name: Cross-SDK delete — relational layer (no LLM)
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e HARNESS_FAIL_ON_SKIP=1 \
+            e2e-tests \
+            pytest -vs -rs \
+            /harness/test_cross_delete.py \
+            /harness/test_readd_after_delete.py \
+            --tb=short
+
       # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
       # The end-to-end path: Rust add + cognify + `export --pack`, then Python
       # imports the archive and must reproduce the same node ids and edges.
@@ -347,4 +371,37 @@ jobs:
           run --rm e2e-tests
           pytest -vs /harness/test_logging_parity.py
           --tb=short
+
+      # ── Cross-SDK delete parity after cognify (LLM-gated) ───────────────
+      # Both SDKs add + cognify, then delete; graph, vector and relational
+      # state must be clean on both sides, and deleting one of two datasets
+      # that share an entity must keep the other's (SDK-1166, the regression
+      # guard for SDK-948). Credentials go per invocation (see the note on
+      # e2e-tests in docker-compose.yml). HARNESS_FAIL_ON_SKIP=1 turns any
+      # skip into a failure (conftest.py) whose message carries the skip
+      # reason, so a step that checked nothing cannot go green. `!cancelled()`
+      # runs it even when an earlier LLM-gated step failed, so a COGX or
+      # provenance failure cannot hide a delete regression in the same run.
+      - name: Cross-SDK delete parity after cognify (LLM-gated)
+        if: ${{ !cancelled() && env.HAS_OPENAI_KEY == 'true' }}
+        env:
+          OPENAI_TOKEN: ${{ secrets.OPENAI_KEY }}
+          OPENAI_URL: https://api.openai.com/v1
+          OPENAI_MODEL: gpt-4o-mini
+          # Only these three reach the tests: helpers.py fixes the provider to
+          # openai for both CLIs, and both embed with the same key through
+          # OpenAI's text-embedding-3-small.
+        run: |
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm \
+            -e OPENAI_TOKEN="$OPENAI_TOKEN" \
+            -e OPENAI_URL="$OPENAI_URL" \
+            -e OPENAI_MODEL="$OPENAI_MODEL" \
+            -e HARNESS_FAIL_ON_SKIP=1 \
+            e2e-tests \
+            pytest -vs -rs \
+            /harness/test_delete_parity.py \
+            /harness/test_delete_shared_entity_parity.py \
+            --tb=short
 

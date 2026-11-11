@@ -938,7 +938,10 @@ async fn sequential_declined_turn_acknowledges_even_with_a_response_schema() {
     )
     .await;
     let mut request = harness.request("No, use X.");
-    request.response_schema = Some(json!({"type": "object"}));
+    request.response_schema = Some(json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}}
+    }));
 
     assert_declined_turn_logged(&harness, request).await;
     assert!(
@@ -1417,7 +1420,10 @@ async fn a_structured_answer_is_persisted_as_compact_json() {
         )
         .await;
         let mut request = harness.request("Be terse. What now?");
-        request.response_schema = Some(json!({"type": "object"}));
+        request.response_schema = Some(json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "n": {"type": "integer"}}
+        }));
         if per_dataset {
             request.dataset_ids = Some(vec![Uuid::new_v4()]);
         }

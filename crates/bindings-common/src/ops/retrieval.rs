@@ -35,8 +35,9 @@ use uuid::Uuid;
 
 use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::{
-    NormalizedResult, RecallItem, RecallSource, SearchRequest, SearchResponse, SearchType,
-    build_graph_entry, entry_dataset_ids, entry_evidence, only_context_system_prompt,
+    NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest, SearchResponse,
+    SearchType, build_graph_entry, build_structured_entry, entry_dataset_ids, entry_evidence,
+    only_context_system_prompt,
 };
 
 use crate::{HandleState, SdkError};
@@ -662,6 +663,8 @@ pub fn normalize_recall_items(
     dataset_names: &HashMap<Uuid, String>,
 ) -> Vec<NormalizedResult> {
     let system_prompt = search_response.and_then(only_context_system_prompt);
+    let structured =
+        search_response.is_some_and(|r| matches!(r.result, SearchOutput::Structured(_)));
     let graph_items = graph_items(items);
     let entry_datasets = graph_item_datasets(&graph_items, search_response);
     let (evidence, dataset_count) = match search_response {
@@ -677,8 +680,12 @@ pub fn normalize_recall_items(
         .map(|(item, dataset)| {
             let name = dataset.and_then(|id| dataset_names.get(&id).cloned());
             let dataset = dataset.map(|id| id.to_string());
-            let mut entry =
-                build_graph_entry(item.content.clone(), search_type, dataset.clone(), name);
+            let build = if structured {
+                build_structured_entry
+            } else {
+                build_graph_entry
+            };
+            let mut entry = build(item.content.clone(), search_type, dataset.clone(), name);
             entry.system_prompt = system_prompt.clone();
             entry.attach_evidence(&entry_evidence(evidence, dataset_count, dataset.as_deref()));
             entry
@@ -821,6 +828,31 @@ mod tests {
     /// payload does: by position in a per-dataset fan-out, by its own
     /// membership, or as the response's only dataset. The name comes from
     /// the looked-up names; an id without one keeps a `null` name.
+    /// A structured graph answer becomes a `STRUCTURED` entry carrying it.
+    #[test]
+    fn normalize_recall_items_marks_a_structured_answer() {
+        let answer = json!({ "answer": "yes" });
+        let response = SearchResponse::from_output(
+            SearchType::GraphCompletion,
+            SearchOutput::Structured(answer.clone()),
+        );
+        let items = [RecallItem {
+            source: RecallSource::Graph,
+            content: answer.clone(),
+            score: 1.0,
+        }];
+        let normalized = normalize_recall_items(
+            &items,
+            SearchType::GraphCompletion,
+            Some(&response),
+            &HashMap::new(),
+        );
+        assert_eq!(normalized.len(), 1);
+        let wire = serde_json::to_value(&normalized[0]).unwrap();
+        assert_eq!(wire["kind"], "structured");
+        assert_eq!(wire["structured"], answer);
+    }
+
     #[test]
     fn normalize_recall_items_name_each_entrys_dataset() {
         let (a, b) = (

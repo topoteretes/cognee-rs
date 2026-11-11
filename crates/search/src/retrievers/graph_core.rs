@@ -20,6 +20,7 @@ use crate::graph_retrieval::{
     DEFAULT_TRIPLET_DISTANCE_PENALTY, GraphRetrievalConfig, RankedGraphEdge,
     brute_force_triplet_search, brute_force_triplet_search_batch, validate_query_batch,
 };
+use crate::response_schema::ResponseSchema;
 use crate::types::{SearchContext, SearchError, SearchItem, SearchOutput, SearchParams};
 use crate::user_preferences::{completion_guidance, load_for_search};
 use crate::utils::{
@@ -301,12 +302,22 @@ pub(crate) async fn complete(
     params: &SearchParams,
     generation_options: Option<GenerationOptions>,
 ) -> Result<SearchOutput, SearchError> {
-    if let Some(schema) = &params.response_schema {
-        let structured_value = llm
-            .create_structured_output_with_messages_raw(messages, schema, generation_options)
+    if let Some(raw_schema) = &params.response_schema {
+        let schema = ResponseSchema::compile(raw_schema)?;
+        let validator = |answer: &serde_json::Value| schema.conform(answer).map(drop);
+        let answer = llm
+            .create_structured_output_with_messages_raw_validated(
+                messages,
+                raw_schema,
+                generation_options,
+                &validator,
+            )
             .await
             .map_err(|e| SearchError::LlmError(e.to_string()))?;
-        Ok(SearchOutput::Structured(structured_value))
+        let conformed = schema.conform(&answer).map_err(|e| {
+            SearchError::LlmError(format!("the answer does not match response_schema: {e}"))
+        })?;
+        Ok(SearchOutput::Structured(conformed))
     } else {
         // The turn's answer: streams into a promoted token sink, if any.
         let completion = cognee_llm::generate_answer(llm, messages, generation_options).await?;

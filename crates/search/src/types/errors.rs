@@ -8,6 +8,10 @@ pub enum SearchError {
     #[error("invalid hybrid search config: {0}")]
     InvalidHybridSearchConfig(String),
 
+    /// The request's `response_schema` is outside the supported subset.
+    #[error(transparent)]
+    InvalidResponseSchema(#[from] crate::response_schema::ResponseSchemaError),
+
     #[error("vector error: {0}")]
     VectorError(String),
 

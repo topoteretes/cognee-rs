@@ -1307,27 +1307,13 @@ impl SearchRetriever for HybridRetriever {
             return Ok(skip_completion_on_empty_context());
         };
 
-        if let Some(schema) = &params.response_schema {
-            let structured_value = self
-                .llm
-                .create_structured_output_with_messages_raw(
-                    messages,
-                    schema,
-                    self.generation_options.clone(),
-                )
-                .await
-                .map_err(|e| SearchError::LlmError(e.to_string()))?;
-            Ok(SearchOutput::Structured(structured_value))
-        } else {
-            // The turn's answer: streams into a promoted token sink, if any.
-            let completion = cognee_llm::generate_answer(
-                self.llm.as_ref(),
-                messages,
-                self.generation_options.clone(),
-            )
-            .await?;
-            Ok(SearchOutput::Text(completion.content))
-        }
+        crate::retrievers::graph_core::complete(
+            self.llm.as_ref(),
+            messages,
+            params,
+            self.generation_options.clone(),
+        )
+        .await
     }
 
     /// HYBRID_COMPLETION rejects query batches at every entry point. No
@@ -2426,7 +2412,10 @@ mod retriever_tests {
         let retriever = retriever(vector_db, graph_db, llm);
 
         let params = SearchParams {
-            response_schema: Some(json!({ "type": "object" })),
+            response_schema: Some(json!({
+                "type": "object",
+                "properties": { "answer": { "type": "string" } }
+            })),
             ..SearchParams::default()
         };
         let output = retriever
@@ -2440,6 +2429,79 @@ mod retriever_tests {
             }
             _ => panic!("expected structured output"),
         }
+    }
+
+    /// The answer is returned conformed to the schema: undeclared keys
+    /// dropped, an absent optional field `null`.
+    #[tokio::test]
+    async fn structured_output_is_conformed_to_the_schema() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let llm = Arc::new(CapturingLlm {
+            structured_response: Some(json!({ "answer": "yes", "extra": 1 })),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, llm);
+        let params = SearchParams {
+            response_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" },
+                    "confidence": { "type": "number" }
+                },
+                "required": ["answer"]
+            })),
+            ..SearchParams::default()
+        };
+
+        let output = retriever
+            .get_completion("q", None, &SessionContext::default(), &params)
+            .await
+            .unwrap();
+
+        let SearchOutput::Structured(value) = output else {
+            panic!("expected structured output");
+        };
+        assert_eq!(value, json!({ "answer": "yes", "confidence": null }));
+    }
+
+    /// An answer that still does not conform is an LLM error naming what
+    /// failed; a schema outside the subset is refused before any LLM call.
+    #[tokio::test]
+    async fn a_non_conforming_answer_or_a_bad_schema_fails() {
+        let (vector_db, graph_db, _alice) = populated_dbs().await;
+        let llm = Arc::new(CapturingLlm {
+            structured_response: Some(json!({ "other": "x" })),
+            ..Default::default()
+        });
+        let retriever = retriever(vector_db, graph_db, llm);
+        let with_schema = |schema: Value| SearchParams {
+            response_schema: Some(schema),
+            ..SearchParams::default()
+        };
+
+        let missing = with_schema(json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"]
+        }));
+        let error = retriever
+            .get_completion("q", None, &SessionContext::default(), &missing)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, SearchError::LlmError(m) if m.contains("answer: missing required field")),
+            "{error}"
+        );
+
+        let bad = with_schema(json!({ "type": "object" }));
+        let error = retriever
+            .get_completion("q", None, &SessionContext::default(), &bad)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, SearchError::InvalidResponseSchema(_)),
+            "{error}"
+        );
     }
 
     #[tokio::test]
