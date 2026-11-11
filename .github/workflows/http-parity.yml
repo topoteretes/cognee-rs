@@ -285,6 +285,32 @@ jobs:
             e2e-tests \
             pytest -vs /harness/test_cogx_import_contract.py --tb=short
 
+      # ── Cross-SDK delete, relational layer (no LLM) ─────────────────────
+      # One SDK adds, the other deletes the same SQLite database, then a
+      # re-add mints fresh rows (SDK-1166). This is the guard for the
+      # dataset-membership model both SDKs share (`data.dataset_id`, Python
+      # alembic d6e8f0a2b4c6 / Rust m20261028_000001_dataset_scoped_data): if
+      # either side reads membership the other no longer writes, the delete
+      # leaves rows behind and this step fails. No credentials are needed, so
+      # it runs on every PR, forks included. A skipped test fails the step:
+      # these tests have no reason to skip, and a silent skip is how the
+      # delete family went unrun before.
+      - name: Cross-SDK delete — relational layer (no LLM)
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/delete-relational.log"
+          docker compose \
+            -f cognee-rust/e2e-cross-sdk/docker-compose.yml \
+            run --rm e2e-tests \
+            pytest -vs -rs \
+            /harness/test_cross_delete.py \
+            /harness/test_readd_after_delete.py \
+            --tb=short 2>&1 | tee "$log"
+          if grep -q 'SKIPPED' "$log"; then
+            echo "::error::a cross-SDK delete test skipped; see the summary above"
+            exit 1
+          fi
+
       # ── COGX roundtrip: Rust exports, Python imports (LLM-gated) ─────────
       # The end-to-end path: Rust add + cognify + `export --pack`, then Python
       # imports the archive and must reproduce the same node ids and edges.
