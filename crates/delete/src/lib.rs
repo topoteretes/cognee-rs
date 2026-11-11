@@ -1641,7 +1641,7 @@ impl DeleteService {
             let (vp, vw) = delete_vector_artifacts(
                 self.vector_db.as_ref(),
                 &unique_nodes,
-                &unique_edges,
+                &triplet_edges(&edges, &unique_edges, &unique_nodes),
                 &edge_type_ids,
             )
             .await?;
@@ -2176,8 +2176,12 @@ impl DeleteService {
             let edge_type_ids = self
                 .edge_type_ids_unclaimed_outside(&dataset_ids, &shared_edges)
                 .await?;
-            vector_points +=
-                edge_point_count(self.vector_db.as_ref(), &edge_type_ids, &unique_edges).await;
+            vector_points += edge_point_count(
+                self.vector_db.as_ref(),
+                &edge_type_ids,
+                &triplet_edges(&shared_edges, &unique_edges, &unique_nodes),
+            )
+            .await;
         }
 
         Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
@@ -2694,6 +2698,36 @@ pub(crate) async fn delete_graph_artifacts(
         }
         Ok((0, warnings))
     }
+}
+
+/// The edge rows whose legacy `Triplet_text` point a dataset delete in a
+/// shared store removes: those no other dataset's row names (`unique_edges`),
+/// and those with an endpoint the delete takes out of the graph
+/// (`deleted_nodes`), deduplicated.
+///
+/// The point is one-to-one with an edge (source, text, target), and the graph
+/// loses an edge only with one of its endpoints. The second set is needed
+/// because a structural row's `slug` is keyed on its relationship text alone
+/// (`edge_slug`, Python's `generate_edge_id`): every dataset's `is_part_of`
+/// rows share one slug, so slug exclusivity never selects a dataset's own
+/// chunk-to-document edge while another dataset exists. An edge whose
+/// endpoints both survive and whose slug another dataset names keeps its
+/// point: it is still in the graph.
+fn triplet_edges(
+    edges: &[GraphEdge],
+    unique_edges: &[GraphEdge],
+    deleted_nodes: &[GraphNode],
+) -> Vec<GraphEdge> {
+    let deleted: HashSet<Uuid> = deleted_nodes.iter().map(|node| node.slug).collect();
+    let mut seen = HashSet::new();
+    unique_edges
+        .iter()
+        .chain(edges.iter().filter(|edge| {
+            deleted.contains(&edge.source_node_id) || deleted.contains(&edge.destination_node_id)
+        }))
+        .filter(|edge| seen.insert(edge.id))
+        .cloned()
+        .collect()
 }
 
 /// The graph nodes and vector points a dataset's ledger rows account for:
@@ -8771,6 +8805,84 @@ mod tests {
         assert_eq!(
             store.graph_slugs().await,
             [store.own_b].into_iter().collect::<BTreeSet<_>>()
+        );
+    }
+
+    /// Structural rows are keyed on their relationship text (`edge_slug`), so
+    /// every dataset's `is_part_of` rows share one slug and a slug check alone
+    /// would call A's own chunk-to-document edge shared with B. Its legacy
+    /// `Triplet_text` point is one-to-one with the edge, and the edge leaves
+    /// the graph with A's chunk, so the point goes; B's stays.
+    #[tokio::test]
+    async fn dataset_delete_drops_legacy_triplets_of_its_own_structural_edges() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let mut structural = Vec::new();
+        for name in ["struct_a", "struct_b"] {
+            let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, name).await;
+            let (chunk, document) = (Uuid::new_v4(), Uuid::new_v4());
+            seed_provenance_nodes(
+                &db,
+                dataset_id,
+                data_id,
+                owner,
+                &[chunk, document],
+                "DocumentChunk",
+                serde_json::json!([]),
+            )
+            .await;
+            let edge = GraphEdge {
+                id: Uuid::new_v4(),
+                slug: EdgeType::deterministic_id("is_part_of"),
+                user_id: owner,
+                data_id: Uuid::nil(),
+                dataset_id,
+                pipeline_run_id: None,
+                source_node_id: chunk,
+                destination_node_id: document,
+                relationship_name: "is_part_of".to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            };
+            ops::graph_storage::upsert_edges(&db, std::slice::from_ref(&edge))
+                .await
+                .unwrap();
+            structural.push(edge);
+        }
+        seed_legacy_triplet_points(&vector_db, &structural).await;
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "struct_a".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let surviving = || async {
+            let ids: Vec<Uuid> = structural.iter().map(triplet_vector_id).collect();
+            vector_db
+                .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &ids)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|found| found.id)
+                .collect::<Vec<_>>()
+        };
+
+        let preview = svc.preview(&request).await.unwrap();
+        let result = svc.execute(&request).await.unwrap();
+
+        assert_eq!(surviving().await, vec![triplet_vector_id(&structural[1])]);
+        // A's triplet point; the shared `is_part_of` EdgeType text has no
+        // point here, and the nodes index no field.
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (1, 1)
         );
     }
 }
