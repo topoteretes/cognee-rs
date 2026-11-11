@@ -701,18 +701,41 @@ jobs:
             --require-test redis_memify_metadata_round_trips_and_merges \
             --require-test the_redis_session_store_applies_the_session_ttl
 
+  # ── C API Rust unit tests (fork-PR copy of ci.yml's `capi-check` step) ──
+  # Needs no secrets, network or models. Fork PRs only: capi-check lives in
+  # ci.yml, which fork PRs skip wholesale, and on an in-repo PR it already runs
+  # the identical script. Slim feature set, so no lbug ccache / ORT / disk
+  # freeing / rust-cache is needed. `notify` accepts `skipped` for it. The
+  # count/name guard lives in capi/scripts/test.sh, so it cannot drift.
+  capi-rust-tests:
+    name: C API Rust Tests
+    runs-on: ubuntu-24.04
+    if: github.event.pull_request.head.repo.full_name != github.repository
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+        with:
+          make-default: true
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Run C API Rust unit tests (slim)
+        env:
+          COGNEE_CAPI_TEST_TARGET_DIR: ${{ runner.temp }}/capi-rust-tests
+        run: bash capi/scripts/test.sh
+
   notify:
     name: Community Checks Status
-    needs: [ lint, test-no-secrets, pggraph-postgres, pgvector-postgres, pg-single-db-postgres, redis-session ]
+    needs: [ lint, test-no-secrets, pggraph-postgres, pgvector-postgres, pg-single-db-postgres, redis-session, capi-rust-tests ]
     runs-on: ubuntu-24.04
     if: ${{ !cancelled() }}
     steps:
       - name: Check status
         run: |
-          # `skipped` is the expected result for the Postgres and Redis lanes on an
-          # in-repo PR, where they are gated off because ci.yml runs the same
-          # lanes. Any other non-success value (failure / cancelled) must still
-          # fail.
+          # `skipped` is the expected result for the Postgres, Redis and C API
+          # test lanes on an in-repo PR, where they are gated off because ci.yml
+          # runs the same lanes. Any other non-success value (failure /
+          # cancelled) must still fail.
           if [[ "${{ needs.lint.result }}" == "success" &&
                 "${{ needs.test-no-secrets.result }}" == "success" &&
                 ( "${{ needs.pggraph-postgres.result }}" == "success" ||
@@ -722,7 +745,9 @@ jobs:
                 ( "${{ needs.pg-single-db-postgres.result }}" == "success" ||
                   "${{ needs.pg-single-db-postgres.result }}" == "skipped" ) &&
                 ( "${{ needs.redis-session.result }}" == "success" ||
-                  "${{ needs.redis-session.result }}" == "skipped" ) ]]; then
+                  "${{ needs.redis-session.result }}" == "skipped" ) &&
+                ( "${{ needs.capi-rust-tests.result }}" == "success" ||
+                  "${{ needs.capi-rust-tests.result }}" == "skipped" ) ]]; then
             echo "All community checks passed!"
           else
             echo "One or more community checks failed."

@@ -252,6 +252,11 @@ echo "=== C API: Building and running examples ==="
 echo "================================================================"
 "$REPO_ROOT/capi/scripts/check.sh"
 
+# capi/ is its own Cargo workspace, so the root `cargo test` never reaches its
+# Rust unit tests; CI runs the same script as a step of `capi-check`. It prints
+# its own banner and uses a separate target dir (see its header).
+"$REPO_ROOT/capi/scripts/test.sh"
+
 echo ""
 echo "================================================================"
 echo "=== Python: Building and running tests ==="

@@ -17,19 +17,18 @@ CAPI_DIR="$(dirname "$SCRIPT_DIR")"
 # takes 13.5s.
 #
 # What the checks covered that the CMake builds do not is cargo *test*
-# targets — cognee-capi has inline #[cfg(test)] modules (src/error.rs,
-# src/exec_status.rs) that only compile under --all-targets. Note they were
-# only ever *compiled* here, never run: nothing in CI executes the capi
-# workspace's Rust unit tests (the root `cargo test --workspace` does not
-# reach into capi/, which is a separate workspace).
+# targets — cognee-capi has inline #[cfg(test)] modules that only compile
+# under --all-targets (the root `cargo test --workspace` does not reach into
+# capi/, which is a separate workspace).
 #
 # Restoring that compile-check via `cargo test --no-run` after the CMake build
 # was tried and measured at 819s — as expensive as the checks it replaced,
-# because `cargo test` pulls in dev-dependencies and rebuilds the lib as a
-# test harness rather than reusing the CMake build's artifacts. It was dropped
-# again. If those two test modules are worth covering, the cheap fix is to
-# make them *run* somewhere sensible rather than to buy a compile-only check
-# here for ~14 min of every CI run.
+# because the test harness needs `panic = "unwind"` while capi's dev profile is
+# `panic = "abort"`, so cargo rebuilds the whole dependency graph rather than
+# reusing the CMake build's artifacts. So the tests are not compiled here at
+# all: they are *run* by capi/scripts/test.sh (slim features, so a cheap build),
+# in CI as a step of `capi-check` right after this script, and locally from
+# check_all.sh.
 echo ""
 echo "================================================================"
 echo "=== C API: Header sync check (exported vs. declared symbols) ==="

@@ -30,6 +30,9 @@
 # `pg-single-db-postgres` lanes in .github/workflows/ci.yml and their mirrors in
 # .github/workflows/community.yml.
 #
+# Also called by capi/scripts/test.sh (a `capi-check` step; `capi-rust-tests` in community.yml), purely for
+# its test-count floor and named-case checks — those tests have no env gate.
+#
 # Also called by the `test` job's retrieval step, which is not Postgres-gated at
 # all — `search_live_smoke` gates on an LLM key and (formerly) a local ONNX
 # model. Nothing here is Postgres-specific: the skip-marker pattern is
@@ -228,4 +231,4 @@ for test_name in ${REQUIRE_TESTS[@]+"${REQUIRE_TESTS[@]}"}; do
     fail "required test $test_name did not run (or did not pass) in any of: ${LOGS[*]}."
 done
 
-echo "$LABEL suite verified: $total_passed tests passed against a live backend across ${#LOGS[@]} log(s), ${#REQUIRE_TESTS[@]} named case(s) confirmed, no skip markers."
+echo "$LABEL suite verified: $total_passed tests passed across ${#LOGS[@]} log(s), ${#REQUIRE_TESTS[@]} named case(s) confirmed, no skip markers."

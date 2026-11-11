@@ -1503,8 +1503,7 @@ jobs:
       #      until their 7-day expiry — PR #127's caches alone were still
       #      holding 4.61 GB of a 10.35 GB quota hours after it merged.
       # Key bumped to v2: the tree no longer contains the check-slim target dir
-      # (removed with the redundant cargo check passes) and now contains the
-      # cargo test artifacts instead.
+      # (removed with the redundant cargo check passes).
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: capi-check-v3
@@ -1539,6 +1538,19 @@ jobs:
         env:
           ORT_CACHE_DIR: ${{ github.workspace }}/capi/target/ort-cache
         run: bash capi/scripts/check.sh
+
+      # The capi crate's Rust unit tests (inline #[cfg(test)] modules). Nothing
+      # else runs them: capi/ is a separate Cargo workspace, so `test` never
+      # reaches it, and check.sh above only does CMake `cargo build`s. Slim
+      # feature set (see capi/scripts/test.sh) because the tests need none of
+      # lancedb / lbug / ort; the panic=unwind tree shares nothing with the
+      # panic=abort builds above, so it goes to RUNNER_TEMP -- outside every
+      # cached dir -- and is rebuilt cold each run instead of bloating the
+      # cache. The script asserts the test count and every case name itself.
+      - name: Run C API Rust unit tests (slim)
+        env:
+          COGNEE_CAPI_TEST_TARGET_DIR: ${{ runner.temp }}/capi-rust-tests
+        run: bash capi/scripts/test.sh
 
       # The x86_64 glibc floor (ci/linux-glibc-floor.txt), on every PR. The
       # release legs that enforce it on shipped artifacts only run on tags and
