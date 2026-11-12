@@ -558,7 +558,8 @@ async fn process_input_reusing(
     let original_location = if let Some(uri) = raw_source_uri.clone() {
         uri
     } else {
-        match input {
+        // A labelled text (`DataItem` around `Text`) is stored the same way.
+        match unwrap_data_item(input) {
             DataInput::Text(_) => raw_data_uri.clone(),
             _ => extract_original_location(input),
         }
@@ -4797,6 +4798,34 @@ mod tests {
             uri.starts_with("file://") && uri.ends_with("/new.txt"),
             "{uri}"
         );
+    }
+
+    /// A labelled text records its stored file as its original location, as a
+    /// plain text does, not `text://inline`.
+    #[tokio::test]
+    async fn a_labelled_text_records_its_stored_file_as_original_location() {
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let process = |input: DataInput| {
+            let storage = &storage;
+            async move {
+                process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let plain = process(DataInput::Text("a note".into())).await;
+        let labelled = process(DataInput::DataItem {
+            data: Box::new(DataInput::Text("a note".into())),
+            label: Some("finance".into()),
+            external_metadata: None,
+        })
+        .await;
+
+        assert_eq!(plain.original_location, plain.raw_data_uri);
+        assert_eq!(labelled.original_location, labelled.raw_data_uri);
+        assert_ne!(labelled.original_location, "text://inline");
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored
