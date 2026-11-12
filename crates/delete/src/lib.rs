@@ -1860,18 +1860,11 @@ impl DeleteService {
         edges: &[GraphEdge],
         structural_edges: &[GraphEdge],
     ) -> Result<Vec<Uuid>, DeleteError> {
-        let candidates: Vec<String> = edges
-            .iter()
-            .chain(structural_edges)
-            .map(edge_retrieval_text)
-            .filter(|text| !text.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let candidates = retrieval_text_candidates(edges.iter().chain(structural_edges));
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
-        let claimed: HashSet<String> = self
+        let claimed = self
             .database
             .get_edge_retrieval_texts_claimed_outside_data(
                 data_id,
@@ -1884,14 +1877,8 @@ impl DeleteService {
                 DeleteError::Runtime(format!(
                     "Failed to get surviving edge texts for data {data_id}: {e}"
                 ))
-            })?
-            .into_iter()
-            .collect();
-        Ok(candidates
-            .iter()
-            .filter(|text| !claimed.contains(*text))
-            .map(|text| EdgeType::deterministic_id(text))
-            .collect())
+            })?;
+        Ok(unclaimed_edge_type_ids(&candidates, claimed))
     }
 
     /// The `EdgeType` point ids a delete of `dataset_ids` may remove from a
@@ -1908,17 +1895,11 @@ impl DeleteService {
         dataset_ids: &[Uuid],
         edges: &[GraphEdge],
     ) -> Result<Vec<Uuid>, DeleteError> {
-        let candidates: Vec<String> = edges
-            .iter()
-            .map(edge_retrieval_text)
-            .filter(|text| !text.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let candidates = retrieval_text_candidates(edges);
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
-        let claimed: HashSet<String> = self
+        let claimed = self
             .database
             .get_edge_retrieval_texts_claimed_outside_datasets(dataset_ids, &candidates)
             .await
@@ -1926,14 +1907,8 @@ impl DeleteService {
                 DeleteError::Runtime(format!(
                     "Failed to get surviving edge texts outside datasets {dataset_ids:?}: {e}"
                 ))
-            })?
-            .into_iter()
-            .collect();
-        Ok(candidates
-            .iter()
-            .filter(|text| !claimed.contains(*text))
-            .map(|text| EdgeType::deterministic_id(text))
-            .collect())
+            })?;
+        Ok(unclaimed_edge_type_ids(&candidates, claimed))
     }
 
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
@@ -2704,6 +2679,28 @@ pub(crate) async fn delete_graph_artifacts(
         }
         Ok((0, warnings))
     }
+}
+
+/// The distinct non-empty `EdgeType` retrieval texts of `edges`, sorted: the
+/// candidates a delete weighs against the rows that survive it.
+fn retrieval_text_candidates<'a>(edges: impl IntoIterator<Item = &'a GraphEdge>) -> Vec<String> {
+    edges
+        .into_iter()
+        .map(edge_retrieval_text)
+        .filter(|text| !text.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The `EdgeType` point ids of the `candidates` no surviving row `claimed`.
+fn unclaimed_edge_type_ids(candidates: &[String], claimed: Vec<String>) -> Vec<Uuid> {
+    let claimed: HashSet<String> = claimed.into_iter().collect();
+    candidates
+        .iter()
+        .filter(|text| !claimed.contains(*text))
+        .map(|text| EdgeType::deterministic_id(text))
+        .collect()
 }
 
 /// The edge rows whose legacy `Triplet_text` point a delete removes: those no
