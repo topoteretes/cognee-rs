@@ -68,6 +68,51 @@ pub struct RecallOptions {
     /// `None` means a tenant-less caller: it reaches only datasets that have
     /// no tenant.
     pub tenant_id: Option<Uuid>,
+    /// When the `tools` scope runs (Python's `tools_trigger`,
+    /// `recall.py:464`). Validated where it is parsed (bindings, HTTP); it has
+    /// no effect until the `tools` lane exists (SDK-1537), because a recall
+    /// whose sources include `tools` is refused by [`resolve_sources`].
+    pub tools_trigger: ToolsTrigger,
+}
+
+/// When recall's `tools` scope runs. Mirrors Python's `tools_trigger`
+/// argument (`recall.py:464`, docstring at `:518-521`, validation at
+/// `:596-600`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ToolsTrigger {
+    /// Run the `tools` lane on every recall that includes it (Python's
+    /// default).
+    #[default]
+    Always,
+    /// Run the `tools` lane only when every other source returned nothing.
+    OnEmpty,
+}
+
+impl ToolsTrigger {
+    /// The wire name, as [`ToolsTrigger::from_str`] accepts it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolsTrigger::Always => "always",
+            ToolsTrigger::OnEmpty => "on_empty",
+        }
+    }
+}
+
+impl std::str::FromStr for ToolsTrigger {
+    type Err = SearchError;
+
+    /// Parse `"always"` / `"on_empty"`. Anything else is
+    /// [`SearchError::InvalidInput`] with Python's message, byte for byte
+    /// (`recall.py:596-600`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "always" => Ok(ToolsTrigger::Always),
+            "on_empty" => Ok(ToolsTrigger::OnEmpty),
+            other => Err(SearchError::InvalidInput(format!(
+                "Invalid tools_trigger '{other}'. Valid values: 'always', 'on_empty'."
+            ))),
+        }
+    }
 }
 
 /// Source tag for recall results. Mirrors the discriminator strings emitted
@@ -81,6 +126,10 @@ pub enum RecallSource {
     Trace,
     /// A note from recall itself, such as the memory still warming up.
     System,
+    /// The session's active context block (Python `_fetch_session_context`).
+    /// Nothing produces it yet: the `session_context` lane lands with SDK-1040
+    /// P2.
+    SessionContext,
 }
 
 impl RecallSource {
@@ -91,19 +140,26 @@ impl RecallSource {
             RecallSource::Graph => "graph",
             RecallSource::Trace => "trace",
             RecallSource::System => "system",
+            RecallSource::SessionContext => "session_context",
         }
     }
 }
 
 /// Scope selector. Mirrors Python's `RecallScope` literal
-/// (`cognee/memory/entries.py`). `Auto` is the sentinel returned by
-/// `normalize_scope(None)` and is resolved into concrete sources inside
-/// `recall()`. `All` never appears in a normalized list — it expands to the
-/// concrete sources during normalization.
+/// (`cognee/memory/entries.py:171-182`). `Auto` is the sentinel returned by
+/// `normalize_scope(None)` and is resolved into concrete sources by
+/// [`resolve_sources`]. `All` never appears in a normalized list — it expands
+/// to the concrete sources during normalization.
 ///
 /// `"graph_context"` is a deprecated alias of `"graph"` (Python `3401da38a`
 /// removed the graph-context lane): [`normalize_scope`] maps it with a
 /// warning, and serde reads it as [`RecallScope::Graph`].
+///
+/// `SessionFirst` is a strategy, not a source: [`resolve_sources`] turns it
+/// into `[Session, Graph, ..]` with a session hit short-circuiting the graph.
+/// `Tools` and `Code` are accepted names whose lanes Rust does not have yet:
+/// [`resolve_sources`] refuses them with [`SearchError::NotSupported`]
+/// (SDK-1537).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecallScope {
@@ -111,7 +167,11 @@ pub enum RecallScope {
     #[serde(alias = "graph_context")]
     Graph,
     Session,
+    SessionFirst,
     Trace,
+    SessionContext,
+    Tools,
+    Code,
 }
 
 /// Deprecated scope names and the scope each now means (Python's
@@ -120,7 +180,8 @@ const DEPRECATED_SCOPE_ALIASES: &[(&str, &str)] = &[("graph_context", "graph")];
 
 impl RecallScope {
     /// The concrete sources, in the canonical order Python uses when
-    /// expanding `"all"` (`entries.py`).
+    /// expanding `"all"` (`entries.py:242`). Python's list also has
+    /// `session_context`, which joins it with SDK-1040 P2.
     pub const ALL: &'static [Self] = &[Self::Graph, Self::Session, Self::Trace];
 
     /// The scope's wire name, as `normalize_scope` accepts it.
@@ -129,7 +190,11 @@ impl RecallScope {
             Self::Auto => "auto",
             Self::Graph => "graph",
             Self::Session => "session",
+            Self::SessionFirst => "session_first",
             Self::Trace => "trace",
+            Self::SessionContext => "session_context",
+            Self::Tools => "tools",
+            Self::Code => "code",
         }
     }
 
@@ -138,24 +203,40 @@ impl RecallScope {
             "auto" => Some(Self::Auto),
             "graph" => Some(Self::Graph),
             "session" => Some(Self::Session),
+            "session_first" => Some(Self::SessionFirst),
             "trace" => Some(Self::Trace),
+            "session_context" => Some(Self::SessionContext),
+            "tools" => Some(Self::Tools),
+            "code" => Some(Self::Code),
             _ => None,
         }
     }
 
-    /// Map an already-resolved (non-Auto) `RecallScope` to its `RecallSource`.
+    /// Map an already-resolved `RecallScope` to the `RecallSource` its lane
+    /// tags results with. `None` for the sentinels (`Auto`, `SessionFirst`)
+    /// and for the scopes without a Rust lane yet (`Tools`, `Code`).
     pub fn as_source(&self) -> Option<RecallSource> {
         match self {
-            RecallScope::Auto => None,
+            RecallScope::Auto
+            | RecallScope::SessionFirst
+            | RecallScope::Tools
+            | RecallScope::Code => None,
             RecallScope::Graph => Some(RecallSource::Graph),
             RecallScope::Session => Some(RecallSource::Session),
             RecallScope::Trace => Some(RecallSource::Trace),
+            RecallScope::SessionContext => Some(RecallSource::SessionContext),
         }
+    }
+
+    /// Whether Rust has a lane for this scope. `Tools` and `Code` are valid
+    /// names that [`resolve_sources`] refuses until SDK-1537.
+    fn is_supported(&self) -> bool {
+        !matches!(self, RecallScope::Tools | RecallScope::Code)
     }
 }
 
 /// Untyped input accepted by [`normalize_scope`] -- mirrors Python's
-/// `Optional[Union[str, list[str]]]` (`entries.py:81`). HTTP/CLI layers can
+/// `str | list[str] | None` (`entries.py:207`). HTTP/CLI layers can
 /// build a `ScopeInput` directly from JSON; callers with a strongly-typed
 /// `Vec<RecallScope>` can pass it via `recall()`'s `scope` parameter without
 /// going through this helper.
@@ -184,7 +265,7 @@ impl From<Vec<String>> for ScopeInput {
 }
 
 /// A scope list with each repeat dropped, first occurrence kept
-/// (`entries.py:108-115`). `Auto` is kept like any other scope.
+/// (`entries.py:251-258`). `Auto` is kept like any other scope.
 pub fn dedupe_scopes(scopes: impl IntoIterator<Item = RecallScope>) -> Vec<RecallScope> {
     let mut seen = HashSet::new();
     scopes
@@ -194,16 +275,18 @@ pub fn dedupe_scopes(scopes: impl IntoIterator<Item = RecallScope>) -> Vec<Recal
 }
 
 /// Normalize the recall ``scope`` parameter to a concrete source list,
-/// mirroring Python's `normalize_scope` at `cognee/memory/entries.py:81-115`.
+/// mirroring Python's `normalize_scope` at `cognee/memory/entries.py:207-258`.
 ///
 /// - `None` -> `[Auto]` (Python: `["auto"]`).
-/// - `"all"` -> `[Graph, Session, Trace]` (`entries.py`).
+/// - `"all"` -> `[Graph, Session, Trace]`, plus `Tools` and then
+///   `SessionFirst` when the caller supplied them next to `"all"`; `"code"`
+///   never rides along (`entries.py:238-249`).
 /// - `"graph_context"` -> `Graph`, with a deprecation warning (Python's
 ///   `_DEPRECATED_SCOPE_ALIASES`).
 /// - Single string -> singleton list.
-/// - List of strings -> order-preserving dedup (`entries.py:108-115`).
+/// - List of strings -> order-preserving dedup (`entries.py:251-258`).
 /// - Unknown values -> `Err(SearchError::InvalidInput(...))` with the
-///   Python-parity error message (`entries.py:99-103`).
+///   Python-parity error message (`entries.py:225-229`).
 pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, SearchError> {
     let raw: Vec<String> = match input {
         None => return Ok(vec![RecallScope::Auto]),
@@ -219,7 +302,7 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
     }
 
     // Collect unknowns *in encounter order* — matches Python's
-    // `[s for s in scopes if s not in _VALID_SCOPES]` (`entries.py:99`).
+    // `[s for s in scopes if s not in _VALID_SCOPES]` (`entries.py:225`).
     // `_VALID_SCOPES` includes `"all"` even though it doesn't map to a
     // `RecallScope` variant — it's the expansion sentinel.
     fn is_valid_wire(s: &str) -> bool {
@@ -234,8 +317,19 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
         .collect();
     if !unknown.is_empty() {
         // Python sorts `_VALID_SCOPES` for the error message
-        // (`entries.py:102` -- `sorted(_VALID_SCOPES)`).
-        let valid_sorted = ["all", "auto", "graph", "graph_context", "session", "trace"];
+        // (`entries.py:228` -- `sorted(_VALID_SCOPES)`).
+        let valid_sorted = [
+            "all",
+            "auto",
+            "code",
+            "graph",
+            "graph_context",
+            "session",
+            "session_context",
+            "session_first",
+            "tools",
+            "trace",
+        ];
         // Match Python's `f"Unknown recall scope(s): {unknown}. Valid values: {sorted(_VALID_SCOPES)}"`
         // formatting: Rust's debug-format for a `Vec<&str>` produces the same
         // bracketed quoted-string list Python's `repr(list)` does.
@@ -267,15 +361,105 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
     };
 
     // `"all"` short-circuits to the canonical source list, in fixed order
-    // (`entries.py`).
+    // (`entries.py:238-249`). `tools` is explicit opt-in, so it stays only
+    // when supplied next to `"all"`; `session_first` is a strategy that
+    // `"all"` neither implies nor replaces, so it is carried the same way.
+    // `code` is dropped.
     if raw.iter().any(|s| s == "all") {
-        return Ok(RecallScope::ALL.to_vec());
+        let mut expanded = RecallScope::ALL.to_vec();
+        for carried in [RecallScope::Tools, RecallScope::SessionFirst] {
+            if raw.iter().any(|s| s == carried.as_wire()) {
+                expanded.push(carried);
+            }
+        }
+        return Ok(expanded);
     }
 
     // Every name is valid here, so each maps to its scope.
     Ok(dedupe_scopes(
         raw.iter().filter_map(|s| RecallScope::from_wire(s)),
     ))
+}
+
+/// The concrete sources a recall runs, and whether a session hit skips the
+/// graph. Built by [`resolve_sources`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSources {
+    /// The scopes to run, in order.
+    pub sources: Vec<RecallScope>,
+    /// `true` when a session hit short-circuits the graph lane (the `auto`
+    /// session-only case, or an explicit `session_first`).
+    pub auto_fallthrough: bool,
+}
+
+/// Resolve a normalized scope list into the sources a recall runs, as
+/// Python's `recall` does (`recall.py:574-594`). The one shared copy of these
+/// rules: `cognee::api::recall` and the HTTP recall router both call it.
+///
+/// - An empty list counts as `[Auto]`, and repeats are dropped.
+/// - `[Auto]` resolves by what the caller supplied (`recall.py:575-585`):
+///   - `session_id` with no dataset filter and no `query_type` ->
+///     `[Session, Graph]`, a session hit skipping the graph;
+///   - `session_id` otherwise -> `[Session, Graph]`, both contributing;
+///   - no `session_id` -> `[Graph]`.
+/// - Any other list containing `SessionFirst` -> `[Session, Graph]` followed
+///   by the rest of the list without `SessionFirst`, `Session` and `Graph`,
+///   a session hit skipping the graph (`recall.py:586-594`).
+/// - Anything else runs as given.
+///
+/// A resolved list that names `Tools` or `Code` is refused with
+/// [`SearchError::NotSupported`] naming the first such scope, so a recall
+/// fails before any lane runs (SDK-1537 adds the lanes).
+pub fn resolve_sources(
+    normalized: Vec<RecallScope>,
+    session_id: Option<&str>,
+    has_dataset_filter: bool,
+    query_type: Option<SearchType>,
+) -> Result<ResolvedSources, SearchError> {
+    let normalized = if normalized.is_empty() {
+        vec![RecallScope::Auto]
+    } else {
+        dedupe_scopes(normalized)
+    };
+
+    let resolved = if normalized.as_slice() == [RecallScope::Auto] {
+        let (sources, auto_fallthrough) = match (session_id, has_dataset_filter, query_type) {
+            (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
+            (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
+            (None, _, _) => (vec![RecallScope::Graph], false),
+        };
+        ResolvedSources {
+            sources,
+            auto_fallthrough,
+        }
+    } else if normalized.contains(&RecallScope::SessionFirst) {
+        let rest = normalized.into_iter().filter(|scope| {
+            !matches!(
+                scope,
+                RecallScope::SessionFirst | RecallScope::Session | RecallScope::Graph
+            )
+        });
+        ResolvedSources {
+            sources: [RecallScope::Session, RecallScope::Graph]
+                .into_iter()
+                .chain(rest)
+                .collect(),
+            auto_fallthrough: true,
+        }
+    } else {
+        ResolvedSources {
+            sources: normalized,
+            auto_fallthrough: false,
+        }
+    };
+
+    if let Some(unsupported) = resolved.sources.iter().find(|scope| !scope.is_supported()) {
+        return Err(SearchError::NotSupported(format!(
+            "Recall scope '{}' is not supported yet in the Rust SDK (tracked in SDK-1537).",
+            unsupported.as_wire()
+        )));
+    }
+    Ok(resolved)
 }
 
 /// A single recall result item.
@@ -1105,7 +1289,7 @@ mod tests {
 
     /// Port of `test_normalize_scope_accepts_session_context`'s alias
     /// asserts (Python `3401da38a`): `graph_context` now means `graph`, and
-    /// `all` no longer carries it. Rust has no `session_context` scope yet, so
+    /// `all` no longer carries it. Rust has no `session_context` lane yet, so
     /// `session` stands in for it in the list case.
     #[test]
     fn test_normalize_scope_maps_deprecated_graph_context_to_graph() {
@@ -1163,9 +1347,9 @@ mod tests {
             other => panic!("expected InvalidInput, got {other:?}"),
         };
         // Python: f'Unknown recall scope(s): {unknown}. Valid values: {sorted(_VALID_SCOPES)}'
-        // -> `Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', 'graph', 'graph_context', 'session', 'trace']`
+        // -> `Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', 'code', 'graph', 'graph_context', 'session', 'session_context', 'session_first', 'tools', 'trace']`
         // Rust's debug format uses double quotes:
-        let expected = "Unknown recall scope(s): [\"foo\"]. Valid values: [\"all\", \"auto\", \"graph\", \"graph_context\", \"session\", \"trace\"]";
+        let expected = "Unknown recall scope(s): [\"foo\"]. Valid values: [\"all\", \"auto\", \"code\", \"graph\", \"graph_context\", \"session\", \"session_context\", \"session_first\", \"tools\", \"trace\"]";
         assert_eq!(msg, expected);
     }
 
@@ -1183,7 +1367,11 @@ mod tests {
             ("\"auto\"", RecallScope::Auto),
             ("\"graph\"", RecallScope::Graph),
             ("\"session\"", RecallScope::Session),
+            ("\"session_first\"", RecallScope::SessionFirst),
             ("\"trace\"", RecallScope::Trace),
+            ("\"session_context\"", RecallScope::SessionContext),
+            ("\"tools\"", RecallScope::Tools),
+            ("\"code\"", RecallScope::Code),
         ] {
             let parsed: RecallScope = serde_json::from_str(s).expect("deserialize");
             assert_eq!(parsed, expected);
@@ -1197,6 +1385,237 @@ mod tests {
         assert_eq!(RecallScope::Graph.as_wire(), "graph");
         assert_eq!(RecallScope::Session.as_wire(), "session");
         assert_eq!(RecallScope::Trace.as_wire(), "trace");
+        for scope in [
+            RecallScope::SessionFirst,
+            RecallScope::SessionContext,
+            RecallScope::Tools,
+            RecallScope::Code,
+        ] {
+            let serialized = serde_json::to_string(&scope).expect("serialize");
+            assert_eq!(serialized, format!("\"{}\"", scope.as_wire()));
+        }
+    }
+
+    /// Every name in Python's `_VALID_SCOPES` (`entries.py:193-204`)
+    /// normalizes; each concrete one to its own scope.
+    #[test]
+    fn normalize_scope_accepts_every_python_scope_name() {
+        for (wire, expected) in [
+            ("auto", RecallScope::Auto),
+            ("graph", RecallScope::Graph),
+            ("session", RecallScope::Session),
+            ("session_first", RecallScope::SessionFirst),
+            ("trace", RecallScope::Trace),
+            ("session_context", RecallScope::SessionContext),
+            ("tools", RecallScope::Tools),
+            ("code", RecallScope::Code),
+        ] {
+            let out = normalize_scope(Some(ScopeInput::from(wire))).expect("valid scope");
+            assert_eq!(out, vec![expected], "{wire}");
+        }
+    }
+
+    #[test]
+    fn as_source_maps_lanes_and_leaves_sentinels_unmapped() {
+        assert_eq!(RecallScope::Graph.as_source(), Some(RecallSource::Graph));
+        assert_eq!(
+            RecallScope::SessionContext.as_source(),
+            Some(RecallSource::SessionContext)
+        );
+        for scope in [
+            RecallScope::Auto,
+            RecallScope::SessionFirst,
+            RecallScope::Tools,
+            RecallScope::Code,
+        ] {
+            assert_eq!(scope.as_source(), None, "{scope:?}");
+        }
+        assert_eq!(RecallSource::SessionContext.as_str(), "session_context");
+    }
+
+    /// Python `entries.py:238-249`: `all` keeps a co-supplied `tools` and
+    /// `session_first` (in that order) and drops `code`.
+    #[test]
+    fn normalize_scope_all_carries_tools_and_session_first_but_not_code() {
+        let many = |names: &[&str]| {
+            normalize_scope(Some(ScopeInput::Many(
+                names.iter().map(|s| (*s).to_string()).collect(),
+            )))
+            .expect("normalize")
+        };
+        let base = RecallScope::ALL.to_vec();
+
+        let mut with_first = base.clone();
+        with_first.push(RecallScope::SessionFirst);
+        assert_eq!(many(&["session_first", "all"]), with_first);
+
+        let mut with_both = base.clone();
+        with_both.extend([RecallScope::Tools, RecallScope::SessionFirst]);
+        assert_eq!(many(&["session_first", "all", "tools"]), with_both);
+
+        assert_eq!(many(&["all", "code"]), base);
+    }
+
+    fn resolve(
+        scope: &[RecallScope],
+        session_id: Option<&str>,
+        has_dataset_filter: bool,
+        query_type: Option<SearchType>,
+    ) -> ResolvedSources {
+        resolve_sources(scope.to_vec(), session_id, has_dataset_filter, query_type)
+            .expect("supported scope")
+    }
+
+    #[test]
+    fn resolve_sources_auto_branches() {
+        use RecallScope::{Auto, Graph, Session};
+        let fallthrough = |sources: Vec<RecallScope>, auto_fallthrough| ResolvedSources {
+            sources,
+            auto_fallthrough,
+        };
+        // Session, no dataset filter, no query type: session first.
+        assert_eq!(
+            resolve(&[Auto], Some("s"), false, None),
+            fallthrough(vec![Session, Graph], true)
+        );
+        // Session with a dataset filter: both contribute.
+        assert_eq!(
+            resolve(&[Auto], Some("s"), true, None),
+            fallthrough(vec![Session, Graph], false)
+        );
+        // Session with a query type: both contribute.
+        assert_eq!(
+            resolve(&[Auto], Some("s"), false, Some(SearchType::Chunks)),
+            fallthrough(vec![Session, Graph], false)
+        );
+        // No session: graph only.
+        assert_eq!(
+            resolve(&[Auto], None, false, None),
+            fallthrough(vec![Graph], false)
+        );
+        // An empty list is auto, a repeated `Auto` too.
+        assert_eq!(
+            resolve(&[], None, false, None),
+            fallthrough(vec![Graph], false)
+        );
+        assert_eq!(
+            resolve(&[Auto, Auto], Some("s"), false, None),
+            fallthrough(vec![Session, Graph], true)
+        );
+    }
+
+    /// Python `recall.py:586-594`.
+    #[test]
+    fn resolve_sources_session_first_reorders_and_dedupes() {
+        use RecallScope::{Graph, Session, SessionFirst, Trace};
+        let expected = |sources: Vec<RecallScope>| ResolvedSources {
+            sources,
+            auto_fallthrough: true,
+        };
+        assert_eq!(
+            resolve(&[SessionFirst], None, false, None),
+            expected(vec![Session, Graph])
+        );
+        // Explicit session/graph next to it collapse into the leading pair,
+        // and the rest keeps its order.
+        assert_eq!(
+            resolve(
+                &[Trace, Graph, SessionFirst, Session],
+                Some("s"),
+                true,
+                None
+            ),
+            expected(vec![Session, Graph, Trace])
+        );
+        // `all` + `session_first`.
+        let mut all_first = RecallScope::ALL.to_vec();
+        all_first.push(SessionFirst);
+        assert_eq!(
+            resolve(&all_first, Some("s"), false, Some(SearchType::Chunks)),
+            expected(vec![Session, Graph, Trace])
+        );
+        // The query type and dataset filter do not matter for an explicit
+        // scope, and without `session_first` nothing short-circuits.
+        assert_eq!(
+            resolve(&[Session, Graph], Some("s"), false, None),
+            ResolvedSources {
+                sources: vec![Session, Graph],
+                auto_fallthrough: false,
+            }
+        );
+        // A repeated explicit source runs once.
+        assert_eq!(
+            resolve(&[Trace, Graph, Trace], None, false, None).sources,
+            vec![Trace, Graph]
+        );
+    }
+
+    /// D1 (SDK-1040): `tools` and `code` are valid names refused before any
+    /// lane runs, naming the first one.
+    #[test]
+    fn resolve_sources_refuses_tools_and_code() {
+        for (scope, name) in [
+            (vec![RecallScope::Tools], "tools"),
+            (vec![RecallScope::Code], "code"),
+            (
+                vec![RecallScope::Graph, RecallScope::Code, RecallScope::Tools],
+                "code",
+            ),
+            (vec![RecallScope::SessionFirst, RecallScope::Tools], "tools"),
+        ] {
+            let err = resolve_sources(scope, Some("s"), false, None).expect_err("refused");
+            match err {
+                SearchError::NotSupported(message) => assert_eq!(
+                    message,
+                    format!(
+                        "Recall scope '{name}' is not supported yet in the Rust SDK \
+                         (tracked in SDK-1537)."
+                    )
+                ),
+                other => panic!("expected NotSupported, got {other:?}"),
+            }
+        }
+        // The message is the error's whole display.
+        let err =
+            resolve_sources(vec![RecallScope::Tools], None, false, None).expect_err("refused");
+        assert_eq!(
+            err.to_string(),
+            "Recall scope 'tools' is not supported yet in the Rust SDK (tracked in SDK-1537)."
+        );
+    }
+
+    #[test]
+    fn tools_trigger_parses_python_values() {
+        use std::str::FromStr;
+        assert_eq!(ToolsTrigger::default(), ToolsTrigger::Always);
+        assert_eq!(
+            ToolsTrigger::from_str("always").expect("valid"),
+            ToolsTrigger::Always
+        );
+        assert_eq!(
+            ToolsTrigger::from_str("on_empty").expect("valid"),
+            ToolsTrigger::OnEmpty
+        );
+        for trigger in [ToolsTrigger::Always, ToolsTrigger::OnEmpty] {
+            assert_eq!(
+                ToolsTrigger::from_str(trigger.as_str()).expect("round trip"),
+                trigger
+            );
+        }
+    }
+
+    #[test]
+    fn tools_trigger_error_matches_python() {
+        use std::str::FromStr;
+        for bad in ["sometimes", "", "Always", "on-empty"] {
+            match ToolsTrigger::from_str(bad) {
+                Err(SearchError::InvalidInput(message)) => assert_eq!(
+                    message,
+                    format!("Invalid tools_trigger '{bad}'. Valid values: 'always', 'on_empty'.")
+                ),
+                other => panic!("expected InvalidInput for {bad:?}, got {other:?}"),
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

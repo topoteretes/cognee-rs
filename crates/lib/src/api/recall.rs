@@ -21,7 +21,8 @@ use cognee_search::observability::{
     COGNEE_SESSION_ENTRY_COUNT, COGNEE_SESSION_ID,
 };
 use cognee_search::recall_scope::{
-    dedupe_scopes, has_dataset_filter, plan_graph, run_graph, search_session, search_trace,
+    ResolvedSources, has_dataset_filter, plan_graph, resolve_sources, run_graph, search_session,
+    search_trace,
 };
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
@@ -30,14 +31,14 @@ use tracing::{field, info};
 use super::error::ApiError;
 
 pub use cognee_search::recall_scope::{
-    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, normalize_scope,
+    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, ToolsTrigger, normalize_scope,
 };
 
 /// Full recall result.
 #[derive(Debug, Clone)]
 pub struct RecallResult {
     /// Source-tagged results -- order matches the iteration order of the
-    /// resolved `sources` list (Python `recall.py:503-513`).
+    /// resolved `sources` list (Python `recall.py:1243-1257`).
     pub items: Vec<RecallItem>,
     /// The search type that was used (if graph search ran), or would have
     /// been when the warm-up guard skipped it.
@@ -51,17 +52,25 @@ pub struct RecallResult {
 
 /// Smart search with optional session routing, auto query-type selection, and
 /// configurable source fan-out. Byte-for-byte parity with Python
-/// `cognee.api.v1.recall.recall()` (`cognee/api/v1/recall/recall.py:317-531`).
+/// `cognee.api.v1.recall.recall()` (`cognee/api/v1/recall/recall.py:434`).
 ///
 /// # Behavior
-/// 1. Normalize `scope` via [`normalize_scope`] (`recall.py:373`).
-/// 2. Resolve `[Auto]` per `(session_id, dataset scope, query_type)` triple
-///    (`recall.py:374-386`):
-///    - `session_id` set + no datasets + no query_type -> `[Session, Graph]`
-///      with `auto_fallthrough=true` (graph short-circuited on session hit).
-///    - `session_id` set otherwise -> `[Session, Graph]`, both contribute.
-///    - No `session_id` -> `[Graph]`.
-/// 3. Iterate sources in caller-supplied order (`recall.py:503`); each source
+/// 1. `scope` arrives normalized (the callers run [`normalize_scope`] on the
+///    wire form, `recall.py:574`).
+/// 2. [`resolve_sources`] resolves it into the sources to run
+///    (`recall.py:575-594`):
+///    - `[Auto]` with `session_id` set + no datasets + no query_type ->
+///      `[Session, Graph]` with `auto_fallthrough=true` (graph
+///      short-circuited on session hit).
+///    - `[Auto]` with `session_id` set otherwise -> `[Session, Graph]`, both
+///      contribute.
+///    - `[Auto]` without `session_id` -> `[Graph]`.
+///    - An explicit `session_first` -> `[Session, Graph, ..rest]` with
+///      `auto_fallthrough=true`.
+///
+///    A `tools` or `code` scope fails here with [`ApiError::InvalidArgument`]
+///    before any source runs: Rust has no lane for them yet (SDK-1537).
+/// 3. Iterate sources in resolved order (`recall.py:1243-1257`); each source
 ///    appends to a flat merged list of [`RecallItem`]s.
 /// 4. Telemetry attrs: `COGNEE_RECALL_SCOPE`, `COGNEE_RECALL_SOURCE`,
 ///    `COGNEE_RESULT_COUNT`, `COGNEE_SESSION_ENTRY_COUNT` (`recall.py:515-522`).
@@ -81,35 +90,22 @@ pub async fn recall(
     scope: Option<Vec<RecallScope>>,
     options: Option<RecallOptions>,
 ) -> Result<RecallResult, ApiError> {
-    // -- Resolve scope to a concrete source list (Python recall.py:373-386). --
-    let normalized: Vec<RecallScope> = match scope {
-        // None means caller did not supply a scope at all -> "auto".
-        None => vec![RecallScope::Auto],
-        // Caller-supplied. We do NOT re-validate via normalize_scope here
-        // because the type system already constrained values to RecallScope;
-        // unknown strings are rejected at the HTTP/CLI boundary before they
-        // reach this function.
-        Some(v) if v.is_empty() => vec![RecallScope::Auto],
-        // A repeated source runs once, as `normalize_scope` dedupes the wire
-        // form. `Auto` stays: next to real sources it is skipped, but the
-        // scope is then not graph-only.
-        Some(v) => dedupe_scopes(v),
-    };
-
-    let auto_mode = normalized.as_slice() == [RecallScope::Auto];
-    let (sources, auto_fallthrough): (Vec<RecallScope>, bool) = if auto_mode {
-        // Python recall.py:466-476: `has_dataset_scope = bool(dataset_ids)
-        // or bool(datasets)` — either filter counts, and an empty list does
-        // not.
-        let has_dataset_scope = has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref());
-        match (session_id, has_dataset_scope, query_type) {
-            (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
-            (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
-            (None, _, _) => (vec![RecallScope::Graph], false),
-        }
-    } else {
-        (normalized, false)
-    };
+    // -- Resolve scope to a concrete source list (Python recall.py:574-594). --
+    // `None` and an empty list both mean "auto". The type system already
+    // constrained the values to `RecallScope`; unknown strings are rejected
+    // by `normalize_scope` at the HTTP/CLI/binding boundary. Python's
+    // `has_dataset_scope = bool(dataset_ids) or bool(datasets)`: either
+    // filter counts, and an empty list does not.
+    let ResolvedSources {
+        sources,
+        auto_fallthrough,
+    } = resolve_sources(
+        scope.unwrap_or_default(),
+        session_id,
+        has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref()),
+        query_type,
+    )
+    .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
 
     // Comma-joined source names, `auto` included, mirroring Python's
     // `span_scope` (`recall.py:388`).
@@ -163,16 +159,24 @@ pub async fn recall(
     let mut graph_response: Option<SearchResponse> = None;
     let mut session_result_count: usize = 0;
 
-    // -- Iterate sources in caller-supplied order (Python recall.py:503-513). --
+    // -- Iterate sources in resolved order (Python recall.py:1243-1257). --
     for src in &sources {
-        // Auto-mode short-circuit: a session hit skips the graph runner.
-        // (Python recall.py:508-509)
+        // Session-first short-circuit: a session hit skips the graph runner,
+        // and every source after it (Python recall.py:1248-1249).
         if auto_fallthrough && *src == RecallScope::Graph && !merged.is_empty() {
             break;
         }
 
         let part: Vec<RecallItem> = match src {
-            RecallScope::Auto => continue, // sentinel -- already resolved above
+            // `Auto` next to real sources is skipped (Python has no runner
+            // for it). `resolve_sources` has already turned `SessionFirst`
+            // into `[Session, Graph]` and refused `Tools` / `Code`.
+            RecallScope::Auto
+            | RecallScope::SessionFirst
+            | RecallScope::Tools
+            | RecallScope::Code => continue,
+            // The `session_context` lane lands with SDK-1040 P2.
+            RecallScope::SessionContext => Vec::new(),
             RecallScope::Session => {
                 search_session(query_text, session_id, user_id, top_k, session_store)
                     .await
