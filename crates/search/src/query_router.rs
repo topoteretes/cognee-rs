@@ -3,13 +3,18 @@
 //! Picks a [`SearchType`] for a query without calling an LLM. Rules are
 //! checked in order and the first match wins; a query no rule matches goes
 //! to [`ROUTER_FALLBACK_TYPE`].
+//!
+//! Port of Python's `cognee/api/v1/recall/query_router.py`. The rules see
+//! only the query text; what the deployment and the request allow is applied
+//! afterwards, in one place, by [`constrain`] from [`RoutingConstraints`].
 
 use std::sync::LazyLock;
 
 use regex::Regex;
-use tracing::debug;
+use tracing::{debug, info};
 
-use crate::types::SearchType;
+use crate::node_name_scope::{NodeNameScope, honours, node_name_scope};
+use crate::types::{SearchError, SearchType};
 
 /// The search type for a query no rule matched.
 pub const ROUTER_FALLBACK_TYPE: SearchType = SearchType::HybridCompletion;
@@ -27,13 +32,19 @@ pub struct RouteDecision {
     pub only_context: bool,
 }
 
-/// What the deployment can run. The default allows everything.
+/// What the deployment and the request can run (Python `RoutingConstraints`,
+/// `query_router.py:49-89`). The default allows everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoutingConstraints {
     /// An LLM can make calls (see `ComponentManager::llm_available`).
     pub llm_available: bool,
     /// Cypher queries are allowed (`search.allow_cypher_query`).
     pub cypher_allowed: bool,
+    /// The scope of the request's `node_name` filter, `None` without one. A
+    /// pick must be a type that honours it (Python's `scoped_types`, the
+    /// types [`search_types_honouring`](crate::node_name_scope::search_types_honouring)
+    /// this scope), since a type that cannot refuses the filter.
+    pub node_scope: Option<NodeNameScope>,
 }
 
 impl Default for RoutingConstraints {
@@ -41,7 +52,25 @@ impl Default for RoutingConstraints {
         Self {
             llm_available: true,
             cypher_allowed: true,
+            node_scope: None,
         }
+    }
+}
+
+impl RoutingConstraints {
+    /// These constraints for a request with this `node_type` / `node_name`
+    /// filter (Python `RoutingConstraints.from_config`). An empty `node_type`
+    /// with names is refused here, before anything is routed, by the rule
+    /// [`node_name_scope`] applies.
+    pub fn with_node_scope(
+        self,
+        node_type: Option<&str>,
+        node_name: Option<&[String]>,
+    ) -> Result<Self, SearchError> {
+        Ok(Self {
+            node_scope: node_name_scope(node_type, node_name)?,
+            ..self
+        })
     }
 }
 
@@ -84,10 +113,32 @@ pub fn pinned_route(search_type: SearchType, constraints: &RoutingConstraints) -
     }
 }
 
-/// Resolve a rule's pick against what the deployment can run. Applied after
-/// the rules, so the rules look at the query text only.
+/// Resolve a rule's pick against what the request and the deployment can
+/// run: the `node_name` scope, then Cypher, then the LLM, in that order
+/// (Python `constrain`, `query_router.py:319-334`). Applied after the rules,
+/// so the rules look at the query text only.
 pub fn constrain(decision: RouteDecision, constraints: &RoutingConstraints) -> RouteDecision {
-    let mut search_type = decision.search_type;
+    let RouteDecision {
+        mut search_type,
+        rule,
+        mut only_context,
+    } = decision;
+    // Python `_constrain_scope` (`query_router.py:282-302`): a pick that
+    // cannot apply the filter resolves to the fallback, which honours every
+    // scope. A lexical pick keeps answering with context only, so a scoped
+    // lexical search still generates no answer.
+    if let Some(scope) = constraints.node_scope
+        && !honours(search_type, scope)
+    {
+        only_context = only_context || search_type == SearchType::ChunksLexical;
+        info!(
+            ?search_type,
+            fallback = ?ROUTER_FALLBACK_TYPE,
+            only_context,
+            "query_router: the pick cannot apply the node_name filter; using the fallback"
+        );
+        search_type = ROUTER_FALLBACK_TYPE;
+    }
     if !constraints.cypher_allowed && CYPHER_TYPES.contains(&search_type) {
         debug!(
             ?search_type,
@@ -96,7 +147,11 @@ pub fn constrain(decision: RouteDecision, constraints: &RoutingConstraints) -> R
         search_type = ROUTER_FALLBACK_TYPE;
     }
     if constraints.llm_available || LLM_FREE_TYPES.contains(&search_type) {
-        return unconstrained(search_type, decision.rule);
+        return RouteDecision {
+            search_type,
+            rule,
+            only_context,
+        };
     }
     if !COMPLETION_ONLY_TYPES.contains(&search_type) {
         debug!(
@@ -107,7 +162,7 @@ pub fn constrain(decision: RouteDecision, constraints: &RoutingConstraints) -> R
     }
     RouteDecision {
         search_type,
-        rule: decision.rule,
+        rule,
         only_context: true,
     }
 }
@@ -226,6 +281,11 @@ fn year_as_object() -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -465,6 +525,7 @@ mod tests {
     const NO_LLM: RoutingConstraints = RoutingConstraints {
         llm_available: false,
         cypher_allowed: true,
+        node_scope: None,
     };
 
     fn decision(search_type: SearchType, rule: &'static str, only_context: bool) -> RouteDecision {
@@ -520,6 +581,7 @@ mod tests {
         let no_cypher = RoutingConstraints {
             llm_available: true,
             cypher_allowed: false,
+            node_scope: None,
         };
         for search_type in CYPHER_TYPES {
             let picked = constrain(decision(search_type, "r", false), &no_cypher);
@@ -528,6 +590,7 @@ mod tests {
         let neither = RoutingConstraints {
             llm_available: false,
             cypher_allowed: false,
+            node_scope: None,
         };
         let picked = constrain(decision(SearchType::Cypher, "r", false), &neither);
         assert_eq!(picked, decision(ROUTER_FALLBACK_TYPE, "r", true));
@@ -542,6 +605,91 @@ mod tests {
         assert_eq!(
             pinned_route(HybridCompletion, &RoutingConstraints::default()),
             decision(HybridCompletion, "pinned", false)
+        );
+    }
+
+    fn scoped(scope: NodeNameScope) -> RoutingConstraints {
+        RoutingConstraints {
+            node_scope: Some(scope),
+            ..RoutingConstraints::default()
+        }
+    }
+
+    #[test]
+    fn with_node_scope_reads_the_filter_and_refuses_an_empty_type() {
+        let names = vec!["alpha".to_string()];
+        let base = RoutingConstraints::default();
+        assert_eq!(base.with_node_scope(Some("Entity"), None).unwrap(), base);
+        assert_eq!(
+            base.with_node_scope(None, Some(&names)).unwrap(),
+            scoped(NodeNameScope::NodeSet)
+        );
+        assert_eq!(
+            base.with_node_scope(Some("Entity"), Some(&names)).unwrap(),
+            scoped(NodeNameScope::Graph)
+        );
+        assert!(matches!(
+            base.with_node_scope(Some(""), Some(&names)),
+            Err(SearchError::QueryValidation(_))
+        ));
+    }
+
+    /// Python `_constrain_scope`: TEMPORAL applies node sets only, so under a
+    /// graph scope a temporal pick falls back to the default.
+    #[test]
+    fn a_graph_scope_sends_a_temporal_pick_to_the_fallback() {
+        let graph = scoped(NodeNameScope::Graph);
+        assert_eq!(
+            route_query("What happened in 1898?", &graph),
+            decision(ROUTER_FALLBACK_TYPE, "time_scoped_question", false)
+        );
+        assert_eq!(
+            route_query("show me the coding rules", &graph),
+            decision(ROUTER_FALLBACK_TYPE, "coding_rules_intent", false)
+        );
+        let node_set = scoped(NodeNameScope::NodeSet);
+        assert_eq!(
+            route_query("What happened in 1898?", &node_set),
+            decision(Temporal, "time_scoped_question", false)
+        );
+    }
+
+    /// A lexical pick ignores `node_name`, so any scope sends it to the
+    /// fallback, which then answers with context only, even with an LLM.
+    #[test]
+    fn a_scoped_lexical_pick_falls_back_as_only_context() {
+        for scope in [NodeNameScope::NodeSet, NodeNameScope::Graph] {
+            assert_eq!(
+                route_query("\"polonium and radium\"", &scoped(scope)),
+                decision(ROUTER_FALLBACK_TYPE, "quoted_phrase", true)
+            );
+        }
+    }
+
+    #[test]
+    fn a_scope_leaves_the_default_and_a_pinned_type_alone() {
+        let graph = scoped(NodeNameScope::Graph);
+        assert_eq!(
+            default_route(&graph),
+            decision(ROUTER_FALLBACK_TYPE, "default", false)
+        );
+        // A pinned type the scope cannot apply is refused by
+        // `reject_unsupported_node_name`, never rerouted.
+        assert_eq!(
+            pinned_route(Temporal, &graph),
+            decision(Temporal, "pinned", false)
+        );
+    }
+
+    #[test]
+    fn a_scope_applies_before_the_llm_constraint() {
+        let constraints = RoutingConstraints {
+            llm_available: false,
+            ..scoped(NodeNameScope::Graph)
+        };
+        assert_eq!(
+            route_query("What happened in 1898?", &constraints),
+            decision(ROUTER_FALLBACK_TYPE, "time_scoped_question", true)
         );
     }
 }

@@ -21,6 +21,9 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::graph_warmup::{ReadinessState, WarmupProbe};
+use crate::node_name_scope::{
+    NODE_SET_TYPE, NodeNameScope, node_name_scope, reject_unsupported_node_name,
+};
 use crate::observability::{
     COGNEE_RECALL_ROUTE_RULE, COGNEE_RECALL_WARMUP_SHORTCIRCUIT, COGNEE_RECALL_WARMUP_STATE,
     COGNEE_SEARCH_TYPE,
@@ -40,9 +43,25 @@ use crate::{
 pub struct RecallOptions {
     pub system_prompt: Option<String>,
     pub system_prompt_path: Option<String>,
+    /// What the names in [`node_name`](Self::node_name) are (Python's
+    /// `node_type`, `recall.py:445`, docstring at `:494-500`): the class name
+    /// of a graph node type such as `"Entity"` or `"TextDocument"`, whose
+    /// named nodes and their one-hop neighbours scope the graph search.
+    /// `None` is Python's default, `NodeSet`: the names are node-set tags.
+    /// An empty string with names is refused, standing in for Python's
+    /// explicit `None` (see [`crate::node_name_scope`]). The router then
+    /// picks only a type that applies the scope, and a pinned type that
+    /// cannot is refused.
+    pub node_type: Option<String>,
+    /// Names to scope the graph search to, read according to
+    /// [`node_type`](Self::node_type). Session sources are not scoped by it.
     pub node_name: Option<Vec<String>>,
     pub node_name_filter_operator: Option<String>,
     pub only_context: Option<bool>,
+    /// Forwarded to the graph search's [`SearchRequest::verbose`] (Python's
+    /// `verbose`, `recall.py:457`): the response keeps its context and graph.
+    /// `None` is `false`.
+    pub verbose: Option<bool>,
     pub wide_search_top_k: Option<usize>,
     pub triplet_distance_penalty: Option<f32>,
     pub feedback_influence: Option<f32>,
@@ -106,6 +125,28 @@ impl RecallOptions {
         options
             .and_then(|o| o.session_cache_user_id.as_deref())
             .or(caller)
+    }
+
+    /// The scope of the `node_name` filter, `None` without one, refusing an
+    /// empty `node_type` with names. Recall checks it before any source runs
+    /// (Python `recall.py:609-613`), so a session-only recall refuses the
+    /// filter the same way a graph one does.
+    pub fn node_name_scope(options: Option<&Self>) -> Result<Option<NodeNameScope>, SearchError> {
+        node_name_scope(
+            options.and_then(|o| o.node_type.as_deref()),
+            options.and_then(|o| o.node_name.as_deref()),
+        )
+    }
+
+    /// The `node_type` the graph search is sent: the caller's, or Python's
+    /// `NodeSet` default when names are set, so the retrievers read them as
+    /// node-set tags as Python's do. Without names and without a type, none.
+    pub fn search_node_type(&self) -> Option<String> {
+        match (&self.node_type, self.node_name.as_deref()) {
+            (Some(node_type), _) => Some(node_type.clone()),
+            (None, Some(names)) if !names.is_empty() => Some(NODE_SET_TYPE.to_string()),
+            (None, _) => None,
+        }
     }
 
     /// The profile the `session_context` lane renders: the caller's, or
@@ -850,6 +891,12 @@ pub struct GraphPlan {
 /// and how to search, recorded on `span`. An explicit `query_type` is used as given;
 /// otherwise `auto_route` picks the type from the query text, or the
 /// deployment's default does.
+///
+/// A `node_name` filter in `options` limits routing to the types that apply
+/// it, as [`RecallOptions::node_type`] reads it (Python `recall.py:765-769`).
+/// An explicit type that cannot apply it is refused with
+/// [`SearchError::QueryValidation`], as Python's retriever factory refuses it
+/// (`get_search_type_retriever_instance.py:498`).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_graph(
     query_text: &str,
@@ -860,12 +907,20 @@ pub fn plan_graph(
     user_id: Option<&str>,
     search_orchestrator: &SearchOrchestrator,
     span: &tracing::Span,
+    options: Option<&RecallOptions>,
 ) -> Result<GraphPlan, SearchError> {
+    let node_type = options.and_then(|o| o.node_type.as_deref());
+    let node_name = options.and_then(|o| o.node_name.as_deref());
+    let constraints = search_orchestrator
+        .routing_constraints()
+        .with_node_scope(node_type, node_name)?;
     let owner = graph_owner(user_id, datasets, dataset_ids)?;
-    let constraints = search_orchestrator.routing_constraints();
     let fallback = default_route(&constraints);
     let (decision, routed_rule) = match (query_type, auto_route) {
-        (Some(qt), _) => (pinned_route(qt, &constraints), None),
+        (Some(qt), _) => {
+            reject_unsupported_node_name(qt, node_type, node_name)?;
+            (pinned_route(qt, &constraints), None)
+        }
         (None, true) => {
             let decision = route_query(query_text, &constraints);
             (decision, Some(decision.rule))
@@ -946,13 +1001,13 @@ pub async fn run_graph(
         only_context: search_only_context(caller_only_context, decision),
         use_combined_context: None,
         session_id: session_id.map(|s| s.to_string()),
-        node_type: None,
+        node_type: options.and_then(RecallOptions::search_node_type),
         node_name: options.and_then(|o| o.node_name.clone()),
         wide_search_top_k: options.and_then(|o| o.wide_search_top_k),
         triplet_distance_penalty: options.and_then(|o| o.triplet_distance_penalty),
         user_id: owner_id,
         tenant_id: options.and_then(|o| o.tenant_id),
-        verbose: None,
+        verbose: options.and_then(|o| o.verbose),
         feedback_influence: options.and_then(|o| o.feedback_influence),
         retriever_specific_config: options.and_then(|o| o.retriever_specific_config.clone()),
         response_schema: options.and_then(|o| o.response_schema.clone()),
@@ -1276,6 +1331,7 @@ mod tests {
             user_id,
             search_orchestrator,
             span,
+            options,
         )?;
         run_graph(
             &plan,
@@ -2051,6 +2107,161 @@ mod tests {
         )
         .await
         .expect("no name filter -> non-UUID id is simply not forwarded");
+    }
+
+    /// `node_type` and `verbose` reach the search (Python `recall.py:665-670`).
+    #[tokio::test]
+    async fn run_graph_forwards_node_type_and_verbose() {
+        let owner = Uuid::new_v4();
+        let (orchestrator, retriever, dataset_id) =
+            orchestrator_with_seeded_dataset("notes", owner).await;
+        let owner_str = owner.to_string();
+        let span = tracing::Span::none();
+        let options = RecallOptions {
+            node_type: Some("Entity".to_string()),
+            node_name: Some(vec!["Alice".to_string()]),
+            verbose: Some(true),
+            ..Default::default()
+        };
+
+        let (.., response) = plan_and_run(
+            "anything",
+            Some(SearchType::Chunks),
+            None,
+            Some(vec![dataset_id]),
+            5,
+            false,
+            None,
+            Some(owner_str.as_str()),
+            &orchestrator,
+            &span,
+            Some(&options),
+        )
+        .await
+        .expect("CHUNKS applies a graph scope");
+
+        let seen = retriever
+            .seen
+            .lock()
+            .expect("test mutex")
+            .clone()
+            .expect("retriever must have been invoked");
+        assert_eq!(seen.node_type.as_deref(), Some("Entity"));
+        assert_eq!(seen.node_name, Some(vec!["Alice".to_string()]));
+        assert!(response.verbose, "verbose must reach the search");
+    }
+
+    /// Names without a type are node-set tags, Python's `NodeSet` default, so
+    /// the search is sent `NodeSet`; with neither, no type.
+    #[test]
+    fn search_node_type_defaults_to_node_set_only_with_names() {
+        let names = RecallOptions {
+            node_name: Some(vec!["alpha".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(names.search_node_type().as_deref(), Some("NodeSet"));
+        let typed = RecallOptions {
+            node_type: Some("Entity".to_string()),
+            ..names.clone()
+        };
+        assert_eq!(typed.search_node_type().as_deref(), Some("Entity"));
+        let empty_names = RecallOptions {
+            node_name: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert_eq!(empty_names.search_node_type(), None);
+        assert_eq!(RecallOptions::default().search_node_type(), None);
+    }
+
+    #[test]
+    fn plan_graph_refuses_a_pinned_type_that_cannot_apply_the_scope() {
+        let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new());
+        let span = tracing::Span::none();
+        let options = RecallOptions {
+            node_type: Some("Entity".to_string()),
+            node_name: Some(vec!["Alice".to_string()]),
+            ..Default::default()
+        };
+        let plan = |query_type| {
+            plan_graph(
+                "anything",
+                query_type,
+                true,
+                None,
+                None,
+                None,
+                &orchestrator,
+                &span,
+                Some(&options),
+            )
+        };
+
+        match plan(Some(SearchType::Temporal)) {
+            Err(SearchError::QueryValidation(message)) => assert!(
+                message.starts_with("TEMPORAL does not apply node_name with node_type=Entity."),
+                "{message}"
+            ),
+            other => panic!("expected QueryValidation, got {other:?}"),
+        }
+        let pinned = plan(Some(SearchType::GraphCompletion)).expect("graph completion applies it");
+        assert_eq!(pinned.search_type(), SearchType::GraphCompletion);
+    }
+
+    /// The router never picks a type the scope cannot apply: a temporal
+    /// question under a graph scope runs as the fallback.
+    #[test]
+    fn plan_graph_routes_within_the_node_scope() {
+        let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new());
+        let span = tracing::Span::none();
+        let plan = |node_type: Option<&str>| {
+            let options = RecallOptions {
+                node_type: node_type.map(str::to_string),
+                node_name: Some(vec!["Alice".to_string()]),
+                ..Default::default()
+            };
+            plan_graph(
+                "What happened in 1898?",
+                None,
+                true,
+                None,
+                None,
+                None,
+                &orchestrator,
+                &span,
+                Some(&options),
+            )
+            .expect("a routed plan")
+        };
+
+        assert_eq!(plan(Some("Entity")).search_type(), ROUTER_FALLBACK_TYPE);
+        assert_eq!(plan(None).search_type(), SearchType::Temporal);
+    }
+
+    #[test]
+    fn plan_graph_refuses_names_with_an_empty_node_type() {
+        let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new());
+        let span = tracing::Span::none();
+        let options = RecallOptions {
+            node_type: Some(String::new()),
+            node_name: Some(vec!["Alice".to_string()]),
+            ..Default::default()
+        };
+        let result = plan_graph(
+            "anything",
+            None,
+            true,
+            None,
+            None,
+            None,
+            &orchestrator,
+            &span,
+            Some(&options),
+        );
+        assert!(matches!(result, Err(SearchError::QueryValidation(_))));
+        assert!(matches!(
+            RecallOptions::node_name_scope(Some(&options)),
+            Err(SearchError::QueryValidation(_))
+        ));
     }
 
     /// `POST /v1/recall` deserialized `dataset_ids` and then dropped it on

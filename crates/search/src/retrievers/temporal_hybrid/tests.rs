@@ -937,13 +937,22 @@ async fn auto_routed_temporal_cites_its_chunk_lane_under_include_references() {
     let orchestrator = temporal_orchestrator(retriever);
     let span = tracing::Span::none();
     let query = "What happened in 1950?";
-    let plan =
-        crate::recall_scope::plan_graph(query, None, true, None, None, None, &orchestrator, &span)
-            .unwrap();
     let options = crate::recall_scope::RecallOptions {
         include_references: true,
         ..Default::default()
     };
+    let plan = crate::recall_scope::plan_graph(
+        query,
+        None,
+        true,
+        None,
+        None,
+        None,
+        &orchestrator,
+        &span,
+        Some(&options),
+    )
+    .unwrap();
     let (_items, used, auto_routed, response) = crate::recall_scope::run_graph(
         &plan,
         query,

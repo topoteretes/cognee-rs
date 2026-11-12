@@ -347,6 +347,7 @@ async fn run_graph_searches_a_cold_graph_without_a_note() {
         Some(&owner),
         &orchestrator,
         &span,
+        None,
     )
     .expect("plan_graph");
     let (items, _, _, _) = run_graph(
