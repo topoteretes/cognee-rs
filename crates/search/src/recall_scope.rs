@@ -579,7 +579,8 @@ pub struct RecallItem {
 ///
 /// Fail-safe like Python: no session id, no caller, a caller that is not a
 /// UUID, no visible row, or a database error all answer `caller` unchanged
-/// (`recall.py:204-205`, `:216-217`, `:226-227`, `:236-237`, `:248-250`).
+/// (`recall.py:204-205`, `:216-217`, `:226-227`, `:236-237`, `:248-250`), and
+/// so does a resolved owner equal to the caller, keeping the caller's spelling.
 pub async fn resolve_session_cache_user_id(
     db: &dyn SessionLifecycleDb,
     session_id: Option<&str>,
@@ -596,8 +597,11 @@ pub async fn resolve_session_cache_user_id(
         .resolve_session_cache_owner(sid, caller_uuid, permitted_dataset_ids)
         .await
     {
-        Ok(Some(owner)) => Some(owner.to_string()),
-        Ok(None) => Some(caller.to_owned()),
+        // The caller's own row keeps the caller's spelling of its id: the
+        // cache is keyed by that string, and `Uuid::to_string` would rewrite
+        // an uppercase or unhyphenated id into a key nothing was written under.
+        Ok(Some(owner)) if owner != caller_uuid => Some(owner.to_string()),
+        Ok(Some(_)) | Ok(None) => Some(caller.to_owned()),
         Err(err) => {
             debug!(error = %err, "Ignoring error in resolve_session_cache_user_id");
             Some(caller.to_owned())
@@ -2545,6 +2549,22 @@ mod session_cache_owner_tests {
 
         let resolved = resolve_session_cache_user_id(&db, Some("s"), Some(&caller_str), &[]).await;
         assert_eq!(resolved, Some(caller_str.clone()));
+    }
+
+    /// When the caller's own row wins, its id comes back as the caller spelled
+    /// it, since the session cache is keyed by that exact string.
+    #[tokio::test]
+    async fn the_callers_own_row_keeps_the_callers_spelling() {
+        let db = make_db().await;
+        let caller = Uuid::new_v4();
+        db.ensure_and_touch_session("s", caller, None)
+            .await
+            .expect("ensure");
+        let spelled = caller.simple().to_string().to_uppercase();
+        assert_eq!(
+            resolve_session_cache_user_id(&db, Some("s"), Some(&spelled), &[]).await,
+            Some(spelled.clone())
+        );
     }
 
     /// Every fail-safe branch of Python's resolver answers the caller.
