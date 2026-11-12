@@ -746,7 +746,8 @@ pub struct RecallArgs {
     #[arg(long = "node-name")]
     pub node_name: Vec<String>,
 
-    /// Keep the graph search's context and graph in its response.
+    /// Keep the graph search's context and graph in its response, and print
+    /// that response after the items (under `search_response` in JSON).
     #[arg(long = "verbose", default_value_t = false)]
     pub verbose: bool,
 }

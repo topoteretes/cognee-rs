@@ -134,7 +134,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             other => CliError::Runtime(format!("Recall failed: {other}")),
         })?;
 
-        render_output(&result, args.output_format)?;
+        render_output(&result, args.output_format, args.verbose)?;
         Ok(())
     })
 }
@@ -163,22 +163,50 @@ fn map_query_type(query_type: QueryTypeArg) -> SearchType {
     }
 }
 
+/// The graph search's response, printed after the items under `--verbose`:
+/// that flag keeps the response's context and graph, which the items alone
+/// do not show. `None` without the flag or when the graph source did not run.
+fn verbose_response(
+    result: &cognee::api::RecallResult,
+    verbose: bool,
+) -> Result<Option<serde_json::Value>, CliError> {
+    match (&result.search_response, verbose) {
+        (Some(response), true) => serde_json::to_value(response).map(Some).map_err(|error| {
+            CliError::Runtime(format!("Failed to render the search response: {error}"))
+        }),
+        _ => Ok(None),
+    }
+}
+
+/// The `--output-format json` document: the item contents, or under
+/// `--verbose` an object with those `items` and the graph `search_response`.
+fn json_output(
+    result: &cognee::api::RecallResult,
+    verbose: bool,
+) -> Result<serde_json::Value, CliError> {
+    let items: Vec<&serde_json::Value> = result.items.iter().map(|i| &i.content).collect();
+    Ok(match verbose_response(result, verbose)? {
+        Some(response) => serde_json::json!({ "items": items, "search_response": response }),
+        None => serde_json::json!(items),
+    })
+}
+
 fn render_output(
     result: &cognee::api::RecallResult,
     output_format: OutputFormatArg,
+    verbose: bool,
 ) -> Result<(), CliError> {
     // Recall results are the command's primary output and must reach stdout
     // regardless of the active log level, so they use `println!` rather than
     // the tracing logger (matches `search`).
+    let render = |value: &serde_json::Value| {
+        serde_json::to_string_pretty(value)
+            .map_err(|error| CliError::Runtime(format!("Failed to render JSON output: {error}")))
+    };
     match output_format {
         OutputFormatArg::Json => {
-            let items: Vec<&serde_json::Value> = result.items.iter().map(|i| &i.content).collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&items).map_err(|error| {
-                    CliError::Runtime(format!("Failed to render JSON output: {error}"))
-                })?
-            );
+            println!("{}", render(&json_output(result, verbose)?)?);
+            return Ok(());
         }
         OutputFormatArg::Simple => {
             for item in &result.items {
@@ -195,6 +223,9 @@ fn render_output(
                 }
             }
         }
+    }
+    if let Some(response) = verbose_response(result, verbose)? {
+        println!("Search response:\n{}", render(&response)?);
     }
 
     Ok(())
@@ -229,6 +260,58 @@ mod tests {
         assert_eq!(
             recall_scope(&owned(&["all"])).expect("all parses"),
             Some(RecallScope::ALL.to_vec())
+        );
+    }
+
+    fn result_with_response() -> cognee::api::RecallResult {
+        cognee::api::RecallResult {
+            items: vec![cognee::search::RecallItem {
+                source: cognee::search::RecallSource::Graph,
+                content: serde_json::json!("answer"),
+                score: 1.0,
+            }],
+            search_type_used: Some(SearchType::GraphCompletion),
+            auto_routed: false,
+            search_response: Some(
+                serde_json::from_value(serde_json::json!({
+                    "search_type": "GRAPH_COMPLETION",
+                    "result": { "kind": "Text", "data": "answer" },
+                    "context": {
+                        "all": [{ "id": null, "score": null, "payload": "the context" }]
+                    },
+                    "graphs": null,
+                    "diagnostics": null,
+                    "datasets": null,
+                    "only_context": false,
+                    "use_combined_context": false,
+                    "verbose": true,
+                }))
+                .expect("a valid search response"),
+            ),
+        }
+    }
+
+    /// Without `--verbose` the JSON output is the item contents, as before;
+    /// with it, the graph search's response (its context) comes along.
+    #[test]
+    fn verbose_json_output_carries_the_search_response() {
+        let result = result_with_response();
+        assert_eq!(
+            json_output(&result, false).expect("renders"),
+            serde_json::json!(["answer"])
+        );
+        let verbose = json_output(&result, true).expect("renders");
+        assert_eq!(verbose["items"], serde_json::json!(["answer"]));
+        assert_eq!(verbose["search_response"]["verbose"], true);
+        assert!(verbose["search_response"]["context"].is_object());
+
+        let no_graph = cognee::api::RecallResult {
+            search_response: None,
+            ..result_with_response()
+        };
+        assert_eq!(
+            json_output(&no_graph, true).expect("renders"),
+            serde_json::json!(["answer"])
         );
     }
 

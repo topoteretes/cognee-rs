@@ -104,11 +104,13 @@ context and graph.
 
 The CLI and the bindings expose these options. `cognee-cli recall` takes
 `--scope` (repeatable), `--context-profile`, `--tools-trigger`, `--node-type`,
-`--node-name` (repeatable) and `--verbose`. The bindings' recall opts take
+`--node-name` (repeatable) and `--verbose` (which also prints the graph
+search's response after the items). The bindings' recall opts take
 `scope`, `contextProfile`, `toolsTrigger`, `nodeType`, `nodeName`,
-`nodeNameFilterOperator` and `verbose` (Python also accepts the snake_case
-spellings). An unknown scope or `tools_trigger`, a `tools` / `code` scope and
-node names with an empty `node_type` are validation errors on every surface.
+`nodeNameFilterOperator` and `verbose` (the Python binding also accepts the
+snake_case spellings). An unknown scope or `tools_trigger`, a `tools` / `code`
+scope and node names with an empty `node_type` are validation errors on every
+surface.
 
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 
