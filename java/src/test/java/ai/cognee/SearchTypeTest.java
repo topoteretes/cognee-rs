@@ -98,4 +98,24 @@ class SearchTypeTest {
         assertEquals("sess-1", n.path("sessionId").asText());
         assertEquals("session", n.path("scope").get(1).asText());
     }
+
+    @Test
+    void recallOptionsSerializeTheSdk1040Keys() {
+        RecallOptions opts = new RecallOptions()
+                .scope("session_context")
+                .contextProfile("agent")
+                .toolsTrigger("on_empty")
+                .nodeType("Entity")
+                .nodeName(List.of("Alice"))
+                .nodeNameFilterOperator("AND")
+                .verbose(true);
+        JsonNode n = Json.tree(opts.toJson());
+        assertEquals("session_context", n.path("scope").asText());
+        assertEquals("agent", n.path("contextProfile").asText());
+        assertEquals("on_empty", n.path("toolsTrigger").asText());
+        assertEquals("Entity", n.path("nodeType").asText());
+        assertEquals("Alice", n.path("nodeName").get(0).asText());
+        assertEquals("AND", n.path("nodeNameFilterOperator").asText());
+        assertTrue(n.path("verbose").asBoolean());
+    }
 }

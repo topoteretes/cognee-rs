@@ -64,6 +64,8 @@ const ALL_RECALL_SCOPES: RecallScopeString[] = [
   "auto",
   "graph",
   "session",
+  "session_first",
+  "session_context",
   "trace",
   "graph_context",
 ];
@@ -129,6 +131,77 @@ describe("recall ops (Tier-A — no LLM)", () => {
         caught = err;
       }
       expect(caught).toBeDefined();
+      expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+    }, 10_000);
+  });
+
+  // ── SDK-1040 recall opts ──────────────────────────────────────────────────
+
+  describe("SDK-1040 recall opts", () => {
+    it("accepts contextProfile, toolsTrigger, the node scope and verbose", async () => {
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          scope: "graph",
+          contextProfile: "agent",
+          toolsTrigger: "on_empty",
+          nodeType: "Entity",
+          nodeName: ["Alice"],
+          nodeNameFilterOperator: "AND",
+          verbose: true,
+        });
+      } catch (err) {
+        expect(errorCode(err)).not.toBe("VALIDATION_ERROR");
+      }
+    }, 15_000);
+
+    it("rejects an unknown toolsTrigger with VALIDATION_ERROR", async () => {
+      let caught: unknown;
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          // @ts-expect-error intentionally invalid tools trigger
+          toolsTrigger: "sometimes",
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+      expect(String((caught as Error).message)).toContain(
+        "Invalid tools_trigger 'sometimes'. Valid values: 'always', 'on_empty'."
+      );
+    }, 10_000);
+
+    it.each(["tools", "code"])(
+      "refuses the not-yet-supported scope '%s' with VALIDATION_ERROR",
+      async (scope) => {
+        let caught: unknown;
+        try {
+          await native.cogneeRecall(handle, "test query", {
+            // @ts-expect-error accepted by the runtime, left out of the type
+            scope,
+          });
+        } catch (err) {
+          caught = err;
+        }
+        expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+        expect(String((caught as Error).message)).toContain(
+          `Recall scope '${scope}' is not supported yet in the Rust SDK (tracked in SDK-1537).`
+        );
+      },
+      10_000
+    );
+
+    it("refuses node names with an empty nodeType with VALIDATION_ERROR", async () => {
+      let caught: unknown;
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          scope: "session",
+          sessionId: "node-scope-session",
+          nodeType: "",
+          nodeName: ["Alice"],
+        });
+      } catch (err) {
+        caught = err;
+      }
       expect(errorCode(caught)).toBe("VALIDATION_ERROR");
     }, 10_000);
   });

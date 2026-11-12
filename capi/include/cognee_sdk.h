@@ -507,9 +507,13 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *   FEELING_LUCKY, FEEDBACK, TEMPORAL, CODING_RULES, CHUNKS_LEXICAL,
  *   GRAPH_REPORT, HYBRID_COMPLETION
  *
- * RecallScope strings (5 valid values):
- *   "auto" | "graph" | "session" | "trace" | "graph_context"
+ * RecallScope strings (10 valid values, Python's sorted list):
+ *   "all" | "auto" | "code" | "graph" | "graph_context" | "session" |
+ *   "session_context" | "session_first" | "tools" | "trace"
  *   "graph_context" is a deprecated alias of "graph" (logged as a warning).
+ *   "all" expands to graph, session, trace and session_context, keeping a
+ *   co-supplied session_first (and tools). "tools" and "code" are accepted
+ *   but fail with CG_ERR_SDK_VALIDATION as not supported yet (SDK-1537).
  *   Absent/null scope → "auto" default applied internally.
  */
 
@@ -568,11 +572,23 @@ void cg_sdk_search(const CgSdk*        sdk,
  *   "topK"       — integer (default 10)
  *   "autoRoute"  — boolean (default false)
  *   "sessionId"  — string
- *   "scope"      — string or string array of RecallScope values:
- *                  "auto" | "graph" | "session" | "trace"
+ *   "scope"      — string or string array of RecallScope values (see
+ *                  above): "auto" | "graph" | "session" | "session_first" |
+ *                  "session_context" | "trace" | "all"
  *                  ("graph_context" is a deprecated alias of "graph")
  *                  Absent or null → "auto" default applied by recall().
- *   "neighborhoodDepth", "neighborhoodSeedTopK" — as for cg_sdk_search
+ *   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as
+ *                  for cg_sdk_search
+ *   "contextProfile" — string; the profile the "session_context" scope
+ *                  renders: "qa" (default) or "agent"
+ *   "toolsTrigger" — "always" (default) or "on_empty"; validated on every
+ *                  call, no effect until the "tools" scope exists
+ *   "nodeType", "nodeName", "nodeNameFilterOperator", "verbose" — as for
+ *                  cg_sdk_search; they apply to the graph source, which then
+ *                  routes only to search types that honour the node scope
+ *
+ * An unknown scope or "toolsTrigger", a "tools" / "code" scope, or
+ * "nodeName" with an empty "nodeType" → CG_ERR_SDK_VALIDATION (14).
  *
  * Async (D4, R1): callback fires exactly once on a tokio worker thread.
  * result_json on success: CogneeRecallResult JSON object (see above).

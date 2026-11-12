@@ -126,12 +126,21 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "autoRoute"   — boolean (default false)
 ///   "sessionId"   — string
 ///   "scope"       — string or string array:
-///                   "auto" | "graph" | "session" | "trace"
-///                   ("graph_context" is a deprecated alias of "graph")
+///                   "auto" | "graph" | "session" | "session_first" |
+///                   "session_context" | "trace" | "all"
+///                   ("graph_context" is a deprecated alias of "graph";
+///                   "tools" and "code" are accepted but fail validation as
+///                   not supported yet)
 ///                   (absent/null → "auto" default applied by recall())
 ///   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as for
 ///                   `cg_sdk_search` (references land in each normalized
 ///                   result's `metadata.evidence`)
+///   "contextProfile" — the profile the "session_context" scope renders:
+///                   "qa" (default) or "agent"
+///   "toolsTrigger" — "always" (default) or "on_empty"; validated on every
+///                   call, no effect until the "tools" scope exists
+///   "nodeType", "nodeName", "nodeNameFilterOperator", "verbose" — as for
+///                   `cg_sdk_search`; they apply to the graph source
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///

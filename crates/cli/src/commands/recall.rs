@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use cognee::api::recall;
+use cognee::api::{ScopeInput, normalize_scope, recall};
 use cognee::database::IngestDb;
 use cognee::search::graph_warmup::GraphWarmup;
 use cognee::search::{SearchBuilder, SearchType, SessionManager};
@@ -29,6 +29,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
     })?;
     drop(settings);
     let tenant_id = crate::commands::parse_tenant_id(args.tenant_id.as_deref())?;
+    let scope = recall_scope(&args.scope)?;
 
     // When `--query-type` is omitted, recall auto-routes the search type.
     let (query_type, auto_route): (Option<SearchType>, bool) = match args.query_type {
@@ -109,7 +110,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             &orchestrator,
             Some(session_store.as_ref()),
             Some(session_manager.as_ref()),
-            None,
+            scope,
             // Only the flags this command exposes. Always `Some`: recall reads
             // every option field-by-field, so an all-default value means the
             // same as `None` and a new flag cannot be dropped by a stale guard.
@@ -117,15 +118,36 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
                 tenant_id,
                 neighborhood_depth: args.neighborhood_depth.map(usize::from),
                 neighborhood_seed_top_k: args.neighborhood_seed_top_k.map(usize::from),
+                tools_trigger: args.tools_trigger,
+                context_profile: args.context_profile,
+                node_type: args.node_type,
+                node_name: (!args.node_name.is_empty()).then_some(args.node_name),
+                verbose: args.verbose.then_some(true),
                 ..Default::default()
             }),
         )
         .await
-        .map_err(|error| CliError::Runtime(format!("Recall failed: {error}")))?;
+        .map_err(|error| match error {
+            // The caller's own input, refused before any source runs (an
+            // unsupported scope, node names with an empty `--node-type`).
+            cognee::api::ApiError::InvalidArgument(message) => CliError::Validation(message),
+            other => CliError::Runtime(format!("Recall failed: {other}")),
+        })?;
 
         render_output(&result, args.output_format)?;
         Ok(())
     })
+}
+
+/// The repeated `--scope` values, normalized as every other recall boundary
+/// does. None given is `None`, which recall treats as `auto`.
+fn recall_scope(scope: &[String]) -> Result<Option<Vec<cognee::api::RecallScope>>, CliError> {
+    if scope.is_empty() {
+        return Ok(None);
+    }
+    normalize_scope(Some(ScopeInput::Many(scope.to_vec())))
+        .map(Some)
+        .map_err(|error| CliError::Validation(format!("Invalid --scope: {error}")))
 }
 
 fn map_query_type(query_type: QueryTypeArg) -> SearchType {
@@ -176,4 +198,47 @@ fn render_output(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use cognee::api::RecallScope;
+
+    use super::*;
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn no_scope_flag_is_auto() {
+        assert_eq!(recall_scope(&[]).expect("no flag parses"), None);
+    }
+
+    #[test]
+    fn scope_flags_are_normalized() {
+        assert_eq!(
+            recall_scope(&owned(&["session_first", "graph_context"])).expect("known names parse"),
+            Some(vec![RecallScope::SessionFirst, RecallScope::Graph])
+        );
+        assert_eq!(
+            recall_scope(&owned(&["all"])).expect("all parses"),
+            Some(RecallScope::ALL.to_vec())
+        );
+    }
+
+    #[test]
+    fn an_unknown_scope_is_a_validation_error() {
+        match recall_scope(&owned(&["everything"])) {
+            Err(CliError::Validation(message)) => {
+                assert!(message.starts_with("Invalid --scope: "), "{message}")
+            }
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
 }

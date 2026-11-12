@@ -102,6 +102,14 @@ in for it. Session sources are not scoped by `node_name`. The `verbose`
 option is forwarded to the graph search, whose response then keeps its
 context and graph.
 
+The CLI and the bindings expose these options. `cognee-cli recall` takes
+`--scope` (repeatable), `--context-profile`, `--tools-trigger`, `--node-type`,
+`--node-name` (repeatable) and `--verbose`. The bindings' recall opts take
+`scope`, `contextProfile`, `toolsTrigger`, `nodeType`, `nodeName`,
+`nodeNameFilterOperator` and `verbose` (Python also accepts the snake_case
+spellings). An unknown scope or `tools_trigger`, a `tools` / `code` scope and
+node names with an empty `node_type` are validation errors on every surface.
+
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 
 ### improve
