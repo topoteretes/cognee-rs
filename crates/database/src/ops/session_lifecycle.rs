@@ -335,6 +335,37 @@ pub async fn accumulate_usage(
     Ok(())
 }
 
+/// Every `session_records` row for `session_id` the caller may see: its own
+/// (`user_id == caller`) or one whose dataset is in `permitted_dataset_ids`.
+/// An empty permitted set leaves only the caller's own rows. Mirrors Python
+/// `metrics.py:315-324` and the `visible` filter of `recall.py:231-234`.
+/// Rows come back in the database's order, as Python's unordered `select`.
+async fn visible_session_rows(
+    db: &DatabaseConnection,
+    session_id: &str,
+    caller_hex: &str,
+    permitted_dataset_ids: &[Uuid],
+) -> Result<Vec<session_record::Model>, DatabaseError> {
+    let mut query =
+        session_record::Entity::find().filter(session_record::Column::SessionId.eq(session_id));
+
+    if permitted_dataset_ids.is_empty() {
+        query = query.filter(session_record::Column::UserId.eq(caller_hex));
+    } else {
+        let permitted_hex: Vec<String> = permitted_dataset_ids
+            .iter()
+            .map(|u| uuid_hex::to_hex(*u))
+            .collect();
+        // user_id == :u OR dataset_id IN :permitted
+        let cond = sea_orm::Condition::any()
+            .add(session_record::Column::UserId.eq(caller_hex))
+            .add(session_record::Column::DatasetId.is_in(permitted_hex));
+        query = query.filter(cond);
+    }
+
+    query.all(db).await.map_err(map_sea_err)
+}
+
 // ---------------------------------------------------------------------------
 // get_session_row
 // ---------------------------------------------------------------------------
@@ -359,27 +390,7 @@ pub async fn get_session_row(
 ) -> Result<Option<SessionRowWithStatus>, DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let user_hex = uuid_hex::to_hex(user_id);
-
-    // Visibility: caller's own OR session's dataset in permitted set.
-    // Mirrors Python `metrics.py:315-324`.
-    let mut query =
-        session_record::Entity::find().filter(session_record::Column::SessionId.eq(session_id));
-
-    if permitted_dataset_ids.is_empty() {
-        query = query.filter(session_record::Column::UserId.eq(user_hex.clone()));
-    } else {
-        let permitted_hex: Vec<String> = permitted_dataset_ids
-            .iter()
-            .map(|u| uuid_hex::to_hex(*u))
-            .collect();
-        // user_id == :u OR dataset_id IN :permitted
-        let cond = sea_orm::Condition::any()
-            .add(session_record::Column::UserId.eq(user_hex.clone()))
-            .add(session_record::Column::DatasetId.is_in(permitted_hex));
-        query = query.filter(cond);
-    }
-
-    let rows = query.all(db).await.map_err(map_sea_err)?;
+    let rows = visible_session_rows(db, session_id, &user_hex, permitted_dataset_ids).await?;
     if rows.is_empty() {
         Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
         return Ok(None);
@@ -403,6 +414,64 @@ pub async fn get_session_row(
         record: chosen,
         effective_status: effective,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// resolve_session_cache_owner
+// ---------------------------------------------------------------------------
+
+#[instrument(
+    name = "cognee.db.relational.session_lifecycle.resolve_session_cache_owner",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn resolve_session_cache_owner(
+    db: &DatabaseConnection,
+    session_id: &str,
+    caller: Uuid,
+    permitted_dataset_ids: &[Uuid],
+) -> Result<Option<Uuid>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let caller_hex = uuid_hex::to_hex(caller);
+    let visible = visible_session_rows(db, session_id, &caller_hex, permitted_dataset_ids).await?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, visible.len() as i64);
+
+    let Some(chosen) = pick_session_cache_owner(&visible, &caller_hex) else {
+        return Ok(None);
+    };
+    uuid_hex::from_hex(&chosen.user_id).map(Some).map_err(|e| {
+        DatabaseError::QueryError(format!(
+            "session_records.user_id {:?} is not a UUID: {e}",
+            chosen.user_id
+        ))
+    })
+}
+
+/// Python `_resolve_session_cache_user_id`'s choice among the visible rows
+/// (`recall.py:239-247`): rows with a `dataset_id` (written through the proper
+/// path, so they hold the cache content) form the pool, or every visible row
+/// when none has one; within the pool, the first row the caller does **not**
+/// own (the session's active writer, e.g. an agent) wins, else the first row.
+fn pick_session_cache_owner<'a>(
+    visible: &'a [session_record::Model],
+    caller_hex: &str,
+) -> Option<&'a session_record::Model> {
+    let with_dataset: Vec<&session_record::Model> =
+        visible.iter().filter(|r| r.dataset_id.is_some()).collect();
+    let pool: Vec<&session_record::Model> = if with_dataset.is_empty() {
+        visible.iter().collect()
+    } else {
+        with_dataset
+    };
+    pool.iter()
+        .find(|r| r.user_id != caller_hex)
+        .or_else(|| pool.first())
+        .copied()
 }
 
 /// Python `get_effective_status_sql` evaluated in Rust for a single row.
@@ -1013,6 +1082,15 @@ impl SessionLifecycleDb for DatabaseConnection {
         .await
     }
 
+    async fn resolve_session_cache_owner(
+        &self,
+        session_id: &str,
+        caller: Uuid,
+        permitted_dataset_ids: &[Uuid],
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        resolve_session_cache_owner(self, session_id, caller, permitted_dataset_ids).await
+    }
+
     async fn list_session_rows(
         &self,
         filters: SessionListFilters,
@@ -1086,5 +1164,66 @@ mod abandon_threshold_tests {
         let window = Duration::seconds(DEFAULT_ABANDON_AFTER_SECONDS as i64);
         assert!(ts >= before - window && ts <= after - window);
         assert!(abandon_threshold_ts(0) >= before);
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod session_cache_owner_tests {
+    use super::*;
+
+    fn row(user: &str, dataset: Option<&str>) -> session_record::Model {
+        let now = Utc::now();
+        session_record::Model {
+            session_id: "s".to_string(),
+            user_id: user.to_string(),
+            dataset_id: dataset.map(str::to_string),
+            status: "running".to_string(),
+            started_at: now,
+            last_activity_at: now,
+            ended_at: None,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+            error_count: 0,
+            last_model: None,
+        }
+    }
+
+    fn picked<'a>(rows: &'a [session_record::Model], caller: &str) -> Option<&'a str> {
+        pick_session_cache_owner(rows, caller).map(|r| r.user_id.as_str())
+    }
+
+    #[test]
+    fn no_rows_pick_nothing() {
+        assert_eq!(picked(&[], "me"), None);
+    }
+
+    #[test]
+    fn rows_with_a_dataset_form_the_pool() {
+        // A non-caller row without a dataset loses to the caller's row with one.
+        let rows = [row("other", None), row("me", Some("d"))];
+        assert_eq!(picked(&rows, "me"), Some("me"));
+    }
+
+    #[test]
+    fn without_any_dataset_every_visible_row_is_the_pool() {
+        let rows = [row("me", None), row("other", None)];
+        assert_eq!(picked(&rows, "me"), Some("other"));
+        assert_eq!(picked(&rows[..1], "me"), Some("me"));
+    }
+
+    #[test]
+    fn the_first_non_caller_row_of_the_pool_wins() {
+        let rows = [
+            row("me", Some("d1")),
+            row("a", Some("d2")),
+            row("b", Some("d3")),
+        ];
+        assert_eq!(picked(&rows, "me"), Some("a"));
     }
 }

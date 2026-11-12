@@ -80,6 +80,14 @@ valid names that fail with "not supported yet" before any source runs
 (`always` | `on_empty`) is validated, and has no effect until the `tools`
 source exists.
 
+The `session`, `trace` and `session_context` sources read the session cache,
+which is keyed by the session's owner. By default they read the caller's own
+entries. A caller that can read the session's dataset reads its owner's
+entries instead, when it sets the `session_cache_user_id` option to the id
+`resolve_session_cache_user_id` resolves from the session records and the
+caller's readable datasets (Python `_resolve_session_cache_user_id`). The
+CLI and the bindings have no dataset permissions, so they leave it unset.
+
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 
 ### improve

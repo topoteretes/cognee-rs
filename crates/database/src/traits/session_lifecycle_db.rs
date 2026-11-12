@@ -178,6 +178,25 @@ pub trait SessionLifecycleDb: Send + Sync {
         abandon_after_seconds: u64,
     ) -> Result<Option<SessionRowWithStatus>, DatabaseError>;
 
+    /// The owner whose session cache holds `session_id`'s entries, as seen by
+    /// `caller`: the database half of Python's
+    /// `_resolve_session_cache_user_id` (`recall.py:181-250`). Session-cache
+    /// entries are keyed by the session's owner, and the same `session_id`
+    /// can exist under several owners (the key is `(session_id, user_id)`).
+    ///
+    /// A row is visible when the caller owns it or its `dataset_id` is in
+    /// `permitted_dataset_ids`; an empty permitted set leaves only the
+    /// caller's own rows. Among the visible rows, those with a `dataset_id`
+    /// win over the rest, and within them a row the caller does not own wins.
+    /// `None` when no row is visible; the caller then queries under its own
+    /// id, as Python falls back to `caller_user_id`.
+    async fn resolve_session_cache_owner(
+        &self,
+        session_id: &str,
+        caller: Uuid,
+        permitted_dataset_ids: &[Uuid],
+    ) -> Result<Option<Uuid>, DatabaseError>;
+
     /// Paginated list with `effective_status` filter support. Mirrors
     /// `metrics.py:365-438`.
     async fn list_session_rows(

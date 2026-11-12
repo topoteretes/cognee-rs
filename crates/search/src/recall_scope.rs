@@ -12,6 +12,7 @@
 
 use std::collections::HashSet;
 
+use cognee_database::SessionLifecycleDb;
 use cognee_session::{
     CONTEXT_PROFILE_QA, SessionManager, SessionStore, build_active_context_block_for_profile_safe,
 };
@@ -80,6 +81,15 @@ pub struct RecallOptions {
     /// [`DEFAULT_CONTEXT_PROFILE`]. Not validated, as in Python: an unknown
     /// profile renders nothing. Other lanes ignore it.
     pub context_profile: Option<String>,
+    /// The id the session, trace and session_context lanes query the session
+    /// cache under, when it is not the caller's. Session-cache entries are
+    /// keyed by the session's owner, and a caller with a read grant on the
+    /// session's dataset reads another owner's session (Python
+    /// `_resolve_session_cache_user_id`, `recall.py:181-250`, used at `:272`,
+    /// `:330` and `:401`). A caller that has the dataset grants resolves it
+    /// with [`resolve_session_cache_user_id`]; `None` uses `user_id`. The graph
+    /// lane always runs as the caller.
+    pub session_cache_user_id: Option<String>,
 }
 
 /// The `session_context` lane's profile when the caller names none (Python's
@@ -87,6 +97,17 @@ pub struct RecallOptions {
 pub const DEFAULT_CONTEXT_PROFILE: &str = CONTEXT_PROFILE_QA;
 
 impl RecallOptions {
+    /// The id the session-cache lanes query under: the resolved owner from
+    /// [`session_cache_user_id`](Self::session_cache_user_id), or `caller`.
+    pub fn session_cache_user_id_or<'a>(
+        options: Option<&'a Self>,
+        caller: Option<&'a str>,
+    ) -> Option<&'a str> {
+        options
+            .and_then(|o| o.session_cache_user_id.as_deref())
+            .or(caller)
+    }
+
     /// The profile the `session_context` lane renders: the caller's, or
     /// [`DEFAULT_CONTEXT_PROFILE`].
     pub fn context_profile_or_default(options: Option<&Self>) -> &str {
@@ -544,6 +565,44 @@ pub struct RecallItem {
     pub content: serde_json::Value,
     /// Relevance score (keyword overlap for session/trace, similarity for graph).
     pub score: f64,
+}
+
+/// The user id to query `session_id`'s session cache under, as `caller` sees
+/// it: Python `_resolve_session_cache_user_id` (`recall.py:181-250`).
+///
+/// Session-cache entries are keyed by the session's owner, not by the caller,
+/// and a caller may read someone else's session through a read grant on the
+/// session's dataset. `permitted_dataset_ids` are the datasets the caller may
+/// read; with none, only the caller's own rows are visible and the answer is
+/// always `caller`. See [`SessionLifecycleDb::resolve_session_cache_owner`]
+/// for which row wins.
+///
+/// Fail-safe like Python: no session id, no caller, a caller that is not a
+/// UUID, no visible row, or a database error all answer `caller` unchanged
+/// (`recall.py:204-205`, `:216-217`, `:226-227`, `:236-237`, `:248-250`).
+pub async fn resolve_session_cache_user_id(
+    db: &dyn SessionLifecycleDb,
+    session_id: Option<&str>,
+    caller: Option<&str>,
+    permitted_dataset_ids: &[Uuid],
+) -> Option<String> {
+    let (Some(sid), Some(caller)) = (session_id.filter(|s| !s.is_empty()), caller) else {
+        return caller.map(str::to_owned);
+    };
+    let Ok(caller_uuid) = Uuid::parse_str(caller) else {
+        return Some(caller.to_owned());
+    };
+    match db
+        .resolve_session_cache_owner(sid, caller_uuid, permitted_dataset_ids)
+        .await
+    {
+        Ok(Some(owner)) => Some(owner.to_string()),
+        Ok(None) => Some(caller.to_owned()),
+        Err(err) => {
+            debug!(error = %err, "Ignoring error in resolve_session_cache_user_id");
+            Some(caller.to_owned())
+        }
+    }
 }
 
 /// Mirrors Python `_search_session` (`recall.py:146-208`).
@@ -2447,6 +2506,84 @@ mod tests {
         assert_eq!(
             RecallOptions::context_profile_or_default(Some(&options)),
             "agent"
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod session_cache_owner_tests {
+    use super::*;
+    use cognee_database::{DatabaseConnection, connect, initialize};
+
+    async fn make_db() -> DatabaseConnection {
+        let db = connect("sqlite::memory:").await.expect("connect");
+        initialize(&db).await.expect("initialize");
+        db
+    }
+
+    /// A caller with a read grant on the session's dataset reads its owner's
+    /// cache; without it, its own.
+    #[tokio::test]
+    async fn resolves_the_owner_through_a_dataset_grant() {
+        let db = make_db().await;
+        let caller = Uuid::new_v4();
+        let owner = Uuid::new_v4();
+        let dataset = Uuid::new_v4();
+        db.ensure_and_touch_session("s", owner, Some(dataset))
+            .await
+            .expect("ensure");
+        let caller_str = caller.to_string();
+
+        let resolved =
+            resolve_session_cache_user_id(&db, Some("s"), Some(&caller_str), &[dataset]).await;
+        assert_eq!(resolved, Some(owner.to_string()));
+
+        let resolved = resolve_session_cache_user_id(&db, Some("s"), Some(&caller_str), &[]).await;
+        assert_eq!(resolved, Some(caller_str.clone()));
+    }
+
+    /// Every fail-safe branch of Python's resolver answers the caller.
+    #[tokio::test]
+    async fn falls_back_to_the_caller() {
+        let db = make_db().await;
+        let dataset = Uuid::new_v4();
+        db.ensure_and_touch_session("s", Uuid::new_v4(), Some(dataset))
+            .await
+            .expect("ensure");
+        let caller = Uuid::new_v4().to_string();
+
+        // No session id, or an empty one.
+        for sid in [None, Some("")] {
+            assert_eq!(
+                resolve_session_cache_user_id(&db, sid, Some(&caller), &[dataset]).await,
+                Some(caller.clone())
+            );
+        }
+        // No caller.
+        assert_eq!(
+            resolve_session_cache_user_id(&db, Some("s"), None, &[dataset]).await,
+            None
+        );
+        // A caller id that is not a UUID.
+        assert_eq!(
+            resolve_session_cache_user_id(&db, Some("s"), Some("user-1"), &[dataset]).await,
+            Some("user-1".to_string())
+        );
+        // No row for the session.
+        assert_eq!(
+            resolve_session_cache_user_id(&db, Some("other"), Some(&caller), &[dataset]).await,
+            Some(caller.clone())
+        );
+        // A database error (no schema).
+        let broken = connect("sqlite::memory:").await.expect("connect");
+        assert_eq!(
+            resolve_session_cache_user_id(&broken, Some("s"), Some(&caller), &[dataset]).await,
+            Some(caller.clone())
         );
     }
 }

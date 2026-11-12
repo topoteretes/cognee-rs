@@ -32,7 +32,8 @@ use tracing::{field, info};
 use super::error::ApiError;
 
 pub use cognee_search::recall_scope::{
-    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, ToolsTrigger, normalize_scope,
+    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, ToolsTrigger,
+    normalize_scope, resolve_session_cache_user_id,
 };
 
 /// Full recall result.
@@ -72,7 +73,10 @@ pub struct RecallResult {
 ///    A `tools` or `code` scope fails here with [`ApiError::InvalidArgument`]
 ///    before any source runs: Rust has no lane for them yet (SDK-1537).
 /// 3. Iterate sources in resolved order (`recall.py:1243-1257`); each source
-///    appends to a flat merged list of [`RecallItem`]s.
+///    appends to a flat merged list of [`RecallItem`]s. The session, trace
+///    and session_context sources read the session cache under
+///    [`RecallOptions::session_cache_user_id`] when set (the session's owner,
+///    from [`resolve_session_cache_user_id`]), else under `user_id`.
 /// 4. Telemetry attrs: `COGNEE_RECALL_SCOPE`, `COGNEE_RECALL_SOURCE`,
 ///    `COGNEE_RESULT_COUNT`, `COGNEE_SESSION_ENTRY_COUNT` (`recall.py:515-522`).
 #[allow(clippy::too_many_arguments)]
@@ -160,6 +164,10 @@ pub async fn recall(
     let mut graph_auto_routed = false;
     let mut graph_response: Option<SearchResponse> = None;
     let mut session_result_count: usize = 0;
+    // The session-cache lanes read under the session's owner when the caller
+    // resolved one (Python `recall.py:272`, `:330`, `:401`); graph runs as
+    // the caller.
+    let session_user_id = RecallOptions::session_cache_user_id_or(options.as_ref(), user_id);
 
     // -- Iterate sources in resolved order (Python recall.py:1243-1257). --
     for src in &sources {
@@ -180,22 +188,30 @@ pub async fn recall(
             RecallScope::SessionContext => search_session_context(
                 query_text,
                 session_id,
-                user_id,
+                session_user_id,
                 RecallOptions::context_profile_or_default(options.as_ref()),
                 session_manager,
             )
             .await
             .map_err(|e| ApiError::Search(e.to_string()))?,
-            RecallScope::Session => {
-                search_session(query_text, session_id, user_id, top_k, session_store)
-                    .await
-                    .map_err(|e| ApiError::Search(e.to_string()))?
-            }
-            RecallScope::Trace => {
-                search_trace(query_text, session_id, user_id, top_k, session_manager)
-                    .await
-                    .map_err(|e| ApiError::Search(e.to_string()))?
-            }
+            RecallScope::Session => search_session(
+                query_text,
+                session_id,
+                session_user_id,
+                top_k,
+                session_store,
+            )
+            .await
+            .map_err(|e| ApiError::Search(e.to_string()))?,
+            RecallScope::Trace => search_trace(
+                query_text,
+                session_id,
+                session_user_id,
+                top_k,
+                session_manager,
+            )
+            .await
+            .map_err(|e| ApiError::Search(e.to_string()))?,
             RecallScope::Graph => {
                 let search_err =
                     |e: cognee_search::types::SearchError| ApiError::Search(e.to_string());
