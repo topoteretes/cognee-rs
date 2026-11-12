@@ -64,13 +64,17 @@ note saying so instead of searching
 session history when given a `--session-id`) and graph-backed. Results are
 returned to the caller (printed to stdout by the CLI).
 
-The `scope` picks the sources: `graph`, `session`, `trace`, `all`, or `auto`
-(the default). With a session id and no query type, `auto` reads the session
-and then the graph: with no dataset filter a session hit skips the graph, with
-one both contribute. Without a session id, or with a query type, `auto` reads
-the graph only. `session_first` asks for the short-circuit explicitly, whatever
-else the call carries. `session_context` is accepted, but its source is not
-wired yet (SDK-1040). `tools` and `code` are valid names that fail with "not
+The `scope` picks the sources: `graph`, `session`, `trace`,
+`session_context`, `all`, or `auto` (the default). `all` is `graph`,
+`session`, `trace` and `session_context`, in that order. With a session id and
+no query type, `auto` reads the session and then the graph: with no dataset
+filter a session hit skips the graph, with one both contribute. Without a
+session id, or with a query type, `auto` reads the graph only. `session_first`
+asks for the short-circuit explicitly, whatever else the call carries.
+`session_context` returns the session's active guidance block (the lessons
+`improve()` stored) as one entry, `{content, context_profile}`, rendered
+read-only for the `context_profile` option (`qa`, the default, or `agent`);
+it is empty without a session id or stored guidance. `tools` and `code` are valid names that fail with "not
 supported yet" before any source runs (SDK-1537). The `tools_trigger` option
 (`always` | `on_empty`) is validated, and has no effect until the `tools`
 source exists.

@@ -12,7 +12,9 @@
 
 use std::collections::HashSet;
 
-use cognee_session::{SessionManager, SessionStore};
+use cognee_session::{
+    CONTEXT_PROFILE_QA, SessionManager, SessionStore, build_active_context_block_for_profile_safe,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -73,6 +75,25 @@ pub struct RecallOptions {
     /// no effect until the `tools` lane exists (SDK-1537), because a recall
     /// whose sources include `tools` is refused by [`resolve_sources`].
     pub tools_trigger: ToolsTrigger,
+    /// The profile the `session_context` lane renders (Python's
+    /// `context_profile`, `recall.py:453`): `"qa"` or `"agent"`. `None` is
+    /// [`DEFAULT_CONTEXT_PROFILE`]. Not validated, as in Python: an unknown
+    /// profile renders nothing. Other lanes ignore it.
+    pub context_profile: Option<String>,
+}
+
+/// The `session_context` lane's profile when the caller names none (Python's
+/// `context_profile: str = "qa"`, `recall.py:453`).
+pub const DEFAULT_CONTEXT_PROFILE: &str = CONTEXT_PROFILE_QA;
+
+impl RecallOptions {
+    /// The profile the `session_context` lane renders: the caller's, or
+    /// [`DEFAULT_CONTEXT_PROFILE`].
+    pub fn context_profile_or_default(options: Option<&Self>) -> &str {
+        options
+            .and_then(|o| o.context_profile.as_deref())
+            .unwrap_or(DEFAULT_CONTEXT_PROFILE)
+    }
 }
 
 /// When recall's `tools` scope runs. Mirrors Python's `tools_trigger`
@@ -126,9 +147,8 @@ pub enum RecallSource {
     Trace,
     /// A note from recall itself, such as the memory still warming up.
     System,
-    /// The session's active context block (Python `_fetch_session_context`).
-    /// Nothing produces it yet: the `session_context` lane lands with SDK-1040
-    /// P2.
+    /// The session's active context block, from [`search_session_context`]
+    /// (Python `_fetch_session_context`, `recall.py:384-424`).
     SessionContext,
 }
 
@@ -180,9 +200,13 @@ const DEPRECATED_SCOPE_ALIASES: &[(&str, &str)] = &[("graph_context", "graph")];
 
 impl RecallScope {
     /// The concrete sources, in the canonical order Python uses when
-    /// expanding `"all"` (`entries.py:242`). Python's list also has
-    /// `session_context`, which joins it with SDK-1040 P2.
-    pub const ALL: &'static [Self] = &[Self::Graph, Self::Session, Self::Trace];
+    /// expanding `"all"` (`entries.py:242`).
+    pub const ALL: &'static [Self] = &[
+        Self::Graph,
+        Self::Session,
+        Self::Trace,
+        Self::SessionContext,
+    ];
 
     /// The scope's wire name, as `normalize_scope` accepts it.
     pub fn as_wire(&self) -> &'static str {
@@ -319,7 +343,7 @@ fn python_list_repr(items: &[&str]) -> String {
 /// mirroring Python's `normalize_scope` at `cognee/memory/entries.py:207-258`.
 ///
 /// - `None` -> `[Auto]` (Python: `["auto"]`).
-/// - `"all"` -> `[Graph, Session, Trace]`, plus `Tools` and then
+/// - `"all"` -> `[Graph, Session, Trace, SessionContext]`, plus `Tools` and then
 ///   `SessionFirst` when the caller supplied them next to `"all"`; `"code"`
 ///   never rides along (`entries.py:238-249`).
 /// - `"graph_context"` -> `Graph`, with a deprecation warning (Python's
@@ -684,6 +708,54 @@ pub async fn search_trace(
             }
         })
         .collect())
+}
+
+/// Mirrors Python `_fetch_session_context` (`recall.py:384-424`): the
+/// session's active context block for `context_profile`, as one item.
+///
+/// Read-only (`stamp_served` false, so no `last_served_at` is written) and
+/// fail-open: a store error renders nothing rather than failing the recall,
+/// as Python's builder does. Empty when the session id or the user is missing
+/// or empty (`recall.py:398-400`, `:712-714`), when no session manager is
+/// wired (`recall.py:405-406`), or when no entry of that profile renders
+/// (`recall.py:417-418`). Otherwise one item whose content is
+/// `{"content": <block>, "context_profile": <profile>}`
+/// (`ResponseSessionContextEntry`, `RecallResponse.py:17-20`); the wire
+/// `source` is added from [`RecallItem::source`].
+pub async fn search_session_context(
+    query_text: &str,
+    session_id: Option<&str>,
+    user_id: Option<&str>,
+    context_profile: &str,
+    sm: Option<&SessionManager>,
+) -> Result<Vec<RecallItem>, SearchError> {
+    let (Some(sid), Some(uid), Some(sm)) = (session_id, user_id, sm) else {
+        return Ok(vec![]);
+    };
+    if sid.is_empty() || uid.is_empty() {
+        return Ok(vec![]);
+    }
+    let (block, _served) = build_active_context_block_for_profile_safe(
+        sm,
+        sid,
+        Some(uid),
+        query_text,
+        context_profile,
+        false,
+        &[] as &[&str],
+    )
+    .await;
+    if block.is_empty() {
+        return Ok(vec![]);
+    }
+    Ok(vec![RecallItem {
+        source: RecallSource::SessionContext,
+        content: serde_json::json!({
+            "content": block,
+            "context_profile": context_profile,
+        }),
+        score: 1.0,
+    }])
 }
 
 /// A recall's graph search, decided once before anything runs: who asks, and
@@ -1319,27 +1391,26 @@ mod tests {
 
     #[test]
     fn test_normalize_scope_all_expands() {
+        let all = vec![
+            RecallScope::Graph,
+            RecallScope::Session,
+            RecallScope::Trace,
+            RecallScope::SessionContext,
+        ];
         let out = normalize_scope(Some(ScopeInput::from("all"))).expect("normalize");
-        assert_eq!(
-            out,
-            vec![RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
-        );
+        assert_eq!(out, all);
         // `"all"` mixed in with other values still expands to the canonical list.
         let out2 = normalize_scope(Some(ScopeInput::Many(vec![
             "session".to_string(),
             "all".to_string(),
         ])))
         .expect("normalize");
-        assert_eq!(
-            out2,
-            vec![RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
-        );
+        assert_eq!(out2, all);
     }
 
     /// Port of `test_normalize_scope_accepts_session_context`'s alias
     /// asserts (Python `3401da38a`): `graph_context` now means `graph`, and
-    /// `all` no longer carries it. Rust has no `session_context` lane yet, so
-    /// `session` stands in for it in the list case.
+    /// `all` no longer carries it.
     #[test]
     fn test_normalize_scope_maps_deprecated_graph_context_to_graph() {
         let out = normalize_scope(Some(ScopeInput::from("graph_context"))).expect("normalize");
@@ -1347,10 +1418,10 @@ mod tests {
 
         let out = normalize_scope(Some(ScopeInput::Many(vec![
             "graph_context".to_string(),
-            "session".to_string(),
+            "session_context".to_string(),
         ])))
         .expect("normalize");
-        assert_eq!(out, vec![RecallScope::Graph, RecallScope::Session]);
+        assert_eq!(out, vec![RecallScope::Graph, RecallScope::SessionContext]);
 
         // The alias and its replacement collapse into one source.
         let out = normalize_scope(Some(ScopeInput::Many(vec![
@@ -1420,9 +1491,15 @@ mod tests {
 
     #[test]
     fn recall_scope_all_constant_matches_canonical_order() {
+        // Python `entries.py:242`.
         assert_eq!(
             RecallScope::ALL,
-            &[RecallScope::Graph, RecallScope::Session, RecallScope::Trace,]
+            &[
+                RecallScope::Graph,
+                RecallScope::Session,
+                RecallScope::Trace,
+                RecallScope::SessionContext,
+            ]
         );
     }
 
@@ -1584,7 +1661,7 @@ mod tests {
     /// Python `recall.py:586-594`.
     #[test]
     fn resolve_sources_session_first_reorders_and_dedupes() {
-        use RecallScope::{Graph, Session, SessionFirst, Trace};
+        use RecallScope::{Graph, Session, SessionContext, SessionFirst, Trace};
         let expected = |sources: Vec<RecallScope>| ResolvedSources {
             sources,
             auto_fallthrough: true,
@@ -1609,7 +1686,7 @@ mod tests {
         all_first.push(SessionFirst);
         assert_eq!(
             resolve(&all_first, Some("s"), false, Some(SearchType::Chunks)),
-            expected(vec![Session, Graph, Trace])
+            expected(vec![Session, Graph, Trace, SessionContext])
         );
         // The query type and dataset filter do not matter for an explicit
         // scope, and without `session_first` nothing short-circuits.
@@ -2175,5 +2252,135 @@ mod tests {
             assert!(items.is_empty(), "caller {caller:?}: {items:?}");
         }
         assert!(retriever.seen.lock().expect("test mutex").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // search_session_context (Python `_fetch_session_context`)
+    // -----------------------------------------------------------------------
+
+    fn context_manager(dir: &tempfile::TempDir) -> SessionManager {
+        SessionManager::new(Arc::new(cognee_session::FsSessionStore::new(dir.path())))
+    }
+
+    async fn seed_context_entry(
+        manager: &SessionManager,
+        profile: &str,
+        section: &str,
+        content: &str,
+        id: &str,
+    ) {
+        let entry = cognee_session::SessionContextEntry {
+            id: id.to_string(),
+            section: section.to_string(),
+            context_profile: profile.to_string(),
+            content: content.to_string(),
+            normalized_content: cognee_session::normalize_content(content),
+            confidence: 0.9,
+            created_at: "2026-06-10T10:00:01".to_string(),
+            source_feedback_ids: Vec::new(),
+            source_trace_ids: Vec::new(),
+            helpful_count: 0,
+            harmful_count: 0,
+            priority: 0,
+            last_served_at: None,
+            embedding: None,
+            kind: cognee_session::CONTEXT_ENTRY_KIND.to_string(),
+        };
+        manager
+            .create_session_context_entry(Some("s"), Some("u"), entry.to_row().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn session_context_is_empty_without_a_session_user_or_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = context_manager(&dir);
+        seed_context_entry(&manager, "qa", "rules", "be concise", "q1").await;
+        let sm = Some(&manager);
+        for (session_id, user_id, sm) in [
+            (None, Some("u"), sm),
+            (Some(""), Some("u"), sm),
+            (Some("s"), None, sm),
+            (Some("s"), Some(""), sm),
+            (Some("s"), Some("u"), None),
+        ] {
+            let items = search_session_context("q", session_id, user_id, "qa", sm)
+                .await
+                .unwrap();
+            assert!(items.is_empty(), "{session_id:?} {user_id:?}: {items:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_context_is_empty_when_nothing_renders() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = context_manager(&dir);
+        let none = search_session_context("q", Some("s"), Some("u"), "qa", Some(&manager))
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+        // Entries of another profile render nothing for this one.
+        seed_context_entry(&manager, "agent", "tool_rules", "use uv run", "a1").await;
+        let none = search_session_context("q", Some("s"), Some("u"), "qa", Some(&manager))
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_context_returns_one_item_with_the_block_and_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = context_manager(&dir);
+        seed_context_entry(&manager, "qa", "rules", "be concise", "q1").await;
+        seed_context_entry(&manager, "agent", "tool_rules", "use uv run", "a1").await;
+
+        let items = search_session_context("q", Some("s"), Some("u"), "agent", Some(&manager))
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.source, RecallSource::SessionContext);
+        assert_eq!(item.score, 1.0);
+        assert_eq!(item.content["context_profile"], "agent");
+        let block = item.content["content"].as_str().expect("block is a string");
+        assert!(block.starts_with("## Active session guidance\n"), "{block}");
+        assert!(
+            block.contains("### Tool rules\n- [10:00:01] use uv run"),
+            "{block}"
+        );
+        assert!(!block.contains("be concise"), "{block}");
+        assert_eq!(
+            item.content.as_object().map(|o| o.len()),
+            Some(2),
+            "only content and context_profile: {}",
+            item.content
+        );
+        // Read-only: no `last_served_at` stamp.
+        for row in manager
+            .get_session_context_entries(Some("s"), Some("u"))
+            .await
+            .unwrap()
+        {
+            assert!(row["last_served_at"].is_null(), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn context_profile_defaults_to_qa() {
+        assert_eq!(RecallOptions::context_profile_or_default(None), "qa");
+        let options = RecallOptions::default();
+        assert_eq!(
+            RecallOptions::context_profile_or_default(Some(&options)),
+            "qa"
+        );
+        let options = RecallOptions {
+            context_profile: Some("agent".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            RecallOptions::context_profile_or_default(Some(&options)),
+            "agent"
+        );
     }
 }
