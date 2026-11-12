@@ -74,8 +74,9 @@ asks for the short-circuit explicitly, whatever else the call carries.
 `session_context` returns the session's active guidance block (the lessons
 `improve()` stored) as one entry, `{content, context_profile}`, rendered
 read-only for the `context_profile` option (`qa`, the default, or `agent`);
-it is empty without a session id or stored guidance. `tools` and `code` are valid names that fail with "not
-supported yet" before any source runs (SDK-1537). The `tools_trigger` option
+it is empty without a session id or stored guidance. `tools` and `code` are
+valid names that fail with "not supported yet" before any source runs
+(SDK-1537). The `tools_trigger` option
 (`always` | `on_empty`) is validated, and has no effect until the `tools`
 source exists.
 
