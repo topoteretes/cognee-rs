@@ -1729,8 +1729,10 @@ impl DeleteService {
 
         // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
         // nil `data_id`, so the queries above never see them; find them through
-        // their endpoints instead. They only contribute `EdgeType` points: no
-        // Triplet is indexed for a structural edge.
+        // their endpoints instead. Each has an endpoint in `nodes`, so its edge
+        // leaves the graph with it: its `EdgeType` text is weighed below and its
+        // legacy `Triplet_text` point goes (Rust's cognify never wrote one for a
+        // structural edge, but Python's did, for every graph edge).
         let structural_edges = self
             .database
             .get_structural_edges_for_data(data_id, dataset_id, self.claimant_scope())
@@ -1780,9 +1782,13 @@ impl DeleteService {
         let edge_type_ids = self
             .edge_type_ids_to_delete(data_id, dataset_id, &edges, &structural_edges)
             .await?;
-        let (vp, vw) =
-            delete_vector_artifacts(self.vector_db.as_ref(), &nodes, &edges, &edge_type_ids)
-                .await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &triplet_edges(&structural_edges, &edges, &nodes),
+            &edge_type_ids,
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -2700,10 +2706,11 @@ pub(crate) async fn delete_graph_artifacts(
     }
 }
 
-/// The edge rows whose legacy `Triplet_text` point a dataset delete in a
-/// shared store removes: those no other dataset's row names (`unique_edges`),
-/// and those with an endpoint the delete takes out of the graph
-/// (`deleted_nodes`), deduplicated.
+/// The edge rows whose legacy `Triplet_text` point a delete removes: those no
+/// other owner's row names (`unique_edges`), and those of `edges` with an
+/// endpoint the delete takes out of the graph (`deleted_nodes`),
+/// deduplicated. Used by the shared-store dataset delete and by the
+/// data-scoped delete (whose `edges` are its structural rows).
 ///
 /// The point is one-to-one with an edge (source, text, target), and the graph
 /// loses an edge only with one of its endpoints. The second set is needed
@@ -8808,15 +8815,22 @@ mod tests {
         );
     }
 
-    /// Structural rows are keyed on their relationship text (`edge_slug`), so
-    /// every dataset's `is_part_of` rows share one slug and a slug check alone
-    /// would call A's own chunk-to-document edge shared with B. Its legacy
-    /// `Triplet_text` point is one-to-one with the edge, and the edge leaves
-    /// the graph with A's chunk, so the point goes; B's stays.
-    #[tokio::test]
-    async fn dataset_delete_drops_legacy_triplets_of_its_own_structural_edges() {
+    /// Two datasets of one owner, `struct_a` and `struct_b`, each with one
+    /// data item whose chunk and document are joined by a structural
+    /// `is_part_of` row (nil `data_id`, slug keyed on the text alone, so both
+    /// rows share it) that has a legacy `Triplet_text` point. Returns the
+    /// service, the vector store, the owner, each dataset's
+    /// `(dataset_id, data_id)` and the two structural rows.
+    async fn seed_structural_triplet_datasets() -> (
+        DeleteService,
+        Arc<MockVectorDB>,
+        Uuid,
+        Vec<(Uuid, Uuid)>,
+        Vec<GraphEdge>,
+    ) {
         let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
         let owner = Uuid::new_v4();
+        let mut items = Vec::new();
         let mut structural = Vec::new();
         for name in ["struct_a", "struct_b"] {
             let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, name).await;
@@ -8848,9 +8862,33 @@ mod tests {
             ops::graph_storage::upsert_edges(&db, std::slice::from_ref(&edge))
                 .await
                 .unwrap();
+            items.push((dataset_id, data_id));
             structural.push(edge);
         }
         seed_legacy_triplet_points(&vector_db, &structural).await;
+        (svc, vector_db, owner, items, structural)
+    }
+
+    /// The `Triplet_text` point ids of `edges` still in `vector_db`.
+    async fn surviving_triplets(vector_db: &MockVectorDB, edges: &[GraphEdge]) -> Vec<Uuid> {
+        let ids: Vec<Uuid> = edges.iter().map(triplet_vector_id).collect();
+        vector_db
+            .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &ids)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|found| found.id)
+            .collect()
+    }
+
+    /// Structural rows are keyed on their relationship text (`edge_slug`), so
+    /// every dataset's `is_part_of` rows share one slug and a slug check alone
+    /// would call A's own chunk-to-document edge shared with B. Its legacy
+    /// `Triplet_text` point is one-to-one with the edge, and the edge leaves
+    /// the graph with A's chunk, so the point goes; B's stays.
+    #[tokio::test]
+    async fn dataset_delete_drops_legacy_triplets_of_its_own_structural_edges() {
+        let (svc, vector_db, owner, _items, structural) = seed_structural_triplet_datasets().await;
         let request = DeleteRequest {
             scope: DeleteScope::Dataset {
                 owner_id: owner,
@@ -8860,21 +8898,14 @@ mod tests {
             mode: DeleteMode::Soft,
             memory_only: false,
         };
-        let surviving = || async {
-            let ids: Vec<Uuid> = structural.iter().map(triplet_vector_id).collect();
-            vector_db
-                .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &ids)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|found| found.id)
-                .collect::<Vec<_>>()
-        };
 
         let preview = svc.preview(&request).await.unwrap();
         let result = svc.execute(&request).await.unwrap();
 
-        assert_eq!(surviving().await, vec![triplet_vector_id(&structural[1])]);
+        assert_eq!(
+            surviving_triplets(&vector_db, &structural).await,
+            vec![triplet_vector_id(&structural[1])]
+        );
         // A's triplet point; the shared `is_part_of` EdgeType text has no
         // point here, and the nodes index no field.
         assert_eq!(
@@ -8884,5 +8915,34 @@ mod tests {
             ),
             (1, 1)
         );
+    }
+
+    /// The data-scoped delete drops the legacy `Triplet_text` point of a
+    /// structural row it removes, as the dataset delete does: the row leaves
+    /// the ledger and its edge leaves the graph with the item's chunk.
+    /// Python's cognify indexed a triplet for every graph edge, structural
+    /// ones included (`_create_triplets_from_graph`), so a store it built has
+    /// them. The other dataset's point stays.
+    #[tokio::test]
+    async fn data_delete_drops_legacy_triplets_of_its_structural_edges() {
+        let (svc, vector_db, _owner, items, structural) = seed_structural_triplet_datasets().await;
+        let (dataset_id, data_id) = items[0];
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id,
+                data_id,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = svc.execute(&request).await.unwrap();
+
+        assert_eq!(
+            surviving_triplets(&vector_db, &structural).await,
+            vec![triplet_vector_id(&structural[1])]
+        );
+        assert_eq!(result.deleted_vector_points, 1);
     }
 }
