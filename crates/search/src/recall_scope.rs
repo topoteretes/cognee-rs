@@ -400,8 +400,12 @@ pub struct ResolvedSources {
 /// - `[Auto]` resolves by what the caller supplied (`recall.py:575-585`):
 ///   - `session_id` with no dataset filter and no `query_type` ->
 ///     `[Session, Graph]`, a session hit skipping the graph;
-///   - `session_id` otherwise -> `[Session, Graph]`, both contributing;
-///   - no `session_id` -> `[Graph]`.
+///   - `session_id` with a dataset filter and no `query_type` ->
+///     `[Session, Graph]`, both contributing;
+///   - otherwise (no `session_id`, or a `query_type`) -> `[Graph]`.
+///
+///   An empty `session_id` counts as none, as Python's truthiness check
+///   does.
 /// - Any other list containing `SessionFirst` -> `[Session, Graph]` followed
 ///   by the rest of the list without `SessionFirst`, `Session` and `Graph`,
 ///   a session hit skipping the graph (`recall.py:586-594`).
@@ -423,10 +427,13 @@ pub fn resolve_sources(
     };
 
     let resolved = if normalized.as_slice() == [RecallScope::Auto] {
-        let (sources, auto_fallthrough) = match (session_id, has_dataset_filter, query_type) {
-            (Some(_), false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
-            (Some(_), _, _) => (vec![RecallScope::Session, RecallScope::Graph], false),
-            (None, _, _) => (vec![RecallScope::Graph], false),
+        // `if session_id and not has_dataset_scope and query_type is None`
+        // / `elif session_id and query_type is None` / `else`.
+        let has_session = session_id.is_some_and(|id| !id.is_empty());
+        let (sources, auto_fallthrough) = match (has_session, has_dataset_filter, query_type) {
+            (true, false, None) => (vec![RecallScope::Session, RecallScope::Graph], true),
+            (true, true, None) => (vec![RecallScope::Session, RecallScope::Graph], false),
+            _ => (vec![RecallScope::Graph], false),
         };
         ResolvedSources {
             sources,
@@ -1483,10 +1490,20 @@ mod tests {
             resolve(&[Auto], Some("s"), true, None),
             fallthrough(vec![Session, Graph], false)
         );
-        // Session with a query type: both contribute.
+        // Session with a query type, with or without a dataset filter: graph
+        // only (`elif session_id and query_type is None`).
         assert_eq!(
             resolve(&[Auto], Some("s"), false, Some(SearchType::Chunks)),
-            fallthrough(vec![Session, Graph], false)
+            fallthrough(vec![Graph], false)
+        );
+        assert_eq!(
+            resolve(&[Auto], Some("s"), true, Some(SearchType::Chunks)),
+            fallthrough(vec![Graph], false)
+        );
+        // An empty session id is no session id (Python truthiness).
+        assert_eq!(
+            resolve(&[Auto], Some(""), false, None),
+            fallthrough(vec![Graph], false)
         );
         // No session: graph only.
         assert_eq!(

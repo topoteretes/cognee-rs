@@ -190,6 +190,40 @@ async fn test_scope_auto_without_session_id_uses_graph_path() {
     );
 }
 
+/// Python `recall.py:576-585`: with a session id and a pinned query type,
+/// `auto` is graph only (`elif session_id and query_type is None`), so the
+/// seeded session entry does not answer.
+#[tokio::test]
+async fn test_scope_auto_with_session_id_and_query_type_uses_graph_only() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "what is rust", "a systems language").await;
+
+    let result = recall(
+        "rust language",
+        Some(SearchType::HybridCompletion),
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        None,
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(!result.items.is_empty(), "the graph should answer");
+    assert!(
+        result.items.iter().all(|i| i.source == RecallSource::Graph),
+        "auto with a query type must not read the session; got {:?}",
+        result.items.iter().map(|i| i.source).collect::<Vec<_>>()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // explicit scope per source
 // ---------------------------------------------------------------------------

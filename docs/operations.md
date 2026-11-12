@@ -65,13 +65,15 @@ session history when given a `--session-id`) and graph-backed. Results are
 returned to the caller (printed to stdout by the CLI).
 
 The `scope` picks the sources: `graph`, `session`, `trace`, `all`, or `auto`
-(the default), which reads the session first and skips the graph on a session
-hit when a session id is given with no dataset filter and no query type.
-`session_first` asks for that short-circuit explicitly, whatever else the call
-carries. `session_context` is accepted, but its source is not wired yet
-(SDK-1040). `tools` and `code` are valid names that fail with "not supported
-yet" before any source runs (SDK-1537); the `tools_trigger` option
-(`always` | `on_empty`) is validated for the same reason.
+(the default). With a session id and no query type, `auto` reads the session
+and then the graph: with no dataset filter a session hit skips the graph, with
+one both contribute. Without a session id, or with a query type, `auto` reads
+the graph only. `session_first` asks for the short-circuit explicitly, whatever
+else the call carries. `session_context` is accepted, but its source is not
+wired yet (SDK-1040). `tools` and `code` are valid names that fail with "not
+supported yet" before any source runs (SDK-1537). The `tools_trigger` option
+(`always` | `on_empty`) is validated, and has no effect until the `tools`
+source exists.
 
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 

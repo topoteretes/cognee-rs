@@ -62,9 +62,9 @@ pub struct RecallResult {
 ///    - `[Auto]` with `session_id` set + no datasets + no query_type ->
 ///      `[Session, Graph]` with `auto_fallthrough=true` (graph
 ///      short-circuited on session hit).
-///    - `[Auto]` with `session_id` set otherwise -> `[Session, Graph]`, both
-///      contribute.
-///    - `[Auto]` without `session_id` -> `[Graph]`.
+///    - `[Auto]` with `session_id` set, a dataset filter and no query_type
+///      -> `[Session, Graph]`, both contribute.
+///    - `[Auto]` otherwise (no `session_id`, or a query_type) -> `[Graph]`.
 ///    - An explicit `session_first` -> `[Session, Graph, ..rest]` with
 ///      `auto_fallthrough=true`.
 ///
