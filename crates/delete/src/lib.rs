@@ -1547,6 +1547,30 @@ impl DeleteService {
         Ok(collections)
     }
 
+    /// Every provenance node row of `dataset_id`.
+    async fn dataset_node_rows(&self, dataset_id: Uuid) -> Result<Vec<GraphNode>, DeleteError> {
+        self.database
+            .get_nodes_by_dataset(dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to get provenance nodes for dataset {dataset_id}: {e}"
+                ))
+            })
+    }
+
+    /// How many provenance node rows `dataset_id` has.
+    async fn dataset_node_count(&self, dataset_id: Uuid) -> Result<usize, DeleteError> {
+        self.database
+            .count_nodes_by_dataset(dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to count provenance nodes for dataset {dataset_id}: {e}"
+                ))
+            })
+    }
+
     /// Dataset-scoped cleanup: remove graph nodes and vector points based on
     /// the provenance `nodes`/`edges` tables. Returns `(graph_nodes_deleted,
     /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
@@ -1559,16 +1583,6 @@ impl DeleteService {
         let mut graph_node_count = 0usize;
         let mut vector_point_count = 0usize;
 
-        let nodes = self
-            .database
-            .get_nodes_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to get provenance nodes for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
         let edges = self
             .database
             .get_edges_by_dataset(dataset_id)
@@ -1578,11 +1592,12 @@ impl DeleteService {
                     "Failed to get provenance edges for dataset {dataset_id}: {e}"
                 ))
             })?;
-
-        let prov_node_count = nodes.len();
         let prov_edge_count = edges.len();
+        let prov_node_count;
 
         if let Some(storage) = &self.dataset_storage {
+            let nodes = self.dataset_node_rows(dataset_id).await?;
+            prov_node_count = nodes.len();
             // The dataset's own databases go whole: nothing in them belongs to
             // another dataset. Done even when the ledger is empty, so a
             // provisioned-but-never-cognified dataset leaves nothing behind.
@@ -1597,11 +1612,14 @@ impl DeleteService {
             // The dataset's own vector store is gone and was never reachable
             // from here, so no legacy `Triplet_text` point is counted; the
             // preview counts the same way.
-            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
+            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
             graph_node_count += gn;
             vector_point_count += vp;
         } else {
-            if nodes.is_empty() && edges.is_empty() {
+            // Only the count of the dataset's node rows is needed here: what
+            // leaves the stores is the unshared subset, selected below.
+            prov_node_count = self.dataset_node_count(dataset_id).await?;
+            if prov_node_count == 0 && edges.is_empty() {
                 return Ok((0, 0, 0, 0, warnings));
             }
 
@@ -2094,17 +2112,6 @@ impl DeleteService {
         let mut shared_edges: Vec<GraphEdge> = Vec::new();
 
         for dataset in &targets.datasets_to_delete {
-            let nodes = self
-                .database
-                .get_nodes_by_dataset(dataset.id)
-                .await
-                .map_err(|e| {
-                    DeleteError::Runtime(format!(
-                        "Failed to count provenance nodes for dataset {}: {e}",
-                        dataset.id
-                    ))
-                })?;
-
             let edges = self
                 .database
                 .get_edges_by_dataset(dataset.id)
@@ -2116,16 +2123,18 @@ impl DeleteService {
                     ))
                 })?;
 
-            prov_nodes += nodes.len();
             prov_edges += edges.len();
             if shared_store {
                 // Counted for the whole set below.
+                prov_nodes += self.dataset_node_count(dataset.id).await?;
                 shared_edges.extend(edges);
             } else {
                 // Per-dataset storage: the dataset's points live in its own
                 // store, which execution drops whole without probing it (see
                 // `cleanup_dataset`).
-                let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
+                let nodes = self.dataset_node_rows(dataset.id).await?;
+                prov_nodes += nodes.len();
+                let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
                 graph_nodes += gn;
                 vector_points += vp;
             }
@@ -2734,22 +2743,19 @@ fn triplet_edges(
         .collect()
 }
 
-/// The graph nodes and vector points a dataset's ledger rows account for:
-/// what a dataset delete reports, previewed or executed.
-///
-/// `store` is the vector store the edge points are probed in (see
-/// [`ledger_edge_point_count`]); `None` for a dataset whose own databases are
-/// dropped whole and cannot be probed from here.
-async fn ledger_artifact_counts(
-    store: Option<&Arc<dyn VectorDB>>,
-    nodes: &[GraphNode],
-    edges: &[GraphEdge],
-) -> (usize, usize) {
+/// The graph nodes and vector points the ledger rows of a dataset under
+/// per-dataset storage account for: what its delete reports, previewed or
+/// executed. Its own databases are dropped whole and cannot be probed from
+/// here, so every distinct `EdgeType` id of a text-bearing edge counts and no
+/// legacy `Triplet_text` point does.
+fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, usize) {
     let (graph_nodes, node_points) = ledger_node_counts(nodes);
-    (
-        graph_nodes,
-        node_points + ledger_edge_point_count(store, edges).await,
-    )
+    let edge_type_points = edges
+        .iter()
+        .filter_map(edge_type_vector_id)
+        .collect::<BTreeSet<Uuid>>()
+        .len();
+    (graph_nodes, node_points + edge_type_points)
 }
 
 /// The graph nodes (unique slugs) and the node vector points (one per
@@ -2769,27 +2775,16 @@ fn ledger_node_counts(nodes: &[GraphNode]) -> (usize, usize) {
     (unique_slugs.len(), node_points.len())
 }
 
-/// The `EdgeType_relationship_name` and legacy `Triplet_text` points the
-/// ledger `edges` account for.
+/// The `EdgeType_relationship_name` points among `edge_type_ids` and the
+/// legacy `Triplet_text` points of `triplet_edges` that a shared-store delete
+/// removes.
 ///
 /// With a `store`, a point counts only when it exists, once however many
-/// edges name it ([`existing_edge_type_vector_ids`],
-/// [`existing_triplet_vector_ids`]): what the run deletes. A failed probe
-/// counts none and logs a warning; the preview stays available, while the
-/// run then fails on `EdgeType` and skips `Triplet_text` (best-effort, as in
-/// Python). With no store (a dataset whose own databases are dropped whole)
-/// the distinct `EdgeType` ids of text-bearing edges are counted, and no
-/// `Triplet_text` point.
-async fn ledger_edge_point_count(store: Option<&Arc<dyn VectorDB>>, edges: &[GraphEdge]) -> usize {
-    let edge_type_ids: Vec<Uuid> = edges.iter().filter_map(edge_type_vector_id).collect();
-    edge_point_count(store, &edge_type_ids, edges).await
-}
-
-/// The `EdgeType_relationship_name` points among `edge_type_ids` and the
-/// legacy `Triplet_text` points of `triplet_edges`, counted as
-/// [`ledger_edge_point_count`] counts them: with a `store`, only the points
-/// that exist, once each (a failed probe counts none and logs a warning);
-/// without one, the distinct `EdgeType` ids and no `Triplet_text` point.
+/// edges name it ([`existing_vector_ids`], [`existing_triplet_vector_ids`]):
+/// what the run deletes. A failed probe counts none and logs a warning; the
+/// preview stays available, while the run then fails on `EdgeType` and skips
+/// `Triplet_text` (best-effort, as in Python). With no vector store
+/// configured, the distinct `EdgeType` ids count and no `Triplet_text` point.
 async fn edge_point_count(
     store: Option<&Arc<dyn VectorDB>>,
     edge_type_ids: &[Uuid],
@@ -4779,8 +4774,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ledger_artifact_counts(Some(&store), &[], std::slice::from_ref(&edge)).await,
-            (0, 0),
+            edge_point_count(Some(&store), &[], std::slice::from_ref(&edge)).await,
+            0,
             "a failed lookup counts no Triplet point, as the run deletes none"
         );
     }

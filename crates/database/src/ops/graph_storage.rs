@@ -152,6 +152,31 @@ pub async fn get_nodes_by_dataset(
     Ok(rows)
 }
 
+/// Count the provenance node rows of a dataset, without loading them.
+#[instrument(
+    name = "cognee.db.relational.graph_storage.count_nodes_by_dataset",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn count_nodes_by_dataset(
+    db: &DatabaseConnection,
+    dataset_id: Uuid,
+) -> Result<usize, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let count = node::Entity::find()
+        .filter(node::Column::DatasetId.eq(uuid_hex::to_hex(dataset_id)))
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
+    Ok(count as usize)
+}
+
 #[instrument(
     name = "cognee.db.relational.graph_storage.delete_nodes_by_data",
     level = "info",
@@ -1398,10 +1423,10 @@ pub async fn get_edges_for_run(
 /// run, another dataset, or (when narrowed) a data item this sweep is keeping.
 /// Only those rows are safe to remove from the graph and vector stores.
 ///
-/// Note the dataset clause runs the opposite way to [`get_unique_nodes_for_data`],
-/// which only treats *same-dataset* rows as claimants. OSS Rust has one graph
-/// store shared by every dataset and `slug` is the content-addressed graph node
-/// id, so two datasets mentioning the same entity share one physical node;
+/// Rows of every other dataset are claimants, as they are for
+/// [`get_unique_nodes_for_data`] under [`ClaimantScope::AnyDataset`]. With one
+/// graph store shared by every dataset, `slug` is the content-addressed graph
+/// node id, so two datasets mentioning the same entity share one physical node;
 /// deleting it while another dataset's ownership row still names it would
 /// corrupt that dataset. Leaving an extra artifact behind is recoverable —
 /// a later sweep or a dataset delete removes it — so the predicate errs that

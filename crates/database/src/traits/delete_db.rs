@@ -134,6 +134,9 @@ pub trait DeleteDb: Send + Sync {
     async fn get_nodes_by_dataset(&self, dataset_id: Uuid)
     -> Result<Vec<GraphNode>, DatabaseError>;
 
+    /// Count the provenance node rows of a dataset without loading them.
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError>;
+
     /// Get all provenance edge rows for a dataset.
     async fn get_edges_by_dataset(&self, dataset_id: Uuid)
     -> Result<Vec<GraphEdge>, DatabaseError>;
@@ -384,6 +387,10 @@ impl DeleteDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<Vec<GraphNode>, DatabaseError> {
         graph_storage::get_nodes_by_dataset(self, dataset_id).await
+    }
+
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError> {
+        graph_storage::count_nodes_by_dataset(self, dataset_id).await
     }
 
     async fn get_edges_by_dataset(

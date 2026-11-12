@@ -128,6 +128,10 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::get_nodes_by_dataset(self.inner.as_ref(), dataset_id).await
     }
 
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError> {
+        DeleteDb::count_nodes_by_dataset(self.inner.as_ref(), dataset_id).await
+    }
+
     async fn get_edges_by_dataset(
         &self,
         dataset_id: Uuid,
