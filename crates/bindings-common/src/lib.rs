@@ -34,7 +34,7 @@ pub mod wire;
 // Top-level re-exports for ergonomic `use cognee_bindings_common::SdkError` etc.
 pub use error::SdkError;
 pub use graph_backend::{GraphBackendFactory, register_graph_backend};
-pub use handle::{DefaultUserBootstrap, HandleState};
+pub use handle::{DefaultUserBootstrap, HandleState, ReadableDatasets};
 pub use redact::{config_key_aliases, config_snapshot, redact_config_json};
 pub use services::CogneeServices;
 pub use settings_keys::canonical_settings_key;

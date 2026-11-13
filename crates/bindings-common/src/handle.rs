@@ -49,6 +49,28 @@ pub trait DefaultUserBootstrap: Send + Sync {
     async fn bootstrap(&self, db: &Arc<dyn RelationalDb>, email: &str) -> Result<User, SdkError>;
 }
 
+/// Optional seam for the datasets a caller may read, used to resolve recall's
+/// session-cache owner.
+///
+/// Session-cache entries are keyed by the session's owner, and Python's local
+/// `recall()` resolves that owner from the caller's dataset read grants
+/// (`_resolve_session_cache_user_id`, `recall.py:181-250`, at `:272`, `:330`,
+/// `:401`). OSS has no grant table, so with no hook (the default) the set is
+/// empty and every session lane reads the caller's own cache. A downstream
+/// build with dataset ACL attaches one, and recall's session, trace and
+/// session_context lanes then read a granted session's owner's entries.
+#[async_trait::async_trait]
+pub trait ReadableDatasets: Send + Sync {
+    /// The ids of the datasets `user_id` may read in `tenant_id`. `db` is the
+    /// handle's database.
+    async fn readable_dataset_ids(
+        &self,
+        db: &Arc<dyn RelationalDb>,
+        user_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Vec<Uuid>, SdkError>;
+}
+
 /// The shareable inner state of a binding handle.
 ///
 /// Kept in its own `Arc` (separate from the Neon `JsBox` or C opaque pointer)
@@ -68,6 +90,9 @@ pub struct HandleState {
     /// keeps the DB-free in-memory derivation; a downstream build can attach
     /// an impl that persists the `users` row.
     bootstrap: Option<Arc<dyn DefaultUserBootstrap>>,
+    /// Optional dataset read-grant hook for recall's session-cache owner.
+    /// `None` (the OSS default) leaves only the caller's own sessions.
+    readable_datasets: Option<Arc<dyn ReadableDatasets>>,
     /// Set by [`HandleState::close`] (the *explicit* teardown). Once set,
     /// [`HandleState::services`] fails instead of re-warming, so a use-after-close
     /// surfaces as a clear error rather than silently reopening the database.
@@ -121,6 +146,7 @@ impl HandleState {
             owner_id: TokioMutex::new(None),
             tenant_id: None,
             bootstrap: None,
+            readable_datasets: None,
             closed: AtomicBool::new(false),
         }
     }
@@ -161,6 +187,19 @@ impl HandleState {
     pub fn with_application_access_control(self) -> Self {
         self.cm.config().set_application_access_control(true);
         self
+    }
+
+    /// Attach a dataset read-grant hook (builder), so recall reads a session
+    /// the caller may read through a dataset grant under its owner. See
+    /// [`ReadableDatasets`].
+    pub fn with_readable_datasets(mut self, hook: Arc<dyn ReadableDatasets>) -> Self {
+        self.readable_datasets = Some(hook);
+        self
+    }
+
+    /// The configured dataset read-grant hook, if any.
+    pub(crate) fn readable_datasets(&self) -> Option<&Arc<dyn ReadableDatasets>> {
+        self.readable_datasets.as_ref()
     }
 
     /// The configured default-user bootstrap hook, if any.
