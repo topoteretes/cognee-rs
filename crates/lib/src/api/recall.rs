@@ -11,7 +11,8 @@
 //!
 //! As of LIB-08 the scope-routing primitives (`RecallScope`, `RecallSource`,
 //! `ScopeInput`, `RecallItem`, `normalize_scope`) and the source helpers
-//! (`search_session`, `search_trace`, `run_graph`) live
+//! (`search_session`, `search_trace`, `search_session_context`, `run_graph`)
+//! live
 //! in `cognee_search::recall_scope`. They are re-exported here so existing
 //! call sites (`api::mod.rs`, `lib.rs::prelude`, integration tests) compile
 //! unchanged.
@@ -22,7 +23,7 @@ use cognee_search::observability::{
 };
 use cognee_search::recall_scope::{
     ResolvedSources, has_dataset_filter, plan_graph, resolve_sources, run_graph, search_session,
-    search_trace,
+    search_session_context, search_trace,
 };
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
@@ -176,8 +177,15 @@ pub async fn recall(
             | RecallScope::SessionFirst
             | RecallScope::Tools
             | RecallScope::Code => continue,
-            // The `session_context` lane lands with SDK-1040 P2.
-            RecallScope::SessionContext => Vec::new(),
+            RecallScope::SessionContext => search_session_context(
+                query_text,
+                session_id,
+                user_id,
+                RecallOptions::context_profile_or_default(options.as_ref()),
+                session_manager,
+            )
+            .await
+            .map_err(|e| ApiError::Search(e.to_string()))?,
             RecallScope::Session => {
                 search_session(query_text, session_id, user_id, top_k, session_store)
                     .await

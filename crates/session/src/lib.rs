@@ -55,7 +55,8 @@ pub use context_builder::{
     CandidateContextUpdate, ContextRanker, DEFAULT_PER_SECTION_CHAR_BUDGET,
     DEFAULT_TOTAL_CHAR_BUDGET, DeterministicRanker, MIN_CANDIDATE_CONFIDENCE, NET_HELP_CLAMP,
     SECTION_HEADINGS, apply_candidate_updates, apply_candidate_updates_for_user,
-    build_active_context_block, build_active_context_block_safe, build_active_context_selection,
+    build_active_context_block, build_active_context_block_for_profile_safe,
+    build_active_context_block_safe, build_active_context_selection,
     build_active_context_selection_safe, clamped_net_helpfulness, fit_preference_lines,
     headings_for_profile, render_preference_block, select_context_entries, stamp_served_entries,
 };

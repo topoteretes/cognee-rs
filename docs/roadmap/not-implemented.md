@@ -119,11 +119,12 @@ Partial stages:
   extract_live_agent_context` / `extract_pending_agent_context`. The rendered session guidance
   block (`cognee_session::build_active_context_block`, SDK-1045) is ported and served on
   session searches for the `qa` profile; the `agent` profile renders through the same builder
-  but nothing serves it into a prompt yet.
-- **Recall `session_context` scope** — Python's recall (`_fetch_session_context`) serves the
-  rendered guidance block (built with `stamp_served=False`) for the `session_context` scope.
-  Neither `cognee::api::recall` nor the HTTP `/recall` router renders it; the builder
-  (`cognee_session::build_active_context_block`) is ready for it.
+  and is returned by recall's `session_context` scope, but nothing serves it into a prompt
+  yet.
+- **Recall `session_context` owner** — the `session_context` scope (SDK-1040) renders the
+  caller's own entries. Python first resolves the session's cache owner
+  (`_resolve_session_cache_user_id`), so a caller with read access to another user's session
+  dataset sees that user's guidance; that lands with SDK-1040 P3.
 - **`TRIPLET_COMPLETION` preference lines** — Python treats it as an alias of
   `GRAPH_COMPLETION`, whose session guidance merges the user's durable preference lines into
   the `Preferences` section. Rust's `TripletRetriever` has no graph store to read preferences
