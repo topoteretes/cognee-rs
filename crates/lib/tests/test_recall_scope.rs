@@ -5,17 +5,21 @@
 )]
 //! Integration tests for `recall()` scope widening (LIB-07).
 //!
-//! Validates Python parity (`cognee/api/v1/recall/recall.py:317-531`,
-//! `cognee/memory/entries.py:81-115`) for:
+//! Validates Python parity (`cognee/api/v1/recall/recall.py:574-594`,
+//! `cognee/memory/entries.py:207-258`) for:
 //!   * `auto` resolution per `(session_id, datasets, query_type)`,
+//!   * the explicit `session_first` short-circuit,
+//!   * `tools` / `code` refused before any source runs (SDK-1537),
 //!   * scope-driven source fan-out across `graph` / `session` / `trace`
 //!     (`graph_context` is a deprecated alias of `graph`),
 //!   * graceful degradation when `session_id` is `None`,
-//!   * Rust-only ergonomics: empty `Vec<RecallScope>` collapses to `[Auto]`.
+//!   * an explicit empty scope list runs nothing (`normalize_scope([])` ->
+//!     `[]`), while an absent scope (`None`) is auto.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee::api::ApiError;
 use cognee::api::recall::{RecallScope, RecallSource, ScopeInput, normalize_scope, recall};
 use cognee_search::orchestration::SearchTypeRegistry;
 use cognee_search::retrievers::SearchRetriever;
@@ -184,6 +188,40 @@ async fn test_scope_auto_without_session_id_uses_graph_path() {
     assert!(
         result.items.iter().all(|i| i.source == RecallSource::Graph),
         "all items should be graph-tagged when session_id is None"
+    );
+}
+
+/// Python `recall.py:576-585`: with a session id and a pinned query type,
+/// `auto` is graph only (`elif session_id and query_type is None`), so the
+/// seeded session entry does not answer.
+#[tokio::test]
+async fn test_scope_auto_with_session_id_and_query_type_uses_graph_only() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "what is rust", "a systems language").await;
+
+    let result = recall(
+        "rust language",
+        Some(SearchType::HybridCompletion),
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        None,
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(!result.items.is_empty(), "the graph should answer");
+    assert!(
+        result.items.iter().all(|i| i.source == RecallSource::Graph),
+        "auto with a query type must not read the session; got {:?}",
+        result.items.iter().map(|i| i.source).collect::<Vec<_>>()
     );
 }
 
@@ -395,6 +433,35 @@ async fn test_scope_session_without_session_id_returns_empty() {
     );
 }
 
+/// Python: `normalize_scope([])` -> `[]`, so `recall(scope=[])` runs no lane
+/// and returns `[]`, even with a session id and a graph that would answer.
+#[tokio::test]
+async fn test_scope_explicit_empty_list_runs_nothing() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "q1", "a1").await;
+
+    let result = recall(
+        "q1",
+        None,
+        None,
+        None,
+        10,
+        false,
+        Some("s1"),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![]),
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(result.items.is_empty(), "an empty scope runs no source");
+    assert!(result.search_type_used.is_none(), "the graph did not run");
+}
+
 #[tokio::test]
 async fn test_scope_unknown_value_returns_error() {
     let err = normalize_scope(Some(ScopeInput::from("bogus_scope"))).expect_err("should error");
@@ -408,7 +475,154 @@ async fn test_scope_unknown_value_returns_error() {
         "expected unknown value to appear in error; got: {msg}"
     );
     assert!(
-        msg.contains(r#"["all", "auto", "graph", "graph_context", "session", "trace"]"#),
+        msg.contains(
+            r#"['all', 'auto', 'code', 'graph', 'graph_context', 'session', 'session_context', 'session_first', 'tools', 'trace']"#
+        ),
         "expected canonical sorted valid-values list; got: {msg}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// session_first (Python recall.py:586-594)
+// ---------------------------------------------------------------------------
+
+/// `scope=[session_first]` with a session hit answers from the session and
+/// skips the graph, even with a pinned query type (which would make `auto`
+/// run both).
+#[tokio::test]
+async fn test_scope_session_first_hit_skips_graph() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "what is rust", "a systems language").await;
+
+    let result = recall(
+        "rust language",
+        Some(SearchType::HybridCompletion),
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![RecallScope::SessionFirst]),
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(!result.items.is_empty(), "the session should answer");
+    assert!(
+        result
+            .items
+            .iter()
+            .all(|i| i.source == RecallSource::Session),
+        "a session hit must skip the graph; got {:?}",
+        result.items.iter().map(|i| i.source).collect::<Vec<_>>()
+    );
+    assert!(result.search_response.is_none(), "the graph must not run");
+}
+
+/// `scope=[session_first]` with a session miss falls through to the graph.
+#[tokio::test]
+async fn test_scope_session_first_miss_runs_graph() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "what is rust", "a systems language").await;
+
+    let result = recall(
+        "unrelated words entirely",
+        Some(SearchType::HybridCompletion),
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![RecallScope::SessionFirst]),
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(!result.items.is_empty(), "the graph should answer");
+    assert!(
+        result.items.iter().all(|i| i.source == RecallSource::Graph),
+        "a session miss must fall through to the graph; got {:?}",
+        result.items.iter().map(|i| i.source).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// tools / code: accepted names, not supported yet (SDK-1040 D1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_scope_tools_and_code_fail_before_any_source_runs() {
+    for (scope, name) in [
+        (vec![RecallScope::Session, RecallScope::Tools], "tools"),
+        (vec![RecallScope::Code, RecallScope::Graph], "code"),
+    ] {
+        let h = build_harness().await;
+        seed_qa(&*h.store, "what is rust", "a systems language").await;
+
+        let err = recall(
+            "rust language",
+            None,
+            None,
+            None,
+            10,
+            false,
+            Some(SESSION_ID),
+            Some(USER_ID),
+            &h.orchestrator,
+            Some(&*h.store),
+            Some(&h.manager),
+            Some(scope),
+            None,
+        )
+        .await
+        .expect_err("unsupported scope must fail");
+
+        match err {
+            ApiError::InvalidArgument(message) => assert_eq!(
+                message,
+                format!(
+                    "Recall scope '{name}' is not supported yet in the Rust SDK \
+                     (tracked in SDK-1537)."
+                )
+            ),
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+}
+
+/// `session_context` is accepted; its lane lands with SDK-1040 P2, so for
+/// now it contributes nothing next to the other sources.
+#[tokio::test]
+async fn test_scope_session_context_is_accepted() {
+    let h = build_harness().await;
+
+    let result = recall(
+        "anything",
+        None,
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![RecallScope::SessionContext]),
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(result.items.is_empty());
 }

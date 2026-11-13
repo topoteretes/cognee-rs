@@ -43,7 +43,10 @@ pub use recall_normalize::{
     NormalizedResult, RecallResultKind, build_graph_entry, build_structured_entry,
     entry_dataset_ids, entry_evidence, item_dataset_id, only_context_system_prompt,
 };
-pub use recall_scope::{RecallItem, RecallScope, RecallSource, ScopeInput, normalize_scope};
+pub use recall_scope::{
+    RecallItem, RecallScope, RecallSource, ResolvedSources, ScopeInput, ToolsTrigger,
+    normalize_scope, resolve_sources,
+};
 pub use retrievers::{
     ChunksRetriever, CodingRulesRetriever, CompletionRetriever, CypherSearchRetriever,
     DatasetScoping, FeedbackRetriever, FeelingLuckyRetriever,

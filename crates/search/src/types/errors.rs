@@ -41,6 +41,12 @@ pub enum SearchError {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    /// The request is valid but asks for something Rust does not implement
+    /// yet, such as recall's `tools` and `code` scopes (SDK-1537). The
+    /// message is shown to the caller as is.
+    #[error("{0}")]
+    NotSupported(String),
+
     #[error("unsupported search type: {0:?}")]
     UnsupportedSearchType(crate::types::SearchType),
 
