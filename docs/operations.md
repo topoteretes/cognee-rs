@@ -70,7 +70,11 @@ The `scope` picks the sources: `graph`, `session`, `trace`,
 no query type, `auto` reads the session and then the graph: with no dataset
 filter a session hit skips the graph, with one both contribute. Without a
 session id, or with a query type, `auto` reads the graph only. `session_first`
-asks for the short-circuit explicitly, whatever else the call carries.
+asks for the short-circuit explicitly, whatever else the call carries. An
+explicit empty scope list runs no source and returns nothing, as Python's
+`scope=[]` does; only an absent scope means `auto`. An unknown name fails with
+Python's message, both lists in Python `repr` form (`Unknown recall scope(s):
+['foo']. Valid values: ['all', 'auto', ...]`).
 `session_context` returns the session's active guidance block (the lessons
 `improve()` stored) as one entry, `{content, context_profile}`, rendered
 read-only for the `context_profile` option (`qa`, the default, or `agent`);
@@ -86,7 +90,10 @@ entries. A caller that can read the session's dataset reads its owner's
 entries instead, when it sets the `session_cache_user_id` option to the id
 `resolve_session_cache_user_id` resolves from the session records and the
 caller's readable datasets (Python `_resolve_session_cache_user_id`). The
-CLI and the bindings have no dataset permissions, so they leave it unset.
+bindings do this themselves when the handle has a `ReadableDatasets` hook
+(`HandleState::with_readable_datasets`), which a build with dataset
+permissions attaches; without one (the OSS build, and the CLI) only the
+caller's own entries are read.
 
 The `node_name` option scopes the graph search, read according to the
 `node_type` option, as Python does: without `node_type` (Python's `NodeSet`
@@ -95,7 +102,12 @@ default) the names are node-set tags, and with a graph node type's class name
 neighbours. The router then picks only a type that applies the scope
 (`TEMPORAL` and `CODING_RULES` apply node sets only; a lexical pick becomes
 `HYBRID_COMPLETION` with `only_context`), and an explicit query type that
-cannot apply it fails with Python's message. Names with an empty `node_type`
+cannot apply it fails with Python's message when the graph search runs, after
+the warm-up note (a graph that was never built answers its note first).
+Unlike Python, `CHUNKS` and `RAG_COMPLETION` apply node-set names only: Python
+serves a graph `node_type` for them with a graph-scoped chunk search that
+Rust has not ported, so here they refuse it rather than match the names
+against node-set tags. Names with an empty `node_type`
 fail before any source runs, whatever the scope; the Rust API has no
 equivalent of Python's explicit `node_type=None`, so the empty string stands
 in for it. Session sources are not scoped by `node_name`. The `verbose`

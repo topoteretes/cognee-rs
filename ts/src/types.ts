@@ -334,6 +334,7 @@ export interface CogneeRecallOptions {
    * "session_context" → the session's active context block (see
    * `contextProfile`).
    * "all" → fan out across the four concrete sources.
+   * An empty array runs no source and returns no items (Python's `scope=[]`).
    */
   scope?: RecallScopeString | RecallScopeString[];
   /** As `CogneeSearchOptions.neighborhoodDepth`. */
@@ -364,7 +365,9 @@ export interface CogneeRecallOptions {
   nodeType?: string;
   /**
    * Scope the graph source to these node names; it then routes only to
-   * search types that honour the scope.
+   * search types that honour the scope. A graph `nodeType` is honoured by the
+   * GRAPH_COMPLETION family and HYBRID_COMPLETION; CHUNKS and RAG_COMPLETION
+   * apply node-set names only.
    */
   nodeName?: string[];
   /** How `nodeName` combines: `"OR"` (any name, default) or `"AND"` (all names). */

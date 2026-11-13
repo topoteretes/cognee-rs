@@ -137,7 +137,8 @@ class RecallOpts(TypedDict, total=False):
     #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"session_first"`` |
     #: ``"session_context"`` | ``"trace"`` | ``"all"`` (``"graph_context"`` is
     #: a deprecated alias of ``"graph"``; ``"tools"`` and ``"code"`` are
-    #: accepted but raise ``CogneeValidationError`` as not supported yet)
+    #: accepted but raise ``CogneeValidationError`` as not supported yet). An
+    #: empty list runs no source and returns no items, as in Python.
     scope: Union[str, list[str]]
     neighborhood_depth: int
     neighborhood_seed_top_k: int
@@ -154,7 +155,9 @@ class RecallOpts(TypedDict, total=False):
     #: What the ``node_name`` values are: a graph node class name such as
     #: ``"Entity"``. Omitted, the names are node-set tags.
     node_type: str
-    #: Scope the graph source to these node names.
+    #: Scope the graph source to these node names. A graph ``node_type`` is
+    #: honoured by the GRAPH_COMPLETION family and HYBRID_COMPLETION; CHUNKS
+    #: and RAG_COMPLETION apply node-set names only.
     node_name: list[str]
     #: ``"OR"`` (default) or ``"AND"``: how ``node_name`` combines.
     node_name_filter_operator: str

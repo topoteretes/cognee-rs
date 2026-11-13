@@ -131,7 +131,8 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///                   ("graph_context" is a deprecated alias of "graph";
 ///                   "tools" and "code" are accepted but fail validation as
 ///                   not supported yet)
-///                   (absent/null → "auto" default applied by recall())
+///                   (absent/null → "auto" default applied by recall(); an
+///                   empty array runs no source and returns no items)
 ///   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as for
 ///                   `cg_sdk_search` (references land in each normalized
 ///                   result's `metadata.evidence`)
@@ -140,7 +141,10 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///   "toolsTrigger" — "always" (default) or "on_empty"; validated on every
 ///                   call, no effect until the "tools" scope exists
 ///   "nodeType", "nodeName", "nodeNameFilterOperator", "verbose" — as for
-///                   `cg_sdk_search`; they apply to the graph source
+///                   `cg_sdk_search`; they apply to the graph source. A graph
+///                   "nodeType" is honoured by the GRAPH_COMPLETION family and
+///                   HYBRID_COMPLETION; CHUNKS and RAG_COMPLETION apply
+///                   node-set names only
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///

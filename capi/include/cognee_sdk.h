@@ -576,7 +576,8 @@ void cg_sdk_search(const CgSdk*        sdk,
  *                  above): "auto" | "graph" | "session" | "session_first" |
  *                  "session_context" | "trace" | "all"
  *                  ("graph_context" is a deprecated alias of "graph")
- *                  Absent or null → "auto" default applied by recall().
+ *                  Absent or null → "auto" default applied by recall();
+ *                  an empty array runs no source and returns no items.
  *   "neighborhoodDepth", "neighborhoodSeedTopK", "includeReferences" — as
  *                  for cg_sdk_search
  *   "contextProfile" — string; the profile the "session_context" scope
@@ -585,10 +586,15 @@ void cg_sdk_search(const CgSdk*        sdk,
  *                  call, no effect until the "tools" scope exists
  *   "nodeType", "nodeName", "nodeNameFilterOperator", "verbose" — as for
  *                  cg_sdk_search; they apply to the graph source, which then
- *                  routes only to search types that honour the node scope
+ *                  routes only to search types that honour the node scope.
+ *                  A graph "nodeType" (anything but "NodeSet") is honoured
+ *                  by the GRAPH_COMPLETION family and HYBRID_COMPLETION;
+ *                  CHUNKS and RAG_COMPLETION apply node-set names only.
  *
  * An unknown scope or "toolsTrigger", a "tools" / "code" scope, or
- * "nodeName" with an empty "nodeType" → CG_ERR_SDK_VALIDATION (14).
+ * "nodeName" with an empty "nodeType" → CG_ERR_SDK_VALIDATION (14). The
+ * unknown-scope message is Python's, both lists in Python repr form:
+ * "Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', ...]".
  *
  * Async (D4, R1): callback fires exactly once on a tokio worker thread.
  * result_json on success: CogneeRecallResult JSON object (see above).
