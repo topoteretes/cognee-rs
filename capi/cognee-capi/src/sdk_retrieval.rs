@@ -63,6 +63,16 @@ use crate::sdk_ops::parse_c_str_or_fire;
 ///                              attach structured `evidence` references to the
 ///                              response, and RAG text answers gain an
 ///                              "Evidence:" block
+///   "llmConfig"              — object of `llm.*` settings keyed by their
+///                              Python names ("llm_model", "llm_api_key", …):
+///                              the search runs with this LLM. It replaces the
+///                              whole configured section for the call (a
+///                              setting left out takes the value the
+///                              environment gave it, else its default; never
+///                              one set in code)
+///   "embeddingConfig"        — object of `embedding.*` settings, likewise;
+///                              dimensions other than the configured model's
+///                              → CG_ERR_SDK_VALIDATION
 ///
 /// `userId` from opts is ignored; `user_id` in `SearchRequest` is always set
 /// from the handle's `owner_id` so dataset-name resolution works correctly.
@@ -145,6 +155,8 @@ pub unsafe extern "C" fn cg_sdk_search(
 ///                   "nodeType" is honoured by the GRAPH_COMPLETION family and
 ///                   HYBRID_COMPLETION; CHUNKS and RAG_COMPLETION apply
 ///                   node-set names only
+///   "llmConfig", "embeddingConfig" — as for `cg_sdk_search`; the whole recall
+///                   runs with them, routing included
 ///
 /// Async (D4, R1): the callback fires on a tokio worker thread.
 ///

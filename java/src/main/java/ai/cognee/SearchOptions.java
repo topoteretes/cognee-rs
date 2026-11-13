@@ -53,4 +53,17 @@ public final class SearchOptions extends Options {
      * @param c snake_case knob names to JSON-serializable values
      */
     public SearchOptions retrieverSpecificConfig(Map<String, Object> c) { put("retrieverSpecificConfig", c); return this; }
+    /**
+     * Run this search with its own LLM (Python's {@code llm_config}): {@code llm.*}
+     * settings keyed by their Python names ({@code llm_provider}, {@code llm_model},
+     * {@code llm_api_key}, ...). It replaces the whole configured LLM section for
+     * the call: a setting left out takes its default, not the configured value.
+     */
+    public SearchOptions llmConfig(Map<String, Object> c) { put("llmConfig", c); return this; }
+    /**
+     * Run this search with its own embedding model (Python's
+     * {@code embedding_config}), keyed like {@link #llmConfig}. Dimensions other
+     * than the configured model's fail with a validation error.
+     */
+    public SearchOptions embeddingConfig(Map<String, Object> c) { put("embeddingConfig", c); return this; }
 }

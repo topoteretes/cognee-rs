@@ -82,12 +82,24 @@ pub enum ApiError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// A per-call `embedding_config` whose model is not as wide as the vector
+    /// store's, refused before anything searches (Python's
+    /// `EmbeddingDimensionMismatchError`, HTTP 409).
+    #[error("{0}")]
+    EmbeddingDimensionMismatch(#[from] cognee_search::EmbeddingDimensionMismatch),
+
     /// The caller lacks the permission on the dataset in its tenant. "No
     /// grant" and "a grant only on another tenant's dataset" both answer this
     /// variant, like Python's single `PermissionDeniedError` (HTTP 403,
     /// `cognee/modules/users/exceptions/exceptions.py:42-51@37f788bd2`).
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
+
+    /// A component could not be built: the engines of a per-call
+    /// `llm_config` / `embedding_config`, or the configuration they are
+    /// built over.
+    #[error("Component error: {0}")]
+    Component(#[from] crate::error::ComponentError),
 
     #[error("Background task join error: {0}")]
     Join(#[from] tokio::task::JoinError),

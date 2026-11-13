@@ -24,6 +24,8 @@ use crate::config::{ConfigManager, Settings};
 use crate::context::PipelineContext;
 use crate::error::ComponentError;
 
+mod engine_overrides;
+
 /// Whether a teardown may call `close()` on state that surviving clones can
 /// observe.
 ///
@@ -88,6 +90,9 @@ pub struct ComponentManager {
     // (env reads + the Postgres credential-fallback warning) runs once per config
     // version instead of once per component (7×).
     context: TokioRwLock<Option<(u64, cognee_components::BackendBuildContext)>>,
+    // The engines built for per-call `llm_config` / `embedding_config`
+    // overrides, most recently used first.
+    engine_overrides: engine_overrides::OverrideCache,
     // This manager's resolved `llm.api_key`, registered with product analytics
     // (hashed into `api_key_tracking_id`) for as long as the manager lives.
     // The configured key (env, config file or code), never a raw env read.
@@ -132,6 +137,7 @@ impl ComponentManager {
             transcriber: TokioRwLock::new(None),
             dataset_storage: TokioRwLock::new(None),
             context: TokioRwLock::new(None),
+            engine_overrides: engine_overrides::OverrideCache::default(),
             telemetry_key,
         }
     }
@@ -203,8 +209,15 @@ impl ComponentManager {
         // The configuration changed (or this is the first build): keep the
         // key reported by product analytics in step with it.
         self.telemetry_key.update(Some(&settings.llm().api_key));
+        self.lower_settings(&settings)
+    }
+
+    /// Lower `settings` into a build context, with the keyless embedding
+    /// switch applied: the configuration's own lowering ([`Self::lower`]) and
+    /// a per-call one ([`Self::build_engines_with_overrides`]) share it.
+    fn lower_settings(&self, settings: &Settings) -> cognee_components::BackendBuildContext {
         let mut ctx = settings.backend_context();
-        if self.keyless(&settings, &ctx) && !settings.embedding_settings_configured() {
+        if self.keyless(settings, &ctx) && !settings.embedding_settings_configured() {
             apply_local_embedding(&mut ctx);
         }
         ctx

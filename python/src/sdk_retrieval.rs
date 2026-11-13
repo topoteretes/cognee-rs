@@ -110,6 +110,14 @@ impl PyCognee {
     ///   ``evidence`` (structured references to the chunks / graph nodes and
     ///   edges placed in context, snake_case keys) to the response, and RAG
     ///   text answers gain an ``Evidence:`` block
+    /// - ``llm_config`` / ``llmConfig``, ``embedding_config`` /
+    ///   ``embeddingConfig`` — dicts of ``llm.*`` / ``embedding.*`` settings
+    ///   keyed by their Python names (``llm_model``, ``llm_api_key``,
+    ///   ``embedding_dimensions``, ...): the search runs with this LLM and
+    ///   embedding model. Each replaces the whole configured section for the
+    ///   call (a setting left out takes its default). An embedding model whose
+    ///   dimensions differ from the configured one raises
+    ///   ``CogneeValidationError``
     ///
     /// ``userId`` / ``user_id`` in opts is ignored; the owner is always taken
     /// from the handle so dataset-name resolution works correctly.
@@ -165,6 +173,10 @@ impl PyCognee {
     ///   ``node_name_filter_operator`` / ``nodeNameFilterOperator``,
     ///   ``verbose`` — as for ``search``; they apply to the graph source, which
     ///   then routes only to search types that honour the node scope
+    /// - ``llm_config`` / ``llmConfig``, ``embedding_config`` /
+    ///   ``embeddingConfig`` — as for ``search``; the whole recall runs with
+    ///   them, routing included (an LLM without a key answers completion
+    ///   types with context only)
     #[pyo3(signature = (query, opts=None))]
     fn recall<'py>(
         &self,

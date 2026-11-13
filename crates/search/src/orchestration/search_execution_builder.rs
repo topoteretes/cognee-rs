@@ -8,6 +8,7 @@ use cognee_llm::Llm;
 use cognee_session::SessionManager;
 use cognee_vector::VectorDB;
 
+use crate::engine_override::{RoutedEmbedding, RoutedLlm};
 use crate::graph_warmup::GraphWarmup;
 use crate::orchestration::{SearchOrchestrator, SearchTypeRegistry, SessionSearchMode};
 use crate::query_router::RoutingConstraints;
@@ -446,7 +447,17 @@ impl SearchBuilder {
         retrievers
     }
 
-    pub fn build(self) -> SearchOrchestrator {
+    /// Build the orchestrator. The standard retrievers and the orchestrator
+    /// get the LLM and embedding engine wrapped in [`RoutedLlm`] /
+    /// [`RoutedEmbedding`], so a call run under
+    /// [`with_engine_override`](crate::engine_override::with_engine_override)
+    /// (recall's and search's per-call `llm_config` / `embedding_config`)
+    /// uses its own engines everywhere. A retriever added with
+    /// [`Self::register_retriever`] keeps the engines it was built with.
+    pub fn build(mut self) -> SearchOrchestrator {
+        self.engines.llm = Arc::new(RoutedLlm::new(self.engines.llm));
+        self.engines.embedding_engine =
+            Arc::new(RoutedEmbedding::new(self.engines.embedding_engine));
         // The orchestrator's own LLM runs session turn analysis.
         let llm = Arc::clone(&self.engines.llm);
         let mut retrievers = Self::standard_retrievers(self.engines, &self.tuning);
@@ -1004,6 +1015,258 @@ mod tests {
             ..RoutingConstraints::default()
         };
         assert_eq!(constrained, expected);
+    }
+
+    /// An LLM that answers with its name and counts its calls.
+    struct NamedLlm {
+        name: &'static str,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl NamedLlm {
+        fn new(name: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl Llm for NamedLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<GenerationResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(GenerationResponse {
+                content: self.name.to_string(),
+                model: self.name.to_string(),
+                usage: None,
+                finish_reason: Some("stop".to_string()),
+            })
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            _messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> LlmResult<serde_json::Value> {
+            Err(LlmError::ConfigError("not used in this test".to_string()))
+        }
+
+        fn model(&self) -> &str {
+            self.name
+        }
+    }
+
+    /// A 2-dimensional embedding engine that counts its query embeddings.
+    #[derive(Default)]
+    struct CountingEmbedding {
+        queries: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingEmbedding {
+        fn queries(&self) -> usize {
+            self.queries.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl EmbeddingEngine for CountingEmbedding {
+        async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+            self.queries
+                .fetch_add(texts.len(), std::sync::atomic::Ordering::SeqCst);
+            Ok(texts.iter().map(|_| vec![0.1, 0.2]).collect())
+        }
+
+        fn dimension(&self) -> usize {
+            2
+        }
+
+        fn batch_size(&self) -> usize {
+            8
+        }
+
+        fn max_sequence_length(&self) -> usize {
+            128
+        }
+    }
+
+    /// A vector store whose chunk collection holds one chunk.
+    struct OneChunkVectorDb;
+
+    #[async_trait]
+    impl VectorDB for OneChunkVectorDb {
+        async fn retrieve(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _ids: &[Uuid],
+        ) -> VectorDBResult<Vec<SearchResult>> {
+            Ok(vec![])
+        }
+
+        async fn create_collection(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _dimension: usize,
+        ) -> VectorDBResult<()> {
+            Ok(())
+        }
+
+        async fn has_collection(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+        ) -> VectorDBResult<bool> {
+            Ok(true)
+        }
+
+        async fn index_points(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _points: &[VectorPoint],
+        ) -> VectorDBResult<()> {
+            Ok(())
+        }
+
+        async fn search_similar(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+            _query_vector: &[f32],
+            _top_k: usize,
+        ) -> VectorDBResult<Vec<SearchResult>> {
+            Ok(vec![SearchResult {
+                id: Uuid::new_v4(),
+                score: 0.9,
+                metadata: [("text".to_string(), json!("Alice works at Acme."))]
+                    .into_iter()
+                    .collect(),
+            }])
+        }
+
+        async fn delete_collection(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+        ) -> VectorDBResult<()> {
+            Ok(())
+        }
+
+        async fn collection_size(
+            &self,
+            _data_type: &str,
+            _field_name: &str,
+        ) -> VectorDBResult<usize> {
+            Ok(1)
+        }
+    }
+
+    /// Inside a per-call override the standard retrievers embed the query
+    /// and answer with the call's engines; outside it, with the deployment's.
+    #[tokio::test]
+    async fn per_call_engines_reach_the_retrievers_and_the_completion() {
+        use crate::engine_override::{EngineOverride, with_engine_override};
+
+        let base_llm = NamedLlm::new("deployment");
+        let base_embedding = Arc::new(CountingEmbedding::default());
+        let orchestrator = SearchBuilder::new(
+            Arc::new(OneChunkVectorDb),
+            base_embedding.clone(),
+            Arc::new(TestGraphDb),
+            base_llm.clone(),
+            Arc::new(TestDatabase),
+        )
+        .build();
+        let per_call_llm = NamedLlm::new("per-call");
+        let per_call_embedding = Arc::new(CountingEmbedding::default());
+        let engines = EngineOverride {
+            llm: Some(per_call_llm.clone()),
+            embedding: Some(per_call_embedding.clone()),
+        };
+
+        let rag = request(SearchType::RagCompletion);
+        let answer = with_engine_override(engines, orchestrator.search(&rag))
+            .await
+            .unwrap();
+        assert!(
+            matches!(&answer.result, SearchOutput::Text(t) if t == "per-call"),
+            "{:?}",
+            answer.result
+        );
+        assert_eq!(per_call_embedding.queries(), 1);
+        assert_eq!(per_call_llm.calls(), 1);
+        assert_eq!(base_embedding.queries(), 0);
+        assert_eq!(base_llm.calls(), 0);
+
+        let answer = orchestrator.search(&rag).await.unwrap();
+        assert!(
+            matches!(&answer.result, SearchOutput::Text(t) if t == "deployment"),
+            "{:?}",
+            answer.result
+        );
+        assert_eq!(base_embedding.queries(), 1);
+        assert_eq!(base_llm.calls(), 1);
+
+        // A raw retrieval type embeds with the call's engine too.
+        let engines = EngineOverride {
+            llm: None,
+            embedding: Some(per_call_embedding.clone()),
+        };
+        with_engine_override(engines, orchestrator.search(&request(SearchType::Chunks)))
+            .await
+            .unwrap();
+        assert_eq!(per_call_embedding.queries(), 2);
+        assert_eq!(base_embedding.queries(), 1);
+    }
+
+    /// `llm_available` follows the call's LLM in both directions: an
+    /// unconfigured per-call LLM limits a keyed deployment, and a keyed one
+    /// lifts a keyless deployment's limit.
+    #[tokio::test]
+    async fn routing_constraints_for_call_read_the_per_call_llm() {
+        use crate::engine_override::{EngineOverride, with_engine_override};
+
+        let unconfigured =
+            || -> Arc<dyn Llm> { Arc::new(cognee_llm::UnconfiguredLlm::new("openai")) };
+        let keyed = builder().build();
+        assert!(keyed.routing_constraints_for_call().llm_available);
+        let engines = EngineOverride {
+            llm: Some(unconfigured()),
+            embedding: None,
+        };
+        let limited =
+            with_engine_override(engines, async { keyed.routing_constraints_for_call() }).await;
+        assert!(!limited.llm_available);
+        // The deployment's constraints are untouched.
+        assert!(keyed.routing_constraints().llm_available);
+
+        let keyless = SearchBuilder::new(
+            Arc::new(TestVectorDb),
+            Arc::new(TestEmbedding),
+            Arc::new(TestGraphDb),
+            unconfigured(),
+            Arc::new(TestDatabase),
+        )
+        .build();
+        assert!(!keyless.routing_constraints_for_call().llm_available);
+        let engines = EngineOverride {
+            llm: Some(Arc::new(TestLlm)),
+            embedding: None,
+        };
+        let lifted =
+            with_engine_override(engines, async { keyless.routing_constraints_for_call() }).await;
+        assert!(lifted.llm_available);
     }
 
     #[tokio::test]

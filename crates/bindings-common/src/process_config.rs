@@ -138,7 +138,9 @@ fn entries(options: Option<&Value>) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
-fn type_name(value: &Value) -> &'static str {
+/// The JSON type of `value`, with its article ("a string"), for error messages
+/// that must not echo the value itself.
+pub(crate) fn type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",

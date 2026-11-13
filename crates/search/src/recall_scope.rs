@@ -109,6 +109,14 @@ pub struct RecallOptions {
     /// with [`resolve_session_cache_user_id`]; `None` uses `user_id`. The graph
     /// lane always runs as the caller.
     pub session_cache_user_id: Option<String>,
+    /// The LLM and embedding engine this recall runs with instead of the
+    /// deployment's (Python's per-call `llm_config` / `embedding_config`,
+    /// `recall.py:467-468`). The whole recall runs under it: routing reads
+    /// `llm_available` off its LLM, and every retriever embeds and answers
+    /// with it. Build it from configs with
+    /// `ComponentManager::build_engines_with_overrides`, which also refuses an
+    /// embedding model of the wrong width. `None` uses the deployment's.
+    pub engine_override: Option<crate::engine_override::EngineOverride>,
 }
 
 /// The `session_context` lane's profile when the caller names none (Python's
@@ -898,6 +906,10 @@ pub struct GraphPlan {
 /// [`run_graph`], as Python's retriever factory refuses it when the search
 /// builds its retriever (`get_search_type_retriever_instance.py:498`): after
 /// the warm-up guard, so a cold graph answers its note first.
+///
+/// Whether an LLM can answer is the call's: a per-call LLM
+/// ([`crate::engine_override`]) decides it when there is one
+/// ([`SearchOrchestrator::routing_constraints_for_call`]).
 #[allow(clippy::too_many_arguments)]
 pub fn plan_graph(
     query_text: &str,
@@ -913,7 +925,7 @@ pub fn plan_graph(
     let node_type = options.and_then(|o| o.node_type.as_deref());
     let node_name = options.and_then(|o| o.node_name.as_deref());
     let constraints = search_orchestrator
-        .routing_constraints()
+        .routing_constraints_for_call()
         .with_node_scope(node_type, node_name)?;
     let owner = graph_owner(user_id, datasets, dataset_ids)?;
     let fallback = default_route(&constraints);
@@ -2282,6 +2294,39 @@ mod tests {
 
         assert_eq!(plan(Some("Entity")).search_type(), ROUTER_FALLBACK_TYPE);
         assert_eq!(plan(None).search_type(), SearchType::Temporal);
+    }
+
+    /// A per-call LLM that cannot make calls makes a pinned completion type
+    /// run with `only_context`, on a deployment whose own LLM can (Python's
+    /// `RoutingConstraints.from_config(llm_config)`, `query_router.py:67-90`).
+    #[tokio::test]
+    async fn plan_graph_reads_llm_availability_off_the_per_call_llm() {
+        use crate::engine_override::{EngineOverride, with_engine_override};
+
+        let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new());
+        let span = tracing::Span::none();
+        let plan = || {
+            plan_graph(
+                "anything",
+                Some(SearchType::GraphCompletion),
+                false,
+                None,
+                None,
+                None,
+                &orchestrator,
+                &span,
+                None,
+            )
+            .expect("a pinned plan")
+        };
+        assert_eq!(plan().only_context(None), None);
+        let engines = EngineOverride {
+            llm: Some(Arc::new(cognee_llm::UnconfiguredLlm::new("openai"))),
+            embedding: None,
+        };
+        let keyless = with_engine_override(engines, async { plan() }).await;
+        assert_eq!(keyless.search_type(), SearchType::GraphCompletion);
+        assert_eq!(keyless.only_context(None), Some(true));
     }
 
     #[test]

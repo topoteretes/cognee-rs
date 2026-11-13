@@ -541,6 +541,15 @@ void cg_sdk_add_and_cognify(const CgSdk*        sdk,
  *                             triplets this many hops around the nearest hits
  *   "neighborhoodSeedTopK"  — positive integer; at most this many hits to
  *                             expand from, nearest first (default: all)
+ *   "llmConfig"             — object of llm.* settings keyed by their Python
+ *                             names ("llm_model", "llm_api_key", ...): the
+ *                             search runs with this LLM. It replaces the whole
+ *                             configured section for the call (a setting left
+ *                             out takes the value the environment gave it,
+ *                             else its default; never one set in code)
+ *   "embeddingConfig"       — object of embedding.* settings, likewise;
+ *                             dimensions other than the configured model's
+ *                             → CG_ERR_SDK_VALIDATION (14)
  *
  * Note: "userId" in opts is ignored — user_id in the request is always set
  * from the handle's owner_id so dataset-name resolution works correctly.
@@ -590,6 +599,8 @@ void cg_sdk_search(const CgSdk*        sdk,
  *                  A graph "nodeType" (anything but "NodeSet") is honoured
  *                  by the GRAPH_COMPLETION family and HYBRID_COMPLETION;
  *                  CHUNKS and RAG_COMPLETION apply node-set names only.
+ *   "llmConfig", "embeddingConfig" — as for cg_sdk_search; the whole recall
+ *                  runs with them, routing included
  *
  * An unknown scope or "toolsTrigger", a "tools" / "code" scope, or
  * "nodeName" with an empty "nodeType" → CG_ERR_SDK_VALIDATION (14). The

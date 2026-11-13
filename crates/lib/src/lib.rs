@@ -179,9 +179,10 @@ pub use error::ComponentError;
 // beyond where they define the impls.
 pub use cognee_components::{
     AUTO_GRAPH_EXTRACTOR, BackendBuildContext, ComponentRegistry, DefaultEmbeddingFactory,
-    EmbeddingFactory, EmbeddingInputs, GLINER_GRAPH_EXTRACTOR, GraphDbFactory,
-    GraphExtractorFactory, LLM_GRAPH_EXTRACTOR, LlmFactory, LlmInputs, OntologyResolverFactory,
-    StorageFactory, VectorDbFactory, is_auto_graph_extractor, keyless_extractor_unavailable,
+    EmbeddingConfig, EmbeddingFactory, EmbeddingInputs, GLINER_GRAPH_EXTRACTOR, GraphDbFactory,
+    GraphExtractorFactory, LLM_GRAPH_EXTRACTOR, LlmConfig, LlmFactory, LlmInputs,
+    OntologyResolverFactory, StorageFactory, VectorDbFactory, is_auto_graph_extractor,
+    keyless_extractor_unavailable,
 };
 
 /// Convenience re-exports for common usage.

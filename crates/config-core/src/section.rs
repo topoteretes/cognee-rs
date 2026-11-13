@@ -527,6 +527,151 @@ impl ConfigSchema {
     }
 }
 
+/// Section `T` from one JSON object keyed by canonical key (`"llm.model"`) or
+/// alias (the Python SDK's flat name, `"llm_model"`), every setting the object
+/// leaves out at `T`'s own default. See [`CallSection::from_object`] for the
+/// key rules; a per-call config that should take the rest from the
+/// environment keeps the [`CallSection`] instead.
+pub fn section_from_object<T: ConfigSection>(
+    object: &serde_json::Map<String, Value>,
+) -> Result<T, KeyError> {
+    CallSection::<T>::from_object(object).map(|call| call.section())
+}
+
+/// A per-call config section, such as recall's `llm_config`: only the
+/// settings the call gave, by canonical key.
+///
+/// Python's per-call configs are pydantic `BaseSettings`, so a setting the
+/// call leaves out comes from the environment, not from the class default.
+/// Keeping what the call gave apart from what it left out lets the caller
+/// fill the rest from the configuration's environment layer
+/// ([`CallSection::over`]) instead of from `T::default()`.
+///
+/// `Debug` masks the section's secrets (and credentials embedded in any other
+/// value), as a typed section's does.
+pub struct CallSection<T> {
+    values: ConfigValues,
+    section: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T> Clone for CallSection<T> {
+    fn clone(&self) -> Self {
+        Self {
+            values: self.values.clone(),
+            section: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> PartialEq for CallSection<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+
+impl<T: ConfigSection> std::fmt::Debug for CallSection<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        for (key, value) in &self.values {
+            let secret = T::schema()
+                .keys
+                .iter()
+                .any(|def| def.key == key && def.secret);
+            let shown = if secret {
+                crate::mask_secret(value.clone(), crate::REDACTED)
+            } else {
+                Value::String(crate::redact_credentials(&value.to_string()).into_owned())
+            };
+            map.entry(key, &shown);
+        }
+        map.finish()
+    }
+}
+
+impl<T: ConfigSection> CallSection<T> {
+    fn schema() -> ConfigSchema {
+        ConfigSchema {
+            sections: vec![T::schema()],
+            ..ConfigSchema::default()
+        }
+    }
+
+    /// The settings in `values` (canonical keys or aliases of `T`'s
+    /// settings), checked and in canonical form. A key that names no setting
+    /// of `T` is ignored with a warning, as Python's `extra="allow"` settings
+    /// models accept it; a known key with a value of the wrong type is an
+    /// error.
+    pub fn from_values(values: ConfigValues) -> Result<Self, KeyError> {
+        let schema = Self::schema();
+        let mut known = ConfigValues::new();
+        for (key, value) in values {
+            if schema.key_def(&key).is_none() {
+                // Not `unknown_key`: its hint (`strict_config`) does not apply
+                // to a per-call object, which is never strict.
+                tracing::warn!(
+                    key = key.as_str(),
+                    section = T::schema().name,
+                    "ignoring a key that names no setting of this per-call config section"
+                );
+                continue;
+            }
+            known.insert(key, value);
+        }
+        schema.normalize(&mut known, true)?;
+        Ok(Self {
+            values: known,
+            section: std::marker::PhantomData,
+        })
+    }
+
+    /// [`Self::from_values`] from one JSON object, such as a binding's
+    /// `llmConfig` opt.
+    pub fn from_object(object: &serde_json::Map<String, Value>) -> Result<Self, KeyError> {
+        Self::from_values(object.clone().into_iter().collect())
+    }
+
+    /// The settings the call gave, by canonical key.
+    pub fn values(&self) -> &ConfigValues {
+        &self.values
+    }
+
+    /// The section as the call gave it, every other setting at its default.
+    pub fn section(&self) -> T {
+        T::from_values(&self.values)
+    }
+
+    /// The whole section's values for the call: `base`'s values of `T`'s
+    /// settings (canonical key, else an alias), with the call's on top. With
+    /// the configuration's environment layer as `base`, this is what Python's
+    /// `BaseSettings` builds for a per-call config: what the call gave, the
+    /// environment for the rest, and the defaults where neither sets one.
+    pub fn over(&self, base: &ConfigValues) -> ConfigValues {
+        let mut values = ConfigValues::new();
+        for def in T::schema().keys {
+            let from_base = base
+                .get(def.key)
+                .or_else(|| def.aliases.iter().find_map(|alias| base.get(*alias)));
+            if let Some(value) = from_base {
+                values.insert(def.key.to_string(), value.clone());
+            }
+        }
+        values.extend(self.values.clone());
+        values
+    }
+}
+
+/// Replace section `T` in `values` with `section_values` (canonical keys, as
+/// a section's `to_values` returns them): every key and alias spelling of
+/// `T`'s settings is removed first, so nothing configured for the old section
+/// survives the replacement.
+pub fn replace_section<T: ConfigSection>(values: &mut ConfigValues, section_values: ConfigValues) {
+    for def in T::schema().keys {
+        remove_aliases(def, values);
+        values.remove(def.key);
+    }
+    values.extend(section_values);
+}
+
 /// Every alias spelling of `def` removed from `values`.
 fn remove_aliases(def: &KeyDef, values: &mut ConfigValues) {
     for alias in def.aliases {
@@ -694,6 +839,23 @@ macro_rules! config_section {
             }
         }
 
+        impl $name {
+            /// Every setting of this section as JSON, keyed canonically: the
+            /// inverse of `ConfigSection::from_values`.
+            #[allow(dead_code, reason = "not every section is written back")]
+            pub fn to_values(&self) -> $crate::ConfigValues {
+                #[allow(unused_mut, reason = "a section may have no fields")]
+                let mut values = $crate::ConfigValues::new();
+                $(
+                    values.insert(
+                        concat!($section, ".", stringify!($field)).to_string(),
+                        $crate::ConfigValue::to_json(&self.$field),
+                    );
+                )*
+                values
+            }
+        }
+
         impl $crate::ConfigSection for $name {
             fn schema() -> &'static $crate::SectionSchema {
                 static SCHEMA: $crate::SectionSchema = $crate::SectionSchema {
@@ -783,6 +945,104 @@ mod tests {
         let mut schema = ConfigSchema::new();
         schema.add(Demo::schema()).unwrap();
         schema
+    }
+
+    /// A per-call object takes canonical keys and aliases, leaves the rest at
+    /// the section defaults, ignores unknown keys and refuses a wrong type.
+    #[test]
+    fn section_from_object_reads_keys_and_aliases_over_defaults() {
+        let object = json!({ "demo_size": 11, "demo.token": "t", "extra": 1 });
+        let demo: Demo = section_from_object(object.as_object().unwrap()).unwrap();
+        assert_eq!(
+            demo,
+            Demo {
+                size: 11,
+                token: Some("t".to_string()),
+                flag: false,
+            }
+        );
+
+        let empty: Demo = section_from_object(&serde_json::Map::new()).unwrap();
+        assert_eq!(empty, Demo::default());
+
+        let wrong = json!({ "demo.size": "big" });
+        let err = section_from_object::<Demo>(wrong.as_object().unwrap()).unwrap_err();
+        assert!(matches!(err, KeyError::Invalid { .. }), "{err:?}");
+    }
+
+    /// A call section keeps only what the call gave; `over` fills the rest
+    /// from a base layer (canonical key or alias), the call winning, and
+    /// leaves what neither sets to the section's default.
+    #[test]
+    fn call_section_takes_what_the_call_left_out_from_the_base() {
+        let call =
+            CallSection::<Demo>::from_object(json!({ "demo_size": 11 }).as_object().unwrap())
+                .unwrap();
+        assert_eq!(call.values().len(), 1);
+        assert_eq!(call.values()["demo.size"], json!(11));
+
+        let base: ConfigValues = [
+            ("demo.size".to_string(), json!(3)),
+            ("demo.token".to_string(), json!("from-env")),
+            ("other.key".to_string(), json!(1)),
+        ]
+        .into();
+        let whole = Demo::from_values(&call.over(&base));
+        assert_eq!(
+            whole,
+            Demo {
+                size: 11,
+                token: Some("from-env".to_string()),
+                flag: false,
+            }
+        );
+        assert!(!call.over(&base).contains_key("other.key"));
+        // An alias in the base counts too.
+        let aliased: ConfigValues = [("demo_size".to_string(), json!(5))].into();
+        let empty = CallSection::<Demo>::from_values(ConfigValues::new()).unwrap();
+        assert_eq!(Demo::from_values(&empty.over(&aliased)).size, 5);
+        // With no base the section's defaults apply.
+        assert_eq!(empty.section(), Demo::default());
+    }
+
+    #[test]
+    fn call_section_debug_masks_secrets() {
+        let call = CallSection::<Demo>::from_object(
+            json!({ "demo.token": "sk-secret", "demo.size": 2 })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        let shown = format!("{call:?}");
+        assert!(!shown.contains("sk-secret"), "{shown}");
+        assert!(shown.contains(crate::REDACTED), "{shown}");
+        assert!(shown.contains("demo.size"), "{shown}");
+    }
+
+    /// `to_values` round-trips through `from_values`, and `replace_section`
+    /// drops every old spelling of the section before writing the new one.
+    #[test]
+    fn to_values_round_trips_and_replace_section_replaces_the_whole_section() {
+        let demo = Demo {
+            size: 3,
+            token: None,
+            flag: true,
+        };
+        let values = demo.to_values();
+        assert_eq!(values.len(), 3);
+        assert_eq!(Demo::from_values(&values), demo);
+
+        let mut configured: ConfigValues = [
+            ("demo_size".to_string(), json!(9)),
+            ("demo.token".to_string(), json!("old")),
+            ("other.key".to_string(), json!(true)),
+        ]
+        .into_iter()
+        .collect();
+        replace_section::<Demo>(&mut configured, Demo::default().to_values());
+        assert_eq!(Demo::from_values(&configured), Demo::default());
+        assert!(!configured.contains_key("demo_size"));
+        assert_eq!(configured.get("other.key"), Some(&json!(true)));
     }
 
     /// `{:?}` of a section never prints a secret: a set secret shows as the

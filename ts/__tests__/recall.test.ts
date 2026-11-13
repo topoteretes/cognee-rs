@@ -190,6 +190,45 @@ describe("recall ops (Tier-A — no LLM)", () => {
       10_000
     );
 
+    it("refuses an embeddingConfig of another width with VALIDATION_ERROR", async () => {
+      let caught: unknown;
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          scope: "graph",
+          embeddingConfig: { embedding_provider: "mock", embedding_dimensions: 8 },
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+      expect(String((caught as Error).message)).toContain("8-dimensional");
+    }, 15_000);
+
+    it("accepts an llmConfig and an embeddingConfig of the configured width", async () => {
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          scope: "graph",
+          llmConfig: { llm_model: "gpt-4o-mini", llm_api_key: "test-dummy-key" },
+          embeddingConfig: { embedding_provider: "mock" },
+        });
+      } catch (err) {
+        expect(errorCode(err)).not.toBe("VALIDATION_ERROR");
+      }
+    }, 15_000);
+
+    it("refuses an llmConfig that is not an object with VALIDATION_ERROR", async () => {
+      let caught: unknown;
+      try {
+        await native.cogneeRecall(handle, "test query", {
+          // @ts-expect-error intentionally not an object
+          llmConfig: "gpt-4o",
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(errorCode(caught)).toBe("VALIDATION_ERROR");
+    }, 10_000);
+
     it("refuses node names with an empty nodeType with VALIDATION_ERROR", async () => {
       let caught: unknown;
       try {

@@ -681,7 +681,16 @@ class Cognee:
         ``onlyContext``, ``use_combined_context`` / ``useCombinedContext``,
         ``verbose``, ``auto_feedback_detection`` / ``autoFeedbackDetection``,
         ``neighborhood_depth`` / ``neighborhoodDepth``,
-        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``.
+        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
+        ``llm_config`` / ``llmConfig``, ``embedding_config`` /
+        ``embeddingConfig``.
+
+        ``llm_config`` / ``embedding_config`` run the call with its own LLM
+        and embedding model: dicts keyed by the settings' Python names
+        (``llm_model``, ``embedding_dimensions``, ...). Each replaces the whole
+        configured section for the call (a setting left out takes the value
+        the environment gave it, else its default; never one set in code). An embedding model whose dimensions differ from the
+        configured one raises :exc:`CogneeValidationError`.
         """
         ...
 
@@ -706,7 +715,9 @@ class Cognee:
         ``tools_trigger`` / ``toolsTrigger``, ``node_type`` / ``nodeType``,
         ``node_name`` / ``nodeName``,
         ``node_name_filter_operator`` / ``nodeNameFilterOperator``,
-        ``verbose``.
+        ``verbose``, ``llm_config`` / ``llmConfig``, ``embedding_config`` /
+        ``embeddingConfig`` (as for :meth:`search`; the whole recall runs with
+        them).
 
         ``scope`` is a string or list of: ``"auto"``, ``"graph"``,
         ``"session"``, ``"session_first"``, ``"session_context"``,
