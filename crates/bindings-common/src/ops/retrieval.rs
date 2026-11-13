@@ -34,6 +34,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::search::recall_scope::{
+    RecallScope, has_dataset_filter, resolve_session_cache_user_id, resolve_sources,
+};
 use cognee::search::{
     NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest, SearchResponse,
     SearchType, build_graph_entry, build_structured_entry, entry_dataset_ids, entry_evidence,
@@ -449,6 +452,64 @@ pub fn build_scope_input(opts: &serde_json::Value) -> Result<Option<ScopeInput>,
 // Public top-level retrieval operations.
 // ---------------------------------------------------------------------------
 
+/// The user whose session cache recall's session, trace and session_context
+/// lanes read: the session's owner when the caller may read it through a
+/// dataset grant, else the caller (Python `_resolve_session_cache_user_id`,
+/// `recall.py:181-250`, which local `recall()` calls at `:272`, `:330`,
+/// `:401`). The grants come from the handle's [`ReadableDatasets`] hook; with
+/// none (OSS), or when no session lane runs, it is `None` and recall reads
+/// the caller's cache. A failing grant lookup also falls back to the caller,
+/// as Python does.
+///
+/// [`ReadableDatasets`]: crate::ReadableDatasets
+#[allow(clippy::too_many_arguments)]
+async fn session_cache_user_id(
+    state: &HandleState,
+    svc: &crate::CogneeServices,
+    caller: Uuid,
+    tenant_id: Option<Uuid>,
+    session_id: Option<&str>,
+    scope: Option<&[RecallScope]>,
+    datasets: Option<&[String]>,
+    dataset_ids: Option<&[Uuid]>,
+    query_type: Option<SearchType>,
+) -> Option<String> {
+    let hook = state.readable_datasets()?;
+    session_id.filter(|id| !id.is_empty())?;
+    // Only when a session-cache lane runs, as the HTTP router does: a
+    // graph-only recall needs no grant lookup. A refused scope fails in
+    // recall itself.
+    let scope = scope.map_or_else(|| vec![RecallScope::Auto], <[RecallScope]>::to_vec);
+    let sources = resolve_sources(
+        scope,
+        session_id,
+        has_dataset_filter(datasets, dataset_ids),
+        query_type,
+    )
+    .ok()?
+    .sources;
+    if !sources.iter().any(|source| {
+        matches!(
+            source,
+            RecallScope::Session | RecallScope::Trace | RecallScope::SessionContext
+        )
+    }) {
+        return None;
+    }
+    let permitted = match hook
+        .readable_dataset_ids(&svc.database, caller, tenant_id)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "recall: dataset grants not resolved; reading the caller's session cache");
+            Vec::new()
+        }
+    };
+    let caller = caller.to_string();
+    resolve_session_cache_user_id(&*svc.database, session_id, Some(&caller), &permitted).await
+}
+
 /// Run search and return the `SearchResponse` as a JSON value.
 ///
 /// `opts` may be `serde_json::Value::Null` when no options were provided.
@@ -517,6 +578,19 @@ pub async fn recall(
     let session_store_ref = Arc::clone(&svc.session_store);
     let session_manager_ref = Arc::clone(&svc.session_manager);
 
+    let session_cache_user_id = session_cache_user_id(
+        state,
+        &svc,
+        owner_id,
+        tenant_id,
+        session_id,
+        scope_opt.as_deref(),
+        datasets.as_deref(),
+        dataset_ids.as_deref(),
+        query_type,
+    )
+    .await;
+
     let result = cognee_recall(
         query,
         query_type,
@@ -539,6 +613,7 @@ pub async fn recall(
             neighborhood_depth,
             neighborhood_seed_top_k,
             include_references,
+            session_cache_user_id,
             ..Default::default()
         }),
     )
