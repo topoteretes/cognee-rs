@@ -1343,11 +1343,6 @@ impl OpenAIAdapter {
         }
     }
 
-    /// Whether to request non-thinking mode for local Qwen OpenAI-compatible endpoints.
-    fn should_disable_thinking(&self) -> bool {
-        self.model.to_lowercase().starts_with("qwen") && !self.base_url.contains("api.openai.com")
-    }
-
     /// True for OpenAI reasoning-model families (`gpt-5*`, `o1*`, `o3*`, `o4*`)
     /// that reject `temperature`/`top_p`/`frequency_penalty`/`presence_penalty`
     /// overrides and require `max_completion_tokens` in place of `max_tokens`.
@@ -2028,11 +2023,6 @@ impl OpenAIAdapter {
             && !stop.is_empty()
         {
             request_body["stop"] = json!(stop);
-        }
-
-        if self.should_disable_thinking() {
-            request_body["think"] = json!(false);
-            request_body["reasoning"] = json!({"effort": "none"});
         }
 
         request_body
@@ -2738,10 +2728,6 @@ impl OpenAIAdapter {
                     // A truncation on the previous level already established that
                     // `opts` is too small; do not repeat the failure.
                     self.write_max_tokens(&mut js_request, raised_budget);
-                    if self.should_disable_thinking() {
-                        js_request["think"] = json!(false);
-                        js_request["reasoning"] = json!({"effort": "none"});
-                    }
 
                     for attempt in 0..self.structured_output_retries {
                         // Aggregate budget check, at the head of the attempt for the
@@ -2967,10 +2953,6 @@ impl OpenAIAdapter {
         // for a truncation seen here. `None` when mode 0 did not run or did not
         // truncate, which leaves the line inert.
         self.write_max_tokens(&mut tools_request, raised_budget);
-        if self.should_disable_thinking() {
-            tools_request["think"] = json!(false);
-            tools_request["reasoning"] = json!({"effort": "none"});
-        }
 
         // Retry loop. A parseable object that also satisfies the validator
         // returns immediately. A non-empty but invalid *or* validation-failing
@@ -3321,10 +3303,6 @@ impl OpenAIAdapter {
         // A truncation in tool-calling mode already established that `opts` is too
         // small; inherit the raised budget rather than repeating the failure.
         self.write_max_tokens(&mut request_body, raised_budget);
-        if self.should_disable_thinking() {
-            request_body["think"] = json!(false);
-            request_body["reasoning"] = json!({"effort": "none"});
-        }
 
         // Reason carried into the next attempt's corrective instruction so a
         // legacy retry is not a byte-identical re-send (which just reproduces the
@@ -3535,10 +3513,6 @@ impl OpenAIAdapter {
         }
         self.write_max_tokens(&mut json_request, opts.max_tokens);
         self.write_max_tokens(&mut json_request, raised_budget);
-        if self.should_disable_thinking() {
-            json_request["think"] = json!(false);
-            json_request["reasoning"] = json!({"effort": "none"});
-        }
 
         let json_attempts = if try_json {
             self.structured_output_retries
