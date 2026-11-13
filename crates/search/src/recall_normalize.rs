@@ -185,6 +185,61 @@ pub fn build_graph_entry(
     }
 }
 
+/// The `source` discriminator of a session-context entry.
+pub const SESSION_CONTEXT_SOURCE: &str = "session_context";
+
+/// One `session_context` entry of recall's response: the session's active
+/// context block for one profile.
+///
+/// Mirrors Python's `ResponseSessionContextEntry`
+/// (`cognee/modules/recall/types/RecallResponse.py:17-20`), fields in its
+/// declaration order (`source`, `content`, `context_profile`), every key
+/// snake_case. The graph variant is [`NormalizedResult`]; session and trace
+/// entries are the session cache's own rows tagged with their `source`.
+///
+/// Python's normalized search payload (`normalize_search_payload`) covers
+/// graph results only, so a binding's `normalizedResults` leaves this entry
+/// out, as it leaves out session and trace entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionContextEntry {
+    /// Discriminator — always [`SESSION_CONTEXT_SOURCE`].
+    pub source: &'static str,
+    /// The rendered active context block.
+    pub content: String,
+    /// The context profile the block was rendered for.
+    pub context_profile: String,
+}
+
+impl SessionContextEntry {
+    /// The entry for `content` rendered under `context_profile`.
+    pub fn new(content: impl Into<String>, context_profile: impl Into<String>) -> Self {
+        Self {
+            source: SESSION_CONTEXT_SOURCE,
+            content: content.into(),
+            context_profile: context_profile.into(),
+        }
+    }
+
+    /// A `session_context` recall item's content: `{content, context_profile}`,
+    /// the entry without its `source` (the item carries that).
+    pub fn item_content(&self) -> Value {
+        serde_json::json!({
+            "content": self.content,
+            "context_profile": self.context_profile,
+        })
+    }
+
+    /// The entry back from a `session_context` recall item's content, or
+    /// `None` when it does not have [`Self::item_content`]'s shape.
+    pub fn from_item_content(content: &Value) -> Option<Self> {
+        let object = content.as_object()?;
+        Some(Self::new(
+            object.get("content")?.as_str()?,
+            object.get("context_profile")?.as_str()?,
+        ))
+    }
+}
+
 /// Build the entry for a structured answer (`SearchOutput::Structured`):
 /// kind `STRUCTURED`, the answer in `structured` and `raw`, `text` drawn from
 /// it as from any object, and no score.
@@ -418,6 +473,26 @@ pub fn entry_evidence(
 mod tests {
     use super::*;
     use SearchType as CoreSearchType;
+
+    /// Python `ResponseSessionContextEntry.model_dump()`: `source`, `content`,
+    /// `context_profile`, in that order, and the item content round-trips.
+    #[test]
+    fn session_context_entry_serializes_as_python_and_round_trips() {
+        let entry = SessionContextEntry::new("## Active session guidance", "agent");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            json,
+            r###"{"source":"session_context","content":"## Active session guidance","context_profile":"agent"}"###
+        );
+        assert_eq!(
+            SessionContextEntry::from_item_content(&entry.item_content()),
+            Some(entry)
+        );
+        assert_eq!(
+            SessionContextEntry::from_item_content(&serde_json::json!({"content": "x"})),
+            None
+        );
+    }
 
     mod per_dataset_evidence {
         use serde_json::json;

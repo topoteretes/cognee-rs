@@ -483,7 +483,10 @@ pub async fn search(
 ///
 /// `normalizedResults` is additive: one typed entry (kind, text, score,
 /// provenance metadata, raw; see [`normalize_recall_items`]) per graph-source
-/// item, in the same order. `items` is unchanged.
+/// item, in the same order. `items` is unchanged. Session, trace and
+/// session_context items stay out of it, as Python's
+/// `normalize_search_payload` normalizes graph results only; they are in
+/// `items`, tagged with their `source`.
 ///
 /// `opts` may be `serde_json::Value::Null` when no options were provided.
 pub async fn recall(

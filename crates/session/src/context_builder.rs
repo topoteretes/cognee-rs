@@ -574,6 +574,36 @@ pub async fn build_active_context_block_safe<S: AsRef<str>>(
     stamp_served: bool,
     preference_lines: &[S],
 ) -> (String, Vec<String>) {
+    build_active_context_block_for_profile_safe(
+        manager,
+        session_id,
+        user_id,
+        query,
+        CONTEXT_PROFILE_QA,
+        stamp_served,
+        preference_lines,
+    )
+    .await
+}
+
+/// [`build_active_context_block`] for `context_profile` with the default
+/// ranker and budgets, fail-open: any error yields `("", [])`, as Python's
+/// `build_active_context_block` does (`session_context_builder.py:323-346`).
+///
+/// Recall's `session_context` lane renders a caller-chosen profile with it,
+/// read-only (`stamp_served` false, `recall.py:409-416`). A profile other
+/// than [`CONTEXT_PROFILE_AGENT`] uses the QA headings
+/// ([`headings_for_profile`]), but only entries stored under that exact
+/// profile are rendered, so an unknown one renders `""`, as in Python.
+pub async fn build_active_context_block_for_profile_safe<S: AsRef<str>>(
+    manager: &SessionManager,
+    session_id: &str,
+    user_id: Option<&str>,
+    query: &str,
+    context_profile: &str,
+    stamp_served: bool,
+    preference_lines: &[S],
+) -> (String, Vec<String>) {
     match build_active_context_block(
         manager,
         session_id,
@@ -582,7 +612,7 @@ pub async fn build_active_context_block_safe<S: AsRef<str>>(
         &DeterministicRanker,
         DEFAULT_PER_SECTION_CHAR_BUDGET,
         DEFAULT_TOTAL_CHAR_BUDGET,
-        CONTEXT_PROFILE_QA,
+        context_profile,
         stamp_served,
         preference_lines,
     )
@@ -1246,6 +1276,75 @@ mod tests {
         assert_eq!(served, ["a1"]);
         assert!(block.contains("### Tool rules"));
         assert!(!block.contains("be concise"));
+    }
+
+    /// The profile-aware fail-open builder renders each profile's own
+    /// entries under its headings; an unknown profile matches no stored
+    /// entry and renders nothing, as in Python.
+    #[tokio::test]
+    async fn the_profile_safe_builder_renders_the_requested_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(&dir);
+        let mut agent = entry("tool_rules", "use uv run", "a1");
+        agent.context_profile = CONTEXT_PROFILE_AGENT.to_string();
+        seed(&manager, &[entry("rules", "be concise", "q1"), agent]).await;
+        let build = async |profile| {
+            build_active_context_block_for_profile_safe(
+                &manager,
+                "s",
+                Some("u"),
+                "q",
+                profile,
+                false,
+                &[] as &[&str],
+            )
+            .await
+        };
+
+        let (qa, served) = build(CONTEXT_PROFILE_QA).await;
+        assert_eq!(served, ["q1"]);
+        assert!(qa.starts_with(BLOCK_TITLE));
+        assert!(qa.contains("### Rules\n- ["));
+        assert!(qa.contains("be concise"));
+        assert!(!qa.contains("use uv run"));
+
+        let (agent_block, served) = build(CONTEXT_PROFILE_AGENT).await;
+        assert_eq!(served, ["a1"]);
+        assert!(agent_block.contains("### Tool rules"));
+        assert!(!agent_block.contains("be concise"));
+
+        assert_eq!(build("unknown").await, (String::new(), vec![]));
+        // Read-only: nothing was stamped.
+        for row in manager
+            .get_session_context_entries(Some("s"), Some("u"))
+            .await
+            .unwrap()
+        {
+            assert!(row["last_served_at"].is_null(), "{row:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_profile_safe_builder_fails_open_on_a_malformed_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(&dir);
+        let mut bad = entry("goals", "ok", "g1").to_row().unwrap();
+        bad.insert("section".into(), "nonsense".into());
+        manager
+            .create_session_context_entry(Some("s"), Some("u"), bad)
+            .await
+            .unwrap();
+        let built = build_active_context_block_for_profile_safe(
+            &manager,
+            "s",
+            Some("u"),
+            "q",
+            CONTEXT_PROFILE_AGENT,
+            false,
+            &[] as &[&str],
+        )
+        .await;
+        assert_eq!(built, (String::new(), vec![]));
     }
 
     #[test]

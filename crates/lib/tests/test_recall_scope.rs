@@ -10,7 +10,8 @@
 //!   * `auto` resolution per `(session_id, datasets, query_type)`,
 //!   * the explicit `session_first` short-circuit,
 //!   * `tools` / `code` refused before any source runs (SDK-1537),
-//!   * scope-driven source fan-out across `graph` / `session` / `trace`
+//!   * scope-driven source fan-out across `graph` / `session` / `trace` /
+//!     `session_context`
 //!     (`graph_context` is a deprecated alias of `graph`),
 //!   * graceful degradation when `session_id` is `None`,
 //!   * an explicit empty scope list runs nothing (`normalize_scope([])` ->
@@ -20,12 +21,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cognee::api::ApiError;
-use cognee::api::recall::{RecallScope, RecallSource, ScopeInput, normalize_scope, recall};
+use cognee::api::recall::{
+    RecallItem, RecallOptions, RecallScope, RecallSource, ScopeInput, normalize_scope, recall,
+};
 use cognee_search::orchestration::SearchTypeRegistry;
 use cognee_search::retrievers::SearchRetriever;
 use cognee_search::types::{SearchContext, SearchError, SearchOutput, SearchParams};
 use cognee_search::{SearchOrchestrator, SearchType};
-use cognee_session::{FsSessionStore, SessionContext, SessionManager, SessionStore};
+use cognee_session::{
+    CandidateContextUpdate, FsSessionStore, SessionContext, SessionManager, SessionStore,
+    apply_candidate_updates,
+};
 use tempfile::TempDir;
 
 const USER_ID: &str = "user-1";
@@ -600,14 +606,21 @@ async fn test_scope_tools_and_code_fail_before_any_source_runs() {
     }
 }
 
-/// `session_context` is accepted; its lane lands with SDK-1040 P2, so for
-/// now it contributes nothing next to the other sources.
-#[tokio::test]
-async fn test_scope_session_context_is_accepted() {
-    let h = build_harness().await;
+async fn seed_context(manager: &SessionManager, profile: &str, section: &str, content: &str) {
+    let candidate = CandidateContextUpdate::new(profile, section, content, 0.9);
+    let touched =
+        apply_candidate_updates(manager, SESSION_ID, USER_ID, "src-1", &[candidate]).await;
+    assert_eq!(touched.len(), 1, "seeded {profile}/{section}");
+}
 
-    let result = recall(
-        "anything",
+/// Recall with only `scope` and `options` varying.
+async fn recall_scoped(
+    h: &Harness,
+    scope: Vec<RecallScope>,
+    options: Option<RecallOptions>,
+) -> Vec<RecallItem> {
+    recall(
+        "how should I answer",
         None,
         None,
         None,
@@ -618,11 +631,107 @@ async fn test_scope_session_context_is_accepted() {
         &h.orchestrator,
         Some(&*h.store),
         Some(&h.manager),
+        Some(scope),
+        options,
+    )
+    .await
+    .expect("recall ok")
+    .items
+}
+
+/// Python `_fetch_session_context` (`recall.py:384-424`): one entry carrying
+/// the rendered block and its profile, `qa` by default.
+#[tokio::test]
+async fn test_scope_session_context_returns_one_qa_entry() {
+    let h = build_harness().await;
+    seed_context(&h.manager, "qa", "rules", "Always cite sources").await;
+    seed_context(&h.manager, "agent", "tool_rules", "Run uv sync first").await;
+
+    let items = recall_scoped(&h, vec![RecallScope::SessionContext], None).await;
+
+    assert_eq!(items.len(), 1, "{items:?}");
+    let item = &items[0];
+    assert_eq!(item.source, RecallSource::SessionContext);
+    assert_eq!(item.content["context_profile"], "qa");
+    let block = item.content["content"].as_str().expect("block");
+    assert!(block.starts_with("## Active session guidance\n"), "{block}");
+    assert!(block.contains("### Rules\n"), "{block}");
+    assert!(block.contains("Always cite sources"), "{block}");
+    assert!(!block.contains("Run uv sync first"), "{block}");
+    // Serialized as the bindings hand it out.
+    let wire = serde_json::to_value(item).expect("serialize");
+    assert_eq!(wire["source"], "session_context");
+}
+
+#[tokio::test]
+async fn test_scope_session_context_agent_profile_uses_agent_headings() {
+    let h = build_harness().await;
+    seed_context(&h.manager, "qa", "rules", "Always cite sources").await;
+    seed_context(&h.manager, "agent", "tool_rules", "Run uv sync first").await;
+
+    let options = RecallOptions {
+        context_profile: Some("agent".to_string()),
+        ..Default::default()
+    };
+    let items = recall_scoped(&h, vec![RecallScope::SessionContext], Some(options)).await;
+
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].content["context_profile"], "agent");
+    let block = items[0].content["content"].as_str().expect("block");
+    assert!(block.contains("### Tool rules\n"), "{block}");
+    assert!(block.contains("Run uv sync first"), "{block}");
+    assert!(!block.contains("### Rules"), "{block}");
+}
+
+/// No stored guidance, or no session: the lane contributes nothing.
+#[tokio::test]
+async fn test_scope_session_context_without_entries_or_session_is_empty() {
+    let h = build_harness().await;
+    assert!(
+        recall_scoped(&h, vec![RecallScope::SessionContext], None)
+            .await
+            .is_empty()
+    );
+
+    seed_context(&h.manager, "qa", "rules", "Always cite sources").await;
+    let result = recall(
+        "anything",
+        None,
+        None,
+        None,
+        10,
+        false,
+        None,
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
         Some(vec![RecallScope::SessionContext]),
         None,
     )
     .await
     .expect("recall ok");
-
     assert!(result.items.is_empty());
+}
+
+/// `all` expands to `[graph, session, trace, session_context]`
+/// (`entries.py:242`), so the context entry comes last.
+#[tokio::test]
+async fn test_scope_all_includes_session_context_last() {
+    let h = build_harness().await;
+    seed_context(&h.manager, "qa", "rules", "Always cite sources").await;
+
+    let scope = normalize_scope(Some(ScopeInput::from("all"))).expect("normalize");
+    let items = recall_scoped(&h, scope, None).await;
+
+    assert_eq!(
+        items.first().map(|i| i.source),
+        Some(RecallSource::Graph),
+        "{items:?}"
+    );
+    assert_eq!(
+        items.last().map(|i| i.source),
+        Some(RecallSource::SessionContext),
+        "{items:?}"
+    );
 }
