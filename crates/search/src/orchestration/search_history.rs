@@ -12,12 +12,8 @@ pub(crate) struct HistoryRow {
 }
 
 /// The type name stored in history, e.g. `GRAPH_COMPLETION`.
-#[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
 pub(crate) fn history_query_type(search_type: SearchType) -> String {
-    serde_json::to_value(search_type)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .expect("SearchType should serialize to a string, as all its variants are unit variants")
+    search_type.wire_name()
 }
 
 /// The row for a search, with its dataset only if exactly one was searched.

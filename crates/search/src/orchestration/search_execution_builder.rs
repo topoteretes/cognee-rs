@@ -459,6 +459,7 @@ impl SearchBuilder {
         let routing_constraints = RoutingConstraints {
             llm_available: llm.is_configured(),
             cypher_allowed: self.tuning.allow_cypher_query,
+            ..RoutingConstraints::default()
         };
         let mut orchestrator = SearchOrchestrator::new(registry)
             .with_database(self.database)
@@ -1000,6 +1001,7 @@ mod tests {
         let expected = RoutingConstraints {
             llm_available: false,
             cypher_allowed: false,
+            ..RoutingConstraints::default()
         };
         assert_eq!(constrained, expected);
     }

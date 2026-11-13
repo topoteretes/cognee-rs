@@ -91,6 +91,7 @@ fn without_an_llm(orchestrator: SearchOrchestrator) -> SearchOrchestrator {
     orchestrator.with_routing_constraints(RoutingConstraints {
         llm_available: false,
         cypher_allowed: true,
+        ..RoutingConstraints::default()
     })
 }
 

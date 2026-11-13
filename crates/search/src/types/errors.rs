@@ -47,6 +47,13 @@ pub enum SearchError {
     #[error("{0}")]
     NotSupported(String),
 
+    /// The query's arguments do not fit together, such as a `node_name`
+    /// filter the search type cannot apply. Mirrors Python's
+    /// `QueryValidationError` (HTTP 422). The message is shown to the caller
+    /// as is.
+    #[error("{0}")]
+    QueryValidation(String),
+
     #[error("unsupported search type: {0:?}")]
     UnsupportedSearchType(crate::types::SearchType),
 

@@ -88,6 +88,20 @@ entries instead, when it sets the `session_cache_user_id` option to the id
 caller's readable datasets (Python `_resolve_session_cache_user_id`). The
 CLI and the bindings have no dataset permissions, so they leave it unset.
 
+The `node_name` option scopes the graph search, read according to the
+`node_type` option, as Python does: without `node_type` (Python's `NodeSet`
+default) the names are node-set tags, and with a graph node type's class name
+(`Entity`, `TextDocument`, ...) they name nodes of that type and their one-hop
+neighbours. The router then picks only a type that applies the scope
+(`TEMPORAL` and `CODING_RULES` apply node sets only; a lexical pick becomes
+`HYBRID_COMPLETION` with `only_context`), and an explicit query type that
+cannot apply it fails with Python's message. Names with an empty `node_type`
+fail before any source runs, whatever the scope; the Rust API has no
+equivalent of Python's explicit `node_type=None`, so the empty string stands
+in for it. Session sources are not scoped by `node_name`. The `verbose`
+option is forwarded to the graph search, whose response then keeps its
+context and graph.
+
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 
 ### improve

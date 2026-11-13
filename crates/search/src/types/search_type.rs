@@ -24,6 +24,19 @@ pub enum SearchType {
     HybridCompletion,
 }
 
+impl SearchType {
+    /// The wire name, Python's `SearchType.value`: `GRAPH_COMPLETION`.
+    #[allow(clippy::expect_used, reason = "invariant is upheld by construction")]
+    pub fn wire_name(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect(
+                "SearchType should serialize to a string, as all its variants are unit variants",
+            )
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
