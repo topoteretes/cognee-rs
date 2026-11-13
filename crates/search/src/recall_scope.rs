@@ -563,13 +563,22 @@ pub async fn search_session(
         // => `is_available` short-circuit (`recall.py:170-171`).
         return Ok(vec![]);
     };
+    // An empty session id is none (`_run_session`'s `if not session_id`),
+    // and a missing or empty caller answers nothing (`_search_session`,
+    // `recall.py:268-270`): the store must not be read under no user.
+    let Some(uid) = user_id.filter(|uid| !uid.is_empty()) else {
+        return Ok(vec![]);
+    };
+    if sid.is_empty() {
+        return Ok(vec![]);
+    }
 
     let query_tokens = tokenize(query_text);
     if query_tokens.is_empty() {
         return Ok(vec![]);
     }
 
-    let entries = store.get_all_qa_entries(sid, user_id).await?;
+    let entries = store.get_all_qa_entries(sid, Some(uid)).await?;
     if entries.is_empty() {
         return Ok(vec![]);
     }
@@ -629,6 +638,10 @@ pub async fn search_trace(
     let (Some(sid), Some(sm)) = (session_id, sm) else {
         return Ok(vec![]);
     };
+    // An empty session id is none (`_run_trace`'s `if not session_id`).
+    if sid.is_empty() {
+        return Ok(vec![]);
+    }
     // Python recall.py:227-228: caller_user_id falsy -> empty. Rust requires
     // a user_id string for `get_agent_trace_session`, so empty/None -> empty.
     let Some(uid) = user_id else {
@@ -750,10 +763,8 @@ pub async fn search_session_context(
     }
     Ok(vec![RecallItem {
         source: RecallSource::SessionContext,
-        content: serde_json::json!({
-            "content": block,
-            "context_profile": context_profile,
-        }),
+        content: crate::recall_normalize::SessionContextEntry::new(block, context_profile)
+            .item_content(),
         score: 1.0,
     }])
 }
@@ -2252,6 +2263,61 @@ mod tests {
             assert!(items.is_empty(), "caller {caller:?}: {items:?}");
         }
         assert!(retriever.seen.lock().expect("test mutex").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // search_session / search_trace guards (Python `_run_session` /
+    // `_run_trace` `if not session_id`, `_search_session`'s caller check)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn session_and_trace_are_empty_without_a_session_id_or_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn SessionStore> =
+            Arc::new(cognee_session::FsSessionStore::new(dir.path()));
+        let manager = SessionManager::new(Arc::clone(&store));
+        // One entry under the caller, one stored under no user at all: a
+        // recall without a caller must not read the latter.
+        for user in [Some("u"), None] {
+            store
+                .create_qa_entry("s", user, "rust question", "rust answer", None)
+                .await
+                .unwrap();
+        }
+        manager
+            .add_agent_trace_step(
+                "u",
+                Some(""),
+                "search.recall",
+                "success",
+                "rust question",
+                "rust context",
+                serde_json::json!({}),
+                None,
+                "",
+                false,
+            )
+            .await
+            .unwrap();
+
+        let found = search_session("rust", Some("s"), Some("u"), 10, Some(store.as_ref()))
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1, "the caller's own entry: {found:?}");
+        for (session_id, user_id) in [
+            (Some(""), Some("u")),
+            (Some("s"), None),
+            (Some("s"), Some("")),
+        ] {
+            let items = search_session("rust", session_id, user_id, 10, Some(store.as_ref()))
+                .await
+                .unwrap();
+            assert!(items.is_empty(), "{session_id:?} {user_id:?}: {items:?}");
+        }
+        let traces = search_trace("rust", Some(""), Some("u"), 10, Some(&manager))
+            .await
+            .unwrap();
+        assert!(traces.is_empty(), "an empty session id is none: {traces:?}");
     }
 
     // -----------------------------------------------------------------------

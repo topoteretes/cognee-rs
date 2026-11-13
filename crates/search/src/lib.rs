@@ -40,8 +40,9 @@ pub use query_router::{
     pinned_route, route_query,
 };
 pub use recall_normalize::{
-    NormalizedResult, RecallResultKind, build_graph_entry, build_structured_entry,
-    entry_dataset_ids, entry_evidence, item_dataset_id, only_context_system_prompt,
+    NormalizedResult, RecallResultKind, SESSION_CONTEXT_SOURCE, SessionContextEntry,
+    build_graph_entry, build_structured_entry, entry_dataset_ids, entry_evidence, item_dataset_id,
+    only_context_system_prompt,
 };
 pub use recall_scope::{
     RecallItem, RecallScope, RecallSource, ResolvedSources, ScopeInput, ToolsTrigger,
