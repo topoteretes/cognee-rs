@@ -555,14 +555,9 @@ async fn process_input_reusing(
     // Compute derived fields that previously lived in add()
     let raw_data_uri = storage_location_to_uri(storage.base_path(), &storage_location);
     let name = extract_name(input, &content_hash);
-    let original_location = if let Some(uri) = raw_source_uri.clone() {
-        uri
-    } else {
-        match input {
-            DataInput::Text(_) => raw_data_uri.clone(),
-            _ => extract_original_location(input),
-        }
-    };
+    let original_location = raw_source_uri
+        .clone()
+        .unwrap_or_else(|| extract_original_location(input, &raw_data_uri));
     let source_uri = source_uri_from_input(input);
     let external_metadata =
         merge_external_metadata(data_item_metadata.clone(), source_uri.as_deref())?;
@@ -1836,9 +1831,11 @@ fn extract_name(input: &DataInput, content_hash: &str) -> String {
     }
 }
 
-fn extract_original_location(input: &DataInput) -> String {
+/// Where `input` came from; a text, which has no source of its own, records the
+/// file it was stored as (`raw_data_uri`), wrapped in a `DataItem` or not.
+fn extract_original_location(input: &DataInput, raw_data_uri: &str) -> String {
     match input {
-        DataInput::Text(_) => "text://inline".to_string(),
+        DataInput::Text(_) => raw_data_uri.to_string(),
         DataInput::FilePath(path) => {
             if path.starts_with("file://") {
                 path.clone()
@@ -1849,7 +1846,7 @@ fn extract_original_location(input: &DataInput) -> String {
         DataInput::Url(url) => url.clone(),
         DataInput::S3Path(path) => path.clone(),
         DataInput::Binary { name, .. } => format!("binary://{name}"),
-        DataInput::DataItem { data, .. } => extract_original_location(data),
+        DataInput::DataItem { data, .. } => extract_original_location(data, raw_data_uri),
     }
 }
 
@@ -4797,6 +4794,93 @@ mod tests {
             uri.starts_with("file://") && uri.ends_with("/new.txt"),
             "{uri}"
         );
+    }
+
+    /// A text records the file it was stored as as its original location, plain
+    /// or wrapped in a `DataItem` (labelled, metadata only, nested).
+    #[tokio::test]
+    async fn a_labelled_text_records_its_stored_file_as_original_location() {
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let process = |input: DataInput| {
+            let storage = &storage;
+            async move {
+                process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let text = || DataInput::Text("a note".into());
+        let wrap =
+            |data: DataInput, label: Option<&str>, metadata: Option<&str>| DataInput::DataItem {
+                data: Box::new(data),
+                label: label.map(str::to_string),
+                external_metadata: metadata.map(str::to_string),
+            };
+
+        let plain = process(text()).await;
+        assert_eq!(plain.original_location, plain.raw_data_uri);
+        for (case, input) in [
+            ("labelled", wrap(text(), Some("finance"), None)),
+            (
+                "metadata only",
+                wrap(text(), None, Some(r#"{"source":"crm"}"#)),
+            ),
+            (
+                "nested",
+                wrap(wrap(text(), Some("inner"), None), Some("outer"), None),
+            ),
+        ] {
+            let processed = process(input).await;
+            assert_eq!(
+                processed.original_location, processed.raw_data_uri,
+                "{case}"
+            );
+        }
+    }
+
+    /// Through `persist_data`: a row an older build stored as `text://inline`
+    /// is corrected when the same text is added again, labelled.
+    #[tokio::test]
+    async fn re_adding_a_labelled_text_fixes_an_inline_location() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+
+        let mut old = process_input(
+            &DataInput::Text("a note".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        old.original_location = "text://inline".into();
+        let stored = persist_data(&old, &db, "ds", owner_id, None).await.unwrap();
+        assert_eq!(stored.original_data_location, "text://inline");
+
+        let labelled = DataInput::DataItem {
+            data: Box::new(DataInput::Text("a note".into())),
+            label: Some("finance".into()),
+            external_metadata: None,
+        };
+        let again = process_input(&labelled, &storage, HashAlgorithm::Md5, owner_id, None)
+            .await
+            .unwrap();
+        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        assert_eq!(refreshed.id, stored.id);
+        // The stored row, not the snapshot `persist_data` returns.
+        let reread = IngestDb::get_data(&db, refreshed.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reread.original_data_location, again.raw_data_uri);
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored
