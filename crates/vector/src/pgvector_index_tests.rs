@@ -7,7 +7,10 @@
 //!
 //! These assert that the index *object* exists, not that the planner chose it.
 //! Plan choice depends on row count and cost settings, so asserting on `EXPLAIN`
-//! would pin a plan shape rather than the behaviour we care about. The behaviour
+//! would pin a plan shape rather than the behaviour we care about. The one
+//! exception is `a_3072_d_collection_is_indexed_and_its_searches_use_the_index`:
+//! there the plan *is* the behaviour — the adapter sets `enable_seqscan = off`
+//! precisely so that it is not left to the planner's costs. The behaviour
 //! that must hold regardless of plan — filtered search staying exact — is pinned
 //! by `test_search_similar_filtered_filter_then_limit` in the shared harness,
 //! which runs against this adapter in `pgvector_integration`.
@@ -100,14 +103,14 @@ async fn a_collection_over_the_dimension_ceiling_is_left_unindexed() {
         "a_collection_over_the_dimension_ceiling_is_left_unindexed",
         |url| async move {
             let adapter = PgVectorAdapter::new(&url, 8).await.unwrap();
-            // 3072 = text-embedding-3-large, past pgvector's 2000-d ceiling.
-            // The collection must stay usable; only the index is skipped.
-            adapter.create_collection("Wide", "f", 3072).await.unwrap();
+            // Past pgvector's 4000-d halfvec ceiling. The collection must stay
+            // usable; only the index is skipped.
+            adapter.create_collection("Wide", "f", 4001).await.unwrap();
 
             let db = Database::connect(&url).await.unwrap();
             assert!(
                 !index_present(&db, "Wide_f_halfvec_hnsw").await,
-                "pgvector cannot index past 2000 dimensions — creating it would error"
+                "pgvector cannot index past 4000 dimensions — creating it would error"
             );
             assert!(
                 adapter.has_collection("Wide", "f").await.unwrap(),
@@ -140,7 +143,8 @@ async fn backfill_indexes_pre_existing_collections_and_is_idempotent() {
             let created = adapter.create_missing_vector_indexes().await.unwrap().built;
             assert_eq!(
                 created, 1,
-                "only the indexable collection counts — the 3072-d one is skipped"
+                "only the collection that lost its index counts — the 3072-d one \
+                 already has its own (or, without halfvec, cannot have one)"
             );
             assert!(index_present(&db, "Old_f_halfvec_hnsw").await);
 
@@ -1132,6 +1136,8 @@ async fn a_caller_owned_connection_answers_every_search_the_same_way() {
                 shared.tuned_sessions,
                 shared.iterative_scan,
                 100,
+                shared.dimension,
+                shared.halfvec,
                 false,
             )
             .expect("a caller-owned connection always needs its settings");
@@ -2223,6 +2229,8 @@ async fn a_stray_full_precision_index_cannot_serve_an_indexless_search() {
                 adapter.tuned_sessions,
                 adapter.iterative_scan,
                 50,
+                adapter.dimension,
+                adapter.halfvec,
                 true,
             )
             .expect("an indexless collection can never run with no settings");
@@ -2307,14 +2315,20 @@ async fn the_backfill_reclaims_the_superseded_full_precision_index() {
             // observable here; that the check ran once for this collection is.
             let observer = PgVectorAdapter::new(&url, 4).await.unwrap();
             assert!(observer.has_collection("OnlyOld", "f").await.unwrap());
+            assert!(observer.has_collection("Both", "f").await.unwrap());
             assert!(
-                observer
-                    .legacy_checked
-                    .read()
-                    .unwrap()
-                    .contains("OnlyOld_f"),
+                observer.index_checked.read().unwrap().contains("OnlyOld_f"),
                 "has_collection must check a collection's index shape once, or \
                  an un-reindexed store stays silent"
+            );
+            assert!(
+                observer.is_unindexed("OnlyOld_f").await,
+                "the legacy index cannot serve the fp16 ordering, so the \
+                 collection must be searched exactly until it is reindexed"
+            );
+            assert!(
+                !observer.is_unindexed("Both_f").await,
+                "a collection with its halfvec index is searched by it"
             );
             observer.close().await.unwrap();
 
@@ -2794,6 +2808,236 @@ async fn stored_index_schema_rows_match_python_pgvector_rows() {
                     Some(&serde_json::json!({"index_fields": ["text"]})),
                     "{collection}"
                 );
+            }
+        },
+    )
+    .await;
+}
+
+/// A deterministic, roughly clustered `dim`-d vector: ten centres, and `seed`
+/// picks one plus a small per-seed offset. Clustered rather than uniform,
+/// like real embeddings, so that the nearest neighbour of a stored vector is
+/// itself by a wide margin.
+fn wide_vec(seed: u32, dim: usize) -> Vec<f32> {
+    let centre = seed % 10;
+    (0..dim)
+        .map(|j| {
+            let j = u32::try_from(j).unwrap();
+            let base = f64::from((centre * 7919 + j * 104_729) % 1000) / 1000.0 - 0.5;
+            let noise = f64::from((seed * 31 + j * 17) % 97) / 97.0 - 0.5;
+            #[allow(clippy::cast_possible_truncation)]
+            let x = (base + 0.3 * noise) as f32;
+            x
+        })
+        .collect()
+}
+
+async fn index_wide(adapter: &PgVectorAdapter, data_type: &str, rows: u32) -> Vec<uuid::Uuid> {
+    let points: Vec<_> = (0..rows)
+        .map(|i| {
+            crate::models::VectorPoint::new(uuid::Uuid::from_u128(u128::from(i) + 1), {
+                wide_vec(i, 3072)
+            })
+        })
+        .collect();
+    for batch in points.chunks(100) {
+        adapter.index_points(data_type, "f", batch).await.unwrap();
+    }
+    points.iter().map(|p| p.id).collect()
+}
+
+/// ENG-33: a `text-embedding-3-large` collection (3072-d) used to be left
+/// without an index — the adapter capped indexing at 2000 dimensions — so on
+/// the BYOC 100 MB run every hybrid search read every TOASTed vector (8.4 s
+/// median). It now gets the half-precision HNSW index, and the statement the
+/// adapter actually sends is planned as a scan of it.
+///
+/// The plan assertion is the point, not a shape pinned by accident: at 3072-d
+/// the vectors are out of line, the planner rates a sequential scan of a few
+/// hundred rows far cheaper than the index scan, and left alone it picks a
+/// scan that casts every stored vector to fp16 on every search — 6x the old
+/// exact scan. `ann_search_locals` turns the sequential scan off for exactly
+/// this case, so the plan is deterministic at any row count.
+#[tokio::test]
+async fn a_3072_d_collection_is_indexed_and_its_searches_use_the_index() {
+    with_temp_db(
+        "a_3072_d_collection_is_indexed_and_its_searches_use_the_index",
+        |url| async move {
+            let adapter = PgVectorAdapter::new(&url, 3072).await.unwrap();
+            if !adapter.halfvec {
+                eprintln!("pgvector has no halfvec — 3072-d cannot be indexed, skipping");
+                adapter.close().await.unwrap();
+                return;
+            }
+            adapter.create_collection("Wide", "f", 3072).await.unwrap();
+
+            let db = Database::connect(&url).await.unwrap();
+            assert!(
+                index_present(&db, "Wide_f_halfvec_hnsw").await,
+                "a 3072-d collection must get its HNSW index (ENG-33)"
+            );
+            let def: String = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    "SELECT indexdef FROM pg_indexes WHERE indexname = 'Wide_f_halfvec_hnsw'",
+                ))
+                .await
+                .unwrap()
+                .expect("the index just asserted present must have a definition")
+                .try_get("", "indexdef")
+                .unwrap();
+            assert!(
+                def.contains("halfvec(3072)") && def.contains("halfvec_cosine_ops"),
+                "{def}"
+            );
+
+            let ids = index_wide(&adapter, "Wide", 300).await;
+
+            // The adapter's own statement for a top-10 search, with the locals
+            // it would send on its own pool.
+            let query = wide_vec(7, 3072);
+            let literal = format!("'{}'", PgVectorAdapter::format_vector(&query));
+            let order = PgVectorAdapter::candidate_order_expr(&literal, 3072, 10, true, false);
+            let candidates = PgVectorAdapter::candidate_select_sql(
+                "Wide_f",
+                &format!("{literal}::vector"),
+                &order,
+                10,
+                true,
+            );
+            let locals = PgVectorAdapter::ann_search_locals(
+                true,
+                adapter.iterative_scan,
+                10,
+                3072,
+                true,
+                false,
+            )
+            .expect("an out-of-line approximate search carries the steer");
+            let txn = sea_orm::TransactionTrait::begin(&db).await.unwrap();
+            txn.execute_unprepared(&locals).await.unwrap();
+            let plan = txn
+                .query_all(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    format!("EXPLAIN {candidates}"),
+                ))
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.try_get_by_index::<String>(0).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            txn.commit().await.unwrap();
+            assert!(
+                plan.contains("Index Scan using \"Wide_f_halfvec_hnsw\"")
+                    || plan.contains("Index Scan using Wide_f_halfvec_hnsw"),
+                "the search must be planned on the HNSW index:\n{plan}"
+            );
+
+            // And it answers: the stored vector itself first, ten rows, best first.
+            let hits = adapter
+                .search_similar("Wide", "f", &query, 10)
+                .await
+                .unwrap();
+            assert_eq!(hits.len(), 10);
+            assert_eq!(
+                hits[0].id, ids[7],
+                "a stored vector is its own nearest neighbour"
+            );
+            assert!(
+                hits.windows(2).all(|w| w[0].score >= w[1].score),
+                "rows must come back sorted by their exact score"
+            );
+            let batched = adapter
+                .batch_search_similar("Wide", "f", std::slice::from_ref(&query), 10)
+                .await
+                .unwrap();
+            assert_eq!(
+                batched[0].iter().map(|h| h.id).collect::<Vec<_>>(),
+                hits.iter().map(|h| h.id).collect::<Vec<_>>(),
+                "the batch path carries the same steer and answers the same"
+            );
+
+            drop(db);
+            adapter.close().await.unwrap();
+        },
+    )
+    .await;
+}
+
+/// The upgrade path of ENG-33: a store written before 3072-d collections were
+/// indexed has none, and `vector-reindex` has not run yet. Ordered in fp16 for
+/// an index that is not there, every search would cast every stored vector —
+/// 6x the exact scan it used to be — so the first `has_collection` of a fresh
+/// adapter records it as indexless and its searches stay exact. Building the
+/// index — here, or in another process, which the re-probe notices — puts it
+/// back on the index.
+#[tokio::test]
+async fn a_wide_collection_found_without_its_index_is_searched_exactly_until_it_has_one() {
+    with_temp_db(
+        "a_wide_collection_found_without_its_index_is_searched_exactly_until_it_has_one",
+        |url| async move {
+            let writer = PgVectorAdapter::new(&url, 3072).await.unwrap();
+            if !writer.halfvec {
+                eprintln!("pgvector has no halfvec — 3072-d cannot be indexed, skipping");
+                writer.close().await.unwrap();
+                return;
+            }
+            writer.create_collection("Up", "f", 3072).await.unwrap();
+            let ids = index_wide(&writer, "Up", 50).await;
+            let db = Database::connect(&url).await.unwrap();
+            // The shape of a store from before ENG-33.
+            db.execute_unprepared(r#"DROP INDEX "Up_f_halfvec_hnsw""#)
+                .await
+                .unwrap();
+
+            // Two processes that open the store after the upgrade.
+            let reader = PgVectorAdapter::new(&url, 3072).await.unwrap();
+            let other = PgVectorAdapter::new(&url, 3072).await.unwrap();
+            for a in [&reader, &other] {
+                assert!(a.has_collection("Up", "f").await.unwrap());
+                assert!(
+                    a.is_unindexed("Up_f").await,
+                    "a 3072-d collection without its index must be searched exactly"
+                );
+            }
+
+            let query = wide_vec(3, 3072);
+            let hits = reader.search_similar("Up", "f", &query, 5).await.unwrap();
+            assert_eq!(hits.len(), 5);
+            assert_eq!(hits[0].id, ids[3]);
+            assert!(hits.windows(2).all(|w| w[0].score >= w[1].score));
+
+            // The repair, run by one of them.
+            let report = reader.create_missing_vector_indexes().await.unwrap();
+            assert_eq!((report.built, report.failed), (1, 0), "{report:?}");
+            assert!(index_present(&db, "Up_f_halfvec_hnsw").await);
+            assert!(
+                !reader.is_unindexed("Up_f").await,
+                "the adapter that built the index must use it at once"
+            );
+
+            // The other one learns it at its next re-probe, not never.
+            assert!(
+                other.is_unindexed("Up_f").await,
+                "still fresh: no re-probe yet"
+            );
+            other.unindexed.write().unwrap().insert(
+                "Up_f".to_string(),
+                std::time::Instant::now()
+                    .checked_sub(super::UNINDEXED_RECHECK)
+                    .expect("the monotonic clock is past one recheck interval"),
+            );
+            assert!(
+                !other.is_unindexed("Up_f").await,
+                "a stale finding must be re-probed, and the index found"
+            );
+            let after = other.search_similar("Up", "f", &query, 5).await.unwrap();
+            assert_eq!(after[0].id, ids[3]);
+
+            drop(db);
+            for a in [writer, reader, other] {
+                a.close().await.unwrap();
             }
         },
     )

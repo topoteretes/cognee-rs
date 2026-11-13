@@ -59,6 +59,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **pgvector indexes 3072-d collections (ENG-33).** `text-embedding-3-large`
+  collections used to be left without an HNSW index — the adapter capped
+  indexing at 2000 dimensions — so every search of them read every stored
+  vector: the Rust BYOC 100 MB run measured a hybrid-search median of 8.4 s
+  against ~3 s for the indexed Python store, and probe searches timed out. The
+  ceiling is now pgvector's own 4000 for the half-precision index (2000 on a
+  pgvector below 0.7), as in the Python SDK (topoteretes/cognee#6158). Searches
+  of collections wider than 2000 dimensions run with `SET LOCAL
+  enable_seqscan = off`, because those vectors live in TOAST, the planner does
+  not cost it, and it otherwise picks a sequential scan that casts every vector
+  to fp16 (6x the exact scan) over the index on collections below ~9 000 rows.
+  Over 12 000 clustered 3072-d rows a top-100 search is 3.2-7.6 ms on the index
+  against 96 ms exact. Writes into such collections now maintain an index,
+  which the bulk-load deferral absorbs during cognify.
+
+  **Existing 3072-d collections stay unindexed until `cognee-cli
+  vector-reindex` runs** (online, idempotent). Until then the adapter finds the
+  missing index on its first `has_collection` of the collection, warns once
+  naming `vector-reindex`, and searches it exactly, as before; it re-checks a
+  minute later, so an index built by another process is picked up without a
+  restart. The same check now covers a collection carrying only the legacy
+  full-precision index, which used to be searched by a sequential scan ordered
+  in fp16.
+
 - **`feedback_weights` improve stage matches Python's bookkeeping (SDK-1051).**
   - Implicit ratings count: a rated answer's weight update also reads the
     `kind = "feedback"` session-context rows (`referenced_qa_rating` /

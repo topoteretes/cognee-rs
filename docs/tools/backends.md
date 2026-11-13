@@ -69,24 +69,34 @@ Notes:
   results. To move such a store onto the half-precision index, install a
   pgvector 0.7+ binary, run `ALTER EXTENSION vector UPDATE`, and then
   `cognee-cli vector-reindex`.
-  Three exceptions, and in all three the candidate ordering drops back to
+  Four exceptions, and in all four the candidate ordering drops back to
   full-precision `vector` too, because there is no fp16 index to match and the
-  scan is one the adapter declares exact: collections wider than 2000 dimensions
-  are not indexed; a `top_k` above 1000 exceeds the largest `ef_search` pgvector
-  accepts; and a collection whose index is dropped for a bulk-load scope (see
-  *bulk loads* below) is indexless until the scope ends.
-  The 2000-dimension ceiling is **this adapter's choice, not pgvector's limit**:
-  2000 is the cap for the `vector` opclasses, while the half-precision
-  expression index this adapter builds allows 4000, so
-  `text-embedding-3-large` at 3072 could be indexed. It is not, because at that
-  width the index is not the faster plan — measured on pgvector 0.8.2 over 3 000
-  rows of uniform random 3072-d vectors, a top-100 exact scan took 15.4-16.0 ms
-  against the HNSW index's 22.5 ms, for a 25.3 s build and 23 MB. Real
-  embeddings cluster better than uniform random ones, so that is a floor rather
-  than a verdict; raising the ceiling is a benchmark against a real 3072-d
-  corpus, and in the code it is one predicate
-  (`PgVectorAdapter::is_indexable_dimension`) that every gate reads, so it moves
-  in one place or not at all.
+  scan is one the adapter declares exact: collections wider than pgvector can
+  index are not indexed (4000 dimensions for the half-precision index; 2000 on a
+  pgvector below 0.7, whose full-precision opclass stops there); a `top_k` above
+  1000 exceeds the largest `ef_search` pgvector accepts; a collection whose
+  index is dropped for a bulk-load scope (see *bulk loads* below) is indexless
+  until the scope ends; and a collection found **without a usable index** the
+  first time the adapter touches it (see below) is indexless until it has one.
+  The ceiling is one predicate (`PgVectorAdapter::is_indexable_dimension`) that
+  every gate reads, so it moves in one place or not at all.
+  **`text-embedding-3-large` (3072-d) is indexed.** The ceiling used to be
+  2000, on the strength of a benchmark of uniform random vectors in which the
+  index lost; at production size the exact scan reads every stored vector on
+  every search, and the BYOC 100 MB run measured a hybrid-search median of
+  8.4 s against ~3 s for the indexed Python store (ENG-33). Over 12 000
+  clustered 3072-d rows a top-100 search now takes 3.2-7.6 ms on the index
+  against 96 ms exact, with 100/100 recall. A vector this wide does not fit in
+  its heap row, so it lives in TOAST, which the planner does not cost: it rates
+  a sequential scan of a few thousand such rows far below the index scan, and
+  picks a scan that casts every stored vector to fp16 — 6x the exact scan.
+  Searches of collections wider than 2000 dimensions therefore run with
+  `enable_seqscan = off` (in a transaction, so the setting stays on that
+  statement). Narrower collections keep their vectors in the row, where the
+  planner's costs are right, and keep the single-statement fast path. Indexing
+  makes writing such a collection slower — every row is an HNSW insert of a
+  3072-d vector — which the bulk-load deferral below absorbs for a cognify
+  run.
   `search_similar_filtered` stays **exact** filter-then-limit, but no longer by
   disabling index scans: each collection carries a GIN index over
   `cognee_vector_set_names(metadata)`, an `IMMUTABLE` function with
@@ -110,10 +120,14 @@ Notes:
   the expression alone would hand the search to an approximate index the adapter
   neither built nor maintains. Turning the index paths off for the statement
   cannot be defeated by a stray index, and costs nothing outside a scope.
-  (A collection whose index was *never* built is the one case left outside that:
-  it is in the catalog rather than in memory, so a search cannot tell without a
-  round trip, and its scan is still ordered in fp16. `vector-reindex` is the
-  repair, as below.) So an interrupted
+  A collection whose index was *never* built — a store written before its width
+  was indexed, a failed build — is in the catalog rather than in memory, so
+  the adapter checks it once, on the first `has_collection` of each collection
+  (the round trip that call makes anyway), warns naming `vector-reindex`, and
+  searches it exactly from then on. It asks the catalog again a minute later, so
+  an index built by another process is picked up without a restart. A
+  collection a search reaches without that first `has_collection` is still
+  ordered in fp16 — correct, slower. So an interrupted
   load (a crash, a process killed between `begin` and `end`) leaves every
   written row in place and searchable, and the one repair is
   `cognee-cli vector-reindex` / `create_missing_vector_indexes()`, which is
@@ -135,11 +149,15 @@ Notes:
 - **Upgrading an existing pgvector store.** The halfvec index is a new index
   under a new name (`<coll>_halfvec_hnsw`), so a store built by an older version
   carries the old full-precision `<coll>_vector_hnsw`, which the halfvec-ordered
-  searches no longer use. Results stay correct — those searches fall back to a
-  sequential scan and a sort, which returns the true top *k* — but **every
-  search on such a store is that scan**, with no error and no index missing from
-  the catalog to notice it by. The adapter therefore warns once per collection,
-  the first time it touches one, naming the collection and `vector-reindex`.
+  searches no longer use. Results stay correct — those searches run the exact
+  scan, which returns the true top *k* — but **every search on such a store is
+  that scan**, with no error and no index missing from the catalog to notice it
+  by. The adapter therefore warns once per collection, the first time it
+  touches one, naming the collection and `vector-reindex`. **Upgrading to a
+  version that indexes 3072-d collections is the same situation:** existing
+  3072-d collections have no index until `cognee-cli vector-reindex` builds
+  one, and are searched exactly — as fast as before the upgrade, no faster —
+  until then.
   `cognee-cli vector-reindex` is the repair: it builds `<coll>_halfvec_hnsw`
   with `CREATE INDEX CONCURRENTLY` and then **drops the superseded
   `<coll>_vector_hnsw`** (`CONCURRENTLY` as well, and only once the new index is
