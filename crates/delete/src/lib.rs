@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use cognee_core::dataset_locks::DatasetLocks;
 use cognee_database::{
-    DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
+    ClaimantScope, DatasetStorageLifecycle, DeleteDb, GraphEdge, GraphNode, PipelineRunRepository,
     PipelineRunStatus,
 };
 use cognee_graph::GraphDBTrait;
@@ -413,6 +413,21 @@ impl DeleteService {
     pub fn with_dataset_storage(mut self, storage: Arc<dyn DatasetStorageLifecycle>) -> Self {
         self.dataset_storage = Some(storage);
         self
+    }
+
+    /// Which ownership rows protect an artifact from a data-scoped delete.
+    ///
+    /// One shared store (the default) holds every dataset's graph, and entity
+    /// ids carry no dataset, so a row of *any* other dataset names the same
+    /// physical node and must protect it (SDK-948). Under per-dataset storage
+    /// each dataset has its own databases, so only rows of the same dataset
+    /// do. Python makes the same switch on `backend_access_control_enabled()`.
+    fn claimant_scope(&self) -> ClaimantScope {
+        if self.dataset_storage.is_some() {
+            ClaimantScope::SameDataset
+        } else {
+            ClaimantScope::AnyDataset
+        }
     }
 
     /// Take the per-dataset lock of every dataset a delete touches, from the
@@ -1532,6 +1547,30 @@ impl DeleteService {
         Ok(collections)
     }
 
+    /// Every provenance node row of `dataset_id`.
+    async fn dataset_node_rows(&self, dataset_id: Uuid) -> Result<Vec<GraphNode>, DeleteError> {
+        self.database
+            .get_nodes_by_dataset(dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to get provenance nodes for dataset {dataset_id}: {e}"
+                ))
+            })
+    }
+
+    /// How many provenance node rows `dataset_id` has.
+    async fn dataset_node_count(&self, dataset_id: Uuid) -> Result<usize, DeleteError> {
+        self.database
+            .count_nodes_by_dataset(dataset_id)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to count provenance nodes for dataset {dataset_id}: {e}"
+                ))
+            })
+    }
+
     /// Dataset-scoped cleanup: remove graph nodes and vector points based on
     /// the provenance `nodes`/`edges` tables. Returns `(graph_nodes_deleted,
     /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
@@ -1544,16 +1583,6 @@ impl DeleteService {
         let mut graph_node_count = 0usize;
         let mut vector_point_count = 0usize;
 
-        let nodes = self
-            .database
-            .get_nodes_by_dataset(dataset_id)
-            .await
-            .map_err(|e| {
-                DeleteError::Runtime(format!(
-                    "Failed to get provenance nodes for dataset {dataset_id}: {e}"
-                ))
-            })?;
-
         let edges = self
             .database
             .get_edges_by_dataset(dataset_id)
@@ -1563,11 +1592,12 @@ impl DeleteService {
                     "Failed to get provenance edges for dataset {dataset_id}: {e}"
                 ))
             })?;
-
-        let prov_node_count = nodes.len();
         let prov_edge_count = edges.len();
+        let prov_node_count;
 
         if let Some(storage) = &self.dataset_storage {
+            let nodes = self.dataset_node_rows(dataset_id).await?;
+            prov_node_count = nodes.len();
             // The dataset's own databases go whole: nothing in them belongs to
             // another dataset. Done even when the ledger is empty, so a
             // provisioned-but-never-cognified dataset leaves nothing behind.
@@ -1582,25 +1612,55 @@ impl DeleteService {
             // The dataset's own vector store is gone and was never reachable
             // from here, so no legacy `Triplet_text` point is counted; the
             // preview counts the same way.
-            let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
+            let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
             graph_node_count += gn;
             vector_point_count += vp;
         } else {
-            if nodes.is_empty() && edges.is_empty() {
+            // Only the count of the dataset's node rows is needed here: what
+            // leaves the stores is the unshared subset, selected below.
+            prov_node_count = self.dataset_node_count(dataset_id).await?;
+            if prov_node_count == 0 && edges.is_empty() {
                 return Ok((0, 0, 0, 0, warnings));
             }
 
+            // One shared store: only what no other dataset's row claims
+            // leaves it (SDK-948; Python's `get_global_dataset_related_nodes`).
+            // Every ledger row of the dataset still goes below, so a shared
+            // artifact goes with the last dataset that names it.
+            let dataset_ids = [dataset_id];
+            let unique_nodes = self
+                .database
+                .get_unique_nodes_for_datasets(&dataset_ids)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get unshared provenance nodes for dataset {dataset_id}: {e}"
+                    ))
+                })?;
+            let unique_edges = self
+                .database
+                .get_unique_edges_for_datasets(&dataset_ids)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!(
+                        "Failed to get unshared provenance edges for dataset {dataset_id}: {e}"
+                    ))
+                })?;
+            let edge_type_ids = self
+                .edge_type_ids_unclaimed_outside(&dataset_ids, &edges)
+                .await?;
+
             // --- Graph cleanup ---
-            let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &nodes).await?;
+            let (gn, gw) = delete_graph_artifacts(self.graph_db.as_ref(), &unique_nodes).await?;
             graph_node_count += gn;
             warnings.extend(gw);
 
             // --- Vector cleanup ---
             let (vp, vw) = delete_vector_artifacts(
                 self.vector_db.as_ref(),
-                &nodes,
-                &edges,
-                &unchecked_edge_type_vector_ids(&edges),
+                &unique_nodes,
+                &triplet_edges(&edges, &unique_edges, &unique_nodes),
+                &edge_type_ids,
             )
             .await?;
             vector_point_count += vp;
@@ -1638,7 +1698,8 @@ impl DeleteService {
     }
 
     /// Data-scoped cleanup: remove graph nodes and vector points for a single
-    /// data item, using only non-shared slugs. Returns `(graph_nodes_deleted,
+    /// data item, using only the slugs no other owner claims
+    /// ([`Self::claimant_scope`]). Returns `(graph_nodes_deleted,
     /// vector_points_deleted, provenance_nodes_deleted, provenance_edges_deleted,
     /// warnings)`.
     ///
@@ -1666,7 +1727,7 @@ impl DeleteService {
 
         let nodes = self
             .database
-            .get_unique_nodes_for_data(data_id, dataset_id)
+            .get_unique_nodes_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1676,7 +1737,7 @@ impl DeleteService {
 
         let edges = self
             .database
-            .get_unique_edges_for_data(data_id, dataset_id)
+            .get_unique_edges_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1686,11 +1747,13 @@ impl DeleteService {
 
         // Structural edges (`is_part_of`, `contains`, ...) are recorded with a
         // nil `data_id`, so the queries above never see them; find them through
-        // their endpoints instead. They only contribute `EdgeType` points: no
-        // Triplet is indexed for a structural edge.
+        // their endpoints instead. Each has an endpoint in `nodes`, so its edge
+        // leaves the graph with it: its `EdgeType` text is weighed below and its
+        // legacy `Triplet_text` point goes (Rust's cognify never wrote one for a
+        // structural edge, but Python's did, for every graph edge).
         let structural_edges = self
             .database
-            .get_structural_edges_for_data(data_id, dataset_id)
+            .get_structural_edges_for_data(data_id, dataset_id, self.claimant_scope())
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
@@ -1737,9 +1800,13 @@ impl DeleteService {
         let edge_type_ids = self
             .edge_type_ids_to_delete(data_id, dataset_id, &edges, &structural_edges)
             .await?;
-        let (vp, vw) =
-            delete_vector_artifacts(self.vector_db.as_ref(), &nodes, &edges, &edge_type_ids)
-                .await?;
+        let (vp, vw) = delete_vector_artifacts(
+            self.vector_db.as_ref(),
+            &nodes,
+            &triplet_edges(&structural_edges, &edges, &nodes),
+            &edge_type_ids,
+        )
+        .await?;
         vector_point_count += vp;
         warnings.extend(vw);
 
@@ -1811,33 +1878,55 @@ impl DeleteService {
         edges: &[GraphEdge],
         structural_edges: &[GraphEdge],
     ) -> Result<Vec<Uuid>, DeleteError> {
-        let candidates: Vec<String> = edges
-            .iter()
-            .chain(structural_edges)
-            .map(edge_retrieval_text)
-            .filter(|text| !text.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let candidates = retrieval_text_candidates(edges.iter().chain(structural_edges));
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
-        let claimed: HashSet<String> = self
+        let claimed = self
             .database
-            .get_edge_retrieval_texts_claimed_outside_data(data_id, dataset_id, &candidates)
+            .get_edge_retrieval_texts_claimed_outside_data(
+                data_id,
+                dataset_id,
+                self.claimant_scope(),
+                &candidates,
+            )
             .await
             .map_err(|e| {
                 DeleteError::Runtime(format!(
                     "Failed to get surviving edge texts for data {data_id}: {e}"
                 ))
-            })?
-            .into_iter()
-            .collect();
-        Ok(candidates
-            .iter()
-            .filter(|text| !claimed.contains(*text))
-            .map(|text| EdgeType::deterministic_id(text))
-            .collect())
+            })?;
+        Ok(unclaimed_edge_type_ids(&candidates, claimed))
+    }
+
+    /// The `EdgeType` point ids a delete of `dataset_ids` may remove from a
+    /// shared store: the retrieval texts of `edges` (the datasets' edge rows)
+    /// that no live edge row outside those datasets still produces.
+    ///
+    /// The dataset-scoped sibling of [`Self::edge_type_ids_to_delete`]. Python
+    /// deletes the point of every deleted edge's text on this path
+    /// (`delete_from_graph_and_vector`); Rust keeps the check its data-scoped
+    /// delete and run sweep already make, because every dataset's structural
+    /// edges (`is_part_of`, `contains`, ...) share one point per text.
+    async fn edge_type_ids_unclaimed_outside(
+        &self,
+        dataset_ids: &[Uuid],
+        edges: &[GraphEdge],
+    ) -> Result<Vec<Uuid>, DeleteError> {
+        let candidates = retrieval_text_candidates(edges);
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let claimed = self
+            .database
+            .get_edge_retrieval_texts_claimed_outside_datasets(dataset_ids, &candidates)
+            .await
+            .map_err(|e| {
+                DeleteError::Runtime(format!(
+                    "Failed to get surviving edge texts outside datasets {dataset_ids:?}: {e}"
+                ))
+            })?;
+        Ok(unclaimed_edge_type_ids(&candidates, claimed))
     }
 
     /// Hard-mode orphan sweep: find and delete degree-one Entity/EntityType
@@ -2019,25 +2108,10 @@ impl DeleteService {
         let mut vector_points = 0usize;
         let mut prov_nodes = 0usize;
         let mut prov_edges = 0usize;
-        let shared_store = if self.dataset_storage.is_some() {
-            None
-        } else {
-            self.vector_db.as_ref()
-        };
+        let shared_store = self.dataset_storage.is_none();
         let mut shared_edges: Vec<GraphEdge> = Vec::new();
 
         for dataset in &targets.datasets_to_delete {
-            let nodes = self
-                .database
-                .get_nodes_by_dataset(dataset.id)
-                .await
-                .map_err(|e| {
-                    DeleteError::Runtime(format!(
-                        "Failed to count provenance nodes for dataset {}: {e}",
-                        dataset.id
-                    ))
-                })?;
-
             let edges = self
                 .database
                 .get_edges_by_dataset(dataset.id)
@@ -2049,29 +2123,56 @@ impl DeleteService {
                     ))
                 })?;
 
-            prov_nodes += nodes.len();
             prov_edges += edges.len();
-            match shared_store {
-                // One shared store: the datasets' edge points are probed
-                // together below, so a point two of them name counts once,
-                // as the run (one dataset after another) deletes it once.
-                Some(_) => {
-                    let (gn, vp) = ledger_node_counts(&nodes);
-                    graph_nodes += gn;
-                    vector_points += vp;
-                    shared_edges.extend(edges);
-                }
+            if shared_store {
+                // Counted for the whole set below.
+                prov_nodes += self.dataset_node_count(dataset.id).await?;
+                shared_edges.extend(edges);
+            } else {
                 // Per-dataset storage: the dataset's points live in its own
                 // store, which execution drops whole without probing it (see
                 // `cleanup_dataset`).
-                None => {
-                    let (gn, vp) = ledger_artifact_counts(None, &nodes, &edges).await;
-                    graph_nodes += gn;
-                    vector_points += vp;
-                }
+                let nodes = self.dataset_node_rows(dataset.id).await?;
+                prov_nodes += nodes.len();
+                let (gn, vp) = ledger_artifact_counts(&nodes, &edges);
+                graph_nodes += gn;
+                vector_points += vp;
             }
         }
-        vector_points += ledger_edge_point_count(shared_store, &shared_edges).await;
+
+        if shared_store {
+            // One shared store: only what no row outside the deleted datasets
+            // claims goes (see `cleanup_dataset`). Taken over the whole set,
+            // so a node or point only they share counts once, as the run (one
+            // dataset after another) deletes it once, with the last of them.
+            let dataset_ids: Vec<Uuid> = targets.datasets_to_delete.iter().map(|d| d.id).collect();
+            let unique_nodes = self
+                .database
+                .get_unique_nodes_for_datasets(&dataset_ids)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!("Failed to count unshared provenance nodes: {e}"))
+                })?;
+            let unique_edges = self
+                .database
+                .get_unique_edges_for_datasets(&dataset_ids)
+                .await
+                .map_err(|e| {
+                    DeleteError::Runtime(format!("Failed to count unshared provenance edges: {e}"))
+                })?;
+            let (gn, vp) = ledger_node_counts(&unique_nodes);
+            graph_nodes += gn;
+            vector_points += vp;
+            let edge_type_ids = self
+                .edge_type_ids_unclaimed_outside(&dataset_ids, &shared_edges)
+                .await?;
+            vector_points += edge_point_count(
+                self.vector_db.as_ref(),
+                &edge_type_ids,
+                &triplet_edges(&shared_edges, &unique_edges, &unique_nodes),
+            )
+            .await;
+        }
 
         Ok((graph_nodes, vector_points, prov_nodes, prov_edges))
     }
@@ -2589,55 +2690,118 @@ pub(crate) async fn delete_graph_artifacts(
     }
 }
 
-/// The graph nodes and vector points a dataset's ledger rows account for:
-/// what a dataset delete reports, previewed or executed.
+/// The distinct non-empty `EdgeType` retrieval texts of `edges`, sorted: the
+/// candidates a delete weighs against the rows that survive it.
+fn retrieval_text_candidates<'a>(edges: impl IntoIterator<Item = &'a GraphEdge>) -> Vec<String> {
+    edges
+        .into_iter()
+        .map(edge_retrieval_text)
+        .filter(|text| !text.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The `EdgeType` point ids of the `candidates` no surviving row `claimed`.
+fn unclaimed_edge_type_ids(candidates: &[String], claimed: Vec<String>) -> Vec<Uuid> {
+    let claimed: HashSet<String> = claimed.into_iter().collect();
+    candidates
+        .iter()
+        .filter(|text| !claimed.contains(*text))
+        .map(|text| EdgeType::deterministic_id(text))
+        .collect()
+}
+
+/// The edge rows whose legacy `Triplet_text` point a delete removes: those no
+/// other owner's row names (`unique_edges`), and those of `edges` with an
+/// endpoint the delete takes out of the graph (`deleted_nodes`),
+/// deduplicated. Used by the shared-store dataset delete and by the
+/// data-scoped delete (whose `edges` are its structural rows).
 ///
-/// `store` is the vector store the edge points are probed in (see
-/// [`ledger_edge_point_count`]); `None` for a dataset whose own databases are
-/// dropped whole and cannot be probed from here.
-async fn ledger_artifact_counts(
-    store: Option<&Arc<dyn VectorDB>>,
-    nodes: &[GraphNode],
+/// The point is one-to-one with an edge (source, text, target), and the graph
+/// loses an edge only with one of its endpoints. The second set is needed
+/// because a structural row's `slug` is keyed on its relationship text alone
+/// (`edge_slug`, Python's `generate_edge_id`): every dataset's `is_part_of`
+/// rows share one slug, so slug exclusivity never selects a dataset's own
+/// chunk-to-document edge while another dataset exists. An edge whose
+/// endpoints both survive and whose slug another dataset names keeps its
+/// point: it is still in the graph.
+fn triplet_edges(
     edges: &[GraphEdge],
-) -> (usize, usize) {
+    unique_edges: &[GraphEdge],
+    deleted_nodes: &[GraphNode],
+) -> Vec<GraphEdge> {
+    let deleted: HashSet<Uuid> = deleted_nodes.iter().map(|node| node.slug).collect();
+    let mut seen = HashSet::new();
+    unique_edges
+        .iter()
+        .chain(edges.iter().filter(|edge| {
+            deleted.contains(&edge.source_node_id) || deleted.contains(&edge.destination_node_id)
+        }))
+        .filter(|edge| seen.insert(edge.id))
+        .cloned()
+        .collect()
+}
+
+/// The graph nodes and vector points the ledger rows of a dataset under
+/// per-dataset storage account for: what its delete reports, previewed or
+/// executed. Its own databases are dropped whole and cannot be probed from
+/// here, so every distinct `EdgeType` id of a text-bearing edge counts and no
+/// legacy `Triplet_text` point does.
+fn ledger_artifact_counts(nodes: &[GraphNode], edges: &[GraphEdge]) -> (usize, usize) {
     let (graph_nodes, node_points) = ledger_node_counts(nodes);
-    (
-        graph_nodes,
-        node_points + ledger_edge_point_count(store, edges).await,
-    )
+    let edge_type_points = edges
+        .iter()
+        .filter_map(edge_type_vector_id)
+        .collect::<BTreeSet<Uuid>>()
+        .len();
+    (graph_nodes, node_points + edge_type_points)
 }
 
 /// The graph nodes (unique slugs) and the node vector points (one per
-/// indexed field) the ledger `nodes` account for.
+/// collection and slug) the ledger `nodes` account for. Several rows can name
+/// one slug (one per data item or dataset that produced it); they stand for
+/// one node and one point per indexed field.
 fn ledger_node_counts(nodes: &[GraphNode]) -> (usize, usize) {
     let unique_slugs: HashSet<Uuid> = nodes.iter().map(|n| n.slug).collect();
-    let node_points: usize = nodes
+    let node_points: HashSet<(&str, String, Uuid)> = nodes
         .iter()
-        .map(|node| parse_indexed_fields(&node.indexed_fields).len())
-        .sum();
-    (unique_slugs.len(), node_points)
+        .flat_map(|node| {
+            parse_indexed_fields(&node.indexed_fields)
+                .into_iter()
+                .map(move |field| (node.node_type.as_str(), field, node.slug))
+        })
+        .collect();
+    (unique_slugs.len(), node_points.len())
 }
 
-/// The `EdgeType_relationship_name` and legacy `Triplet_text` points the
-/// ledger `edges` account for.
+/// The `EdgeType_relationship_name` points among `edge_type_ids` and the
+/// legacy `Triplet_text` points of `triplet_edges` that a shared-store delete
+/// removes.
 ///
 /// With a `store`, a point counts only when it exists, once however many
-/// edges name it ([`existing_edge_type_vector_ids`],
-/// [`existing_triplet_vector_ids`]): what the run deletes. A failed probe
-/// counts none and logs a warning; the preview stays available, while the
-/// run then fails on `EdgeType` and skips `Triplet_text` (best-effort, as in
-/// Python). With no store (a dataset whose own databases are dropped whole)
-/// the distinct `EdgeType` ids of text-bearing edges are counted, and no
-/// `Triplet_text` point.
-async fn ledger_edge_point_count(store: Option<&Arc<dyn VectorDB>>, edges: &[GraphEdge]) -> usize {
+/// edges name it ([`existing_vector_ids`], [`existing_triplet_vector_ids`]):
+/// what the run deletes. A failed probe counts none and logs a warning; the
+/// preview stays available, while the run then fails on `EdgeType` and skips
+/// `Triplet_text` (best-effort, as in Python). With no vector store
+/// configured, the distinct `EdgeType` ids count and no `Triplet_text` point.
+async fn edge_point_count(
+    store: Option<&Arc<dyn VectorDB>>,
+    edge_type_ids: &[Uuid],
+    triplet_edges: &[GraphEdge],
+) -> usize {
+    let edge_type_ids: BTreeSet<Uuid> = edge_type_ids.iter().copied().collect();
     let Some(vector_db) = store else {
-        return edges
-            .iter()
-            .filter_map(edge_type_vector_id)
-            .collect::<BTreeSet<Uuid>>()
-            .len();
+        return edge_type_ids.len();
     };
-    let edge_type_points = match existing_edge_type_vector_ids(vector_db, edges).await {
+    let edge_type_points = match existing_vector_ids(
+        vector_db,
+        EDGE_TYPE_DATA_TYPE,
+        EDGE_TYPE_FIELD,
+        edge_type_ids,
+    )
+    .await
+    {
         Ok(ids) => ids.len(),
         Err(error) => {
             warn!("{error}; counting no EdgeType points");
@@ -2646,7 +2810,7 @@ async fn ledger_edge_point_count(store: Option<&Arc<dyn VectorDB>>, edges: &[Gra
     };
     // Cognify no longer writes `Triplet_text` points (SDK-1115), so most
     // edges have none.
-    let triplet_points = match existing_triplet_vector_ids(vector_db, edges).await {
+    let triplet_points = match existing_triplet_vector_ids(vector_db, triplet_edges).await {
         Ok(ids) => ids.len(),
         Err(error) => {
             warn!("{error}; counting no legacy Triplet_text points");
@@ -2675,21 +2839,6 @@ async fn existing_triplet_vector_ids(
 ) -> Result<Vec<Uuid>, String> {
     let candidates: BTreeSet<Uuid> = edges.iter().map(triplet_vector_id).collect();
     existing_vector_ids(vector_db, TRIPLET_DATA_TYPE, TRIPLET_FIELD, candidates).await
-}
-
-/// The `EdgeType_relationship_name` point ids of `edges` that exist in
-/// `vector_db`, without duplicates.
-///
-/// The id is per retrieval text ([`edge_type_vector_id`]), so edges sharing a
-/// text name one point, and a point is absent when the collection is missing
-/// or the edge was never indexed. Both the delete preview and the run count
-/// this set, so they agree and neither reports a point that is not there.
-async fn existing_edge_type_vector_ids(
-    vector_db: &Arc<dyn VectorDB>,
-    edges: &[GraphEdge],
-) -> Result<Vec<Uuid>, String> {
-    let candidates: BTreeSet<Uuid> = edges.iter().filter_map(edge_type_vector_id).collect();
-    existing_vector_ids(vector_db, EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, candidates).await
 }
 
 /// The members of `candidates` that exist as points of `data_type_field`.
@@ -2739,8 +2888,9 @@ pub(crate) async fn delete_vector_artifacts(
     let mut total_deleted = 0usize;
 
     if let Some(vector_db) = vector_db {
-        // Group nodes by (node_type, field_name) for batched deletion
-        let mut by_collection: HashMap<(String, String), Vec<Uuid>> = HashMap::new();
+        // Group nodes by (node_type, field_name) for batched deletion. A set,
+        // because several ledger rows can name one slug.
+        let mut by_collection: HashMap<(String, String), BTreeSet<Uuid>> = HashMap::new();
 
         for node in nodes {
             let fields = parse_indexed_fields(&node.indexed_fields);
@@ -2748,7 +2898,7 @@ pub(crate) async fn delete_vector_artifacts(
                 by_collection
                     .entry((node.node_type.clone(), field_name))
                     .or_default()
-                    .push(node.slug);
+                    .insert(node.slug);
             }
         }
 
@@ -2804,7 +2954,8 @@ pub(crate) async fn delete_vector_artifacts(
                 })?;
 
             if exists {
-                let deleted = vector_db.delete_points(data_type, field_name, ids).await;
+                let ids: Vec<Uuid> = ids.iter().copied().collect();
+                let deleted = vector_db.delete_points(data_type, field_name, &ids).await;
                 match deleted {
                     Ok(_) => total_deleted += ids.len(),
                     Err(e) if data_type == TRIPLET_DATA_TYPE && field_name == TRIPLET_FIELD => {
@@ -2851,19 +3002,6 @@ fn parse_indexed_fields(value: &serde_json::Value) -> Vec<String> {
             vec![]
         }
     }
-}
-
-/// Every selected edge's `EdgeType` point id, with no exclusivity check over
-/// the retrieval text — the dataset delete path's long-standing
-/// behavior, kept as it was.
-///
-/// Because that id is many-to-one over edges, this can name a point a surviving
-/// edge of another dataset still needs. The run sweep narrows the set with
-/// `get_edge_retrieval_texts_claimed_outside_run` and the data-scoped path with
-/// `get_edge_retrieval_texts_claimed_outside_data`; doing the same here
-/// changes dataset deletion and belongs with that path's own tests.
-fn unchecked_edge_type_vector_ids(edges: &[GraphEdge]) -> Vec<Uuid> {
-    edges.iter().filter_map(edge_type_vector_id).collect()
 }
 
 /// The `EdgeType` vector point id cognify actually wrote for this edge.
@@ -4636,8 +4774,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ledger_artifact_counts(Some(&store), &[], std::slice::from_ref(&edge)).await,
-            (0, 0),
+            edge_point_count(Some(&store), &[], std::slice::from_ref(&edge)).await,
+            0,
             "a failed lookup counts no Triplet point, as the run deletes none"
         );
     }
@@ -8356,5 +8494,447 @@ mod tests {
                 "the delete must name the point `Triplet::new` derived (edge_text={edge_text:?})"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // SDK-948: artifacts another dataset still references
+    // ------------------------------------------------------------------
+
+    /// Two datasets of one owner in one shared store. Each has one data item;
+    /// `berlin` (an `Entity`, indexed on `name`) is named by both, `own_a` and
+    /// `own_b` by one each. The graph holds the three nodes and the vector
+    /// store their three `Entity_name` points.
+    struct SharedEntityStore {
+        svc: DeleteService,
+        db: Arc<cognee_database::DatabaseConnection>,
+        graph_db: Arc<MockGraphDB>,
+        vector_db: Arc<MockVectorDB>,
+        owner: Uuid,
+        dataset_a: Uuid,
+        data_a: Uuid,
+        dataset_b: Uuid,
+        berlin: Uuid,
+        own_a: Uuid,
+        own_b: Uuid,
+    }
+
+    impl SharedEntityStore {
+        async fn new() -> Self {
+            Self::with_storage(false).await
+        }
+
+        /// With `per_dataset_storage`, the service runs as under
+        /// `ENABLE_BACKEND_ACCESS_CONTROL` (each dataset's store dropped whole).
+        async fn with_storage(per_dataset_storage: bool) -> Self {
+            let (svc, storage, db, graph_db, vector_db) = make_service_with_graph_vector().await;
+            let svc = if per_dataset_storage {
+                svc.with_dataset_storage(Arc::new(DroppingStorage))
+            } else {
+                svc
+            };
+            let owner = Uuid::new_v4();
+            let (dataset_a, data_a) = seed_dataset_with_data(&db, &storage, owner, "ds_a").await;
+            let (dataset_b, data_b) = seed_dataset_with_data(&db, &storage, owner, "ds_b").await;
+            let (berlin, own_a, own_b) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            for (dataset, data, slugs) in [
+                (dataset_a, data_a, [berlin, own_a]),
+                (dataset_b, data_b, [berlin, own_b]),
+            ] {
+                seed_provenance_nodes(
+                    &db,
+                    dataset,
+                    data,
+                    owner,
+                    &slugs,
+                    "Entity",
+                    serde_json::json!(["name"]),
+                )
+                .await;
+            }
+            vector_db
+                .create_collection("Entity", "name", 3)
+                .await
+                .unwrap();
+            for slug in [berlin, own_a, own_b] {
+                graph_db
+                    .add_node_raw(serde_json::json!({"id": slug.to_string(), "name": "n"}))
+                    .await
+                    .unwrap();
+                vector_db
+                    .index_points(
+                        "Entity",
+                        "name",
+                        &[cognee_vector::VectorPoint::new(slug, vec![1.0, 0.0, 0.0])],
+                    )
+                    .await
+                    .unwrap();
+            }
+            Self {
+                svc,
+                db,
+                graph_db,
+                vector_db,
+                owner,
+                dataset_a,
+                data_a,
+                dataset_b,
+                berlin,
+                own_a,
+                own_b,
+            }
+        }
+
+        async fn graph_slugs(&self) -> BTreeSet<Uuid> {
+            let (nodes, _) = self.graph_db.get_graph_data().await.unwrap();
+            nodes
+                .iter()
+                .map(|(id, _)| Uuid::parse_str(id).unwrap())
+                .collect()
+        }
+
+        async fn vector_slugs(&self) -> BTreeSet<Uuid> {
+            self.vector_db
+                .retrieve("Entity", "name", &[self.berlin, self.own_a, self.own_b])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|found| found.id)
+                .collect()
+        }
+
+        fn dataset_request(&self, name: &str) -> DeleteRequest {
+            DeleteRequest {
+                scope: DeleteScope::Dataset {
+                    owner_id: self.owner,
+                    dataset_name: name.to_string(),
+                    tenant_id: None,
+                },
+                mode: DeleteMode::Soft,
+                memory_only: false,
+            }
+        }
+    }
+
+    /// Deleting dataset A keeps `berlin`, which dataset B still names, in the
+    /// graph and the vector store (Python's `get_global_dataset_related_nodes`);
+    /// only A's own node goes, and the preview says so. Deleting B then
+    /// removes `berlin` with its last claimant.
+    #[tokio::test]
+    async fn dataset_delete_keeps_an_entity_another_dataset_names() {
+        let store = SharedEntityStore::new().await;
+        let request = store.dataset_request("ds_a");
+
+        let preview = store.svc.preview(&request).await.unwrap();
+        let result = store.svc.execute(&request).await.unwrap();
+
+        let survivors: BTreeSet<Uuid> = [store.berlin, store.own_b].into_iter().collect();
+        assert_eq!(store.graph_slugs().await, survivors);
+        assert_eq!(store.vector_slugs().await, survivors);
+        assert_eq!(
+            (preview.graph_nodes_to_delete, result.deleted_graph_nodes),
+            (1, 1)
+        );
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (1, 1)
+        );
+        // A's ledger rows go even for the artifact that stays.
+        assert!(
+            ops::graph_storage::get_nodes_by_dataset(&store.db, store.dataset_a)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .svc
+            .execute(&store.dataset_request("ds_b"))
+            .await
+            .unwrap();
+        assert!(store.graph_slugs().await.is_empty());
+        assert!(store.vector_slugs().await.is_empty());
+    }
+
+    /// Deleting A's data item keeps `berlin` for dataset B too (Python's
+    /// `get_global_data_related_nodes(data_id, dataset_id=…)`).
+    #[tokio::test]
+    async fn data_delete_keeps_an_entity_another_dataset_names() {
+        let store = SharedEntityStore::new().await;
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id: store.dataset_a,
+                data_id: store.data_a,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = store.svc.execute(&request).await.unwrap();
+
+        let survivors: BTreeSet<Uuid> = [store.berlin, store.own_b].into_iter().collect();
+        assert_eq!(store.graph_slugs().await, survivors);
+        assert_eq!(store.vector_slugs().await, survivors);
+        assert_eq!(result.deleted_graph_nodes, 1);
+        assert_eq!(
+            ops::graph_storage::get_nodes_by_dataset(&store.db, store.dataset_b)
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "B's ledger rows are untouched"
+        );
+    }
+
+    /// Deleting every dataset at once removes the shared entity: it is
+    /// claimed only inside the deleted set, and counted once.
+    #[tokio::test]
+    async fn deleting_every_claimant_dataset_removes_the_shared_entity() {
+        let store = SharedEntityStore::new().await;
+        let request = DeleteRequest {
+            scope: DeleteScope::User {
+                owner_id: store.owner,
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = store.svc.preview(&request).await.unwrap();
+        let result = store.svc.execute(&request).await.unwrap();
+
+        assert!(store.graph_slugs().await.is_empty());
+        assert!(store.vector_slugs().await.is_empty());
+        assert_eq!(
+            (preview.graph_nodes_to_delete, result.deleted_graph_nodes),
+            (3, 3)
+        );
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (3, 3)
+        );
+    }
+
+    /// The `EdgeType` point of a retrieval text both datasets' edges produce
+    /// (every dataset's `is_part_of`) survives deleting one of them, and goes
+    /// with the second.
+    #[tokio::test]
+    async fn dataset_delete_keeps_an_edge_type_point_another_dataset_needs() {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        for name in ["edge_a", "edge_b"] {
+            let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, name).await;
+            seed_edges_returning(&db, dataset_id, data_id, owner, 1, "is_part_of").await;
+        }
+        let point = EdgeType::deterministic_id("is_part_of");
+        vector_db
+            .create_collection(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, 3)
+            .await
+            .unwrap();
+        vector_db
+            .index_points(
+                EDGE_TYPE_DATA_TYPE,
+                EDGE_TYPE_FIELD,
+                &[cognee_vector::VectorPoint::new(point, vec![1.0, 0.0, 0.0])],
+            )
+            .await
+            .unwrap();
+        let request = |name: &str| DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: name.to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+        let exists = || async {
+            !vector_db
+                .retrieve(EDGE_TYPE_DATA_TYPE, EDGE_TYPE_FIELD, &[point])
+                .await
+                .unwrap()
+                .is_empty()
+        };
+
+        let preview = svc.preview(&request("edge_a")).await.unwrap();
+        let result = svc.execute(&request("edge_a")).await.unwrap();
+        assert!(
+            exists().await,
+            "edge_b's is_part_of edge still needs the point"
+        );
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (0, 0)
+        );
+
+        let result = svc.execute(&request("edge_b")).await.unwrap();
+        assert!(!exists().await);
+        assert_eq!(result.deleted_vector_points, 1);
+    }
+
+    /// Per-dataset storage keeps Python's multi-user rule: each dataset has
+    /// its own graph, so another dataset's row names a different physical
+    /// node and does not protect this one. A data delete removes the item's
+    /// `berlin` from the dataset's store.
+    #[tokio::test]
+    async fn per_dataset_storage_data_delete_ignores_other_datasets() {
+        let store = SharedEntityStore::with_storage(true).await;
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id: store.dataset_a,
+                data_id: store.data_a,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = store.svc.execute(&request).await.unwrap();
+
+        assert_eq!(result.deleted_graph_nodes, 2);
+        assert_eq!(
+            store.graph_slugs().await,
+            [store.own_b].into_iter().collect::<BTreeSet<_>>()
+        );
+    }
+
+    /// Two datasets of one owner, `struct_a` and `struct_b`, each with one
+    /// data item whose chunk and document are joined by a structural
+    /// `is_part_of` row (nil `data_id`, slug keyed on the text alone, so both
+    /// rows share it) that has a legacy `Triplet_text` point. Returns the
+    /// service, the vector store, the owner, each dataset's
+    /// `(dataset_id, data_id)` and the two structural rows.
+    async fn seed_structural_triplet_datasets() -> (
+        DeleteService,
+        Arc<MockVectorDB>,
+        Uuid,
+        Vec<(Uuid, Uuid)>,
+        Vec<GraphEdge>,
+    ) {
+        let (svc, storage, db, _graph_db, vector_db) = make_service_with_graph_vector().await;
+        let owner = Uuid::new_v4();
+        let mut items = Vec::new();
+        let mut structural = Vec::new();
+        for name in ["struct_a", "struct_b"] {
+            let (dataset_id, data_id) = seed_dataset_with_data(&db, &storage, owner, name).await;
+            let (chunk, document) = (Uuid::new_v4(), Uuid::new_v4());
+            seed_provenance_nodes(
+                &db,
+                dataset_id,
+                data_id,
+                owner,
+                &[chunk, document],
+                "DocumentChunk",
+                serde_json::json!([]),
+            )
+            .await;
+            let edge = GraphEdge {
+                id: Uuid::new_v4(),
+                slug: EdgeType::deterministic_id("is_part_of"),
+                user_id: owner,
+                data_id: Uuid::nil(),
+                dataset_id,
+                pipeline_run_id: None,
+                source_node_id: chunk,
+                destination_node_id: document,
+                relationship_name: "is_part_of".to_string(),
+                label: None,
+                attributes: None,
+                created_at: chrono::Utc::now(),
+            };
+            ops::graph_storage::upsert_edges(&db, std::slice::from_ref(&edge))
+                .await
+                .unwrap();
+            items.push((dataset_id, data_id));
+            structural.push(edge);
+        }
+        seed_legacy_triplet_points(&vector_db, &structural).await;
+        (svc, vector_db, owner, items, structural)
+    }
+
+    /// The `Triplet_text` point ids of `edges` still in `vector_db`.
+    async fn surviving_triplets(vector_db: &MockVectorDB, edges: &[GraphEdge]) -> Vec<Uuid> {
+        let ids: Vec<Uuid> = edges.iter().map(triplet_vector_id).collect();
+        vector_db
+            .retrieve(TRIPLET_DATA_TYPE, TRIPLET_FIELD, &ids)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|found| found.id)
+            .collect()
+    }
+
+    /// Structural rows are keyed on their relationship text (`edge_slug`), so
+    /// every dataset's `is_part_of` rows share one slug and a slug check alone
+    /// would call A's own chunk-to-document edge shared with B. Its legacy
+    /// `Triplet_text` point is one-to-one with the edge, and the edge leaves
+    /// the graph with A's chunk, so the point goes; B's stays.
+    #[tokio::test]
+    async fn dataset_delete_drops_legacy_triplets_of_its_own_structural_edges() {
+        let (svc, vector_db, owner, _items, structural) = seed_structural_triplet_datasets().await;
+        let request = DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id: owner,
+                dataset_name: "struct_a".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let preview = svc.preview(&request).await.unwrap();
+        let result = svc.execute(&request).await.unwrap();
+
+        assert_eq!(
+            surviving_triplets(&vector_db, &structural).await,
+            vec![triplet_vector_id(&structural[1])]
+        );
+        // A's triplet point; the shared `is_part_of` EdgeType text has no
+        // point here, and the nodes index no field.
+        assert_eq!(
+            (
+                preview.vector_points_to_delete,
+                result.deleted_vector_points
+            ),
+            (1, 1)
+        );
+    }
+
+    /// The data-scoped delete drops the legacy `Triplet_text` point of a
+    /// structural row it removes, as the dataset delete does: the row leaves
+    /// the ledger and its edge leaves the graph with the item's chunk.
+    /// Python's cognify indexed a triplet for every graph edge, structural
+    /// ones included (`_create_triplets_from_graph`), so a store it built has
+    /// them. The other dataset's point stays.
+    #[tokio::test]
+    async fn data_delete_drops_legacy_triplets_of_its_structural_edges() {
+        let (svc, vector_db, _owner, items, structural) = seed_structural_triplet_datasets().await;
+        let (dataset_id, data_id) = items[0];
+        let request = DeleteRequest {
+            scope: DeleteScope::DataInDataset {
+                dataset_id,
+                data_id,
+                delete_dataset_if_empty: false,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        };
+
+        let result = svc.execute(&request).await.unwrap();
+
+        assert_eq!(
+            surviving_triplets(&vector_db, &structural).await,
+            vec![triplet_vector_id(&structural[1])]
+        );
+        assert_eq!(result.deleted_vector_points, 1);
     }
 }

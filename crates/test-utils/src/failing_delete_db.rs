@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cognee_database::{DatabaseError, DeleteDb, GraphEdge, GraphNode};
+use cognee_database::{ClaimantScope, DatabaseError, DeleteDb, GraphEdge, GraphNode};
 use cognee_models::{Data, Dataset};
 use uuid::Uuid;
 
@@ -128,6 +128,10 @@ impl DeleteDb for FailingDeleteDb {
         DeleteDb::get_nodes_by_dataset(self.inner.as_ref(), dataset_id).await
     }
 
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError> {
+        DeleteDb::count_nodes_by_dataset(self.inner.as_ref(), dataset_id).await
+    }
+
     async fn get_edges_by_dataset(
         &self,
         dataset_id: Uuid,
@@ -139,24 +143,42 @@ impl DeleteDb for FailingDeleteDb {
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphNode>, DatabaseError> {
-        DeleteDb::get_unique_nodes_for_data(self.inner.as_ref(), data_id, dataset_id).await
+        DeleteDb::get_unique_nodes_for_data(self.inner.as_ref(), data_id, dataset_id, scope).await
     }
 
     async fn get_unique_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
-        DeleteDb::get_unique_edges_for_data(self.inner.as_ref(), data_id, dataset_id).await
+        DeleteDb::get_unique_edges_for_data(self.inner.as_ref(), data_id, dataset_id, scope).await
+    }
+
+    async fn get_unique_nodes_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+    ) -> Result<Vec<GraphNode>, DatabaseError> {
+        DeleteDb::get_unique_nodes_for_datasets(self.inner.as_ref(), dataset_ids).await
+    }
+
+    async fn get_unique_edges_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+    ) -> Result<Vec<GraphEdge>, DatabaseError> {
+        DeleteDb::get_unique_edges_for_datasets(self.inner.as_ref(), dataset_ids).await
     }
 
     async fn get_structural_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
-        DeleteDb::get_structural_edges_for_data(self.inner.as_ref(), data_id, dataset_id).await
+        DeleteDb::get_structural_edges_for_data(self.inner.as_ref(), data_id, dataset_id, scope)
+            .await
     }
 
     async fn delete_provenance_edges_by_ids(&self, ids: &[Uuid]) -> Result<u64, DatabaseError> {
@@ -167,12 +189,27 @@ impl DeleteDb for FailingDeleteDb {
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
         candidates: &[String],
     ) -> Result<Vec<String>, DatabaseError> {
         DeleteDb::get_edge_retrieval_texts_claimed_outside_data(
             self.inner.as_ref(),
             data_id,
             dataset_id,
+            scope,
+            candidates,
+        )
+        .await
+    }
+
+    async fn get_edge_retrieval_texts_claimed_outside_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+        candidates: &[String],
+    ) -> Result<Vec<String>, DatabaseError> {
+        DeleteDb::get_edge_retrieval_texts_claimed_outside_datasets(
+            self.inner.as_ref(),
+            dataset_ids,
             candidates,
         )
         .await

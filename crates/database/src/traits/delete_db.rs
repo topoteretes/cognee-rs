@@ -3,6 +3,7 @@ use cognee_models::{Data, Dataset};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
+use crate::ops::graph_storage::ClaimantScope;
 use crate::ops::{data, datasets, edge_evidence, graph_storage, pipeline_runs, search_history};
 use crate::types::{DatabaseError, GraphEdge, GraphNode};
 
@@ -133,35 +134,56 @@ pub trait DeleteDb: Send + Sync {
     async fn get_nodes_by_dataset(&self, dataset_id: Uuid)
     -> Result<Vec<GraphNode>, DatabaseError>;
 
+    /// Count the provenance node rows of a dataset without loading them.
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError>;
+
     /// Get all provenance edge rows for a dataset.
     async fn get_edges_by_dataset(&self, dataset_id: Uuid)
     -> Result<Vec<GraphEdge>, DatabaseError>;
 
-    /// Get nodes belonging to `(data_id, dataset_id)` whose slug is NOT shared
-    /// with other data items in the same dataset. Safe for targeted deletion.
+    /// Get nodes belonging to `(data_id, dataset_id)` whose slug no other owner
+    /// claims, with "other owner" as `scope` defines it (see
+    /// [`ClaimantScope`]). Safe for targeted deletion.
     async fn get_unique_nodes_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphNode>, DatabaseError>;
 
-    /// Get edges belonging to `(data_id, dataset_id)` whose slug is NOT shared
-    /// with other data items in the same dataset.
+    /// Get edges belonging to `(data_id, dataset_id)` whose slug no other owner
+    /// claims under `scope`.
     async fn get_unique_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
+    ) -> Result<Vec<GraphEdge>, DatabaseError>;
+
+    /// Node rows of `dataset_ids` whose slug no row of another dataset claims:
+    /// what a delete of those datasets may remove from a shared store.
+    async fn get_unique_nodes_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+    ) -> Result<Vec<GraphNode>, DatabaseError>;
+
+    /// Edge rows of `dataset_ids` whose slug no row of another dataset claims.
+    async fn get_unique_edges_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
     ) -> Result<Vec<GraphEdge>, DatabaseError>;
 
     /// Structural edge rows (`is_part_of`, `contains`, ...) that cognify wrote
     /// with a nil `data_id` but that belong to `(data_id, dataset_id)` because
     /// one of their endpoints is exclusive to it. Selected through their
     /// endpoints because the `data_id` column does not name them, so this must
-    /// be called before the item's node rows are deleted.
+    /// be called before the item's node rows are deleted. Exclusivity is decided
+    /// under `scope`, as [`Self::get_unique_nodes_for_data`] decides it.
     async fn get_structural_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphEdge>, DatabaseError>;
 
     /// Delete the provenance edge rows with these ids, returning how many
@@ -174,6 +196,15 @@ pub trait DeleteDb: Send + Sync {
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
+        candidates: &[String],
+    ) -> Result<Vec<String>, DatabaseError>;
+
+    /// The subset of `candidates` still claimed by edge rows outside
+    /// `dataset_ids`, which survive the deletion of those datasets.
+    async fn get_edge_retrieval_texts_claimed_outside_datasets(
+        &self,
+        dataset_ids: &[Uuid],
         candidates: &[String],
     ) -> Result<Vec<String>, DatabaseError>;
 
@@ -358,6 +389,10 @@ impl DeleteDb for DatabaseConnection {
         graph_storage::get_nodes_by_dataset(self, dataset_id).await
     }
 
+    async fn count_nodes_by_dataset(&self, dataset_id: Uuid) -> Result<usize, DatabaseError> {
+        graph_storage::count_nodes_by_dataset(self, dataset_id).await
+    }
+
     async fn get_edges_by_dataset(
         &self,
         dataset_id: Uuid,
@@ -369,24 +404,41 @@ impl DeleteDb for DatabaseConnection {
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphNode>, DatabaseError> {
-        graph_storage::get_unique_nodes_for_data(self, data_id, dataset_id).await
+        graph_storage::get_unique_nodes_for_data(self, data_id, dataset_id, scope).await
     }
 
     async fn get_unique_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
-        graph_storage::get_unique_edges_for_data(self, data_id, dataset_id).await
+        graph_storage::get_unique_edges_for_data(self, data_id, dataset_id, scope).await
+    }
+
+    async fn get_unique_nodes_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+    ) -> Result<Vec<GraphNode>, DatabaseError> {
+        graph_storage::get_unique_nodes_for_datasets(self, dataset_ids).await
+    }
+
+    async fn get_unique_edges_for_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+    ) -> Result<Vec<GraphEdge>, DatabaseError> {
+        graph_storage::get_unique_edges_for_datasets(self, dataset_ids).await
     }
 
     async fn get_structural_edges_for_data(
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
     ) -> Result<Vec<GraphEdge>, DatabaseError> {
-        graph_storage::get_structural_edges_for_data(self, data_id, dataset_id).await
+        graph_storage::get_structural_edges_for_data(self, data_id, dataset_id, scope).await
     }
 
     async fn delete_provenance_edges_by_ids(&self, ids: &[Uuid]) -> Result<u64, DatabaseError> {
@@ -397,10 +449,24 @@ impl DeleteDb for DatabaseConnection {
         &self,
         data_id: Uuid,
         dataset_id: Uuid,
+        scope: ClaimantScope,
         candidates: &[String],
     ) -> Result<Vec<String>, DatabaseError> {
         graph_storage::get_edge_retrieval_texts_claimed_outside_data(
-            self, data_id, dataset_id, candidates,
+            self, data_id, dataset_id, scope, candidates,
+        )
+        .await
+    }
+
+    async fn get_edge_retrieval_texts_claimed_outside_datasets(
+        &self,
+        dataset_ids: &[Uuid],
+        candidates: &[String],
+    ) -> Result<Vec<String>, DatabaseError> {
+        graph_storage::get_edge_retrieval_texts_claimed_outside_datasets(
+            self,
+            dataset_ids,
+            candidates,
         )
         .await
     }

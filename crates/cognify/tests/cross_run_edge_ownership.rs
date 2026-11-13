@@ -24,6 +24,7 @@ mod rollback_harness;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use cognee_database::ClaimantScope;
 use cognee_database::DeleteDb;
 use cognee_database::ops::graph_storage::get_unique_edges_for_data;
 use cognee_delete::{DeleteMode, DeleteRequest, DeleteScope, DeleteService};
@@ -103,9 +104,14 @@ async fn the_shared_edge_is_no_longer_exclusive_to_the_first_file() {
     let (harness, first, second) = two_runs_over_one_shared_edge().await;
 
     for (label, data_id) in [("first", first), ("second", second)] {
-        let exclusive = get_unique_edges_for_data(&harness.db, data_id, harness.dataset_id)
-            .await
-            .expect("exclusivity query");
+        let exclusive = get_unique_edges_for_data(
+            &harness.db,
+            data_id,
+            harness.dataset_id,
+            ClaimantScope::AnyDataset,
+        )
+        .await
+        .expect("exclusivity query");
         assert!(
             !exclusive
                 .iter()

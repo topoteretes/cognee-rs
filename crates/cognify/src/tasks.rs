@@ -4523,9 +4523,10 @@ fn entity_document_map(
 ///
 /// One row per data item that produced this entity. A merged entity is created
 /// once but claimed by every file whose chunks yielded it, and
-/// `get_unique_nodes_for_data` only spares a slug that another `data_id` in the
-/// dataset claims — so a single row lets deleting one file sweep an entity the
-/// others still reference. Deduplicated because two chunks of the same file are
+/// `get_unique_nodes_for_data` only spares a slug that another owner's row
+/// claims (another `data_id` in the dataset, or in one shared store any other
+/// dataset: `ClaimantScope`) — so a single row lets deleting one file sweep an
+/// entity the others still reference. Deduplicated because two chunks of the same file are
 /// two producers but one `data_id`, and [`provenance_node_id`] would then mint
 /// the same primary key twice in one batch.
 fn entity_provenance_rows(
@@ -7636,7 +7637,7 @@ mod tests {
 
     /// An edge produced by two files must own one row per file: the rows share
     /// a `slug`, and `get_unique_edges_for_data` spares a slug only when
-    /// another `data_id` in the dataset claims it — so a single row lets
+    /// another owner's row claims it — so a single row lets
     /// deleting one file sweep an edge (and its EdgeType/Triplet vectors) the
     /// other still references.
     ///
