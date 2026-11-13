@@ -4680,8 +4680,10 @@ fn semantic_edge_provenance_rows(
         // is about what the hash sees.
         let edge_text = sanitize_string(edge_text);
 
+        // Extractors and ontology pullers alike own the edge; only extractors
+        // are evidence for it (see `ArtifactProducers::record_ontology_edge`).
         let mut data_ids = producing_data_ids(
-            producers.edge_chunks(&edge_pair.dedup_key()),
+            &producers.edge_owner_chunks(&edge_pair.dedup_key()),
             chunk_data_map,
         );
         if data_ids.is_empty() {
@@ -7064,17 +7066,6 @@ mod tests {
         );
     }
 
-    /// [`producing_data_ids`] deduplicates on the way *out*, not on the way
-    /// into the database. Two chunks of one file are two producers but one
-    /// data item, and the row id formulas would mint the same primary key
-    /// twice for them.
-    ///
-    /// Asserted on the return value, deliberately. `upsert_nodes_on` /
-    /// `upsert_edges_on` collapse duplicates only *within* one
-    /// `PROVENANCE_INSERT_BATCH` chunk, so a test that reads the rows back
-    /// measures their dedup rather than this function's, and stays green
-    /// against a duplicate pair that straddles a batch boundary — the latent
-    /// bug at scale the doc comment names.
     /// Canonicalizes the individual `Einstein` to `albert_einstein` and pulls
     /// in `albert_einstein -is_a-> scientist`, an edge only the ontology yields.
     struct ScientistOntology;
@@ -7211,6 +7202,92 @@ mod tests {
         );
     }
 
+    /// Every chunk of a run that names an ontology individual owns the
+    /// ontology edges its subgraph holds, not only the first one, which is the
+    /// only chunk that looks the subgraph up. Otherwise deleting the first
+    /// chunk's file would delete `albert_einstein -is_a-> scientist` from
+    /// under the other file of the same run. The pulling chunks are owners
+    /// only: neither is listed as having extracted the edge, so neither is
+    /// cited as edge evidence for it.
+    #[tokio::test]
+    async fn every_chunk_naming_an_ontology_entity_owns_its_ontology_edges() {
+        use crate::fact_extraction::{KnowledgeGraph, Node};
+        use cognee_graph::MockGraphDB;
+
+        let graph = || KnowledgeGraph {
+            nodes: vec![Node {
+                id: "einstein".to_string(),
+                name: "Einstein".to_string(),
+                node_type: "Person".to_string(),
+                description: "A physicist.".to_string(),
+            }],
+            edges: vec![],
+        };
+        let is_a = (
+            Entity::id_for("albert_einstein"),
+            EntityType::id_for("scientist"),
+            "is_a".to_string(),
+        );
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (file_a, file_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let dataset_id = Uuid::new_v4();
+
+        let expansion = expand_and_partition_extracted_graphs(
+            &MockGraphDB::new(),
+            vec![(chunk_a, graph()), (chunk_b, graph())],
+            dataset_id,
+            &HashMap::new(),
+            &HashMap::new(),
+            &ScientistOntology,
+            None,
+            None,
+        )
+        .await
+        .expect("the run expands");
+
+        let written: Vec<GraphEdgePair> = expansion
+            .edges
+            .iter()
+            .filter(|e| e.dedup_key() == is_a)
+            .cloned()
+            .collect();
+        assert_eq!(written.len(), 1, "the ontology edge is written once");
+        assert_eq!(
+            expansion.producers.edge_owner_chunks(&is_a),
+            vec![chunk_a, chunk_b],
+            "both chunks own it"
+        );
+        assert!(
+            expansion.producers.edge_chunks(&is_a).is_empty()
+                && expansion.producers.edges().all(|(key, _)| *key != is_a),
+            "neither chunk extracted it"
+        );
+
+        let rows = semantic_edge_provenance_rows(
+            LedgerIdentity::new(None, Some(Uuid::new_v4()), dataset_id, Some(Uuid::new_v4())),
+            &written,
+            &HashMap::from([(chunk_a, file_a), (chunk_b, file_b)]),
+            &HashMap::new(),
+            &expansion.producers,
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.data_id).collect::<Vec<_>>(),
+            vec![file_a, file_b],
+            "one ownership row per file"
+        );
+    }
+
+    /// [`producing_data_ids`] deduplicates on the way *out*, not on the way
+    /// into the database. Two chunks of one file are two producers but one
+    /// data item, and the row id formulas would mint the same primary key
+    /// twice for them.
+    ///
+    /// Asserted on the return value, deliberately. `upsert_nodes_on` /
+    /// `upsert_edges_on` collapse duplicates only *within* one
+    /// `PROVENANCE_INSERT_BATCH` chunk, so a test that reads the rows back
+    /// measures their dedup rather than this function's, and stays green
+    /// against a duplicate pair that straddles a batch boundary — the latent
+    /// bug at scale the doc comment names.
     #[test]
     fn producing_data_ids_deduplicates_and_keeps_first_seen_order() {
         let file_a = Uuid::new_v4();

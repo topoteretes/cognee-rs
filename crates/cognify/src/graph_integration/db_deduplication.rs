@@ -67,10 +67,13 @@ fn collect_distinct_candidate_edges(edges: &[GraphEdgePair]) -> Vec<EdgeData> {
 /// run's data item finds the edge exclusively owned and deletes it from under
 /// every later file that references it. A caller that drops this list
 /// re-creates, across runs, the cross-file damage per-producer ownership rows
-/// exist to prevent. The claim is dataset-scoped, like every other ownership
-/// row: exclusivity is decided by `get_unique_edges_for_data` within one
-/// dataset, so an edge shared between two *datasets* stays unprotected in
-/// either direction.
+/// exist to prevent.
+///
+/// The row is dataset-scoped, like every other ownership row, but it protects
+/// the edge across datasets too: in one shared store a delete counts rows of
+/// any other dataset as claimants (`ClaimantScope::AnyDataset`, SDK-948), so
+/// an edge two datasets produced survives deleting either. Under per-dataset
+/// storage each dataset has its own graph and only same-dataset rows count.
 ///
 /// `existing_edges` holds one edge per identity. An extracted edge and an
 /// ontology edge can share one, and the claim list is turned into ownership

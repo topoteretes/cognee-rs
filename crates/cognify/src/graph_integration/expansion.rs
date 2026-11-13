@@ -641,6 +641,14 @@ pub async fn expand_extracted_graphs(
     let mut ontology_entities_map: HashMap<String, GraphNodePair> = HashMap::new();
     let mut ontology_edge_keys: HashSet<String> = HashSet::new();
     let mut ontology_edges_out: Vec<GraphEdgePair> = Vec::new();
+    // `type_map` / `node_map` key → the ontology edges its subgraph pulled in.
+    // The subgraph is looked up only by the chunk that creates the type or
+    // entity; a later chunk resolving to it reuses the map entry, and is
+    // recorded as an owner of those edges from here. Without it only the
+    // first chunk's document would own them, and deleting that document would
+    // delete edges another document of the run still names. Python gives each
+    // data item its own ref, since it expands every item separately.
+    let mut ontology_edges_by_puller: HashMap<String, Vec<(Uuid, Uuid, String)>> = HashMap::new();
 
     // Process all graphs — each graph carries its source chunk_id
     // `position` is the chunk's ordinal in this pass. Registry entries record
@@ -762,6 +770,12 @@ pub async fn expand_extracted_graphs(
                     .cloned()
                     .unwrap_or_else(|| type_key.clone());
 
+                if let Some(pulled) = ontology_edges_by_puller.get(&effective_key) {
+                    for key in pulled {
+                        producers.record_ontology_edge(key.clone(), chunk_id);
+                    }
+                }
+
                 if !type_map.contains_key(&effective_key) {
                     let mut et =
                         EntityType::from_node_type(&normalized_type_name, Some(dataset_id));
@@ -813,7 +827,7 @@ pub async fn expand_extracted_graphs(
                                 // created the canonical type node).
                                 let mut edge_category_nodes = onto_nodes.clone();
                                 edge_category_nodes.push(root_node.clone());
-                                process_ontology_edges(
+                                let pulled = process_ontology_edges(
                                     &edge_category_nodes,
                                     &onto_edges,
                                     &mut ontology_edge_keys,
@@ -823,14 +837,13 @@ pub async fn expand_extracted_graphs(
                                 );
 
                                 // Insert under canonical key
-                                type_map.insert(
-                                    if new_type_key != type_key {
-                                        new_type_key
-                                    } else {
-                                        effective_key.clone()
-                                    },
-                                    et,
-                                );
+                                let inserted_key = if new_type_key != type_key {
+                                    new_type_key
+                                } else {
+                                    effective_key.clone()
+                                };
+                                ontology_edges_by_puller.insert(inserted_key.clone(), pulled);
+                                type_map.insert(inserted_key, et);
                             }
                             Ok((_, _, None)) => {
                                 // No match in ontology
@@ -968,6 +981,7 @@ pub async fn expand_extracted_graphs(
             }
 
             // Process deferred ontology individual subgraph (outside the Vacant borrow)
+            let individual_subgraph_pulled = deferred_individual_data.is_some();
             if let Some((ont_nodes, ont_edges)) = deferred_individual_data {
                 process_ontology_nodes(
                     &ont_nodes,
@@ -981,7 +995,7 @@ pub async fn expand_extracted_graphs(
                     task_rank,
                     &mut local_visited,
                 );
-                process_ontology_edges(
+                let pulled = process_ontology_edges(
                     &ont_nodes,
                     &ont_edges,
                     &mut ontology_edge_keys,
@@ -989,6 +1003,15 @@ pub async fn expand_extracted_graphs(
                     &mut producers,
                     chunk_id,
                 );
+                ontology_edges_by_puller.insert(entity_key.clone(), pulled);
+            }
+            if !individual_subgraph_pulled {
+                // An earlier chunk created this entity and pulled its subgraph.
+                if let Some(pulled) = ontology_edges_by_puller.get(&entity_key) {
+                    for key in pulled {
+                        producers.record_ontology_edge(key.clone(), chunk_id);
+                    }
+                }
             }
 
             // Record this chunk as a producer whether or not it was the chunk
@@ -1493,11 +1516,18 @@ fn process_ontology_nodes(
 /// is already in the graph is decided afterwards, with every other produced edge,
 /// by [`partition_existing_edges`](super::db_deduplication::partition_existing_edges).
 ///
-/// `chunk_id` is recorded as a producer of every edge it yields, the skipped
-/// repeats included: it is the chunk whose entity pulled this subgraph in. Its
-/// document then owns the edge, as Python attaches the current document's ref
-/// to enrichment edges (`find_existing_edge_identities`), so a claimed ontology
-/// edge gets an ownership row for that document instead of a nil one.
+/// `chunk_id` is recorded as an ontology puller of every edge the subgraph
+/// holds, the ones this pass already produced included: it is the chunk whose
+/// entity or type pulled this subgraph in. Its document then owns the edge, as
+/// Python attaches the current document's ref to enrichment edges
+/// (`find_existing_edge_identities`), so a claimed ontology edge gets an
+/// ownership row for that document instead of a nil one. It is *not* recorded
+/// as an extractor, so the chunk is not edge evidence for it (see
+/// [`ArtifactProducers::record_ontology_edge`]).
+///
+/// Returns the dedup key of every edge the subgraph holds, so a later chunk
+/// that resolves to the same entity or type, and therefore skips the subgraph
+/// lookup, can be recorded as an owner too.
 fn process_ontology_edges(
     ontology_nodes: &[AttachedOntologyNode],
     ontology_edges: &[OntologyEdge],
@@ -1505,7 +1535,7 @@ fn process_ontology_edges(
     ontology_edges_out: &mut Vec<GraphEdgePair>,
     producers: &mut ArtifactProducers,
     chunk_id: Uuid,
-) {
+) -> Vec<(Uuid, Uuid, String)> {
     // Mirror Python's `node_category = {node.name: node.category ...}`: an edge
     // endpoint that names a class resolves via `EntityType::id_for`, otherwise
     // `Entity::id_for` (expand_with_nodes_and_edges.py:84-89). Endpoints not in
@@ -1537,12 +1567,15 @@ fn process_ontology_edges(
         }
     };
 
+    let mut pulled = Vec::with_capacity(ontology_edges.len());
     for (source, relation, target) in ontology_edges {
         let source_id = endpoint_id(source);
         let target_id = endpoint_id(target);
         let rel_name = generate_edge_name(relation);
         let edge_key = format!("{source_id}_{target_id}_{rel_name}");
-        producers.record_edge((source_id, target_id, rel_name.clone()), chunk_id);
+        let dedup_key = (source_id, target_id, rel_name.clone());
+        producers.record_ontology_edge(dedup_key.clone(), chunk_id);
+        pulled.push(dedup_key);
 
         if ontology_edge_keys.contains(&edge_key) {
             continue;
@@ -1557,6 +1590,7 @@ fn process_ontology_edges(
         ontology_edge_keys.insert(edge_key);
         ontology_edges_out.push(edge);
     }
+    pulled
 }
 
 #[cfg(test)]

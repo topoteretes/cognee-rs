@@ -109,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `expand_extracted_graphs` | took `existing_edges_set` and filled `Expansion::claimed_existing_edges` | no `existing_edges_set`; does not consult the graph, so `claimed_existing_edges` is empty |
   | DB-aware expansion | built into the functions above | `expand_and_partition_extracted_graphs(graph_db, …)`, which the pipeline uses |
   | Stored ontology edge produced again | re-upserted and re-indexed every run | claimed and not rewritten, as Python |
-  | Ownership row of an ontology edge | usually a nil `data_id`, so no file deletion ever removed the edge | the document whose chunk pulled the ontology subgraph in, so deleting the last such document removes it, as Python's document-scoped ref does |
+  | Ownership row of an ontology edge | usually a nil `data_id`, so no file deletion ever removed the edge | one row per document with a chunk naming the entity or type whose ontology subgraph holds the edge, so deleting the last such document removes it, as Python's document-scoped ref does. Those chunks are not recorded as edge evidence (`extracted`) for it, as in Python |
 
   **Migration:** a caller of the expansion functions that writes their edges to
   a graph should call `expand_and_partition_extracted_graphs` instead, or pass
