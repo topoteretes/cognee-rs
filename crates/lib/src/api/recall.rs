@@ -91,7 +91,8 @@ pub async fn recall(
     options: Option<RecallOptions>,
 ) -> Result<RecallResult, ApiError> {
     // -- Resolve scope to a concrete source list (Python recall.py:574-594). --
-    // `None` and an empty list both mean "auto". The type system already
+    // `None` means "auto"; an explicit empty list runs nothing and returns
+    // `[]`, as Python's `normalize_scope([])` does. The type system already
     // constrained the values to `RecallScope`; unknown strings are rejected
     // by `normalize_scope` at the HTTP/CLI/binding boundary. Python's
     // `has_dataset_scope = bool(dataset_ids) or bool(datasets)`: either
@@ -100,7 +101,7 @@ pub async fn recall(
         sources,
         auto_fallthrough,
     } = resolve_sources(
-        scope.unwrap_or_default(),
+        scope.unwrap_or_else(|| vec![RecallScope::Auto]),
         session_id,
         has_dataset_filter(datasets.as_deref(), dataset_ids.as_deref()),
         query_type,

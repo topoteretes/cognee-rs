@@ -225,11 +225,10 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     let scope_input = build_scope_input(opts)?;
     let scope = normalize_scope(scope_input)
         .map_err(|e| SdkError::Validation(format!("invalid scope: {e}")))?;
-    // normalize_scope returns Vec<RecallScope>. An empty vec (from an empty Many
-    // input) is passed as None so recall() applies its own Auto default; any
-    // non-empty vec (including vec![Auto] from a missing/null/auto scope) is
-    // passed as-is — recall() treats Some(vec![Auto]) and None identically.
-    let scope = if scope.is_empty() { None } else { Some(scope) };
+    // A missing/null scope normalizes to `[Auto]`; an explicit empty list
+    // stays empty, so the recall runs nothing and returns `[]`, as Python's
+    // `normalize_scope([])` -> `[]` does.
+    let scope = Some(scope);
     let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
     let include_references = parse_include_references(opts);
 
@@ -426,10 +425,18 @@ pub fn build_scope_input(opts: &serde_json::Value) -> Result<Option<ScopeInput>,
         Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(s)) => Ok(Some(ScopeInput::Single(s.clone()))),
         Some(serde_json::Value::Array(arr)) => {
-            let strings: Vec<String> = arr
+            // A non-string element is refused rather than dropped: dropping
+            // it could turn `[1]` into an empty list, which runs nothing.
+            let strings = arr
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect();
+                .map(|v| {
+                    v.as_str().map(str::to_string).ok_or_else(|| {
+                        SdkError::Validation(format!(
+                            "`scope` must be a string or string array, got element: {v}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<String>, SdkError>>()?;
             Ok(Some(ScopeInput::Many(strings)))
         }
         Some(other) => Err(SdkError::Validation(format!(
@@ -1283,6 +1290,23 @@ mod tests {
         // A missing `scope` normalizes to `[Auto]`, which recall() treats the
         // same as `None`; it must not arrive as an empty vec.
         assert_eq!(args.scope, Some(vec![cognee::api::RecallScope::Auto]));
+    }
+
+    /// An explicit empty `scope` stays empty (the recall runs nothing, as
+    /// Python's `normalize_scope([])` -> `[]`), distinct from a missing or
+    /// null one (auto); a non-string element is refused, not dropped.
+    #[test]
+    fn build_recall_args_keeps_an_empty_scope_distinct_from_a_missing_one() {
+        assert_eq!(
+            build_recall_args(&json!({ "scope": [] })).unwrap().scope,
+            Some(vec![])
+        );
+        assert_eq!(
+            build_recall_args(&json!({ "scope": null })).unwrap().scope,
+            Some(vec![cognee::api::RecallScope::Auto])
+        );
+        assert!(build_recall_args(&json!({ "scope": [1] })).is_err());
+        assert!(build_recall_args(&json!({ "scope": ["graph", null] })).is_err());
     }
 
     /// `includeReferences` reaches both ops, defaults off, and a non-boolean

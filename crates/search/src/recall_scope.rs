@@ -274,6 +274,47 @@ pub fn dedupe_scopes(scopes: impl IntoIterator<Item = RecallScope>) -> Vec<Recal
         .collect()
 }
 
+/// Python's `repr(str)`: single quotes, unless the text holds a `'` and no
+/// `"`, then double quotes. Backslashes and the chosen quote are escaped, as
+/// are `\n`, `\r`, `\t` and the other ASCII control characters (`\xNN`).
+/// Non-ASCII text is kept as is, which matches Python for printable
+/// characters; Python would also escape non-printable non-ASCII code points
+/// (`\x85`, `\u2028`, ...), which this does not, as scope names never hold
+/// them in practice.
+fn python_str_repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push(quote);
+    for ch in text.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Python's `repr(list[str])`: `['a', 'b']`.
+fn python_list_repr(items: &[&str]) -> String {
+    let inner: Vec<String> = items.iter().map(|item| python_str_repr(item)).collect();
+    format!("[{}]", inner.join(", "))
+}
+
 /// Normalize the recall ``scope`` parameter to a concrete source list,
 /// mirroring Python's `normalize_scope` at `cognee/memory/entries.py:207-258`.
 ///
@@ -331,10 +372,12 @@ pub fn normalize_scope(input: Option<ScopeInput>) -> Result<Vec<RecallScope>, Se
             "trace",
         ];
         // Match Python's `f"Unknown recall scope(s): {unknown}. Valid values: {sorted(_VALID_SCOPES)}"`
-        // formatting: Rust's debug-format for a `Vec<&str>` produces the same
-        // bracketed quoted-string list Python's `repr(list)` does.
+        // byte for byte: both lists render as Python's `repr(list)` does,
+        // single-quoted (`['foo']`), not Rust's double-quoted `{:?}`.
         return Err(SearchError::InvalidInput(format!(
-            "Unknown recall scope(s): {unknown:?}. Valid values: {valid_sorted:?}"
+            "Unknown recall scope(s): {}. Valid values: {}",
+            python_list_repr(&unknown),
+            python_list_repr(&valid_sorted)
         )));
     }
 
@@ -396,7 +439,10 @@ pub struct ResolvedSources {
 /// Python's `recall` does (`recall.py:574-594`). The one shared copy of these
 /// rules: `cognee::api::recall` and the HTTP recall router both call it.
 ///
-/// - An empty list counts as `[Auto]`, and repeats are dropped.
+/// - An empty list resolves to no sources at all, so the recall runs nothing
+///   and returns `[]`, as Python's `normalize_scope([])` -> `[]` does. Only
+///   an absent scope means auto: callers map `None` to `[Auto]` before
+///   calling this. Repeats are dropped.
 /// - `[Auto]` resolves by what the caller supplied (`recall.py:575-585`):
 ///   - `session_id` with no dataset filter and no `query_type` ->
 ///     `[Session, Graph]`, a session hit skipping the graph;
@@ -420,11 +466,7 @@ pub fn resolve_sources(
     has_dataset_filter: bool,
     query_type: Option<SearchType>,
 ) -> Result<ResolvedSources, SearchError> {
-    let normalized = if normalized.is_empty() {
-        vec![RecallScope::Auto]
-    } else {
-        dedupe_scopes(normalized)
-    };
+    let normalized = dedupe_scopes(normalized);
 
     let resolved = if normalized.as_slice() == [RecallScope::Auto] {
         // `if session_id and not has_dataset_scope and query_type is None`
@@ -1355,9 +1397,25 @@ mod tests {
         };
         // Python: f'Unknown recall scope(s): {unknown}. Valid values: {sorted(_VALID_SCOPES)}'
         // -> `Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', 'code', 'graph', 'graph_context', 'session', 'session_context', 'session_first', 'tools', 'trace']`
-        // Rust's debug format uses double quotes:
-        let expected = "Unknown recall scope(s): [\"foo\"]. Valid values: [\"all\", \"auto\", \"code\", \"graph\", \"graph_context\", \"session\", \"session_context\", \"session_first\", \"tools\", \"trace\"]";
+        let expected = "Unknown recall scope(s): ['foo']. Valid values: ['all', 'auto', 'code', 'graph', 'graph_context', 'session', 'session_context', 'session_first', 'tools', 'trace']";
         assert_eq!(msg, expected);
+    }
+
+    #[test]
+    fn unknown_scope_names_render_as_python_repr() {
+        let err = normalize_scope(Some(ScopeInput::Many(vec![
+            "graph".into(),
+            "it's".into(),
+            "a\"b'c".into(),
+            "back\\slash\n".into(),
+        ])))
+        .expect_err("unknown names");
+        let msg = err.to_string();
+        // Python: repr(["it's", 'a"b\'c', 'back\\slash\n'])
+        assert!(
+            msg.contains(r#"Unknown recall scope(s): ["it's", 'a"b\'c', 'back\\slash\n']."#),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -1510,10 +1568,12 @@ mod tests {
             resolve(&[Auto], None, false, None),
             fallthrough(vec![Graph], false)
         );
-        // An empty list is auto, a repeated `Auto` too.
+        // An explicit empty list runs nothing (Python `normalize_scope([])`
+        // -> `[]`), even with a session id; a repeated `Auto` is auto.
+        assert_eq!(resolve(&[], None, false, None), fallthrough(vec![], false));
         assert_eq!(
-            resolve(&[], None, false, None),
-            fallthrough(vec![Graph], false)
+            resolve(&[], Some("s"), false, None),
+            fallthrough(vec![], false)
         );
         assert_eq!(
             resolve(&[Auto, Auto], Some("s"), false, None),

@@ -13,7 +13,8 @@
 //!   * scope-driven source fan-out across `graph` / `session` / `trace`
 //!     (`graph_context` is a deprecated alias of `graph`),
 //!   * graceful degradation when `session_id` is `None`,
-//!   * Rust-only ergonomics: empty `Vec<RecallScope>` collapses to `[Auto]`.
+//!   * an explicit empty scope list runs nothing (`normalize_scope([])` ->
+//!     `[]`), while an absent scope (`None`) is auto.
 
 use std::sync::Arc;
 
@@ -432,6 +433,35 @@ async fn test_scope_session_without_session_id_returns_empty() {
     );
 }
 
+/// Python: `normalize_scope([])` -> `[]`, so `recall(scope=[])` runs no lane
+/// and returns `[]`, even with a session id and a graph that would answer.
+#[tokio::test]
+async fn test_scope_explicit_empty_list_runs_nothing() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "q1", "a1").await;
+
+    let result = recall(
+        "q1",
+        None,
+        None,
+        None,
+        10,
+        false,
+        Some("s1"),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![]),
+        None,
+    )
+    .await
+    .expect("recall ok");
+
+    assert!(result.items.is_empty(), "an empty scope runs no source");
+    assert!(result.search_type_used.is_none(), "the graph did not run");
+}
+
 #[tokio::test]
 async fn test_scope_unknown_value_returns_error() {
     let err = normalize_scope(Some(ScopeInput::from("bogus_scope"))).expect_err("should error");
@@ -446,7 +476,7 @@ async fn test_scope_unknown_value_returns_error() {
     );
     assert!(
         msg.contains(
-            r#"["all", "auto", "code", "graph", "graph_context", "session", "session_context", "session_first", "tools", "trace"]"#
+            r#"['all', 'auto', 'code', 'graph', 'graph_context', 'session', 'session_context', 'session_first', 'tools', 'trace']"#
         ),
         "expected canonical sorted valid-values list; got: {msg}"
     );
