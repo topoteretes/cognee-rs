@@ -130,8 +130,24 @@ pub struct ArtifactProducers {
     /// Final entity id → producing chunk ids, in first-seen order.
     entities: HashMap<Uuid, Vec<Uuid>>,
 
-    /// [`GraphEdgePair::dedup_key`] → producing chunk ids, in first-seen order.
+    /// [`GraphEdgePair::dedup_key`] → chunk ids that *extracted* the edge, in
+    /// first-seen order.
     edges: HashMap<(Uuid, Uuid, String), Vec<Uuid>>,
+
+    /// [`GraphEdgePair::dedup_key`] of an ontology edge → chunk ids whose
+    /// entity or type pulled the ontology subgraph holding it in, in
+    /// first-seen order.
+    ///
+    /// Kept apart from `edges` because the two feed different rows. Both make
+    /// the chunk's document an owner of the edge, but only an extraction is
+    /// evidence for it: Python appends to `_provenance_edges` (what edge
+    /// evidence reads) only in `_add_extracted_edges`
+    /// (`expand_with_nodes_and_edges.py:290-302`), while `_add_ontology_edges`
+    /// only `setdefault`s the edge
+    /// (`construct_data_points_and_edges_with_ontology.py:420-433`). A chunk
+    /// that names "Einstein" is not evidence that `albert_einstein is_a
+    /// scientist`.
+    ontology_edges: HashMap<(Uuid, Uuid, String), Vec<Uuid>>,
 }
 
 impl ArtifactProducers {
@@ -148,12 +164,24 @@ impl ArtifactProducers {
         }
     }
 
-    /// Record `chunk_id` as a producer of the edge identified by `key`.
+    /// Record `chunk_id` as having *extracted* the edge identified by `key`.
+    ///
+    /// The chunk becomes an owner of the edge and evidence for it. Use
+    /// [`record_ontology_edge`](Self::record_ontology_edge) for an edge the
+    /// chunk only pulled in from the ontology.
     pub fn record_edge(&mut self, key: (Uuid, Uuid, String), chunk_id: Uuid) {
-        let producers = self.edges.entry(key).or_default();
-        if !producers.contains(&chunk_id) {
-            producers.push(chunk_id);
-        }
+        push_unique(self.edges.entry(key).or_default(), chunk_id);
+    }
+
+    /// Record `chunk_id` as the chunk whose entity or type pulled in the
+    /// ontology edge identified by `key`.
+    ///
+    /// The chunk's document owns the edge (see
+    /// [`edge_owner_chunks`](Self::edge_owner_chunks)), but the chunk is not
+    /// evidence for it: [`edges`](Self::edges) and
+    /// [`edge_chunks`](Self::edge_chunks) do not report it.
+    pub fn record_ontology_edge(&mut self, key: (Uuid, Uuid, String), chunk_id: Uuid) {
+        push_unique(self.ontology_edges.entry(key).or_default(), chunk_id);
     }
 
     /// Chunks that produced `entity_id`, or an empty slice when unknown
@@ -162,19 +190,41 @@ impl ArtifactProducers {
         self.entities.get(&entity_id).map_or(&[], Vec::as_slice)
     }
 
-    /// Chunks that produced the edge identified by `key`, or an empty slice
-    /// when unknown.
+    /// Chunks that extracted the edge identified by `key`, or an empty slice
+    /// when unknown. Ontology pullers are not included; see
+    /// [`edge_owner_chunks`](Self::edge_owner_chunks).
     pub fn edge_chunks(&self, key: &(Uuid, Uuid, String)) -> &[Uuid] {
         self.edges.get(key).map_or(&[], Vec::as_slice)
     }
 
-    /// Every produced edge with its producing chunks, in no particular order.
-    /// Includes the edges an earlier run already wrote, which this run only
-    /// claims (see `claimed_existing_edges`).
+    /// Chunks whose documents own the edge identified by `key`: the chunks
+    /// that extracted it, then the chunks that pulled it in from the ontology,
+    /// deduplicated in that first-seen order. Empty when unknown.
+    pub fn edge_owner_chunks(&self, key: &(Uuid, Uuid, String)) -> Vec<Uuid> {
+        let mut owners = self.edge_chunks(key).to_vec();
+        for &chunk_id in self.ontology_edges.get(key).map_or(&[][..], Vec::as_slice) {
+            push_unique(&mut owners, chunk_id);
+        }
+        owners
+    }
+
+    /// Every extracted edge with the chunks that extracted it, in no
+    /// particular order. Includes the edges an earlier run already wrote,
+    /// which this run only claims (see
+    /// [`partition_existing_edges`](super::db_deduplication::partition_existing_edges)).
+    /// Edges only pulled in from the ontology are not included: this is what
+    /// edge evidence reads, and an ontology edge has none.
     pub fn edges(&self) -> impl Iterator<Item = (&(Uuid, Uuid, String), &[Uuid])> {
         self.edges
             .iter()
             .map(|(key, chunks)| (key, chunks.as_slice()))
+    }
+}
+
+/// Append `chunk_id` unless it is already listed, keeping first-seen order.
+fn push_unique(chunks: &mut Vec<Uuid>, chunk_id: Uuid) {
+    if !chunks.contains(&chunk_id) {
+        chunks.push(chunk_id);
     }
 }
 
@@ -255,6 +305,44 @@ mod tests {
                 .edge_chunks(&(source, target, "unrelated".to_string()))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn edge_owner_chunks_unions_extractors_and_ontology_pullers() {
+        let edge = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "is_a");
+        let (extractor, puller, both) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_edge(edge.dedup_key(), extractor);
+        producers.record_edge(edge.dedup_key(), both);
+        producers.record_ontology_edge(edge.dedup_key(), puller);
+        producers.record_ontology_edge(edge.dedup_key(), both);
+
+        // Owners: extractors first, then pullers, each chunk once.
+        assert_eq!(
+            producers.edge_owner_chunks(&edge.dedup_key()),
+            [extractor, both, puller]
+        );
+        // Evidence-side readers see the extractors only.
+        assert_eq!(producers.edge_chunks(&edge.dedup_key()), [extractor, both]);
+        let (_, chunks) = producers
+            .edges()
+            .next()
+            .expect("the extracted edge is listed");
+        assert_eq!(chunks, [extractor, both]);
+    }
+
+    #[test]
+    fn an_edge_only_pulled_from_the_ontology_is_owned_but_not_listed_as_extracted() {
+        let edge = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "is_a");
+        let puller = Uuid::new_v4();
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_ontology_edge(edge.dedup_key(), puller);
+
+        assert_eq!(producers.edge_owner_chunks(&edge.dedup_key()), [puller]);
+        assert!(producers.edge_chunks(&edge.dedup_key()).is_empty());
+        assert_eq!(producers.edges().count(), 0);
     }
 
     #[test]

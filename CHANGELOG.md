@@ -93,6 +93,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`cognee-cognify`: the edge dedup check runs on the identity expansion
+  stores, and relationship labels are stored normalized (#75, #76).** The
+  existence check used to build its keys from the raw extraction before
+  expansion, so it missed stored edges whenever the two disagreed (a
+  `Works At` / `works_at` relationship, a node id that differs from the name
+  the entity id derives from, a name-resolved or ontology-canonicalized
+  endpoint), and re-cognify wrote those edges again.
+
+  | Item | Before | After |
+  |---|---|---|
+  | Stored relationship label | as extracted (`Works At`) | `generate_edge_name` (`works_at`), as Python |
+  | `retrieve_existing_edges(graph_db, graphs)` | public, run before expansion | removed; use `partition_existing_edges(graph_db, edges)` after expansion, which returns `(new_edges, existing_edges)` |
+  | `expand_with_nodes_and_edges` / `_with_stats` | took `existing_edges_set`; returned `claimed_existing_edges` | no `existing_edges_set`; return `(nodes, edges, producers)` / `(nodes, edges, producers, stats)` |
+  | `expand_extracted_graphs` | took `existing_edges_set` and filled `Expansion::claimed_existing_edges` | no `existing_edges_set`; does not consult the graph, so `claimed_existing_edges` is empty |
+  | DB-aware expansion | built into the functions above | `expand_and_partition_extracted_graphs(graph_db, …)`, which the pipeline uses |
+  | Stored ontology edge produced again | re-upserted and re-indexed every run | claimed and not rewritten, as Python |
+  | Ownership row of an ontology edge | usually a nil `data_id`, so no file deletion ever removed the edge | one row per document with a chunk naming the entity or type whose ontology subgraph holds the edge, so deleting the last such document removes it, as Python's document-scoped ref does. Those chunks are not recorded as edge evidence (`extracted`) for it, as in Python |
+
+  **Migration:** a caller of the expansion functions that writes their edges to
+  a graph should call `expand_and_partition_extracted_graphs` instead, or pass
+  the edges through `partition_existing_edges` and write only `new_edges`,
+  recording ownership for `existing_edges` too. Writing the expansion's edges
+  directly re-writes every stored edge and leaves later files without an
+  ownership row for it. Edges already stored under a raw label are not
+  migrated; a re-cognify writes the normalized label beside them.
+
 - **`improve()` follows Python 1.6.7 stage defaults (SDK-1206).**
   `review_conflicts` and `global_context_index` now run by default
   (`IMPROVE_REVIEW_CONFLICTS` and the new `IMPROVE_GLOBAL_CONTEXT_INDEX`,
