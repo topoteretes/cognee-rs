@@ -47,12 +47,23 @@ const NODE_SET_ONLY: &[NodeNameScope] = &[NodeNameScope::NodeSet];
 /// The scopes each search type honours (Python `SUPPORTED_SCOPES`,
 /// `node_name_scope.py:36-49`). A type missing here ignores `node_name` and is
 /// refused when one is given. `HYBRID_COMPLETION` lists every scope because a
-/// graph scope is served by deferring to `GRAPH_COMPLETION`. Python's
+/// graph scope is served by deferring to `GRAPH_COMPLETION`
+/// (`orchestration::hybrid_fallback::requested_graph_only_filter`). Python's
 /// `HYBRID_COMPLETION_DECOMPOSITION` and `AGENTIC_COMPLETION` have no Rust
 /// [`SearchType`] and are left out.
+///
+/// Deviation: Python lists `CHUNKS` and `RAG_COMPLETION` under every scope,
+/// serving a graph scope with a graph-scoped chunk search
+/// (`cognee/modules/retrieval/utils/scoped_chunk_search.py`, used by
+/// `chunks_retriever.py:141` and `completion_retriever.py:151`). Rust has no
+/// port of it yet: its chunks and RAG retrievers only filter by node-set tags,
+/// so a graph scope would be matched against the wrong field and return
+/// nothing. They are node-set only here, which refuses a pinned graph scope
+/// with Python's message and keeps routing off them, until that search is
+/// ported.
 pub const SUPPORTED_SCOPES: [(SearchType, &[NodeNameScope]); 10] = [
-    (SearchType::Chunks, EVERY_SCOPE),
-    (SearchType::RagCompletion, EVERY_SCOPE),
+    (SearchType::Chunks, NODE_SET_ONLY),
+    (SearchType::RagCompletion, NODE_SET_ONLY),
     (SearchType::HybridCompletion, EVERY_SCOPE),
     (SearchType::Temporal, NODE_SET_ONLY),
     (SearchType::CodingRules, NODE_SET_ONLY),
@@ -185,8 +196,6 @@ mod tests {
         assert_eq!(
             graph,
             vec![
-                Chunks,
-                RagCompletion,
                 HybridCompletion,
                 GraphCompletion,
                 GraphCompletionCot,
@@ -197,7 +206,9 @@ mod tests {
         );
         let node_set = search_types_honouring(NodeNameScope::NodeSet);
         assert_eq!(node_set.len(), SUPPORTED_SCOPES.len());
-        for search_type in [Temporal, CodingRules] {
+        // Chunks and RAG: node-set tags only until the graph-scoped chunk
+        // search is ported (Python serves both scopes).
+        for search_type in [Temporal, CodingRules, Chunks, RagCompletion] {
             assert!(honours(search_type, NodeNameScope::NodeSet));
             assert!(!honours(search_type, NodeNameScope::Graph));
         }
@@ -242,10 +253,30 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "TEMPORAL does not apply node_name with node_type=Entity. Search types that do: \
-             CHUNKS, GRAPH_COMPLETION, GRAPH_COMPLETION_CONTEXT_EXTENSION, GRAPH_COMPLETION_COT, \
-             GRAPH_COMPLETION_DECOMPOSITION, GRAPH_SUMMARY_COMPLETION, HYBRID_COMPLETION, \
-             RAG_COMPLETION."
+             GRAPH_COMPLETION, GRAPH_COMPLETION_CONTEXT_EXTENSION, GRAPH_COMPLETION_COT, \
+             GRAPH_COMPLETION_DECOMPOSITION, GRAPH_SUMMARY_COMPLETION, HYBRID_COMPLETION."
         );
+    }
+
+    /// Rust has no graph-scoped chunk search yet, so chunks and RAG refuse a
+    /// graph scope instead of matching it against node-set tags.
+    #[test]
+    fn chunks_and_rag_refuse_a_graph_scope() {
+        for search_type in [SearchType::Chunks, SearchType::RagCompletion] {
+            let err = reject_unsupported_node_name(search_type, Some("Entity"), Some(&names()))
+                .unwrap_err();
+            assert!(
+                err.to_string().starts_with(&format!(
+                    "{} does not apply node_name with node_type=Entity.",
+                    search_type.wire_name()
+                )),
+                "{err}"
+            );
+            assert_eq!(
+                reject_unsupported_node_name(search_type, None, Some(&names())).unwrap(),
+                Some(NodeNameScope::NodeSet)
+            );
+        }
     }
 
     #[test]

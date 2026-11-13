@@ -420,3 +420,53 @@ async fn without_an_owner_a_cold_graph_is_searched_not_noted() {
         assert!(answered(&result.items), "{user_id:?}");
     }
 }
+
+/// A pinned type that cannot apply the node scope is refused when the search
+/// would build its retriever, after the warm-up guard (Python
+/// `recall.py:815-911` runs before `_search`): a cold graph answers its note
+/// first, a built one refuses.
+#[tokio::test]
+async fn a_cold_graph_notes_before_a_pinned_type_is_refused_for_its_node_scope() {
+    let fixture = Fixture::new().await;
+    let orchestrator = fixture.orchestrator(WarmupConfig::default());
+    let owner = fixture.owner.to_string();
+    let options = RecallOptions {
+        node_type: Some("Entity".to_string()),
+        node_name: Some(vec!["Alice".to_string()]),
+        ..Default::default()
+    };
+    let recall_temporal = || {
+        recall(
+            "Who won?",
+            Some(SearchType::Temporal),
+            None,
+            Some(vec![fixture.dataset_id]),
+            10,
+            false,
+            None,
+            Some(&owner),
+            &orchestrator,
+            None,
+            None,
+            Some(vec![RecallScope::Graph]),
+            Some(options.clone()),
+        )
+    };
+
+    let cold = recall_temporal()
+        .await
+        .expect("a cold graph answers its note");
+    assert_eq!(statuses(&cold.items), ["memory_warming_up"]);
+
+    fixture
+        .log_cognify(PipelineRunStatus::Completed, None)
+        .await;
+    let error = recall_temporal()
+        .await
+        .expect_err("a built graph refuses the type")
+        .to_string();
+    assert!(
+        error.contains("TEMPORAL does not apply node_name with node_type=Entity."),
+        "{error}"
+    );
+}

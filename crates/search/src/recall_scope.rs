@@ -894,9 +894,10 @@ pub struct GraphPlan {
 ///
 /// A `node_name` filter in `options` limits routing to the types that apply
 /// it, as [`RecallOptions::node_type`] reads it (Python `recall.py:765-769`).
-/// An explicit type that cannot apply it is refused with
-/// [`SearchError::QueryValidation`], as Python's retriever factory refuses it
-/// (`get_search_type_retriever_instance.py:498`).
+/// An explicit type that cannot apply it is accepted here and refused by
+/// [`run_graph`], as Python's retriever factory refuses it when the search
+/// builds its retriever (`get_search_type_retriever_instance.py:498`): after
+/// the warm-up guard, so a cold graph answers its note first.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_graph(
     query_text: &str,
@@ -917,10 +918,7 @@ pub fn plan_graph(
     let owner = graph_owner(user_id, datasets, dataset_ids)?;
     let fallback = default_route(&constraints);
     let (decision, routed_rule) = match (query_type, auto_route) {
-        (Some(qt), _) => {
-            reject_unsupported_node_name(qt, node_type, node_name)?;
-            (pinned_route(qt, &constraints), None)
-        }
+        (Some(qt), _) => (pinned_route(qt, &constraints), None),
         (None, true) => {
             let decision = route_query(query_text, &constraints);
             (decision, Some(decision.rule))
@@ -971,6 +969,17 @@ pub async fn run_graph(
     } = *plan;
     let search_type = decision.search_type;
     let auto_routed = routed_rule.is_some();
+
+    // A type that cannot apply the `node_name` filter is refused when the
+    // search would build its retriever, as Python's factory refuses it
+    // (`get_search_type_retriever_instance.py:498`): after the warm-up guard
+    // (`recall.py:815-911`), which callers ask before running the graph. The
+    // router only ever picks a type that applies it.
+    reject_unsupported_node_name(
+        search_type,
+        options.and_then(|o| o.node_type.as_deref()),
+        options.and_then(|o| o.node_name.as_deref()),
+    )?;
 
     // Under per-dataset storage an unfiltered graph search covers the datasets
     // the caller may read, which needs a caller. With none (or one that is not
@@ -1919,13 +1928,14 @@ mod tests {
     /// Records the `SearchParams` it was invoked with so a test can assert on
     /// what the orchestrator handed down after dataset-name resolution.
     struct RecordingRetriever {
+        kind: SearchType,
         seen: std::sync::Mutex<Option<SearchParams>>,
     }
 
     #[async_trait]
     impl SearchRetriever for RecordingRetriever {
         fn search_type(&self) -> SearchType {
-            SearchType::Chunks
+            self.kind
         }
 
         fn dataset_scoping(&self) -> crate::retrievers::DatasetScoping {
@@ -1963,6 +1973,16 @@ mod tests {
         name: &str,
         owner: Uuid,
     ) -> (SearchOrchestrator, Arc<RecordingRetriever>, Uuid) {
+        orchestrator_with_seeded_dataset_for(name, owner, SearchType::Chunks).await
+    }
+
+    /// [`orchestrator_with_seeded_dataset`] with the recording retriever
+    /// registered for `kind`.
+    async fn orchestrator_with_seeded_dataset_for(
+        name: &str,
+        owner: Uuid,
+        kind: SearchType,
+    ) -> (SearchOrchestrator, Arc<RecordingRetriever>, Uuid) {
         let db = Arc::new(connect("sqlite::memory:").await.expect("in-memory sqlite"));
         initialize(&db).await.expect("schema init");
         let dataset = db_ops::datasets::create_dataset(
@@ -1973,6 +1993,7 @@ mod tests {
         .expect("seed dataset");
 
         let retriever = Arc::new(RecordingRetriever {
+            kind,
             seen: std::sync::Mutex::new(None),
         });
         let mut registry = SearchTypeRegistry::new();
@@ -2114,7 +2135,7 @@ mod tests {
     async fn run_graph_forwards_node_type_and_verbose() {
         let owner = Uuid::new_v4();
         let (orchestrator, retriever, dataset_id) =
-            orchestrator_with_seeded_dataset("notes", owner).await;
+            orchestrator_with_seeded_dataset_for("notes", owner, SearchType::GraphCompletion).await;
         let owner_str = owner.to_string();
         let span = tracing::Span::none();
         let options = RecallOptions {
@@ -2126,7 +2147,7 @@ mod tests {
 
         let (.., response) = plan_and_run(
             "anything",
-            Some(SearchType::Chunks),
+            Some(SearchType::GraphCompletion),
             None,
             Some(vec![dataset_id]),
             5,
@@ -2138,7 +2159,7 @@ mod tests {
             Some(&options),
         )
         .await
-        .expect("CHUNKS applies a graph scope");
+        .expect("GRAPH_COMPLETION applies a graph scope");
 
         let seen = retriever
             .seen
@@ -2173,8 +2194,11 @@ mod tests {
         assert_eq!(RecallOptions::default().search_node_type(), None);
     }
 
-    #[test]
-    fn plan_graph_refuses_a_pinned_type_that_cannot_apply_the_scope() {
+    /// A pinned type that cannot apply the scope is planned (so the warm-up
+    /// guard runs first) and refused when the graph search runs, as Python's
+    /// retriever factory refuses it (`get_search_type_retriever_instance.py:498`).
+    #[tokio::test]
+    async fn run_graph_refuses_a_pinned_type_that_cannot_apply_the_scope() {
         let orchestrator = SearchOrchestrator::new(SearchTypeRegistry::new());
         let span = tracing::Span::none();
         let options = RecallOptions {
@@ -2196,12 +2220,35 @@ mod tests {
             )
         };
 
-        match plan(Some(SearchType::Temporal)) {
-            Err(SearchError::QueryValidation(message)) => assert!(
-                message.starts_with("TEMPORAL does not apply node_name with node_type=Entity."),
-                "{message}"
-            ),
-            other => panic!("expected QueryValidation, got {other:?}"),
+        for refused in [
+            SearchType::Temporal,
+            SearchType::Chunks,
+            SearchType::RagCompletion,
+        ] {
+            let planned = plan(Some(refused)).expect("planning does not refuse");
+            assert_eq!(planned.search_type(), refused);
+            let run = run_graph(
+                &planned,
+                "anything",
+                None,
+                None,
+                10,
+                None,
+                &orchestrator,
+                &span,
+                Some(&options),
+            )
+            .await;
+            match run {
+                Err(SearchError::QueryValidation(message)) => assert!(
+                    message.starts_with(&format!(
+                        "{} does not apply node_name with node_type=Entity.",
+                        refused.wire_name()
+                    )),
+                    "{message}"
+                ),
+                other => panic!("expected QueryValidation, got {other:?}"),
+            }
         }
         let pinned = plan(Some(SearchType::GraphCompletion)).expect("graph completion applies it");
         assert_eq!(pinned.search_type(), SearchType::GraphCompletion);
