@@ -602,3 +602,122 @@ async fn test_cost_by_model_groups_correctly() {
     assert_eq!(rows[1].tokens_in, 20);
     assert_eq!(rows[1].tokens_out, 10);
 }
+
+// ---------------------------------------------------------------------------
+// resolve_session_cache_owner (Python `_resolve_session_cache_user_id`,
+// `recall.py:181-250`)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_resolve_session_cache_owner_without_rows_is_none() {
+    let db = make_db().await;
+    let caller = Uuid::new_v4();
+    let owner = db
+        .resolve_session_cache_owner("no-such-session", caller, &[Uuid::new_v4()])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, None);
+}
+
+/// Another user's row is invisible unless its dataset is permitted, and a row
+/// without a dataset is never visible to a non-owner.
+#[tokio::test]
+async fn test_resolve_session_cache_owner_without_visible_rows_is_none() {
+    let db = make_db().await;
+    let caller = Uuid::new_v4();
+    let other = Uuid::new_v4();
+    let other_other = Uuid::new_v4();
+    let dataset = Uuid::new_v4();
+    let sid = "shared-session";
+    db.ensure_and_touch_session(sid, other, Some(dataset))
+        .await
+        .expect("ensure other");
+    db.ensure_and_touch_session(sid, other_other, None)
+        .await
+        .expect("ensure other_other");
+
+    for permitted in [vec![], vec![Uuid::new_v4()]] {
+        let owner = db
+            .resolve_session_cache_owner(sid, caller, &permitted)
+            .await
+            .expect("resolve");
+        assert_eq!(owner, None, "permitted = {permitted:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_resolve_session_cache_owner_own_row_is_the_caller() {
+    let db = make_db().await;
+    let caller = Uuid::new_v4();
+    let sid = "own-session";
+    db.ensure_and_touch_session(sid, caller, None)
+        .await
+        .expect("ensure");
+    let owner = db
+        .resolve_session_cache_owner(sid, caller, &[])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, Some(caller));
+}
+
+/// The caller owns an empty row (no dataset) and may read another owner's
+/// row through its dataset: the row with a dataset wins, so the other owner's
+/// cache is read.
+#[tokio::test]
+async fn test_resolve_session_cache_owner_prefers_the_row_with_a_dataset() {
+    let db = make_db().await;
+    let caller = Uuid::new_v4();
+    let writer = Uuid::new_v4();
+    let dataset = Uuid::new_v4();
+    let sid = "agent-session";
+    db.ensure_and_touch_session(sid, caller, None)
+        .await
+        .expect("ensure caller");
+    db.ensure_and_touch_session(sid, writer, Some(dataset))
+        .await
+        .expect("ensure writer");
+
+    let owner = db
+        .resolve_session_cache_owner(sid, caller, &[dataset])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, Some(writer));
+
+    // Without the grant only the caller's own row is visible.
+    let owner = db
+        .resolve_session_cache_owner(sid, caller, &[])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, Some(caller));
+}
+
+/// Both rows carry a dataset: the one the caller does not own wins (the
+/// session's active writer, e.g. an agent).
+#[tokio::test]
+async fn test_resolve_session_cache_owner_prefers_a_non_caller_owner() {
+    let db = make_db().await;
+    let caller = Uuid::new_v4();
+    let writer = Uuid::new_v4();
+    let caller_dataset = Uuid::new_v4();
+    let writer_dataset = Uuid::new_v4();
+    let sid = "two-writers";
+    db.ensure_and_touch_session(sid, caller, Some(caller_dataset))
+        .await
+        .expect("ensure caller");
+    db.ensure_and_touch_session(sid, writer, Some(writer_dataset))
+        .await
+        .expect("ensure writer");
+
+    let owner = db
+        .resolve_session_cache_owner(sid, caller, &[caller_dataset, writer_dataset])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, Some(writer));
+
+    // A grant on the caller's own dataset alone does not reveal the writer.
+    let owner = db
+        .resolve_session_cache_owner(sid, caller, &[caller_dataset])
+        .await
+        .expect("resolve");
+    assert_eq!(owner, Some(caller));
+}

@@ -735,3 +735,76 @@ async fn test_scope_all_includes_session_context_last() {
         "{items:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// session-cache owner (Python `_resolve_session_cache_user_id`)
+// ---------------------------------------------------------------------------
+
+const OWNER_ID: &str = "owner-1";
+
+/// The session, trace and session_context lanes read the session cache under
+/// `RecallOptions::session_cache_user_id` (the session's owner) instead of the
+/// caller, as Python queries under `cache_user_id` (`recall.py:272`, `:330`,
+/// `:401`). Without it the caller's own (empty) cache is read.
+#[tokio::test]
+async fn test_session_cache_user_id_reads_the_owners_cache() {
+    let h = build_harness().await;
+    h.store
+        .create_qa_entry(
+            SESSION_ID,
+            Some(OWNER_ID),
+            "how should I answer rust questions",
+            "cite the book",
+            None,
+        )
+        .await
+        .expect("create qa");
+    h.manager
+        .add_agent_trace_step(
+            OWNER_ID,
+            Some(SESSION_ID),
+            "search.recall",
+            "success",
+            "how should I answer",
+            "owner context",
+            serde_json::json!({}),
+            None,
+            "",
+            false,
+        )
+        .await
+        .expect("add trace step");
+    let candidate = CandidateContextUpdate::new("qa", "rules", "Always cite sources", 0.9);
+    let touched =
+        apply_candidate_updates(&h.manager, SESSION_ID, OWNER_ID, "src-1", &[candidate]).await;
+    assert_eq!(touched.len(), 1);
+
+    let scope = vec![
+        RecallScope::Session,
+        RecallScope::Trace,
+        RecallScope::SessionContext,
+    ];
+
+    // The caller (USER_ID) owns nothing in this session.
+    assert!(
+        recall_scoped(&h, scope.clone(), None).await.is_empty(),
+        "the caller's own cache is empty"
+    );
+
+    let options = RecallOptions {
+        session_cache_user_id: Some(OWNER_ID.to_string()),
+        ..Default::default()
+    };
+    let items = recall_scoped(&h, scope, Some(options)).await;
+    let sources: Vec<RecallSource> = items.iter().map(|i| i.source).collect();
+    assert_eq!(
+        sources,
+        vec![
+            RecallSource::Session,
+            RecallSource::Trace,
+            RecallSource::SessionContext
+        ],
+        "{items:?}"
+    );
+    assert_eq!(items[0].content["answer"], "cite the book");
+}
