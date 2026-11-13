@@ -103,8 +103,9 @@ pub fn run(_args: VectorReindexArgs, cm: Arc<ComponentManager>) -> Result<(), Cl
                  the '{provider}' backend is already indexed, or that backend \
                  builds no ANN index of its own — of the bundled backends only \
                  pgvector does, and its index is per collection, so it can go \
-                 missing. A pgvector collection over 2000 dimensions also keeps \
-                 its exact scan and is skipped."
+                 missing. A pgvector collection wider than pgvector can index \
+                 (4000 dimensions, or 2000 below pgvector 0.7) also keeps its \
+                 exact scan and is skipped."
             );
         }
 
