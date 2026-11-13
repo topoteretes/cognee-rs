@@ -1483,7 +1483,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)
   was stored with `original_data_location = "text://inline"` instead of its
-  `file://` URI, unlike the same text unwrapped and unlike Python.
+  `file://` URI, unlike the same text unwrapped and unlike Python. Existing
+  rows are not migrated: a row already written with `text://inline` keeps it
+  until the same content is added again. Delete still removes its stored file
+  (`raw_data_location`), so the practical impact is small.
 
 - **`cognee-llm`: `flac` and `ogg` audio are transcribed.** The Whisper format
   whitelist left out two formats the OpenAI transcription API and Python's
