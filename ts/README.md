@@ -225,9 +225,17 @@ Session-first routing: checks session QA history before falling back to graph se
 ```ts
 const result = await c.recall("What did we discuss?", {
   sessionId: "session-uuid",
-  scope: "auto",   // "graph" | "session" | "trace" | "all" ("graph_context" = deprecated "graph")
+  scope: "auto",   // "graph" | "session" | "session_first" | "session_context" | "trace" | "all"
+                   // ("graph_context" = deprecated "graph")
+  contextProfile: "qa",   // profile the "session_context" scope renders ("qa" | "agent")
+  toolsTrigger: "always", // "always" | "on_empty"; validated, no effect until the tools scope exists
 });
 ```
+
+`nodeType`, `nodeName`, `nodeNameFilterOperator` and `verbose` apply to the
+graph source as they do to `search`. `"tools"` and `"code"` scopes, an unknown
+`toolsTrigger` and node names with an empty `nodeType` fail with a
+`ValidationError`.
 
 ## Memory operations
 

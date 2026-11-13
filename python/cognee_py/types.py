@@ -134,14 +134,35 @@ class RecallOpts(TypedDict, total=False):
     top_k: int
     auto_route: bool
     session_id: str
-    #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"`` | ``"all"``
-    #: (``"graph_context"`` is a deprecated alias of ``"graph"``)
+    #: ``"auto"`` | ``"graph"`` | ``"session"`` | ``"session_first"`` |
+    #: ``"session_context"`` | ``"trace"`` | ``"all"`` (``"graph_context"`` is
+    #: a deprecated alias of ``"graph"``; ``"tools"`` and ``"code"`` are
+    #: accepted but raise ``CogneeValidationError`` as not supported yet). An
+    #: empty list runs no source and returns no items, as in Python.
     scope: Union[str, list[str]]
     neighborhood_depth: int
     neighborhood_seed_top_k: int
     #: As ``SearchOpts.include_references``; evidence lands in each result's
     #: ``metadata["evidence"]``.
     include_references: bool
+    #: Profile the ``"session_context"`` scope renders: ``"qa"`` (default) or
+    #: ``"agent"``. Not validated, as in Python: an unknown profile matches no
+    #: entries and renders nothing.
+    context_profile: str
+    #: ``"always"`` (default) or ``"on_empty"``: when the ``"tools"`` scope
+    #: runs. Validated on every call; no effect until that scope exists.
+    tools_trigger: str
+    #: What the ``node_name`` values are: a graph node class name such as
+    #: ``"Entity"``. Omitted, the names are node-set tags.
+    node_type: str
+    #: Scope the graph source to these node names. A graph ``node_type`` is
+    #: honoured by the GRAPH_COMPLETION family and HYBRID_COMPLETION; CHUNKS
+    #: and RAG_COMPLETION apply node-set names only.
+    node_name: list[str]
+    #: ``"OR"`` (default) or ``"AND"``: how ``node_name`` combines.
+    node_name_filter_operator: str
+    #: Keep the graph search's context and graph in its response.
+    verbose: bool
 
 
 class RememberOpts(TypedDict, total=False):
