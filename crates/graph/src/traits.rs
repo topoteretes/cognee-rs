@@ -187,6 +187,15 @@ pub trait GraphDBTrait: Send + Sync {
         Ok(())
     }
 
+    /// The canonical roots of the embedded stores this engine holds open in
+    /// this process, as claimed in `cognee_utils::store_claim` — empty for a
+    /// backend that claims none (a server-backed or in-memory store) or once
+    /// closed. The manager compares a refused open's path against these to
+    /// tell its own engine from another holder.
+    fn store_paths(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     /// Make everything written so far durable, **without** closing.
     ///
     /// The graph counterpart of the flush the vector store already does after

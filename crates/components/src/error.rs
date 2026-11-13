@@ -40,4 +40,76 @@ pub enum ComponentError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An embedded graph or vector store is already open in this process: a
+    /// second live engine on the same path was refused rather than opened
+    /// next to the first (see [`cognee_utils::store_claim`]). The bindings
+    /// report it as `STORE_IN_USE`.
+    #[error(transparent)]
+    StoreInUse(#[from] cognee_utils::StoreInUse),
+}
+
+impl ComponentError {
+    /// A graph engine's construction failure, for a factory: a refused second
+    /// open stays [`ComponentError::StoreInUse`] (so the bindings can report
+    /// `STORE_IN_USE`); anything else becomes [`ComponentError::GraphDb`]
+    /// prefixed with `context`.
+    pub fn from_graph_db(context: &str, error: cognee_graph::GraphDBError) -> Self {
+        match error {
+            cognee_graph::GraphDBError::StoreInUse(in_use) => Self::StoreInUse(in_use),
+            other => Self::GraphDb(format!("{context}: {other}")),
+        }
+    }
+
+    /// The vector twin of [`ComponentError::from_graph_db`].
+    pub fn from_vector_db(context: &str, error: cognee_vector::VectorDBError) -> Self {
+        match error {
+            cognee_vector::VectorDBError::StoreInUse(in_use) => Self::StoreInUse(in_use),
+            other => Self::VectorDb(format!("{context}: {other}")),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    fn in_use(dir: &std::path::Path) -> cognee_utils::StoreInUse {
+        cognee_utils::StoreClaim::acquire(dir, "test").unwrap_err()
+    }
+
+    /// Both factory helpers keep a refused open typed (the bindings report
+    /// it as STORE_IN_USE) and flatten everything else into their kind's
+    /// string error. `from_vector_db` is the seam a vector factory outside
+    /// this repository uses, exactly as the Ladybug factory uses its twin.
+    #[test]
+    fn the_factory_helpers_keep_store_in_use_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _held = cognee_utils::StoreClaim::acquire(dir.path(), "test").unwrap();
+
+        let graph = ComponentError::from_graph_db(
+            "init",
+            cognee_graph::GraphDBError::StoreInUse(in_use(dir.path())),
+        );
+        assert!(matches!(graph, ComponentError::StoreInUse(_)));
+        let vector = ComponentError::from_vector_db(
+            "init",
+            cognee_vector::VectorDBError::StoreInUse(in_use(dir.path())),
+        );
+        assert!(matches!(vector, ComponentError::StoreInUse(_)));
+
+        let other = ComponentError::from_vector_db(
+            "init",
+            cognee_vector::VectorDBError::StorageError("disk".into()),
+        );
+        assert!(
+            matches!(&other, ComponentError::VectorDb(m) if m.starts_with("init: ")),
+            "{other}"
+        );
+    }
 }

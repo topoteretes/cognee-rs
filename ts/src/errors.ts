@@ -27,9 +27,22 @@ export class CogneeError extends Error {
 
 /** A component (storage / database / graph / vector / embedding / llm) failed to initialise. */
 export class ComponentError extends CogneeError {
-  constructor(message: string) {
-    super(message, "COMPONENT_ERROR");
+  constructor(message: string, kind: string = "COMPONENT_ERROR") {
+    super(message, kind);
     this.name = "ComponentError";
+  }
+}
+
+/**
+ * An embedded graph or vector store is already open in this process (another
+ * live handle on the same directories). Close that handle first; the store is
+ * free once its in-flight operations finish. A `ComponentError` subclass, so
+ * existing `instanceof ComponentError` checks still match.
+ */
+export class StoreInUseError extends ComponentError {
+  constructor(message: string) {
+    super(message, "STORE_IN_USE");
+    this.name = "StoreInUseError";
   }
 }
 
@@ -115,6 +128,7 @@ export class ConfigTypeMismatchError extends CogneeError {
 /** Map from `kind` string to the concrete error constructor. */
 const KIND_TO_CLASS: Record<string, new (msg: string) => CogneeError> = {
   COMPONENT_ERROR: ComponentError,
+  STORE_IN_USE: StoreInUseError,
   SERVICE_BUILD_ERROR: ServiceBuildError,
   USER_BOOTSTRAP_ERROR: UserBootstrapError,
   RUNTIME_ERROR: RuntimeError,

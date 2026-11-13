@@ -40,4 +40,9 @@ pub enum GraphDBError {
     /// a zero `max_nodes`); rejected before anything is read.
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// The embedded store is already open in this process (a second live
+    /// open of the same path); see [`cognee_utils::store_claim`].
+    #[error(transparent)]
+    StoreInUse(#[from] cognee_utils::StoreInUse),
 }

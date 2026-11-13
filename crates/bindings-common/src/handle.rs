@@ -208,6 +208,10 @@ impl HandleState {
             return Ok(Arc::clone(svc));
         }
 
+        // The stale bundle stays cached until its replacement is built: a
+        // failed build leaves the handle as it was. Keeping it does not hold a
+        // store against the rebuild — the manager keeps an embedded store whose
+        // own inputs did not change, and never opens one a second time.
         let (svc, owner_id) = CogneeServices::build(&self.cm).await?;
         let svc = Arc::new(svc);
 
@@ -226,9 +230,16 @@ impl HandleState {
             owner_id
         };
 
-        *guard = Some((current_ver, Arc::clone(&svc)));
+        let stale = guard.replace((current_ver, Arc::clone(&svc)));
         // Publish the resolved owner id (idempotent: email-derived UUID5).
         *self.owner_id.lock().await = Some(owner_id);
+        drop(guard);
+        // The stale bundle may hold the last reference to an engine the
+        // manager replaced; a store destructor (lbug's checkpoint) must not run
+        // on a runtime worker.
+        if let Some(stale) = stale {
+            let _ = tokio::task::spawn_blocking(move || drop(stale)).await;
+        }
         Ok(svc)
     }
 

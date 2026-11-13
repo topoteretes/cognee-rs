@@ -120,7 +120,9 @@ uint32_t cg_api_version(void);
 #define CG_ERR_CONFIG_TYPE_MISMATCH 18
 
 /* Mapping to TypeScript SdkError kind strings (js/src/types.ts):
- *   CG_ERR_COMPONENT            ↔ "COMPONENT_ERROR"
+ *   CG_ERR_COMPONENT            ↔ "COMPONENT_ERROR", and "STORE_IN_USE"
+ *                                 (an embedded graph/vector store is already
+ *                                 open in this process; the message names it)
  *   CG_ERR_SERVICE_BUILD        ↔ "SERVICE_BUILD_ERROR"
  *   CG_ERR_USER_BOOTSTRAP       ↔ "USER_BOOTSTRAP_ERROR"
  *   (CG_ERR_RUNTIME = 3)        ↔ "RUNTIME_ERROR", and "IMPROVE_ABORTED"
