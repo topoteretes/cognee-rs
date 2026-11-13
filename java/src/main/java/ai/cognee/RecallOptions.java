@@ -1,6 +1,7 @@
 package ai.cognee;
 
 import java.util.List;
+import java.util.Map;
 
 /** Per-call options for {@link Cognee#recall}. */
 public final class RecallOptions extends Options {
@@ -55,4 +56,12 @@ public final class RecallOptions extends Options {
     public RecallOptions nodeNameFilterOperator(String op) { put("nodeNameFilterOperator", op); return this; }
     /** Keep the graph search's context and graph in its response. */
     public RecallOptions verbose(boolean b) { put("verbose", b); return this; }
+    /**
+     * As {@link SearchOptions#llmConfig}: the whole recall runs with this LLM,
+     * routing included (an LLM without a key answers completion types with
+     * context only).
+     */
+    public RecallOptions llmConfig(Map<String, Object> c) { put("llmConfig", c); return this; }
+    /** As {@link SearchOptions#embeddingConfig}. */
+    public RecallOptions embeddingConfig(Map<String, Object> c) { put("embeddingConfig", c); return this; }
 }

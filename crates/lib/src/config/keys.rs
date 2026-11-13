@@ -668,11 +668,24 @@ impl Settings {
     /// [`Settings::overlay_from`] for a build whose component registry adds
     /// sections of its own: `schema` must include the built-in sections too
     /// (see [`schema_with`]).
+    ///
+    /// The section values the environment set are also kept as the settings'
+    /// [`env_layer`](Settings::env_layer), replacing any earlier one.
     pub fn overlay_from_with_schema(&mut self, env: &dyn EnvSource, schema: &ConfigSchema) {
         for spec in KEYS {
             (spec.overlay)(self, env);
         }
-        schema.overlay_env(&mut self.sections, env);
+        // `overlay_env` only inserts what the environment sets, so reading it
+        // into an empty map first and merging that is the same overlay, with
+        // the env-sourced values kept on the side.
+        let mut from_env = cognee_config_core::ConfigValues::new();
+        schema.overlay_env(&mut from_env, env);
+        self.sections.extend(
+            from_env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        self.env_layer = super::EnvLayer::new(from_env);
     }
 }
 
@@ -773,6 +786,34 @@ mod tests {
         deduped.dedup();
         assert_eq!(rows, deduped, "a key has two rows");
         assert_eq!(rows, fields, "registry rows and Settings fields differ");
+    }
+
+    /// An env overlay keeps what the environment set as the env layer: the
+    /// same values it wrote into `sections`, none of the defaults, nothing
+    /// set later in code, and `Debug` never prints them.
+    #[test]
+    fn an_env_overlay_keeps_its_section_values_as_the_env_layer() {
+        let mut settings = Settings::default();
+        assert!(settings.env_layer.values().is_empty());
+        settings.overlay_from(
+            &crate::config::MapEnv::new()
+                .with("LLM_API_KEY", "sk-env-layer")
+                .with("LLM_MODEL", "env-model"),
+        );
+        let layer = settings.env_layer.values();
+        assert_eq!(layer["llm.api_key"], serde_json::json!("sk-env-layer"));
+        assert_eq!(settings.sections["llm.model"], layer["llm.model"]);
+        assert!(!layer.contains_key("llm.provider"), "no defaults");
+        assert!(!format!("{settings:?}").contains("sk-env-layer"));
+        assert!(!format!("{:?}", settings.env_layer).contains("sk-env-layer"));
+
+        let config = crate::config::ConfigManager::new(settings);
+        config.set_llm_model("set-in-code");
+        let after = config.read().clone();
+        assert_eq!(
+            after.env_layer.values()["llm.model"],
+            serde_json::json!("env-model")
+        );
     }
 
     /// No env var and no setting key binds two rows.

@@ -123,6 +123,19 @@ class SearchOpts(TypedDict, total=False):
     #: Completion searches attach structured ``evidence`` references (and RAG
     #: text answers gain an ``Evidence:`` block). Default ``False``.
     include_references: bool
+    #: Run this search with its own LLM (Python's ``llm_config``): a dict of
+    #: ``llm.*`` settings keyed by their Python names (``llm_provider``,
+    #: ``llm_model``, ``llm_api_key``, ...) or canonical keys (``llm.model``).
+    #: It replaces the whole configured LLM section for the call: a setting
+    #: left out takes the value the environment gave it (as Python's settings
+    #: model reads it), else its default, never a value set in code.
+    llm_config: dict[str, Any]
+    #: Run this search with its own embedding model (Python's
+    #: ``embedding_config``), keyed like ``llm_config`` (``embedding_provider``,
+    #: ``embedding_model``, ``embedding_dimensions``, ...). Its dimensions must
+    #: match the configured model's, or the call raises
+    #: ``CogneeValidationError``.
+    embedding_config: dict[str, Any]
     user_id: str
 
 
@@ -163,6 +176,10 @@ class RecallOpts(TypedDict, total=False):
     node_name_filter_operator: str
     #: Keep the graph search's context and graph in its response.
     verbose: bool
+    #: As ``SearchOpts.llm_config``: the whole recall runs with this LLM.
+    llm_config: dict[str, Any]
+    #: As ``SearchOpts.embedding_config``.
+    embedding_config: dict[str, Any]
 
 
 class RememberOpts(TypedDict, total=False):

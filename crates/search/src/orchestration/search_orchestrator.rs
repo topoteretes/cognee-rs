@@ -494,6 +494,21 @@ impl SearchOrchestrator {
         self.routing_constraints
     }
 
+    /// What this call can run: [`Self::routing_constraints`], with
+    /// `llm_available` read off the call's own LLM when it overrides the
+    /// deployment's ([`crate::engine_override`]). Python builds the
+    /// constraints from the call's `llm_config` the same way
+    /// (`RoutingConstraints.from_config(llm_config)`, `query_router.py:67-90`),
+    /// so a per-call LLM without a key makes completion types run with
+    /// `only_context`, and a keyed one lifts a keyless deployment's limit.
+    pub fn routing_constraints_for_call(&self) -> RoutingConstraints {
+        let mut constraints = self.routing_constraints;
+        if let Some(llm) = crate::engine_override::current_llm() {
+            constraints.llm_available = llm.is_configured();
+        }
+        constraints
+    }
+
     /// Give recall a graph-readiness probe, so a recall whose graph is not
     /// built yet can short-circuit (see [`Self::assess_memory_readiness`]).
     pub fn with_graph_warmup(mut self, warmup: Arc<GraphWarmup>) -> Self {
@@ -1391,8 +1406,10 @@ impl SearchOrchestrator {
                 rows.clone(),
             ));
             let query = request.query_text.clone();
+            // A new task: it carries the call's per-call LLM only through
+            // `propagate`.
             fanout_analysis = Some(concurrent_session::AbortOnDrop::new(tokio::spawn(
-                async move {
+                crate::engine_override::propagate(async move {
                     if auto_feedback {
                         super::session_turn::prepare_concurrent_session_turn_from_snapshot(
                             llm.as_ref(),
@@ -1406,7 +1423,7 @@ impl SearchOrchestrator {
                     } else {
                         super::session_turn::SessionTurnPreparation::pass_through(&query)
                     }
-                },
+                }),
             )));
         }
 
@@ -4499,27 +4516,49 @@ mod tests {
             )
             .await
             .unwrap();
+        // The deployment's LLM is routed, as the builder wires it, and the
+        // search runs under a per-call LLM: the analysis lane, spawned on its
+        // own task, must still reach the per-call one through `propagate`.
+        let deployment_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let deployment: Arc<dyn Llm> = Arc::new(AnalysisProbe {
+            started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            calls: Arc::clone(&deployment_calls),
+        });
         let orchestrator = super::SearchOrchestrator::new(registry)
             .with_per_dataset_storage(true)
             .with_session_manager(Arc::clone(&manager))
-            .with_llm(Arc::new(AnalysisProbe {
-                started,
-                calls: Arc::clone(&analysis_calls),
-            }))
+            .with_llm(Arc::new(crate::engine_override::RoutedLlm::new(deployment)))
             .with_auto_feedback_default(true)
             .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+        let per_call = crate::EngineOverride {
+            llm: Some(Arc::new(AnalysisProbe {
+                started,
+                calls: Arc::clone(&analysis_calls),
+            })),
+            embedding: None,
+        };
         let mut request = echo_request(SearchType::RagCompletion, &[a, b]);
         request.user_id = Some(user);
         request.session_id = Some("fanout".into());
         request.use_combined_context = Some(true);
 
-        let results = orchestrator.search_datasets(&request).await.unwrap();
+        let results = crate::engine_override::with_engine_override(
+            per_call,
+            orchestrator.search_datasets(&request),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             results.iter().map(|r| r.dataset_id).collect::<Vec<_>>(),
             vec![Some(a), Some(b)]
         );
         assert_eq!(analysis_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            deployment_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the spawned analysis ran with the per-call LLM"
+        );
         assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
         let mut seen = scopes.lock().unwrap().clone();
         seen.sort_unstable();

@@ -40,6 +40,14 @@ Lowest precedence first:
 
 So: `defaults < config.json < .env < env < code`.
 
+The env overlay also keeps what it read as the settings' **env layer**
+(`Settings::env_layer`: the component-section values `.env` and the
+environment set, without defaults, a config file or anything set in code
+since). It is read once, at the same boundary, never again. Recall's and
+search's per-call `llm_config` / `embedding_config` take the settings they
+leave out from it, as Python's per-call `BaseSettings` read them from the
+environment (see [operations](operations.md#recall)).
+
 Parsing notes:
 * Booleans accept `true|1|yes|on` and `false|0|no` (`cognee_utils::parse_env_bool`).
 * Empty env values are treated as unset.

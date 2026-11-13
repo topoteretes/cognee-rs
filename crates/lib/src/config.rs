@@ -16,8 +16,9 @@ pub use cognee_config_core::{EnvSource, MapEnv};
 
 mod keys;
 pub use cognee_config_core::{
-    ConfigSchema, ConfigSection, ConfigValues, CredentialSafe, KeyDef, REDACTED, Redacted,
-    SectionSchema, mask_secret, redact_credentials, secret_is_set,
+    CallSection, ConfigSchema, ConfigSection, ConfigValues, CredentialSafe, KeyDef, KeyError,
+    REDACTED, Redacted, SectionSchema, mask_secret, redact_credentials, secret_is_set,
+    section_from_object,
 };
 pub use keys::{KeySpec, builtin_schema, key_spec, keys, schema_with};
 
@@ -325,6 +326,48 @@ pub struct Settings {
     /// one that matches no registered section is an unknown key.
     #[serde(flatten)]
     pub sections: cognee_config_core::ConfigValues,
+
+    /// The section values the environment (and `.env` file) set when these
+    /// settings were last overlaid from it ([`Settings::overlay_from`] and
+    /// the `*_from_env*` constructors), without the defaults and without
+    /// anything set in code or loaded from a file since. Empty for settings
+    /// that never read an environment.
+    ///
+    /// A per-call config (recall's `llm_config`) takes the settings it leaves
+    /// out from here, as Python's per-call `BaseSettings` reads them from the
+    /// environment. Not serialized; travels with clones.
+    #[serde(skip)]
+    pub env_layer: EnvLayer,
+}
+
+/// The environment-sourced section values of a [`Settings`]: see
+/// [`Settings::env_layer`]. `Debug` never prints the values, which may hold
+/// credentials.
+#[derive(Clone, Default)]
+pub struct EnvLayer(Option<Arc<cognee_config_core::ConfigValues>>);
+
+impl EnvLayer {
+    /// The layer holding `values`.
+    pub fn new(values: cognee_config_core::ConfigValues) -> Self {
+        Self(Some(Arc::new(values)))
+    }
+
+    /// The env-sourced values, empty when no environment was read.
+    pub fn values(&self) -> &cognee_config_core::ConfigValues {
+        static EMPTY: std::sync::OnceLock<cognee_config_core::ConfigValues> =
+            std::sync::OnceLock::new();
+        match &self.0 {
+            Some(values) => values,
+            None => EMPTY.get_or_init(cognee_config_core::ConfigValues::new),
+        }
+    }
+}
+
+impl std::fmt::Debug for EnvLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys = self.0.as_ref().map_or(0, |values| values.len());
+        write!(f, "EnvLayer({keys} keys)")
+    }
 }
 
 impl Settings {
@@ -1200,6 +1243,7 @@ impl Default for Settings {
             skip_preflight: false,
             skip_connection_test: false,
             sections: cognee_config_core::ConfigValues::new(),
+            env_layer: EnvLayer::default(),
         }
     }
 }

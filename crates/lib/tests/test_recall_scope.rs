@@ -922,3 +922,144 @@ async fn test_session_cache_user_id_reads_the_owners_cache() {
     );
     assert_eq!(items[0].content["answer"], "cite the book");
 }
+
+// ---------------------------------------------------------------------------
+// per-call engines (Python `llm_config` / `embedding_config`)
+// ---------------------------------------------------------------------------
+
+/// Answers with the model of the call's per-call LLM, or `"deployment"`.
+struct EngineProbe;
+
+#[async_trait]
+impl SearchRetriever for EngineProbe {
+    fn search_type(&self) -> SearchType {
+        SearchType::GraphCompletion
+    }
+
+    async fn get_context(
+        &self,
+        _query: &str,
+        _params: &SearchParams,
+    ) -> Result<SearchContext, SearchError> {
+        Ok(vec![])
+    }
+
+    async fn get_completion(
+        &self,
+        _query: &str,
+        _context: Option<SearchContext>,
+        _session: &SessionContext,
+        _params: &SearchParams,
+    ) -> Result<SearchOutput, SearchError> {
+        let model = cognee_search::engine_override::current_llm()
+            .map_or_else(|| "deployment".to_string(), |llm| llm.model().to_string());
+        Ok(SearchOutput::Text(model))
+    }
+}
+
+/// `RecallOptions::engine_override` is in effect for the whole recall, so the
+/// graph source's retriever sees the call's LLM, and nothing outlives the call.
+#[tokio::test]
+async fn test_engine_override_reaches_the_graph_source() {
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(Arc::new(EngineProbe));
+    let orchestrator = SearchOrchestrator::new(registry);
+    let run = |options: Option<RecallOptions>| {
+        recall(
+            "who is Alice",
+            Some(SearchType::GraphCompletion),
+            None,
+            None,
+            10,
+            false,
+            None,
+            Some(USER_ID),
+            &orchestrator,
+            None,
+            None,
+            Some(vec![RecallScope::Graph]),
+            options,
+        )
+    };
+
+    let with_llm = |llm: Arc<dyn cognee::llm::Llm>| RecallOptions {
+        engine_override: Some(cognee_search::EngineOverride {
+            llm: Some(llm),
+            embedding: None,
+        }),
+        ..Default::default()
+    };
+
+    let per_call: Arc<dyn cognee::llm::Llm> = Arc::new(cognee_test_utils::MockLlm::new(vec![]));
+    let result = run(Some(with_llm(Arc::clone(&per_call))))
+        .await
+        .expect("recall");
+    assert_eq!(
+        result.items[0].content,
+        serde_json::json!(per_call.model()),
+        "{:?}",
+        result.items
+    );
+
+    // An unconfigured per-call LLM makes the pinned completion type run with
+    // context only, though the deployment's routing allows an LLM.
+    let keyless = with_llm(Arc::new(cognee::llm::UnconfiguredLlm::new("openai")));
+    let result = run(Some(keyless)).await.expect("recall");
+    assert!(result.search_response.expect("graph ran").only_context);
+
+    let result = run(None).await.expect("recall");
+    assert_eq!(result.items[0].content, serde_json::json!("deployment"));
+}
+
+/// A model-only `llm_config` on a deployment whose key comes from the
+/// environment keeps that key (Python's per-call `LLMConfig` is a
+/// `BaseSettings`), so the pinned completion type answers with the call's
+/// model instead of being forced to context only.
+#[tokio::test]
+async fn test_model_only_llm_config_keeps_the_env_key_and_answers() {
+    let mut settings = cognee::Settings::default();
+    settings.overlay_from(
+        &cognee::config::MapEnv::new()
+            .with("LLM_PROVIDER", "openai")
+            .with("LLM_API_KEY", "sk-from-env")
+            .with("MOCK_EMBEDDING", "true")
+            .with("EMBEDDING_DIMENSIONS", "4"),
+    );
+    let cm = cognee::ComponentManager::new(cognee::ConfigManager::new(settings));
+    let llm_config = cognee::config::CallSection::from_object(
+        serde_json::json!({ "llm_model": "gpt-4o" })
+            .as_object()
+            .expect("object"),
+    )
+    .expect("valid llm_config");
+    let engines = cm
+        .build_engines_with_overrides(Some(&llm_config), None)
+        .await
+        .expect("engines");
+
+    let mut registry = SearchTypeRegistry::new();
+    registry.register(Arc::new(EngineProbe));
+    let orchestrator = SearchOrchestrator::new(registry);
+    let result = recall(
+        "who is Alice",
+        Some(SearchType::GraphCompletion),
+        None,
+        None,
+        10,
+        false,
+        None,
+        Some(USER_ID),
+        &orchestrator,
+        None,
+        None,
+        Some(vec![RecallScope::Graph]),
+        Some(RecallOptions {
+            engine_override: Some(engines),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("recall");
+    assert!(!result.search_response.expect("graph ran").only_context);
+    assert_eq!(result.items[0].content, serde_json::json!("gpt-4o"));
+}

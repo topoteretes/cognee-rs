@@ -1,5 +1,8 @@
 //! Unified search orchestration across 17 retrieval strategies (GraphCompletion, RagCompletion, Chunks, and more).
 
+/// Per-call LLM and embedding engines (Python's `llm_config` /
+/// `embedding_config` context variables).
+pub mod engine_override;
 /// Graph retrieval strategies and helpers.
 pub mod graph_retrieval;
 /// Graph-readiness probe for recall's warm-up short-circuit.
@@ -33,6 +36,10 @@ pub mod utils;
 #[allow(deprecated)]
 pub use cognee_session::SeaOrmSessionStore;
 pub use cognee_session::{RelationalSessionStore, SessionContext, SessionManager, SessionStore};
+pub use engine_override::{
+    EmbeddingDimensionMismatch, EngineOverride, RoutedEmbedding, RoutedLlm,
+    maybe_with_engine_override, with_engine_override,
+};
 pub use node_name_scope::{NodeNameScope, node_name_scope, reject_unsupported_node_name};
 pub use orchestration::{
     DatasetSearchResult, SearchBuilder, SearchOrchestrator, SearchTuning, SearchTypeRegistry,

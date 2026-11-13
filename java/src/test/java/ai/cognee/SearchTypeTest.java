@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import ai.cognee.internal.Json;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class SearchTypeTest {
@@ -117,5 +118,18 @@ class SearchTypeTest {
         assertEquals("Alice", n.path("nodeName").get(0).asText());
         assertEquals("AND", n.path("nodeNameFilterOperator").asText());
         assertTrue(n.path("verbose").asBoolean());
+    }
+
+    @Test
+    void searchAndRecallOptionsSerializeTheEngineConfigs() {
+        Map<String, Object> llm = Map.of("llm_model", "gpt-4o");
+        Map<String, Object> embedding = Map.of("embedding_dimensions", 384);
+        for (Options opts : List.of(
+                new SearchOptions().llmConfig(llm).embeddingConfig(embedding),
+                new RecallOptions().llmConfig(llm).embeddingConfig(embedding))) {
+            JsonNode n = Json.tree(opts.toJson());
+            assertEquals("gpt-4o", n.path("llmConfig").path("llm_model").asText());
+            assertEquals(384, n.path("embeddingConfig").path("embedding_dimensions").asInt());
+        }
     }
 }

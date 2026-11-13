@@ -34,14 +34,16 @@ use serde_json::json;
 use uuid::Uuid;
 
 use cognee::api::{ApiError, RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::config::CallSection;
 use cognee::search::recall_scope::{
     RecallScope, has_dataset_filter, resolve_session_cache_user_id, resolve_sources,
 };
 use cognee::search::{
-    NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest, SearchResponse,
-    SearchType, ToolsTrigger, build_graph_entry, build_structured_entry, entry_dataset_ids,
-    entry_evidence, only_context_system_prompt,
+    EngineOverride, NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest,
+    SearchResponse, SearchType, ToolsTrigger, build_graph_entry, build_structured_entry,
+    entry_dataset_ids, entry_evidence, maybe_with_engine_override, only_context_system_prompt,
 };
+use cognee::{ComponentManager, EmbeddingConfig, LlmConfig};
 
 use crate::{HandleState, SdkError};
 
@@ -197,6 +199,9 @@ pub struct RecallArgs {
     /// `verbose`: the graph search keeps its context and graph (Python's
     /// `verbose`, `recall.py:457`).
     pub verbose: Option<bool>,
+    /// `llmConfig` / `embeddingConfig`: the engines this recall runs with
+    /// (Python's `llm_config` / `embedding_config`, `recall.py:467-468`).
+    pub engine_configs: EngineConfigs,
 }
 
 impl RecallArgs {
@@ -329,6 +334,7 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         .map(|s| s.to_string());
     let node_scope = parse_node_scope(opts)?;
     let verbose = parse_verbose(opts);
+    let engine_configs = parse_engine_configs(opts)?;
 
     Ok(RecallArgs {
         query_type,
@@ -346,7 +352,73 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         context_profile,
         node_scope,
         verbose,
+        engine_configs,
     })
+}
+
+/// The per-call `llmConfig` / `embeddingConfig` of a search or recall (Python's
+/// `llm_config` / `embedding_config`, `search.py:71-72`, `recall.py:467-468`).
+///
+/// Each is a JSON object keyed by the setting's canonical key (`"llm.model"`)
+/// or its Python name (`"llm_model"`), parsed into a [`CallSection`] that keeps
+/// only the settings it gives. It replaces the whole configured section for
+/// the call, as Python's does: a setting it leaves out takes the value the
+/// environment gave it, else the default (see
+/// `ComponentManager::build_engines_with_overrides`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EngineConfigs {
+    pub llm: Option<CallSection<LlmConfig>>,
+    pub embedding: Option<CallSection<EmbeddingConfig>>,
+}
+
+impl EngineConfigs {
+    /// The engines these configs select, built (and cached) through `cm`;
+    /// `None` without configs.
+    ///
+    /// An embedding model of another width than the configured one is a
+    /// [`SdkError::Validation`] (Python's `EmbeddingDimensionMismatchError`);
+    /// an engine that cannot be built is a [`SdkError::Component`].
+    pub async fn resolve(&self, cm: &ComponentManager) -> Result<Option<EngineOverride>, SdkError> {
+        if self.llm.is_none() && self.embedding.is_none() {
+            return Ok(None);
+        }
+        cm.build_engines_with_overrides(self.llm.as_ref(), self.embedding.as_ref())
+            .await
+            .map(Some)
+            .map_err(|error| match error {
+                ApiError::EmbeddingDimensionMismatch(e) => SdkError::Validation(e.to_string()),
+                ApiError::Component(e) => SdkError::Component(e),
+                other => SdkError::Runtime(other.to_string()),
+            })
+    }
+}
+
+/// Parse `llmConfig` / `embeddingConfig` into [`EngineConfigs`]. Absent or
+/// null is no override; anything but a JSON object, or a known setting with a
+/// value of the wrong type, is a validation error. Unknown keys are ignored
+/// with a warning, as Python's `extra="allow"` config models accept them.
+pub fn parse_engine_configs(opts: &serde_json::Value) -> Result<EngineConfigs, SdkError> {
+    Ok(EngineConfigs {
+        llm: parse_section(opts, "llmConfig")?,
+        embedding: parse_section(opts, "embeddingConfig")?,
+    })
+}
+
+fn parse_section<T: cognee::config::ConfigSection>(
+    opts: &serde_json::Value,
+    key: &str,
+) -> Result<Option<CallSection<T>>, SdkError> {
+    match opts.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Object(object)) => CallSection::from_object(object)
+            .map(Some)
+            .map_err(|e| SdkError::Validation(format!("invalid `{key}`: {e}"))),
+        // Names only the JSON type: the value may be a misplaced API key.
+        Some(other) => Err(SdkError::Validation(format!(
+            "`{key}` must be an object, got {}",
+            crate::process_config::type_name(other)
+        ))),
+    }
 }
 
 /// `includeReferences`: attach structured evidence references (and, for RAG,
@@ -608,6 +680,9 @@ async fn session_cache_user_id(
 /// All `opts` keys must be camelCase (e.g. `searchType`, `topK`, `datasets`).
 /// A `userId` key in opts is ignored; `user_id` is always set from the handle's
 /// `owner_id` so dataset-name resolution works correctly.
+///
+/// `llmConfig` / `embeddingConfig` run the search with the call's own LLM and
+/// embedding engine (see [`EngineConfigs`]).
 pub async fn search(
     state: &HandleState,
     query: &str,
@@ -617,10 +692,9 @@ pub async fn search(
     let owner_id = state.owner_id().await?;
 
     let request = build_search_request(query, opts, owner_id)?;
+    let engines = parse_engine_configs(opts)?.resolve(&state.cm).await?;
 
-    let response = svc
-        .search_orchestrator
-        .search(&request)
+    let response = maybe_with_engine_override(engines, svc.search_orchestrator.search(&request))
         .await
         .map_err(|e| SdkError::Runtime(format!("search failed: {e}")))?;
 
@@ -642,6 +716,8 @@ pub async fn search(
 /// `items`, tagged with their `source`.
 ///
 /// `opts` may be `serde_json::Value::Null` when no options were provided.
+/// `llmConfig` / `embeddingConfig` run the recall with the call's own LLM and
+/// embedding engine (see [`EngineConfigs`]).
 pub async fn recall(
     state: &HandleState,
     query: &str,
@@ -652,7 +728,10 @@ pub async fn recall(
     let owner_str = owner_id.to_string();
 
     let args = build_recall_args(opts)?;
-    let mut options = args.recall_options();
+    let mut options = RecallOptions {
+        engine_override: args.engine_configs.resolve(&state.cm).await?,
+        ..args.recall_options()
+    };
     let RecallArgs {
         query_type,
         datasets,
@@ -1579,6 +1658,123 @@ mod tests {
                 other => panic!("expected a validation error for {bad}, got {other:?}"),
             }
         }
+    }
+
+    /// `llmConfig` / `embeddingConfig` take Python's names and canonical keys,
+    /// keep only the settings they give (the rest comes from the environment
+    /// layer when the engines are built), ignore unknown keys, and refuse a
+    /// non-object or a wrongly typed value.
+    #[test]
+    fn engine_configs_parse_into_the_settings_they_give() {
+        let opts = json!({
+            "llmConfig": { "llm_model": "gpt-4o", "llm.api_key": "sk-call", "unknown": 1 },
+            "embeddingConfig": { "embedding_dimensions": 384, "embedding_provider": "onnx" },
+        });
+        let args = build_recall_args(&opts).unwrap();
+        let llm = args.engine_configs.llm.as_ref().unwrap();
+        assert_eq!(
+            llm.values().keys().collect::<Vec<_>>(),
+            ["llm.api_key", "llm.model"]
+        );
+        let section = llm.section();
+        assert_eq!(section.model, "gpt-4o");
+        assert_eq!(section.api_key, "sk-call");
+        assert_eq!(section.provider, LlmConfig::default().provider);
+        // The key never reaches `Debug`.
+        assert!(!format!("{:?}", args.engine_configs).contains("sk-call"));
+        let embedding = args.engine_configs.embedding.as_ref().unwrap().section();
+        assert_eq!(embedding.dimensions, 384);
+        assert_eq!(embedding.provider, "onnx");
+        assert_eq!(embedding.batch_size, EmbeddingConfig::default().batch_size);
+        // Search reads them with the same parser.
+        assert_eq!(parse_engine_configs(&opts).unwrap(), args.engine_configs);
+
+        let none = build_recall_args(&json!({ "llmConfig": null })).unwrap();
+        assert_eq!(none.engine_configs, EngineConfigs::default());
+
+        // A misplaced key is never echoed back in the error.
+        let err = parse_engine_configs(&json!({ "llmConfig": "sk-secret" })).unwrap_err();
+        assert!(
+            matches!(&err, SdkError::Validation(m) if m == "`llmConfig` must be an object, got a string"),
+            "{err:?}"
+        );
+
+        for bad in [
+            json!({ "llmConfig": "gpt-4o" }),
+            json!({ "embeddingConfig": { "embedding_dimensions": "wide" } }),
+        ] {
+            assert!(
+                matches!(build_recall_args(&bad), Err(SdkError::Validation(_))),
+                "{bad}"
+            );
+            assert!(matches!(
+                parse_engine_configs(&bad),
+                Err(SdkError::Validation(_))
+            ));
+        }
+    }
+
+    /// The configs resolve through the handle's component manager: none is
+    /// no override, an embedding model of the wrong width is a validation
+    /// error, and an unknown provider a component error.
+    #[tokio::test]
+    async fn engine_configs_resolve_through_the_component_manager() {
+        let settings = cognee::Settings {
+            sections: [
+                ("embedding.mock".to_string(), json!("true")),
+                ("embedding.dimensions".to_string(), json!(4)),
+            ]
+            .into(),
+            ..cognee::Settings::default()
+        };
+        let cm = ComponentManager::new(cognee::ConfigManager::new(settings));
+        assert!(
+            EngineConfigs::default()
+                .resolve(&cm)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let embedding = |dimensions: u32| {
+            CallSection::<EmbeddingConfig>::from_object(
+                json!({ "mock_embedding": "true", "embedding_dimensions": dimensions })
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let fits = EngineConfigs {
+            embedding: Some(embedding(4)),
+            ..Default::default()
+        };
+        let engines = fits.resolve(&cm).await.unwrap().unwrap();
+        assert_eq!(engines.embedding.unwrap().dimension(), 4);
+
+        let too_wide = EngineConfigs {
+            embedding: Some(embedding(8)),
+            ..Default::default()
+        };
+        assert!(matches!(
+            too_wide.resolve(&cm).await,
+            Err(SdkError::Validation(_))
+        ));
+
+        let unknown = EngineConfigs {
+            llm: Some(
+                CallSection::from_object(
+                    json!({ "llm_provider": "no-such-provider", "llm_api_key": "k" })
+                        .as_object()
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(matches!(
+            unknown.resolve(&cm).await,
+            Err(SdkError::Component(_))
+        ));
     }
 
     /// The new scope names flow through `normalize_scope` unchanged.

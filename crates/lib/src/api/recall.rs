@@ -26,7 +26,7 @@ use cognee_search::recall_scope::{
     search_session_context, search_trace,
 };
 use cognee_search::types::SearchError;
-use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
+use cognee_search::{SearchOrchestrator, SearchResponse, SearchType, maybe_with_engine_override};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
 
@@ -85,8 +85,52 @@ pub struct RecallResult {
 ///    from [`resolve_session_cache_user_id`]), else under `user_id`.
 /// 4. Telemetry attrs: `COGNEE_RECALL_SCOPE`, `COGNEE_RECALL_SOURCE`,
 ///    `COGNEE_RESULT_COUNT`, `COGNEE_SESSION_ENTRY_COUNT` (`recall.py:515-522`).
+///
+/// [`RecallOptions::engine_override`] runs the whole recall with the call's
+/// own LLM and embedding engine (Python's per-call `llm_config` /
+/// `embedding_config`, `recall.py:467-468`): the graph source's routing, its
+/// retrievers and its session-turn analysis all use them.
 #[allow(clippy::too_many_arguments)]
 pub async fn recall(
+    query_text: &str,
+    query_type: Option<SearchType>,
+    datasets: Option<Vec<String>>,
+    dataset_ids: Option<Vec<uuid::Uuid>>,
+    top_k: usize,
+    auto_route: bool,
+    session_id: Option<&str>,
+    user_id: Option<&str>,
+    search_orchestrator: &SearchOrchestrator,
+    session_store: Option<&dyn SessionStore>,
+    session_manager: Option<&SessionManager>,
+    scope: Option<Vec<RecallScope>>,
+    options: Option<RecallOptions>,
+) -> Result<RecallResult, ApiError> {
+    let engines = options.as_ref().and_then(|o| o.engine_override.clone());
+    maybe_with_engine_override(
+        engines,
+        recall_with_engines(
+            query_text,
+            query_type,
+            datasets,
+            dataset_ids,
+            top_k,
+            auto_route,
+            session_id,
+            user_id,
+            search_orchestrator,
+            session_store,
+            session_manager,
+            scope,
+            options,
+        ),
+    )
+    .await
+}
+
+/// [`recall`]'s body, run under the call's engines.
+#[allow(clippy::too_many_arguments)]
+async fn recall_with_engines(
     query_text: &str,
     query_type: Option<SearchType>,
     datasets: Option<Vec<String>>,

@@ -32,8 +32,9 @@ pub use redact::{
     CredentialSafe, REDACTED, Redacted, mask_secret, redact_credentials, secret_is_set,
 };
 pub use section::{
-    ConfigSchema, ConfigSection, ConfigValue, ConfigValues, KeyDef, KeyError, LenientReport,
-    SchemaError, SectionFieldDebug, SectionSchema, StrictBool, unknown_key,
+    CallSection, ConfigSchema, ConfigSection, ConfigValue, ConfigValues, KeyDef, KeyError,
+    LenientReport, SchemaError, SectionFieldDebug, SectionSchema, StrictBool, replace_section,
+    section_from_object, unknown_key,
 };
 
 /// Read-only view over an environment.

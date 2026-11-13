@@ -290,6 +290,23 @@ export interface CogneeSearchOptions {
    */
   includeReferences?: boolean;
   /**
+   * Run this search with its own LLM (Python's `llm_config`): `llm.*`
+   * settings keyed by their Python names (`llm_provider`, `llm_model`,
+   * `llm_api_key`, ...) or canonical keys (`"llm.model"`). It replaces the
+   * whole configured LLM section for the call: a setting left out takes the
+   * value the environment gave it (as Python's settings model reads it), else
+   * its default, never a value set in code.
+   */
+  llmConfig?: Record<string, unknown>;
+  /**
+   * Run this search with its own embedding model (Python's
+   * `embedding_config`), keyed like `llmConfig` (`embedding_provider`,
+   * `embedding_model`, `embedding_dimensions`, ...). Its dimensions must
+   * match the configured model's, or the call fails with a
+   * `VALIDATION_ERROR`.
+   */
+  embeddingConfig?: Record<string, unknown>;
+  /**
    * Per-retriever knobs, forwarded verbatim to the retriever the search
    * resolves to. Keys are snake_case and retriever-defined; a key the chosen
    * retriever does not know is ignored rather than rejected.
@@ -374,6 +391,14 @@ export interface CogneeRecallOptions {
   nodeNameFilterOperator?: "AND" | "OR";
   /** Keep the graph search's context and graph in its response. */
   verbose?: boolean;
+  /**
+   * As `CogneeSearchOptions.llmConfig`: the whole recall runs with this LLM,
+   * routing included (an LLM without a key answers completion types with
+   * context only).
+   */
+  llmConfig?: Record<string, unknown>;
+  /** As `CogneeSearchOptions.embeddingConfig`. */
+  embeddingConfig?: Record<string, unknown>;
 }
 
 /**

@@ -124,6 +124,33 @@ snake_case spellings). An unknown scope or `tools_trigger`, a `tools` / `code`
 scope and node names with an empty `node_type` are validation errors on every
 surface.
 
+A recall (and a search) can run with its own LLM and embedding model, as
+Python's `llm_config` / `embedding_config` arguments do. In Rust that is the
+`engine_override` option, built with
+`ComponentManager::build_engines_with_overrides` from an `llm` and an
+`embedding` config section; the bindings take them as the `llmConfig` /
+`embeddingConfig` opts, objects keyed by the settings' Python names
+(`llm_model`, `llm_api_key`, `embedding_dimensions`, ...) or canonical keys
+(`llm.model`). As in Python, each replaces the whole configured section for
+the call: a setting it leaves out takes the value the environment (or `.env`
+file) gave it, as Python's per-call `LLMConfig` / `EmbeddingConfig`
+(`BaseSettings`) read it, else the section's default. The environment is not
+read again: the values come from the configuration's env layer
+(`Settings::env_layer`), captured when it was read from the environment. A
+value set in code or loaded from a file is not inherited, as a fresh Python
+`LLMConfig()` does not see the runtime-modified global config. The cache of
+built engines is keyed by a digest of the configs, never their plain text.
+One difference remains: `embedding.api_key` binds `EMBEDDING_API_KEY` and
+then `LLM_API_KEY`, so with only `LLM_API_KEY` set the embedder keeps that key
+under an `llm_config` with another key, where Python's embedder would follow
+the call's LLM key. The call's LLM also decides
+routing: one without a key answers completion types with `only_context`. An
+embedding model whose width differs from the configured one fails before
+anything is searched. The engines are built through the deployment's
+component registry, so any registered provider can be selected, and are
+cached per configuration. The CLI has no per-call overrides; it has the
+configuration.
+
 `recall ≈ auto-routed search`. rustdoc: `api::recall`.
 
 ### improve

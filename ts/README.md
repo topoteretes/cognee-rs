@@ -237,6 +237,22 @@ graph source as they do to `search`. `"tools"` and `"code"` scopes, an unknown
 `toolsTrigger` and node names with an empty `nodeType` fail with a
 `ValidationError`.
 
+`search` and `recall` both take `llmConfig` / `embeddingConfig` to run one
+call with its own LLM or embedding model (Python's `llm_config` /
+`embedding_config`), keyed by the settings' Python names:
+
+```ts
+const result = await c.recall("Who is Alice?", {
+  llmConfig: { llm_provider: "openai", llm_model: "gpt-4o", llm_api_key: "sk-..." },
+});
+```
+
+Each replaces the whole configured section for that call: a setting left out
+takes the value the environment (or `.env` file) gave it when the handle was
+configured, as Python's settings models read it, else its default; a value set
+in code is not inherited. An embedding model whose
+dimensions differ from the configured one fails with a `ValidationError`.
+
 ## Memory operations
 
 ### remember
