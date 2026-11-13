@@ -76,6 +76,8 @@ fn build_orchestrator() -> SearchOrchestrator {
         SearchType::ChunksLexical,
         SearchType::CodingRules,
         SearchType::Temporal,
+        // A typed node scope defers hybrid to graph completion.
+        SearchType::GraphCompletion,
     ] {
         registry.register(Arc::new(StubRetriever(st)));
     }
@@ -604,6 +606,118 @@ async fn test_scope_tools_and_code_fail_before_any_source_runs() {
             other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// node_name / node_type (SDK-1040 P4)
+// ---------------------------------------------------------------------------
+
+/// Names with an empty `node_type` are refused before any source runs, even
+/// when the graph would not run (Python `recall.py:609-613`).
+#[tokio::test]
+async fn test_node_names_without_a_type_fail_for_a_session_only_scope() {
+    let h = build_harness().await;
+    seed_qa(&*h.store, "what is rust", "a systems language").await;
+    let options = RecallOptions {
+        node_type: Some(String::new()),
+        node_name: Some(vec!["alpha".to_string()]),
+        ..Default::default()
+    };
+
+    let err = recall(
+        "rust language",
+        None,
+        None,
+        None,
+        10,
+        false,
+        Some(SESSION_ID),
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![RecallScope::Session]),
+        Some(options),
+    )
+    .await
+    .expect_err("names without a type must fail");
+
+    match err {
+        ApiError::InvalidArgument(message) => assert!(
+            message.starts_with("node_name needs a node_type"),
+            "{message}"
+        ),
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+/// A pinned type that cannot apply the scope is the caller's error.
+#[tokio::test]
+async fn test_pinned_type_that_cannot_apply_the_node_scope_is_invalid() {
+    let h = build_harness().await;
+    let options = RecallOptions {
+        node_type: Some("Entity".to_string()),
+        node_name: Some(vec!["Alice".to_string()]),
+        ..Default::default()
+    };
+
+    let err = recall(
+        "what happened",
+        Some(SearchType::Temporal),
+        None,
+        None,
+        10,
+        false,
+        None,
+        Some(USER_ID),
+        &h.orchestrator,
+        Some(&*h.store),
+        Some(&h.manager),
+        Some(vec![RecallScope::Graph]),
+        Some(options),
+    )
+    .await
+    .expect_err("TEMPORAL cannot apply a graph scope");
+
+    match err {
+        ApiError::InvalidArgument(message) => assert!(
+            message.starts_with("TEMPORAL does not apply node_name with node_type=Entity."),
+            "{message}"
+        ),
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+/// Under a graph scope the router does not pick TEMPORAL; the fallback runs.
+#[tokio::test]
+async fn test_auto_route_stays_within_the_node_scope() {
+    let h = build_harness().await;
+    let options = RecallOptions {
+        node_type: Some("Entity".to_string()),
+        node_name: Some(vec!["Alice".to_string()]),
+        ..Default::default()
+    };
+
+    let result = recall(
+        "What happened in 1898?",
+        None,
+        None,
+        None,
+        10,
+        true,
+        None,
+        Some(USER_ID),
+        &h.orchestrator,
+        None,
+        None,
+        Some(vec![RecallScope::Graph]),
+        Some(options),
+    )
+    .await
+    .expect("routed recall");
+
+    assert_eq!(result.search_type_used, Some(SearchType::HybridCompletion));
+    assert!(result.auto_routed);
 }
 
 async fn seed_context(manager: &SessionManager, profile: &str, section: &str, content: &str) {

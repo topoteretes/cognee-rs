@@ -25,6 +25,7 @@ use cognee_search::recall_scope::{
     ResolvedSources, has_dataset_filter, plan_graph, resolve_sources, run_graph, search_session,
     search_session_context, search_trace,
 };
+use cognee_search::types::SearchError;
 use cognee_search::{SearchOrchestrator, SearchResponse, SearchType};
 use cognee_session::{SessionManager, SessionStore};
 use tracing::{field, info};
@@ -72,6 +73,11 @@ pub struct RecallResult {
 ///
 ///    A `tools` or `code` scope fails here with [`ApiError::InvalidArgument`]
 ///    before any source runs: Rust has no lane for them yet (SDK-1537).
+///    So does a `node_name` filter with an empty [`RecallOptions::node_type`]
+///    (Python `recall.py:609-613`), whatever the scope. The graph source then
+///    routes only to types that apply the filter, and an explicit
+///    `query_type` that cannot apply it fails with
+///    [`ApiError::InvalidArgument`] when the graph source runs.
 /// 3. Iterate sources in resolved order (`recall.py:1243-1257`); each source
 ///    appends to a flat merged list of [`RecallItem`]s. The session, trace
 ///    and session_context sources read the session cache under
@@ -112,6 +118,11 @@ pub async fn recall(
         query_type,
     )
     .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
+    // Names with an empty `node_type` are refused before any source runs, so
+    // a session-only recall refuses them as a graph one does (Python
+    // `recall.py:609-613`).
+    RecallOptions::node_name_scope(options.as_ref())
+        .map_err(|e| ApiError::InvalidArgument(e.to_string()))?;
 
     // Comma-joined source names, `auto` included, mirroring Python's
     // `span_scope` (`recall.py:388`).
@@ -213,8 +224,6 @@ pub async fn recall(
             .await
             .map_err(|e| ApiError::Search(e.to_string()))?,
             RecallScope::Graph => {
-                let search_err =
-                    |e: cognee_search::types::SearchError| ApiError::Search(e.to_string());
                 let plan = plan_graph(
                     query_text,
                     query_type,
@@ -224,8 +233,9 @@ pub async fn recall(
                     user_id,
                     search_orchestrator,
                     &span,
+                    options.as_ref(),
                 )
-                .map_err(search_err)?;
+                .map_err(graph_error)?;
                 let note = plan
                     .warmup_note(
                         search_orchestrator,
@@ -235,7 +245,7 @@ pub async fn recall(
                         options.as_ref(),
                     )
                     .await
-                    .map_err(search_err)?;
+                    .map_err(graph_error)?;
                 // A graph that is not built is not searched: it answers the
                 // note as the one source, and nothing next to others.
                 let (items, used_type, was_auto, response) = match note {
@@ -261,7 +271,7 @@ pub async fn recall(
                         options.as_ref(),
                     )
                     .await
-                    .map_err(search_err)?,
+                    .map_err(graph_error)?,
                 };
                 graph_search_type = Some(used_type);
                 graph_auto_routed = was_auto;
@@ -320,6 +330,16 @@ pub async fn recall(
         auto_routed: graph_auto_routed,
         search_response: graph_response,
     })
+}
+
+/// A graph-source failure: an argument the search refused (a `node_name`
+/// filter the pinned type cannot apply) is the caller's, anything else the
+/// search's.
+fn graph_error(error: SearchError) -> ApiError {
+    match error {
+        SearchError::QueryValidation(message) => ApiError::InvalidArgument(message),
+        other => ApiError::Search(other.to_string()),
+    }
 }
 
 /// The recall's `cognee.recall.source`: a single source names itself; any

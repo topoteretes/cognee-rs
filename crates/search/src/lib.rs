@@ -4,6 +4,8 @@
 pub mod graph_retrieval;
 /// Graph-readiness probe for recall's warm-up short-circuit.
 pub mod graph_warmup;
+/// What a `node_name` filter means for each search type, and which types honour it.
+pub mod node_name_scope;
 /// Observability hooks for search pipeline tracing.
 pub mod observability;
 /// Search orchestration and pipeline assembly.
@@ -31,6 +33,7 @@ pub mod utils;
 #[allow(deprecated)]
 pub use cognee_session::SeaOrmSessionStore;
 pub use cognee_session::{RelationalSessionStore, SessionContext, SessionManager, SessionStore};
+pub use node_name_scope::{NodeNameScope, node_name_scope, reject_unsupported_node_name};
 pub use orchestration::{
     DatasetSearchResult, SearchBuilder, SearchOrchestrator, SearchTuning, SearchTypeRegistry,
     SessionSearchMode, merge_dataset_results,
