@@ -576,6 +576,7 @@ impl LadybugAdapter {
         use LbugValue::*;
         match value {
             Null(_) => serde_json::Value::Null,
+            Json(v) => v,
             Bool(b) => serde_json::Value::Bool(b),
             Int8(i) => json!(i),
             Int16(i) => json!(i),
@@ -1150,14 +1151,13 @@ impl GraphDBTrait for LadybugAdapter {
             GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
         })?;
 
-        // One row per id before batching — see `crate::dedup`. The engine
-        // mishandles an id repeated inside a single `UNWIND … MERGE` that sets
-        // two or more columns (lbug 0.14.1): the repeated row is written onto
-        // the node at the first row offset, so writing `[person, timestamp,
-        // person]` EntityTypes turned an Entity into an EntityType. Reduced to
-        // raw Cypher in `tests::lbug_engine_still_corrupts_on_a_repeated_merge_key`,
-        // which fails once an lbug upgrade fixes it. A batch with distinct ids
-        // has not been seen to trigger it, which is what this guarantees.
+        // One row per id before batching — see `crate::dedup`. lbug 0.14.1
+        // mishandled an id repeated inside a single `UNWIND … MERGE` that sets
+        // two or more columns: the repeated row was written onto the node at
+        // the first row offset, so writing `[person, timestamp, person]`
+        // EntityTypes turned an Entity into an EntityType. lbug 0.22 no longer
+        // does that (the canary that asserted the bug went with the bump), and
+        // the dedup stays for the edge abort and as plain hygiene.
         //
         // Each surviving id takes everything from its last occurrence and the
         // `created_at` column from its first — the column is set only `ON
@@ -2912,57 +2912,6 @@ mod tests {
     /// struct list) and it is idempotent — the basis for the batched
     /// `add_nodes_raw`/`add_edges` upserts that replaced per-item exists-check
     /// + CREATE/SET.
-    /// Canary for the engine bug the batch dedup in `add_nodes_raw` works
-    /// around (see `crate::dedup`). With lbug 0.14.1, a key repeated inside one
-    /// `UNWIND … MERGE` whose SET clauses touch two or more columns writes the
-    /// repeated row onto the node at the first row offset (`e0` here). One SET
-    /// column does not trigger it. Raw Cypher, no adapter code involved.
-    /// Tracked in SDK-1128 (to be reported upstream at LadybugDB/ladybug).
-    ///
-    /// This asserts the bug is **still present**. When an lbug upgrade fixes
-    /// it, this test fails: then the dedup is no longer a correctness guard
-    /// (it is still worth keeping for the edge abort and as plain hygiene) and
-    /// this canary should be deleted along with the comment that points here.
-    #[tokio::test]
-    #[serial]
-    async fn lbug_engine_still_corrupts_on_a_repeated_merge_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = SystemConfig::default().max_db_size(DEFAULT_MAX_DB_SIZE);
-        let db =
-            Database::new(temp_dir.path().join("canary.db").to_str().unwrap(), config).unwrap();
-        let conn = Connection::new(&db).unwrap();
-        conn.query("CREATE NODE TABLE Node(id STRING PRIMARY KEY, name STRING, type STRING)")
-            .unwrap();
-        let merge = |rows: &str| {
-            format!(
-                "UNWIND [{rows}] AS node MERGE (n:Node {{id: node.id}}) \
-                 ON CREATE SET n.name = node.name, n.type = node.type \
-                 ON MATCH SET n.name = node.name, n.type = node.type"
-            )
-        };
-        conn.query(&merge(
-            "{id:'e0', name:'e0', type:'Entity'}, {id:'e1', name:'e1', type:'Entity'}",
-        ))
-        .unwrap();
-        conn.query(&merge(
-            "{id:'t1', name:'t1', type:'EntityType'}, {id:'t2', name:'t2', type:'EntityType'}, \
-             {id:'t1', name:'t1', type:'EntityType'}",
-        ))
-        .unwrap();
-        let e0_type = conn
-            .query("MATCH (n:Node) WHERE n.id = 'e0' RETURN n.type")
-            .unwrap()
-            .next()
-            .and_then(|row| row.into_iter().next())
-            .map(|v| format!("{v:?}"))
-            .unwrap_or_default();
-        assert!(
-            e0_type.contains("EntityType"),
-            "lbug no longer writes a repeated MERGE row onto e0 (e0.type = {e0_type}): the \
-             engine bug behind the batch dedup looks fixed — see this test's doc comment"
-        );
-    }
-
     #[tokio::test]
     #[serial]
     async fn ladybug_supports_idempotent_unwind_merge_batch() {
