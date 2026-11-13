@@ -4875,7 +4875,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(refreshed.id, stored.id);
-        assert_eq!(refreshed.original_data_location, again.raw_data_uri);
+        // The stored row, not the snapshot `persist_data` returns.
+        let reread = IngestDb::get_data(&db, refreshed.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reread.original_data_location, again.raw_data_uri);
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored
