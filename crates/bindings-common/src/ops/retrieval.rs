@@ -33,14 +33,14 @@ use std::sync::Arc;
 use serde_json::json;
 use uuid::Uuid;
 
-use cognee::api::{RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
+use cognee::api::{ApiError, RecallOptions, ScopeInput, normalize_scope, recall as cognee_recall};
 use cognee::search::recall_scope::{
     RecallScope, has_dataset_filter, resolve_session_cache_user_id, resolve_sources,
 };
 use cognee::search::{
     NormalizedResult, RecallItem, RecallSource, SearchOutput, SearchRequest, SearchResponse,
-    SearchType, build_graph_entry, build_structured_entry, entry_dataset_ids, entry_evidence,
-    only_context_system_prompt,
+    SearchType, ToolsTrigger, build_graph_entry, build_structured_entry, entry_dataset_ids,
+    entry_evidence, only_context_system_prompt,
 };
 
 use crate::{HandleState, SdkError};
@@ -183,6 +183,94 @@ pub struct RecallArgs {
     pub neighborhood_depth: Option<usize>,
     pub neighborhood_seed_top_k: Option<usize>,
     pub include_references: bool,
+    /// `toolsTrigger`: Python's `tools_trigger` (`recall.py:464`), validated
+    /// on every call whatever the scope (`:596-600`). No effect until the
+    /// `tools` lane exists (SDK-1537).
+    pub tools_trigger: ToolsTrigger,
+    /// `contextProfile`: the profile the `session_context` lane renders
+    /// (Python's `context_profile`, `recall.py:453`). Not validated, as in
+    /// Python; `None` is the `"qa"` default.
+    pub context_profile: Option<String>,
+    /// `nodeType` / `nodeName` / `nodeNameFilterOperator`: the graph lane's
+    /// node scope, parsed exactly as for search.
+    pub node_scope: NodeScope,
+    /// `verbose`: the graph search keeps its context and graph (Python's
+    /// `verbose`, `recall.py:457`).
+    pub verbose: Option<bool>,
+}
+
+impl RecallArgs {
+    /// The [`RecallOptions`] these arguments hand to [`cognee::api::recall`].
+    ///
+    /// The rest of `RecallOptions` is advanced tuning the opts do not expose.
+    /// The tenant has the same reasoning as the `tenant_id` on
+    /// [`build_search_request`]: `add` / `remember` accept a per-call
+    /// `tenant`, so a name must be resolved under the caller's tenant.
+    pub fn recall_options(&self) -> RecallOptions {
+        RecallOptions {
+            tenant_id: self.tenant_id,
+            neighborhood_depth: self.neighborhood_depth,
+            neighborhood_seed_top_k: self.neighborhood_seed_top_k,
+            include_references: self.include_references,
+            tools_trigger: self.tools_trigger,
+            context_profile: self.context_profile.clone(),
+            node_type: self.node_scope.node_type.clone(),
+            node_name: self.node_scope.node_name.clone(),
+            node_name_filter_operator: self.node_scope.node_name_filter_operator.clone(),
+            verbose: self.verbose,
+            ..Default::default()
+        }
+    }
+}
+
+/// The node scope shared by search and recall opts: `nodeType`, `nodeName`
+/// and `nodeNameFilterOperator`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NodeScope {
+    pub node_type: Option<String>,
+    pub node_name: Option<Vec<String>>,
+    pub node_name_filter_operator: Option<String>,
+}
+
+/// Parse `nodeType` (a string), `nodeName` (a string array; non-string
+/// entries are skipped) and `nodeNameFilterOperator` (see
+/// [`parse_node_name_filter_operator`]).
+fn parse_node_scope(opts: &serde_json::Value) -> Result<NodeScope, SdkError> {
+    let node_type = opts
+        .get("nodeType")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let node_name: Option<Vec<String>> = opts.get("nodeName").and_then(|v| {
+        v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+    });
+    Ok(NodeScope {
+        node_type,
+        node_name,
+        node_name_filter_operator: parse_node_name_filter_operator(opts)?,
+    })
+}
+
+/// `verbose`: anything but a JSON boolean is unset.
+fn parse_verbose(opts: &serde_json::Value) -> Option<bool> {
+    opts.get("verbose").and_then(|v| v.as_bool())
+}
+
+/// `toolsTrigger`: `"always"` (the default when absent or null) or
+/// `"on_empty"`, through [`ToolsTrigger::from_str`] so the message is
+/// Python's. A non-string value is refused like an unknown string, as
+/// Python's `tools_trigger not in ("always", "on_empty")` refuses it.
+fn parse_tools_trigger(opts: &serde_json::Value) -> Result<ToolsTrigger, SdkError> {
+    let raw = match opts.get("toolsTrigger") {
+        None | Some(serde_json::Value::Null) => return Ok(ToolsTrigger::default()),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    };
+    raw.parse::<ToolsTrigger>()
+        .map_err(|e| SdkError::Validation(format!("invalid tools_trigger: {e}")))
 }
 
 /// Parse camelCase recall `opts` into [`RecallArgs`].
@@ -234,6 +322,13 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
     let scope = Some(scope);
     let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
     let include_references = parse_include_references(opts);
+    let tools_trigger = parse_tools_trigger(opts)?;
+    let context_profile = opts
+        .get("contextProfile")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let node_scope = parse_node_scope(opts)?;
+    let verbose = parse_verbose(opts);
 
     Ok(RecallArgs {
         query_type,
@@ -247,6 +342,10 @@ pub fn build_recall_args(opts: &serde_json::Value) -> Result<RecallArgs, SdkErro
         neighborhood_depth,
         neighborhood_seed_top_k,
         include_references,
+        tools_trigger,
+        context_profile,
+        node_scope,
+        verbose,
     })
 }
 
@@ -343,21 +442,14 @@ pub fn build_search_request(
         .get("sessionId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let node_type = opts
-        .get("nodeType")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let node_name: Option<Vec<String>> = opts.get("nodeName").and_then(|v| {
-        v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-    });
-    let node_name_filter_operator = parse_node_name_filter_operator(opts)?;
+    let NodeScope {
+        node_type,
+        node_name,
+        node_name_filter_operator,
+    } = parse_node_scope(opts)?;
     let only_context = opts.get("onlyContext").and_then(|v| v.as_bool());
     let use_combined_context = opts.get("useCombinedContext").and_then(|v| v.as_bool());
-    let verbose = opts.get("verbose").and_then(|v| v.as_bool());
+    let verbose = parse_verbose(opts);
     let auto_feedback_detection = opts.get("autoFeedbackDetection").and_then(|v| v.as_bool());
     let (neighborhood_depth, neighborhood_seed_top_k) = parse_neighborhood(opts)?;
     // Per-retriever knobs, forwarded verbatim. `SearchRequest` documents these
@@ -559,6 +651,8 @@ pub async fn recall(
     let owner_id = state.owner_id().await?;
     let owner_str = owner_id.to_string();
 
+    let args = build_recall_args(opts)?;
+    let mut options = args.recall_options();
     let RecallArgs {
         query_type,
         datasets,
@@ -568,17 +662,15 @@ pub async fn recall(
         auto_route,
         session_id: session_id_owned,
         scope: scope_opt,
-        neighborhood_depth,
-        neighborhood_seed_top_k,
-        include_references,
-    } = build_recall_args(opts)?;
+        ..
+    } = args;
     let session_id: Option<&str> = session_id_owned.as_deref();
 
     // session_store and session_manager are Option<&dyn …> — borrow from Arc.
     let session_store_ref = Arc::clone(&svc.session_store);
     let session_manager_ref = Arc::clone(&svc.session_manager);
 
-    let session_cache_user_id = session_cache_user_id(
+    options.session_cache_user_id = session_cache_user_id(
         state,
         &svc,
         owner_id,
@@ -604,21 +696,10 @@ pub async fn recall(
         Some(session_store_ref.as_ref()),
         Some(session_manager_ref.as_ref()),
         scope_opt,
-        // The rest of `RecallOptions` is advanced tuning these opts do not
-        // expose. The tenant has the same reasoning as the `tenant_id` on
-        // `build_search_request`: `add` / `remember` accept a per-call
-        // `tenant`, so a name must be resolved under the caller's tenant.
-        Some(RecallOptions {
-            tenant_id,
-            neighborhood_depth,
-            neighborhood_seed_top_k,
-            include_references,
-            session_cache_user_id,
-            ..Default::default()
-        }),
+        Some(options),
     )
     .await
-    .map_err(|e| SdkError::Runtime(format!("recall failed: {e}")))?;
+    .map_err(recall_error)?;
 
     // Hand-build the JSON — RecallResult does not derive Serialize.
     let items = serde_json::to_value(&result.items)
@@ -668,6 +749,21 @@ pub async fn recall(
         "searchResponse": search_response,
         "normalizedResults": normalized_results,
     }))
+}
+
+/// Map a [`cognee::api::recall`] failure onto the binding error.
+///
+/// Recall refuses the caller's own input with [`ApiError::InvalidArgument`]:
+/// a `tools` / `code` scope that is not supported yet (SDK-1537) or node
+/// names with an empty `nodeType`, both before any source runs, and a pinned
+/// `searchType` that cannot apply the `nodeName` filter. That is a
+/// developer error, so it surfaces as [`SdkError::Validation`] (the bindings'
+/// `VALIDATION_ERROR`) rather than as an infrastructure failure.
+fn recall_error(error: ApiError) -> SdkError {
+    match error {
+        ApiError::InvalidArgument(message) => SdkError::Validation(message),
+        other => SdkError::Runtime(format!("recall failed: {other}")),
+    }
 }
 
 /// The graph-source items of a recall, in order.
@@ -1368,6 +1464,151 @@ mod tests {
         // A missing `scope` normalizes to `[Auto]`, which recall() treats the
         // same as `None`; it must not arrive as an empty vec.
         assert_eq!(args.scope, Some(vec![cognee::api::RecallScope::Auto]));
+        assert_eq!(args.tools_trigger, ToolsTrigger::Always);
+        assert_eq!(args.context_profile, None);
+        assert_eq!(args.node_scope, NodeScope::default());
+        assert_eq!(args.verbose, None);
+    }
+
+    /// The SDK-1040 recall opts reach the [`RecallOptions`] that
+    /// `cognee::api::recall` receives — parsing them is not enough, the
+    /// `datasetIds` regression was a parsed key that was never handed on.
+    #[test]
+    fn sdk_1040_recall_opts_reach_the_recall_options() {
+        let opts = json!({
+            "toolsTrigger": "on_empty",
+            "contextProfile": "agent",
+            "nodeType": "Entity",
+            "nodeName": ["Alice", 7, "Bob"],
+            "nodeNameFilterOperator": " and ",
+            "verbose": true,
+        });
+        let options = build_recall_args(&opts).unwrap().recall_options();
+        assert_eq!(options.tools_trigger, ToolsTrigger::OnEmpty);
+        assert_eq!(options.context_profile.as_deref(), Some("agent"));
+        assert_eq!(options.node_type.as_deref(), Some("Entity"));
+        assert_eq!(
+            options.node_name,
+            Some(vec!["Alice".to_string(), "Bob".to_string()])
+        );
+        assert_eq!(options.node_name_filter_operator.as_deref(), Some("AND"));
+        assert_eq!(options.verbose, Some(true));
+
+        let defaults = build_recall_args(&json!({})).unwrap().recall_options();
+        assert_eq!(defaults.tools_trigger, ToolsTrigger::Always);
+        assert_eq!(defaults.context_profile, None);
+        assert_eq!(defaults.node_type, None);
+        assert_eq!(defaults.node_name, None);
+        assert_eq!(defaults.verbose, None);
+    }
+
+    /// The pre-existing opts are carried into the options too, so moving the
+    /// `RecallOptions` construction out of `recall` dropped none of them.
+    #[test]
+    fn recall_options_keep_the_existing_opts() {
+        let tenant = Uuid::new_v4();
+        let opts = json!({
+            "tenant": tenant.to_string(),
+            "neighborhoodDepth": 2,
+            "neighborhoodSeedTopK": 3,
+            "includeReferences": true,
+        });
+        let options = build_recall_args(&opts).unwrap().recall_options();
+        assert_eq!(options.tenant_id, Some(tenant));
+        assert_eq!(options.neighborhood_depth, Some(2));
+        assert_eq!(options.neighborhood_seed_top_k, Some(3));
+        assert!(options.include_references);
+    }
+
+    /// Search and recall read the node scope and `verbose` through the same
+    /// parsers, so the two ops cannot drift.
+    #[test]
+    fn search_and_recall_parse_the_node_scope_alike() {
+        let opts = json!({
+            "nodeType": "TextDocument",
+            "nodeName": ["a"],
+            "nodeNameFilterOperator": "or",
+            "verbose": false,
+        });
+        let req = build_search_request("q", &opts, Uuid::new_v4()).unwrap();
+        let args = build_recall_args(&opts).unwrap();
+        assert_eq!(args.node_scope.node_type, req.node_type);
+        assert_eq!(args.node_scope.node_name, req.node_name);
+        assert_eq!(
+            args.node_scope.node_name_filter_operator,
+            req.node_name_filter_operator
+        );
+        assert_eq!(args.verbose, req.verbose);
+
+        let bad = json!({ "nodeNameFilterOperator": "XOR" });
+        assert!(matches!(
+            build_recall_args(&bad),
+            Err(SdkError::Validation(_))
+        ));
+    }
+
+    /// `toolsTrigger` is validated on every call with Python's message
+    /// (`recall.py:596-600`); null is the default, and a non-string is refused
+    /// like an unknown string.
+    #[test]
+    fn tools_trigger_is_validated_with_pythons_message() {
+        assert_eq!(
+            build_recall_args(&json!({ "toolsTrigger": "always" }))
+                .unwrap()
+                .tools_trigger,
+            ToolsTrigger::Always
+        );
+        assert_eq!(
+            build_recall_args(&json!({ "toolsTrigger": null }))
+                .unwrap()
+                .tools_trigger,
+            ToolsTrigger::Always
+        );
+        for (bad, shown) in [
+            (json!("sometimes"), "sometimes"),
+            (json!("ALWAYS"), "ALWAYS"),
+            (json!(true), "true"),
+        ] {
+            match build_recall_args(&json!({ "toolsTrigger": bad })) {
+                Err(SdkError::Validation(message)) => assert!(
+                    message.ends_with(&format!(
+                        "Invalid tools_trigger '{shown}'. Valid values: 'always', 'on_empty'."
+                    )),
+                    "unexpected message: {message}"
+                ),
+                other => panic!("expected a validation error for {bad}, got {other:?}"),
+            }
+        }
+    }
+
+    /// The new scope names flow through `normalize_scope` unchanged.
+    #[test]
+    fn recall_accepts_the_sdk_1040_scope_names() {
+        use cognee::api::RecallScope;
+        let args =
+            build_recall_args(&json!({ "scope": ["session_first", "session_context"] })).unwrap();
+        assert_eq!(
+            args.scope,
+            Some(vec![RecallScope::SessionFirst, RecallScope::SessionContext])
+        );
+        let args = build_recall_args(&json!({ "scope": "tools" })).unwrap();
+        assert_eq!(args.scope, Some(vec![RecallScope::Tools]));
+    }
+
+    /// Recall's refusals of the caller's input are validation errors; any
+    /// other failure stays a runtime one.
+    #[test]
+    fn recall_errors_map_invalid_arguments_to_validation() {
+        let message = "Recall scope 'tools' is not supported yet in the Rust SDK \
+                       (tracked in SDK-1537).";
+        match recall_error(ApiError::InvalidArgument(message.to_string())) {
+            SdkError::Validation(m) => assert_eq!(m, message),
+            other => panic!("expected Validation, got {other:?}"),
+        }
+        match recall_error(ApiError::Search("boom".to_string())) {
+            SdkError::Runtime(m) => assert_eq!(m, "recall failed: Search error: boom"),
+            other => panic!("expected Runtime, got {other:?}"),
+        }
     }
 
     /// An explicit empty `scope` stays empty (the recall runs nothing, as

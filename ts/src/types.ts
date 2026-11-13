@@ -217,13 +217,18 @@ export type SearchTypeString =
   | "HYBRID_COMPLETION";
 
 /**
- * Recall scope wire names (snake_case; "all" expands to the three concrete
- * scopes). "graph_context" is a deprecated alias of "graph".
+ * Recall scope wire names (snake_case). "all" expands to "graph", "session",
+ * "trace" and "session_context", keeping a co-supplied "session_first".
+ * "graph_context" is a deprecated alias of "graph". The runtime also accepts
+ * "tools" and "code", which fail with a `VALIDATION_ERROR` as not supported
+ * yet, so they are left out of this type.
  */
 export type RecallScopeString =
   | "auto"
   | "graph"
   | "session"
+  | "session_first"
+  | "session_context"
   | "trace"
   | "graph_context"
   | "all";
@@ -325,7 +330,11 @@ export interface CogneeRecallOptions {
   /**
    * Recall scope: a single scope string or an array.
    * "auto" (default) → session-first routing when sessionId is set, else graph.
-   * "all" → fan out across all four concrete sources.
+   * "session_first" → the session source, then graph only on a session miss.
+   * "session_context" → the session's active context block (see
+   * `contextProfile`).
+   * "all" → fan out across the four concrete sources.
+   * An empty array runs no source and returns no items (Python's `scope=[]`).
    */
   scope?: RecallScopeString | RecallScopeString[];
   /** As `CogneeSearchOptions.neighborhoodDepth`. */
@@ -337,6 +346,34 @@ export interface CogneeRecallOptions {
    * normalized result's `metadata.evidence`.
    */
   includeReferences?: boolean;
+  /**
+   * The profile the "session_context" scope renders: "qa" (default) or
+   * "agent". Not validated, as in Python: an unknown profile matches no
+   * entries and renders nothing.
+   */
+  contextProfile?: string;
+  /**
+   * When the "tools" scope runs: "always" (default) or "on_empty". Validated
+   * on every call (anything else is a `VALIDATION_ERROR`); no effect until
+   * that scope exists.
+   */
+  toolsTrigger?: "always" | "on_empty";
+  /**
+   * What the `nodeName` values are: a graph node class name such as
+   * "Entity". Omitted, the names are node-set tags.
+   */
+  nodeType?: string;
+  /**
+   * Scope the graph source to these node names; it then routes only to
+   * search types that honour the scope. A graph `nodeType` is honoured by the
+   * GRAPH_COMPLETION family and HYBRID_COMPLETION; CHUNKS and RAG_COMPLETION
+   * apply node-set names only.
+   */
+  nodeName?: string[];
+  /** How `nodeName` combines: `"OR"` (any name, default) or `"AND"` (all names). */
+  nodeNameFilterOperator?: "AND" | "OR";
+  /** Keep the graph search's context and graph in its response. */
+  verbose?: boolean;
 }
 
 /**
@@ -426,12 +463,13 @@ export interface CogneeSearchResponse {
 /**
  * A single recall result item. Mirrors `cognee_search::RecallItem` (Serialize).
  *
- * `source` is one of `"session"`, `"graph"`, `"trace"`
- * (snake_case, matching the `RecallSource` serde rename).
- * `content` is a heterogeneous JSON value whose shape depends on the source.
+ * `source` is one of `"session"`, `"graph"`, `"trace"`, `"session_context"`
+ * or `"system"` (snake_case, matching the `RecallSource` serde rename).
+ * `content` is a heterogeneous JSON value whose shape depends on the source;
+ * a `"session_context"` item carries `{ content, context_profile }`.
  */
 export interface CogneeRecallItem {
-  source: "session" | "graph" | "trace";
+  source: "session" | "graph" | "trace" | "session_context" | "system";
   content: Record<string, unknown>;
   score: number;
 }

@@ -147,12 +147,24 @@ impl PyCognee {
     /// - ``auto_route`` / ``autoRoute`` — bool (default ``False``)
     /// - ``session_id`` / ``sessionId`` — session UUID string
     /// - ``scope`` — ``str`` or ``list[str]``:
-    ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"trace"``
-    ///   (``"graph_context"`` is a deprecated alias of ``"graph"``)
+    ///   ``"auto"`` | ``"graph"`` | ``"session"`` | ``"session_first"`` |
+    ///   ``"session_context"`` | ``"trace"`` | ``"all"``
+    ///   (``"graph_context"`` is a deprecated alias of ``"graph"``;
+    ///   ``"tools"`` and ``"code"`` are accepted names that raise
+    ///   ``CogneeValidationError`` as not supported yet)
     /// - ``neighborhood_depth`` / ``neighborhoodDepth``,
     ///   ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
     ///   ``include_references`` / ``includeReferences`` — as for ``search``
     ///   (references land in each normalized result's ``metadata.evidence``)
+    /// - ``context_profile`` / ``contextProfile`` — the profile the
+    ///   ``"session_context"`` scope renders: ``"qa"`` (default) or ``"agent"``
+    /// - ``tools_trigger`` / ``toolsTrigger`` — ``"always"`` (default) or
+    ///   ``"on_empty"``; anything else raises ``CogneeValidationError``. No
+    ///   effect until the ``"tools"`` scope exists
+    /// - ``node_type`` / ``nodeType``, ``node_name`` / ``nodeName``,
+    ///   ``node_name_filter_operator`` / ``nodeNameFilterOperator``,
+    ///   ``verbose`` — as for ``search``; they apply to the graph source, which
+    ///   then routes only to search types that honour the node scope
     #[pyo3(signature = (query, opts=None))]
     fn recall<'py>(
         &self,

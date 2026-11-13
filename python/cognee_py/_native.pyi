@@ -700,7 +700,20 @@ class Cognee:
         ``search_type`` / ``searchType``, ``datasets``, ``top_k`` / ``topK``,
         ``auto_route`` / ``autoRoute``, ``session_id`` / ``sessionId``,
         ``scope``, ``neighborhood_depth`` / ``neighborhoodDepth``,
-        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``.
+        ``neighborhood_seed_top_k`` / ``neighborhoodSeedTopK``,
+        ``include_references`` / ``includeReferences``,
+        ``context_profile`` / ``contextProfile``,
+        ``tools_trigger`` / ``toolsTrigger``, ``node_type`` / ``nodeType``,
+        ``node_name`` / ``nodeName``,
+        ``node_name_filter_operator`` / ``nodeNameFilterOperator``,
+        ``verbose``.
+
+        ``scope`` is a string or list of: ``"auto"``, ``"graph"``,
+        ``"session"``, ``"session_first"``, ``"session_context"``,
+        ``"trace"``, ``"all"`` (``"graph_context"`` is a deprecated alias of
+        ``"graph"``). ``"tools"`` and ``"code"`` are accepted names that raise
+        :exc:`CogneeValidationError` as not supported yet, as does an invalid
+        ``tools_trigger``.
         """
         ...
 

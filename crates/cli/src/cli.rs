@@ -717,6 +717,39 @@ pub struct RecallArgs {
     /// As for `search`: at most this many hits to expand from, nearest first.
     #[arg(long = "neighborhood-seed-top-k")]
     pub neighborhood_seed_top_k: Option<std::num::NonZeroUsize>,
+
+    /// Sources to recall from (Python's `scope`); repeat for several. One of
+    /// `auto`, `graph`, `session`, `session_first`, `session_context`,
+    /// `trace`, `all` (`graph_context` is a deprecated alias of `graph`).
+    /// `tools` and `code` are accepted names that fail as not supported yet.
+    /// Omitted is `auto`.
+    #[arg(long = "scope")]
+    pub scope: Vec<String>,
+
+    /// The profile the `session_context` source renders (Python's
+    /// `context_profile`): `qa` (the default) or `agent`.
+    #[arg(long = "context-profile")]
+    pub context_profile: Option<String>,
+
+    /// When the `tools` source runs (Python's `tools_trigger`): `always` (the
+    /// default) or `on_empty`. Validated now; it has no effect until the
+    /// `tools` source exists.
+    #[arg(long = "tools-trigger", default_value = "always")]
+    pub tools_trigger: cognee::search::ToolsTrigger,
+
+    /// What the `--node-name` values are (Python's `node_type`): a graph node
+    /// class name such as `Entity`. Omitted, the names are node-set tags.
+    #[arg(long = "node-type")]
+    pub node_type: Option<String>,
+
+    /// Scope the graph source to these node names; repeat for several.
+    #[arg(long = "node-name")]
+    pub node_name: Vec<String>,
+
+    /// Keep the graph search's context and graph in its response, and print
+    /// that response after the items (under `search_response` in JSON).
+    #[arg(long = "verbose", default_value_t = false)]
+    pub verbose: bool,
 }
 
 /// Arguments for `cognee-cli forget` — remove memory.
@@ -1092,6 +1125,69 @@ mod tests {
         lower_logging_settings(&mut cfg, &Settings::default());
         assert_eq!(cfg.level_filter, None);
         assert_eq!(cfg.logs_dir_override, None);
+    }
+
+    /// The SDK-1040 recall flags parse, with Python's defaults when omitted
+    /// (`scope` auto, `tools_trigger="always"`, no node scope, not verbose).
+    #[test]
+    fn recall_accepts_the_sdk_1040_flags() {
+        use cognee::search::ToolsTrigger;
+        match parse(&[
+            "cognee-cli",
+            "recall",
+            "q",
+            "--scope",
+            "session_first",
+            "--scope",
+            "session_context",
+            "--context-profile",
+            "agent",
+            "--tools-trigger",
+            "on_empty",
+            "--node-type",
+            "Entity",
+            "--node-name",
+            "Alice",
+            "--node-name",
+            "Bob",
+            "--verbose",
+        ])
+        .command
+        {
+            Commands::Recall(args) => {
+                assert_eq!(args.scope, ["session_first", "session_context"]);
+                assert_eq!(args.context_profile.as_deref(), Some("agent"));
+                assert_eq!(args.tools_trigger, ToolsTrigger::OnEmpty);
+                assert_eq!(args.node_type.as_deref(), Some("Entity"));
+                assert_eq!(args.node_name, ["Alice", "Bob"]);
+                assert!(args.verbose);
+            }
+            other => panic!("expected recall, got {other:?}"),
+        }
+        match parse(&["cognee-cli", "recall", "q"]).command {
+            Commands::Recall(args) => {
+                assert!(args.scope.is_empty());
+                assert_eq!(args.context_profile, None);
+                assert_eq!(args.tools_trigger, ToolsTrigger::Always);
+                assert_eq!(args.node_type, None);
+                assert!(args.node_name.is_empty());
+                assert!(!args.verbose);
+            }
+            other => panic!("expected recall, got {other:?}"),
+        }
+    }
+
+    /// An unknown `--tools-trigger` is refused at parse time with Python's
+    /// message (`recall.py:596-600`).
+    #[test]
+    fn recall_rejects_an_unknown_tools_trigger() {
+        let error = Cli::try_parse_from(["cognee-cli", "recall", "q", "--tools-trigger", "never"])
+            .expect_err("an unknown tools trigger must not parse")
+            .to_string();
+        assert!(
+            error.contains("Invalid tools_trigger 'never'. Valid values: 'always', 'on_empty'."),
+            "unexpected error: {error}"
+        );
     }
 
     /// `--tenant-id` reaches every dataset command — `search`, `recall`,
