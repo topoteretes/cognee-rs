@@ -400,6 +400,75 @@ pub async fn count_data_dataset_links(
     Ok(count as usize)
 }
 
+/// Count the Data rows whose `last_accessed` is set — Python
+/// `cleanup_unused_data`'s "has tracking run at all" check
+/// (`cleanup_unused_data.py:63-66`), across every owner.
+#[instrument(
+    name = "cognee.db.relational.data.count_tracked_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn count_tracked_data(db: &DatabaseConnection) -> Result<usize, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let count: u64 = data::Entity::find()
+        .filter(data::Column::LastAccessed.is_not_null())
+        .count(db)
+        .await
+        .map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
+    Ok(count as usize)
+}
+
+/// The Data rows not accessed since `cutoff`: `last_accessed < cutoff` or
+/// never accessed (`NULL`), as Python `_cleanup_via_sql`
+/// (`cleanup_unused_data.py:122-124`). With `dataset_ids`, only rows in
+/// those datasets (an empty list matches nothing). Oldest first, ties by id.
+#[instrument(
+    name = "cognee.db.relational.data.list_unused_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn list_unused_data(
+    db: &DatabaseConnection,
+    cutoff: DateTime<Utc>,
+    dataset_ids: Option<&[Uuid]>,
+) -> Result<Vec<Data>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let mut query = data::Entity::find().filter(
+        Condition::any()
+            .add(data::Column::LastAccessed.lt(cutoff))
+            .add(data::Column::LastAccessed.is_null()),
+    );
+    if let Some(ids) = dataset_ids {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hex_ids: Vec<_> = ids.iter().map(|id| uuid_hex::to_hex(*id)).collect();
+        query = query.filter(data::Column::DatasetId.is_in(hex_ids));
+    }
+    let rows: Vec<Data> = query
+        .order_by_asc(data::Column::CreatedAt)
+        .order_by_asc(data::Column::Id)
+        .all(db)
+        .await
+        .map_err(map_sea_err)?
+        .into_iter()
+        .map(Data::from)
+        .collect();
+    Span::current().record(COGNEE_DB_ROW_COUNT, rows.len() as i64);
+    Ok(rows)
+}
+
 /// Update only the `token_count` column for a Data record.
 ///
 /// Mirrors the Python `update_document_token_count()` in

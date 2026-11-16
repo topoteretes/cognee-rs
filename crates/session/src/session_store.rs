@@ -135,6 +135,31 @@ pub trait SessionStore: Send + Sync {
         ))
     }
 
+    /// How many agent-trace steps the session has (Python's
+    /// `get_agent_trace_count`). The default reads them all; the Redis and
+    /// relational stores override it with a count.
+    async fn count_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<usize, SessionError> {
+        Ok(self.read_trace_steps(user_id, session_id).await?.len())
+    }
+
+    /// The session's newest `n` agent-trace steps, oldest-first (Python's
+    /// `get_agent_trace_session(last_n=n)`). The default reads them all and
+    /// keeps the tail; the Redis and relational stores read only `n`.
+    async fn read_last_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let mut steps = self.read_trace_steps(user_id, session_id).await?;
+        let drop = steps.len().saturating_sub(n);
+        Ok(steps.split_off(drop))
+    }
+
     /// Append one session-context row (a JSON object carrying a `"kind"`
     /// field) to the session's context list. Python's
     /// `create_session_context_entry`: the relational store upserts on the

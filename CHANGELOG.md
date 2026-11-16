@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
+  ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
+  documents not accessed for `minutes_threshold` minutes, or never, and —
+  unless `dry_run` (the default) — hard-deletes each through the
+  `DeleteService`. It is skipped while `enable_last_accessed` is off and
+  until at least one document has been tracked, and returns Python's
+  `{status, unused_count, deleted_count, cleanup_date, preview}`. As in
+  Python, nothing exposes it beyond the library. It is an operator task:
+  `user_id` narrows the selection to that user's datasets and the deletes run
+  without an ACL check, so a run without `user_id` deletes every owner's
+  unused documents; Python always deletes as the default user, so its
+  deletes outside that user's datasets fail. `DeleteDb` gains
+  `count_tracked_data` and `list_unused_data` for it.
+
 - **Structured answers with `response_schema`, in search and recall
   (SDK-1043).** `cognee_search::response_schema::ResponseSchema` accepts the
   structural subset Python does (objects, primitives, arrays, enums, unions,
@@ -58,6 +72,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remember's automatic improve — and report `{finished, pending}`.
 
 ### Changed
+
+- **Storing an agent trace step now extracts agent context, as Python
+  (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs
+  Python's `_maybe_extract_agent_context` after the step is stored: an errored
+  step with an error message becomes an `agent`-profile `failure_lessons`
+  entry (no LLM), and, with an LLM wired, the batch pass distils the steps
+  newer than the shared watermark once `TRACE_EXTRACTION_INTERVAL` (10) of
+  them have piled up. It fails open (a warning; the trace write still
+  succeeds) and shares its watermark with improve's `extract_agent_context`
+  stage, so the two never extract the same steps twice. The pending check
+  counts the session's steps instead of reading them
+  (`SessionStore::count_trace_steps`, a `COUNT` / `LLEN` on the relational
+  and Redis stores) and reads only the extraction window when a pass is due
+  (`read_last_trace_steps`), as Python's `get_agent_trace_count` does;
+  `SessionManager::get_agent_trace_session(last_n)` uses the same tail read.
+
+- **`AUTO_FEEDBACK` now gates the LLM summary of agent trace steps
+  (SDK-1048).** With `auto_feedback` off, a trace step that asks for LLM
+  feedback (`generate_feedback_with_llm`) stores the deterministic
+  `"<origin> succeeded."` / `"<origin> failed. …"` line and makes no LLM call,
+  as Python's `SessionManager.add_agent_trace_step` does.
+  `SessionManager::with_auto_feedback` / `auto_feedback_enabled` carry the
+  switch; `Settings::session_manager(store)` builds a manager configured from
+  the settings, and the bindings and CLI use it.
 
 - **pgvector indexes 3072-d collections (ENG-33).** `text-embedding-3-large`
   collections used to be left without an HNSW index — the adapter capped

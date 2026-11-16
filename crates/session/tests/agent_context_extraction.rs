@@ -14,8 +14,9 @@ use async_trait::async_trait;
 use cognee_llm::{GenerationOptions, GenerationResponse, Llm, LlmError, LlmResult, Message};
 use cognee_session::{
     FsSessionStore, MAX_BATCH_LESSONS, SessionContextRow, SessionManager,
-    TRACE_EXTRACTION_STATE_ID, TRACE_EXTRACTION_STATE_KIND, TRACE_EXTRACTION_WATERMARK,
-    extract_batch_agent_context, extract_live_agent_context, extract_pending_agent_context,
+    TRACE_EXTRACTION_INTERVAL, TRACE_EXTRACTION_STATE_ID, TRACE_EXTRACTION_STATE_KIND,
+    TRACE_EXTRACTION_WATERMARK, extract_batch_agent_context, extract_live_agent_context,
+    extract_pending_agent_context,
 };
 use serde_json::{Value, json};
 
@@ -107,7 +108,10 @@ struct Fixture {
 
 async fn fixture(traces: &[(&str, &str, &str)]) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let manager = SessionManager::new(Arc::new(FsSessionStore::new(dir.path())));
+    // Automatic extraction off: these tests drive the passes themselves (the
+    // trace-write hook has its own tests below).
+    let manager =
+        SessionManager::new(Arc::new(FsSessionStore::new(dir.path()))).with_auto_feedback(false);
     for (origin, status, error) in traces {
         manager
             .add_agent_trace_step(
@@ -439,4 +443,127 @@ async fn the_pending_pass_shares_the_state_row_watermark() {
         .filter(|row| row.get("kind").and_then(Value::as_str) == Some(TRACE_EXTRACTION_STATE_KIND))
         .count();
     assert_eq!(state_rows, 1);
+}
+
+// ---------------------------------------------------------------------------
+// The trace-write hook (SDK-1048): Python's
+// `SessionManager._maybe_extract_agent_context`, run by every
+// `add_agent_trace_step` while automatic feedback analysis is on.
+// ---------------------------------------------------------------------------
+
+/// A manager over a fresh store with `auto_feedback` as given and,
+/// optionally, an LLM for the batch pass.
+fn hooked_manager(auto_feedback: bool, llm: Option<Arc<ScriptedLlm>>) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let mut manager = SessionManager::new(Arc::new(FsSessionStore::new(dir.path())))
+        .with_auto_feedback(auto_feedback);
+    if let Some(llm) = llm {
+        manager = manager.with_llm(llm);
+    }
+    Fixture { _dir: dir, manager }
+}
+
+/// Store one trace step without LLM feedback; returns its trace id.
+async fn write_step(manager: &SessionManager, origin: &str, status: &str, error: &str) -> String {
+    manager
+        .add_agent_trace_step(
+            USER,
+            Some(SESSION),
+            origin,
+            status,
+            "",
+            "",
+            json!({}),
+            None,
+            error,
+            false,
+        )
+        .await
+        .unwrap()
+}
+
+// Python `test_add_agent_trace_step_runs_extraction_when_enabled`.
+#[tokio::test]
+async fn a_trace_write_stores_the_live_failure_lesson() {
+    let f = hooked_manager(true, None);
+    let trace_id = write_step(&f.manager, "run_tests", "error", "exit code 1").await;
+    let stored = lessons(&f.manager).await;
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    assert_eq!(stored[0]["section"], "failure_lessons");
+    assert_eq!(stored[0]["source_trace_ids"], json!([trace_id]));
+}
+
+/// A successful step yields no live lesson, and below the interval the
+/// batch pass asks nothing of the LLM.
+#[tokio::test]
+async fn a_successful_trace_write_below_the_interval_extracts_nothing() {
+    let llm = ScriptedLlm::new(json!([]));
+    let f = hooked_manager(true, Some(Arc::clone(&llm)));
+    write_step(&f.manager, "run_tests", "success", "").await;
+    assert!(lessons(&f.manager).await.is_empty());
+    assert!(llm.prompts().is_empty());
+}
+
+// Python `test_add_agent_trace_step_skips_extraction_when_disabled`.
+#[tokio::test]
+async fn a_trace_write_extracts_nothing_while_auto_feedback_is_off() {
+    let llm = ScriptedLlm::new(json!([lesson("tool_rules", "Never runs.", 0.9)]));
+    let f = hooked_manager(false, Some(Arc::clone(&llm)));
+    write_step(&f.manager, "run_tests", "error", "exit code 1").await;
+    for i in 0..TRACE_EXTRACTION_INTERVAL {
+        write_step(&f.manager, &format!("step-{i}"), "success", "").await;
+    }
+    assert!(rows(&f.manager).await.is_empty());
+    assert!(llm.prompts().is_empty());
+}
+
+/// The batch pass runs once `TRACE_EXTRACTION_INTERVAL` steps are newer than
+/// the watermark (Python's trace-write default), then advances it.
+#[tokio::test]
+async fn the_trace_write_runs_the_batch_pass_at_the_interval() {
+    let llm = ScriptedLlm::new(json!([lesson(
+        "success_patterns",
+        "Run the focused test before the full suite.",
+        0.9
+    )]));
+    let f = hooked_manager(true, Some(Arc::clone(&llm)));
+    for i in 0..TRACE_EXTRACTION_INTERVAL - 1 {
+        write_step(&f.manager, &format!("step-{i}"), "success", "").await;
+    }
+    assert!(llm.prompts().is_empty());
+    assert_eq!(processed(&f.manager).await, None);
+
+    write_step(&f.manager, "step-last", "success", "").await;
+    assert_eq!(llm.prompts().len(), 1);
+    assert_eq!(
+        processed(&f.manager).await,
+        Some(TRACE_EXTRACTION_INTERVAL as u64)
+    );
+    assert_eq!(lessons(&f.manager).await.len(), 1);
+
+    // improve's flush shares the watermark: nothing is pending, no LLM call.
+    let touched = extract_pending_agent_context(&f.manager, llm.as_ref(), SESSION, USER, 1, 3, 40)
+        .await
+        .unwrap();
+    assert!(touched.is_empty());
+    assert_eq!(llm.prompts().len(), 1);
+}
+
+/// Fail-open: a failing batch pass never fails the trace write, and leaves
+/// the watermark for the next attempt.
+#[tokio::test]
+async fn a_failing_batch_pass_never_fails_the_trace_write() {
+    let llm = ScriptedLlm::failing("llm down");
+    let f = hooked_manager(true, Some(Arc::clone(&llm)));
+    for i in 0..TRACE_EXTRACTION_INTERVAL {
+        write_step(&f.manager, &format!("step-{i}"), "success", "").await;
+    }
+    assert_eq!(llm.prompts().len(), 1);
+    assert_eq!(processed(&f.manager).await, None);
+    let steps = f
+        .manager
+        .get_agent_trace_session(USER, Some(SESSION), None)
+        .await
+        .unwrap();
+    assert_eq!(steps.len(), TRACE_EXTRACTION_INTERVAL);
 }

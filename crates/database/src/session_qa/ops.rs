@@ -1,7 +1,7 @@
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -274,6 +274,43 @@ pub async fn save_trace_step(
     Ok(trace_id)
 }
 
+/// How many agent-trace steps `(user_id, session_id)` has — a `COUNT`, not
+/// a read of the rows (Python `SqlCacheAdapter.get_agent_trace_count`).
+pub async fn count_trace_steps(
+    db: &DatabaseConnection,
+    user_id: &str,
+    session_id: &str,
+) -> Result<usize, DatabaseError> {
+    let count = entity::trace_step::Entity::find()
+        .filter(entity::trace_step::Column::UserId.eq(user_id))
+        .filter(entity::trace_step::Column::SessionId.eq(session_id))
+        .count(db)
+        .await
+        .map_err(map_db_err)?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+/// The newest `n` agent-trace steps of `(user_id, session_id)`, oldest-first
+/// (Python `SqlCacheAdapter.get_agent_trace_session(last_n=n)`:
+/// `ORDER BY seq DESC LIMIT n`, reversed).
+pub async fn read_last_trace_steps(
+    db: &DatabaseConnection,
+    user_id: &str,
+    session_id: &str,
+    n: usize,
+) -> Result<Vec<SessionTraceRow>, DatabaseError> {
+    let mut models = entity::trace_step::Entity::find()
+        .filter(entity::trace_step::Column::UserId.eq(user_id))
+        .filter(entity::trace_step::Column::SessionId.eq(session_id))
+        .order_by_desc(entity::trace_step::Column::Seq)
+        .limit(u64::try_from(n).unwrap_or(u64::MAX))
+        .all(db)
+        .await
+        .map_err(map_db_err)?;
+    models.reverse();
+    Ok(models.into_iter().map(trace_row).collect())
+}
+
 /// Read agent-trace steps for `(user_id, session_id)`, ordered oldest-first.
 pub async fn read_trace_steps(
     db: &DatabaseConnection,
@@ -287,20 +324,21 @@ pub async fn read_trace_steps(
         .all(db)
         .await
         .map_err(map_db_err)?;
-    Ok(models
-        .into_iter()
-        .map(|m| SessionTraceRow {
-            trace_id: m.trace_id,
-            origin_function: m.origin_function,
-            status: m.status,
-            memory_query: m.memory_query,
-            memory_context: m.memory_context,
-            method_params: m.method_params,
-            method_return_value: m.method_return_value,
-            error_message: m.error_message,
-            session_feedback: m.session_feedback,
-        })
-        .collect())
+    Ok(models.into_iter().map(trace_row).collect())
+}
+
+fn trace_row(m: entity::trace_step::Model) -> SessionTraceRow {
+    SessionTraceRow {
+        trace_id: m.trace_id,
+        origin_function: m.origin_function,
+        status: m.status,
+        memory_query: m.memory_query,
+        memory_context: m.memory_context,
+        method_params: m.method_params,
+        method_return_value: m.method_return_value,
+        error_message: m.error_message,
+        session_feedback: m.session_feedback,
+    }
 }
 
 // ── session-context rows ───────────────────────────────────────────────────

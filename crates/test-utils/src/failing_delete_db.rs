@@ -1,6 +1,8 @@
 //! [`FailingDeleteDb`]: a [`DeleteDb`] wrapper whose `delete_dataset` fails
 //! for one dataset id — drives the "stop at the first failing dataset"
-//! (`DeleteError::Partial`) paths of the per-dataset deletes.
+//! (`DeleteError::Partial`) paths of the per-dataset deletes — and, with
+//! [`FailingDeleteDb::with_failing_delete_data`], whose `delete_data` fails
+//! for one data id.
 
 use std::sync::Arc;
 
@@ -10,10 +12,12 @@ use cognee_models::{Data, Dataset};
 use uuid::Uuid;
 
 /// Forwards every [`DeleteDb`] call to `inner`, except that
-/// `delete_dataset(fail_delete_of)` returns a `QueryError`.
+/// `delete_dataset(fail_delete_of)` and `delete_data(fail_delete_data_of)`
+/// return a `QueryError`.
 pub struct FailingDeleteDb {
     inner: Arc<dyn DeleteDb>,
     fail_delete_of: Option<Uuid>,
+    fail_delete_data_of: Option<Uuid>,
 }
 
 impl FailingDeleteDb {
@@ -23,7 +27,15 @@ impl FailingDeleteDb {
         Self {
             inner,
             fail_delete_of,
+            fail_delete_data_of: None,
         }
+    }
+
+    /// Also fail `delete_data` for `data_id`.
+    #[must_use]
+    pub fn with_failing_delete_data(mut self, data_id: Uuid) -> Self {
+        self.fail_delete_data_of = Some(data_id);
+        self
     }
 }
 
@@ -42,6 +54,11 @@ impl DeleteDb for FailingDeleteDb {
     }
 
     async fn delete_data(&self, id: Uuid) -> Result<(), DatabaseError> {
+        if Some(id) == self.fail_delete_data_of {
+            return Err(DatabaseError::QueryError(
+                "simulated delete_data failure".into(),
+            ));
+        }
         DeleteDb::delete_data(self.inner.as_ref(), id).await
     }
 
@@ -79,6 +96,18 @@ impl DeleteDb for FailingDeleteDb {
 
     async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
         DeleteDb::list_datasets(self.inner.as_ref()).await
+    }
+
+    async fn count_tracked_data(&self) -> Result<usize, DatabaseError> {
+        DeleteDb::count_tracked_data(self.inner.as_ref()).await
+    }
+
+    async fn list_unused_data(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        owner_id: Option<Uuid>,
+    ) -> Result<Vec<Data>, DatabaseError> {
+        DeleteDb::list_unused_data(self.inner.as_ref(), cutoff, owner_id).await
     }
 
     async fn delete_dataset(&self, id: Uuid) -> Result<(), DatabaseError> {

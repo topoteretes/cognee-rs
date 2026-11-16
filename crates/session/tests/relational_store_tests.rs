@@ -914,3 +914,63 @@ async fn memify_metadata_accepts_python_shaped_values() {
     assert_eq!(m["feedback_weights_attempts"], json!(3));
     assert_eq!(m["note"], json!("x"));
 }
+
+// SDK-1048: the trace count and the newest-n read the trace-write extraction
+// check uses (Python `get_agent_trace_count`, `get_agent_trace_session(last_n)`).
+#[tokio::test]
+async fn trace_steps_are_counted_and_read_from_the_tail() {
+    let store = setup_store().await;
+    assert_eq!(store.count_trace_steps("u", "s").await.unwrap(), 0);
+    for i in 0..5 {
+        store
+            .save_trace_step("u", "s", make_step(&format!("t{i}"), "fn"))
+            .await
+            .unwrap();
+    }
+    // Another session and another user are not counted.
+    store
+        .save_trace_step("u", "other", make_step("x", "fn"))
+        .await
+        .unwrap();
+    store
+        .save_trace_step("v", "s", make_step("y", "fn"))
+        .await
+        .unwrap();
+
+    assert_eq!(store.count_trace_steps("u", "s").await.unwrap(), 5);
+    let last: Vec<String> = store
+        .read_last_trace_steps("u", "s", 2)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.trace_id)
+        .collect();
+    assert_eq!(last, vec!["t3", "t4"], "newest two, oldest-first");
+    assert_eq!(
+        store
+            .read_last_trace_steps("u", "s", 10)
+            .await
+            .unwrap()
+            .len(),
+        5
+    );
+    assert!(
+        store
+            .read_last_trace_steps("u", "s", 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The manager goes through the same reads.
+    let manager = SessionManager::new(store.clone());
+    assert_eq!(
+        manager.get_agent_trace_count("u", Some("s")).await.unwrap(),
+        5
+    );
+    let tail = manager
+        .get_agent_trace_session("u", Some("s"), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(tail[0].trace_id, "t4");
+}

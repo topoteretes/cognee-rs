@@ -718,6 +718,19 @@ impl Settings {
         )
     }
 
+    /// A session manager over `store` configured from these settings: the
+    /// trace-feedback LLM timeout ([`Self::feedback_llm_timeout`]) and
+    /// automatic feedback analysis (`auto_feedback`, Python's `AUTO_FEEDBACK`).
+    /// The LLM is attached by the caller (`with_llm`).
+    pub fn session_manager(
+        &self,
+        store: Arc<dyn cognee_session::SessionStore>,
+    ) -> cognee_session::SessionManager {
+        cognee_session::SessionManager::new(store)
+            .with_feedback_llm_timeout(self.feedback_llm_timeout())
+            .with_auto_feedback(self.auto_feedback)
+    }
+
     /// The relational kind section (`relational.*`): backend, URL and
     /// connection parts.
     pub fn relational(&self) -> cognee_components::RelationalConfig {
@@ -2882,6 +2895,24 @@ mod tests {
         assert!(cm.read().search_tuning().auto_feedback);
         cm.set("session.caching", serde_json::json!(false)).unwrap();
         assert!(!cm.read().search_tuning().auto_feedback);
+    }
+
+    /// `Settings::session_manager` carries `auto_feedback` into the session
+    /// manager, so a trace step's LLM feedback follows `AUTO_FEEDBACK`
+    /// (SDK-1048, Python `session_manager.py:241`).
+    #[test]
+    fn session_manager_follows_auto_feedback() {
+        let store: Arc<dyn cognee_session::SessionStore> = Arc::new(
+            cognee_session::FsSessionStore::new(std::env::temp_dir().join("sdk-1048-unused")),
+        );
+        let cm = ConfigManager::new(Settings::default());
+        assert!(
+            cm.read()
+                .session_manager(Arc::clone(&store))
+                .auto_feedback_enabled()
+        );
+        cm.set("auto_feedback", serde_json::json!(false)).unwrap();
+        assert!(!cm.read().session_manager(store).auto_feedback_enabled());
     }
 
     /// The `recall` section's defaults are the warm-up defaults, and a cache

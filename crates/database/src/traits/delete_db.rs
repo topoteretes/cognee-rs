@@ -34,6 +34,17 @@ pub trait DeleteDb: Send + Sync {
     async fn count_dataset_data(&self, dataset_id: Uuid) -> Result<usize, DatabaseError>;
     async fn list_datasets_by_owner(&self, owner_id: Uuid) -> Result<Vec<Dataset>, DatabaseError>;
     async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError>;
+    /// How many Data rows have a `last_accessed` timestamp, across every
+    /// owner (Python `cleanup_unused_data`'s tracking check).
+    async fn count_tracked_data(&self) -> Result<usize, DatabaseError>;
+    /// The Data rows not accessed since `cutoff` (`last_accessed < cutoff` or
+    /// never), limited to the datasets `owner_id` owns when given (Python
+    /// `_cleanup_via_sql`). Oldest first.
+    async fn list_unused_data(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        owner_id: Option<Uuid>,
+    ) -> Result<Vec<Data>, DatabaseError>;
     /// The dataset named `name` owned by `owner_id` in `tenant_id`, with
     /// **strict** tenant equality (`None` matches only a tenant-less row) —
     /// Python's `get_dataset_ids` rule
@@ -321,6 +332,28 @@ impl DeleteDb for DatabaseConnection {
 
     async fn list_datasets(&self) -> Result<Vec<Dataset>, DatabaseError> {
         datasets::list_datasets(self).await
+    }
+
+    async fn count_tracked_data(&self) -> Result<usize, DatabaseError> {
+        data::count_tracked_data(self).await
+    }
+
+    async fn list_unused_data(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+        owner_id: Option<Uuid>,
+    ) -> Result<Vec<Data>, DatabaseError> {
+        let dataset_ids: Option<Vec<Uuid>> = match owner_id {
+            Some(owner_id) => Some(
+                datasets::list_datasets_by_owner(self, owner_id)
+                    .await?
+                    .into_iter()
+                    .map(|ds| ds.id)
+                    .collect(),
+            ),
+            None => None,
+        };
+        data::list_unused_data(self, cutoff, dataset_ids.as_deref()).await
     }
 
     async fn get_dataset_by_name_in_tenant(

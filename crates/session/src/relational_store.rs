@@ -243,6 +243,31 @@ impl SessionStore for RelationalSessionStore {
         rows.into_iter().map(row_to_step).collect()
     }
 
+    async fn count_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<usize, SessionError> {
+        self.db
+            .count_session_trace_steps(user_id, session_id)
+            .await
+            .map_err(store_err)
+    }
+
+    async fn read_last_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        let rows = self
+            .db
+            .read_last_session_trace_steps(user_id, session_id, n)
+            .await
+            .map_err(store_err)?;
+        rows.into_iter().map(row_to_step).collect()
+    }
+
     async fn create_session_context_entry(
         &self,
         session_id: &str,

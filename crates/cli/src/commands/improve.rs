@@ -4,7 +4,6 @@ use cognee::add::AddPipeline;
 use cognee::api::{ImproveParams, improve};
 use cognee::core::RayonThreadPool;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee::search::SessionManager;
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use tracing::info;
@@ -98,11 +97,7 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
-        let session_manager = Arc::new(
-            SessionManager::new(Arc::clone(&session_store))
-                .with_feedback_llm_timeout(feedback_llm_timeout),
-        );
+        let session_manager = Arc::new(cm.settings().session_manager(Arc::clone(&session_store)));
 
         let ontology_resolver: Arc<dyn OntologyResolver> = Arc::new(NoOpOntologyResolver::new());
 
