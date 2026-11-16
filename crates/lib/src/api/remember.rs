@@ -1075,6 +1075,14 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> Session
 /// `"<origin> failed."`). When `generate_feedback_with_llm` is `false` or
 /// `auto_feedback` is off, the deterministic fallback is recorded regardless
 /// — also Python parity (`session_manager.py:241`).
+///
+/// **Agent context**: while `auto_feedback` is on, a stored trace entry also
+/// runs the agent-context extraction (Python's
+/// `_maybe_extract_agent_context`): an `error` step with an `error_message`
+/// becomes an `agent`-profile `failure_lessons` session-context entry, and
+/// every `TRACE_EXTRACTION_INTERVAL` new steps an LLM batch pass distils
+/// lessons from them. It fails open: an extraction error is logged and the
+/// entry is still stored.
 #[allow(clippy::too_many_arguments)]
 pub async fn remember_entry(
     entry: MemoryEntry,

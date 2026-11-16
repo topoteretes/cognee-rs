@@ -686,6 +686,7 @@ jobs:
           cargo test -p cognee-session --features redis --lib \
             session_ttl_expires_every_written_key -- --nocapture \
             redis_memify_metadata_round_trips_and_merges \
+            redis_trace_steps_are_counted_and_read_from_the_tail \
             2>&1 | tee redis-session.log
           cargo test -p cognee-components --no-default-features \
             --features sqlite,session-redis --lib \
@@ -699,6 +700,7 @@ jobs:
             --log redis-components.log --min-tests 1 \
             --require-test session_ttl_expires_every_written_key \
             --require-test redis_memify_metadata_round_trips_and_merges \
+            --require-test redis_trace_steps_are_counted_and_read_from_the_tail \
             --require-test the_redis_session_store_applies_the_session_ttl
 
   # ── C API Rust unit tests (fork-PR copy of ci.yml's `capi-check` step) ──

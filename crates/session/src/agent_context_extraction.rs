@@ -482,10 +482,12 @@ pub async fn extract_pending_agent_context(
     if !llm.is_configured() || min_new_traces == 0 {
         return Ok(Vec::new());
     }
-    let traces = manager
-        .get_agent_trace_session(user_id, Some(session_id), None)
+    // Count first and read only the window when a pass is due (Python's
+    // `_plan_pending_extraction`): this runs on every trace write, so it must
+    // not read the session's whole trace list.
+    let total = manager
+        .get_agent_trace_count(user_id, Some(session_id))
         .await?;
-    let total = traces.len();
     let processed = TRACE_EXTRACTION_WATERMARK
         .read_count(manager, Some(session_id), Some(user_id))
         .await?;
@@ -494,9 +496,10 @@ pub async fn extract_pending_agent_context(
         return Ok(Vec::new());
     }
     let window = trace_window_size(pending, overlap, max_window);
-    let start = total.saturating_sub(window);
-    let touched =
-        extract_batch_from_traces(manager, llm, session_id, user_id, &traces[start..]).await?;
+    let traces = manager
+        .get_agent_trace_session(user_id, Some(session_id), Some(window))
+        .await?;
+    let touched = extract_batch_from_traces(manager, llm, session_id, user_id, &traces).await?;
     TRACE_EXTRACTION_WATERMARK
         .write_count(
             manager,

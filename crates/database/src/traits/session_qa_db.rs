@@ -86,6 +86,32 @@ pub trait SessionQaDb: Send + Sync {
         session_id: &str,
     ) -> Result<Vec<SessionTraceRow>, DatabaseError>;
 
+    /// How many agent trace steps the session has. The default reads them
+    /// all; override it with a count query.
+    async fn count_session_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<usize, DatabaseError> {
+        Ok(self
+            .read_session_trace_steps(user_id, session_id)
+            .await?
+            .len())
+    }
+
+    /// The session's newest `n` agent trace steps, oldest-first. The default
+    /// reads them all and keeps the tail; override it with a limited query.
+    async fn read_last_session_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<SessionTraceRow>, DatabaseError> {
+        let mut rows = self.read_session_trace_steps(user_id, session_id).await?;
+        let drop = rows.len().saturating_sub(n);
+        Ok(rows.split_off(drop))
+    }
+
     /// Create or replace the session-context row keyed by `entry_id`;
     /// `payload` is the JSON-encoded row object.
     async fn create_session_context_entry(
@@ -197,6 +223,23 @@ impl SessionQaDb for DatabaseConnection {
         session_id: &str,
     ) -> Result<Vec<SessionTraceRow>, DatabaseError> {
         ops::read_trace_steps(self, user_id, session_id).await
+    }
+
+    async fn count_session_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<usize, DatabaseError> {
+        ops::count_trace_steps(self, user_id, session_id).await
+    }
+
+    async fn read_last_session_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<SessionTraceRow>, DatabaseError> {
+        ops::read_last_trace_steps(self, user_id, session_id, n).await
     }
 
     async fn create_session_context_entry(

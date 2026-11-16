@@ -639,3 +639,35 @@ async fn delete_session_does_not_wait_for_another_sessions_turn() {
     .unwrap();
     assert!(deleted);
 }
+
+// SDK-1048: the default trace count and newest-n read (the fs store keeps the
+// trait defaults).
+#[tokio::test]
+async fn fs_trace_steps_are_counted_and_read_from_the_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = cognee_session::FsSessionStore::new(dir.path());
+    for i in 0..3 {
+        store
+            .save_trace_step(
+                "u",
+                "s",
+                cognee_session::SessionTraceStep {
+                    trace_id: format!("t{i}"),
+                    origin_function: "fn".to_string(),
+                    status: "success".to_string(),
+                    memory_query: String::new(),
+                    memory_context: String::new(),
+                    method_params: serde_json::json!({}),
+                    method_return_value: None,
+                    error_message: String::new(),
+                    session_feedback: String::new(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.count_trace_steps("u", "s").await.unwrap(), 3);
+    let last = store.read_last_trace_steps("u", "s", 2).await.unwrap();
+    assert_eq!(last[0].trace_id, "t1");
+    assert_eq!(last[1].trace_id, "t2");
+}

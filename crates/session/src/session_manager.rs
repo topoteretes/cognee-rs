@@ -438,6 +438,10 @@ impl SessionManager {
     /// summarize `method_return_value`; otherwise, or if no LLM is wired or
     /// generation fails, it stores deterministic feedback
     /// (`<origin> succeeded/failed`).
+    ///
+    /// After the step is stored, the agent-context extraction runs while
+    /// automatic feedback analysis is on (see
+    /// `maybe_extract_agent_context`); its failures never fail the call.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_agent_trace_step(
         &self,
@@ -492,7 +496,73 @@ impl SessionManager {
             error_message: error_message.to_string(),
             session_feedback,
         };
-        self.store.save_trace_step(user_id, resolved_id, step).await
+        let stored_id = self
+            .store
+            .save_trace_step(user_id, resolved_id, step)
+            .await?;
+        self.maybe_extract_agent_context(
+            user_id,
+            resolved_id,
+            &stored_id,
+            origin_function,
+            status,
+            error_message,
+        )
+        .await;
+        Ok(stored_id)
+    }
+
+    /// Derive agent-profile lessons from a just-stored trace step (Python's
+    /// `SessionManager._maybe_extract_agent_context`). Runs only while
+    /// automatic feedback analysis is on ([`Self::auto_feedback_enabled`]):
+    /// first the no-LLM live pass (an errored step becomes a
+    /// `failure_lessons` entry), then, with an LLM wired, the batch pass over
+    /// the steps newer than the shared watermark, once
+    /// [`TRACE_EXTRACTION_INTERVAL`](crate::TRACE_EXTRACTION_INTERVAL) of
+    /// them have piled up. Fail-open: the trace row is already stored, so an
+    /// extraction failure is logged and never returned.
+    async fn maybe_extract_agent_context(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        trace_id: &str,
+        origin_function: &str,
+        status: &str,
+        error_message: &str,
+    ) {
+        if !self.auto_feedback_enabled() {
+            return;
+        }
+        crate::agent_context_extraction::extract_live_agent_context(
+            self,
+            session_id,
+            user_id,
+            trace_id,
+            origin_function,
+            status,
+            error_message,
+        )
+        .await;
+        let Some(llm) = self.llm.as_ref() else {
+            return;
+        };
+        if let Err(error) = crate::agent_context_extraction::extract_pending_agent_context(
+            self,
+            llm.as_ref(),
+            session_id,
+            user_id,
+            crate::agent_context_extraction::TRACE_EXTRACTION_INTERVAL,
+            crate::agent_context_extraction::TRACE_EXTRACTION_OVERLAP,
+            crate::agent_context_extraction::BATCH_TRACE_LIMIT,
+        )
+        .await
+        {
+            tracing::warn!(
+                session_id,
+                %error,
+                "agent-context extraction skipped (non-fatal)"
+            );
+        }
     }
 
     /// Retrieve agent-trace steps for a session, oldest-first.
@@ -506,12 +576,26 @@ impl SessionManager {
         last_n: Option<usize>,
     ) -> Result<Vec<SessionTraceStep>, SessionError> {
         let resolved_id = self.resolve_session_id(session_id);
-        let mut entries = self.store.read_trace_steps(user_id, resolved_id).await?;
-        if let Some(n) = last_n {
-            let drop = entries.len().saturating_sub(n);
-            entries = entries.split_off(drop);
+        match last_n {
+            Some(n) => {
+                self.store
+                    .read_last_trace_steps(user_id, resolved_id, n)
+                    .await
+            }
+            None => self.store.read_trace_steps(user_id, resolved_id).await,
         }
-        Ok(entries)
+    }
+
+    /// How many agent-trace steps a session has (Python's
+    /// `get_agent_trace_count`), without reading them on the stores that can
+    /// count.
+    pub async fn get_agent_trace_count(
+        &self,
+        user_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<usize, SessionError> {
+        let resolved_id = self.resolve_session_id(session_id);
+        self.store.count_trace_steps(user_id, resolved_id).await
     }
 }
 

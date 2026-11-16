@@ -492,6 +492,37 @@ impl SessionStore for RedisSessionStore {
             .collect()
     }
 
+    async fn count_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<usize, SessionError> {
+        let key = trace_key(user_id, session_id);
+        let mut conn = self.conn.clone();
+        conn.llen(&key).await.map_err(map_err)
+    }
+
+    async fn read_last_trace_steps(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<SessionTraceStep>, SessionError> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let key = trace_key(user_id, session_id);
+        let mut conn = self.conn.clone();
+        let start = -isize::try_from(n).unwrap_or(isize::MAX);
+        let raw: Vec<String> = conn.lrange(&key, start, -1).await.map_err(map_err)?;
+        raw.iter()
+            .map(|s| {
+                serde_json::from_str::<SessionTraceStep>(s)
+                    .map_err(|e| SessionError::StoreError(format!("json parse error: {e}")))
+            })
+            .collect()
+    }
+
     async fn create_session_context_entry(
         &self,
         session_id: &str,
@@ -895,5 +926,79 @@ mod tests {
         let info = connection_info("h", 1, "", "secret");
         assert_eq!(info.redis.username, None);
         assert_eq!(info.redis.password.as_deref(), Some("secret"));
+    }
+
+    /// SDK-1048: the trace count (`LLEN`) and the newest-n read
+    /// (`LRANGE -n -1`) behind the trace-write extraction check. Needs a Redis
+    /// server (`REDIS_TEST_URL`); skipped when unset.
+    #[tokio::test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tests drive configuration through the process env"
+    )]
+    async fn redis_trace_steps_are_counted_and_read_from_the_tail() {
+        use super::RedisSessionStore;
+        use crate::session_store::SessionStore;
+        use crate::types::SessionTraceStep;
+
+        let Some(url) = std::env::var("REDIS_TEST_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+        else {
+            eprintln!(
+                "REDIS_TEST_URL not set — skipping redis_trace_steps_are_counted_and_read_from_the_tail"
+            );
+            return;
+        };
+        let session = format!("trace-{}", uuid::Uuid::new_v4());
+        let store = RedisSessionStore::new(&url)
+            .await
+            .unwrap()
+            .with_session_ttl_seconds(120);
+        assert_eq!(store.count_trace_steps("u", &session).await.unwrap(), 0);
+        for i in 0..4 {
+            store
+                .save_trace_step(
+                    "u",
+                    &session,
+                    SessionTraceStep {
+                        trace_id: format!("t{i}"),
+                        origin_function: "fn".to_string(),
+                        status: "success".to_string(),
+                        memory_query: String::new(),
+                        memory_context: String::new(),
+                        method_params: serde_json::json!({}),
+                        method_return_value: None,
+                        error_message: String::new(),
+                        session_feedback: String::new(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.count_trace_steps("u", &session).await.unwrap(), 4);
+        let tail: Vec<String> = store
+            .read_last_trace_steps("u", &session, 2)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.trace_id)
+            .collect();
+        assert_eq!(tail, vec!["t2", "t3"]);
+        assert_eq!(
+            store
+                .read_last_trace_steps("u", &session, 9)
+                .await
+                .unwrap()
+                .len(),
+            4
+        );
+        assert!(
+            store
+                .read_last_trace_steps("u", &session, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

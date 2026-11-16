@@ -59,6 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Storing an agent trace step now extracts agent context, as Python
+  (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs
+  Python's `_maybe_extract_agent_context` after the step is stored: an errored
+  step with an error message becomes an `agent`-profile `failure_lessons`
+  entry (no LLM), and, with an LLM wired, the batch pass distils the steps
+  newer than the shared watermark once `TRACE_EXTRACTION_INTERVAL` (10) of
+  them have piled up. It fails open (a warning; the trace write still
+  succeeds) and shares its watermark with improve's `extract_agent_context`
+  stage, so the two never extract the same steps twice. The pending check
+  counts the session's steps instead of reading them
+  (`SessionStore::count_trace_steps`, a `COUNT` / `LLEN` on the relational
+  and Redis stores) and reads only the extraction window when a pass is due
+  (`read_last_trace_steps`), as Python's `get_agent_trace_count` does;
+  `SessionManager::get_agent_trace_session(last_n)` uses the same tail read.
+
 - **`AUTO_FEEDBACK` now gates the LLM summary of agent trace steps
   (SDK-1048).** With `auto_feedback` off, a trace step that asks for LLM
   feedback (`generate_feedback_with_llm`) stores the deterministic
