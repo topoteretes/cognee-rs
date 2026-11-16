@@ -609,9 +609,7 @@ impl SearchRetriever for TemporalHybridRetriever {
         params: &SearchParams,
     ) -> SearchContext {
         match self.limits(params) {
-            Ok(limits) => self
-                .lanes(params, limits)
-                .merge_session_contexts(raw, conversational),
+            Ok(limits) => self.lanes(params, limits).merge_lanes(raw, conversational),
             Err(error) => {
                 warn!(%error, "TEMPORAL session merge kept one lane: invalid limits");
                 raw.or(conversational).unwrap_or_default()

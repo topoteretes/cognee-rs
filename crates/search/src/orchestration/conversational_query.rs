@@ -8,6 +8,9 @@
 /// Longest conversational query, in characters (Python `len`, code points).
 pub(crate) const MAX_CONVERSATIONAL_QUERY_CHARS: usize = 2000;
 
+/// Label of a prior question in the rewrite (Python's `f"Prior user: {question}"`).
+pub(crate) const PRIOR_USER_LABEL: &str = "Prior user:";
+
 /// Python's `re.sub(r"\s+", " ", value).strip()`. Python's `\s` on `str` is
 /// `str.isspace`, which also covers the four ASCII separators `\x1c`-`\x1f`
 /// that Unicode `White_Space` leaves out.
@@ -28,7 +31,7 @@ fn render(raw: &str, qa_pairs: &[[String; 2]]) -> String {
     for [question, answer] in qa_pairs {
         let mut lines = Vec::new();
         if !question.is_empty() {
-            lines.push(format!("Prior user: {question}"));
+            lines.push(format!("{PRIOR_USER_LABEL} {question}"));
         }
         if !answer.is_empty() {
             lines.push(format!(

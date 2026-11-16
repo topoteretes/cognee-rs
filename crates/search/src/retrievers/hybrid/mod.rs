@@ -267,7 +267,7 @@ impl HybridLanes {
     /// Shared by plain hybrid (lanes from [`HybridRetriever::resolve_lanes`])
     /// and TEMPORAL (lanes from its `top_k` / `candidate_top_k`), so each
     /// merges at the sizes its own fetch used.
-    pub(crate) fn merge_session_contexts(
+    pub(crate) fn merge_lanes(
         &self,
         raw: Option<SearchContext>,
         conversational: Option<SearchContext>,
@@ -1222,8 +1222,7 @@ impl SearchRetriever for HybridRetriever {
         conversational: Option<SearchContext>,
         params: &SearchParams,
     ) -> SearchContext {
-        self.resolve_lanes(params)
-            .merge_session_contexts(raw, conversational)
+        self.resolve_lanes(params).merge_lanes(raw, conversational)
     }
 
     /// Python `HybridRetriever.append_references` (`hybrid_retriever.py:373`

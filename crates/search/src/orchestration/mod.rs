@@ -12,6 +12,9 @@ pub const CONTEXT_LABEL_COMBINED: &str = "combined";
 pub const CONTEXT_LABEL_DEFAULT: &str = "default";
 
 pub use concurrent_session::SessionSearchMode;
+/// Lets those tests recognise the conversational lane's query.
+#[cfg(test)]
+pub(crate) use conversational_query::PRIOR_USER_LABEL;
 pub use prepare_search_result::prepare_search_result;
 pub use search_execution_builder::{SearchBuilder, SearchTuning};
 /// Lets retriever tests drive a session turn's two-lane retrieval with a

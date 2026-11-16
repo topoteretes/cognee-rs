@@ -1131,7 +1131,7 @@ impl EmbeddingEngine for LaneEmbedding {
         Ok(texts
             .iter()
             .map(|text| {
-                if text.starts_with("Prior user:") {
+                if text.starts_with(crate::orchestration::PRIOR_USER_LABEL) {
                     vec![0.0, 1.0]
                 } else {
                     vec![1.0, 0.0]
@@ -1247,7 +1247,7 @@ async fn temporal_session_retrieval_merges_both_lanes() {
             .lock()
             .unwrap()
             .iter()
-            .any(|text| text.starts_with("Prior user:")),
+            .any(|text| text.starts_with(crate::orchestration::PRIOR_USER_LABEL)),
         "the conversational lane ran"
     );
 }
@@ -1319,7 +1319,7 @@ async fn temporal_session_turn_retrieves_the_raw_lane_only() {
             .lock()
             .unwrap()
             .iter()
-            .all(|text| !text.starts_with("Prior user:")),
+            .all(|text| !text.starts_with(crate::orchestration::PRIOR_USER_LABEL)),
         "no conversational lane ran"
     );
 }
