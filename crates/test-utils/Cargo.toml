@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 cognee-core = { path = "../core" }
 cognee-database = { path = "../database" }
 cognee-embedding = { path = "../embedding" }

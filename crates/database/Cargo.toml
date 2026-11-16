@@ -77,6 +77,11 @@ path = "tests/data_update_last_accessed.rs"
 required-features = ["sqlite"]
 
 [[test]]
+name = "data_unused_listing"
+path = "tests/data_unused_listing.rs"
+required-features = ["sqlite"]
+
+[[test]]
 name = "pipeline_run_listing"
 path = "tests/pipeline_run_listing.rs"
 required-features = ["sqlite"]

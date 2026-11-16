@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
+  ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
+  documents not accessed for `minutes_threshold` minutes, or never, and —
+  unless `dry_run` (the default) — hard-deletes each through the
+  `DeleteService`. It is skipped while `enable_last_accessed` is off and
+  until at least one document has been tracked, and returns Python's
+  `{status, unused_count, deleted_count, cleanup_date, preview}`. As in
+  Python, nothing exposes it beyond the library. It is an operator task:
+  `user_id` narrows the selection to that user's datasets and the deletes run
+  without an ACL check, so a run without `user_id` deletes every owner's
+  unused documents; Python always deletes as the default user, so its
+  deletes outside that user's datasets fail. `DeleteDb` gains
+  `count_tracked_data` and `list_unused_data` for it.
+
 - **Structured answers with `response_schema`, in search and recall
   (SDK-1043).** `cognee_search::response_schema::ResponseSchema` accepts the
   structural subset Python does (objects, primitives, arrays, enums, unions,

@@ -4,6 +4,7 @@
 //! pipeline primitives (add, cognify, search, delete) into
 //! user-friendly operations matching the Python SDK.
 //!
+//! - [`cleanup`] -- Delete documents no search has touched for a while
 //! - [`forget`] -- Unified deletion API
 //! - [`update`] -- Data replacement (delete + re-add + re-cognify)
 //! - [`prune`] -- Selective backend cleanup
@@ -12,6 +13,7 @@
 //! - [`improve`] -- Staged self-improvement orchestrator
 
 pub mod auto_improve_debounce;
+pub mod cleanup;
 pub mod datasets;
 pub mod error;
 pub mod forget;
@@ -22,6 +24,10 @@ pub mod remember;
 pub mod update;
 pub mod user;
 
+pub use cleanup::{
+    CleanupDeletedCount, CleanupError, CleanupParams, CleanupPreview, CleanupResult, CleanupStatus,
+    REASON_NOTHING_TRACKED, REASON_TRACKING_DISABLED, cleanup_unused_data,
+};
 pub use datasets::{DatasetDb, DatasetManager};
 pub use error::{ApiError, DatasetError};
 pub use forget::{DatasetRef, ForgetResult, ForgetTarget, forget};
