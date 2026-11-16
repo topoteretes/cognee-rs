@@ -578,6 +578,47 @@ impl SearchRetriever for TemporalHybridRetriever {
         self.hybrid.append_references(output, context, params)
     }
 
+    /// Fuse a session turn's raw and conversational lanes the way plain
+    /// hybrid does, but at TEMPORAL's own sizes: chunks and entities capped
+    /// at `candidate_top_k`, facts at `top_k`. Python's
+    /// `TemporalHybridRetriever` inherits `HybridRetriever.merge_retrieved_objects`
+    /// (`hybrid_retriever.py:411`, called from
+    /// `session_aware_completion.py:231`), which merges at the instance's
+    /// `chunks_top_k` / `entities_top_k` / `facts_top_k` — and TEMPORAL's
+    /// constructor sets those to `candidate_top_k`, `candidate_top_k` and
+    /// `top_k` (`temporal_hybrid_retriever.py:75`). Forwarding to the inner
+    /// [`HybridRetriever`] instead would size the merge from its plain-hybrid
+    /// lanes (`top_k`), narrower than Python.
+    ///
+    /// No session turn reaches this today: Python's concurrent turn opts
+    /// retrievers in by exact class (`session_aware_completion.py:56`,
+    /// `_eligible_retriever_types`), so TEMPORAL runs the sequential,
+    /// single-lane turn, and `concurrent_session::eligible` mirrors that. The
+    /// hook keeps the merge Python's TEMPORAL instance carries, so opting
+    /// TEMPORAL in later needs no change here.
+    ///
+    /// The merge cannot fail, but resolving the limits can. Both lanes ran
+    /// [`SearchRetriever::get_context`] with these same `params`, which
+    /// rejects bad limits first, so an error here means no lane retrieved
+    /// anything through this retriever; keep whichever lane there is (the
+    /// trait default) rather than panic.
+    fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+        params: &SearchParams,
+    ) -> SearchContext {
+        match self.limits(params) {
+            Ok(limits) => self
+                .lanes(params, limits)
+                .merge_session_contexts(raw, conversational),
+            Err(error) => {
+                warn!(%error, "TEMPORAL session merge kept one lane: invalid limits");
+                raw.or(conversational).unwrap_or_default()
+            }
+        }
+    }
+
     /// TEMPORAL answers one query at a time (Python raises
     /// `NotImplementedError` for `query_batch`).
     async fn get_context_batch(

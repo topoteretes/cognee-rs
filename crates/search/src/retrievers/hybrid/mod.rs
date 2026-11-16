@@ -255,6 +255,35 @@ pub(crate) struct HybridLanes {
     pub fusion: ChunkLaneFusion,
 }
 
+impl HybridLanes {
+    /// Merge the two retrievals of a session turn (the raw question and its
+    /// conversational rewrite) with each kind capped at this fetch's lane
+    /// size: chunks at `chunks_top_k`, entities at `entities_top_k`, facts at
+    /// `facts_top_k`. Port of Python's `HybridRetriever.merge_retrieved_objects`
+    /// (`hybrid_retriever.py:411`), which merges at the retriever's own
+    /// `chunks_top_k` / `entities_top_k` / `facts_top_k`. A lane that failed
+    /// open (`None`) merges as empty, so the other lane is kept as is.
+    ///
+    /// Shared by plain hybrid (lanes from [`HybridRetriever::resolve_lanes`])
+    /// and TEMPORAL (lanes from its `top_k` / `candidate_top_k`), so each
+    /// merges at the sizes its own fetch used.
+    pub(crate) fn merge_session_contexts(
+        &self,
+        raw: Option<SearchContext>,
+        conversational: Option<SearchContext>,
+    ) -> SearchContext {
+        merge::merge_hybrid_results(
+            raw.unwrap_or_default(),
+            conversational.unwrap_or_default(),
+            &merge::ChannelLimits {
+                chunks: self.chunks_top_k,
+                entities: self.entities_top_k,
+                facts: self.facts_top_k,
+            },
+        )
+    }
+}
+
 impl HybridRetriever {
     /// Set the context budget and overflow handling (`search.hybrid`).
     #[must_use]
@@ -1193,16 +1222,8 @@ impl SearchRetriever for HybridRetriever {
         conversational: Option<SearchContext>,
         params: &SearchParams,
     ) -> SearchContext {
-        let lanes = self.resolve_lanes(params);
-        merge::merge_hybrid_results(
-            raw.unwrap_or_default(),
-            conversational.unwrap_or_default(),
-            &merge::ChannelLimits {
-                chunks: lanes.chunks_top_k,
-                entities: lanes.entities_top_k,
-                facts: lanes.facts_top_k,
-            },
-        )
+        self.resolve_lanes(params)
+            .merge_session_contexts(raw, conversational)
     }
 
     /// Python `HybridRetriever.append_references` (`hybrid_retriever.py:373`

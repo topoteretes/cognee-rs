@@ -970,3 +970,282 @@ async fn auto_routed_temporal_cites_its_chunk_lane_under_include_references() {
     assert!(auto_routed);
     assert_cites_the_chunk(&answer_text(&response.result), chunk_id);
 }
+
+// --- session turns (SDK-1461) --------------------------------------------------
+
+/// One session lane: `per_kind` chunk, entity and fact items, ids prefixed by
+/// the lane so the merge cannot dedupe across lanes.
+fn session_lane(prefix: &str, per_kind: usize) -> SearchContext {
+    ["chunk", "entity", "fact"]
+        .iter()
+        .flat_map(|kind| {
+            (0..per_kind).map(move |n| SearchItem {
+                id: None,
+                score: None,
+                payload: json!({"kind": kind, "id": format!("{prefix}-{kind}-{n}")}),
+            })
+        })
+        .collect()
+}
+
+/// `(chunks, entities, facts)` in a merged context.
+fn kind_counts(context: &SearchContext) -> (usize, usize, usize) {
+    (
+        kind_ids(context, "chunk").len(),
+        kind_ids(context, "entity").len(),
+        kind_ids(context, "fact").len(),
+    )
+}
+
+/// Python's `TemporalHybridRetriever` inherits `HybridRetriever.merge_retrieved_objects`,
+/// so a concurrent session turn fuses the raw and conversational lanes (the
+/// trait default would keep only the raw one), with chunks and entities capped
+/// at `candidate_top_k` and facts at `top_k` — the sizes Python's constructor
+/// hands to `HybridRetriever`.
+#[test]
+fn session_merge_fuses_both_lanes_at_temporal_limits() {
+    // Constructor limits: top_k = 2, candidate_top_k = 20.
+    let h = harness();
+    let merged = h.retriever.merge_session_contexts(
+        Some(session_lane("r", 4)),
+        Some(session_lane("c", 4)),
+        &SearchParams::default(),
+    );
+    assert_eq!(kind_counts(&merged), (8, 8, 2));
+    let chunks = kind_ids(&merged, "chunk");
+    assert!(chunks.iter().any(|id| id.starts_with("r-")), "{chunks:?}");
+    assert!(chunks.iter().any(|id| id.starts_with("c-")), "{chunks:?}");
+
+    // The inner hybrid's own merge sizes every kind from `top_k`: forwarding
+    // to it would cut chunks and entities to 2, narrower than Python.
+    let forwarded = h.retriever.hybrid.merge_session_contexts(
+        Some(session_lane("r", 4)),
+        Some(session_lane("c", 4)),
+        &SearchParams {
+            top_k: Some(2),
+            ..SearchParams::default()
+        },
+    );
+    assert_eq!(kind_counts(&forwarded), (2, 2, 2));
+}
+
+/// Without constructor or request limits, `top_k` is 5 and `candidate_top_k`
+/// 20; a request's `top_k` / `candidate_top_k` override them, as for the
+/// fetch.
+#[test]
+fn session_merge_caps_follow_default_and_request_limits() {
+    let h = harness_with(ScriptedLlm::new(json!({})), None, None);
+    let merged = h.retriever.merge_session_contexts(
+        Some(session_lane("r", 12)),
+        Some(session_lane("c", 12)),
+        &SearchParams::default(),
+    );
+    assert_eq!(kind_counts(&merged), (20, 20, 5));
+
+    // A request `top_k` alone moves `candidate_top_k` to four times it.
+    let merged = h.retriever.merge_session_contexts(
+        Some(session_lane("r", 12)),
+        Some(session_lane("c", 12)),
+        &SearchParams {
+            top_k: Some(1),
+            ..SearchParams::default()
+        },
+    );
+    assert_eq!(kind_counts(&merged), (4, 4, 1));
+
+    // Both request knobs override the constructor's.
+    let h = harness();
+    let merged = h.retriever.merge_session_contexts(
+        Some(session_lane("r", 12)),
+        Some(session_lane("c", 12)),
+        &SearchParams {
+            top_k: Some(3),
+            candidate_top_k: Some(5),
+            ..SearchParams::default()
+        },
+    );
+    assert_eq!(kind_counts(&merged), (5, 5, 3));
+}
+
+/// A lane that failed open (`None`) leaves the other lane, still capped; with
+/// limits no fetch would accept, the merge keeps a lane instead of panicking.
+#[test]
+fn session_merge_keeps_the_surviving_lane() {
+    let h = harness();
+    let params = SearchParams::default();
+    let lane_prefixes = |context: &SearchContext| -> HashSet<String> {
+        kind_ids(context, "chunk")
+            .iter()
+            .chain(&kind_ids(context, "entity"))
+            .chain(&kind_ids(context, "fact"))
+            .map(|id| id[..1].to_string())
+            .collect()
+    };
+
+    let raw_only = h
+        .retriever
+        .merge_session_contexts(Some(session_lane("r", 4)), None, &params);
+    assert_eq!(kind_counts(&raw_only), (4, 4, 2));
+    assert_eq!(lane_prefixes(&raw_only), HashSet::from(["r".to_string()]));
+
+    let conversational_only =
+        h.retriever
+            .merge_session_contexts(None, Some(session_lane("c", 4)), &params);
+    assert_eq!(kind_counts(&conversational_only), (4, 4, 2));
+    assert_eq!(
+        lane_prefixes(&conversational_only),
+        HashSet::from(["c".to_string()])
+    );
+
+    assert!(
+        h.retriever
+            .merge_session_contexts(None, None, &params)
+            .is_empty()
+    );
+
+    let invalid = SearchParams {
+        top_k: Some(0),
+        ..SearchParams::default()
+    };
+    let kept = h.retriever.merge_session_contexts(
+        Some(session_lane("r", 1)),
+        Some(session_lane("c", 1)),
+        &invalid,
+    );
+    assert_eq!(lane_prefixes(&kept), HashSet::from(["r".to_string()]));
+}
+
+/// Embeds the conversational rewrite (`"Prior user: …"`) to `[0, 1]` and
+/// every other query to `[1, 0]`, so the two session lanes would rank
+/// different chunks first, and records every text it embeds.
+struct LaneEmbedding(Arc<Mutex<Vec<String>>>);
+
+#[async_trait]
+impl EmbeddingEngine for LaneEmbedding {
+    async fn embed(&self, texts: &[&str]) -> EmbeddingResult<Vec<Vec<f32>>> {
+        self.0
+            .lock()
+            .unwrap()
+            .extend(texts.iter().map(|text| (*text).to_string()));
+        Ok(texts
+            .iter()
+            .map(|text| {
+                if text.starts_with("Prior user:") {
+                    vec![0.0, 1.0]
+                } else {
+                    vec![1.0, 0.0]
+                }
+            })
+            .collect())
+    }
+    fn dimension(&self) -> usize {
+        2
+    }
+    fn batch_size(&self) -> usize {
+        8
+    }
+    fn max_sequence_length(&self) -> usize {
+        128
+    }
+}
+
+/// End to end through the orchestrator: a TEMPORAL session turn retrieves
+/// the raw question only, even in concurrent mode with history to rewrite
+/// from. Python's concurrent turn opts retrievers in by exact class
+/// (`session_aware_completion.py` `_eligible_retriever_types`), so its
+/// `TemporalHybridRetriever` subclass takes the sequential runner and its
+/// inherited `merge_retrieved_objects` is never reached; Rust's
+/// `concurrent_session::eligible` mirrors that. The merge hook above stays
+/// correct for the day TEMPORAL is opted in, and this pins that it is not
+/// yet.
+#[tokio::test]
+async fn temporal_session_turn_retrieves_the_raw_lane_only() {
+    let graph = Arc::new(MockGraphDB::new());
+    add_node(&graph, "c1", "DocumentChunk").await;
+    let vector = Arc::new(MockVectorDB::new());
+    vector
+        .create_collection("DocumentChunk", "text", 2)
+        .await
+        .unwrap();
+    let point = |name: &str, embedding: Vec<f32>| {
+        VectorPoint::new(Uuid::parse_str(&id(name)).unwrap(), embedding)
+            .with_metadata("id", json!(id(name)))
+            .with_metadata("text", json!(format!("text of {name}")))
+    };
+    vector
+        .index_points(
+            "DocumentChunk",
+            "text",
+            &[point("raw", vec![1.0, 0.0]), point("conv", vec![0.0, 1.0])],
+        )
+        .await
+        .unwrap();
+    let llm = Arc::new(ScriptedLlm::answering("answer"));
+    let embedded = Arc::new(Mutex::new(Vec::new()));
+    let retriever = Arc::new(TemporalHybridRetriever::new(
+        vector as Arc<dyn VectorDB>,
+        Arc::new(LaneEmbedding(Arc::clone(&embedded))) as Arc<dyn EmbeddingEngine>,
+        graph as Arc<dyn GraphDBTrait>,
+        Arc::clone(&llm) as Arc<dyn Llm>,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ));
+
+    let user = Uuid::new_v4();
+    let dir = tempfile::tempdir().unwrap();
+    let manager = Arc::new(cognee_session::SessionManager::new(Arc::new(
+        cognee_session::FsSessionStore::new(dir.path()),
+    )));
+    manager
+        .save_qa(
+            Some("s"),
+            Some(&user.to_string()),
+            "Which expedition founded Atlas?",
+            "The northern one.",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // An orchestrator LLM, so concurrent mode would run if TEMPORAL were
+    // eligible; it is never called with auto-feedback off.
+    let orchestrator = temporal_orchestrator(retriever)
+        .with_session_manager(manager)
+        .with_llm(Arc::new(ScriptedLlm::failing("turn analysis must not run")))
+        .with_auto_feedback_default(false)
+        .with_session_search_mode(crate::SessionSearchMode::Concurrent);
+    let mut request: crate::types::SearchRequest = serde_json::from_value(json!({
+        "query_text": "When was it founded?",
+        "top_k": 1,
+        "session_id": "s",
+    }))
+    .unwrap();
+    request.search_type = SearchType::Temporal;
+    request.user_id = Some(user);
+    request.use_combined_context = Some(false);
+
+    let result = orchestrator.search(&request).await.unwrap();
+    assert_eq!(answer_text(&result.result), "answer");
+    let prompt: String = llm
+        .last_prompt
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|message| message.content.clone())
+        .collect();
+    assert!(prompt.contains("text of raw"), "{prompt}");
+    assert!(!prompt.contains("text of conv"), "{prompt}");
+    assert!(
+        embedded
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|text| !text.starts_with("Prior user:")),
+        "no conversational lane ran"
+    );
+}
