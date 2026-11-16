@@ -25,7 +25,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use cognee_chunking::{NAMESPACE_OID, TokenCountMode, TokenCounterKind, chunk_by_row, chunk_text};
+use cognee_chunking::{
+    ChunkContext, Chunker, CsvChunker, NAMESPACE_OID, TextChunker, TokenCountMode, TokenCounterKind,
+};
 use cognee_core::{
     CpuPool, DatasetLocks, Pipeline, PipelineBuilder, PipelineContext, TaskContextBuilder,
     TypedTask, Value,
@@ -392,8 +394,15 @@ pub fn classify_documents(
 /// Split out of [`extract_chunks_from_documents`] so the per-document work has
 /// exactly one fallible boundary: everything that can go wrong for a single
 /// file — storage `retrieve`, UTF-8 decode, an unregistered document type, the
-/// loader's own `extract` — surfaces here as one `Err` the caller records
-/// against the file rather than propagating out of the batch.
+/// loader's own `extract`, the chunker — surfaces here as one `Err` the caller
+/// records against the file rather than propagating out of the batch.
+///
+/// `chunker` is the selected chunker (see [`CognifyConfig::chunker`]); `None`
+/// keeps the default per-format dispatch — [`TextChunker`] for loader text,
+/// [`CsvChunker`] for loader rows. Every chunk a chunker cuts carries its
+/// `chunker_id`. A DLT row and a loader's `LoaderOutput::SingleChunk`, which
+/// no chunker cuts (the selected or custom chunker is bypassed), carry none.
+#[allow(clippy::too_many_arguments)]
 async fn chunk_one_document(
     document: &Document,
     storage: &dyn StorageTrait,
@@ -402,6 +411,7 @@ async fn chunk_one_document(
     token_count_mode: TokenCountMode,
     db: Option<&dyn RelationalDb>,
     loader_registry: &LoaderRegistry,
+    chunker: Option<&dyn Chunker>,
 ) -> Result<Vec<DocumentChunk>, CognifyError> {
     let content_bytes = storage
         .retrieve(&document.raw_data_location)
@@ -458,30 +468,34 @@ async fn chunk_one_document(
         .await
         .map_err(|e| CognifyError::ChunkingError(e.to_string()))?;
 
-    let mut chunks = match output {
-        LoaderOutput::Text(text) => chunk_text(
-            document.base.id,
-            &text,
-            max_chunk_size,
-            &counter,
-            token_count_mode,
-        ),
-        LoaderOutput::Rows(rows) => {
-            let joined = rows.join("\n\n");
-            chunk_by_row(document.base.id, &joined, max_chunk_size, &counter)
-        }
-        LoaderOutput::SingleChunk { text, cut_type } => {
-            let chunk_id =
-                Uuid::new_v5(&NAMESPACE_OID, format!("{}-0", document.base.id).as_bytes());
-            let word_count = counter.count_tokens(&text);
-            vec![DocumentChunk::new(
-                chunk_id,
-                text,
-                word_count,
-                0,
-                cut_type.to_string(),
-                document.base.id,
-            )]
+    // Scoped: the context borrows the (non-`Sync`) token counter, which must
+    // not be held across the token-count `.await` below.
+    let mut chunks = {
+        let ctx = ChunkContext::new(document.base.id, max_chunk_size, counter)
+            .with_mode(token_count_mode);
+        let chunked = |default: &dyn Chunker, text: &str| {
+            chunker
+                .unwrap_or(default)
+                .chunk_document(text, &ctx)
+                .map_err(|e| CognifyError::ChunkingError(e.to_string()))
+        };
+        match output {
+            LoaderOutput::Text(text) => chunked(&TextChunker, &text)?,
+            // The rows are joined with "\n\n", the format `chunk_by_row` (and
+            // Python's CSV document text) uses.
+            LoaderOutput::Rows(rows) => chunked(&CsvChunker, &rows.join("\n\n"))?,
+            LoaderOutput::SingleChunk { text, cut_type } => {
+                let chunk_id = ctx.positional_chunk_id(0);
+                let word_count = counter.count_tokens(&text);
+                vec![DocumentChunk::new(
+                    chunk_id,
+                    text,
+                    word_count,
+                    0,
+                    cut_type.to_string(),
+                    document.base.id,
+                )]
+            }
         }
     };
 
@@ -559,6 +573,7 @@ pub async fn extract_chunks_from_documents(
     db: Option<&dyn RelationalDb>,
     loader_registry: &LoaderRegistry,
     failure_policy: FailurePolicy,
+    chunker: Option<&dyn Chunker>,
 ) -> Result<ExtractedChunks, CognifyError> {
     let counter = token_counter_kind
         .build()
@@ -583,6 +598,7 @@ pub async fn extract_chunks_from_documents(
             token_count_mode,
             db,
             loader_registry,
+            chunker,
         )
         .await;
 
@@ -6055,6 +6071,10 @@ pub fn make_classify_documents_task_with_rank(
 /// with `source_task = "extract_chunks_from_documents"`. Documents
 /// inherited from the upstream wrapper keep their already-set stamp via
 /// the `is_none()` guard inside [`stamp_provenance`].
+///
+/// `chunker` is the chunker every document goes through, or `None` for the
+/// default per-format dispatch; see [`CognifyConfig::chunker`].
+#[allow(clippy::too_many_arguments)]
 pub fn make_extract_chunks_task(
     storage: Arc<dyn StorageTrait>,
     max_chunk_size: usize,
@@ -6063,6 +6083,7 @@ pub fn make_extract_chunks_task(
     db: Option<Arc<dyn RelationalDb>>,
     loader_registry: Arc<LoaderRegistry>,
     failure_policy: FailurePolicy,
+    chunker: Option<Arc<dyn Chunker>>,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     make_extract_chunks_task_with_rank(
         storage,
@@ -6072,6 +6093,7 @@ pub fn make_extract_chunks_task(
         db,
         loader_registry,
         failure_policy,
+        chunker,
         EXTRACT_CHUNKS_TASK_RANK,
     )
 }
@@ -6086,12 +6108,14 @@ pub fn make_extract_chunks_task_with_rank(
     db: Option<Arc<dyn RelationalDb>>,
     loader_registry: Arc<LoaderRegistry>,
     failure_policy: FailurePolicy,
+    chunker: Option<Arc<dyn Chunker>>,
     rank: i32,
 ) -> TypedTask<ClassifiedDocuments, ExtractedChunks> {
     TypedTask::async_fn(move |input: &ClassifiedDocuments, ctx| {
         let input = input.clone();
         let storage = Arc::clone(&storage);
         let db = db.clone();
+        let chunker = chunker.clone();
         let token_counter_kind = token_counter_kind.clone();
         let loader_registry = Arc::clone(&loader_registry);
         let user_label = user_label_from_ctx(&ctx);
@@ -6105,6 +6129,7 @@ pub fn make_extract_chunks_task_with_rank(
                 db.as_deref(),
                 &loader_registry,
                 failure_policy,
+                chunker.as_deref(),
             )
             .await?;
             for chunk in &mut extracted.chunks {
@@ -6703,6 +6728,50 @@ fn build_loader_registry(llm: &Arc<dyn Llm>, config: &CognifyConfig) -> LoaderRe
     registry
 }
 
+/// [`CognifyConfig::chunker`] for the chunk stage.
+///
+/// `cognify()` validates the config first, so there this cannot fail. A caller
+/// that builds the pipeline from an unvalidated config gets a chunker that
+/// fails every document with the configuration error — never a silent fallback
+/// to the default chunker.
+fn resolve_chunker(config: &CognifyConfig) -> Option<Arc<dyn Chunker>> {
+    if config.custom_chunker.is_none()
+        && config.chunk_strategy == crate::config::ChunkStrategy::Overlap
+        && config.chunk_overlap_ratio == 0.0
+    {
+        // Python's default ratio too, but then nothing overlaps: the chunks are
+        // cut like the paragraph chunker's. The ratio is code-only
+        // (`CognifyConfig::with_chunk_overlap_ratio`), so say so once per run.
+        warn!(
+            "chunk_strategy OVERLAP with chunk_overlap_ratio 0.0: chunks will not overlap \
+             (set it with CognifyConfig::with_chunk_overlap_ratio)"
+        );
+    }
+    match config.chunker() {
+        Ok(chunker) => chunker,
+        Err(e) => Some(Arc::new(InvalidChunker(e.to_string()))),
+    }
+}
+
+/// Stand-in for a chunker whose configuration did not validate.
+struct InvalidChunker(String);
+
+impl Chunker for InvalidChunker {
+    fn chunker_id(&self) -> &str {
+        ""
+    }
+
+    fn chunk(
+        &self,
+        _text: &str,
+        _ctx: &ChunkContext<'_>,
+    ) -> Result<Vec<DocumentChunk>, cognee_chunking::ChunkingError> {
+        Err(cognee_chunking::ChunkingError::InvalidConfig(
+            self.0.clone(),
+        ))
+    }
+}
+
 /// Build a complete cognify [`Pipeline`]:
 /// [`CognifyInput`] → classify → chunk → (extract_graph ‖ summarize) →
 /// add_data_points → [`CognifyResult`].
@@ -6748,6 +6817,7 @@ pub fn build_cognify_pipeline(
             Some(Arc::clone(&db)),
             loader_registry,
             config.failure_policy(),
+            resolve_chunker(&config),
         ),
         EXTRACT_CHUNKS_TASK_NAME,
     )
@@ -7284,6 +7354,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await
         .unwrap();
@@ -7295,6 +7366,347 @@ mod tests {
                 .iter()
                 .all(|c| c.base.importance_weight == Some(0.9)),
             "every chunk must inherit the document's importance_weight"
+        );
+    }
+
+    // -- Chunker selection (SDK-1042) ---------------------------------------
+
+    use crate::config::ChunkStrategy;
+
+    /// Store `content` as a document of `document_type` and chunk it through
+    /// [`extract_chunks_from_documents`] with `config`'s chunker.
+    async fn chunk_with(
+        content: &str,
+        document_type: &str,
+        registry: &LoaderRegistry,
+        max_chunk_size: usize,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedChunks, CognifyError> {
+        let storage = Arc::new(MockStorage::new());
+        let location = storage.store(content.as_bytes(), "doc.txt").await.unwrap();
+        let doc_id = Uuid::new_v4();
+        let mut base = DataPoint::new("TextDocument", None);
+        base.id = doc_id;
+        base.importance_weight = Some(0.5);
+        let input = ClassifiedDocuments {
+            failures: FailureReport::default(),
+            documents: vec![Document {
+                base,
+                document_type: document_type.to_string(),
+                name: "doc.txt".to_string(),
+                raw_data_location: location,
+                mime_type: "text/plain".to_string(),
+                extension: "txt".to_string(),
+                data_id: doc_id,
+                external_metadata: None,
+            }],
+            dataset_id: Uuid::new_v4(),
+            user_id: None,
+            tenant_id: None,
+        };
+        let chunker = resolve_chunker(config);
+        extract_chunks_from_documents(
+            &input,
+            &*storage,
+            max_chunk_size,
+            TokenCounterKind::Word,
+            TokenCountMode::Span,
+            None,
+            registry,
+            config.failure_policy(),
+            chunker.as_deref(),
+        )
+        .await
+    }
+
+    /// A loader handing its lines to the chunk stage as `LoaderOutput::Rows`,
+    /// the shape the (feature-gated) CSV loader produces.
+    struct RowsLoader;
+
+    #[async_trait::async_trait]
+    impl cognee_ingestion::loaders::DocumentLoader for RowsLoader {
+        async fn extract(
+            &self,
+            bytes: &[u8],
+            _doc: &Document,
+        ) -> Result<LoaderOutput, cognee_ingestion::loaders::LoaderError> {
+            Ok(LoaderOutput::Rows(
+                String::from_utf8_lossy(bytes)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect(),
+            ))
+        }
+
+        fn engine_name(&self) -> &'static str {
+            "rows_test_loader"
+        }
+    }
+
+    fn rows_registry() -> LoaderRegistry {
+        let mut registry = LoaderRegistry::default();
+        registry.register("rows", Arc::new(RowsLoader));
+        registry
+    }
+
+    fn chunk_ids(chunks: &[DocumentChunk]) -> Vec<Option<&str>> {
+        chunks.iter().map(|c| c.chunker_id.as_deref()).collect()
+    }
+
+    fn texts(chunks: &[DocumentChunk]) -> Vec<&str> {
+        chunks.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn default_text_chunks_carry_the_text_chunker_id() {
+        let result = chunk_with(
+            "Hello world. This is a test.",
+            "text",
+            &LoaderRegistry::default(),
+            100,
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(!result.chunks.is_empty());
+        assert!(
+            chunk_ids(&result.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::TEXT_CHUNKER_ID))
+        );
+    }
+
+    /// The validation row for extraction-22: `chunk_strategy = Recursive`
+    /// yields different boundaries than the default paragraph chunker.
+    #[tokio::test]
+    async fn the_recursive_strategy_changes_chunk_boundaries() {
+        let text = (0..80)
+            .map(|i| format!("Sentence number {i} is right here."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let registry = LoaderRegistry::default();
+        let paragraph = chunk_with(&text, "text", &registry, 60, &CognifyConfig::default())
+            .await
+            .unwrap();
+        let recursive = chunk_with(
+            &text,
+            "text",
+            &registry,
+            2000,
+            &CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Recursive),
+        )
+        .await
+        .unwrap();
+        assert_ne!(texts(&paragraph.chunks), texts(&recursive.chunks));
+        assert!(
+            chunk_ids(&recursive.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::LANGCHAIN_CHUNKER_ID))
+        );
+        // Chunk bookkeeping still runs for a non-default chunker.
+        assert!(
+            recursive
+                .chunks
+                .iter()
+                .all(|c| c.base.importance_weight == Some(0.5))
+        );
+    }
+
+    /// Python raises when a LangchainChunker split is over the token budget;
+    /// that fails the file, not the whole batch.
+    #[tokio::test]
+    async fn an_oversized_recursive_split_fails_the_document() {
+        let config = CognifyConfig::default()
+            .with_chunk_strategy(ChunkStrategy::Recursive)
+            .with_failure_stop(FailureStop::RunToEnd);
+        let result = chunk_with(
+            &"word ".repeat(300),
+            "text",
+            &LoaderRegistry::default(),
+            50,
+            &config,
+        )
+        .await
+        .unwrap();
+        assert!(result.chunks.is_empty());
+        let entries = result.failures.entries();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].error.contains("larger than the maximum"),
+            "{}",
+            entries[0].error
+        );
+    }
+
+    #[tokio::test]
+    async fn loader_rows_default_to_the_csv_chunker() {
+        let result = chunk_with(
+            "name: Alice, age: 30\nname: Bob, age: 25",
+            "rows",
+            &rows_registry(),
+            100,
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            texts(&result.chunks),
+            vec!["name: Alice, age: 30", "name: Bob, age: 25"]
+        );
+        assert!(
+            chunk_ids(&result.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::CSV_CHUNKER_ID))
+        );
+    }
+
+    /// A selected chunker applies to loader rows too (Python's `CsvDocument`
+    /// hands its text to whichever chunker was chosen).
+    #[tokio::test]
+    async fn a_selected_chunker_applies_to_loader_rows() {
+        let result = chunk_with(
+            "name: Alice, age: 30\nname: Bob, age: 25",
+            "rows",
+            &rows_registry(),
+            100,
+            &CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Recursive),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.chunks.len(), 1, "{:?}", texts(&result.chunks));
+        assert_eq!(
+            result.chunks[0].chunker_id.as_deref(),
+            Some(cognee_chunking::LANGCHAIN_CHUNKER_ID)
+        );
+    }
+
+    /// `--chunker CsvChunker` on plain text cuts rows, as Python's CsvChunker
+    /// does on whatever text its document yields.
+    #[tokio::test]
+    async fn the_csv_strategy_row_chunks_text_documents() {
+        let result = chunk_with(
+            "a: 1, b: 2\n\nc: 3, d: 4",
+            "text",
+            &LoaderRegistry::default(),
+            100,
+            &CognifyConfig::default().with_chunk_strategy(ChunkStrategy::Csv),
+        )
+        .await
+        .unwrap();
+        assert_eq!(texts(&result.chunks), vec!["a: 1, b: 2", "c: 3, d: 4"]);
+        assert!(result.chunks.iter().all(|c| c.cut_type == "row_end"));
+    }
+
+    #[tokio::test]
+    async fn the_json_list_strategy_gives_one_chunk_per_item() {
+        let result = chunk_with(
+            r#"["first", "second item", {"k": "v"}]"#,
+            "text",
+            &LoaderRegistry::default(),
+            100,
+            &CognifyConfig::default().with_chunk_strategy(ChunkStrategy::JsonList),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            texts(&result.chunks),
+            vec!["first", "second item", "{'k': 'v'}"]
+        );
+        assert!(
+            chunk_ids(&result.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::JSON_LIST_CHUNKER_ID))
+        );
+    }
+
+    /// End-to-end through the chunk stage for the overlap chunker
+    /// (storage-chunking-10's integration row).
+    #[tokio::test]
+    async fn the_overlap_strategy_repeats_content_across_chunks() {
+        let text = (0..40)
+            .map(|i| format!("W{i}a W{i}b."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let result = chunk_with(
+            &text,
+            "text",
+            &LoaderRegistry::default(),
+            20,
+            &CognifyConfig::default()
+                .with_chunk_strategy(ChunkStrategy::Overlap)
+                .with_chunk_overlap_ratio(0.5),
+        )
+        .await
+        .unwrap();
+        assert!(result.chunks.len() > 2);
+        for pair in result.chunks.windows(2) {
+            let last = pair[0].text.split_whitespace().last().unwrap();
+            assert!(
+                pair[1].text.split_whitespace().any(|w| w == last),
+                "no overlap: {:?} / {:?}",
+                pair[0].text,
+                pair[1].text
+            );
+        }
+        assert!(
+            chunk_ids(&result.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::TEXT_CHUNKER_OVERLAP_ID))
+        );
+    }
+
+    /// storage-chunking-09: a custom chunker's output is stamped with its id.
+    #[tokio::test]
+    async fn custom_chunker_output_is_stamped_with_its_id() {
+        let closure = CognifyConfig::default().with_custom_chunker(Arc::new(|t: &str, _| {
+            t.split(';').map(str::to_owned).collect()
+        }));
+        let result = chunk_with("a;b;c", "text", &LoaderRegistry::default(), 100, &closure)
+            .await
+            .unwrap();
+        assert_eq!(texts(&result.chunks), vec!["a", "b", "c"]);
+        assert!(
+            chunk_ids(&result.chunks)
+                .iter()
+                .all(|id| *id == Some(cognee_chunking::CUSTOM_CHUNKER_ID))
+        );
+
+        let named =
+            CognifyConfig::default().with_chunker(Arc::new(cognee_chunking::FnChunker::with_id(
+                "my_chunker_v2",
+                Arc::new(|t: &str, _| vec![t.to_owned()]),
+            )));
+        let result = chunk_with("whole", "text", &LoaderRegistry::default(), 100, &named)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.chunks[0].chunker_id.as_deref(),
+            Some("my_chunker_v2")
+        );
+    }
+
+    /// An unvalidated invalid chunker config fails each document; it never
+    /// falls back to the default chunker.
+    #[tokio::test]
+    async fn an_invalid_chunker_config_fails_documents_instead_of_falling_back() {
+        let config = CognifyConfig::default()
+            .with_chunk_strategy(ChunkStrategy::Overlap)
+            .with_chunk_overlap_ratio(1.5)
+            .with_failure_stop(FailureStop::RunToEnd);
+        let result = chunk_with(
+            "Hello world.",
+            "text",
+            &LoaderRegistry::default(),
+            100,
+            &config,
+        )
+        .await
+        .unwrap();
+        assert!(result.chunks.is_empty());
+        assert!(
+            result.failures.entries()[0]
+                .error
+                .contains("overlap ratio must be in [0, 1)")
         );
     }
 
@@ -7949,6 +8361,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await
         .unwrap();
@@ -8000,6 +8413,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await
         .unwrap();
@@ -8095,6 +8509,7 @@ mod tests {
             None,
             &registry,
             config.failure_policy(),
+            None,
         )
         .await
     }
@@ -11171,6 +11586,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await;
 
@@ -11246,6 +11662,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await;
 
@@ -11365,6 +11782,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await;
 
@@ -11436,6 +11854,7 @@ mod tests {
             None,
             &registry,
             CognifyConfig::default().failure_policy(),
+            None,
         )
         .await;
 

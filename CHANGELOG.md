@@ -155,6 +155,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Chunker selection is real (SDK-1042).** `chunk_strategy` (and the CLI's
+  `--chunker`) now chooses the chunker cognify cuts documents with:
+  `PARAGRAPH`/`TextChunker` (default), `RECURSIVE`/`LangchainChunker`,
+  `CSV`/`CsvChunker`, `JSON_LIST`/`JsonListChunker` and
+  `OVERLAP`/`TextChunkerWithOverlap`. Before, every value except the default
+  was parsed and ignored. **`RECURSIVE` changes behaviour:** it cuts
+  1024-word splits with `chunk_overlap` words of overlap and, like Python's
+  `LangchainChunker`, fails a document whose split exceeds `max_chunk_size`
+  tokens — with a ~512-token local embedding budget that is most documents
+  over ~400 words. `chunk_overlap` is now read (by `RECURSIVE` only) and must
+  be at most 1024 there. Every chunk carries `DocumentChunk.chunker_id`.
+  API: `CustomChunker` now wraps `Arc<dyn cognee_chunking::Chunker>`
+  (`with_custom_chunker(closure)` still works; `with_chunker` takes a
+  `Chunker`); `ChunkStrategy` gains `Csv`, `JsonList` and `Overlap`;
+  `extract_chunks_from_documents` and `make_extract_chunks_task(_with_rank)`
+  take the chunker as a new argument; `CognifyConfig` gains
+  `chunk_overlap_ratio`. CLI: `--chunker` no longer defaults to
+  `TextChunker` (omitting it now defers to `chunk_strategy`) and accepts
+  `JsonListChunker`.
+
 - **`improve()` follows Python 1.6.7 stage defaults (SDK-1206).**
   `review_conflicts` and `global_context_index` now run by default
   (`IMPROVE_REVIEW_CONFLICTS` and the new `IMPROVE_GLOBAL_CONTEXT_INDEX`,

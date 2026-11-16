@@ -5,10 +5,10 @@ use cognee::cognify::cognify;
 use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
 use cognee::{ComponentManager, PipelineContext};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
-use crate::cli::{AddAndCognifyArgs, ChunkerArg};
+use crate::cli::AddAndCognifyArgs;
 use crate::error::CliError;
 
 pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
@@ -38,22 +38,12 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
 
     // Every flag-derived setting, validated before anything is added.
     let flag_config = super::apply_graph_schema_args(
-        settings
-            .cognify_config()
+        super::apply_chunker_arg(settings.cognify_config(), args.chunker)
             .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
             .with_max_parallel_extractions(effective_max_parallel)
             .with_summarization(!summarization_model.is_empty()),
         &args.graph_schema,
     )?;
-
-    match args.chunker {
-        ChunkerArg::Text => {}
-        ChunkerArg::Langchain | ChunkerArg::Csv => {
-            warn!(
-                "Warning: selected chunker is not natively available in Rust yet; using TextChunker-compatible flow."
-            );
-        }
-    }
 
     crate::teardown::run_command(Arc::clone(&cm), async {
         // `graph_extraction.backend`, resolved before the add: an unregistered

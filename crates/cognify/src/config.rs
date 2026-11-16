@@ -7,7 +7,10 @@
 
 use std::sync::Arc;
 
-use cognee_chunking::{TokenCountMode, TokenCounterKind};
+use cognee_chunking::{
+    Chunker, CsvChunker, FnChunker, JsonListChunker, RecursiveChunker, TextChunkerWithOverlap,
+    TokenCountMode, TokenCounterKind,
+};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_llm::{Llm, Transcriber};
 use serde::{Deserialize, Serialize};
@@ -202,47 +205,36 @@ pub struct CognifyConfig {
     /// explicit `Some(1500)` is honoured rather than treated as "unset".
     pub max_chunk_size: Option<usize>,
 
-    /// Overlap between chunks (in tokens). Python default: 10 (from
-    /// `ChunkConfig.chunk_overlap`).
+    /// Overlap between consecutive chunks of the **recursive** chunker, in
+    /// words. Python default: 10.
     ///
-    /// # Inert — kept deliberately, on both sides
+    /// Read only when [`CognifyConfig::chunk_strategy`] is
+    /// [`ChunkStrategy::Recursive`]: it is the `chunk_overlap` handed to the
+    /// langchain-style splitter (Python's `LangchainChunker` passes its
+    /// `chunk_overlap=10` default to `RecursiveCharacterTextSplitter`). The
+    /// paragraph chunker has no overlap, and the overlap chunker
+    /// ([`ChunkStrategy::Overlap`]) takes a *ratio* instead
+    /// ([`CognifyConfig::chunk_overlap_ratio`]).
     ///
-    /// **No chunking code reads this.** It is defaulted here, plumbed through
-    /// `Settings`, the CLI and `bindings-common`, and then never consulted:
-    /// `crates/chunking/` contains zero references to it, so setting it changes
-    /// no chunk boundary. (An earlier version of this comment said "Used when
-    /// chunk_strategy is RECURSIVE or LANGCHAIN", which was not true of any
-    /// code path.)
-    ///
-    /// Nothing reads it at all, [`CognifyConfig::validate`] included. That
-    /// validator used to reject `chunk_overlap >= max_chunk_size`, which made
-    /// an inert knob able to fail a whole pipeline — and Python has no such
-    /// rule anywhere. (The only upstream check is langchain's own, inside the
-    /// opt-in `LangchainChunker` against its own `chunk_size=1024`, and it is
-    /// `>` not `>=`.) The rule is gone, so this field is now genuinely
-    /// unobservable: any value parses, and none changes a chunk boundary.
-    ///
-    /// It is a faithful port of a knob that is dead in Python too — though dead
-    /// by unreachability, not by absence. Python declares
-    /// `ChunkConfig.chunk_overlap = 10`
-    /// (`cognee/infrastructure/data/chunking/config.py:16`) and
-    /// `DefaultChunkEngine` genuinely consumes it — but
-    /// `get_chunking_engine()` has zero callers, and the default path is
-    /// `TextChunker` (`cognee/api/v1/cognify/cognify.py:62`), which never reads
-    /// it. (`text_chunker_with_overlap.py` uses a *ratio*, a different opt-in
-    /// knob.)
-    ///
-    /// Kept rather than removed because removal is a SemVer break across four
-    /// public binding surfaces — `python/cognee_py/types.py`, `ts/src/types.ts`
-    /// (plus `configSetChunkOverlap`), `java/…/CognifyOptions.java` and
-    /// `capi/include/cognee_sdk.h` — for a knob that costs nothing to keep, and
-    /// would diverge from Python, which still declares it.
+    /// The only rule is langchain's own, checked by
+    /// [`CognifyConfig::validate`] for the recursive strategy alone: the overlap
+    /// may not exceed the splitter's 1024-word `chunk_size`. It is never
+    /// compared with `max_chunk_size` (which is in tokens, and which Python does
+    /// not check it against either).
     pub chunk_overlap: usize,
 
-    /// Chunking strategy.
-    /// Python default: ChunkStrategy.PARAGRAPH
-    /// Options: Paragraph (sentence-aware), Recursive (character-based with overlap)
+    /// Which built-in chunker cuts documents — Python's `chunker` argument to
+    /// `cognify()` (`TextChunker` by default). See [`ChunkStrategy`].
+    ///
+    /// Ignored when [`CognifyConfig::custom_chunker`] is set.
     pub chunk_strategy: ChunkStrategy,
+
+    /// Overlap of the overlap chunker ([`ChunkStrategy::Overlap`]), as a
+    /// fraction of `max_chunk_size` in `[0, 1)`: Python's
+    /// `TextChunkerWithOverlap(chunk_overlap_ratio=…)`, default `0.0`. Read by
+    /// no other strategy.
+    #[serde(default)]
+    pub chunk_overlap_ratio: f64,
 
     /// Number of chunks to process in a single batch during graph extraction.
     ///
@@ -461,13 +453,13 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub summary_schema: Option<serde_json::Value>,
 
-    /// Pluggable chunker callback.
+    /// A caller-supplied [`Chunker`], used for every document instead of the
+    /// one [`CognifyConfig::chunk_strategy`] selects. Its
+    /// [`Chunker::chunker_id`] is stamped on the chunks it produces.
     ///
-    /// When `Some`, this function is called instead of the built-in
-    /// paragraph/recursive chunking. The callback receives the text and
-    /// max token count, and returns a list of chunk strings.
-    ///
-    /// Mirrors Python's `chunker` parameter.
+    /// Mirrors passing a custom `Chunker` subclass as Python's `chunker`
+    /// parameter. Set with [`CognifyConfig::with_chunker`], or
+    /// [`CognifyConfig::with_custom_chunker`] for a plain closure.
     #[serde(skip)]
     pub custom_chunker: Option<CustomChunker>,
 
@@ -501,17 +493,16 @@ pub struct CognifyConfig {
     pub graph_backend: Option<GraphBackendHandle>,
 }
 
-/// Opaque wrapper around a custom chunker callback.
+/// Opaque wrapper around a caller-supplied [`Chunker`].
 ///
-/// Implements [`Debug`] (prints `"CustomChunker(…)"`) and [`Clone`] (cheap
-/// `Arc` clone), keeping [`CognifyConfig`] derivable.
+/// Implements [`Debug`] (prints `"CustomChunker(<chunker_id>)"`) and [`Clone`]
+/// (cheap `Arc` clone), keeping [`CognifyConfig`] derivable.
 #[derive(Clone)]
-#[allow(clippy::type_complexity)]
-pub struct CustomChunker(pub Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>);
+pub struct CustomChunker(pub Arc<dyn Chunker>);
 
 impl std::fmt::Debug for CustomChunker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("CustomChunker(…)")
+        write!(f, "CustomChunker({})", self.0.chunker_id())
     }
 }
 
@@ -571,18 +562,65 @@ impl ExtractionStrategy {
     }
 }
 
-/// Chunking strategy options.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// The built-in chunker cognify cuts documents with — Python's `chunker`
+/// argument (`cognee/api/v1/cognify/cognify.py`), and the CLI's `--chunker`.
+///
+/// CSV documents are the one exception to "every document goes through the
+/// selected chunker": under the default [`ChunkStrategy::Paragraph`] they keep
+/// being cut row by row ([`cognee_chunking::CsvChunker`]), as they were before
+/// the strategy was selectable. Python's default `TextChunker` paragraph-chunks
+/// the formatted CSV text instead; any other strategy applies to CSV rows too.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ChunkStrategy {
-    /// Paragraph-based chunking (sentence-aware, no overlap).
-    /// Python: ChunkStrategy.PARAGRAPH
-    /// Default and most reliable for semantic coherence.
+    /// Paragraph chunking, Python's `TextChunker` (`text_chunker_v1`). The
+    /// default.
+    #[default]
     Paragraph,
 
-    /// Recursive character-based chunking with overlap.
-    /// Python: ChunkStrategy.RECURSIVE (via LangchainChunker)
-    /// Better for preserving context across chunk boundaries.
+    /// Recursive character splitting measured in words, Python's
+    /// `LangchainChunker` (`langchain_chunker_v1`): 1024-word splits with
+    /// [`CognifyConfig::chunk_overlap`] words of overlap; a split over
+    /// `max_chunk_size` tokens fails the document, as in Python.
     Recursive,
+
+    /// Row chunking, Python's `CsvChunker` (`csv_chunker_v1`).
+    Csv,
+
+    /// One chunk per item of a JSON list, Python's `JsonListChunker`
+    /// (`json_list_chunker_v1`). A document that is not a JSON list fails.
+    JsonList,
+
+    /// Paragraph chunking with a ratio-based overlap, Python's
+    /// `TextChunkerWithOverlap` (`text_chunker_overlap_v1`); the ratio is
+    /// [`CognifyConfig::chunk_overlap_ratio`].
+    Overlap,
+}
+
+impl ChunkStrategy {
+    /// Parse a strategy name, case-insensitively. Accepts the Rust names
+    /// (`paragraph`, `recursive`, `csv`, `json_list`, `overlap`), the Python
+    /// chunker class names the CLI takes (`TextChunker`, `LangchainChunker`,
+    /// `CsvChunker`, `JsonListChunker`, `TextChunkerWithOverlap`), and the
+    /// legacy `ChunkStrategy` spellings `langchain` / `langchain_character`.
+    /// `None` for anything else.
+    pub fn parse(name: &str) -> Option<Self> {
+        let normalized: String = name
+            .trim()
+            .chars()
+            .filter(|c| !matches!(c, '_' | '-' | ' '))
+            .collect::<String>()
+            .to_ascii_lowercase();
+        match normalized.as_str() {
+            "" | "paragraph" | "text" | "textchunker" => Some(Self::Paragraph),
+            "recursive" | "langchain" | "langchaincharacter" | "langchainchunker" => {
+                Some(Self::Recursive)
+            }
+            "csv" | "csvchunker" => Some(Self::Csv),
+            "jsonlist" | "jsonlistchunker" => Some(Self::JsonList),
+            "overlap" | "textchunkerwithoverlap" => Some(Self::Overlap),
+            _ => None,
+        }
+    }
 }
 
 /// Serde default for [`CognifyConfig::chunk_failure_ratio_threshold`].
@@ -606,6 +644,7 @@ impl Default for CognifyConfig {
             max_chunk_size: None,
             chunk_overlap: 10,
             chunk_strategy: ChunkStrategy::Paragraph,
+            chunk_overlap_ratio: 0.0,
 
             chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
             max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
@@ -682,9 +721,18 @@ impl CognifyConfig {
         self.max_chunk_size.unwrap_or(Self::DEFAULT_MAX_CHUNK_SIZE)
     }
 
-    /// Set chunk overlap (for recursive chunking).
+    /// Set the recursive chunker's overlap, in words (see
+    /// [`CognifyConfig::chunk_overlap`]).
     pub fn with_chunk_overlap(mut self, overlap: usize) -> Self {
         self.chunk_overlap = overlap;
+        self
+    }
+
+    /// Set the overlap chunker's overlap ratio (see
+    /// [`CognifyConfig::chunk_overlap_ratio`]). Checked by
+    /// [`CognifyConfig::validate`].
+    pub fn with_chunk_overlap_ratio(mut self, ratio: f64) -> Self {
+        self.chunk_overlap_ratio = ratio;
         self
     }
 
@@ -791,14 +839,50 @@ impl CognifyConfig {
         Ok(self)
     }
 
-    /// Set a custom chunker callback.
-    #[allow(clippy::type_complexity)]
-    pub fn with_custom_chunker(
-        mut self,
-        chunker: Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>,
-    ) -> Self {
+    /// Use `chunker` for every document, overriding
+    /// [`CognifyConfig::chunk_strategy`].
+    pub fn with_chunker(mut self, chunker: Arc<dyn Chunker>) -> Self {
         self.custom_chunker = Some(CustomChunker(chunker));
         self
+    }
+
+    /// Use a closure as the chunker: it receives a document's text and the
+    /// token budget and returns the chunk texts. Its chunks are stamped
+    /// `chunker_id = "custom_chunker"`; implement [`Chunker`] and use
+    /// [`CognifyConfig::with_chunker`] to choose the id.
+    #[allow(clippy::type_complexity)]
+    pub fn with_custom_chunker(
+        self,
+        chunker: Arc<dyn Fn(&str, usize) -> Vec<String> + Send + Sync>,
+    ) -> Self {
+        self.with_chunker(Arc::new(FnChunker::new(chunker)))
+    }
+
+    /// The chunker every document goes through, or `None` for the default
+    /// per-format dispatch (paragraph chunking for text, row chunking for CSV
+    /// rows) of [`ChunkStrategy::Paragraph`].
+    ///
+    /// Fails when the selected strategy's parameters are invalid: a recursive
+    /// overlap larger than the 1024-word split, or an overlap ratio outside
+    /// `[0, 1)`.
+    pub fn chunker(&self) -> Result<Option<Arc<dyn Chunker>>, ConfigError> {
+        if let Some(custom) = &self.custom_chunker {
+            return Ok(Some(Arc::clone(&custom.0)));
+        }
+        let invalid =
+            |e: cognee_chunking::ChunkingError| ConfigError::InvalidParameter(e.to_string());
+        Ok(match self.chunk_strategy {
+            ChunkStrategy::Paragraph => None,
+            ChunkStrategy::Recursive => Some(Arc::new(
+                RecursiveChunker::new(RecursiveChunker::DEFAULT_CHUNK_SIZE, self.chunk_overlap)
+                    .map_err(invalid)?,
+            )),
+            ChunkStrategy::Csv => Some(Arc::new(CsvChunker)),
+            ChunkStrategy::JsonList => Some(Arc::new(JsonListChunker)),
+            ChunkStrategy::Overlap => Some(Arc::new(
+                TextChunkerWithOverlap::new(self.chunk_overlap_ratio).map_err(invalid)?,
+            )),
+        })
     }
 
     /// Set a transcriber for audio document processing.
@@ -923,6 +1007,9 @@ impl CognifyConfig {
     ///
     /// Returns an error if any parameters are invalid.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // The selected chunker's own parameters (recursive overlap, overlap
+        // ratio) — fail before classify rather than on every document.
+        self.chunker()?;
         if self.chunk_attachment.is_some() && self.graph_schema.is_none() {
             return Err(ConfigError::InvalidParameter(
                 "chunk_attachment requires graph_schema".to_string(),
@@ -962,15 +1049,11 @@ impl CognifyConfig {
                 "max_chunk_size must be greater than 0".to_string(),
             ));
         }
-        // No `chunk_overlap` rule here on purpose. Python validates
-        // `chunk_overlap` against a chunk size nowhere; the only such check
-        // upstream is langchain's own, inside the opt-in `LangchainChunker`
-        // against its own `chunk_size=1024`, and it is `>` not `>=`. The
-        // field is inert on both sides (see its doc comment), so the rule
-        // failed whole pipelines over a knob that moves no chunk boundary —
-        // most easily via an unset `max_chunk_size`, where
-        // `with_auto_chunk_size` puts the budget through `fit_token_budget`
-        // and a word counter turns 512 into 341.
+        // No `chunk_overlap` vs `max_chunk_size` rule on purpose: Python has
+        // none. The one overlap check upstream is langchain's own — overlap
+        // `>` the splitter's 1024-word `chunk_size` — and `self.chunker()`
+        // above applies exactly that, only when the recursive strategy reads
+        // the field.
 
         if self.chunks_per_batch == 0 {
             return Err(ConfigError::InvalidParameter(
@@ -1375,8 +1458,9 @@ mod tests {
 
     /// `chunk_overlap` is never validated against the chunk size, resolved or
     /// not. Python has no such rule anywhere — the only upstream check lives in
-    /// the opt-in `LangchainChunker` against its own `chunk_size=1024` — and
-    /// nothing in Rust reads the field, so there is nothing to protect.
+    /// the opt-in `LangchainChunker` against its own `chunk_size=1024` (see
+    /// `the_recursive_overlap_is_checked_against_the_1024_word_split`) — and
+    /// under the default paragraph strategy nothing reads the field.
     #[test]
     fn an_overlap_larger_than_the_chunk_size_is_not_an_error() {
         // Explicit size.
@@ -1427,6 +1511,118 @@ mod tests {
             resolved.validate().is_ok(),
             "an inert knob must not fail the pipeline"
         );
+    }
+
+    /// Under the recursive strategy the overlap is live, and langchain's own
+    /// rule applies: overlap `>` the 1024-word split is an error, `==` is not.
+    #[test]
+    fn the_recursive_overlap_is_checked_against_the_1024_word_split() {
+        let recursive = |overlap| {
+            CognifyConfig::default()
+                .with_chunk_strategy(ChunkStrategy::Recursive)
+                .with_chunk_overlap(overlap)
+        };
+        assert!(recursive(1024).validate().is_ok());
+        assert!(matches!(
+            recursive(1025).validate(),
+            Err(ConfigError::InvalidParameter(_))
+        ));
+        // The same overlap is not checked by a strategy that does not read it.
+        assert!(
+            CognifyConfig::default()
+                .with_chunk_overlap(1025)
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_overlap_ratio_is_validated_only_for_the_overlap_strategy() {
+        let overlap = |ratio| {
+            CognifyConfig::default()
+                .with_chunk_strategy(ChunkStrategy::Overlap)
+                .with_chunk_overlap_ratio(ratio)
+        };
+        assert!(overlap(0.0).validate().is_ok());
+        assert!(overlap(0.5).validate().is_ok());
+        assert!(overlap(1.0).validate().is_err());
+        assert!(overlap(-0.1).validate().is_err());
+        assert!(
+            CognifyConfig::default()
+                .with_chunk_overlap_ratio(5.0)
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn chunk_strategy_resolves_to_its_chunker() {
+        assert!(
+            CognifyConfig::default()
+                .chunker()
+                .expect("the default config resolves")
+                .is_none()
+        );
+        for (strategy, id) in [
+            (
+                ChunkStrategy::Recursive,
+                cognee_chunking::LANGCHAIN_CHUNKER_ID,
+            ),
+            (ChunkStrategy::Csv, cognee_chunking::CSV_CHUNKER_ID),
+            (
+                ChunkStrategy::JsonList,
+                cognee_chunking::JSON_LIST_CHUNKER_ID,
+            ),
+            (
+                ChunkStrategy::Overlap,
+                cognee_chunking::TEXT_CHUNKER_OVERLAP_ID,
+            ),
+        ] {
+            let chunker = CognifyConfig::default()
+                .with_chunk_strategy(strategy)
+                .chunker()
+                .expect("default parameters are valid")
+                .expect("a non-default strategy always resolves a chunker");
+            assert_eq!(chunker.chunker_id(), id);
+        }
+    }
+
+    #[test]
+    fn a_custom_chunker_overrides_the_strategy() {
+        let config = CognifyConfig::default()
+            .with_chunk_strategy(ChunkStrategy::Csv)
+            .with_custom_chunker(Arc::new(|t: &str, _| vec![t.to_owned()]));
+        let chunker = config
+            .chunker()
+            .expect("a custom chunker always resolves")
+            .expect("a custom chunker is always selected");
+        assert_eq!(chunker.chunker_id(), cognee_chunking::CUSTOM_CHUNKER_ID);
+        assert_eq!(
+            format!("{:?}", config.custom_chunker),
+            "Some(CustomChunker(custom_chunker))"
+        );
+    }
+
+    #[test]
+    fn chunk_strategy_parses_rust_and_python_names() {
+        let cases = [
+            ("PARAGRAPH", ChunkStrategy::Paragraph),
+            ("", ChunkStrategy::Paragraph),
+            ("TextChunker", ChunkStrategy::Paragraph),
+            ("RECURSIVE", ChunkStrategy::Recursive),
+            ("LangchainChunker", ChunkStrategy::Recursive),
+            ("langchain_character", ChunkStrategy::Recursive),
+            ("csv", ChunkStrategy::Csv),
+            ("CsvChunker", ChunkStrategy::Csv),
+            ("JSON_LIST", ChunkStrategy::JsonList),
+            ("JsonListChunker", ChunkStrategy::JsonList),
+            ("overlap", ChunkStrategy::Overlap),
+            ("TextChunkerWithOverlap", ChunkStrategy::Overlap),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(ChunkStrategy::parse(name), Some(expected), "{name}");
+        }
+        assert_eq!(ChunkStrategy::parse("sentence"), None);
     }
 
     #[test]

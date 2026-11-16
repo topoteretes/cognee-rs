@@ -48,6 +48,19 @@ pub fn parse_tenant_id(raw: Option<&str>) -> Result<Option<uuid::Uuid>, CliError
         .map_err(|error| CliError::Validation(format!("Invalid --tenant-id: {error}")))
 }
 
+/// Apply `--chunker` to `cfg`: the flag, when given, overrides the configured
+/// `chunk_strategy`; without it the setting stands. Shared by `cognify` and
+/// `add-and-cognify`.
+pub(crate) fn apply_chunker_arg(
+    cfg: cognee::cognify::CognifyConfig,
+    chunker: Option<crate::cli::ChunkerArg>,
+) -> cognee::cognify::CognifyConfig {
+    match chunker {
+        Some(arg) => cfg.with_chunk_strategy(arg.into()),
+        None => cfg,
+    }
+}
+
 /// Apply `--graph-schema` / `--graph-spec` / `--chunk-attachment` to `cfg`
 /// and validate the result — the step `cognify` and `add-and-cognify` run
 /// before building any component, so a bad flag fails fast with exit code 2.

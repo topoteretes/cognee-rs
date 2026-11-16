@@ -7,6 +7,9 @@
 //! - [`text_chunker`] / `cognify_pipeline` — the chunking entry points (the
 //!   latter is a plain code span, not an intra-doc link: it is gated off wasm32,
 //!   where the link would be unresolved on a `--target wasm32` doc build)
+//! - [`chunker`] — the pluggable [`Chunker`] trait and the built-in chunkers
+//!   (text, recursive/langchain, CSV, JSON list, overlap), each stamping its
+//!   `chunker_id` on the chunks it produces
 //! - [`token_counter`] — the [`token_counter::TokenCounter`] trait and its
 //!   `WordCounter` / `HuggingFaceTokenCounter` / `TikTokenCounter` impls,
 //!   selected by [`config`] (`TokenCounterKind::resolve`), plus
@@ -18,6 +21,7 @@ pub mod chunk_by_paragraph;
 pub mod chunk_by_row;
 pub mod chunk_by_sentence;
 pub mod chunk_by_word;
+pub mod chunker;
 // cognify_pipeline pulls in cognee-storage (filesystem-coupled) + tokio; excluded
 // on wasm32, where only the pure chunking primitives are available.
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +29,7 @@ pub mod cognify_pipeline;
 pub mod config;
 pub mod cut_type;
 pub mod error;
+pub mod recursive_splitter;
 pub mod text_chunker;
 pub mod token_counter;
 
@@ -32,6 +37,11 @@ pub mod token_counter;
 pub(crate) mod test_inputs;
 
 pub use chunk_by_row::chunk_by_row;
+pub use chunker::{
+    CSV_CHUNKER_ID, CUSTOM_CHUNKER_ID, ChunkContext, ChunkFn, Chunker, CsvChunker, FnChunker,
+    JSON_LIST_CHUNKER_ID, JsonListChunker, LANGCHAIN_CHUNKER_ID, RecursiveChunker, TEXT_CHUNKER_ID,
+    TEXT_CHUNKER_OVERLAP_ID, TextChunker, TextChunkerWithOverlap,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use cognify_pipeline::ExtractTextChunksPipeline;
 pub use config::TokenCounterKind;
