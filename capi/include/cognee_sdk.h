@@ -418,10 +418,9 @@ void cg_sdk_add(const CgSdk*        sdk,
  * opts_json may be NULL or a JSON object with optional keys:
  *   "tenant"         — UUID string
  *   "chunkSize"      — integer
- *   "chunkOverlap"   — integer (INERT on the default chunking path: no
- *                      chunker reads it, so chunk boundaries are
- *                      unaffected. Only validation reads it, rejecting
- *                      overlap >= chunk size. Kept for API compat.)
+ *   "chunkOverlap"   — integer: overlap, in words, of the recursive
+ *                      chunker (chunk_strategy RECURSIVE); no other
+ *                      chunker reads it. At most 1024.
  *   "summarization"  — boolean
  *   "graphSchema"    — a custom graph model's JSON Schema, as an object or a
  *                      JSON string (alias "graphModel"); {} means the

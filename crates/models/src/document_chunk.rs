@@ -39,6 +39,12 @@ pub struct DocumentChunk {
     /// Entity refs populated during graph extraction (mirrors Python's `contains` list).
     #[serde(default)]
     pub contains: Vec<serde_json::Value>,
+    /// Which chunker produced this chunk (`Chunker::chunker_id` in
+    /// `cognee-chunking`, Python's `DocumentChunk.chunker_id`). `None` on
+    /// chunks written before the field existed and on chunks no chunker cut
+    /// (DLT rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunker_id: Option<String>,
 }
 
 impl DocumentChunk {
@@ -71,6 +77,7 @@ impl DocumentChunk {
             document_id,
             is_part_of: Some(document_id),
             contains: vec![],
+            chunker_id: None,
         }
     }
 

@@ -989,9 +989,29 @@ interval), and recovery sends no `Pipeline Run Errored` telemetry event.
 ## Chunking & tokenizer
 
 Read by [`crates/chunking/src/config.rs`](../crates/chunking/src/config.rs).
-`chunk_strategy` (default `PARAGRAPH`) and `chunk_engine` are `Settings` /
-`CognifyConfig` fields without env bindings. Chunk size and overlap are
-env-bindable:
+`chunk_strategy` (default `PARAGRAPH`) selects the chunker cognify cuts
+documents with — Python's `chunker` argument. It has no env binding; set it with
+`cognee-cli config set chunk_strategy …`, `ConfigManager::set` or a binding's
+`setChunkStrategy`, or per run with the CLI's `--chunker`. Names are
+case-insensitive, and Python's chunker class names are accepted too:
+
+| `chunk_strategy` | Python chunker | `chunker_id` stamped on chunks |
+|---|---|---|
+| `PARAGRAPH` / `TextChunker` | `TextChunker` | `text_chunker_v1` |
+| `RECURSIVE` / `LangchainChunker` | `LangchainChunker` (1024-word splits, `chunk_overlap` words of overlap) | `langchain_chunker_v1` |
+| `CSV` / `CsvChunker` | `CsvChunker` | `csv_chunker_v1` |
+| `JSON_LIST` / `JsonListChunker` | `JsonListChunker` | `json_list_chunker_v1` |
+| `OVERLAP` / `TextChunkerWithOverlap` | `TextChunkerWithOverlap` | `text_chunker_overlap_v1` |
+
+An unknown name logs a warning and keeps `PARAGRAPH`. Under `PARAGRAPH`, CSV
+documents are still cut row by row (`csv_chunker_v1`); every other strategy
+applies to CSV rows as well. The overlap chunker's ratio
+(`CognifyConfig::chunk_overlap_ratio`, default `0.0` as in Python) and a custom
+`Chunker` (`CognifyConfig::with_chunker`) are code-only. `chunk_engine` is
+stored and never read — Python's `get_chunk_engine()` has no callers either.
+
+Chunk size and overlap are env-bindable; `chunk_overlap` is read by the
+`RECURSIVE` chunker only:
 
 | Env var | `Settings` field | Default |
 |---|---|---|

@@ -488,10 +488,17 @@ impl Settings {
                 .resolved_tokenizer_path(std::path::Path::new(&self.cache_root_directory))
                 .to_string_lossy(),
         );
-        let chunk_strategy = match self.chunk_strategy.to_uppercase().as_str() {
-            "RECURSIVE" => cognee_cognify::ChunkStrategy::Recursive,
-            _ => cognee_cognify::ChunkStrategy::Paragraph,
-        };
+        // Accepts the Rust strategy names and Python's chunker class names
+        // (`ChunkStrategy::parse`). An unknown name keeps the paragraph
+        // chunker, as it always has, but no longer silently.
+        let chunk_strategy = cognee_cognify::ChunkStrategy::parse(&self.chunk_strategy)
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    chunk_strategy = %self.chunk_strategy,
+                    "unknown chunk_strategy; using the paragraph chunker"
+                );
+                cognee_cognify::ChunkStrategy::Paragraph
+            });
         let mut cfg = cognee_cognify::CognifyConfig::default()
             .with_chunk_size_opt(self.chunk_size.map(|n| n as usize))
             .with_chunk_overlap(self.chunk_overlap as usize)

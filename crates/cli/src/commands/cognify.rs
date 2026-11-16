@@ -7,7 +7,7 @@ use cognee::{ComponentManager, PipelineContext};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::cli::{ChunkerArg, CognifyArgs};
+use crate::cli::CognifyArgs;
 use crate::error::CliError;
 
 /// The distinctive prefix every failure summary carries.
@@ -164,22 +164,12 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         );
     }
 
-    match args.chunker {
-        ChunkerArg::Text => {}
-        ChunkerArg::Langchain | ChunkerArg::Csv => {
-            warn!(
-                "Warning: selected chunker is not natively available in Rust yet; using TextChunker-compatible flow."
-            );
-        }
-    }
-
     let tenant_id = super::parse_tenant_id(args.tenant_id.as_deref())?;
     let requested_datasets = args.datasets.clone();
 
     // Every flag-derived setting, validated before any component is built.
     let flag_config = super::apply_graph_schema_args(
-        settings
-            .cognify_config()
+        super::apply_chunker_arg(settings.cognify_config(), args.chunker)
             .with_chunk_size_opt(effective_chunk_size.map(|n| n as usize))
             .with_max_parallel_extractions(effective_max_parallel),
         &args.graph_schema,

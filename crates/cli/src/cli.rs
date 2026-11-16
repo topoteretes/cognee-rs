@@ -326,14 +326,34 @@ pub struct AddArgs {
     pub tenant_id: Option<String>,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+/// `--chunker`: Python's `CHUNKER_CHOICES` (`cognee/cli/config.py`) plus the
+/// JSON-list chunker. Each maps onto a [`cognee::cognify::ChunkStrategy`].
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ChunkerArg {
+    /// Paragraph chunking (Python's default `TextChunker`).
     #[value(name = "TextChunker")]
     Text,
+    /// Recursive splitting, 1024 words with `chunk_overlap` words of overlap.
     #[value(name = "LangchainChunker")]
     Langchain,
+    /// Row chunking of `key: value` rows.
     #[value(name = "CsvChunker")]
     Csv,
+    /// One chunk per item of a JSON list (Rust extension to the CLI; the
+    /// chunker is Python's `JsonListChunker`).
+    #[value(name = "JsonListChunker")]
+    JsonList,
+}
+
+impl From<ChunkerArg> for cognee::cognify::ChunkStrategy {
+    fn from(arg: ChunkerArg) -> Self {
+        match arg {
+            ChunkerArg::Text => Self::Paragraph,
+            ChunkerArg::Langchain => Self::Recursive,
+            ChunkerArg::Csv => Self::Csv,
+            ChunkerArg::JsonList => Self::JsonList,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -347,8 +367,10 @@ pub struct CognifyArgs {
     #[arg(long = "ontology-file")]
     pub ontology_file: Option<String>,
 
-    #[arg(long = "chunker", default_value = "TextChunker")]
-    pub chunker: ChunkerArg,
+    /// Chunker for this run. Overrides the configured `chunk_strategy`; when
+    /// omitted, that setting applies (default: `TextChunker`).
+    #[arg(long = "chunker")]
+    pub chunker: Option<ChunkerArg>,
 
     #[arg(long = "background", short = 'b', default_value_t = false)]
     pub background: bool,
@@ -400,8 +422,10 @@ pub struct AddAndCognifyArgs {
     #[arg(long = "ontology-file")]
     pub ontology_file: Option<String>,
 
-    #[arg(long = "chunker", default_value = "TextChunker")]
-    pub chunker: ChunkerArg,
+    /// Chunker for this run. Overrides the configured `chunk_strategy`; when
+    /// omitted, that setting applies (default: `TextChunker`).
+    #[arg(long = "chunker")]
+    pub chunker: Option<ChunkerArg>,
 
     /// Overrides `LLM_MAX_RETRIES` for this invocation.
     ///
