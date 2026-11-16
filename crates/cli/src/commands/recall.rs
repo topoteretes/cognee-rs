@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cognee::api::{ScopeInput, normalize_scope, recall};
 use cognee::database::IngestDb;
 use cognee::search::graph_warmup::GraphWarmup;
-use cognee::search::{SearchBuilder, SearchType, SessionManager};
+use cognee::search::{SearchBuilder, SearchType};
 use cognee::session::SessionStore;
 use cognee::{ComponentManager, PipelineContext};
 use uuid::Uuid;
@@ -63,11 +63,7 @@ pub fn run(args: RecallArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
-        let session_manager = Arc::new(
-            SessionManager::new(Arc::clone(&session_store))
-                .with_feedback_llm_timeout(feedback_llm_timeout),
-        );
+        let session_manager = Arc::new(cm.settings().session_manager(Arc::clone(&session_store)));
 
         let search_tuning = cm.settings().search_tuning();
         // Per-dataset storage: every dataset is searched in its own databases.

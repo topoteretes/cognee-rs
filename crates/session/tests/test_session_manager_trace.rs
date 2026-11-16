@@ -239,3 +239,106 @@ async fn test_unimplemented_backend_returns_store_error() {
         other => panic!("expected StoreError, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// AUTO_FEEDBACK gate (SDK-1048, Python `session_manager.py:241`)
+// ---------------------------------------------------------------------------
+
+/// Answers every `generate` with a fixed summary and counts the calls.
+struct CountingLlm {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl cognee_llm::Llm for CountingLlm {
+    async fn generate(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(cognee_llm::GenerationResponse {
+            content: "Found two matching documents.".to_string(),
+            model: "counting".to_string(),
+            usage: None,
+            finish_reason: None,
+        })
+    }
+
+    async fn create_structured_output_with_messages_raw(
+        &self,
+        _messages: Vec<cognee_llm::Message>,
+        _json_schema: &serde_json::Value,
+        _options: Option<cognee_llm::GenerationOptions>,
+    ) -> cognee_llm::LlmResult<serde_json::Value> {
+        Ok(serde_json::json!({ "lessons": [] }))
+    }
+
+    fn model(&self) -> &str {
+        "counting"
+    }
+}
+
+/// One trace step asking for LLM feedback, on a manager with `auto_feedback`
+/// set as given; returns the stored feedback and the LLM call count.
+async fn trace_feedback_with(auto_feedback: bool) -> (String, usize) {
+    let (sm, _dir) = fs_manager();
+    let llm = Arc::new(CountingLlm {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let sm = sm
+        .with_llm(Arc::clone(&llm) as Arc<dyn cognee_llm::Llm>)
+        .with_auto_feedback(auto_feedback);
+    assert_eq!(sm.auto_feedback_enabled(), auto_feedback);
+
+    sm.add_agent_trace_step(
+        "u",
+        Some("s"),
+        "memory.search",
+        "success",
+        "",
+        "",
+        serde_json::json!({}),
+        Some(serde_json::json!({"hits": 2})),
+        "",
+        true,
+    )
+    .await
+    .expect("add should succeed");
+    let steps = sm
+        .get_agent_trace_session("u", Some("s"), None)
+        .await
+        .expect("read should succeed");
+    (
+        steps[0].session_feedback.clone(),
+        llm.calls.load(std::sync::atomic::Ordering::SeqCst),
+    )
+}
+
+/// `AUTO_FEEDBACK` on (the default): the step's feedback is the LLM summary.
+#[tokio::test]
+async fn trace_feedback_uses_the_llm_while_auto_feedback_is_on() {
+    let (feedback, calls) = trace_feedback_with(true).await;
+    assert_eq!(calls, 1);
+    assert_eq!(feedback, "Found two matching documents.");
+}
+
+/// `AUTO_FEEDBACK=false`: no LLM call even though the step asks for one; the
+/// deterministic line is stored, as in Python.
+#[tokio::test]
+async fn trace_feedback_skips_the_llm_while_auto_feedback_is_off() {
+    let (feedback, calls) = trace_feedback_with(false).await;
+    assert_eq!(calls, 0);
+    assert_eq!(feedback, "memory.search succeeded.");
+}
+
+/// Automatic feedback needs a store that keeps anything (`caching`), as
+/// Python's `is_auto_feedback_enabled` needs `CACHING`.
+#[test]
+fn auto_feedback_needs_an_available_store() {
+    let sm = SessionManager::new(Arc::new(cognee_session::DisabledSessionStore));
+    assert!(!sm.auto_feedback_enabled());
+    let (sm, _dir) = fs_manager();
+    assert!(sm.auto_feedback_enabled());
+    assert!(!sm.with_auto_feedback(false).auto_feedback_enabled());
+}

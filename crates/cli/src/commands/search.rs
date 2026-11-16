@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use cognee::database::IngestDb;
-use cognee::search::{
-    SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType, SessionManager,
-};
+use cognee::search::{SearchBuilder, SearchOutput, SearchRequest, SearchResponse, SearchType};
 use cognee::{ComponentManager, PipelineContext};
 use tracing::warn;
 use uuid::Uuid;
@@ -70,10 +68,7 @@ pub fn run(args: SearchArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             .session_store()
             .await
             .map_err(|e| CliError::Runtime(format!("session store init failed: {e}")))?;
-        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
-        let session_manager = Arc::new(
-            SessionManager::new(session_store).with_feedback_llm_timeout(feedback_llm_timeout),
-        );
+        let session_manager = Arc::new(cm.settings().session_manager(session_store));
         let search_tuning = cm.settings().search_tuning();
         // Per-dataset storage: every dataset is searched in its own databases.
         let per_dataset_storage = cm

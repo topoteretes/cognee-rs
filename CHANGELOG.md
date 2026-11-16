@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`AUTO_FEEDBACK` now gates the LLM summary of agent trace steps
+  (SDK-1048).** With `auto_feedback` off, a trace step that asks for LLM
+  feedback (`generate_feedback_with_llm`) stores the deterministic
+  `"<origin> succeeded."` / `"<origin> failed. …"` line and makes no LLM call,
+  as Python's `SessionManager.add_agent_trace_step` does.
+  `SessionManager::with_auto_feedback` / `auto_feedback_enabled` carry the
+  switch; `Settings::session_manager(store)` builds a manager configured from
+  the settings, and the bindings and CLI use it.
+
 - **pgvector indexes 3072-d collections (ENG-33).** `text-embedding-3-large`
   collections used to be left without an HNSW index — the adapter capped
   indexing at 2000 dimensions — so every search of them read every stored

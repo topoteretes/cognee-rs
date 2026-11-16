@@ -26,6 +26,9 @@ pub struct SessionManager {
     history_limit: usize,
     llm: Option<Arc<dyn Llm>>,
     feedback_llm_timeout: std::time::Duration,
+    /// Automatic feedback analysis (`auto_feedback`, Python's `AUTO_FEEDBACK`).
+    /// Defaults to `true`, the setting's default.
+    auto_feedback: bool,
 }
 
 impl SessionManager {
@@ -40,6 +43,7 @@ impl SessionManager {
             history_limit: DEFAULT_HISTORY_LIMIT,
             llm: None,
             feedback_llm_timeout: feedback::DEFAULT_FEEDBACK_LLM_TIMEOUT,
+            auto_feedback: true,
         }
     }
 
@@ -56,6 +60,21 @@ impl SessionManager {
     pub fn with_feedback_llm_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.feedback_llm_timeout = timeout;
         self
+    }
+
+    /// Switch automatic feedback analysis (`auto_feedback`, Python's
+    /// `AUTO_FEEDBACK`) on or off; on by default. While off, a trace step
+    /// asking for LLM feedback gets the deterministic line instead.
+    #[must_use]
+    pub fn with_auto_feedback(mut self, enabled: bool) -> Self {
+        self.auto_feedback = enabled;
+        self
+    }
+
+    /// Python's `SessionManager.is_auto_feedback_enabled`: automatic feedback
+    /// analysis is switched on and the store keeps anything (`caching`).
+    pub fn auto_feedback_enabled(&self) -> bool {
+        self.auto_feedback && self.is_available()
     }
 
     pub fn with_llm(mut self, llm: Arc<dyn Llm>) -> Self {
@@ -413,10 +432,12 @@ impl SessionManager {
     ///
     /// Mirrors Python's `SessionManager.add_agent_trace_step`.
     ///
-    /// When `generate_feedback` is `true`, this method attempts to use the
-    /// configured LLM (`with_llm`) to summarize `method_return_value`; if no
-    /// LLM is wired or generation fails, it falls back to deterministic
-    /// feedback (`<origin> succeeded/failed`).
+    /// When `generate_feedback` is `true` and automatic feedback analysis is
+    /// on ([`Self::auto_feedback_enabled`], Python `session_manager.py:241`),
+    /// this method attempts to use the configured LLM (`with_llm`) to
+    /// summarize `method_return_value`; otherwise, or if no LLM is wired or
+    /// generation fails, it stores deterministic feedback
+    /// (`<origin> succeeded/failed`).
     #[allow(clippy::too_many_arguments)]
     pub async fn add_agent_trace_step(
         &self,
@@ -437,7 +458,7 @@ impl SessionManager {
         }
         let resolved_id = self.resolve_session_id(session_id);
         let trace_id = uuid::Uuid::new_v4().to_string();
-        let session_feedback = if generate_feedback {
+        let session_feedback = if generate_feedback && self.auto_feedback {
             if let Some(llm) = self.llm.as_ref() {
                 feedback::generate_session_feedback(
                     llm.as_ref(),

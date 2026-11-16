@@ -1062,17 +1062,19 @@ pub async fn launch_session_auto_improve(request: SessionAutoImprove) -> Session
 ///   `RememberStatus::Errored` with `error = Some("add_feedback: QA <id>
 ///   not found in session <sid>")`. `entry_type = "feedback"`.
 ///
-/// **LLM feedback**: When `TraceEntry::generate_feedback_with_llm` is `true`
-/// and `llm` is `Some`, the trace entry's `session_feedback` is produced by
-/// calling the LLM with the
-/// `agent_trace_feedback_summary_system` prompt (Python parity); the call is
-/// bounded by an 8-second timeout. On timeout, LLM error, missing `llm`
-/// handle, or empty `method_return_value`, the implementation falls back to
-/// the deterministic Python-parity strings (`"<origin> succeeded."` /
-/// `"<origin> failed. Reason: ..."` / `"<origin> failed."`). When
-/// `generate_feedback_with_llm` is `false`, the deterministic fallback is
-/// recorded regardless — also Python parity
-/// (`session_manager.py:289-294`).
+/// **LLM feedback**: When `TraceEntry::generate_feedback_with_llm` is `true`,
+/// automatic feedback analysis is on (the manager's `auto_feedback`, Python's
+/// `AUTO_FEEDBACK`; see [`SessionManager::auto_feedback_enabled`]) and `llm`
+/// is `Some`, the trace entry's `session_feedback` is produced by calling the
+/// LLM with the `agent_trace_feedback_summary_system` prompt (Python parity);
+/// the call is bounded by the manager's feedback timeout
+/// (`session.feedback_llm_timeout_ms`, default 8 s). On timeout, LLM error,
+/// missing `llm` handle, or empty `method_return_value`, the implementation
+/// falls back to the deterministic Python-parity strings
+/// (`"<origin> succeeded."` / `"<origin> failed. Reason: ..."` /
+/// `"<origin> failed."`). When `generate_feedback_with_llm` is `false` or
+/// `auto_feedback` is off, the deterministic fallback is recorded regardless
+/// — also Python parity (`session_manager.py:241`).
 #[allow(clippy::too_many_arguments)]
 pub async fn remember_entry(
     entry: MemoryEntry,

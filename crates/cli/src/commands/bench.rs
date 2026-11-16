@@ -21,7 +21,7 @@ use cognee::core::RayonThreadPool;
 use cognee::database::{IngestDb, PipelineRunRepository};
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
-use cognee::search::{SearchBuilder, SearchRequest, SearchType, SessionManager};
+use cognee::search::{SearchBuilder, SearchRequest, SearchType};
 use cognee::{ComponentManager, PipelineContext};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -866,10 +866,7 @@ async fn bench_search_orchestrator(
     let database = cm.database().await.map_err(|e| e.to_string())?;
 
     let session_store = cm.session_store().await.map_err(|e| e.to_string())?;
-    let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
-    let session_manager = Arc::new(
-        SessionManager::new(session_store).with_feedback_llm_timeout(feedback_llm_timeout),
-    );
+    let session_manager = Arc::new(cm.settings().session_manager(session_store));
     let search_history_db = Arc::clone(&database) as Arc<dyn cognee::database::SearchHistoryDb>;
     let search_tuning = cm.settings().search_tuning();
     let per_dataset_storage = cm

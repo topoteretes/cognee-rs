@@ -295,11 +295,7 @@ impl CogneeServices {
             .session_store()
             .await
             .map_err(|e| SdkError::ServiceBuild(format!("session store: {e}")))?;
-        let feedback_llm_timeout = cm.settings().feedback_llm_timeout();
-        let session_manager = Arc::new(
-            SessionManager::new(Arc::clone(&session_store))
-                .with_feedback_llm_timeout(feedback_llm_timeout),
-        );
+        let session_manager = Arc::new(cm.settings().session_manager(Arc::clone(&session_store)));
 
         let search_tuning = cm.settings().search_tuning();
         // Per-dataset storage: every dataset is searched in its own databases.
