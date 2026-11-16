@@ -998,8 +998,8 @@ fn kind_counts(context: &SearchContext) -> (usize, usize, usize) {
 }
 
 /// Python's `TemporalHybridRetriever` inherits `HybridRetriever.merge_retrieved_objects`,
-/// so a concurrent session turn fuses the raw and conversational lanes (the
-/// trait default would keep only the raw one), with chunks and entities capped
+/// so its merge fuses the raw and conversational lanes (the trait default
+/// would keep only the raw one), raw first, with chunks and entities capped
 /// at `candidate_top_k` and facts at `top_k` — the sizes Python's constructor
 /// hands to `HybridRetriever`.
 #[test]
@@ -1015,6 +1015,7 @@ fn session_merge_fuses_both_lanes_at_temporal_limits() {
     let chunks = kind_ids(&merged, "chunk");
     assert!(chunks.iter().any(|id| id.starts_with("r-")), "{chunks:?}");
     assert!(chunks.iter().any(|id| id.starts_with("c-")), "{chunks:?}");
+    assert!(chunks[0].starts_with("r-"), "raw lane leads: {chunks:?}");
 
     // The inner hybrid's own merge sizes every kind from `top_k`: forwarding
     // to it would cut chunks and entities to 2, narrower than Python.
@@ -1149,17 +1150,15 @@ impl EmbeddingEngine for LaneEmbedding {
     }
 }
 
-/// End to end through the orchestrator: a TEMPORAL session turn retrieves
-/// the raw question only, even in concurrent mode with history to rewrite
-/// from. Python's concurrent turn opts retrievers in by exact class
-/// (`session_aware_completion.py` `_eligible_retriever_types`), so its
-/// `TemporalHybridRetriever` subclass takes the sequential runner and its
-/// inherited `merge_retrieved_objects` is never reached; Rust's
-/// `concurrent_session::eligible` mirrors that. The merge hook above stays
-/// correct for the day TEMPORAL is opted in, and this pins that it is not
-/// yet.
-#[tokio::test]
-async fn temporal_session_turn_retrieves_the_raw_lane_only() {
+/// A TEMPORAL retriever (no constructor limits) over two chunks: `raw`,
+/// nearest the raw question, and `conv`, nearest its conversational rewrite.
+struct LaneRetriever {
+    retriever: Arc<TemporalHybridRetriever>,
+    llm: Arc<ScriptedLlm>,
+    embedded: Arc<Mutex<Vec<String>>>,
+}
+
+async fn lane_retriever() -> LaneRetriever {
     let graph = Arc::new(MockGraphDB::new());
     add_node(&graph, "c1", "DocumentChunk").await;
     let vector = Arc::new(MockVectorDB::new());
@@ -1194,6 +1193,81 @@ async fn temporal_session_turn_retrieves_the_raw_lane_only() {
         None,
         None,
     ));
+    LaneRetriever {
+        retriever,
+        llm,
+        embedded,
+    }
+}
+
+/// The history a session turn rewrites the question from.
+const PRIOR_QUESTION: &str = "Which expedition founded Atlas?";
+const PRIOR_ANSWER: &str = "The northern one.";
+
+/// The orchestrator's session retrieval with a real TEMPORAL retriever: with
+/// history to rewrite from, the raw and conversational lanes each retrieve
+/// their own chunk and the merge keeps both, as HYBRID's does (the ticket's
+/// SDK-1045 mirror). At `top_k = 1` each lane returns one chunk; the trait
+/// default would keep only `raw`, and a forward to the inner hybrid's merge
+/// (every kind at `top_k = 1`) would too, so only TEMPORAL's
+/// `candidate_top_k` merge keeps `conv`. The orchestrator does not take this
+/// path for TEMPORAL today (see the next test).
+#[tokio::test]
+async fn temporal_session_retrieval_merges_both_lanes() {
+    let LaneRetriever {
+        retriever,
+        embedded,
+        ..
+    } = lane_retriever().await;
+    let session = cognee_session::SessionContext {
+        recent_qas: vec![(PRIOR_QUESTION.to_string(), PRIOR_ANSWER.to_string())],
+        ..cognee_session::SessionContext::default()
+    };
+    let params = SearchParams {
+        top_k: Some(1),
+        ..SearchParams::default()
+    };
+
+    let context = crate::orchestration::retrieve_session_context(
+        &(retriever as Arc<dyn SearchRetriever>),
+        "When was it founded?",
+        &session,
+        &params,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        kind_ids(&context, "chunk"),
+        vec![id("raw"), id("conv")],
+        "raw lane first, then the conversational lane"
+    );
+    assert!(
+        embedded
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|text| text.starts_with("Prior user:")),
+        "the conversational lane ran"
+    );
+}
+
+/// End to end through the orchestrator: a TEMPORAL session turn retrieves
+/// the raw question only, even in concurrent mode with history to rewrite
+/// from. Python's concurrent turn opts retrievers in by exact class
+/// (`session_aware_completion.py` `_eligible_retriever_types`), so its
+/// `TemporalHybridRetriever` subclass takes the sequential runner and its
+/// inherited `merge_retrieved_objects` is never reached; Rust's
+/// `concurrent_session::eligible` mirrors that. The merge hook above stays
+/// correct for the day TEMPORAL is opted in, and this pins that it is not
+/// yet.
+#[tokio::test]
+async fn temporal_session_turn_retrieves_the_raw_lane_only() {
+    let LaneRetriever {
+        retriever,
+        llm,
+        embedded,
+    } = lane_retriever().await;
 
     let user = Uuid::new_v4();
     let dir = tempfile::tempdir().unwrap();
@@ -1204,8 +1278,8 @@ async fn temporal_session_turn_retrieves_the_raw_lane_only() {
         .save_qa(
             Some("s"),
             Some(&user.to_string()),
-            "Which expedition founded Atlas?",
-            "The northern one.",
+            PRIOR_QUESTION,
+            PRIOR_ANSWER,
             None,
             None,
             None,

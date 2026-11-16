@@ -14,6 +14,10 @@ pub const CONTEXT_LABEL_DEFAULT: &str = "default";
 pub use concurrent_session::SessionSearchMode;
 pub use prepare_search_result::prepare_search_result;
 pub use search_execution_builder::{SearchBuilder, SearchTuning};
+/// Lets retriever tests drive a session turn's two-lane retrieval with a
+/// real retriever, without making it concurrent-eligible.
+#[cfg(test)]
+pub(crate) use search_orchestrator::retrieve_session_context;
 pub use search_orchestrator::{DatasetSearchResult, SearchOrchestrator, merge_dataset_results};
 pub use search_type_tools::SearchTypeRegistry;
 pub use session_turn::{
