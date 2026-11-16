@@ -17,6 +17,12 @@
 //!   (`expand_with_nodes_and_edges.py:283-302`), so such a chunk still cites it;
 //! - `structural`: edges of the storage batch rooted at the chunk, such as
 //!   `contains` and `is_part_of`.
+//!
+//! An ontology edge carries no evidence, even though the chunk whose entity
+//! pulled it in owns it: Python appends to `_provenance_edges` only in
+//! `_add_extracted_edges` (`expand_with_nodes_and_edges.py:290-302`), never
+//! in `_add_ontology_edges`. [`ArtifactProducers::edges`] lists extractors
+//! only, so such a chunk is never cited for it.
 
 use std::collections::HashMap;
 
@@ -340,5 +346,26 @@ mod tests {
                 "works_with"
             )
         );
+    }
+
+    /// A chunk that only pulled an edge in from the ontology owns it but is
+    /// not evidence for it; Python's `_add_ontology_edges` never appends to
+    /// `_provenance_edges`. A chunk that also extracted the same edge still
+    /// cites it.
+    #[test]
+    fn an_ontology_edge_is_not_evidence_of_the_chunk_that_pulled_it() {
+        let (puller, extractor) = (chunk(0, Uuid::new_v4()), chunk(1, Uuid::new_v4()));
+        let is_a = GraphEdgePair::new(Uuid::new_v4(), Uuid::new_v4(), "is_a");
+        let chunks = [puller.clone(), extractor.clone()];
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_ontology_edge(is_a.dedup_key(), puller.base.id);
+        assert!(build_edge_evidence(&scope(), &chunks, &[], &producers).is_empty());
+
+        producers.record_edge(is_a.dedup_key(), extractor.base.id);
+        let rows = build_edge_evidence(&scope(), &chunks, &[], &producers);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].chunk_id, extractor.base.id);
+        assert_eq!(rows[0].evidence_kind, KIND_EXTRACTED);
     }
 }

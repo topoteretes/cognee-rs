@@ -1365,7 +1365,7 @@ impl GraphDBTrait for LadybugAdapter {
     /// This is the read-side counterpart of the Postgres adapter's
     /// `unnest(...)` + `EXISTS` fix (`pg_graph_adapter::has_edges`), and it is
     /// what makes the pre-write dedup check on the cognify path
-    /// (`retrieve_existing_edges` → this method) stop scaling its round-trip
+    /// (`partition_existing_edges` → this method) stop scaling its round-trip
     /// count with the extracted edge count.
     ///
     /// The engine accepts no bound parameters, so the three key columns go in

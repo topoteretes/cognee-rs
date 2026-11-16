@@ -64,8 +64,8 @@ pub use graph_backend::{
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
     DeduplicationResult, EdgeResolutionStats, Expansion, GraphEdgePair, GraphNodePair,
-    TimestampNode, deduplicate_nodes_and_edges, expand_extracted_graphs,
-    expand_with_nodes_and_edges, expand_with_nodes_and_edges_with_stats,
+    TimestampNode, deduplicate_nodes_and_edges, expand_and_partition_extracted_graphs,
+    expand_extracted_graphs, expand_with_nodes_and_edges, expand_with_nodes_and_edges_with_stats,
 };
 pub use graph_spec::{
     Cardinality, EntitySpec, EnumFieldSpec, FieldSpec, GraphSchemaOptions, GraphSchemaSpec,
