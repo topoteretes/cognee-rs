@@ -22,6 +22,29 @@ use crate::SdkError;
 // Shared result helpers.
 // ---------------------------------------------------------------------------
 
+/// Serialise `Data` rows for a binding, reporting an uncomputed token count as
+/// `null`.
+///
+/// `Data::token_count` stores `-1` until `cognify` has chunked the item (the
+/// column keeps that sentinel for cross-SDK database parity with Python).
+/// Bindings expose the field as nullable instead, so a caller reading the rows
+/// returned by `add`, `addAndCognify` or `listData` before `cognify` has run
+/// sees `null` rather than a number that is not a count (SDK-951).
+pub fn data_records_json(items: &[cognee::models::Data]) -> Result<serde_json::Value, SdkError> {
+    let mut value = serde_json::to_value(items)
+        .map_err(|e| SdkError::Runtime(format!("failed to serialize data items: {e}")))?;
+    if let serde_json::Value::Array(rows) = &mut value {
+        for row in rows {
+            if let Some(count) = row.get_mut("token_count")
+                && count.as_i64().is_some_and(|n| n < 0)
+            {
+                *count = serde_json::Value::Null;
+            }
+        }
+    }
+    Ok(value)
+}
+
 /// Hand-build the `CognifyResult` JSON from its `.len()` counts.
 ///
 /// `CognifyResult` is NOT `Serialize` (it carries non-serialisable internal
@@ -157,5 +180,38 @@ pub fn marshal_inputs(value: &serde_json::Value) -> Result<Vec<DataInput>, SdkEr
             items.iter().map(marshal_one).collect()
         }
         other => marshal_one(other).map(|input| vec![input]),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    fn row(token_count: i64) -> cognee::models::Data {
+        let mut d = cognee::models::Data::builder(
+            uuid::Uuid::nil(),
+            "doc",
+            "file:///raw",
+            "file:///orig",
+            "txt",
+            "text/plain",
+            "hash",
+            uuid::Uuid::nil(),
+        )
+        .build();
+        d.token_count = token_count;
+        d
+    }
+
+    #[test]
+    fn the_uncomputed_sentinel_becomes_null_and_a_count_is_kept() {
+        let json = data_records_json(&[row(-1), row(0), row(42)]).expect("serialize");
+        // `get`, not indexing: a missing key would also index as null.
+        assert_eq!(json[0].get("token_count"), Some(&serde_json::Value::Null));
+        assert_eq!(json[1]["token_count"], 0);
+        assert_eq!(json[2]["token_count"], 42);
+        // Only the token count is mapped: the other `-1` sentinel is untouched.
+        assert_eq!(json[0]["data_size"], -1);
     }
 }

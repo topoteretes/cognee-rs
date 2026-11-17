@@ -370,6 +370,9 @@ void cg_sdk_destroy(CgSdk* sdk);
  *
  *   CogneeAddResult — {"datasetName":"…","added":[…],"addedCount":N,
  *                       "deduplicated":[…],"deduplicatedCount":M}
+ *     Each data row's "token_count" is null until cognify has run on the
+ *     item; cg_sdk_add_and_cognify returns the count cognify computed
+ *     (still null for an item cognify could not count).
  *
  *   CogneeCognifyResult — {"chunks":N,"entities":N,"edges":N,"summaries":N,
  *                           "embeddings":N,"alreadyCompleted":false,

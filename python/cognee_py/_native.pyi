@@ -420,6 +420,9 @@ class CogneeDatasets:
 
         *dataset_id* must be a valid UUID string.
         Raises :exc:`CogneeValidationError` for an invalid UUID.
+
+        Each row's ``token_count`` is ``None`` until :meth:`Cognee.cognify` has
+        run on the item.
         """
         ...
 
@@ -618,6 +621,9 @@ class Cognee:
         Returns a dict with camelCase keys: ``datasetName``, ``added``,
         ``addedCount``, ``deduplicated``, ``deduplicatedCount``.
 
+        Each data row's ``token_count`` is ``None`` until :meth:`cognify` has
+        run on the item.
+
         Accepted *opts* keys (``snake_case`` and ``camelCase`` both accepted):
         ``tenant``.
         """
@@ -657,6 +663,9 @@ class Cognee:
         Returns a dict with two top-level keys: ``add`` and ``cognify``
         (same shapes as the individual operations). Accepts the ``cognify``
         *opts* keys, validated before anything is added.
+
+        The newly added rows under ``add`` carry the ``token_count`` cognify
+        computed (still ``None`` for an item cognify could not count).
         """
         ...
 

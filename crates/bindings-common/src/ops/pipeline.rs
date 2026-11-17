@@ -47,7 +47,7 @@ use cognee::models::{Data, Dataset};
 use crate::graph_backend::{
     check_graph_backend_registered, graph_backend_from_opts, selected_graph_backend,
 };
-use crate::wire::{cognify_result_json, marshal_inputs};
+use crate::wire::{cognify_result_json, data_records_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
 
 // ---------------------------------------------------------------------------
@@ -359,15 +359,16 @@ pub async fn cognify_config_with_graph_backend(
 /// into newly-added vs deduplicated by id membership (a re-added identical
 /// payload dedups onto the dataset's existing row, so it keeps that row's id;
 /// a new row gets a fresh `uuid4`).
+///
+/// Each row's `token_count` is `null` until `cognify` has counted it (see
+/// [`data_records_json`]).
 pub fn add_result_json(
     newly_added: &[Data],
     duplicates: &[Data],
     dataset_name: &str,
 ) -> Result<serde_json::Value, SdkError> {
-    let added = serde_json::to_value(newly_added)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize added data: {e}")))?;
-    let dup = serde_json::to_value(duplicates)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize deduplicated data: {e}")))?;
+    let added = data_records_json(newly_added)?;
+    let dup = data_records_json(duplicates)?;
     Ok(json!({
         "datasetName": dataset_name,
         "added": added,
@@ -607,12 +608,11 @@ pub async fn add_and_cognify(
         .map_err(|e| SdkError::Runtime(format!("add failed: {e}")))?;
 
     let (newly_added, duplicates) = partition_added(returned, &pre_existing);
-    let add_json = add_result_json(&newly_added, &duplicates, dataset_name)?;
 
     if newly_added.is_empty() {
         // Everything was a duplicate: skip cognify, return a zeroed summary.
         return Ok(json!({
-            "add": add_json,
+            "add": add_result_json(&newly_added, &duplicates, dataset_name)?,
             "cognify": cognify_result_json(&cognee::cognify::CognifyResult::empty()),
         }));
     }
@@ -620,10 +620,42 @@ pub async fn add_and_cognify(
     // Resolve the dataset for its id/tenant, but cognify the just-added items
     // directly (do not re-load the whole dataset).
     let dataset = resolve_dataset(&svc, dataset_name, owner_id, tenant_id).await?;
-    let result = run_cognify_on_items(&svc, &dataset, owner_id, newly_added, opts).await?;
+    let result = run_cognify_on_items(&svc, &dataset, owner_id, newly_added.clone(), opts).await?;
+
+    // Cognify has now counted the added items' tokens, so report the stored
+    // rows rather than the pre-cognify snapshot, whose `token_count` is still
+    // the uncomputed sentinel (SDK-951).
+    let newly_added = refresh_rows(&svc, newly_added).await;
 
     Ok(json!({
-        "add": add_json,
+        "add": add_result_json(&newly_added, &duplicates, dataset_name)?,
         "cognify": cognify_result_json(&result),
     }))
+}
+
+/// Re-read each of `rows` by id, keeping their order. A row that cannot be
+/// re-read is returned as it was passed in.
+///
+/// `add_and_cognify` uses it to report the `token_count` cognify stored rather
+/// than the pre-cognify snapshot `add` returned (SDK-951). Best-effort: the
+/// cognify it follows has already succeeded, so a failed read is logged and
+/// that row is returned unchanged (its count then reads `null`) rather than
+/// failing the call. Reads only the given rows, never the whole dataset.
+pub async fn refresh_rows(svc: &CogneeServices, rows: Vec<Data>) -> Vec<Data> {
+    let mut refreshed = Vec::with_capacity(rows.len());
+    for row in rows {
+        match cognee::database::IngestDb::get_data(&*svc.database, row.id).await {
+            Ok(Some(stored)) => refreshed.push(stored),
+            Ok(None) => refreshed.push(row),
+            Err(e) => {
+                tracing::warn!(
+                    data_id = %row.id,
+                    error = %e,
+                    "could not re-read an added row after cognify; reporting it as added"
+                );
+                refreshed.push(row);
+            }
+        }
+    }
+    refreshed
 }

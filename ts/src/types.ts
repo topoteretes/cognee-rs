@@ -154,7 +154,14 @@ export interface CogneeDataRecord {
   external_metadata: string | null;
   node_set: string | null;
   pipeline_status: string | null;
-  token_count: number;
+  /**
+   * Token count of the item's text, computed by `cognify`. `null` until
+   * `cognify` has run on the item: the rows `cogneeAdd` and `cogneeListData`
+   * return before that carry `null`, and `cogneeAddAndCognify` returns the
+   * count it computed (still `null` for an item cognify could not count,
+   * such as one that is blank after trimming).
+   */
+  token_count: number | null;
   data_size: number;
   last_accessed: string | null;
   importance_weight: number | null;
