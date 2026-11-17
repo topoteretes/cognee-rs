@@ -114,7 +114,7 @@ futures-timer = { version = "3", features = ["wasm-bindgen"] }
 futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
-lbug = "0.14"
+lbug = "0.22"
 log = "0.4"
 mail-parser = "0.11"
 mime_guess = "2.0"
