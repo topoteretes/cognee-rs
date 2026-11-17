@@ -41,6 +41,19 @@ describeMaybe("Phase-3 cognify (Tier-B, live LLM + embeddings)", () => {
     dbPath = path.join(tmpDir, "cognee.db");
   });
 
+  // Every test opens a handle on the same directory. One process may hold an
+  // embedded graph only once (a second open fails STORE_IN_USE), so each
+  // test's handle is closed before the next one opens.
+  const opened: ReturnType<typeof native.cogneeNew>[] = [];
+  function openHandle() {
+    const handle = native.cogneeNew(makeSettings());
+    opened.push(handle);
+    return handle;
+  }
+  afterEach(() => {
+    for (const handle of opened.splice(0)) native.cogneeClose(handle);
+  });
+
   afterAll(() => {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -70,7 +83,7 @@ describeMaybe("Phase-3 cognify (Tier-B, live LLM + embeddings)", () => {
   it(
     "runs a live add → cognify round-trip producing a non-empty graph",
     async () => {
-      const handle = native.cogneeNew(makeSettings());
+      const handle = openHandle();
       const text =
         "Alan Turing was a British mathematician. He worked at Bletchley Park " +
         "during World War II and is considered the father of computer science.";
@@ -94,7 +107,7 @@ describeMaybe("Phase-3 cognify (Tier-B, live LLM + embeddings)", () => {
   it(
     "addAndCognify returns both summaries in one call",
     async () => {
-      const handle = native.cogneeNew(makeSettings());
+      const handle = openHandle();
       const text =
         "Marie Curie was a physicist and chemist who conducted pioneering " +
         "research on radioactivity. She won two Nobel Prizes.";
@@ -113,7 +126,7 @@ describeMaybe("Phase-3 cognify (Tier-B, live LLM + embeddings)", () => {
   it(
     "addAndCognify on all-duplicate input zeroes the cognify summary",
     async () => {
-      const handle = native.cogneeNew(makeSettings());
+      const handle = openHandle();
       const text = "Duplicate detection round-trip payload.";
 
       // Seed the content first.

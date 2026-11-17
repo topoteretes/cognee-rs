@@ -74,6 +74,18 @@ impl SdkError {
     /// API error code enum. Values are stable across versions (append-only per
     /// decision D5).
     pub fn code(&self) -> &'static str {
+        // A refused second open of an embedded store keeps its variant's tier
+        // everywhere a binding maps variants (C, Python), and gets its own code
+        // where a binding carries the string (Java, TypeScript) — also when it
+        // happened mid-operation and arrives inside another error's message
+        // (`cognify failed: STORE_IN_USE: …`).
+        let in_use = match self {
+            SdkError::Component(cognee::ComponentError::StoreInUse(_)) => true,
+            other => cognee_utils::mentions_store_in_use(&other.to_string()),
+        };
+        if in_use {
+            return cognee_utils::STORE_IN_USE_CODE;
+        }
         match self {
             SdkError::Component(_) => "COMPONENT_ERROR",
             SdkError::ServiceBuild(_) => "SERVICE_BUILD_ERROR",

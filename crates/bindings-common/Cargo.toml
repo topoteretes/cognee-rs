@@ -53,6 +53,8 @@ cognee = { path = "../lib", version = "0.2.0", default-features = false }
 # binding enables `cognee-observability/telemetry` on its own dependency.
 cognee-logging = { path = "../logging", version = "0.2.0" }
 cognee-observability = { path = "../observability", version = "0.2.0" }
+# `STORE_IN_USE_CODE`, the code of a refused second open of an embedded store.
+cognee-utils = { path = "../utils", version = "0.2.0" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
@@ -68,3 +70,10 @@ cognee-config-core = { path = "../config-core", version = "0.2.0" }
 cognee-database = { path = "../database", features = ["testing"] }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+
+# Integration tests whose whole file is behind a `#![cfg(feature = ...)]`
+# (see the `required-features` note in the OSS `.claude/CLAUDE.md`).
+[[test]]
+name = "store_in_use"
+path = "tests/store_in_use.rs"
+required-features = ["ladybug"]

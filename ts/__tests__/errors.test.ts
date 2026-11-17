@@ -165,6 +165,22 @@ describe("Phase-8 error marshalling (Tier-A)", () => {
     expect(wrapped.code).toBe("MYSTERY_CODE");
   });
 
+  it("wrapNativeError maps STORE_IN_USE (also op-time) to StoreInUseError, a ComponentError", async () => {
+    const { wrapNativeError, StoreInUseError, ComponentError } = await import("../src/errors");
+
+    // An op-time refusal arrives inside another error's message; the native
+    // layer still tags it STORE_IN_USE (SdkError::code()).
+    const native_err = Object.assign(
+      new Error("runtime error: cognify failed: STORE_IN_USE: the ladybug graph store at /x is already open"),
+      { code: "STORE_IN_USE", kind: "STORE_IN_USE" },
+    );
+    const wrapped = wrapNativeError(native_err);
+    expect(wrapped).toBeInstanceOf(StoreInUseError);
+    expect(wrapped).toBeInstanceOf(ComponentError);
+    expect(wrapped.kind).toBe("STORE_IN_USE");
+    expect(wrapped.code).toBe("STORE_IN_USE");
+  });
+
   it("wrapNativeError passes through an existing CogneeError unchanged", async () => {
     const { wrapNativeError, RuntimeError } = await import("../src/errors");
 

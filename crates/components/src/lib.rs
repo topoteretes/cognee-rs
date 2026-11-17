@@ -56,8 +56,8 @@ pub use dataset_storage::{
 pub use error::ComponentError;
 pub use registry::{
     AUTO_GRAPH_EXTRACTOR, ComponentRegistry, GLINER_GRAPH_EXTRACTOR, LLM_GRAPH_EXTRACTOR,
-    default_graph_provider, is_auto_graph_extractor, keyless_extractor_unavailable,
-    resolve_graph_extractor_kind,
+    default_graph_provider, graph_store_inputs, is_auto_graph_extractor,
+    keyless_extractor_unavailable, resolve_graph_extractor_kind, vector_store_inputs,
 };
 pub use sections::{
     AnthropicConfig, AwsConfig, CognifySettings, EmbeddingConfig, FsSessionConfig, GraphConfig,

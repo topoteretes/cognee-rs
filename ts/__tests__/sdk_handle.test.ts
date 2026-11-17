@@ -90,6 +90,9 @@ describe("Phase-1 SDK handle & facade", () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
     expect(ownerId).toBe(uuid5Oid(email));
+    // Release the store: the next test opens a handle on the same directory,
+    // and one process may hold an embedded graph only once (STORE_IN_USE).
+    native.cogneeClose(handle);
   });
 
   // Note: a former test asserted that a `users` row was created after warm by
@@ -104,6 +107,7 @@ describe("Phase-1 SDK handle & facade", () => {
     // No cogneeWarm() — cogneeOwnerId warms on demand.
     const ownerId = await native.cogneeOwnerId(handle);
     expect(ownerId).toBe(uuid5Oid(email));
+    native.cogneeClose(handle);
   });
 
   // ── close() and the WAL sidecars (issue #132) ──────────────────────────────
