@@ -8,8 +8,11 @@
 //! The audio loader calls a paid model at `add`, and running it again can
 //! change the text. A re-add of the same content into the same dataset finds
 //! the row `persist_data` deduplicates against, and reuses its transcript when
-//! the audio loader wrote it and it is still in storage. Otherwise the audio is
-//! transcribed again and the re-add points the row at the new transcript.
+//! the audio loader wrote it and it is still in storage. Any add, in any
+//! dataset, also uses the transcript stored as `text_<hash>.txt`, which is
+//! kept once written (Python `overwrite=False`). Only when that file is gone
+//! is the audio transcribed again, and the re-add points the row at the new
+//! transcript.
 
 use cognee_core::RayonThreadPool;
 use cognee_database::{DatabaseConnection, IngestDb, connect, initialize};
@@ -178,7 +181,7 @@ async fn impl_re_adding_audio_without_a_transcriber_reuses_it(db_url: Option<Str
 }
 
 /// When the stored transcript is gone, a re-add transcribes once more and
-/// points the row at the new file; the next re-add reuses it.
+/// stores it again at the same hash-named path; the next re-add reuses it.
 async fn impl_re_adding_audio_whose_text_is_gone_repairs_the_row(db_url: Option<String>) {
     let setup = Setup::new(db_url).await;
     let transcriber = whisper(&["first take", "second take", "third take"]);
@@ -189,7 +192,8 @@ async fn impl_re_adding_audio_whose_text_is_gone_repairs_the_row(db_url: Option<
 
     let repaired = setup.add(&pipeline, owner).await;
     assert_eq!(transcriber.calls(), 2);
-    assert_ne!(repaired.raw_data_location, first.raw_data_location);
+    assert_eq!(repaired.raw_data_location, first.raw_data_location);
+    assert!(stored_path(&repaired.raw_data_location).exists());
     assert_eq!(setup.text(&repaired).await, b"second take");
     let row = setup.row(first.id).await;
     assert_eq!(row.raw_data_location, repaired.raw_data_location);
@@ -201,8 +205,9 @@ async fn impl_re_adding_audio_whose_text_is_gone_repairs_the_row(db_url: Option<
 }
 
 /// A row whose stored file is not a transcript (the raw audio a URL add
-/// stores) is transcribed again, and the row then holds the transcript.
-async fn impl_re_adding_audio_stored_raw_transcribes_it(db_url: Option<String>) {
+/// stores) is pointed back at the transcript stored as `text_<hash>.txt`,
+/// without transcribing again (Python keeps that file, `overwrite=False`).
+async fn impl_re_adding_audio_stored_raw_uses_the_stored_transcript(db_url: Option<String>) {
     let setup = Setup::new(db_url).await;
     let transcriber = whisper(&["first take", "second take", "third take"]);
     let pipeline = setup.pipeline(Some(transcriber.clone()));
@@ -223,20 +228,26 @@ async fn impl_re_adding_audio_stored_raw_transcribes_it(db_url: Option<String>) 
     let repaired = setup.add(&pipeline, owner).await;
     assert_eq!(
         transcriber.calls(),
-        2,
-        "raw audio is not a transcript to reuse"
+        1,
+        "the stored transcript is used, not a new transcription"
     );
     assert_eq!(repaired.extension, "txt");
     assert_eq!(repaired.mime_type, "text/plain");
-    assert_eq!(setup.text(&repaired).await, b"second take");
+    assert_eq!(setup.text(&repaired).await, b"first take");
+    assert_eq!(
+        repaired.raw_content_hash, first.raw_content_hash,
+        "the hash describes the stored transcript"
+    );
 
     setup.add(&pipeline, owner).await;
-    assert_eq!(transcriber.calls(), 2, "the repaired row is reused");
+    assert_eq!(transcriber.calls(), 1, "the repaired row is reused");
 }
 
-/// The same audio in another dataset is another row, so it is transcribed for
-/// that dataset too.
-async fn impl_another_dataset_transcribes_its_own_copy(db_url: Option<String>) {
+/// The same audio in another dataset is another row, sharing the stored
+/// `text_<hash>.txt`: it is not transcribed again, and the first dataset's
+/// text never changes under it (Python keeps that file, `overwrite=False`,
+/// so a new transcription would be thrown away).
+async fn impl_another_dataset_reuses_the_stored_transcript(db_url: Option<String>) {
     let setup = Setup::new(db_url).await;
     let transcriber = whisper(&["first take", "second take"]);
     let pipeline = setup.pipeline(Some(transcriber.clone()));
@@ -250,7 +261,10 @@ async fn impl_another_dataset_transcribes_its_own_copy(db_url: Option<String>) {
         .remove(0);
 
     assert_ne!(other.id, first.id);
-    assert_eq!(transcriber.calls(), 2);
+    assert_eq!(transcriber.calls(), 1);
+    assert_eq!(other.raw_data_location, first.raw_data_location);
+    assert_eq!(setup.text(&first).await, b"first take");
+    assert_eq!(other.raw_content_hash, first.raw_content_hash);
 }
 
 macro_rules! sqlite_and_pg {
@@ -286,12 +300,12 @@ sqlite_and_pg!(
     re_adding_audio_whose_text_is_gone_repairs_the_row_pg
 );
 sqlite_and_pg!(
-    impl_re_adding_audio_stored_raw_transcribes_it,
-    re_adding_audio_stored_raw_transcribes_it_sqlite,
-    re_adding_audio_stored_raw_transcribes_it_pg
+    impl_re_adding_audio_stored_raw_uses_the_stored_transcript,
+    re_adding_audio_stored_raw_uses_the_stored_transcript_sqlite,
+    re_adding_audio_stored_raw_uses_the_stored_transcript_pg
 );
 sqlite_and_pg!(
-    impl_another_dataset_transcribes_its_own_copy,
-    another_dataset_transcribes_its_own_copy_sqlite,
-    another_dataset_transcribes_its_own_copy_pg
+    impl_another_dataset_reuses_the_stored_transcript,
+    another_dataset_reuses_the_stored_transcript_sqlite,
+    another_dataset_reuses_the_stored_transcript_pg
 );

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncWriteExt};
@@ -19,16 +19,78 @@ pub enum StorageError {
     InvalidPath(String),
 }
 
+/// A temp file that is removed when dropped, unless [`TempFile::commit`]
+/// renamed it into place: an error, a cancelled future or an abandoned
+/// writer never leaves it in the storage root.
+pub(crate) struct TempFile {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl TempFile {
+    /// Create `path`, which must not exist yet, already guarded. The create
+    /// is a direct, synchronous call: `tokio::fs` would create the file on
+    /// a background thread that a cancelled caller cannot stop, after the
+    /// guard's cleanup had already run.
+    pub(crate) fn create(path: PathBuf) -> std::io::Result<(Self, File)> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let guard = Self {
+            path,
+            committed: false,
+        };
+        Ok((guard, File::from_std(file)))
+    }
+
+    /// Rename the temp file over `target`; only a finished rename keeps it
+    /// from being removed on drop.
+    pub(crate) async fn commit(mut self, target: &Path) -> std::io::Result<()> {
+        tokio::fs::rename(&self.path, target).await?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// A writer for storing data in chunks
 /// This allows efficient streaming writes without loading entire content into memory
 pub struct StorageWriter {
     file: File,
     location: String,
+    /// `(temp, target)`: `finish` renames the temp file being written over
+    /// the target, so the target is never seen half-written; the guard
+    /// removes the temp file on any other way out.
+    rename_on_finish: Option<(TempFile, PathBuf)>,
 }
 
 impl StorageWriter {
+    /// A plain writer, used by `MockStorage`.
+    #[cfg(feature = "testing")]
     pub(crate) fn new(file: File, location: String) -> Self {
-        Self { file, location }
+        Self {
+            file,
+            location,
+            rename_on_finish: None,
+        }
+    }
+
+    /// A writer into `temp`, the file open as `file`, that `finish` renames
+    /// over `target`.
+    pub(crate) fn atomic(file: File, location: String, temp: TempFile, target: PathBuf) -> Self {
+        Self {
+            file,
+            location,
+            rename_on_finish: Some((temp, target)),
+        }
     }
 
     /// Write a chunk of data to storage
@@ -41,10 +103,11 @@ impl StorageWriter {
 
     /// Finish writing and return the storage location
     pub async fn finish(mut self) -> Result<String, StorageError> {
-        self.file
-            .flush()
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
+        let to_io_error = |e| StorageError::IoError(format!("Failed to write file: {e}"));
+        self.file.flush().await.map_err(to_io_error)?;
+        if let Some((temp, target)) = self.rename_on_finish {
+            temp.commit(&target).await.map_err(to_io_error)?;
+        }
         Ok(self.location)
     }
 }
@@ -53,6 +116,16 @@ impl StorageWriter {
 pub trait StorageTrait: Send + Sync {
     /// Store data at a specific path and return the storage location
     async fn store(&self, data: &[u8], file_name: &str) -> Result<String, StorageError>;
+
+    /// [`store`](Self::store) unless a file already exists at `file_name`,
+    /// which is then kept as it is (Python `store(..., overwrite=False)`,
+    /// its default; plain `store` is `overwrite=True`).
+    async fn store_if_absent(&self, data: &[u8], file_name: &str) -> Result<String, StorageError> {
+        if self.exists(file_name).await? {
+            return Ok(file_name.to_string());
+        }
+        self.store(data, file_name).await
+    }
 
     /// Store data from an async reader (streaming) and return the storage location.
     /// This is the object-safe version; for a generic version see [`StorageExt::store_stream`].
