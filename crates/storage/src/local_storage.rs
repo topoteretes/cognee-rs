@@ -226,12 +226,15 @@ impl StorageTrait for LocalStorage {
 
 /// `file_name` as a relative path made only of plain names: no `..`, no root
 /// and no drive prefix, so joining it to the storage root stays inside it.
+/// The last part must name a file, so `.` or `./` (the root itself) is
+/// refused too.
 fn checked_relative_path(file_name: &str) -> Result<&Path, StorageError> {
     let path = Path::new(file_name);
     let plain = path
         .components()
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
-    if file_name.is_empty() || !plain {
+    let names_a_file = matches!(path.components().next_back(), Some(Component::Normal(_)));
+    if !plain || !names_a_file {
         return Err(StorageError::InvalidPath(format!(
             "{file_name:?} is not a path inside the storage root"
         )));
@@ -423,14 +426,32 @@ mod tests {
             "a/../../escaped.txt",
             outside.to_str().unwrap(),
             "",
+            // The root itself: its temp file would land beside the root.
+            ".",
+            "./",
+            "./.",
         ] {
             let result = storage.store(b"x", name).await;
             assert!(
                 matches!(result, Err(StorageError::InvalidPath(_))),
                 "{name:?}: {result:?}"
             );
+            let writer = storage.create_writer(name).await;
+            assert!(
+                matches!(writer, Err(StorageError::InvalidPath(_))),
+                "{name:?}: create_writer"
+            );
         }
         assert!(!outside.exists());
+        let beside_root: Vec<_> = std::fs::read_dir(outer.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|name| name != "root")
+            .collect();
+        assert!(
+            beside_root.is_empty(),
+            "written outside the root: {beside_root:?}"
+        );
     }
 
     /// A folder inside the root that links outside it is refused too
