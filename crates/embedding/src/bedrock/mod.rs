@@ -259,7 +259,23 @@ impl BedrockEmbeddingEngine {
     }
 
     /// POST `body` once and return the raw response body.
+    ///
+    /// This is the one place every InvokeModel attempt passes through — each
+    /// Titan per-text request, each Cohere batch, and each retry of either — so
+    /// the embedding pacer gates it here. A gate around `embed_titan` would
+    /// admit a whole fan-out of N requests as one unit and leave the per-request
+    /// rate unbounded.
     async fn post_once(&self, body: Vec<u8>) -> EmbeddingResult<Vec<u8>> {
+        // Flag-gated admission only, as in the OpenAI-compatible and Ollama
+        // engines: Python's embedding limiter is gated purely on
+        // EMBEDDING_RATE_LIMIT_ENABLED and neither feeds nor consults the
+        // overload policy — reactive pacing is an LLM-path behaviour. No
+        // in-flight permit either: no embedding engine takes one, and the
+        // process-wide embedding bound is SDK-954's decision.
+        if let Some(pacer) = cognee_utils::pacing::embedding_pacer() {
+            pacer.admit().await;
+        }
+
         let response = self
             .transport
             .post_json(&self.invoke_url(), body)
