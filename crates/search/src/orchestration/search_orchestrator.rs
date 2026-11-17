@@ -39,7 +39,7 @@ struct TurnSnapshot {
 /// ([`SearchRetriever::merge_session_contexts`]). The rewrite lane is skipped
 /// when it would be the raw question again. A failed lane fails open to the
 /// other; only both failing is an error, the raw lane's.
-async fn retrieve_session_context(
+pub(crate) async fn retrieve_session_context(
     retriever: &crate::retrievers::SearchRetrieverRef,
     query: &str,
     session: &SessionContext,
