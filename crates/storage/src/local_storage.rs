@@ -57,6 +57,18 @@ impl LocalStorage {
             .map_err(|e| StorageError::IoError(format!("Failed to resolve base directory: {e}")))
     }
 
+    /// A relative location names a file this storage wrote inside its root,
+    /// so it gets the same root check as a write: no `..`, and no symlink
+    /// leading out. A `file://` URI or absolute path, which a row may hold
+    /// for the user's own file, is left as given.
+    async fn check_stored_location(&self, location: &str) -> Result<(), StorageError> {
+        if location.starts_with("file://") || Path::new(location).is_absolute() {
+            return Ok(());
+        }
+        let full_path = self.base_path.join(checked_relative_path(location)?);
+        self.ensure_inside_root(&full_path, location).await
+    }
+
     /// Resolve a location string into a filesystem path.
     ///
     /// Mirrors Python's `get_data_file_path()` + `open_data_file()` which
@@ -138,6 +150,7 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.retrieve", skip(self), fields(location))]
     async fn retrieve(&self, location: &str) -> Result<Vec<u8>, StorageError> {
+        self.check_stored_location(location).await?;
         let full_path = self.resolve_location(location);
 
         let bytes = fs::read(&full_path).await.map_err(|e| {
@@ -471,6 +484,29 @@ mod tests {
             "{result:?}"
         );
         assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    /// Reading a stored name that is a symlink out of the root is refused,
+    /// as writing through it is; the outside file itself is still read by
+    /// its own `file://` URI, as a row for the user's own file holds it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reading_a_symlink_out_of_the_root_is_refused() {
+        let root = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let secret = elsewhere.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, root.path().join("text_h.txt")).unwrap();
+        let storage = LocalStorage::new(root.path().to_path_buf());
+
+        let result = storage.retrieve("text_h.txt").await;
+
+        assert!(
+            matches!(result, Err(StorageError::InvalidPath(_))),
+            "{result:?}"
+        );
+        let by_uri = format!("file://{}", secret.display());
+        assert_eq!(storage.retrieve(&by_uri).await.unwrap(), b"secret");
     }
 
     /// A writer's file appears at its path only once `finish` renames it.

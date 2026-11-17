@@ -368,11 +368,12 @@ async fn store_claimed(
         return storage.store_if_absent(data, name).await;
     }
     match storage.store(data, name).await {
-        // `name` is content-hashed, so a file already there holds these
-        // bytes: a replace that failed (on Windows, a reader in another
-        // process can block the rename) loses nothing.
+        // A replace that failed (on Windows, a reader in another process
+        // can block the rename) loses nothing when the file already there
+        // holds exactly these bytes; anything else at the name (another
+        // file, a folder) keeps the error.
         Err(error @ cognee_storage::StorageError::IoError(_))
-            if storage.exists(name).await.unwrap_or(false) =>
+            if storage.retrieve(name).await.is_ok_and(|kept| kept == data) =>
         {
             warn!(%name, %error, "could not replace a stored file; keeping the existing copy");
             Ok(name.to_string())
@@ -3107,26 +3108,39 @@ mod tests {
         );
     }
 
-    /// When replacing a content-hashed file fails while it exists (on
-    /// Windows, another process's reader can block the rename), the add
-    /// keeps the existing copy instead of failing. A folder at the name makes
-    /// the rename fail the same way.
+    /// When replacing a content-hashed file fails while it holds the same
+    /// bytes (on Windows, another process's reader can block the rename),
+    /// the add keeps the existing copy instead of failing. A read-only
+    /// folder makes the replace fail the same way.
+    #[cfg(unix)]
     #[tokio::test]
-    async fn a_failed_replace_of_an_existing_hashed_file_keeps_it() {
+    async fn a_failed_replace_of_an_identical_file_keeps_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        std::fs::write(temp_dir.path().join("fetched_h.pdf"), b"%PDF").unwrap();
+        let read_only = std::fs::Permissions::from_mode(0o555);
+        std::fs::set_permissions(temp_dir.path(), read_only).unwrap();
+
+        let claims = ClaimScope::default();
+        let stored = store_claimed(&storage, &claims, b"%PDF", "fetched_h.pdf", true).await;
+
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(stored.unwrap(), "fetched_h.pdf");
+    }
+
+    /// Anything else at the name, such as a folder, is not a usable copy:
+    /// the failed replace stays an error, so no row points at it.
+    #[tokio::test]
+    async fn a_failed_replace_over_a_folder_stays_an_error() {
         let temp_dir = tempfile::tempdir().unwrap();
         let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
         std::fs::create_dir(temp_dir.path().join("fetched_h.pdf")).unwrap();
 
-        let stored = store_claimed(
-            &storage,
-            &ClaimScope::default(),
-            b"%PDF",
-            "fetched_h.pdf",
-            true,
-        )
-        .await;
+        let claims = ClaimScope::default();
+        let stored = store_claimed(&storage, &claims, b"%PDF", "fetched_h.pdf", true).await;
 
-        assert_eq!(stored.unwrap(), "fetched_h.pdf");
+        assert!(stored.is_err(), "{stored:?}");
     }
 
     #[tokio::test]
