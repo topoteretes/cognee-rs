@@ -126,12 +126,7 @@ impl StorageTrait for LocalStorage {
     #[instrument(name = "storage.create_writer", skip(self), fields(file_name))]
     async fn create_writer(&self, file_name: &str) -> Result<StorageWriter, StorageError> {
         let full_path = self.prepare_target(file_name).await?;
-        let temp = TempFile::new(temp_path_for(&full_path)?);
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(temp.path())
-            .await
+        let (temp, file) = TempFile::create(temp_path_for(&full_path)?)
             .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
         Ok(StorageWriter::atomic(
             file,
@@ -276,26 +271,13 @@ async fn write_atomically(
     reader: &mut (dyn AsyncRead + Unpin + Send),
 ) -> Result<(), StorageError> {
     // Removed on drop unless committed, even if this future is cancelled.
-    let temp = TempFile::new(temp_path_for(full_path)?);
     let to_io_error = |e| StorageError::IoError(format!("Failed to write file: {e}"));
-    copy_into_new_file(temp.path(), reader)
+    let (temp, mut file) = TempFile::create(temp_path_for(full_path)?).map_err(to_io_error)?;
+    tokio::io::copy(reader, &mut file)
         .await
         .map_err(to_io_error)?;
+    file.flush().await.map_err(to_io_error)?;
     temp.commit(full_path).await.map_err(to_io_error)
-}
-
-/// Create `path`, which must not exist yet, and stream `reader` into it.
-async fn copy_into_new_file(
-    path: &Path,
-    reader: &mut (dyn AsyncRead + Unpin + Send),
-) -> std::io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await?;
-    tokio::io::copy(reader, &mut file).await?;
-    file.flush().await
 }
 
 /// A unique temp file beside `full_path`, so the rename stays in one folder

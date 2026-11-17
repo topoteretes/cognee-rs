@@ -28,15 +28,20 @@ pub(crate) struct TempFile {
 }
 
 impl TempFile {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self {
+    /// Create `path`, which must not exist yet, already guarded. The create
+    /// is a direct, synchronous call: `tokio::fs` would create the file on
+    /// a background thread that a cancelled caller cannot stop, after the
+    /// guard's cleanup had already run.
+    pub(crate) fn create(path: PathBuf) -> std::io::Result<(Self, File)> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let guard = Self {
             path,
             committed: false,
-        }
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+        };
+        Ok((guard, File::from_std(file)))
     }
 
     /// Rename the temp file over `target`; only a finished rename keeps it
