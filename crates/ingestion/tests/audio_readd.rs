@@ -229,14 +229,18 @@ async fn impl_re_adding_audio_stored_raw_transcribes_it(db_url: Option<String>) 
     );
     assert_eq!(repaired.extension, "txt");
     assert_eq!(repaired.mime_type, "text/plain");
-    assert_eq!(setup.text(&repaired).await, b"second take");
+    // The first add's `text_<hash>.txt` is still there and is kept, as in
+    // Python (`overwrite=False`): the row now points at that transcript.
+    assert_eq!(setup.text(&repaired).await, b"first take");
 
     setup.add(&pipeline, owner).await;
     assert_eq!(transcriber.calls(), 2, "the repaired row is reused");
 }
 
 /// The same audio in another dataset is another row, so it is transcribed for
-/// that dataset too.
+/// that dataset too; the shared `text_<hash>.txt` keeps the first transcript,
+/// so the first dataset's text never changes under it (Python
+/// `store_derived_text`, `overwrite=False`).
 async fn impl_another_dataset_transcribes_its_own_copy(db_url: Option<String>) {
     let setup = Setup::new(db_url).await;
     let transcriber = whisper(&["first take", "second take"]);
@@ -252,6 +256,8 @@ async fn impl_another_dataset_transcribes_its_own_copy(db_url: Option<String>) {
 
     assert_ne!(other.id, first.id);
     assert_eq!(transcriber.calls(), 2);
+    assert_eq!(other.raw_data_location, first.raw_data_location);
+    assert_eq!(setup.text(&first).await, b"first take");
 }
 
 macro_rules! sqlite_and_pg {

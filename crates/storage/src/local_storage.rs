@@ -1,4 +1,4 @@
-use super::storage_trait::{StorageError, StorageTrait, StorageWriter};
+use super::storage_trait::{StorageError, StorageTrait, StorageWriter, TempFile};
 use async_trait::async_trait;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
@@ -99,6 +99,19 @@ impl StorageTrait for LocalStorage {
         Ok(file_name.to_string())
     }
 
+    async fn store_if_absent(&self, data: &[u8], file_name: &str) -> Result<String, StorageError> {
+        // The path is checked before anything is probed; like Python, two
+        // first writes racing may both write, the later one winning.
+        let full_path = self.prepare_target(file_name).await?;
+        let exists = fs::try_exists(&full_path)
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to check file existence: {e}")))?;
+        if !exists {
+            write_atomically(&full_path, &mut &data[..]).await?;
+        }
+        Ok(file_name.to_string())
+    }
+
     #[instrument(name = "storage.store_stream", skip(self, reader), fields(file_name))]
     async fn store_stream_dyn(
         &self,
@@ -113,17 +126,17 @@ impl StorageTrait for LocalStorage {
     #[instrument(name = "storage.create_writer", skip(self), fields(file_name))]
     async fn create_writer(&self, file_name: &str) -> Result<StorageWriter, StorageError> {
         let full_path = self.prepare_target(file_name).await?;
-        let temp_path = temp_path_for(&full_path)?;
+        let temp = TempFile::new(temp_path_for(&full_path)?);
         let file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temp_path)
+            .open(temp.path())
             .await
             .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
         Ok(StorageWriter::atomic(
             file,
             file_name.to_string(),
-            temp_path,
+            temp,
             full_path,
         ))
     }
@@ -262,16 +275,13 @@ async fn write_atomically(
     full_path: &Path,
     reader: &mut (dyn AsyncRead + Unpin + Send),
 ) -> Result<(), StorageError> {
-    let temp_path = temp_path_for(full_path)?;
-    let written = match copy_into_new_file(&temp_path, reader).await {
-        Ok(()) => fs::rename(&temp_path, full_path).await,
-        Err(e) => Err(e),
-    };
-    if let Err(e) = written {
-        let _ = fs::remove_file(&temp_path).await;
-        return Err(StorageError::IoError(format!("Failed to write file: {e}")));
-    }
-    Ok(())
+    // Removed on drop unless committed, even if this future is cancelled.
+    let temp = TempFile::new(temp_path_for(full_path)?);
+    let to_io_error = |e| StorageError::IoError(format!("Failed to write file: {e}"));
+    copy_into_new_file(temp.path(), reader)
+        .await
+        .map_err(to_io_error)?;
+    temp.commit(full_path).await.map_err(to_io_error)
 }
 
 /// Create `path`, which must not exist yet, and stream `reader` into it.
@@ -507,5 +517,42 @@ mod tests {
         drop(writer);
 
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    /// A streamed store cancelled while its reader is pending removes its
+    /// temp file and never creates the target.
+    #[tokio::test]
+    async fn a_cancelled_stream_store_leaves_nothing() {
+        use tokio::io::AsyncWriteExt;
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let (mut sender, mut reader) = tokio::io::duplex(64);
+        sender.write_all(b"partial").await.unwrap();
+
+        let store = storage.store_stream_dyn(&mut reader, "stalled.txt");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(50), store).await;
+
+        assert!(result.is_err(), "the store waits on the stalled reader");
+        assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
+
+    /// `store_if_absent` writes a new file but keeps one already there
+    /// (Python `overwrite=False`).
+    #[tokio::test]
+    async fn store_if_absent_keeps_the_first_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let first = storage
+            .store_if_absent(b"first take", "text_h.txt")
+            .await
+            .unwrap();
+        let second = storage
+            .store_if_absent(b"second take", "text_h.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(second, first);
+        assert_eq!(storage.retrieve(&first).await.unwrap(), b"first take");
     }
 }

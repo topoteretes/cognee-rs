@@ -272,6 +272,7 @@ async fn reusable_stored_text(
     engine: &str,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+    claims: &ClaimScope,
 ) -> Result<Option<StoredText>, Box<dyn std::error::Error>> {
     let database = &*lookup.database;
     let dataset = match lookup.target_dataset_id {
@@ -299,6 +300,11 @@ async fn reusable_stored_text(
     let Some(raw_content_hash) = row.raw_content_hash else {
         return Ok(None);
     };
+    // Claimed before the check: a delete after it keeps the file for this
+    // add's row, and one before it is seen by the check.
+    claims
+        .claim(&storage.get_full_path(&row.raw_data_location))
+        .await;
     match storage.exists(&row.raw_data_location).await {
         Ok(true) => {}
         Ok(false) => return Ok(None),
@@ -317,15 +323,22 @@ async fn reusable_stored_text(
 
 /// Store `data` as `name`, first claiming the file in `claims`, so a delete
 /// running meanwhile keeps it until the add's row points at it (see
-/// [`ClaimScope`]).
+/// [`ClaimScope`]). `overwrite` is Python's flag: `true` for content fixed
+/// by its hash (`save_data_to_file`), `false` for a loader's text, which a
+/// second run may word differently (`store_derived_text`).
 async fn store_claimed(
     storage: &dyn StorageTrait,
     claims: &ClaimScope,
     data: &[u8],
     name: &str,
+    overwrite: bool,
 ) -> Result<String, cognee_storage::StorageError> {
     claims.claim(&storage.get_full_path(name)).await;
-    storage.store(data, name).await
+    if overwrite {
+        storage.store(data, name).await
+    } else {
+        storage.store_if_absent(data, name).await
+    }
 }
 
 /// [`process_input_preferring`] that, with `stored_text`, reuses the text an
@@ -454,7 +467,8 @@ async fn process_input_reusing(
         .is_some_and(is_html_url_metadata);
     let raw_source_uri = if is_html_url {
         let raw_file_name = format!("text_{content_hash}.html");
-        let raw_location = store_claimed(storage, &claims, &collected, &raw_file_name).await?;
+        let raw_location =
+            store_claimed(storage, &claims, &collected, &raw_file_name, true).await?;
         Some(storage_location_to_uri(storage.base_path(), &raw_location))
     } else {
         None
@@ -465,7 +479,7 @@ async fn process_input_reusing(
         // two different fetches never share a file. `raw_content_hash` is the
         // MD5 of that stored file, which equals `content_hash` here.
         let stored_name = format!("text_{content_hash}.{stored_extension}");
-        let location = store_claimed(storage, &claims, &collected, &stored_name).await?;
+        let location = store_claimed(storage, &claims, &collected, &stored_name, true).await?;
         (location, content_hash.clone())
     } else {
         // Non-URL path: run the document loader at ADD time and store the
@@ -526,11 +540,17 @@ async fn process_input_reusing(
             .find(|(reused, _)| *reused == doc_type)
             .map(|(_, engine)| *engine);
         let reused = match (stored_text, engine) {
-            (Some(lookup), Some(engine)) => {
-                reusable_stored_text(lookup, storage, &content_hash, engine, owner_id, tenant_id)
-                    .await?
-                    .map(|stored| (stored, engine))
-            }
+            (Some(lookup), Some(engine)) => reusable_stored_text(
+                lookup,
+                storage,
+                &content_hash,
+                engine,
+                owner_id,
+                tenant_id,
+                &claims,
+            )
+            .await?
+            .map(|stored| (stored, engine)),
             _ => None,
         };
 
@@ -564,7 +584,8 @@ async fn process_input_reusing(
             let extracted_bytes = extracted_text.into_bytes();
 
             let stored_name = format!("text_{content_hash}.txt");
-            let location = store_claimed(storage, &claims, &extracted_bytes, &stored_name).await?;
+            let location =
+                store_claimed(storage, &claims, &extracted_bytes, &stored_name, false).await?;
 
             // Stored-file metadata now describes the extracted text.
             stored_extension = "txt".to_string();
@@ -5630,6 +5651,7 @@ mod tests {
             "audio_loader",
             owner_id,
             None,
+            &ClaimScope::default(),
         )
         .await
         .expect("a failed probe must not fail the add");
