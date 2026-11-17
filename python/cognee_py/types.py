@@ -283,6 +283,9 @@ class AddResult(TypedDict):
 
     The native :meth:`Cognee.add` returns the same data with camelCase keys
     (``datasetName``, ``addedCount``, ``deduplicatedCount``).
+
+    Each row in ``added`` / ``deduplicated`` has a ``token_count`` that is
+    ``None`` until cognify has run on the item.
     """
 
     dataset_name: str

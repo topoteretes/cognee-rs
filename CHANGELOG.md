@@ -155,6 +155,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`token_count` is `null` until cognify runs, in every binding (SDK-951).**
+  The data rows returned by `add`, `addAndCognify` and `listData` used to
+  carry `token_count: -1` until `cognify` had counted the item, a sentinel
+  the types did not express. They now carry `null` (TS `number | null`,
+  Python `None`, Java `Long tokenCount` on `CogneeData`, JSON `null` in the
+  C API). `addAndCognify` now returns the count cognify computed for the
+  newly added rows instead of the pre-cognify value (still `null` for an
+  item cognify could not count, such as one that is blank after trimming).
+  The stored column keeps `-1`, for database parity with Python.
+  **Java migration:** the `CogneeData` record gains a third component, so
+  its canonical constructor is now `new CogneeData(id, name, tokenCount)`
+  and record patterns need three bindings
+  (`case CogneeData(var id, var name, var tokenCount)`).
+  Closes gh #99 and gh #200.
+
 - **Chunker selection is real (SDK-1042).** `chunk_strategy` (and the CLI's
   `--chunker`) now chooses the chunker cognify cuts documents with:
   `PARAGRAPH`/`TextChunker` (default), `RECURSIVE`/`LangchainChunker`,

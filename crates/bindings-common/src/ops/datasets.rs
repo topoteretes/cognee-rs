@@ -54,7 +54,8 @@ pub async fn list_datasets(state: &HandleState) -> Result<serde_json::Value, Sdk
 
 /// List all data items in a dataset.
 ///
-/// `dataset_id_str` is a UUID string. Returns a JSON array of `Data` objects.
+/// `dataset_id_str` is a UUID string. Returns a JSON array of `Data` objects
+/// whose `token_count` is `null` until cognify has counted the item.
 pub async fn list_data(
     state: &HandleState,
     dataset_id_str: &str,
@@ -70,8 +71,8 @@ pub async fn list_data(
         .await
         .map_err(|e| SdkError::Runtime(format!("list_data failed: {e}")))?;
 
-    serde_json::to_value(&items)
-        .map_err(|e| SdkError::Runtime(format!("failed to serialize data items: {e}")))
+    // `token_count` is `null` until cognify has counted the item (SDK-951).
+    crate::wire::data_records_json(&items)
 }
 
 /// Check whether a dataset has any data.
