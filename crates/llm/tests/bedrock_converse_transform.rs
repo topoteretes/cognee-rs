@@ -267,11 +267,10 @@ fn the_remaining_bedrock_exceptions_map_to_their_taxonomy_slots() {
     ));
 }
 
-/// The Python engine's Converse body carries a literal `"inferenceConfig": {}`.
-/// This pins the Rust equivalent: an absent caller budget must produce NO
-/// `maxTokens` key at all, not a substituted ceiling. Sending 16384 here is what
-/// truncated three chunks of a 55-chunk document at a quarter of Sonnet 4.5's
-/// 64000-token maximum, and then discarded the other 52 via WholeRun rollback.
+/// `inference_config` with no budget produces NO `maxTokens` key at all, never a
+/// `null` (which Converse rejects). The adapter always hands it a budget — the
+/// configured ceiling when the caller set none — so this pins the builder's
+/// contract, not the adapter's policy.
 #[test]
 fn an_absent_budget_omits_max_tokens_entirely() {
     let opts = GenerationOptions {
