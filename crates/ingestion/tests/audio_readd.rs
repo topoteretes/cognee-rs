@@ -178,7 +178,7 @@ async fn impl_re_adding_audio_without_a_transcriber_reuses_it(db_url: Option<Str
 }
 
 /// When the stored transcript is gone, a re-add transcribes once more and
-/// points the row at the new file; the next re-add reuses it.
+/// stores it again at the same hash-named path; the next re-add reuses it.
 async fn impl_re_adding_audio_whose_text_is_gone_repairs_the_row(db_url: Option<String>) {
     let setup = Setup::new(db_url).await;
     let transcriber = whisper(&["first take", "second take", "third take"]);
@@ -189,7 +189,8 @@ async fn impl_re_adding_audio_whose_text_is_gone_repairs_the_row(db_url: Option<
 
     let repaired = setup.add(&pipeline, owner).await;
     assert_eq!(transcriber.calls(), 2);
-    assert_ne!(repaired.raw_data_location, first.raw_data_location);
+    assert_eq!(repaired.raw_data_location, first.raw_data_location);
+    assert!(stored_path(&repaired.raw_data_location).exists());
     assert_eq!(setup.text(&repaired).await, b"second take");
     let row = setup.row(first.id).await;
     assert_eq!(row.raw_data_location, repaired.raw_data_location);

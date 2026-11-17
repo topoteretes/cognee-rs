@@ -60,17 +60,31 @@ impl StorageWriter {
 
     /// Finish writing and return the storage location
     pub async fn finish(mut self) -> Result<String, StorageError> {
-        self.file
-            .flush()
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
-        if let Some((temp, target)) = self.rename_on_finish
-            && let Err(e) = tokio::fs::rename(&temp, &target).await
-        {
-            let _ = tokio::fs::remove_file(&temp).await;
+        // Taken, so `Drop` leaves the temp file to the cleanup below.
+        let rename = self.rename_on_finish.take();
+        let flushed = self.file.flush().await;
+        let written = match (&rename, flushed) {
+            (_, Err(e)) => Err(e),
+            (Some((temp, target)), Ok(())) => tokio::fs::rename(temp, target).await,
+            (None, Ok(())) => Ok(()),
+        };
+        if let Err(e) = written {
+            if let Some((temp, _)) = &rename {
+                let _ = tokio::fs::remove_file(temp).await;
+            }
             return Err(StorageError::IoError(format!("Failed to write file: {e}")));
         }
-        Ok(self.location)
+        Ok(std::mem::take(&mut self.location))
+    }
+}
+
+impl Drop for StorageWriter {
+    /// A writer dropped without `finish` removes its temp file, so an
+    /// abandoned write leaves nothing in the storage root.
+    fn drop(&mut self) {
+        if let Some((temp, _)) = self.rename_on_finish.take() {
+            let _ = std::fs::remove_file(temp);
+        }
     }
 }
 

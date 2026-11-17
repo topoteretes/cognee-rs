@@ -139,6 +139,15 @@ pub struct ProcessedInput {
     /// refreshes (or creates under that id) the pinned row instead of
     /// deduplicating by content hash.
     pub pinned_id: Option<Uuid>,
+    /// Claims on the files this input stored (see [`ClaimScope`]): a delete
+    /// keeps them until the last clone of this value is dropped, after its
+    /// row is saved, whether it ran through `add`, `build_add_pipeline` or
+    /// a direct `process_input*` call.
+    #[allow(
+        dead_code,
+        reason = "held only for its Drop, which releases the claims"
+    )]
+    claims: Arc<ClaimScope>,
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +227,6 @@ pub async fn process_input_preferring(
         owner_id,
         tenant_id,
         preferred_loaders,
-        None,
         None,
     )
     .await
@@ -312,13 +320,11 @@ async fn reusable_stored_text(
 /// [`ClaimScope`]).
 async fn store_claimed(
     storage: &dyn StorageTrait,
-    claims: Option<&ClaimScope>,
+    claims: &ClaimScope,
     data: &[u8],
     name: &str,
 ) -> Result<String, cognee_storage::StorageError> {
-    if let Some(claims) = claims {
-        claims.claim(&storage.get_full_path(name)).await;
-    }
+    claims.claim(&storage.get_full_path(name)).await;
     storage.store(data, name).await
 }
 
@@ -327,7 +333,7 @@ async fn store_claimed(
 #[allow(clippy::too_many_arguments)]
 #[instrument(
     name = "ingestion.process_input",
-    skip(input, storage, loaders, stored_text, claims)
+    skip(input, storage, loaders, stored_text)
 )]
 async fn process_input_reusing(
     input: &DataInput,
@@ -338,13 +344,15 @@ async fn process_input_reusing(
     tenant_id: Option<Uuid>,
     preferred_loaders: &[String],
     stored_text: Option<&StoredTextLookup>,
-    claims: Option<&ClaimScope>,
 ) -> Result<ProcessedInput, Box<dyn std::error::Error>> {
     use tokio::sync::Mutex;
 
     // Before anything is fetched or stored, as Python's `ingest_data` checks
     // a DataItem's `external_metadata["node_set"]` up front.
     validate_item_node_set(input)?;
+    // Every file stored below is claimed here first; the scope travels in
+    // the returned `ProcessedInput` until its row is saved.
+    let claims = Arc::new(ClaimScope::default());
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
@@ -446,7 +454,7 @@ async fn process_input_reusing(
         .is_some_and(is_html_url_metadata);
     let raw_source_uri = if is_html_url {
         let raw_file_name = format!("text_{content_hash}.html");
-        let raw_location = store_claimed(storage, claims, &collected, &raw_file_name).await?;
+        let raw_location = store_claimed(storage, &claims, &collected, &raw_file_name).await?;
         Some(storage_location_to_uri(storage.base_path(), &raw_location))
     } else {
         None
@@ -457,7 +465,7 @@ async fn process_input_reusing(
         // two different fetches never share a file. `raw_content_hash` is the
         // MD5 of that stored file, which equals `content_hash` here.
         let stored_name = format!("text_{content_hash}.{stored_extension}");
-        let location = store_claimed(storage, claims, &collected, &stored_name).await?;
+        let location = store_claimed(storage, &claims, &collected, &stored_name).await?;
         (location, content_hash.clone())
     } else {
         // Non-URL path: run the document loader at ADD time and store the
@@ -556,7 +564,7 @@ async fn process_input_reusing(
             let extracted_bytes = extracted_text.into_bytes();
 
             let stored_name = format!("text_{content_hash}.txt");
-            let location = store_claimed(storage, claims, &extracted_bytes, &stored_name).await?;
+            let location = store_claimed(storage, &claims, &extracted_bytes, &stored_name).await?;
 
             // Stored-file metadata now describes the extracted text.
             stored_extension = "txt".to_string();
@@ -605,6 +613,7 @@ async fn process_input_reusing(
         node_set: None,
         importance_weight: None,
         pinned_id: None,
+        claims,
     })
 }
 
@@ -1933,13 +1942,11 @@ pub fn make_process_input_task_with_loaders(
         owner_id,
         tenant_id,
         None,
-        None,
     )
 }
 
 /// [`make_process_input_task_with_loaders`] that tries the Python loader names
 /// in `preferred_loaders` first (see [`AddParams::preferred_loaders`]).
-#[allow(clippy::too_many_arguments)]
 fn make_process_input_task_preferring(
     storage: Arc<dyn StorageTrait>,
     loaders: Arc<LoaderRegistry>,
@@ -1948,7 +1955,6 @@ fn make_process_input_task_preferring(
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
     stored_text: Option<StoredTextLookup>,
-    claims: Option<Arc<ClaimScope>>,
 ) -> TypedTask<DataInput, ProcessedInput> {
     TypedTask::async_fn(move |input: &DataInput, _ctx| {
         let input = input.clone();
@@ -1956,7 +1962,6 @@ fn make_process_input_task_preferring(
         let loaders = Arc::clone(&loaders);
         let preferred_loaders = Arc::clone(&preferred_loaders);
         let stored_text = stored_text.clone();
-        let claims = claims.clone();
         Box::pin(async move {
             process_input_reusing(
                 &input,
@@ -1967,7 +1972,6 @@ fn make_process_input_task_preferring(
                 tenant_id,
                 &preferred_loaders,
                 stored_text.as_ref(),
-                claims.as_deref(),
             )
             .await
             .map(Box::new)
@@ -2130,9 +2134,6 @@ pub fn build_add_pipeline_with_acl(
         acl_db,
         Arc::new(LoaderRegistry::default_registry()),
         AddParamsInjection::default(),
-        // A pipeline the caller keeps and reruns would hold its claims for
-        // as long as it lives; only `add_with_params` scopes them to a run.
-        None,
     )
 }
 
@@ -2153,7 +2154,6 @@ fn build_add_pipeline_internal(
     acl_db: Option<Arc<dyn AclDb>>,
     loaders: Arc<LoaderRegistry>,
     add_params: AddParamsInjection,
-    claims: Option<Arc<ClaimScope>>,
 ) -> Pipeline {
     // Locked Decision 4 (LIB-06): the per-input `data_id_fn` operates on
     // the pipeline input (`DataInput`), which has no UUID until
@@ -2175,7 +2175,6 @@ fn build_add_pipeline_internal(
                 dataset_name: dataset_name.to_string(),
                 target_dataset_id: add_params.target_dataset_id,
             }),
-            claims,
         ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
@@ -2483,9 +2482,6 @@ impl AddPipeline {
             self.acl_db.clone(),
             Arc::clone(&self.loaders),
             add_params_inj,
-            // Claims the files this run stores until the pipeline is dropped
-            // at the end of the call, after their rows are saved.
-            Some(Arc::new(ClaimScope::default())),
         );
 
         // ── Build the TaskContext ────────────────────────────────────────
@@ -3016,29 +3012,18 @@ mod tests {
         }
     }
 
-    /// The file an add stores stays claimed, so no delete removes it, until
-    /// the add's scope ends after its row is saved.
+    /// The file a processed input stored stays claimed, so no delete removes
+    /// it, until the `ProcessedInput` is dropped after its row is saved; this
+    /// holds for the public `process_input`, not only for `add`.
     #[tokio::test]
-    async fn stored_text_stays_claimed_until_the_scope_ends() {
+    async fn stored_text_stays_claimed_until_the_processed_input_is_dropped() {
         let temp_dir = tempfile::tempdir().unwrap();
         let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
-        let registry = LoaderRegistry::default_registry();
-        let scope = ClaimScope::default();
         let input = DataInput::Text("claimed text".to_string());
 
-        let processed = process_input_reusing(
-            &input,
-            &storage,
-            &registry,
-            HashAlgorithm::Md5,
-            Uuid::new_v4(),
-            None,
-            &[],
-            None,
-            Some(&scope),
-        )
-        .await
-        .unwrap();
+        let processed = process_input(&input, &storage, HashAlgorithm::Md5, Uuid::new_v4(), None)
+            .await
+            .unwrap();
 
         let stored = storage.get_full_path(&processed.storage_location);
         assert!(
@@ -3046,7 +3031,7 @@ mod tests {
                 .await
                 .is_claimed(&stored)
         );
-        drop(scope);
+        drop(processed);
         assert!(
             !cognee_storage::removing_stored_files()
                 .await
@@ -5622,7 +5607,6 @@ mod tests {
                 None,
                 &[],
                 Some(&lookup),
-                None,
             )
         };
 

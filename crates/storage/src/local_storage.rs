@@ -494,4 +494,18 @@ mod tests {
         storage.delete(&uri).await.unwrap();
         assert!(!old_file.exists());
     }
+
+    /// A writer abandoned before `finish` (say, on an error mid-write)
+    /// removes its temp file and never creates the target.
+    #[tokio::test]
+    async fn a_writer_dropped_without_finish_leaves_nothing() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let mut writer = storage.create_writer("abandoned.txt").await.unwrap();
+        writer.write_chunk(b"half").await.unwrap();
+        drop(writer);
+
+        assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
+    }
 }
