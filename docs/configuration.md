@@ -2074,7 +2074,15 @@ These knobs form one resilience stack, matching Python cognee's:
   exhausted quota or billing rather than a per-minute limit.
 
 Embedding requests have their own `EMBEDDING_RATE_LIMIT_*` bucket, which is
-flag-gated only — provider overload does not switch it on automatically.
+flag-gated only — provider overload does not switch it on automatically. It
+applies to every HTTP request an engine sends, retries included, so what a
+batch of N texts costs depends on the engine:
+
+- **OpenAI-compatible** and **Cohere on Bedrock**: one request, one token.
+- **Bedrock Titan**: one request per text, N tokens.
+- **Ollama**: one token normally. If the server rejects array input, the engine
+  falls back to one request per text, and each batch then costs 1 + N (the
+  failed array request is retried on every batch).
 
 ## Logging
 
