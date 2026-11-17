@@ -9,12 +9,14 @@
 
 mod local_storage;
 mod storage_trait;
+mod stored_file_claims;
 
 #[cfg(feature = "testing")]
 mod mock_storage;
 
 pub use local_storage::LocalStorage;
 pub use storage_trait::{StorageError, StorageExt, StorageTrait, StorageWriter};
+pub use stored_file_claims::{ClaimScope, RemovalGuard, removing_stored_files};
 
 #[cfg(feature = "testing")]
 pub use mock_storage::MockStorage;

@@ -1,6 +1,6 @@
 use super::storage_trait::{StorageError, StorageTrait, StorageWriter};
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 use tracing::{debug, instrument};
@@ -15,17 +15,46 @@ impl LocalStorage {
         Self { base_path }
     }
 
-    /// Generate a UUID-based subdirectory structure for organizing files
-    /// Returns a relative path like "ab/cd/filename.txt"
-    fn generate_storage_path(&self, file_name: &str) -> String {
-        let uuid = Uuid::new_v4();
-        let uuid_str = uuid.to_string();
+    /// The full path `file_name` is written to, with its parent folders
+    /// created. Refuses a path that leaves the storage root, by `..` or
+    /// through a symlink (Python `LocalFileStorage._resolve_storage_path`).
+    async fn prepare_target(&self, file_name: &str) -> Result<PathBuf, StorageError> {
+        let full_path = self.base_path.join(checked_relative_path(file_name)?);
+        self.ensure_inside_root(&full_path, file_name).await?;
+        let parent = full_path
+            .parent()
+            .ok_or_else(|| StorageError::InvalidPath(file_name.to_string()))?;
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
+        Ok(full_path)
+    }
 
-        // Use first 4 chars for first directory, next 4 for second
-        let dir1 = &uuid_str[..2];
-        let dir2 = &uuid_str[2..4];
+    /// Refuses `full_path` when its nearest existing ancestor, with symlinks
+    /// followed, lies outside the storage root.
+    async fn ensure_inside_root(
+        &self,
+        full_path: &Path,
+        file_name: &str,
+    ) -> Result<(), StorageError> {
+        let root = self.canonical_root().await?;
+        let resolved = canonicalize_existing_prefix(full_path).await?;
+        if resolved.starts_with(&root) {
+            return Ok(());
+        }
+        Err(StorageError::InvalidPath(format!(
+            "{file_name:?} resolves outside the storage root"
+        )))
+    }
 
-        format!("{dir1}/{dir2}/{file_name}")
+    /// The storage root with symlinks resolved, created when missing.
+    async fn canonical_root(&self) -> Result<PathBuf, StorageError> {
+        fs::create_dir_all(&self.base_path)
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to create base directory: {e}")))?;
+        fs::canonicalize(&self.base_path)
+            .await
+            .map_err(|e| StorageError::IoError(format!("Failed to resolve base directory: {e}")))
     }
 
     /// Resolve a location string into a filesystem path.
@@ -62,30 +91,12 @@ impl StorageTrait for LocalStorage {
 
     #[instrument(name = "storage.store", skip(self, data), fields(file_name, bytes = data.len()))]
     async fn store(&self, data: &[u8], file_name: &str) -> Result<String, StorageError> {
-        let relative_path = self.generate_storage_path(file_name);
-        let full_path = self.base_path.join(&relative_path);
-
-        // Create parent directories
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
-        }
-
-        // Write file
-        let mut file = fs::File::create(&full_path)
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
-
-        file.write_all(data)
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to write file: {e}")))?;
-
-        file.flush()
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
-
-        Ok(relative_path)
+        // `file_name` is the path under the storage root, used as given, so
+        // the same content always lands in the same file (Python
+        // `LocalFileStorage.store(..., overwrite=True)`).
+        let full_path = self.prepare_target(file_name).await?;
+        write_atomically(&full_path, &mut &data[..]).await?;
+        Ok(file_name.to_string())
     }
 
     #[instrument(name = "storage.store_stream", skip(self, reader), fields(file_name))]
@@ -94,51 +105,27 @@ impl StorageTrait for LocalStorage {
         reader: &mut (dyn AsyncRead + Unpin + Send),
         file_name: &str,
     ) -> Result<String, StorageError> {
-        let relative_path = self.generate_storage_path(file_name);
-        let full_path = self.base_path.join(&relative_path);
-
-        // Create parent directories
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
-        }
-
-        // Create file
-        let mut file = fs::File::create(&full_path)
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
-
-        // Stream copy from reader to file
-        tokio::io::copy(reader, &mut file)
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to write file: {e}")))?;
-
-        file.flush()
-            .await
-            .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
-
-        Ok(relative_path)
+        let full_path = self.prepare_target(file_name).await?;
+        write_atomically(&full_path, reader).await?;
+        Ok(file_name.to_string())
     }
 
     #[instrument(name = "storage.create_writer", skip(self), fields(file_name))]
     async fn create_writer(&self, file_name: &str) -> Result<StorageWriter, StorageError> {
-        let relative_path = self.generate_storage_path(file_name);
-        let full_path = self.base_path.join(&relative_path);
-
-        // Create parent directories
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| StorageError::IoError(format!("Failed to create directory: {e}")))?;
-        }
-
-        // Create file
-        let file = fs::File::create(&full_path)
+        let full_path = self.prepare_target(file_name).await?;
+        let temp_path = temp_path_for(&full_path)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
             .await
             .map_err(|e| StorageError::IoError(format!("Failed to create file: {e}")))?;
-
-        Ok(StorageWriter::new(file, relative_path))
+        Ok(StorageWriter::atomic(
+            file,
+            file_name.to_string(),
+            temp_path,
+            full_path,
+        ))
     }
 
     #[instrument(name = "storage.retrieve", skip(self), fields(location))]
@@ -227,6 +214,88 @@ impl StorageTrait for LocalStorage {
         }
         Ok(())
     }
+}
+
+/// `file_name` as a relative path made only of plain names: no `..`, no root
+/// and no drive prefix, so joining it to the storage root stays inside it.
+fn checked_relative_path(file_name: &str) -> Result<&Path, StorageError> {
+    let path = Path::new(file_name);
+    let plain = path
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+    if file_name.is_empty() || !plain {
+        return Err(StorageError::InvalidPath(format!(
+            "{file_name:?} is not a path inside the storage root"
+        )));
+    }
+    Ok(path)
+}
+
+/// The nearest ancestor of `path` (itself included) that exists, with
+/// symlinks followed. An entry that exists but does not resolve, such as a
+/// dangling symlink, is an error rather than skipped.
+async fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf, StorageError> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor).await {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(StorageError::IoError(format!(
+                    "Failed to inspect path: {e}"
+                )));
+            }
+            Ok(_) => {}
+        }
+        return fs::canonicalize(ancestor).await.map_err(|e| {
+            StorageError::InvalidPath(format!("{} does not resolve: {e}", ancestor.display()))
+        });
+    }
+    Err(StorageError::InvalidPath(format!(
+        "{} has no existing ancestor",
+        path.display()
+    )))
+}
+
+/// Write what `reader` yields to `full_path` through a temp file renamed
+/// over it, so a reader never sees a half-written file (Python's
+/// write-then-rename).
+async fn write_atomically(
+    full_path: &Path,
+    reader: &mut (dyn AsyncRead + Unpin + Send),
+) -> Result<(), StorageError> {
+    let temp_path = temp_path_for(full_path)?;
+    let written = match copy_into_new_file(&temp_path, reader).await {
+        Ok(()) => fs::rename(&temp_path, full_path).await,
+        Err(e) => Err(e),
+    };
+    if let Err(e) = written {
+        let _ = fs::remove_file(&temp_path).await;
+        return Err(StorageError::IoError(format!("Failed to write file: {e}")));
+    }
+    Ok(())
+}
+
+/// Create `path`, which must not exist yet, and stream `reader` into it.
+async fn copy_into_new_file(
+    path: &Path,
+    reader: &mut (dyn AsyncRead + Unpin + Send),
+) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await?;
+    tokio::io::copy(reader, &mut file).await?;
+    file.flush().await
+}
+
+/// A unique temp file beside `full_path`, so the rename stays in one folder
+/// and two writers of the same file never share a temp file.
+fn temp_path_for(full_path: &Path) -> Result<PathBuf, StorageError> {
+    let name = full_path
+        .file_name()
+        .ok_or_else(|| StorageError::InvalidPath(full_path.display().to_string()))?;
+    let temp_name = format!(".{}.{}.tmp", name.to_string_lossy(), Uuid::new_v4());
+    Ok(full_path.with_file_name(temp_name))
 }
 
 #[cfg(test)]
@@ -327,5 +396,102 @@ mod tests {
         storage.delete(&location).await.unwrap();
 
         assert!(!storage.exists(&location).await.unwrap());
+    }
+
+    /// A file lands at the path it is given, and storing it again replaces
+    /// it in place: no copy, no temp file left (Python `overwrite=True`).
+    #[tokio::test]
+    async fn storing_twice_overwrites_one_file_at_the_given_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let first = storage.store(b"one", "hash/photo.png").await.unwrap();
+        let second = storage.store(b"two", "hash/photo.png").await.unwrap();
+
+        assert_eq!(first, "hash/photo.png");
+        assert_eq!(second, first);
+        let names: Vec<_> = std::fs::read_dir(temp_dir.path().join("hash"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["photo.png"]);
+        assert_eq!(storage.retrieve(&first).await.unwrap(), b"two");
+    }
+
+    /// `..`, an absolute path or an empty one is refused and writes nothing.
+    #[tokio::test]
+    async fn a_path_leaving_the_root_is_refused() {
+        let outer = TempDir::new().unwrap();
+        let root = outer.path().join("root");
+        let storage = LocalStorage::new(root.clone());
+        let outside = outer.path().join("escaped.txt");
+
+        for name in [
+            "../escaped.txt",
+            "a/../../escaped.txt",
+            outside.to_str().unwrap(),
+            "",
+        ] {
+            let result = storage.store(b"x", name).await;
+            assert!(
+                matches!(result, Err(StorageError::InvalidPath(_))),
+                "{name:?}: {result:?}"
+            );
+        }
+        assert!(!outside.exists());
+    }
+
+    /// A folder inside the root that links outside it is refused too
+    /// (Python resolves the path with `realpath` before writing).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_leaving_the_root_is_refused() {
+        let root = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("link")).unwrap();
+        let storage = LocalStorage::new(root.path().to_path_buf());
+
+        let result = storage.store(b"x", "link/sub/file.txt").await;
+
+        assert!(
+            matches!(result, Err(StorageError::InvalidPath(_))),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    /// A writer's file appears at its path only once `finish` renames it.
+    #[tokio::test]
+    async fn a_writer_shows_the_file_only_after_finish() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+
+        let mut writer = storage.create_writer("streamed.txt").await.unwrap();
+        writer.write_chunk(b"part one, ").await.unwrap();
+        assert!(!storage.exists("streamed.txt").await.unwrap());
+        writer.write_chunk(b"part two").await.unwrap();
+        let location = writer.finish().await.unwrap();
+
+        assert_eq!(location, "streamed.txt");
+        assert_eq!(
+            storage.retrieve(&location).await.unwrap(),
+            b"part one, part two"
+        );
+    }
+
+    /// Rows from earlier builds point at random `ab/cd/` folders; those
+    /// files are still read and deleted through their `file://` URI.
+    #[tokio::test]
+    async fn a_file_from_an_older_build_is_still_read_and_deleted() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let old_file = temp_dir.path().join("ab/cd/text_old.txt");
+        std::fs::create_dir_all(old_file.parent().unwrap()).unwrap();
+        std::fs::write(&old_file, b"old").unwrap();
+        let uri = format!("file://{}", old_file.display());
+
+        assert_eq!(storage.retrieve(&uri).await.unwrap(), b"old");
+        storage.delete(&uri).await.unwrap();
+        assert!(!old_file.exists());
     }
 }

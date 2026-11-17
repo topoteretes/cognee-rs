@@ -324,6 +324,17 @@ and tenant (by content hash), so the same content in two datasets is two rows.
 Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
 [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
 
+Stored files are named by content hash and written directly under
+`data_root_directory`, as in Python: extracted text as `text_<hash>.txt`, a
+fetched page as `text_<hash>.html`, other fetched content as
+`text_<hash>.<ext>`. The same content is stored once and shared by every row
+that holds it; re-adding it overwrites that file in place (write, then rename),
+and delete removes it only when no row points at it any more. A path that would
+leave the storage root is refused. While an `add` runs, the files it stored are
+claimed, so a concurrent delete in another dataset keeps them until the add's
+rows are saved (within one process, as in Python). Rows from builds before this
+change point at random `ab/cd/` folders; they keep working as they are.
+
 ### cognify (knowledge-graph extraction)
 
 Turns stored data into a knowledge graph in five stages: **classify** documents →

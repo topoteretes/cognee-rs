@@ -304,11 +304,10 @@ async fn cross_owner_isolation_same_content_different_owners_pg() {
 // Sub-test E — Deleting a dataset deletes only its own row
 // ---------------------------------------------------------------------------
 
-/// The same content in three datasets is three rows. Deleting a dataset
-/// deletes its own row and leaves the other datasets' rows and their stored
-/// files alone. (`LocalStorage` names every stored file uniquely; the shared
-/// content-addressed file case is covered by the delete crate's
-/// `shared_file_is_kept_until_its_last_row_is_deleted`.)
+/// The same content in three datasets is three rows sharing one stored file,
+/// `text_<hash>.txt` (Python stores it once, too). Deleting a dataset deletes
+/// its own row and leaves the other datasets' rows alone; the shared file
+/// stays until the last row that points at it is deleted.
 async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str) {
     let dir = TempDir::new().expect("tempdir");
     let (pipeline, database, storage) = make_pipeline(&dir, db_url).await;
@@ -327,6 +326,20 @@ async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str)
             .expect("add");
         rows.push(added[0].clone());
     }
+    assert!(
+        rows.iter()
+            .all(|row| row.raw_data_location == rows[0].raw_data_location),
+        "the same content is stored once"
+    );
+    let expected = dir
+        .path()
+        .join("storage")
+        .join(format!("text_{}.txt", rows[0].content_hash));
+    assert_eq!(
+        rows[0].raw_data_location,
+        format!("file://{}", expected.display()),
+        "the text is stored at the storage root, named by its hash, as in Python"
+    );
 
     let delete_svc = DeleteService::new(
         storage.clone() as Arc<dyn StorageTrait>,
@@ -352,12 +365,14 @@ async fn impl_cascade_deletion_preserves_data_with_remaining_links(db_url: &str)
                 .expect("get data")
                 .is_none()
         );
-        assert!(
-            !storage
+        let is_last = i + 1 == rows.len();
+        assert_eq!(
+            storage
                 .exists(&rows[i].raw_data_location)
                 .await
                 .expect("exists"),
-            "the deleted row's own file goes with it"
+            !is_last,
+            "the shared file stays until its last row is deleted"
         );
         for later in &rows[i + 1..] {
             assert!(

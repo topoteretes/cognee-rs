@@ -24,11 +24,30 @@ pub enum StorageError {
 pub struct StorageWriter {
     file: File,
     location: String,
+    /// `(temp, target)`: `finish` renames the temp file being written over
+    /// the target, so the target is never seen half-written.
+    rename_on_finish: Option<(PathBuf, PathBuf)>,
 }
 
 impl StorageWriter {
+    /// A plain writer, used by `MockStorage`.
+    #[cfg(feature = "testing")]
     pub(crate) fn new(file: File, location: String) -> Self {
-        Self { file, location }
+        Self {
+            file,
+            location,
+            rename_on_finish: None,
+        }
+    }
+
+    /// A writer into `temp`, the file open as `file`, that `finish` renames
+    /// over `target`.
+    pub(crate) fn atomic(file: File, location: String, temp: PathBuf, target: PathBuf) -> Self {
+        Self {
+            file,
+            location,
+            rename_on_finish: Some((temp, target)),
+        }
     }
 
     /// Write a chunk of data to storage
@@ -45,6 +64,12 @@ impl StorageWriter {
             .flush()
             .await
             .map_err(|e| StorageError::IoError(format!("Failed to flush file: {e}")))?;
+        if let Some((temp, target)) = self.rename_on_finish
+            && let Err(e) = tokio::fs::rename(&temp, &target).await
+        {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(StorageError::IoError(format!("Failed to write file: {e}")));
+        }
         Ok(self.location)
     }
 }
