@@ -9,7 +9,10 @@
 //! — `add_column_if_missing` checks it).
 //!
 //! `text` holding JSON, like `external_metadata`: SQLAlchemy's `JSON` type is
-//! stored as text on SQLite, so both SDKs read each other's values.
+//! stored as text on SQLite, so both SDKs read each other's values. On
+//! Postgres Python's column is native `json`, so `add_column_if_missing`
+//! refuses it as a type mismatch: a shared database is SQLite-only, the same
+//! limit as every other Rust table (`m20260914_000001_baseline`).
 //!
 //! Unlike Python's revision this does not move DLT stamps
 //! (`external_metadata.source` of `"dlt"` / `"dlt_source"`) into the new
