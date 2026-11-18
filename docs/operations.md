@@ -327,7 +327,10 @@ Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
 Stored files are named by content hash and written directly under
 `data_root_directory`, as in Python: extracted text as `text_<hash>.txt`, a
 fetched page as `text_<hash>.html`, other fetched content as
-`fetched_<hash>.<ext>`. The same content is stored once and shared by every row
+`fetched_<hash>.<ext>`. An upload (`DataInput::Binary`) is also kept as it
+arrived, as `<hash>/<file name>`, and the row's `original_data_location`
+points at it; rows from older builds that say `binary://<name>` are corrected
+when the same upload is added again. The same content is stored once and shared by every row
 that holds it, and delete removes it only when no row points at it any more.
 As in Python, fetched content is rewritten in place on a re-add (write, then
 rename), while a loader's text keeps the first version stored: a second

@@ -382,6 +382,31 @@ async fn store_claimed(
     }
 }
 
+/// Store a `Binary` upload as it arrived, at `<content_hash>/<file name>`,
+/// overwriting an earlier copy, and return the stored file's URI.
+async fn store_original_upload(
+    storage: &dyn StorageTrait,
+    claims: &ClaimScope,
+    data: &[u8],
+    content_hash: &str,
+    name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let file_name = upload_file_name(name).ok_or_else(|| IngestionError::UnnamedBinaryUpload {
+        name: name.to_string(),
+    })?;
+    let key = format!("{content_hash}/{file_name}");
+    let location = store_claimed(storage, claims, data, &key, true).await?;
+    Ok(storage_location_to_uri(storage.base_path(), &location))
+}
+
+/// The file name part of an upload's name: what follows the last `/` or `\`,
+/// or `None` when that is empty.
+fn upload_file_name(name: &str) -> Option<&str> {
+    name.rsplit(['/', '\\'])
+        .next()
+        .filter(|file_name| !file_name.is_empty())
+}
+
 /// [`process_input_preferring`] that, with `stored_text`, reuses the text an
 /// earlier add of the same content stored (see [`reusable_stored_text`]).
 #[allow(clippy::too_many_arguments)]
@@ -495,6 +520,17 @@ async fn process_input_reusing(
     // (`ingest_data.py:364-389`). `persist_data` swaps it for the existing
     // row's id when the dataset already holds this content.
     let data_id = Uuid::new_v4();
+
+    // An in-memory upload is kept as it arrived, under Python's
+    // `<content_hash>/<file name>` key (`save_data_to_file.py`), and the row
+    // points `original_data_location` at it. A fetched URL is not a
+    // `Binary` here: `input` is still the URL.
+    let original_upload_uri = match unwrap_data_item(input) {
+        DataInput::Binary { name, .. } => {
+            Some(store_original_upload(storage, &claims, &collected, &content_hash, name).await?)
+        }
+        _ => None,
+    };
 
     // Store the artifact + compute `raw_content_hash` (MD5 of the stored
     // extracted-text file — Python parity, ingest_data.py:195).
@@ -652,6 +688,7 @@ async fn process_input_reusing(
     let name = extract_name(input, &content_hash);
     let original_location = raw_source_uri
         .clone()
+        .or(original_upload_uri)
         .unwrap_or_else(|| extract_original_location(input, &raw_data_uri));
     let source_uri = source_uri_from_input(input);
     let external_metadata =
@@ -1941,7 +1978,8 @@ fn extract_original_location(input: &DataInput, raw_data_uri: &str) -> String {
         }
         DataInput::Url(url) => url.clone(),
         DataInput::S3Path(path) => path.clone(),
-        DataInput::Binary { name, .. } => format!("binary://{name}"),
+        // Not reached from `process_input`, which records the stored upload.
+        DataInput::Binary { .. } => raw_data_uri.to_string(),
         DataInput::DataItem { data, .. } => extract_original_location(data, raw_data_uri),
     }
 }
@@ -2695,6 +2733,10 @@ pub enum IngestionError {
     /// (Python: `ValueError: Could not determine MIME type for image file`).
     #[error("Could not determine MIME type for image file: {name}. Is the extension correct?")]
     ImageMimeTypeUndetermined { name: String },
+    /// A `Binary` upload whose name has no file name part (empty, or only
+    /// separators), so it cannot be stored under `<content_hash>/<name>`.
+    #[error("Binary upload has no file name: {name:?}")]
+    UnnamedBinaryUpload { name: String },
     /// A node set — the add call's or one in a data item's
     /// `external_metadata["node_set"]` — is not a list of non-empty names.
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
@@ -5045,6 +5087,110 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(reread.original_data_location, again.raw_data_uri);
+    }
+
+    /// A `Binary` upload, bare or wrapped in a `DataItem`, is stored as it
+    /// arrived at `<content_hash>/<file name>`, and that file is its original
+    /// location, apart from the extracted text.
+    #[tokio::test]
+    async fn a_binary_upload_is_stored_as_its_original_location() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+        let process = |input: DataInput| {
+            let storage = &storage;
+            async move {
+                process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let upload = b"an uploaded note".to_vec();
+        let binary = || DataInput::Binary {
+            data: upload.clone(),
+            name: "uploads/notes.txt".into(),
+        };
+        let wrap = |data: DataInput, label: Option<&str>| DataInput::DataItem {
+            data: Box::new(data),
+            label: label.map(str::to_string),
+            external_metadata: None,
+        };
+
+        for (case, input) in [
+            ("bare", binary()),
+            ("labelled", wrap(binary(), Some("finance"))),
+            ("nested", wrap(wrap(binary(), Some("inner")), None)),
+        ] {
+            let processed = process(input).await;
+            let key = format!("{}/notes.txt", processed.content_hash);
+            let expected = format!("file://{}", temp_dir.path().join(&key).display());
+            assert_eq!(processed.original_location, expected, "{case}");
+            assert_eq!(storage.retrieve(&key).await.unwrap(), upload, "{case}");
+            assert_ne!(
+                processed.original_location, processed.raw_data_uri,
+                "{case}"
+            );
+        }
+    }
+
+    /// A `Binary` whose name has no file name part fails the add.
+    #[tokio::test]
+    async fn a_binary_upload_without_a_file_name_is_refused() {
+        let storage = MockStorage::new();
+        for name in ["", "uploads/", "dir\\"] {
+            let input = DataInput::Binary {
+                data: b"bytes".to_vec(),
+                name: name.into(),
+            };
+            let error = process_input(&input, &storage, HashAlgorithm::Md5, Uuid::new_v4(), None)
+                .await
+                .expect_err(name);
+            assert!(
+                matches!(
+                    error.downcast_ref::<IngestionError>(),
+                    Some(IngestionError::UnnamedBinaryUpload { .. })
+                ),
+                "{name:?}: {error}"
+            );
+        }
+    }
+
+    /// Through `persist_data`: a row an older build stored as `binary://<name>`
+    /// points at the stored upload once the same upload is added again.
+    #[tokio::test]
+    async fn re_adding_a_binary_fixes_a_binary_scheme_location() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+        let upload = DataInput::Binary {
+            data: b"an uploaded note".to_vec(),
+            name: "notes.txt".into(),
+        };
+
+        let mut old = process_input(&upload, &storage, HashAlgorithm::Md5, owner_id, None)
+            .await
+            .unwrap();
+        old.original_location = "binary://notes.txt".into();
+        let stored = persist_data(&old, &db, "ds", owner_id, None).await.unwrap();
+        assert_eq!(stored.original_data_location, "binary://notes.txt");
+
+        let again = process_input(&upload, &storage, HashAlgorithm::Md5, owner_id, None)
+            .await
+            .unwrap();
+        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(refreshed.id, stored.id);
+        let reread = IngestDb::get_data(&db, refreshed.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let key = format!("{}/notes.txt", again.content_hash);
+        let expected = format!("file://{}", temp_dir.path().join(key).display());
+        assert_eq!(reread.original_data_location, expected);
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored

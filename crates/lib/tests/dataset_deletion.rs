@@ -189,6 +189,63 @@ async fn dataset_deletion_removes_storage_files() {
     assert!(gone.is_none(), "data record should be gone after deletion");
 }
 
+/// A `Binary` add stores the upload and its extracted text; deleting the
+/// dataset removes both files.
+#[tokio::test]
+async fn dataset_deletion_removes_a_binary_upload_and_its_text() {
+    let (_handle, ctx, db) = test_task_context().await;
+    let temp_dir = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn StorageTrait> = Arc::new(cognee::storage::LocalStorage::new(
+        temp_dir.path().to_path_buf(),
+    ));
+    let owner_id = Uuid::new_v4();
+    let pipeline = build_add_pipeline(
+        Arc::clone(&storage),
+        db.clone() as Arc<dyn IngestDb>,
+        HashAlgorithm::default(),
+        "binary_ds",
+        owner_id,
+        None,
+    );
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(DataInput::Binary {
+        data: b"an uploaded note".to_vec(),
+        name: "notes.txt".into(),
+    })];
+    let results = execute(&pipeline, inputs, Arc::clone(&ctx), &NoopWatcher)
+        .await
+        .unwrap();
+    let data = downcast_ref::<Data>(&results[0]).clone();
+
+    let on_disk = |uri: &str| std::path::Path::new(uri.strip_prefix("file://").unwrap()).exists();
+    assert_ne!(data.original_data_location, data.raw_data_location);
+    assert!(
+        on_disk(&data.original_data_location),
+        "the upload is stored"
+    );
+    assert!(on_disk(&data.raw_data_location), "the text is stored");
+
+    let svc = DeleteService::new(storage, db.clone() as Arc<dyn DeleteDb>);
+    let result = svc
+        .execute(&DeleteRequest {
+            scope: DeleteScope::Dataset {
+                owner_id,
+                dataset_name: "binary_ds".to_string(),
+                tenant_id: None,
+            },
+            mode: DeleteMode::Soft,
+            memory_only: false,
+        })
+        .await
+        .expect("delete should succeed");
+
+    assert_eq!(result.deleted_storage_files, 2);
+    assert!(
+        !on_disk(&data.original_data_location),
+        "the upload is removed"
+    );
+    assert!(!on_disk(&data.raw_data_location), "the text is removed");
+}
+
 // ---------------------------------------------------------------------------
 // G1.3 — shared data preserved on partial delete
 // ---------------------------------------------------------------------------
