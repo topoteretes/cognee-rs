@@ -129,11 +129,14 @@ fn normalize_node_names(graph: &mut KnowledgeGraph) {
 
 /// The `GenerationOptions` shared by the per-chunk and batched extraction calls.
 ///
-/// `max_tokens: None` is a documented invariant (Python parity): the Python
-/// `acreate_structured_output` passes no cap, so the response uses the model's
-/// full default output budget. A small cap truncates a dense graph mid-JSON and
-/// aborts cognify with a deserialization error. Kept in one place so the two
-/// call sites cannot drift.
+/// `max_tokens: None` is a documented invariant: like Python's
+/// `acreate_structured_output`, extraction asks for no per-call budget of its
+/// own, so it never sets a smaller per-call cap that would truncate a dense
+/// graph mid-JSON. Every adapter, Bedrock included, then sends the operator's
+/// ceiling (`LLM_MAX_COMPLETION_TOKENS`, clamped to a listed model's cap). On
+/// Bedrock this intentionally diverges from Python, which sends no `maxTokens`
+/// and so lets a runaway generation run to the model maximum. Kept in one place
+/// so the two call sites cannot drift.
 fn extraction_options() -> GenerationOptions {
     // `temperature: None` because Python OMITS temperature unless an operator
     // explicitly sets one, and no deployment we ship sets it.

@@ -83,6 +83,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   functions now also run a dataset reached more than once (by name and by id,
   or by a repeated ref) only once, returning one result for it.
 
+- **Bedrock: `LLM_MAX_COMPLETION_TOKENS` bounds calls that pass no budget
+  again.** A call without a budget of its own — cognify's graph extraction
+  passes `max_tokens: None` — now sends `inferenceConfig.maxTokens =
+  min(llm_max_completion_tokens, model cap)` instead of omitting it, as the
+  Anthropic and OpenAI-compatible adapters already do. This reverses the
+  "absent caller budget sends no `maxTokens`" entry below. Omitting it let a
+  stochastic runaway extraction run to the model maximum (64000 output tokens
+  for Claude Sonnet 4.5) with `LLM_MAX_COMPLETION_TOKENS=16384` configured,
+  and the truncation re-ask paid that again; in the same production run no
+  well-formed extraction out of 26068 exceeded 11170 output tokens.
+  **Behaviour change:** with the default ceiling (16384) Bedrock extraction is
+  now capped at 16384 output tokens. To keep the model's full output budget, set
+  `LLM_MAX_COMPLETION_TOKENS` to it (64000 for Sonnet 4.5); values above the
+  model cap are clamped to it. This intentionally diverges from Python, which
+  sends no `maxTokens`.
+  The truncation re-ask never raises the budget above the ceiling either (#190
+  re-asked up to the model maximum). A dense answer longer than the ceiling
+  now fails after its re-asks, so raise `LLM_MAX_COMPLETION_TOKENS` for dense
+  corpora; with `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items` one such chunk
+  drops one document, not the run.
+  A model missing from the Bedrock caps table is bounded by the ceiling alone,
+  not by the table's 4096-token fallback guess, and the adapter logs a warning
+  at construction.
+
 - **Storing an agent trace step now extracts agent context, as Python
   (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs
   Python's `_maybe_extract_agent_context` after the step is stored: an errored

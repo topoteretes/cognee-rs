@@ -170,9 +170,9 @@ pub fn inference_config(
     max_tokens: Option<u32>,
     default_temperature: Option<f32>,
 ) -> Value {
-    // `None` omits the key entirely rather than sending a substituted ceiling.
-    // Bedrock then applies the model maximum, which is what the Python engine
-    // gets — its request body carries a literal `"inferenceConfig": {}`.
+    // `None` omits the key entirely, and Bedrock then applies the model
+    // maximum. The adapter itself always passes a budget (the configured
+    // ceiling when the caller set none; see `effective_max_tokens`).
     let mut config = match max_tokens {
         Some(max_tokens) => json!({ "maxTokens": max_tokens }),
         None => json!({}),
