@@ -79,7 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the loops no longer append a dataset-level `COMPLETED` row after every run.
   `cognify_dataset_refs` given only `DatasetRef::ById` refs now cognifies just
   those datasets: it used to resolve an empty name list as "every dataset" as
-  well, cognifying the caller's other datasets and the named ones twice.
+  well, cognifying the caller's other datasets and the named ones twice. Both
+  functions now also run a dataset reached more than once (by name and by id,
+  or by a repeated ref) only once, returning one result for it.
 
 - **Storing an agent trace step now extracts agent context, as Python
   (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs

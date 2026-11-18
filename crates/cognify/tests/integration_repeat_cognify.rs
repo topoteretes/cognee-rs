@@ -1079,35 +1079,38 @@ async fn a_failed_rollback_leaves_the_run_started_for_a_later_retry() {
     assert!(!h.graph_has(slug).await);
 }
 
-/// Serves exactly one dataset, read from the harness's real database, so the
-/// `cognify_datasets` / `cognify_dataset_refs` loops run against the same
-/// `pipeline_runs` table the executor writes.
-struct OneDatasetResolver {
-    dataset: cognee_models::Dataset,
-    items: Vec<Data>,
+/// Serves a fixed set of datasets, read from the harness's real database, so
+/// the `cognify_datasets` / `cognify_dataset_refs` loops run against the same
+/// `pipeline_runs` table the executor writes. An empty name list resolves to
+/// every dataset, as the trait documents.
+struct FixedResolver {
+    datasets: Vec<(cognee_models::Dataset, Vec<Data>)>,
 }
 
 #[async_trait::async_trait]
-impl cognee_cognify::DatasetResolver for OneDatasetResolver {
+impl cognee_cognify::DatasetResolver for FixedResolver {
     async fn resolve_datasets(
         &self,
         names: &[String],
         _user_id: Uuid,
         _permission: &str,
     ) -> Result<Vec<cognee_models::Dataset>, CognifyError> {
-        Ok(if names.is_empty() || names.contains(&self.dataset.name) {
-            vec![self.dataset.clone()]
-        } else {
-            vec![]
-        })
+        Ok(self
+            .datasets
+            .iter()
+            .map(|(dataset, _)| dataset)
+            .filter(|dataset| names.is_empty() || names.contains(&dataset.name))
+            .cloned()
+            .collect())
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, CognifyError> {
-        Ok(if dataset_id == self.dataset.id {
-            self.items.clone()
-        } else {
-            vec![]
-        })
+        Ok(self
+            .datasets
+            .iter()
+            .find(|(dataset, _)| dataset.id == dataset_id)
+            .map(|(_, items)| items.clone())
+            .unwrap_or_default())
     }
 
     async fn resolve_dataset_by_id(
@@ -1116,7 +1119,52 @@ impl cognee_cognify::DatasetResolver for OneDatasetResolver {
         _user_id: Uuid,
         _permission: &str,
     ) -> Result<Option<cognee_models::Dataset>, CognifyError> {
-        Ok((id == self.dataset.id).then(|| self.dataset.clone()))
+        Ok(self
+            .datasets
+            .iter()
+            .find(|(dataset, _)| dataset.id == id)
+            .map(|(dataset, _)| dataset.clone()))
+    }
+}
+
+impl Harness {
+    async fn dataset(&self, dataset_name: &str) -> cognee_models::Dataset {
+        ops::datasets::get_dataset_by_name_in_tenant(
+            &self.database,
+            dataset_name,
+            self.owner_id,
+            None,
+        )
+        .await
+        .expect("get_dataset_by_name_in_tenant")
+        .expect("dataset exists")
+    }
+
+    async fn cognify_refs(
+        &self,
+        refs: Vec<cognee_cognify::DatasetRef>,
+        resolver: Arc<dyn cognee_cognify::DatasetResolver>,
+        config: &CognifyConfig,
+    ) -> Vec<CognifyResult> {
+        cognee_cognify::cognify_dataset_refs(
+            refs,
+            self.owner_id,
+            None,
+            resolver,
+            Arc::clone(&self.llm),
+            Arc::clone(&self.storage),
+            Arc::clone(&self.graph_db),
+            Arc::clone(&self.vector_db),
+            Arc::clone(&self.embedding_engine),
+            self.database.clone(),
+            Arc::clone(&self.pipeline_run_repo),
+            Arc::new(cognee_core::RayonThreadPool::with_default_threads().unwrap())
+                as Arc<dyn cognee_core::CpuPool>,
+            Arc::clone(&self.ontology),
+            config,
+        )
+        .await
+        .expect("cognify_dataset_refs")
     }
 }
 
@@ -1142,9 +1190,8 @@ async fn cognify_dataset_loops_leave_only_the_executors_pair() {
             as Arc<dyn cognee_core::CpuPool>
     };
     let resolver = |items: Vec<Data>| {
-        Arc::new(OneDatasetResolver {
-            dataset: dataset.clone(),
-            items,
+        Arc::new(FixedResolver {
+            datasets: vec![(dataset.clone(), items)],
         }) as Arc<dyn cognee_cognify::DatasetResolver>
     };
 
@@ -1225,4 +1272,59 @@ async fn cognify_dataset_loops_leave_only_the_executors_pair() {
     );
     assert_eq!(rows[2].pipeline_run_id, rows[3].pipeline_run_id);
     assert_ne!(rows[0].pipeline_run_id, rows[2].pipeline_run_id);
+}
+
+/// A dataset reached more than once — by name and by id, or by a repeated id —
+/// runs once, and an id-only ref list leaves every other dataset alone.
+#[tokio::test]
+async fn cognify_dataset_refs_runs_each_dataset_once_and_only_the_ones_named() {
+    use cognee_cognify::DatasetRef::{ById, ByName};
+
+    let h = Harness::new().await;
+    let config = h.config();
+    let items_a = h.add("refs_a", WAVE_1_TEXT).await;
+    let items_b = h.add("refs_b", WAVE_2_TEXT).await;
+    let a = h.dataset("refs_a").await;
+    let b = h.dataset("refs_b").await;
+    let resolver: Arc<dyn cognee_cognify::DatasetResolver> = Arc::new(FixedResolver {
+        datasets: vec![(a.clone(), items_a), (b.clone(), items_b)],
+    });
+    let pair = vec![PipelineRunStatus::Started, PipelineRunStatus::Completed];
+    let statuses = |rows: Vec<cognee_database::PipelineRun>| {
+        rows.into_iter().map(|r| r.status).collect::<Vec<_>>()
+    };
+
+    // An id-only list: only `a` runs, `b` is never touched.
+    let results = h
+        .cognify_refs(vec![ById(a.id)], Arc::clone(&resolver), &config)
+        .await;
+    assert_eq!(results.len(), 1);
+    assert!(
+        !results[0].entities.is_empty(),
+        "the run must really extract"
+    );
+    assert_eq!(statuses(h.cognify_rows(a.id).await), pair);
+    assert!(
+        h.cognify_rows(b.id).await.is_empty(),
+        "an id-only ref list must not widen to the caller's other datasets"
+    );
+
+    // The same dataset by name and by id, then by a repeated id: one run each.
+    for refs in [
+        vec![ByName("refs_b".to_string()), ById(b.id)],
+        vec![ById(a.id), ById(a.id)],
+    ] {
+        let results = h.cognify_refs(refs, Arc::clone(&resolver), &config).await;
+        assert_eq!(results.len(), 1, "a dataset reached twice runs once");
+    }
+    assert_eq!(
+        statuses(h.cognify_rows(b.id).await),
+        pair,
+        "name + id for `b` writes one pair"
+    );
+    assert_eq!(
+        statuses(h.cognify_rows(a.id).await),
+        [pair.clone(), pair.clone()].concat(),
+        "a repeated id for `a` adds one pair, not two"
+    );
 }
