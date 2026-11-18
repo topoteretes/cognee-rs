@@ -86,7 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Behaviour change:** with the default ceiling (16384) Bedrock extraction is
   now capped at 16384 output tokens. To keep the model's full output budget, set
   `LLM_MAX_COMPLETION_TOKENS` to it (64000 for Sonnet 4.5); values above the
-  model cap are clamped to it.
+  model cap are clamped to it. This intentionally diverges from Python, which
+  sends no `maxTokens`.
+  The truncation re-ask never raises the budget above the ceiling either (#190
+  re-asked up to the model maximum). A dense answer longer than the ceiling
+  now fails after its re-asks, so raise `LLM_MAX_COMPLETION_TOKENS` for dense
+  corpora; with `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items` one such chunk
+  drops one document, not the run.
+  A model missing from the Bedrock caps table is bounded by the ceiling alone,
+  not by the table's 4096-token fallback guess, and the adapter logs a warning
+  at construction.
 
 - **Storing an agent trace step now extracts agent context, as Python
   (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs

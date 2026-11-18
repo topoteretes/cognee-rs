@@ -268,9 +268,10 @@ fn the_remaining_bedrock_exceptions_map_to_their_taxonomy_slots() {
 }
 
 /// `inference_config` with no budget produces NO `maxTokens` key at all, never a
-/// `null` (which Converse rejects). The adapter always hands it a budget — the
-/// configured ceiling when the caller set none — so this pins the builder's
-/// contract, not the adapter's policy.
+/// `null` (which Converse rejects). This pins the builder's contract only. The
+/// adapter never passes `None`: it always sends a budget, the configured
+/// ceiling when the caller set none. That intentionally diverges from Python,
+/// which sends no `maxTokens`.
 #[test]
 fn an_absent_budget_omits_max_tokens_entirely() {
     let opts = GenerationOptions {
@@ -281,12 +282,12 @@ fn an_absent_budget_omits_max_tokens_entirely() {
     let config = inference_config(&opts, None, None);
     assert!(
         config.get("maxTokens").is_none(),
-        "maxTokens must be absent so Bedrock applies the model maximum: {config}",
+        "the builder must omit maxTokens, never send null, when handed no budget: {config}",
     );
     assert_eq!(
         config,
         serde_json::json!({}),
-        "with no budget and no sampling overrides the block matches Python's empty inferenceConfig",
+        "with no budget and no sampling overrides the builder emits an empty inferenceConfig",
     );
 }
 

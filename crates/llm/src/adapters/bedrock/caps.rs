@@ -63,9 +63,14 @@ pub struct ModelCaps {
 /// produces a request the model rejects — a terminal 400 — while guessing
 /// `false` only picks the more widely-supported shape. The 4 096-token output
 /// cap is the floor of the Bedrock converse families (Llama 3.1 caps at 2 048,
-/// Claude 3 and Llama 3.2 at 4 096), so an unlisted model under-budgets its
-/// output until the table below is refreshed rather than 400ing on
-/// `maxTokens > model limit`.
+/// Claude 3 and Llama 3.2 at 4 096).
+///
+/// The `BedrockAdapter` does **not** bound output by that 4 096 guess. If it
+/// did, an unlisted model would silently clamp every call that sets no budget
+/// of its own (cognify's graph extraction) to 4 096 tokens. For an unlisted
+/// model the adapter sends the configured `LLM_MAX_COMPLETION_TOKENS` ceiling
+/// and logs a warning at construction. An operator on such a model whose limit
+/// is below the ceiling lowers the ceiling or adds the model to [`MODEL_CAPS`].
 pub const UNKNOWN_MODEL_CAPS: ModelCaps = ModelCaps {
     supports_native_structured_output: false,
     supports_tool_choice: false,
@@ -335,10 +340,23 @@ pub const MODEL_CAPS: &[(&str, ModelCaps)] = &[
     ),
 ];
 
+/// Look up caps for an already-normalised base model id, or `None` when the id
+/// is not in [`MODEL_CAPS`].
+///
+/// Callers that must tell a documented limit from the [`UNKNOWN_MODEL_CAPS`]
+/// guess use this. The adapter does: it bounds output by a listed model's cap,
+/// but not by the fallback's 4 096 guess.
+pub fn lookup_base_model(base_model: &str) -> Option<ModelCaps> {
+    MODEL_CAPS
+        .iter()
+        .find(|(id, _)| *id == base_model)
+        .map(|(_, caps)| *caps)
+}
+
 /// Look up caps for an already-normalised base model id.
 pub fn caps_for_base_model(base_model: &str) -> ModelCaps {
-    match MODEL_CAPS.iter().find(|(id, _)| *id == base_model) {
-        Some((_, caps)) => *caps,
+    match lookup_base_model(base_model) {
+        Some(caps) => caps,
         None => {
             // Surfaced at debug level so the conservative fallback is
             // diagnosable when tracing the LLM path, without warn-spamming a
