@@ -86,3 +86,14 @@ mockito = "1"
 [[test]]
 name = "integration"
 required-features = ["onnx"]
+
+# The Bedrock engine only exists under `bedrock`. Its own binary because the
+# embedding pacer it installs is a first-install-wins process global.
+[[test]]
+name = "bedrock_pacing"
+required-features = ["bedrock"]
+
+# Needs a slower pacer than `bedrock_pacing`, so a binary of its own.
+[[test]]
+name = "bedrock_pacing_retry"
+required-features = ["bedrock"]

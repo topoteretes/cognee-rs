@@ -24,14 +24,14 @@ use cognee_database::ops::data::DataRowRefresh;
 use cognee_database::{AclDb, IngestDb, PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_models::{Data, DataInput, DataPoint, Dataset, Document};
-use cognee_storage::StorageTrait;
+use cognee_storage::{ClaimScope, StorageTrait};
 use cognee_vector::VectorDB;
 
 use crate::content_hasher::HashAlgorithm;
 use crate::dataset_locks::DatasetLocks;
 use crate::id_generation::generate_dataset_id;
 use crate::loader_registry::get_loader_name;
-use crate::loaders::{LoaderOutput, LoaderRegistry};
+use crate::loaders::{DocumentLoader, LoaderOutput, LoaderRegistry};
 use crate::url_resolver::UrlMetadata;
 #[cfg(feature = "html-loader")]
 use crate::url_resolver::resolve_url_input;
@@ -139,6 +139,15 @@ pub struct ProcessedInput {
     /// refreshes (or creates under that id) the pinned row instead of
     /// deduplicating by content hash.
     pub pinned_id: Option<Uuid>,
+    /// Claims on the files this input stored (see [`ClaimScope`]): a delete
+    /// keeps them until the last clone of this value is dropped, after its
+    /// row is saved, whether it ran through `add`, `build_add_pipeline` or
+    /// a direct `process_input*` call.
+    #[allow(
+        dead_code,
+        reason = "held only for its Drop, which releases the claims"
+    )]
+    claims: Arc<ClaimScope>,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +272,7 @@ async fn reusable_stored_text(
     engine: &str,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+    claims: &ClaimScope,
 ) -> Result<Option<StoredText>, Box<dyn std::error::Error>> {
     let database = &*lookup.database;
     let dataset = match lookup.target_dataset_id {
@@ -290,6 +300,11 @@ async fn reusable_stored_text(
     let Some(raw_content_hash) = row.raw_content_hash else {
         return Ok(None);
     };
+    // Claimed before the check: a delete after it keeps the file for this
+    // add's row, and one before it is seen by the check.
+    claims
+        .claim(&storage.get_full_path(&row.raw_data_location))
+        .await;
     match storage.exists(&row.raw_data_location).await {
         Ok(true) => {}
         Ok(false) => return Ok(None),
@@ -304,6 +319,67 @@ async fn reusable_stored_text(
         extension: row.extension,
         mime_type: row.mime_type,
     }))
+}
+
+/// Run `loader` over `bytes` and return its text as stored: rows joined by
+/// blank lines.
+async fn extract_text(
+    loader: &Arc<dyn DocumentLoader>,
+    bytes: &[u8],
+    descriptor: &Document,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let text = match loader.extract(bytes, descriptor).await? {
+        LoaderOutput::Text(t) => t,
+        LoaderOutput::Rows(rows) => rows.join("\n\n"),
+        LoaderOutput::SingleChunk { text, .. } => text,
+    };
+    Ok(text.into_bytes())
+}
+
+/// The loader text an earlier add stored as `name`, if it is there,
+/// claimed first so a delete running meanwhile keeps it for this add.
+async fn kept_loader_text(
+    storage: &dyn StorageTrait,
+    claims: &ClaimScope,
+    name: &str,
+) -> Result<Option<Vec<u8>>, cognee_storage::StorageError> {
+    claims.claim(&storage.get_full_path(name)).await;
+    match storage.retrieve(name).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(cognee_storage::StorageError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Store `data` as `name`, first claiming the file in `claims`, so a delete
+/// running meanwhile keeps it until the add's row points at it (see
+/// [`ClaimScope`]). `overwrite` is Python's flag: `true` for content fixed
+/// by its hash (`save_data_to_file`), `false` for a loader's text, which a
+/// second run may word differently (`store_derived_text`).
+async fn store_claimed(
+    storage: &dyn StorageTrait,
+    claims: &ClaimScope,
+    data: &[u8],
+    name: &str,
+    overwrite: bool,
+) -> Result<String, cognee_storage::StorageError> {
+    claims.claim(&storage.get_full_path(name)).await;
+    if !overwrite {
+        return storage.store_if_absent(data, name).await;
+    }
+    match storage.store(data, name).await {
+        // A replace that failed (on Windows, a reader in another process
+        // can block the rename) loses nothing when the file already there
+        // holds exactly these bytes; anything else at the name (another
+        // file, a folder) keeps the error.
+        Err(error @ cognee_storage::StorageError::IoError(_))
+            if storage.retrieve(name).await.is_ok_and(|kept| kept == data) =>
+        {
+            warn!(%name, %error, "could not replace a stored file; keeping the existing copy");
+            Ok(name.to_string())
+        }
+        stored => stored,
+    }
 }
 
 /// [`process_input_preferring`] that, with `stored_text`, reuses the text an
@@ -328,6 +404,9 @@ async fn process_input_reusing(
     // Before anything is fetched or stored, as Python's `ingest_data` checks
     // a DataItem's `external_metadata["node_set"]` up front.
     validate_item_node_set(input)?;
+    // Every file stored below is claimed here first; the scope travels in
+    // the returned `ProcessedInput` until its row is saved.
+    let claims = Arc::new(ClaimScope::default());
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
@@ -429,16 +508,21 @@ async fn process_input_reusing(
         .is_some_and(is_html_url_metadata);
     let raw_source_uri = if is_html_url {
         let raw_file_name = format!("text_{content_hash}.html");
-        let raw_location = storage.store(&collected, &raw_file_name).await?;
+        let raw_location =
+            store_claimed(storage, &claims, &collected, &raw_file_name, true).await?;
         Some(storage_location_to_uri(storage.base_path(), &raw_location))
     } else {
         None
     };
     let (storage_location, raw_content_hash) = if resolved_url_metadata.is_some() && !is_html_url {
-        // Other URL types: the content is stored verbatim under the
-        // metadata-derived name and extension, as before. `raw_content_hash`
-        // is the MD5 of that stored file, which equals `content_hash` here.
-        let location = storage.store(&collected, &file_name).await?;
+        // Other URL types: the content is stored verbatim, named by its hash
+        // with the metadata-derived extension, so two different fetches
+        // never share a file. The `fetched_` prefix keeps a `text/plain`
+        // fetch off `text_<hash>.txt`, where a loader keeps its own text
+        // under the opposite overwrite rule. `raw_content_hash` is the MD5
+        // of that stored file, which equals `content_hash` here.
+        let stored_name = format!("fetched_{content_hash}.{stored_extension}");
+        let location = store_claimed(storage, &claims, &collected, &stored_name, true).await?;
         (location, content_hash.clone())
     } else {
         // Non-URL path: run the document loader at ADD time and store the
@@ -499,11 +583,17 @@ async fn process_input_reusing(
             .find(|(reused, _)| *reused == doc_type)
             .map(|(_, engine)| *engine);
         let reused = match (stored_text, engine) {
-            (Some(lookup), Some(engine)) => {
-                reusable_stored_text(lookup, storage, &content_hash, engine, owner_id, tenant_id)
-                    .await?
-                    .map(|stored| (stored, engine))
-            }
+            (Some(lookup), Some(engine)) => reusable_stored_text(
+                lookup,
+                storage,
+                &content_hash,
+                engine,
+                owner_id,
+                tenant_id,
+                &claims,
+            )
+            .await?
+            .map(|stored| (stored, engine)),
             _ => None,
         };
 
@@ -529,25 +619,30 @@ async fn process_input_reusing(
                 &original_mime_type,
             );
 
-            let extracted_text = match loader.extract(&collected, &descriptor).await? {
-                LoaderOutput::Text(t) => t,
-                LoaderOutput::Rows(rows) => rows.join("\n\n"),
-                LoaderOutput::SingleChunk { text, .. } => text,
-            };
-            let extracted_bytes = extracted_text.into_bytes();
-
+            // A loader's text is kept once stored (Python `overwrite=False`):
+            // when an earlier add, in any dataset, stored it, use it instead
+            // of calling the loader again, which may be a paid model whose
+            // answer would be thrown away anyway.
             let stored_name = format!("text_{content_hash}.txt");
-            let location = storage.store(&extracted_bytes, &stored_name).await?;
+            let (location, text_bytes) = match kept_loader_text(storage, &claims, &stored_name)
+                .await?
+            {
+                Some(kept) => (stored_name, kept),
+                None => {
+                    let extracted = extract_text(loader, &collected, &descriptor).await?;
+                    let location =
+                        store_claimed(storage, &claims, &extracted, &stored_name, false).await?;
+                    (location, extracted)
+                }
+            };
 
-            // Stored-file metadata now describes the extracted text.
+            // Stored-file metadata now describes the stored text.
             stored_extension = "txt".to_string();
             stored_mime_type = "text/plain".to_string();
             loader_engine = loader.engine_name().to_string();
 
-            let raw_content_hash = crate::content_hasher::ContentHasher::hash_content(
-                &extracted_bytes,
-                hash_algorithm,
-            );
+            let raw_content_hash =
+                crate::content_hasher::ContentHasher::hash_content(&text_bytes, hash_algorithm);
             (location, raw_content_hash)
         }
     };
@@ -586,6 +681,7 @@ async fn process_input_reusing(
         node_set: None,
         importance_weight: None,
         pinned_id: None,
+        claims,
     })
 }
 
@@ -2972,11 +3068,79 @@ mod tests {
             );
             assert_eq!(processed.stored_extension, expected_ext);
             assert_eq!(processed.stored_mime_type, expected_mime);
+            // Named by its hash, so two different fetches never share a file,
+            // and prefixed apart from a loader's `text_<hash>.txt`.
+            assert_eq!(
+                processed.storage_location,
+                format!("fetched_{}.{expected_ext}", processed.content_hash)
+            );
             assert_eq!(
                 storage.retrieve(&processed.raw_data_uri).await.unwrap(),
                 body.as_bytes()
             );
         }
+    }
+
+    /// The file a processed input stored stays claimed, so no delete removes
+    /// it, until the `ProcessedInput` is dropped after its row is saved; this
+    /// holds for the public `process_input`, not only for `add`.
+    #[tokio::test]
+    async fn stored_text_stays_claimed_until_the_processed_input_is_dropped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let input = DataInput::Text("claimed text".to_string());
+
+        let processed = process_input(&input, &storage, HashAlgorithm::Md5, Uuid::new_v4(), None)
+            .await
+            .unwrap();
+
+        let stored = storage.get_full_path(&processed.storage_location);
+        assert!(
+            cognee_storage::removing_stored_files()
+                .await
+                .is_claimed(&stored)
+        );
+        drop(processed);
+        assert!(
+            !cognee_storage::removing_stored_files()
+                .await
+                .is_claimed(&stored)
+        );
+    }
+
+    /// When replacing a content-hashed file fails while it holds the same
+    /// bytes (on Windows, another process's reader can block the rename),
+    /// the add keeps the existing copy instead of failing. A read-only
+    /// folder makes the replace fail the same way.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_replace_of_an_identical_file_keeps_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        std::fs::write(temp_dir.path().join("fetched_h.pdf"), b"%PDF").unwrap();
+        let read_only = std::fs::Permissions::from_mode(0o555);
+        std::fs::set_permissions(temp_dir.path(), read_only).unwrap();
+
+        let claims = ClaimScope::default();
+        let stored = store_claimed(&storage, &claims, b"%PDF", "fetched_h.pdf", true).await;
+
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(stored.unwrap(), "fetched_h.pdf");
+    }
+
+    /// Anything else at the name, such as a folder, is not a usable copy:
+    /// the failed replace stays an error, so no row points at it.
+    #[tokio::test]
+    async fn a_failed_replace_over_a_folder_stays_an_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        std::fs::create_dir(temp_dir.path().join("fetched_h.pdf")).unwrap();
+
+        let claims = ClaimScope::default();
+        let stored = store_claimed(&storage, &claims, b"%PDF", "fetched_h.pdf", true).await;
+
+        assert!(stored.is_err(), "{stored:?}");
     }
 
     #[tokio::test]
@@ -5570,6 +5734,7 @@ mod tests {
             "audio_loader",
             owner_id,
             None,
+            &ClaimScope::default(),
         )
         .await
         .expect("a failed probe must not fail the add");

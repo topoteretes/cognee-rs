@@ -33,7 +33,7 @@ use cognee_graph::GraphDBTrait;
 use cognee_models::dataset_scope::with_dataset;
 use cognee_models::{Dataset, EdgeType, Triplet};
 use cognee_session::SessionStore;
-use cognee_storage::{StorageError, StorageTrait};
+use cognee_storage::{StorageError, StorageTrait, removing_stored_files};
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -1016,6 +1016,14 @@ impl DeleteService {
                 // file or an external URL and is never touched (Python
                 // `remove_data_file_if_unreferenced`).
                 if is_original && !self.is_storage_managed(&location) {
+                    continue;
+                }
+                // Held through the count and the delete, so an add cannot
+                // claim the file in between; a file an add has claimed is
+                // about to be pointed at by its row and is kept (Python
+                // `removing_stored_files`).
+                let removal = removing_stored_files().await;
+                if removal.is_claimed(&self.storage.get_full_path(&location)) {
                     continue;
                 }
                 let references = self
@@ -3571,7 +3579,8 @@ mod tests {
             let ds = Dataset::new(name.to_string(), owner, None, Uuid::new_v4());
             let ds_id = ds.id;
             ops::datasets::create_dataset(&db, ds).await.unwrap();
-            let raw = uri(&storage.store(b"description", "text_x.txt").await.unwrap());
+            let raw_name = format!("text_x{i}.txt");
+            let raw = uri(&storage.store(b"description", &raw_name).await.unwrap());
             let original = if i == 0 {
                 uri(&storage.store(b"image bytes", "image.png").await.unwrap())
             } else {
@@ -3603,6 +3612,54 @@ mod tests {
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
         assert!(!storage.exists(&files[1].0).await.unwrap());
         assert!(user_file.exists(), "the user's own file is never removed");
+    }
+
+    /// A file an in-flight add has claimed (its row is not saved yet) is
+    /// kept by a delete of the last row that points at it now (Python
+    /// `stored_file_claims`).
+    #[tokio::test]
+    async fn delete_keeps_a_file_an_add_has_claimed() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(connect("sqlite::memory:").await.unwrap());
+        initialize(&db).await.unwrap();
+        let storage = Arc::new(cognee_storage::LocalStorage::new(root.path().to_path_buf()));
+        let svc = DeleteService::new(
+            storage.clone() as Arc<dyn StorageTrait>,
+            db.clone() as Arc<dyn DeleteDb>,
+        );
+        let owner = Uuid::new_v4();
+        let location = storage
+            .store(b"shared text", "text_shared.txt")
+            .await
+            .unwrap();
+        let raw = format!("file://{}", root.path().join(&location).display());
+        let ds = Dataset::new("ds".to_string(), owner, None, Uuid::new_v4());
+        let ds_id = ds.id;
+        ops::datasets::create_dataset(&db, ds).await.unwrap();
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "doc",
+            raw.clone(),
+            raw.clone(),
+            "txt",
+            "text/plain",
+            "hash",
+            owner,
+        )
+        .dataset_id(ds_id)
+        .build();
+        ops::data::create_data(&db, data).await.unwrap();
+
+        let in_flight_add = cognee_storage::ClaimScope::default();
+        in_flight_add.claim(&storage.get_full_path(&location)).await;
+        let result = delete_dataset_named(&svc, owner, "ds").await;
+
+        assert_eq!(result.deleted_data, 1);
+        assert_eq!(result.deleted_storage_files, 0);
+        assert!(
+            storage.exists(&raw).await.unwrap(),
+            "the claimed file is kept"
+        );
     }
 
     #[tokio::test]
