@@ -554,6 +554,7 @@ mod tests {
                     data: Box::new(DataInput::Text("replacement".into())),
                     label: Some("item".into()),
                     external_metadata: Some(r#"{"node_set": "alpha"}"#.into()),
+                    system_metadata: None,
                 }],
                 None,
             ),

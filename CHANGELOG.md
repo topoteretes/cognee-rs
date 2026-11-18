@@ -18,6 +18,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Data.system_metadata` and the cognify route policy (SDK-1053).** The
+  `data` table gains Python's nullable `system_metadata` JSON column
+  (migration `m20261118_000001_data_system_metadata`, Python alembic
+  `f2b4c6d8e0a1`; skipped when Python added it first). It is the cognee-owned
+  route stamp of a row and is never merged with the user's
+  `external_metadata`. `DataInput::DataItem` gains `system_metadata`, which
+  ingestion writes to the column; on a re-add it follows the content as in
+  Python (an item's own stamp replaces the stored one; without one the stamp
+  is kept unless the content changed). `cognee_cognify::routing` ports
+  Python's `CognifyRoute` / `cognify_route_for`: `code` → `Code`,
+  `code_repo` → `CodeRepo`, `dlt_source` → `DltSource`, anything else →
+  `Standard`, and a legacy per-row `dlt` stamp is refused with Python's
+  message. Nothing routes on it yet. Unlike Python's revision the migration
+  does not move DLT stamps out of `external_metadata`: Rust's DLT route still
+  reads them there. **[BREAKING]** for code that builds `Data`,
+  `DataInput::DataItem` or `DataRowRefresh` with a struct literal: each gains
+  a `system_metadata` field.
+
 - **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
   ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
   documents not accessed for `minutes_threshold` minutes, or never, and —
