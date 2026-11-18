@@ -10,9 +10,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use cognee_core::CpuPool;
-use cognee_database::{PipelineRun, PipelineRunRepository, PipelineRunStatus, RelationalDb};
+use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_embedding::engine::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_llm::Llm;
@@ -27,11 +26,6 @@ use crate::config::CognifyConfig;
 use crate::error::CognifyError;
 use crate::pipeline::CognifyResult;
 use crate::tasks::cognify;
-
-/// Pipeline name used for cognify pipeline run records (matches Python
-/// convention). Aliased to the single source of truth so the run rows written
-/// below cannot drift from what the executor actually persists.
-use crate::tasks::COGNIFY_PIPELINE_STAMP_NAME as COGNIFY_PIPELINE_NAME;
 
 // ---------------------------------------------------------------------------
 // DatasetRef — identify a dataset by name or UUID
@@ -89,53 +83,6 @@ pub trait DatasetResolver: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Shared per-dataset helpers
-// ---------------------------------------------------------------------------
-
-/// Append the dataset-level `COMPLETED` row this loop writes after a run.
-///
-/// Carries the run's *real* `pipeline_run_id` whenever the run reported one.
-/// This row is the latest one for the dataset, so a cache check reads it
-/// rather than the executor's; with a fabricated id it named a run no
-/// ownership row belongs to, and its `run_info` said nothing at all about the
-/// run's failures. Both now match what the run actually did.
-///
-/// One edge to that claim, stated rather than papered over: **a result flagged
-/// `already_completed` is not a run**, so nothing is appended. The completion
-/// markers covered every item; the run that did the work already has its own
-/// rows, and appending one here would put a fabricated id at the head of the
-/// dataset's trail — exactly what carrying the real id exists to avoid.
-///
-/// `run_info` is Python's `COMPLETED` shape, `{}` (no data items since
-/// COG-6089, `a88402500`), whatever the run's failure report says: the report
-/// is in the returned `CognifyResult`, not in the row.
-async fn record_dataset_run(
-    database: &dyn RelationalDb,
-    user_id: Uuid,
-    dataset_id: Uuid,
-    result: &CognifyResult,
-) -> Result<(), CognifyError> {
-    if result.already_completed {
-        return Ok(());
-    }
-    let pipeline_run_id = result.pipeline_run_id.unwrap_or_else(Uuid::new_v4);
-    let run_info = Some(cognee_core::pipeline_run_registry::run_info_for_completed());
-    let run = PipelineRun {
-        id: Uuid::new_v4(),
-        created_at: Utc::now(),
-        status: PipelineRunStatus::Completed,
-        pipeline_run_id,
-        pipeline_name: COGNIFY_PIPELINE_NAME.to_string(),
-        pipeline_id: pipeline_run_id,
-        dataset_id: Some(dataset_id),
-        run_info,
-        user_id: Some(user_id),
-    };
-    database.create_pipeline_run(run).await?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // cognify_datasets
 // ---------------------------------------------------------------------------
 
@@ -148,6 +95,12 @@ async fn record_dataset_run(
 /// 3. Runs the full cognify pipeline per dataset.
 ///
 /// Empty datasets (no data items) are silently skipped.
+///
+/// The `pipeline_runs` trail is the one [`cognify`]'s executor writes
+/// (`STARTED` → `COMPLETED`/`ERRORED`, sharing one `pipeline_run_id`); this
+/// loop appends nothing of its own. Python's per-dataset loop writes no
+/// dataset-level row either, so an extra `COMPLETED` here was a cross-SDK
+/// row-shape divergence (SDK-946).
 #[allow(clippy::too_many_arguments)]
 pub async fn cognify_datasets(
     dataset_names: Vec<String>,
@@ -215,9 +168,6 @@ pub async fn cognify_datasets(
         )
         .await?;
 
-        // --- Record successful pipeline run ---
-        record_dataset_run(&*database, user_id, dataset.id, &result).await?;
-
         results.push(result);
     }
 
@@ -271,12 +221,18 @@ pub async fn cognify_dataset_refs(
         }
     }
 
-    // Resolve name-based refs.
-    let name_datasets = resolver.resolve_datasets(&names, user_id, "read").await?;
+    // Resolve name-based refs. An empty name list means "every dataset" to
+    // `resolve_datasets`, which is right only when no ref was given at all:
+    // id-only refs must not widen to the caller's whole dataset list (and
+    // cognify the named ones twice).
+    let name_datasets = if names.is_empty() && !id_datasets.is_empty() {
+        Vec::new()
+    } else {
+        resolver.resolve_datasets(&names, user_id, "read").await?
+    };
 
-    // Merge both sets and delegate to the core loop via cognify_datasets.
-    // To avoid duplicating the per-dataset loop, we just call cognify_datasets
-    // with a fake name list (empty) and handle both sets directly.
+    // Merge both sets and run the same per-dataset loop as `cognify_datasets`
+    // over them (a copy of it: this function does not call `cognify_datasets`).
     let mut all_datasets = name_datasets;
     all_datasets.extend(id_datasets);
 
@@ -323,8 +279,6 @@ pub async fn cognify_dataset_refs(
             config,
         )
         .await?;
-
-        record_dataset_run(&*database, user_id, dataset.id, &result).await?;
 
         results.push(result);
     }

@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`cognify_datasets` and `cognify_dataset_refs` write no extra
+  `pipeline_runs` row (SDK-946).** Each run now leaves only the executor's
+  `STARTED` → `COMPLETED`/`ERRORED` pair, as Python's per-dataset loop does;
+  the loops no longer append a dataset-level `COMPLETED` row after every run.
+  `cognify_dataset_refs` given only `DatasetRef::ById` refs now cognifies just
+  those datasets: it used to resolve an empty name list as "every dataset" as
+  well, cognifying the caller's other datasets and the named ones twice.
+
 - **Storing an agent trace step now extracts agent context, as Python
   (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs
   Python's `_maybe_extract_agent_context` after the step is stored: an errored
