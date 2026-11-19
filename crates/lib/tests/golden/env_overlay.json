@@ -4378,6 +4378,70 @@
   "ENABLE_LAST_ACCESSED=\"{\\\"a\\\":1}\"": {},
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "ENABLE_LAST_ACCESSED=\"{\\\"ssl\\\":true}\"": {},
+  "ENOLA_PATH=\"  \"": {
+    "code_graph.enola_path": "  "
+  },
+  "ENOLA_PATH=\"\"": {},
+  "ENOLA_PATH=\"-1\"": {
+    "code_graph.enola_path": "-1"
+  },
+  "ENOLA_PATH=\"0\"": {
+    "code_graph.enola_path": "0"
+  },
+  "ENOLA_PATH=\"1\"": {
+    "code_graph.enola_path": "1"
+  },
+  "ENOLA_PATH=\"1.5\"": {
+    "code_graph.enola_path": "1.5"
+  },
+  "ENOLA_PATH=\"42\"": {
+    "code_graph.enola_path": "42"
+  },
+  "ENOLA_PATH=\"5000000000\"": {
+    "code_graph.enola_path": "5000000000"
+  },
+  "ENOLA_PATH=\"70000\"": {
+    "code_graph.enola_path": "70000"
+  },
+  "ENOLA_PATH=\"TRUE\"": {
+    "code_graph.enola_path": "TRUE"
+  },
+  "ENOLA_PATH=\"[1]\"": {
+    "code_graph.enola_path": "[1]"
+  },
+  "ENOLA_PATH=\"abc\"": {
+    "code_graph.enola_path": "abc"
+  },
+  "ENOLA_PATH=\"false\"": {
+    "code_graph.enola_path": "false"
+  },
+  "ENOLA_PATH=\"no\"": {
+    "code_graph.enola_path": "no"
+  },
+  "ENOLA_PATH=\"on\"": {
+    "code_graph.enola_path": "on"
+  },
+  "ENOLA_PATH=\"require\"": {
+    "code_graph.enola_path": "require"
+  },
+  "ENOLA_PATH=\"true\"": {
+    "code_graph.enola_path": "true"
+  },
+  "ENOLA_PATH=\"v\"": {
+    "code_graph.enola_path": "v"
+  },
+  "ENOLA_PATH=\"yes\"": {
+    "code_graph.enola_path": "yes"
+  },
+  "ENOLA_PATH=\"{\\\"a\\\":1}\"": {
+    "code_graph.enola_path": "{\"a\":1}"
+  },
+  "ENOLA_PATH=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "code_graph.enola_path": "{\"ssl\":\"verify-full\"}"
+  },
+  "ENOLA_PATH=\"{\\\"ssl\\\":true}\"": {
+    "code_graph.enola_path": "{\"ssl\":true}"
+  },
   "ENV=\"  \"": {
     "otel_deployment_environment": "  "
   },
