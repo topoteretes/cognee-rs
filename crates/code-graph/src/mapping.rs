@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::models::{CodeGraphEntity, CodeNode, CodeNodeType, CodeRepository, code_metadata};
-use crate::pyjson::{dumps_sorted, py_str};
+use crate::pyjson::{dumps_sorted, py_str, py_strip};
 use crate::snapshot::{Fact, is_enola_id};
 
 /// Version of how cognee maps an enola snapshot onto graph nodes and edges.
@@ -154,7 +154,11 @@ pub fn map_facts_to_data_points(
     node_set: Option<&[String]>,
 ) -> Vec<CodeNode> {
     let fallback_repo = resolve_fallback_repo(facts, repo_path);
-    let primary_repo = repo_scope.unwrap_or(&fallback_repo).to_string();
+    // Python's `repo_scope or fallback_repo`: an empty scope falls back too.
+    let primary_repo = repo_scope
+        .filter(|scope| !scope.is_empty())
+        .unwrap_or(&fallback_repo)
+        .to_string();
     let node_set = node_set.filter(|names| !names.is_empty());
 
     let belongs_to_set: Option<Vec<Value>> =
@@ -259,7 +263,7 @@ pub fn map_facts_to_data_points(
             .filter(|id| is_enola_id(id))
             .and_then(Value::as_str);
         let doc = match props.get("doc") {
-            Some(Value::String(doc)) if kind.as_str() != "insight" && !doc.trim().is_empty() => {
+            Some(Value::String(doc)) if kind.as_str() != "insight" && !py_strip(doc).is_empty() => {
                 Some(doc.as_str())
             }
             _ => None,

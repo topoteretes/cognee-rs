@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::error::{CodeGraphError, CodeGraphResult};
-use crate::pyjson::{is_truthy, py_repr, py_str};
+use crate::pyjson::{is_truthy, py_repr, py_str, py_strip};
 
 /// One enola fact: a JSON object from `facts.jsonl`, or one synthesized from
 /// `insights.json` / `flows.json`.
@@ -188,12 +188,17 @@ fn read_facts(facts_path: &Path) -> CodeGraphResult<Vec<Fact>> {
                 facts_path.display()
             ))
         })?;
-        for line in chunk.split('\r') {
-            if line.is_empty() {
-                continue;
-            }
+        // `read_until` stops at `\n`, so a `\r\n` pair never spans two chunks.
+        // What is left after folding it is one line per `\r`-separated piece,
+        // except an empty tail after a final lone `\r` (end of file).
+        let chunk = chunk.replace("\r\n", "\n");
+        let mut lines: Vec<&str> = chunk.split('\r').collect();
+        if lines.len() > 1 && lines.last().is_some_and(|tail| tail.is_empty()) {
+            lines.pop();
+        }
+        for line in lines {
             line_number += 1;
-            let line = line.trim();
+            let line = py_strip(line);
             if line.is_empty() {
                 continue;
             }

@@ -104,6 +104,8 @@ struct FactIndexes<'a> {
     fact_index: HashMap<FactKey, &'a Fact>,
     /// `(repo, module name)` → module fact, in first-seen order.
     module_index: Vec<((String, String), &'a Fact)>,
+    /// `(repo, module name)` → position in `module_index`, for lookups.
+    module_positions: HashMap<(String, String), usize>,
     module_path_repos: HashMap<String, HashSet<String>>,
 }
 
@@ -116,6 +118,7 @@ impl<'a> FactIndexes<'a> {
             enola_id_index: HashMap::new(),
             fact_index: HashMap::new(),
             module_index: Vec::new(),
+            module_positions: HashMap::new(),
             module_path_repos: HashMap::new(),
         };
         for fact in facts {
@@ -155,11 +158,10 @@ impl<'a> FactIndexes<'a> {
                 .or_insert(fact);
             if kind == "module" {
                 let key = (repo.clone(), name.clone());
-                if !indexes
-                    .module_index
-                    .iter()
-                    .any(|(existing, _)| *existing == key)
-                {
+                if !indexes.module_positions.contains_key(&key) {
+                    indexes
+                        .module_positions
+                        .insert(key.clone(), indexes.module_index.len());
                     indexes.module_index.push((key, fact));
                 }
                 let module_path = fact
@@ -181,9 +183,9 @@ impl<'a> FactIndexes<'a> {
     }
 
     fn module(&self, repo: &str, name: &str) -> Option<&'a Fact> {
-        self.module_index
-            .iter()
-            .find(|((module_repo, module_name), _)| module_repo == repo && module_name == name)
+        self.module_positions
+            .get(&(repo.to_string(), name.to_string()))
+            .and_then(|position| self.module_index.get(*position))
             .map(|(_, fact)| *fact)
     }
 

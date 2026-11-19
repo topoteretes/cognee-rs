@@ -531,3 +531,32 @@ fn repo_scope_maps_one_member_of_a_multi_repo_snapshot() {
     assert_eq!(names, vec!["acme/billing", "invoices"]);
     assert_eq!(nodes[0].as_repository().unwrap().path, "/repos/billing");
 }
+
+#[test]
+fn empty_repo_scope_falls_back_to_the_snapshot_repository() {
+    // Python: `primary_repo = repo_scope or fallback_repo`, while the fact
+    // filter still compares against the empty scope.
+    let facts = facts(json!([
+        {"kind": "module", "name": "checkout", "repo": "acme/shop"},
+    ]));
+    let nodes = map_facts_to_data_points(&facts, Some("/repos/shop"), Some(""), None);
+    let names: Vec<&str> = nodes.iter().map(|node| node.name()).collect();
+    assert_eq!(names, vec!["acme/shop"]);
+    assert_eq!(nodes[0].as_repository().unwrap().path, "/repos/shop");
+}
+
+#[test]
+fn a_doc_of_python_whitespace_only_is_no_doc() {
+    // Python's str.strip() also strips the ASCII separators \x1c..\x1f,
+    // which Rust's char::is_whitespace does not.
+    let facts = facts(json!([
+        {"kind": "symbol", "name": "f", "repo": "r", "props": {"doc": " \u{1c}\u{1f} "}},
+    ]));
+    let nodes = map_facts_to_data_points(&facts, None, None, None);
+    let symbol = entity(by_name(&nodes, "f"));
+    assert_eq!(symbol.doc, None);
+    assert_eq!(
+        symbol.description.as_deref(),
+        Some("symbol: doc= \u{1c}\u{1f} ")
+    );
+}

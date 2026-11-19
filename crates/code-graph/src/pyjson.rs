@@ -165,6 +165,15 @@ pub fn py_repr(value: &Value) -> String {
     }
 }
 
+/// Python's `str.strip()`: trims what `str.isspace()` calls whitespace, which
+/// is Unicode `White_Space` (Rust's `char::is_whitespace`) plus the ASCII
+/// separators `\x1c`..=`\x1f`.
+pub fn py_strip(text: &str) -> &str {
+    text.trim_matches(|character: char| {
+        character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
+    })
+}
+
 /// Python truthiness of a JSON value.
 pub fn is_truthy(value: &Value) -> bool {
     match value {
@@ -242,5 +251,16 @@ mod tests {
         assert!(!is_truthy(&json!(0)));
         assert!(!is_truthy(&json!("")));
         assert!(is_truthy(&json!(5)));
+    }
+
+    #[test]
+    fn strip_matches_python_isspace() {
+        assert_eq!(
+            py_strip(" \t\n\r\u{0b}\u{0c}x\u{1c}\u{1f}\u{85}\u{a0}"),
+            "x"
+        );
+        assert_eq!(py_strip("\u{2003}doc\u{3000}"), "doc");
+        assert_eq!(py_strip("\u{200b}"), "\u{200b}");
+        assert_eq!(py_strip(""), "");
     }
 }
