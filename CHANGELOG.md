@@ -56,6 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serde_json's `float_roundtrip` is now enabled workspace-wide so a
   17-digit float parses to the same double as Python's `json.loads`.
 
+- **enola runner, code graph writer and `code_graph.*` config (SDK-1053).**
+  `cognee-code-graph` gains the runner and writer halves of Python's
+  `cognee/tasks/code_graph`. `run_enola_generate` runs `enola --generate
+  <repo>` as a subprocess (repository as cwd, update check and prompts off,
+  a timeout, Python's not-installed and snapshot error messages).
+  `add_code_graph_data_points` / `add_code_graph_edges` write the graph as a
+  delta against what is stored (by `fact_hash` and edge key), record
+  provenance ledger rows under the owning `Data` row and stamp the
+  `CodeRepository` node last. `extract_code_graph` / `load_code_graph` run
+  the whole sequence for one local repository. New config section
+  `code_graph`: `code_graph.enola_path` (env alias `ENOLA_PATH`; unset means
+  `enola` is looked up on `PATH`) and `code_graph.enola_timeout_secs`
+  (default `600`), readable as `Settings::code_graph()`. Nothing calls it
+  from cognify yet.
+
 - **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
   ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
   documents not accessed for `minutes_threshold` minutes, or never, and —
