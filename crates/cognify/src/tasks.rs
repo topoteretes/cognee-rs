@@ -587,7 +587,10 @@ pub async fn extract_chunks_from_documents(
     // `unreached_items`, which is never capped; `entries` is truncated at
     // `failure_report_cap`, so counting it would undercount the denominator
     // and could trip the no-survivor backstop on a run full of survivors.
-    let item_total = input.documents.len() + failures.unreached_items().len();
+    // Plus the items a code route took on ahead of classification (SDK-1053):
+    // a repo item that loaded survives, one that failed is in the report.
+    let item_total =
+        input.documents.len() + failures.unreached_items().len() + failures.routed_items();
 
     for (index, document) in input.documents.iter().enumerate() {
         let outcome = chunk_one_document(
@@ -3883,6 +3886,247 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 }
 
 // ---------------------------------------------------------------------------
+// Cognify routes (SDK-1053): the CODE_REPO route ahead of the standard tasks
+// ---------------------------------------------------------------------------
+
+/// Name of the task that runs the code routes ahead of the standard pipeline
+/// (Python's CODE_REPO-route task, `extract_code_repo_graph`).
+pub const EXTRACT_CODE_REPO_GRAPH_TASK_NAME: &str = "extract_code_repo_graph";
+
+/// What [`run_code_routes`] hands the standard pipeline: the standard items,
+/// and what the code routes did with the rest.
+///
+/// The report is seeded into the classify stage's, so a repo item's failure
+/// reaches the run result, its sweep and its completion marker like a
+/// document's does, and every repo item the routes took on counts in the
+/// run's item total ([`FailureReport::routed_items`]).
+#[derive(Debug, Clone)]
+pub struct RoutedCognifyInput {
+    /// The items left for the standard pipeline.
+    pub input: CognifyInput,
+    /// The code routes' failures and unreached items, and how many items they
+    /// took on.
+    pub failures: FailureReport,
+}
+
+/// Run the non-standard routes of a cognify run and hand the rest on.
+///
+/// Port of the route split in Python's `cognify()` (`tasks_by_route` and
+/// `resolve_cognify_tasks`, `cognify.py:592-604`). Every item is routed by
+/// [`crate::routing::cognify_route_for`] before anything is loaded:
+///
+/// - standard items are returned for the standard pipeline, unchanged;
+/// - each code-repo item loads its repository's code graph
+///   ([`cognee_code_graph::extract_code_repo_graph`]): the stored manifest
+///   names the repository, the row's `external_metadata["node_set"]` tags
+///   every code node, and every node and edge is recorded in the ownership
+///   ledger under the row and `pipeline_run_id`, so a failed run's sweep and
+///   a later delete find them. No LLM, no embedding;
+/// - a per-file code item, a DLT-source row stamped in `system_metadata`,
+///   or a refused (legacy `dlt`) item fails the whole run before any enola
+///   work: Rust has no task list for those routes yet, and Python resolves
+///   every item's task list before any item runs (`run_tasks.py`), raising
+///   for an unmapped or refused one.
+///
+/// A repo item that fails to load is a per-item failure, as an item's tasks
+/// fail in Python's `run_tasks_data_item` (`run_tasks_data_item.py:279-305`):
+/// the manifest read, its node set and the code graph load are all inside
+/// it. What happens next follows `failure_policy`, as for a document:
+///
+/// - [`FailureStop::FailFast`] stops at the first failed repo item, as Python
+///   re-raises it (`RAISE_INCREMENTAL_LOADING_ERRORS`). Under
+///   [`RollbackScope::WholeRun`] / [`RollbackScope::Nothing`] the item's own
+///   error fails the run, as Python's gather re-raises the item's exception
+///   (`run_tasks.py:301-318`); under [`RollbackScope::FailedItems`] the rest
+///   of the run's items are marked unreached and the run ends with the repo
+///   items already loaded as its only survivors.
+/// - [`FailureStop::RunToEnd`] records the failure and goes on with the other
+///   repo items and every standard item; the end-of-run gate then judges the
+///   report ([`FailureReport::is_fatal`]), where a loaded repo item counts as
+///   a survivor and keeps its graph and its completion marker under
+///   `FailedItems`, as Python's per-item rollback keeps a completed item.
+///
+/// # Errors
+///
+/// [`CognifyError::Route`] for a refused item; under `FailFast` without
+/// `FailedItems`, the first failing repo item's own error
+/// ([`CognifyError::Route`] for an invalid node set,
+/// [`CognifyError::StorageError`] for an unreadable manifest,
+/// [`CognifyError::CodeGraph`] for what the code graph load raises).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_code_routes(
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+    failure_policy: FailurePolicy,
+) -> Result<RoutedCognifyInput, CognifyError> {
+    use crate::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
+
+    let mut standard = Vec::with_capacity(input.data_items.len());
+    let mut repositories = Vec::new();
+    for item in &input.data_items {
+        match cognify_route_for(item)? {
+            CognifyRoute::Standard => standard.push(item.clone()),
+            CognifyRoute::CodeRepo => repositories.push(item),
+            route @ (CognifyRoute::Code | CognifyRoute::DltSource) => {
+                return Err(CognifyRouteError::UnsupportedRoute {
+                    data_id: item.id,
+                    route,
+                }
+                .into());
+            }
+        }
+    }
+
+    let mut failures = FailureReport::with_policy(&failure_policy);
+    for (index, item) in repositories.iter().enumerate() {
+        failures.note_routed_items(1);
+        let Err(error) = load_code_repo_item(
+            item,
+            input,
+            storage,
+            graph_db,
+            db,
+            code_graph,
+            pipeline_run_id,
+        )
+        .await
+        else {
+            continue;
+        };
+        warn!(data_id = %item.id, "code repo item failed to load: {error}");
+        if failure_policy.stop == FailureStop::FailFast
+            && failure_policy.scope != RollbackScope::FailedItems
+        {
+            return Err(error);
+        }
+        failures.record_error(
+            StageFailure {
+                stage: FailureStage::CodeGraph,
+                data_id: item.id,
+                chunk_id: None,
+                error: error.to_string(),
+                fails_item: true,
+            },
+            &error,
+        );
+        if failure_policy.stop == FailureStop::FailFast {
+            // `FailedItems`: stop here and keep what already loaded. Nothing
+            // after this item is attempted, standard items included.
+            for later in &repositories[index + 1..] {
+                failures.mark_unreached(later.id);
+            }
+            for item in standard.drain(..) {
+                failures.mark_unreached(item.id);
+            }
+            break;
+        }
+    }
+
+    Ok(RoutedCognifyInput {
+        input: CognifyInput {
+            data_items: standard,
+            dataset_id: input.dataset_id,
+            user_id: input.user_id,
+            tenant_id: input.tenant_id,
+        },
+        failures,
+    })
+}
+
+/// Load one code repo item's code graph: Python's `extract_code_repo_graph`
+/// body for one data item (`tasks/code_graph/code_repo.py`).
+#[allow(clippy::too_many_arguments)]
+async fn load_code_repo_item(
+    item: &Data,
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+) -> Result<(), CognifyError> {
+    let node_set = crate::routing::code_repo_node_set(item)?;
+    let manifest = storage
+        .retrieve(&item.raw_data_location)
+        .await
+        .map_err(|e| CognifyError::StorageError(e.to_string()))?;
+    let manifest = String::from_utf8(manifest).map_err(|e| {
+        CognifyError::from(cognee_code_graph::CodeGraphError::InvalidRepoItem(format!(
+            "the code repo manifest of data item {} is not UTF-8: {e}",
+            item.id
+        )))
+    })?;
+    let ledger = cognee_code_graph::CodeGraphLedger {
+        db,
+        owner: cognee_code_graph::CodeGraphOwner {
+            tenant_id: input.tenant_id,
+            user_id: input.user_id.unwrap_or(DEFAULT_LEDGER_USER_ID),
+            dataset_id: input.dataset_id,
+            data_id: item.id,
+            pipeline_run_id,
+        },
+    };
+    cognee_code_graph::extract_code_repo_graph(
+        graph_db,
+        Some(&ledger),
+        code_graph,
+        &manifest,
+        node_set.as_deref(),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Build the [`TypedTask`] that runs [`run_code_routes`]; it takes the run's
+/// [`CognifyInput`] and returns the [`RoutedCognifyInput`] the routed classify
+/// task ([`make_classify_routed_documents_task`]) takes. The pipeline run id
+/// comes from the task context, so the ledger rows name the run.
+pub fn make_code_routes_task(
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    db: Arc<dyn RelationalDb>,
+    code_graph: cognee_code_graph::CodeGraphConfig,
+    failure_policy: FailurePolicy,
+) -> TypedTask<CognifyInput, RoutedCognifyInput> {
+    TypedTask::async_fn(move |input: &CognifyInput, ctx| {
+        let input = input.clone();
+        let storage = Arc::clone(&storage);
+        let graph_db = Arc::clone(&graph_db);
+        let db = Arc::clone(&db);
+        let code_graph = code_graph.clone();
+        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
+        Box::pin(async move {
+            let routed = run_code_routes(
+                &input,
+                &*storage,
+                &*graph_db,
+                &*db,
+                &code_graph,
+                pipeline_run_id,
+                failure_policy,
+            )
+            .await?;
+            Ok(Box::new(routed))
+        })
+    })
+}
+
+/// Whether a run over `items` needs [`make_code_routes_task`] ahead of the
+/// standard tasks: some item does not take the standard route.
+fn needs_code_routes(items: &[Data]) -> bool {
+    items.iter().any(|item| {
+        !matches!(
+            crate::routing::cognify_route_for(item),
+            Ok(crate::routing::CognifyRoute::Standard)
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Convenience function: sequential execution of all tasks
 // ---------------------------------------------------------------------------
 
@@ -4102,6 +4346,41 @@ async fn cognify_in_scope(
                 Arc::clone(&ontology_resolver),
                 effective_config.clone(),
             );
+            // ── Routes (SDK-1053) ───────────────────────────────────────────
+            // Python runs each item down its route's task list in one
+            // `cognify_pipeline` run. Here the code routes run as the run's
+            // first task and hand only the standard items to classify, so
+            // every item still shares this one run and its completion
+            // markers. A dataset of standard items keeps the plain pipeline.
+            if needs_code_routes(&data_items) {
+                // The classify task takes the routed input, which carries
+                // the code routes' report into the standard stages'.
+                let classify = pipeline
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.name.as_deref() == Some(CLASSIFY_DOCUMENTS_TASK_NAME))
+                    .ok_or_else(|| {
+                        CognifyError::ContextBuild(
+                            "the cognify pipeline has no classify task to route into".to_string(),
+                        )
+                    })?;
+                classify.task = cognee_core::TaskInfo::from(make_classify_routed_documents_task(
+                    CLASSIFY_DOCUMENTS_TASK_RANK,
+                    effective_config.failure_policy(),
+                ))
+                .task;
+                pipeline.tasks.insert(
+                    0,
+                    cognee_core::TaskInfo::from(make_code_routes_task(
+                        Arc::clone(&storage),
+                        Arc::clone(&graph_db),
+                        Arc::clone(&database),
+                        effective_config.code_graph.clone(),
+                        effective_config.failure_policy(),
+                    ))
+                    .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
+                );
+            }
 
             // The executor re-derives `PipelineRunInfo.pipeline_id` from
             // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`
@@ -4426,9 +4705,9 @@ pub(crate) fn provenance_node_id(
     data_id: Uuid,
     node_id: Uuid,
 ) -> Uuid {
-    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
-    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{node_id}");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+    cognee_database::provenance_ids::provenance_node_id(
+        tenant_id, user_id, dataset_id, data_id, node_id,
+    )
 }
 
 /// Deterministic provenance edge ID:
@@ -4470,9 +4749,9 @@ fn provenance_edge_id(
     edge_text: &str,
     target_id: Uuid,
 ) -> Uuid {
-    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
-    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{source_id}{edge_text}{target_id}");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+    cognee_database::provenance_ids::provenance_edge_id(
+        tenant_id, user_id, dataset_id, data_id, source_id, edge_text, target_id,
+    )
 }
 
 /// The data items behind a set of producing chunks, in first-seen order.
@@ -4503,9 +4782,7 @@ fn edge_slug(edge_text: &str) -> Uuid {
 
 /// Deterministic triplet slug, matching `Triplet::new`.
 fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uuid {
-    let raw = format!("{source_id}{relationship_name}{target_id}");
-    let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+    cognee_database::provenance_ids::triplet_slug(source_id, relationship_name, target_id)
 }
 
 /// Map each chunk to the data item it came from, for tracing an artifact's
@@ -6051,18 +6328,48 @@ pub fn make_classify_documents_task_with_rank(
         // typed error — which is what turns a failure that is "merely thrown"
         // into one that is reported.
         let mut classified = classify_documents(input, failure_policy)?;
-        let user_label = user_label_from_ctx(&ctx);
-        for doc in &mut classified.documents {
-            stamp_provenance(
-                &mut doc.base,
-                COGNIFY_PIPELINE_STAMP_NAME,
-                CLASSIFY_DOCUMENTS_TASK_NAME,
-                user_label.as_deref(),
-                rank,
-            );
-        }
+        stamp_classified_documents(&mut classified, &ctx, rank);
         Ok(Box::new(classified))
     })
+}
+
+/// [`make_classify_documents_task_with_rank`] behind [`make_code_routes_task`]:
+/// classifies the standard items the code routes left and seeds the stage's
+/// report with the routes' own, so a repo item's failure, the items a
+/// `FailFast` stop left unreached and the repo items that loaded all reach
+/// the run's report and its item total.
+pub fn make_classify_routed_documents_task(
+    rank: i32,
+    failure_policy: FailurePolicy,
+) -> TypedTask<RoutedCognifyInput, ClassifiedDocuments> {
+    TypedTask::sync(move |routed: &RoutedCognifyInput, ctx| {
+        let mut classified = classify_documents(&routed.input, failure_policy)?;
+        // Both reports were built fresh (`with_policy`), so `absorb`'s
+        // independence rule holds.
+        let mut failures = routed.failures.clone();
+        failures.absorb(&classified.failures);
+        classified.failures = failures;
+        stamp_classified_documents(&mut classified, &ctx, rank);
+        Ok(Box::new(classified))
+    })
+}
+
+/// Stamp every classified `Document` with the classify task's provenance.
+fn stamp_classified_documents(
+    classified: &mut ClassifiedDocuments,
+    ctx: &Arc<cognee_core::TaskContext>,
+    rank: i32,
+) {
+    let user_label = user_label_from_ctx(ctx);
+    for doc in &mut classified.documents {
+        stamp_provenance(
+            &mut doc.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            CLASSIFY_DOCUMENTS_TASK_NAME,
+            user_label.as_deref(),
+            rank,
+        );
+    }
 }
 
 /// Build a [`TypedTask`] that extracts text chunks from classified documents.

@@ -416,6 +416,7 @@ impl ComponentRegistry {
             <crate::sections::StorageConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::OntologyConfig as cognee_config_core::ConfigSection>::schema(),
             <crate::sections::GraphExtractionConfig as cognee_config_core::ConfigSection>::schema(),
+            <cognee_code_graph::CodeGraphConfig as cognee_config_core::ConfigSection>::schema(),
         ];
         for f in sorted(&self.vector) {
             sections.extend(f.config_sections());

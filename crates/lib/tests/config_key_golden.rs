@@ -197,6 +197,8 @@ const ENV_VARS: &[&str] = &[
     "COGNEE_SKIP_CONNECTION_TEST",
     // Component config sections of a default build.
     "GRAPH_MAX_DB_SIZE",
+    // `code_graph.*` (cognee-code-graph, SDK-1053).
+    "ENOLA_PATH",
     "COGNEE_DEBUG_LLM_REQUEST",
     "LLM_VISION_MODEL",
     "TRANSCRIPTION_MODEL",

@@ -56,6 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serde_json's `float_roundtrip` is now enabled workspace-wide so a
   17-digit float parses to the same double as Python's `json.loads`.
 
+- **enola runner, code graph writer and `code_graph.*` config (SDK-1053).**
+  `cognee-code-graph` gains the runner and writer halves of Python's
+  `cognee/tasks/code_graph`. `run_enola_generate` runs `enola --generate
+  <repo>` as a subprocess (repository as cwd, update check and prompts off,
+  a timeout, Python's not-installed and snapshot error messages).
+  `add_code_graph_data_points` / `add_code_graph_edges` write the graph as a
+  delta against what is stored (by `fact_hash` and edge key), record
+  provenance ledger rows under the owning `Data` row and stamp the
+  `CodeRepository` node last. `extract_code_graph` / `load_code_graph` run
+  the whole sequence for one local repository. New config section
+  `code_graph`: `code_graph.enola_path` (env alias `ENOLA_PATH`; unset means
+  `enola` is looked up on `PATH`) and `code_graph.enola_timeout_secs`
+  (default `600`), readable as `Settings::code_graph()`. Nothing calls it
+  from cognify yet.
+
 - **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
   ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
   documents not accessed for `minutes_threshold` minutes, or never, and —
@@ -226,6 +241,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `FeedbackError::InvalidSessionIds`, as Python does.
 
 ### Breaking changes
+
+- **`add(<directory>)` and the CODE_REPO cognify route (SDK-1053).** A
+  `DataInput::FilePath` naming a directory is now expanded on `add` instead
+  of failing: a code project (Python's `detect_code_project`) becomes one
+  repo manifest item stamped `system_metadata.source = "code_repo"` plus its
+  documents, any other directory is flattened into its files. cognify runs a
+  repo item down the deterministic code graph (`cognee-code-graph`'s
+  `extract_code_repo_graph`, no LLM, no embedding) in the same run as the
+  standard items; a repo item that fails to load is a per-item failure
+  under the failure policy (`FailureStage::CodeGraph`), and one that loaded
+  counts as a survivor. A per-file code item, a DLT source stamped in
+  `system_metadata` and a legacy `dlt` row fail the whole run. Without an
+  LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
+  CLI) a code project's documents are left out at add and the repo item
+  cognifies keyless. The manifest's data id is content-derived for now:
+  Python pins it to (user, dataset, repo path) so a re-add replaces one
+  record; that comes with the incremental re-ingest (SDK-1053 O6), so until
+  then a changed repository is added as a new item.
+  API: `CognifyConfig.code_graph` is a new public field (struct literals
+  need it; `..CognifyConfig::default()` covers it); new variants on enums
+  that are not `#[non_exhaustive]`: `CognifyError::{Route, CodeGraph}`,
+  `CodeGraphError::InvalidRepoItem`,
+  `CognifyRouteError::{UnsupportedRoute, InvalidNodeSet}` and
+  `FailureStage::CodeGraph`; new `AddPipeline::with_llm_available`,
+  `routing::routes_need_llm`, `tasks::run_code_routes` /
+  `make_code_routes_task` / `RoutedCognifyInput` /
+  `make_classify_routed_documents_task`, and
+  `FailureReport::{note_routed_items, routed_items}`.
 
 - **`token_count` is `null` until cognify runs, in every binding (SDK-951).**
   The data rows returned by `add`, `addAndCognify` and `listData` used to

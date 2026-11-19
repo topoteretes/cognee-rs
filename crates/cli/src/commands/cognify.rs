@@ -206,18 +206,6 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             .await
             .map_err(|e| CliError::Runtime(format!("{e}")))?;
 
-        // `graph_extraction.backend`: an unregistered kind fails here, before
-        // any extraction, rather than silently running the LLM extractor.
-        let graph_backend = cm
-            .graph_extractor(
-                args.extractor.as_deref(),
-                &serde_json::Value::String(String::new()),
-            )
-            .await
-            .map_err(|error| {
-                CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
-            })?;
-
         // `--ontology-file` overrides `ontology.file_path`; neither means none.
         let ontology_resolver = cm
             .ontology_resolver(args.ontology_file.as_deref())
@@ -227,11 +215,6 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             })?;
 
         let mut cognify_config = flag_config;
-        if let Some(backend) = graph_backend {
-            cognify_config = cognify_config.with_graph_backend(backend);
-            // A configured backend cannot serve `--graph-schema`.
-            super::validate_cognify_config(&cognify_config)?;
-        }
         if let Some(transcriber) = cm
             .transcriber()
             .await
@@ -239,6 +222,12 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         {
             cognify_config = cognify_config.with_transcriber(transcriber);
         }
+        // With the graph extractor, built on the first dataset whose items
+        // take the standard route: only that route extracts. A dataset of
+        // code projects needs neither the extractor nor the LLM it may need,
+        // so a keyless deployment cognifies it (Python's `needs_llm` union
+        // over the routes in play).
+        let mut standard_config: Option<cognee::cognify::CognifyConfig> = None;
 
         let mut total_chunks = 0usize;
         let mut total_entities = 0usize;
@@ -266,6 +255,38 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 "Dataset '{dataset_name}': cognifying {} data item(s)",
                 data_items.len()
             );
+
+            let run_config = if cognee::cognify::routing::routes_need_llm(&data_items) {
+                let config = match standard_config.take() {
+                    Some(config) => config,
+                    // `graph_extraction.backend`: an unregistered kind fails
+                    // here, before any extraction, rather than silently
+                    // running the LLM extractor.
+                    None => {
+                        let graph_backend = cm
+                            .graph_extractor(
+                                args.extractor.as_deref(),
+                                &serde_json::Value::String(String::new()),
+                            )
+                            .await
+                            .map_err(|error| {
+                                CliError::Runtime(format!(
+                                    "Graph extractor initialization failed: {error}"
+                                ))
+                            })?;
+                        let mut config = cognify_config.clone();
+                        if let Some(backend) = graph_backend {
+                            config = config.with_graph_backend(backend);
+                            // A configured backend cannot serve `--graph-schema`.
+                            super::validate_cognify_config(&config)?;
+                        }
+                        config
+                    }
+                };
+                &*standard_config.insert(config)
+            } else {
+                &cognify_config
+            };
 
             // OSS build has no DB-backed user lookup (there is no `users`
             // table), so `user_email` always falls back to `None`. `cognify()`
@@ -298,7 +319,7 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 pipeline_run_repo,
                 thread_pool,
                 Arc::clone(&ontology_resolver),
-                &cognify_config,
+                run_config,
             )
             .await
             .map_err(|error| {

@@ -1,0 +1,41 @@
+#!/bin/sh
+# A stand-in for the enola binary in the cognee-code-graph tests.
+#
+# Called as `enola --generate <repo>`. The repository's `.fake-enola` file
+# says what to do:
+#   snapshot:<name>  copy tests/fixtures/snapshots/<name>/ into <repo>/.enola/
+#   fail             write to stderr and exit 3
+#   hang             sleep longer than any test timeout
+#   empty            exit 0 without writing a snapshot
+#
+# A successful run also records the environment overrides cognee sets and
+# its working directory in <repo>/.enola/fake-run.txt (`set -u` fails the
+# run if an override is missing).
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+[ "$1" = "--generate" ] || { echo "unexpected arguments: $*" >&2; exit 64; }
+repo=$2
+mode=$(cat "$repo/.fake-enola")
+case "$mode" in
+  snapshot:*)
+    name=${mode#snapshot:}
+    mkdir -p "$repo/.enola"
+    cp "$here/../snapshots/$name/"* "$repo/.enola/"
+    printf '%s\n%s\n%s\n' "$ENOLA_NO_UPDATE_CHECK" "$ENOLA_NO_PROMPTS" "$(pwd -P)" \
+      > "$repo/.enola/fake-run.txt"
+    echo "enola: no mcp-arch.yaml in $repo, using built-in defaults" >&2
+    ;;
+  fail)
+    echo "boom: extractor crashed" >&2
+    exit 3
+    ;;
+  hang)
+    exec sleep 30
+    ;;
+  empty)
+    ;;
+  *)
+    echo "unknown fake-enola mode: $mode" >&2
+    exit 64
+    ;;
+esac

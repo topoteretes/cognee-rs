@@ -16,6 +16,9 @@ workspace = true
 
 [dependencies]
 chrono.workspace = true
+cognee-config-core = { path = "../config-core", version = "0.2.0" }
+cognee-database = { path = "../database", version = "0.2.0" }
+cognee-graph = { path = "../graph", version = "0.2.0" }
 cognee-models = { path = "../models", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }
 hex.workspace = true
@@ -23,8 +26,14 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# `process`: the enola subprocess (`runner`).
+tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+cognee-graph = { path = "../graph", features = ["testing"] }
+cognee-models = { path = "../models" }
+cognee-database = { path = "../database", features = ["sqlite"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["process", "macros", "rt-multi-thread"] }

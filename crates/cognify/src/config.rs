@@ -491,6 +491,12 @@ pub struct CognifyConfig {
     /// supports.
     #[serde(skip)]
     pub graph_backend: Option<GraphBackendHandle>,
+
+    /// The code graph settings (`code_graph.*`) the CODE_REPO route runs
+    /// enola with. Not serialized: it is lowered from `Settings` like the
+    /// handles above.
+    #[serde(skip)]
+    pub code_graph: cognee_code_graph::CodeGraphConfig,
 }
 
 /// Opaque wrapper around a caller-supplied [`Chunker`].
@@ -680,6 +686,7 @@ impl Default for CognifyConfig {
             custom_chunker: None,
             transcriber: None,
             graph_backend: None,
+            code_graph: cognee_code_graph::CodeGraphConfig::default(),
         }
     }
 }
@@ -894,6 +901,12 @@ impl CognifyConfig {
     /// Set an LLM-free graph backend (see [`ChunkGraphExtractor`]).
     pub fn with_graph_backend(mut self, backend: Arc<dyn ChunkGraphExtractor>) -> Self {
         self.graph_backend = Some(GraphBackendHandle(backend));
+        self
+    }
+
+    /// Set the code graph settings the CODE_REPO route runs enola with.
+    pub fn with_code_graph(mut self, code_graph: cognee_code_graph::CodeGraphConfig) -> Self {
+        self.code_graph = code_graph;
         self
     }
 

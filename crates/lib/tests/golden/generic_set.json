@@ -2318,6 +2318,134 @@
     "err": "TypeMismatch",
     "key": "classification_model"
   },
+  "code_graph.enola_path <- \"\"": {
+    "ok": {}
+  },
+  "code_graph.enola_path <- \"1\"": {
+    "ok": {
+      "code_graph.enola_path": "1"
+    }
+  },
+  "code_graph.enola_path <- \"s\"": {
+    "ok": {
+      "code_graph.enola_path": "s"
+    }
+  },
+  "code_graph.enola_path <- \"true\"": {
+    "ok": {
+      "code_graph.enola_path": "true"
+    }
+  },
+  "code_graph.enola_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_path"
+  },
+  "code_graph.enola_timeout_secs <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- -1": {
+    "ok": {
+      "code_graph.enola_timeout_secs": -1.0
+    }
+  },
+  "code_graph.enola_timeout_secs <- 0": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 0.0
+    }
+  },
+  "code_graph.enola_timeout_secs <- 1": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 1.0
+    }
+  },
+  "code_graph.enola_timeout_secs <- 1.5": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 1.5
+    }
+  },
+  "code_graph.enola_timeout_secs <- 5000000000": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 5000000000.0
+    }
+  },
+  "code_graph.enola_timeout_secs <- 70000": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 70000.0
+    }
+  },
+  "code_graph.enola_timeout_secs <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
+  "code_graph.enola_timeout_secs <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.enola_timeout_secs"
+  },
   "cognee_tracing_enabled <- \"\"": {
     "err": "TypeMismatch",
     "key": "cognee_tracing_enabled"
@@ -6254,6 +6382,68 @@
   "enable_last_accessed <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "enable_last_accessed"
+  },
+  "enola_path <- \"\"": {
+    "ok": {}
+  },
+  "enola_path <- \"1\"": {
+    "ok": {
+      "code_graph.enola_path": "1"
+    }
+  },
+  "enola_path <- \"s\"": {
+    "ok": {
+      "code_graph.enola_path": "s"
+    }
+  },
+  "enola_path <- \"true\"": {
+    "ok": {
+      "code_graph.enola_path": "true"
+    }
+  },
+  "enola_path <- -1": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- 0": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- 1": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- 70000": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- [1]": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- false": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- null": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- true": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
+  },
+  "enola_path <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "enola_path"
   },
   "graph.dataset_database_handler <- \"\"": {
     "ok": {}
