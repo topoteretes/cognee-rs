@@ -19,6 +19,16 @@
 //! column: Rust's DLT route still reads them from `external_metadata`
 //! (SDK-1053 decision 2), so moving them would break it. Nothing is
 //! backfilled.
+//!
+//! Python's move does not depend on who added the column. On a shared SQLite
+//! file its `f2b4c6d8e0a1` upgrade (`cognee/alembic/versions/
+//! f2b4c6d8e0a1_add_system_metadata_to_data.py` ~63-78) skips only the
+//! `add_column` when the column exists, then still rewrites every row whose
+//! `external_metadata.source` is `"dlt"` or `"dlt_source"`: the dict moves
+//! to `system_metadata` and `external_metadata` is set to NULL. So DLT rows Rust wrote lose their
+//! `external_metadata` stamp once Python upgrades the shared file, and the
+//! Rust DLT route no longer finds them there. Routing those rows from
+//! `system_metadata` is a later stage of SDK-1053 (O4).
 use sea_orm_migration::prelude::*;
 
 use super::helpers::{add_column_if_missing, drop_column_if_present};

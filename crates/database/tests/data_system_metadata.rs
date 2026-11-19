@@ -5,7 +5,8 @@
 )]
 //! `data.system_metadata` (Python `Data.system_metadata`, SDK-1053): the
 //! cognee-owned route stamp round-trips through the entity, survives the
-//! re-add refresh, and has its own targeted setter.
+//! re-add refresh (which writes it only when given one), and has its own
+//! targeted setter.
 //!
 //! Runs on in-memory SQLite, so it needs no external database.
 #![cfg(feature = "sqlite")]
@@ -125,12 +126,8 @@ async fn update_data_system_metadata_on_a_missing_row_is_not_found() {
     assert!(matches!(err, DatabaseError::NotFound(_)), "got {err:?}");
 }
 
-#[tokio::test]
-async fn refresh_data_row_writes_system_metadata() {
-    let db = db().await;
-    let d = data(Some(STAMP));
-    create_data(&db, d.clone()).await.unwrap();
-    let refresh = DataRowRefresh {
+fn refresh_of(d: &Data, system_metadata: Option<&str>) -> DataRowRefresh {
+    DataRowRefresh {
         name: d.name.clone(),
         raw_data_location: d.raw_data_location.clone(),
         original_data_location: d.original_data_location.clone(),
@@ -141,12 +138,43 @@ async fn refresh_data_row_writes_system_metadata() {
         loader_engine: None,
         raw_content_hash: None,
         data_size: d.data_size,
-        label: None,
+        label: Some("relabelled".to_string()),
         node_set: None,
         external_metadata: None,
-        system_metadata: Some(r#"{"source":"code"}"#.to_string()),
-    };
-    refresh_data_row(&db, d.id, &refresh).await.unwrap();
+        system_metadata: system_metadata.map(str::to_string),
+    }
+}
+
+#[tokio::test]
+async fn refresh_data_row_writes_system_metadata() {
+    let db = db().await;
+    let d = data(Some(STAMP));
+    create_data(&db, d.clone()).await.unwrap();
+    refresh_data_row(&db, d.id, &refresh_of(&d, Some(r#"{"source":"code"}"#)))
+        .await
+        .unwrap();
     let row = get_data(&db, d.id).await.unwrap().unwrap();
     assert_eq!(row.system_metadata.as_deref(), Some(r#"{"source":"code"}"#));
+}
+
+/// `system_metadata` is a patch: `None` leaves the stored stamp alone, as
+/// Python's re-add of unchanged content without a stamp never writes the
+/// column (`ingest_data.py:589-590`). The other columns are still written.
+#[tokio::test]
+async fn refresh_data_row_without_system_metadata_leaves_the_column() {
+    let db = db().await;
+    let d = data(None);
+    create_data(&db, d.clone()).await.unwrap();
+    // Written after the caller's snapshot: the refresh must not clobber it.
+    update_data_system_metadata(&db, d.id, Some(STAMP))
+        .await
+        .unwrap();
+
+    let written = refresh_data_row(&db, d.id, &refresh_of(&d, None))
+        .await
+        .unwrap();
+    let row = get_data(&db, d.id).await.unwrap().unwrap();
+    assert_eq!(row.system_metadata.as_deref(), Some(STAMP));
+    assert_eq!(row.label.as_deref(), Some("relabelled"));
+    assert_eq!(row.updated_at, Some(written));
 }

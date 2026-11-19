@@ -24,15 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `f2b4c6d8e0a1`; skipped when Python added it first). It is the cognee-owned
   route stamp of a row and is never merged with the user's
   `external_metadata`. `DataInput::DataItem` gains `system_metadata`, which
-  ingestion writes to the column; on a re-add it follows the content as in
-  Python (an item's own stamp replaces the stored one; without one the stamp
-  is kept unless the content changed). `cognee_cognify::routing` ports
+  ingestion writes to the column; like Python's `dict | None` it must be a
+  JSON object (`null` is no stamp), anything else fails the add with
+  `IngestionError::InvalidSystemMetadata`. On a re-add it follows the content
+  as in Python (an item's own stamp replaces the stored one; without one the
+  column is not written unless the content changed, which clears it).
+  `DataRowRefresh::system_metadata` is a patch: `None` leaves the column
+  untouched. `cognee_cognify::routing` ports
   Python's `CognifyRoute` / `cognify_route_for`: `code` → `Code`,
   `code_repo` → `CodeRepo`, `dlt_source` → `DltSource`, anything else →
   `Standard`, and a legacy per-row `dlt` stamp is refused with Python's
   message. Nothing routes on it yet. Unlike Python's revision the migration
   does not move DLT stamps out of `external_metadata`: Rust's DLT route still
-  reads them there. **[BREAKING]** for code that builds `Data`,
+  reads them there; Python's revision still moves them on a shared SQLite
+  file whoever added the column, so such rows lose their
+  `external_metadata` stamp once Python upgrades it. **[BREAKING]** for code
+  that builds `Data`,
   `DataInput::DataItem` or `DataRowRefresh` with a struct literal: each gains
   a `system_metadata` field.
 

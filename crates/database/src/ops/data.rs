@@ -315,8 +315,8 @@ pub async fn update_data_system_metadata(
 /// The columns Python's `ingest_data` update branch rewrites on a re-add of
 /// an existing row (`ingest_data.py` ~470-545), minus the ones the dedup
 /// lookup already fixes (`content_hash`, `owner_id`, `tenant_id`,
-/// `dataset_id`). `label` is only written when `Some` (Python: "absent means
-/// leave unchanged").
+/// `dataset_id`). `label` and `system_metadata` are only written when `Some`
+/// (Python: "absent means leave unchanged").
 #[derive(Debug, Clone)]
 pub struct DataRowRefresh {
     pub name: String,
@@ -332,9 +332,12 @@ pub struct DataRowRefresh {
     pub label: Option<String>,
     pub node_set: Option<String>,
     pub external_metadata: Option<String>,
-    /// The row's route stamp after the re-add (Python: the item's own
-    /// `system_metadata` when it carries one, else the stored value, since a
-    /// dedup hit never changes the content). Written as given.
+    /// The item's own route stamp, a patch: `Some` replaces the stored
+    /// `system_metadata`, `None` leaves the column untouched. Python writes
+    /// the column on a re-add only when the item carries a stamp or the
+    /// content changed (`ingest_data.py:589-590`), and a dedup hit never
+    /// changes the content. To clear the stamp use
+    /// [`update_data_system_metadata`].
     pub system_metadata: Option<String>,
 }
 
@@ -399,13 +402,15 @@ pub async fn refresh_data_row(
             data::Column::ExternalMetadata,
             Expr::value(refresh.external_metadata.clone()),
         )
-        .col_expr(
-            data::Column::SystemMetadata,
-            Expr::value(refresh.system_metadata.clone()),
-        )
         .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)));
     if let Some(label) = &refresh.label {
         update = update.col_expr(data::Column::Label, Expr::value(Some(label.clone())));
+    }
+    if let Some(system_metadata) = &refresh.system_metadata {
+        update = update.col_expr(
+            data::Column::SystemMetadata,
+            Expr::value(Some(system_metadata.clone())),
+        );
     }
     let result = update
         .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
