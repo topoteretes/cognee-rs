@@ -244,6 +244,10 @@ async fn dataset_deletion_removes_a_binary_upload_and_its_text() {
         "the upload is removed"
     );
     assert!(!on_disk(&data.raw_data_location), "the text is removed");
+    assert!(
+        !temp_dir.path().join(&data.content_hash).exists(),
+        "the upload's emptied folder is removed"
+    );
 }
 
 // ---------------------------------------------------------------------------

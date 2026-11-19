@@ -185,6 +185,31 @@ impl StorageTrait for LocalStorage {
         })
     }
 
+    async fn remove_empty_parent(&self, location: &str) -> Result<(), StorageError> {
+        let absolute = |path: &Path| std::path::absolute(path).unwrap_or(path.to_path_buf());
+        let root = absolute(&self.base_path);
+        let Some(folder) = self.resolve_location(location).parent().map(absolute) else {
+            return Ok(());
+        };
+        if folder == root || !folder.starts_with(&root) {
+            return Ok(());
+        }
+        match fs::remove_dir(&folder).await {
+            Ok(()) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(StorageError::IoError(format!(
+                "Failed to remove folder: {e}"
+            ))),
+        }
+    }
+
     fn get_full_path(&self, location: &str) -> PathBuf {
         self.resolve_location(location)
     }

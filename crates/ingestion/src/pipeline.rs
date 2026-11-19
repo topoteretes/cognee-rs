@@ -382,29 +382,39 @@ async fn store_claimed(
     }
 }
 
-/// Store a `Binary` upload as it arrived, at `<content_hash>/<file name>`,
+/// Store a `Binary` upload as it arrived, at `<content_hash>/<file_name>`,
 /// overwriting an earlier copy, and return the stored file's URI.
+/// `file_name` is one [`upload_file_name`] accepted.
 async fn store_original_upload(
     storage: &dyn StorageTrait,
     claims: &ClaimScope,
     data: &[u8],
     content_hash: &str,
-    name: &str,
+    file_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let file_name = upload_file_name(name).ok_or_else(|| IngestionError::UnnamedBinaryUpload {
-        name: name.to_string(),
-    })?;
     let key = format!("{content_hash}/{file_name}");
     let location = store_claimed(storage, claims, data, &key, true).await?;
     Ok(storage_location_to_uri(storage.base_path(), &location))
 }
 
-/// The file name part of an upload's name: what follows the last `/` or `\`,
-/// or `None` when that is empty.
-fn upload_file_name(name: &str) -> Option<&str> {
-    name.rsplit(['/', '\\'])
-        .next()
-        .filter(|file_name| !file_name.is_empty())
+/// The file name part of an upload's name, what follows the last `/` or `\`,
+/// when it can be stored as one file (see [`IngestionError::InvalidUploadName`]).
+fn upload_file_name(name: &str) -> Result<&str, IngestionError> {
+    let file_name = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let refused = match file_name {
+        "" => Some("no file name"),
+        "." | ".." => Some("not a file name"),
+        _ if file_name.contains('\0') => Some("contains a NUL byte"),
+        _ if file_name.len() > 255 => Some("file name longer than 255 bytes"),
+        _ => None,
+    };
+    match refused {
+        Some(reason) => Err(IngestionError::InvalidUploadName {
+            name: name.to_string(),
+            reason,
+        }),
+        None => Ok(file_name),
+    }
 }
 
 /// [`process_input_preferring`] that, with `stored_text`, reuses the text an
@@ -523,12 +533,12 @@ async fn process_input_reusing(
 
     // An in-memory upload is kept as it arrived, under Python's
     // `<content_hash>/<file name>` key (`save_data_to_file.py`), and the row
-    // points `original_data_location` at it. A fetched URL is not a
-    // `Binary` here: `input` is still the URL.
-    let original_upload_uri = match unwrap_data_item(input) {
-        DataInput::Binary { name, .. } => {
-            Some(store_original_upload(storage, &claims, &collected, &content_hash, name).await?)
-        }
+    // points `original_data_location` at it. Its name is checked here, before
+    // a loader runs; the file is stored only once the loader has succeeded,
+    // so a failed add leaves nothing behind. A fetched URL is not a `Binary`
+    // here: `input` is still the URL.
+    let upload_name = match unwrap_data_item(input) {
+        DataInput::Binary { name, .. } => Some(upload_file_name(name)?),
         _ => None,
     };
 
@@ -683,6 +693,14 @@ async fn process_input_reusing(
         }
     };
 
+    // The loader has succeeded: keep the upload (see `upload_name` above).
+    let original_upload_uri = match upload_name {
+        Some(file_name) => Some(
+            store_original_upload(storage, &claims, &collected, &content_hash, file_name).await?,
+        ),
+        None => None,
+    };
+
     // Compute derived fields that previously lived in add()
     let raw_data_uri = storage_location_to_uri(storage.base_path(), &storage_location);
     let name = extract_name(input, &content_hash);
@@ -738,11 +756,12 @@ async fn process_input_reusing(
 /// This is the second step of the ingest pipeline (Task 2).
 #[instrument(
     name = "ingestion.persist_data",
-    skip(processed, database),
+    skip(processed, storage, database),
     fields(new_data_id = %processed.data_id)
 )]
 pub async fn persist_data(
     processed: &ProcessedInput,
+    storage: &dyn StorageTrait,
     database: &dyn IngestDb,
     dataset_name: &str,
     owner_id: Uuid,
@@ -750,6 +769,7 @@ pub async fn persist_data(
 ) -> Result<Data, Box<dyn std::error::Error>> {
     persist_data_with_acl_and_locks(
         processed,
+        storage,
         database,
         dataset_name,
         owner_id,
@@ -765,14 +785,17 @@ pub async fn persist_data(
 /// (read, write, delete, share) to the owner when a new dataset is created.
 ///
 /// Unsynchronised: equivalent to
-/// [`persist_data_with_acl_and_locks`] with no locks. Kept at its original
-/// seven-argument shape because it is public API re-exported from both
-/// `cognee_ingestion` and `cognee`, and no existing caller should have to
-/// change to say "I am the only writer" — which is what `None` means and what
-/// every single-caller embedder (the CLI, the library facade) wants. Serving
+/// [`persist_data_with_acl_and_locks`] with no locks, which is what every
+/// single-caller embedder (the CLI, the library facade) wants. Serving
 /// concurrent requests? Use [`persist_data_with_acl_and_locks`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the same independent dimensions as `persist_data_with_acl_and_locks`, \
+              minus the locks"
+)]
 pub async fn persist_data_with_acl(
     processed: &ProcessedInput,
+    storage: &dyn StorageTrait,
     database: &dyn IngestDb,
     dataset_name: &str,
     owner_id: Uuid,
@@ -782,6 +805,7 @@ pub async fn persist_data_with_acl(
 ) -> Result<Data, Box<dyn std::error::Error>> {
     persist_data_with_acl_and_locks(
         processed,
+        storage,
         database,
         dataset_name,
         owner_id,
@@ -813,7 +837,7 @@ pub async fn persist_data_with_acl(
 /// caller (the CLI, the library facade) wants.
 #[instrument(
     name = "ingestion.persist_data_with_acl",
-    skip(processed, database, acl_db, dataset_locks),
+    skip(processed, storage, database, acl_db, dataset_locks),
     fields(new_data_id = %processed.data_id)
 )]
 #[allow(
@@ -824,6 +848,7 @@ pub async fn persist_data_with_acl(
 )]
 pub async fn persist_data_with_acl_and_locks(
     processed: &ProcessedInput,
+    storage: &dyn StorageTrait,
     database: &dyn IngestDb,
     dataset_name: &str,
     owner_id: Uuid,
@@ -995,7 +1020,7 @@ pub async fn persist_data_with_acl_and_locks(
             .await?
             .unwrap_or(pin);
         if let Some(row) = database.get_data(resolved).await? {
-            return persist_pinned_row(processed, database, dataset.id, row).await;
+            return persist_pinned_row(processed, storage, database, dataset.id, row).await;
         }
         new_row_id = resolved;
     }
@@ -1105,6 +1130,11 @@ pub async fn persist_data_with_acl_and_locks(
                 refresh.external_metadata.as_deref(),
             );
         if !unchanged {
+            let replaced = replaced_locations(
+                &existing_data,
+                &refresh.raw_data_location,
+                &refresh.original_data_location,
+            );
             // A row deleted since the read above fails the write with
             // `DatabaseError::NotFound`, which propagates: the call does
             // not report a row that no longer exists.
@@ -1129,6 +1159,7 @@ pub async fn persist_data_with_acl_and_locks(
             existing_data.node_set = refresh.node_set;
             existing_data.external_metadata = refresh.external_metadata;
             existing_data.updated_at = Some(updated_at);
+            release_replaced_files(storage, database, &replaced).await?;
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
         return Ok(existing_data);
@@ -1198,6 +1229,7 @@ pub async fn persist_data_with_acl_and_locks(
 /// cleared only when the content changed.
 async fn persist_pinned_row(
     processed: &ProcessedInput,
+    storage: &dyn StorageTrait,
     database: &dyn IngestDb,
     dataset_id: Uuid,
     mut row: Data,
@@ -1227,6 +1259,7 @@ async fn persist_pinned_row(
         content_changed,
     )?;
 
+    let replaced = replaced_locations(&row, &processed.raw_data_uri, &processed.original_location);
     row.name = processed.name.clone();
     row.raw_data_location = processed.raw_data_uri.clone();
     row.original_data_location = processed.original_location.clone();
@@ -1254,7 +1287,56 @@ async fn persist_pinned_row(
 
     let saved = database.update_data(row).await?;
     info!(data_id = %saved.id, content_changed, "pinned row refreshed");
+    release_replaced_files(storage, database, &replaced).await?;
     Ok(saved)
+}
+
+/// The files `row` points at now and will not once it holds `raw` and
+/// `original` (Python `ingest_data`'s `replaced_locations`).
+fn replaced_locations(row: &Data, raw: &str, original: &str) -> Vec<String> {
+    let mut replaced: Vec<String> = Vec::new();
+    for old in [&row.raw_data_location, &row.original_data_location] {
+        if old != raw && old != original && !replaced.contains(old) {
+            replaced.push(old.clone());
+        }
+    }
+    replaced
+}
+
+/// Remove each of `locations` that is under the storage root, claimed by no
+/// add in progress and pointed at by no row (Python
+/// `remove_unreferenced_files`). Called once a row has moved on to new files.
+async fn release_replaced_files(
+    storage: &dyn StorageTrait,
+    database: &dyn IngestDb,
+    locations: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if locations.is_empty() {
+        return Ok(());
+    }
+    let removal = cognee_storage::removing_stored_files().await;
+    for location in locations {
+        if !cognee_storage::is_storage_managed(storage.base_path(), location)
+            || removal.is_claimed(&storage.get_full_path(location))
+            || database.count_data_location_references(location).await? > 0
+        {
+            continue;
+        }
+        match cognee_storage::remove_stored_file(storage, &removal, location).await {
+            Ok(()) => {}
+            Err(cognee_storage::StorageError::NotFound(_)) => {
+                warn!(%location, "replaced file was already gone");
+            }
+            Err(error) => {
+                return Err(format!(
+                    "The new content was stored, but its replaced file {location} \
+                     could not be removed: {error}"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The `external_metadata` and `node_set` column a re-ingested (pinned) row
@@ -1978,8 +2060,9 @@ fn extract_original_location(input: &DataInput, raw_data_uri: &str) -> String {
         }
         DataInput::Url(url) => url.clone(),
         DataInput::S3Path(path) => path.clone(),
-        // Not reached from `process_input`, which records the stored upload.
-        DataInput::Binary { .. } => raw_data_uri.to_string(),
+        DataInput::Binary { .. } => {
+            unreachable!("process_input stores every Binary upload and records its URI")
+        }
         DataInput::DataItem { data, .. } => extract_original_location(data, raw_data_uri),
     }
 }
@@ -2093,17 +2176,19 @@ fn make_process_input_task_preferring(
 /// Build a [`TypedTask`] that resolves or creates the dataset, deduplicates by
 /// content hash, persists a new [`Data`] record if needed, and returns it.
 pub fn make_persist_data_task(
+    storage: Arc<dyn StorageTrait>,
     database: Arc<dyn IngestDb>,
     dataset_name: String,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
 ) -> TypedTask<ProcessedInput, Data> {
-    make_persist_data_task_with_acl(database, dataset_name, owner_id, tenant_id, None)
+    make_persist_data_task_with_acl(storage, database, dataset_name, owner_id, tenant_id, None)
 }
 
 /// Like [`make_persist_data_task`], but optionally grants ACL permissions
 /// on newly created datasets.
 pub fn make_persist_data_task_with_acl(
+    storage: Arc<dyn StorageTrait>,
     database: Arc<dyn IngestDb>,
     dataset_name: String,
     owner_id: Uuid,
@@ -2111,6 +2196,7 @@ pub fn make_persist_data_task_with_acl(
     acl_db: Option<Arc<dyn AclDb>>,
 ) -> TypedTask<ProcessedInput, Data> {
     make_persist_data_task_with_acl_and_params(
+        storage,
         database,
         dataset_name,
         owner_id,
@@ -2155,6 +2241,7 @@ fn loader_names(preferred: Option<&[(String, String)]>) -> Vec<String> {
 /// with the [`AddParams`] fields (`node_set`, `importance_weight`) and
 /// honours an optional `dataset_id` override.
 fn make_persist_data_task_with_acl_and_params(
+    storage: Arc<dyn StorageTrait>,
     database: Arc<dyn IngestDb>,
     dataset_name: String,
     owner_id: Uuid,
@@ -2174,12 +2261,14 @@ fn make_persist_data_task_with_acl_and_params(
         processed.pinned_id = add_params.pinned_id;
         let override_ds = add_params.target_dataset_id;
         let dataset_locks = add_params.dataset_locks.clone();
+        let storage = Arc::clone(&storage);
         let database = Arc::clone(&database);
         let dataset_name = dataset_name.clone();
         let acl_db = acl_db.clone();
         Box::pin(async move {
             persist_data_with_acl_and_locks(
                 &processed,
+                &*storage,
                 &*database,
                 &dataset_name,
                 owner_id,
@@ -2284,6 +2373,7 @@ fn build_add_pipeline_internal(
         ),
     )
     .add_task(make_persist_data_task_with_acl_and_params(
+        storage,
         database,
         dataset_name.to_string(),
         owner_id,
@@ -2733,10 +2823,12 @@ pub enum IngestionError {
     /// (Python: `ValueError: Could not determine MIME type for image file`).
     #[error("Could not determine MIME type for image file: {name}. Is the extension correct?")]
     ImageMimeTypeUndetermined { name: String },
-    /// A `Binary` upload whose name has no file name part (empty, or only
-    /// separators), so it cannot be stored under `<content_hash>/<name>`.
-    #[error("Binary upload has no file name: {name:?}")]
-    UnnamedBinaryUpload { name: String },
+    /// A `Binary` upload whose name cannot be stored as
+    /// `<content_hash>/<file name>`: its file name part (after the last `/`
+    /// or `\`) is empty, `.` or `..`, holds a NUL byte, or is longer than 255
+    /// bytes.
+    #[error("Invalid upload name {name:?}: {reason}")]
+    InvalidUploadName { name: String, reason: &'static str },
     /// A node set — the add call's or one in a data item's
     /// `external_metadata["node_set"]` — is not a list of non-empty names.
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
@@ -2948,7 +3040,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let data = persist_data(&processed, &db, "url-html", owner_id, None)
+        let data = persist_data(&processed, &storage, &db, "url-html", owner_id, None)
             .await
             .unwrap();
 
@@ -2998,7 +3090,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let data = persist_data(&processed, &db, "wrapped-url", owner_id, None)
+        let data = persist_data(&processed, &storage, &db, "wrapped-url", owner_id, None)
             .await
             .unwrap();
 
@@ -4645,7 +4737,7 @@ mod tests {
         .unwrap();
         processed.node_set = Some(vec!["alpha".into()]);
 
-        let data = persist_data(&processed, &db, "direct_ds", owner_id, None)
+        let data = persist_data(&processed, &storage, &db, "direct_ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(data.node_set.as_deref(), Some("[\"alpha\"]"));
@@ -4658,7 +4750,7 @@ mod tests {
 
         // Blank names are refused on this entry point too.
         processed.node_set = Some(vec![String::new()]);
-        let err = persist_data(&processed, &db, "direct_ds", owner_id, None)
+        let err = persist_data(&processed, &storage, &db, "direct_ds", owner_id, None)
             .await
             .expect_err("blank name");
         assert!(matches!(
@@ -4687,7 +4779,7 @@ mod tests {
         .await
         .unwrap();
         processed.pinned_id = pin;
-        persist_data(&processed, db, name, owner_id, None).await
+        persist_data(&processed, storage, db, name, owner_id, None).await
     }
 
     /// A pinned item refreshes its row in place: the id, owner, creation time
@@ -4970,7 +5062,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let old = persist_data(&first, &db, "ds", owner_id, None)
+        let old = persist_data(&first, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
 
@@ -4987,7 +5079,7 @@ mod tests {
         .await
         .unwrap();
         processed.pinned_id = Some(old.id);
-        let refreshed = persist_data(&processed, &db, "ds", owner_id, None)
+        let refreshed = persist_data(&processed, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
 
@@ -5065,7 +5157,9 @@ mod tests {
         .await
         .unwrap();
         old.original_location = "text://inline".into();
-        let stored = persist_data(&old, &db, "ds", owner_id, None).await.unwrap();
+        let stored = persist_data(&old, &storage, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
         assert_eq!(stored.original_data_location, "text://inline");
 
         let labelled = DataInput::DataItem {
@@ -5076,7 +5170,7 @@ mod tests {
         let again = process_input(&labelled, &storage, HashAlgorithm::Md5, owner_id, None)
             .await
             .unwrap();
-        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+        let refreshed = persist_data(&again, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
 
@@ -5134,11 +5228,14 @@ mod tests {
         }
     }
 
-    /// A `Binary` whose name has no file name part fails the add.
+    /// A `Binary` whose file name cannot be stored fails the add with
+    /// `InvalidUploadName` and writes nothing.
     #[tokio::test]
-    async fn a_binary_upload_without_a_file_name_is_refused() {
-        let storage = MockStorage::new();
-        for name in ["", "uploads/", "dir\\"] {
+    async fn a_binary_upload_with_a_bad_name_is_refused() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let long = "a".repeat(256);
+        for name in ["", "uploads/", "dir\\", ".", "x/..", "a\0b.txt", &long] {
             let input = DataInput::Binary {
                 data: b"bytes".to_vec(),
                 name: name.into(),
@@ -5149,11 +5246,29 @@ mod tests {
             assert!(
                 matches!(
                     error.downcast_ref::<IngestionError>(),
-                    Some(IngestionError::UnnamedBinaryUpload { .. })
+                    Some(IngestionError::InvalidUploadName { .. })
                 ),
                 "{name:?}: {error}"
             );
         }
+        let written: Vec<_> = std::fs::read_dir(temp_dir.path()).unwrap().collect();
+        assert!(written.is_empty(), "nothing is stored: {written:?}");
+    }
+
+    /// An upload whose loader fails is not stored: no row will point at it.
+    #[tokio::test]
+    async fn a_failed_add_leaves_no_upload_behind() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let input = DataInput::Binary {
+            data: vec![0xff, 0xfe, 0x00, 0x80],
+            name: "bad.txt".into(),
+        };
+        process_input(&input, &storage, HashAlgorithm::Md5, Uuid::new_v4(), None)
+            .await
+            .expect_err("non-UTF-8 text fails in the loader");
+        let written: Vec<_> = std::fs::read_dir(temp_dir.path()).unwrap().collect();
+        assert!(written.is_empty(), "nothing is stored: {written:?}");
     }
 
     /// Through `persist_data`: a row an older build stored as `binary://<name>`
@@ -5174,13 +5289,15 @@ mod tests {
             .await
             .unwrap();
         old.original_location = "binary://notes.txt".into();
-        let stored = persist_data(&old, &db, "ds", owner_id, None).await.unwrap();
+        let stored = persist_data(&old, &storage, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
         assert_eq!(stored.original_data_location, "binary://notes.txt");
 
         let again = process_input(&upload, &storage, HashAlgorithm::Md5, owner_id, None)
             .await
             .unwrap();
-        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+        let refreshed = persist_data(&again, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(refreshed.id, stored.id);
@@ -5191,6 +5308,91 @@ mod tests {
         let key = format!("{}/notes.txt", again.content_hash);
         let expected = format!("file://{}", temp_dir.path().join(key).display());
         assert_eq!(reread.original_data_location, expected);
+    }
+
+    /// Re-adding the same bytes under a new name moves the row on to the new
+    /// copy and removes the old one, which nothing points at any more.
+    #[tokio::test]
+    async fn re_adding_an_upload_under_a_new_name_removes_the_old_copy() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+        let add = |name: &str| DataInput::Binary {
+            data: b"an uploaded note".to_vec(),
+            name: name.into(),
+        };
+
+        let old = process_input(
+            &add("old.txt"),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        persist_data(&old, &storage, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+        let folder = temp_dir.path().join(&old.content_hash);
+        // Its row is saved: the add's claims end, as in the pipeline.
+        drop(old);
+
+        let new = process_input(
+            &add("new.txt"),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        persist_data(&new, &storage, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        assert!(!folder.join("old.txt").exists(), "the old copy is removed");
+        assert!(folder.join("new.txt").exists(), "the new copy stays");
+    }
+
+    /// A re-add keeps the old copy while a row of another dataset still
+    /// points at it.
+    #[tokio::test]
+    async fn re_adding_an_upload_keeps_a_copy_another_row_uses() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let owner_id = Uuid::new_v4();
+        let process = |name: &str| {
+            let input = DataInput::Binary {
+                data: b"an uploaded note".to_vec(),
+                name: name.into(),
+            };
+            let storage = &storage;
+            async move {
+                process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        for dataset in ["ds1", "ds2"] {
+            let old = process("old.txt").await;
+            persist_data(&old, &storage, &db, dataset, owner_id, None)
+                .await
+                .unwrap();
+        }
+        let new = process("new.txt").await;
+        persist_data(&new, &storage, &db, "ds1", owner_id, None)
+            .await
+            .unwrap();
+
+        let folder = temp_dir.path().join(&new.content_hash);
+        assert!(folder.join("old.txt").exists(), "ds2's row still uses it");
+        assert!(folder.join("new.txt").exists());
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored
@@ -5216,7 +5418,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let stored = persist_data(&first, &db, "ds", owner_id, None)
+        let stored = persist_data(&first, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
         let again = process_input(
@@ -5228,7 +5430,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let refreshed = persist_data(&again, &db, "ds", owner_id, None)
+        let refreshed = persist_data(&again, &storage, &db, "ds", owner_id, None)
             .await
             .unwrap();
 
@@ -5301,6 +5503,7 @@ mod tests {
 
         let err = persist_data_with_acl(
             &processed,
+            &storage,
             &db,
             "orphan_ds",
             owner_id,
@@ -5396,7 +5599,7 @@ mod tests {
             .unwrap();
 
         processed.node_set = Some(vec!["a".into(), "b".into()]);
-        let data = persist_data(&processed, &db, "python_row_ds", owner_id, None)
+        let data = persist_data(&processed, &storage, &db, "python_row_ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(data.node_set.as_deref(), Some(python_column));
@@ -5416,7 +5619,7 @@ mod tests {
 
         // A different set is still a refresh.
         processed.node_set = Some(vec!["c".into()]);
-        let data = persist_data(&processed, &db, "python_row_ds", owner_id, None)
+        let data = persist_data(&processed, &storage, &db, "python_row_ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(data.node_set.as_deref(), Some(r#"["c"]"#));
@@ -5475,6 +5678,12 @@ mod tests {
         }
         async fn get_data(&self, id: Uuid) -> Result<Option<Data>, cognee_database::DatabaseError> {
             IngestDb::get_data(&*self.inner, id).await
+        }
+        async fn count_data_location_references(
+            &self,
+            location: &str,
+        ) -> Result<usize, cognee_database::DatabaseError> {
+            IngestDb::count_data_location_references(&*self.inner, location).await
         }
         /// The pipeline's read of an existing row is its dedup lookup.
         async fn find_data_in_dataset(
@@ -5601,7 +5810,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = persist_data(&processed, &*db, "raced_ds", owner_id, None)
+        let first = persist_data(&processed, &storage, &*db, "raced_ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(first.token_count, -1);
@@ -5614,7 +5823,7 @@ mod tests {
             hook: AfterRead::WriteOtherColumns,
         };
         processed.node_set = Some(vec!["alpha".into()]);
-        let refreshed = persist_data(&processed, &racing, "raced_ds", owner_id, None)
+        let refreshed = persist_data(&processed, &storage, &racing, "raced_ds", owner_id, None)
             .await
             .unwrap();
         assert_eq!(refreshed.node_set.as_deref(), Some(r#"["alpha"]"#));
@@ -5671,7 +5880,7 @@ mod tests {
         )
         .await
         .unwrap();
-        persist_data(&processed, &*db, "vanish_ds", owner_id, None)
+        persist_data(&processed, &storage, &*db, "vanish_ds", owner_id, None)
             .await
             .unwrap();
 
@@ -5681,7 +5890,7 @@ mod tests {
             hook: AfterRead::DeleteRow,
         };
         processed.node_set = Some(vec!["alpha".into()]);
-        let err = persist_data(&processed, &racing, "vanish_ds", owner_id, None)
+        let err = persist_data(&processed, &storage, &racing, "vanish_ds", owner_id, None)
             .await
             .expect_err("a vanished row is not reported as refreshed");
         assert!(err.to_string().contains("not found"), "got {err}");
@@ -5716,7 +5925,7 @@ mod tests {
         )
         .await
         .unwrap();
-        persist_data(&processed, &*db, "contended_ds", owner_id, None)
+        persist_data(&processed, &storage, &*db, "contended_ds", owner_id, None)
             .await
             .unwrap();
 
@@ -5736,8 +5945,8 @@ mod tests {
         with_b.node_set = Some(vec!["b".into()]);
 
         let (a, b) = tokio::join!(
-            persist_data(&with_a, &racing, "contended_ds", owner_id, None),
-            persist_data(&with_b, &racing, "contended_ds", owner_id, None),
+            persist_data(&with_a, &storage, &racing, "contended_ds", owner_id, None),
+            persist_data(&with_b, &storage, &racing, "contended_ds", owner_id, None),
         );
         let (a, b) = (a.unwrap(), b.unwrap());
         assert_eq!(
@@ -5861,7 +6070,7 @@ mod tests {
         };
 
         let first = process().await.unwrap();
-        persist_data(&first, &*db, "meetings", owner_id, None)
+        persist_data(&first, &storage, &*db, "meetings", owner_id, None)
             .await
             .unwrap();
         let again = process().await.unwrap();

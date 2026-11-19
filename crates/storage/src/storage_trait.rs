@@ -148,6 +148,12 @@ pub trait StorageTrait: Send + Sync {
     /// Delete data at location
     async fn delete(&self, location: &str) -> Result<(), StorageError>;
 
+    /// Remove the folder `location` is in when it is empty and is not the
+    /// storage root. A backend without folders has nothing to remove.
+    async fn remove_empty_parent(&self, _location: &str) -> Result<(), StorageError> {
+        Ok(())
+    }
+
     /// Get the full path for a location
     fn get_full_path(&self, location: &str) -> PathBuf;
 

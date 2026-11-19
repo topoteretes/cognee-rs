@@ -1015,7 +1015,9 @@ impl DeleteService {
                 // A location outside the storage root is the user's own
                 // file or an external URL and is never touched (Python
                 // `remove_data_file_if_unreferenced`).
-                if is_original && !self.is_storage_managed(&location) {
+                if is_original
+                    && !cognee_storage::is_storage_managed(self.storage.base_path(), &location)
+                {
                     continue;
                 }
                 // Held through the count and the delete, so an add cannot
@@ -1038,7 +1040,8 @@ impl DeleteService {
                 if references > 0 {
                     continue;
                 }
-                match self.storage.delete(&location).await {
+                match cognee_storage::remove_stored_file(&*self.storage, &removal, &location).await
+                {
                     Ok(()) => {
                         deleted_storage += 1;
                     }
@@ -1206,36 +1209,6 @@ impl DeleteService {
             warnings,
             data_id: resolved_data_id(request, &targets),
         })
-    }
-
-    /// Whether `location` lives under this service's storage root, so the
-    /// delete path may remove it. Mirrors the data-root test of Python's
-    /// `remove_data_file_if_unreferenced`: a user's own local file, an
-    /// external URL (`s3://`, `http://`) or an inline marker (`text://`) is
-    /// never removed.
-    fn is_storage_managed(&self, location: &str) -> bool {
-        let path_str = location.strip_prefix("file://").unwrap_or(location);
-        if path_str.contains("://") {
-            return false;
-        }
-        let base = self.storage.base_path();
-        if base.is_empty() {
-            // A backend without a filesystem root (mock, S3-backed) keys
-            // its files by bare location.
-            return true;
-        }
-        let path = std::path::Path::new(path_str);
-        if !path.is_absolute() {
-            // A plain relative storage key.
-            return true;
-        }
-        let base = std::path::Path::new(base);
-        let base = if base.is_absolute() {
-            base.to_path_buf()
-        } else {
-            std::env::current_dir().unwrap_or_default().join(base)
-        };
-        path.starts_with(base)
     }
 
     async fn execute_memory_only(

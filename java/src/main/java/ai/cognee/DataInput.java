@@ -30,7 +30,11 @@ public final class DataInput {
         return new DataInput(Map.of("type", "url", "url", url));
     }
 
-    /** Binary input; {@code name} drives MIME detection. Bytes are sent base64. */
+    /**
+     * Binary input; {@code name} drives MIME detection and is the stored file's
+     * name (an empty, {@code .} or {@code ..} name fails the add). Bytes are
+     * sent base64.
+     */
     public static DataInput binary(byte[] bytes, String name) {
         String b64 = Base64.getEncoder().encodeToString(bytes);
         return new DataInput(Map.of("type", "binary", "bytes", b64, "name", name));
