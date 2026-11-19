@@ -30,6 +30,7 @@ members = [
     "crates/truth-subspace",
     "crates/test-utils",
     "crates/visualization",
+    "crates/code-graph",
     "crates/migration",
     "crates/observability",
     "crates/telemetry",
