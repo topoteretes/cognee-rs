@@ -43,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DataInput::DataItem` or `DataRowRefresh` with a struct literal: each gains
   a `system_metadata` field.
 
+- **`cognee-code-graph`: the deterministic enola code graph (SDK-1053).** A
+  new crate ports Python's `cognee/tasks/code_graph` mapping at parity pin
+  `a59433e6b` (enola 0.5.1). It reads an enola snapshot directory
+  (`parse_enola_snapshot`: `facts.jsonl`, `insights.json` findings, and
+  `flows.json` when `receipt.json` vouches for it; `validate_receipt` rejects
+  an unknown artifact format), maps the facts onto the 15 code node types
+  (`map_facts_to_data_points`) and resolves their relations into typed edges
+  (`build_code_graph_edges`). Node ids (`fact_node_id`), `fact_hash` values,
+  properties and edges match Python byte for byte, checked by goldens Python
+  produced. It is the pure half: it runs no subprocess and writes no graph.
+  serde_json's `float_roundtrip` is now enabled workspace-wide so a
+  17-digit float parses to the same double as Python's `json.loads`.
+
 - **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
   ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
   documents not accessed for `minutes_threshold` minutes, or never, and —
