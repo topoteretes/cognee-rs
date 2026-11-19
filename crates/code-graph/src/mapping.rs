@@ -419,4 +419,31 @@ mod tests {
         );
         assert_eq!(describe_fact("service", &Map::new()), None);
     }
+
+    #[test]
+    fn fact_hash_of_a_seventeen_digit_float_matches_python() {
+        // A 17-significant-digit float must parse to the correctly rounded
+        // double, as Python's `json.loads` does; serde_json's fast path can
+        // land one ULP off and change the hash (workspace `float_roundtrip`).
+        // Expected values: Python's `_fact_content_hash` over
+        // `json.loads(text)` (extract_code_graph.py:294-305).
+        let cases = [
+            (
+                r#"{"name": "m", "ratio": 0.9452706955539223}"#,
+                "sha256:d31f8d042f69ace8f3f43946b6cd0a037de6b7bb314db845ad79717f70016104",
+            ),
+            (
+                r#"{"ratio": 2.2250738585072011e-308}"#,
+                "sha256:06d5d5d0db3ad0921e8d57f89a22f63f363af4547f9ad57fff0920436cf8f894",
+            ),
+            (
+                r#"{"r": 0.30000000000000004}"#,
+                "sha256:3d2bca4108a01ee176a9de01c4732370539473383563f1ae610c4a48d4447490",
+            ),
+        ];
+        for (text, expected) in cases {
+            let fields: Map<String, Value> = serde_json::from_str(text).expect("valid json");
+            assert_eq!(fact_content_hash(&fields), expected, "{text}");
+        }
+    }
 }
