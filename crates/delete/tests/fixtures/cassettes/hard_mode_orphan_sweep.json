@@ -2,7 +2,7 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "1ce6cad187268b5944ca9e0e8cd4011cba4100c0fbcd9c12773db32a7529f9e2": {
+    "46a5c626f4ce507dde4ac94fe414d40603f697c29ac76541d58a427dd8446bfc": {
       "method": "structured_output",
       "user_input_preview": "Bob is an engineer at TechCorp. Bob develops cloud infrastructure.",
       "schema_name": "KnowledgeGraph",
@@ -12,13 +12,19 @@
             "id": "Bob",
             "name": "Bob",
             "type": "Person",
-            "description": "Engineer at TechCorp who develops cloud infrastructure"
+            "description": "Engineer at TechCorp"
           },
           {
             "id": "TechCorp",
             "name": "TechCorp",
             "type": "Organization",
             "description": "Company employing Bob"
+          },
+          {
+            "id": "Cloud Infrastructure",
+            "name": "Cloud Infrastructure",
+            "type": "Concept",
+            "description": "Technology developed by Bob"
           }
         ],
         "edges": [
@@ -26,18 +32,18 @@
             "source_node_id": "Bob",
             "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Bob is an engineer at TechCorp"
+            "description": "Bob works at TechCorp"
           },
           {
             "source_node_id": "Bob",
-            "target_node_id": "cloud_infrastructure",
+            "target_node_id": "Cloud Infrastructure",
             "relationship_name": "develops",
             "description": "Bob develops cloud infrastructure"
           }
         ]
       }
     },
-    "dd9db4bf8d8b6ad31b17b7796ef64fc85feaa5ec994ce44efee726517b078893": {
+    "cfab688c7aef805e9fb144c128bc69e9eeeaa070716822367fbda785de1bbbcf": {
       "method": "structured_output",
       "user_input_preview": "Alice is a researcher at TechCorp. Alice studies machine learning.",
       "schema_name": "KnowledgeGraph",
@@ -47,19 +53,19 @@
             "id": "Alice",
             "name": "Alice",
             "type": "Person",
-            "description": "Researcher studying machine learning"
+            "description": "Researcher studying machine learning."
           },
           {
             "id": "TechCorp",
             "name": "TechCorp",
             "type": "Organization",
-            "description": "Organization employing Alice as researcher"
+            "description": "Organization where Alice is a researcher."
           },
           {
-            "id": "machine_learning",
-            "name": "Machine Learning",
+            "id": "Machine_learning",
+            "name": "Machine learning",
             "type": "Concept",
-            "description": "Field studied by Alice"
+            "description": "Field studied by Alice."
           }
         ],
         "edges": [
@@ -67,13 +73,13 @@
             "source_node_id": "Alice",
             "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Alice works at TechCorp as a researcher"
+            "description": "Alice works at TechCorp."
           },
           {
             "source_node_id": "Alice",
-            "target_node_id": "machine_learning",
+            "target_node_id": "Machine_learning",
             "relationship_name": "studies",
-            "description": "Alice studies machine learning"
+            "description": "Alice studies machine learning."
           }
         ]
       }

@@ -2,7 +2,7 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "e6a77a7e8c2087c4b9920a50b5d4750fd282b62213078d34a24a5c4416c6fa15": {
+    "fd40e7fe11c8d3a9b14e7b05a8882f8691aab99cf59aa7a7af19e175f1fceff8": {
       "method": "structured_output",
       "user_input_preview": "Alice works at TechCorp in San Francisco as a software engineer.",
       "schema_name": "KnowledgeGraph",
@@ -12,19 +12,25 @@
             "id": "Alice",
             "name": "Alice",
             "type": "Person",
-            "description": "software engineer"
+            "description": ""
           },
           {
             "id": "TechCorp",
             "name": "TechCorp",
             "type": "Organization",
-            "description": "company"
+            "description": "TechCorp is an organization located in San Francisco."
           },
           {
-            "id": "San Francisco",
+            "id": "San_Francisco",
             "name": "San Francisco",
             "type": "Place",
-            "description": "city in California"
+            "description": "San Francisco is a city."
+          },
+          {
+            "id": "Software_Engineer",
+            "name": "Software Engineer",
+            "type": "Concept",
+            "description": "Software Engineer is a profession held by Alice at TechCorp."
           }
         ],
         "edges": [
@@ -32,13 +38,19 @@
             "source_node_id": "Alice",
             "target_node_id": "TechCorp",
             "relationship_name": "works_at",
-            "description": "Alice works at TechCorp"
+            "description": "Alice works at TechCorp."
           },
           {
             "source_node_id": "TechCorp",
-            "target_node_id": "San Francisco",
+            "target_node_id": "San_Francisco",
             "relationship_name": "located_in",
-            "description": "TechCorp is located in San Francisco"
+            "description": "TechCorp is located in San Francisco."
+          },
+          {
+            "source_node_id": "Alice",
+            "target_node_id": "Software_Engineer",
+            "relationship_name": "has_profession",
+            "description": "Alice has the profession of software engineer."
           }
         ]
       }
