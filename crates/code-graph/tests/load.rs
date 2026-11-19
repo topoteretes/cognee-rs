@@ -393,8 +393,8 @@ async fn a_missing_configured_binary_is_enola_not_installed() {
 
 #[tokio::test]
 async fn a_binary_that_cannot_be_found_is_enola_not_installed() {
-    // A relative path that resolves nowhere: spawning reports NotFound, as
-    // a bare `enola` missing from PATH does.
+    // No configured path: the bare `enola` is resolved on PATH at spawn, and
+    // a missing binary reports NotFound, which maps to EnolaNotInstalled.
     let (_root, repo_path) = repo("snapshot:basic");
     let config = CodeGraphConfig {
         enola_path: String::new(),
