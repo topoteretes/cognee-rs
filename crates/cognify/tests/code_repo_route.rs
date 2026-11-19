@@ -645,7 +645,11 @@ async fn a_legacy_dlt_row_fails_the_whole_run() {
     let error = stack
         .cognify(
             items.clone(),
-            &policy(config(true), FailureStop::RunToEnd, RollbackScope::FailedItems),
+            &policy(
+                config(true),
+                FailureStop::RunToEnd,
+                RollbackScope::FailedItems,
+            ),
         )
         .await
         .unwrap_err();
@@ -672,9 +676,14 @@ async fn a_dlt_source_row_is_refused() {
     let (_, documents) = split(&items);
     let mut row = documents[0].clone();
     row.system_metadata = Some(r#"{"source": "dlt_source"}"#.to_string());
-    assert!(!cognee_cognify::routing::routes_need_llm(std::slice::from_ref(&row)));
+    assert!(!cognee_cognify::routing::routes_need_llm(
+        std::slice::from_ref(&row)
+    ));
 
-    let error = stack.cognify(vec![row.clone()], &config(true)).await.unwrap_err();
+    let error = stack
+        .cognify(vec![row.clone()], &config(true))
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             error,

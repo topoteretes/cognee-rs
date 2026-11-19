@@ -242,6 +242,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **`add(<directory>)` and the CODE_REPO cognify route (SDK-1053).** A
+  `DataInput::FilePath` naming a directory is now expanded on `add` instead
+  of failing: a code project (Python's `detect_code_project`) becomes one
+  repo manifest item stamped `system_metadata.source = "code_repo"` plus its
+  documents, any other directory is flattened into its files. cognify runs a
+  repo item down the deterministic code graph (`cognee-code-graph`'s
+  `extract_code_repo_graph`, no LLM, no embedding) in the same run as the
+  standard items; a repo item that fails to load is a per-item failure
+  under the failure policy (`FailureStage::CodeGraph`), and one that loaded
+  counts as a survivor. A per-file code item, a DLT source stamped in
+  `system_metadata` and a legacy `dlt` row fail the whole run. Without an
+  LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
+  CLI) a code project's documents are left out at add and the repo item
+  cognifies keyless. The manifest's data id is content-derived for now:
+  Python pins it to (user, dataset, repo path) so a re-add replaces one
+  record; that comes with the incremental re-ingest (SDK-1053 O6), so until
+  then a changed repository is added as a new item.
+  API: `CognifyConfig.code_graph` is a new public field (struct literals
+  need it; `..CognifyConfig::default()` covers it); new variants on enums
+  that are not `#[non_exhaustive]`: `CognifyError::{Route, CodeGraph}`,
+  `CodeGraphError::InvalidRepoItem`,
+  `CognifyRouteError::{UnsupportedRoute, InvalidNodeSet}` and
+  `FailureStage::CodeGraph`; new `AddPipeline::with_llm_available`,
+  `routing::routes_need_llm`, `tasks::run_code_routes` /
+  `make_code_routes_task` / `RoutedCognifyInput` /
+  `make_classify_routed_documents_task`, and
+  `FailureReport::{note_routed_items, routed_items}`.
+
 - **`token_count` is `null` until cognify runs, in every binding (SDK-951).**
   The data rows returned by `add`, `addAndCognify` and `listData` used to
   carry `token_count: -1` until `cognify` had counted the item, a sentinel
