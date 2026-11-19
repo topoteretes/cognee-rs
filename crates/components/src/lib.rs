@@ -45,6 +45,7 @@ pub use builtins::embedding::{OnnxAssetDefaults, onnx_asset_defaults};
 #[cfg(any(feature = "pgvector", feature = "pggraph"))]
 pub use builtins::pg_dataset_handlers::PostgresDatasetHandler;
 pub use builtins::{build_database, build_embedding_config, build_storage};
+pub use cognee_code_graph::CodeGraphConfig;
 pub use context::{
     AwsInputs, BackendBuildContext, EmbeddingInputs, LlmInputs, parse_reasoning_override,
     parse_structured_output_mode,

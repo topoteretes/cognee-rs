@@ -19,6 +19,8 @@
     "chunk_size",
     "chunk_strategy",
     "classification_model",
+    "code_graph.enola_path",
+    "code_graph.enola_timeout_secs",
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
@@ -342,6 +344,8 @@
     "ontology.resolver",
     "ontology.matching_strategy",
     "graph_extraction.backend",
+    "code_graph.enola_path",
+    "code_graph.enola_timeout_secs",
     "vector.pgvector.hnsw_m",
     "vector.pgvector.hnsw_ef_construction",
     "vector.pgvector.maintenance_workers",
@@ -2292,6 +2296,114 @@
     "err": true
   },
   "set classification_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.enola_path <- \"\"": {
+    "ok": {}
+  },
+  "set code_graph.enola_path <- \"1\"": {
+    "ok": {
+      "code_graph.enola_path": "1"
+    }
+  },
+  "set code_graph.enola_path <- \"s\"": {
+    "ok": {
+      "code_graph.enola_path": "s"
+    }
+  },
+  "set code_graph.enola_path <- \"true\"": {
+    "ok": {
+      "code_graph.enola_path": "true"
+    }
+  },
+  "set code_graph.enola_path <- -1": {
+    "err": true
+  },
+  "set code_graph.enola_path <- 0": {
+    "err": true
+  },
+  "set code_graph.enola_path <- 1": {
+    "err": true
+  },
+  "set code_graph.enola_path <- 1.5": {
+    "err": true
+  },
+  "set code_graph.enola_path <- 5000000000": {
+    "err": true
+  },
+  "set code_graph.enola_path <- 70000": {
+    "err": true
+  },
+  "set code_graph.enola_path <- [1]": {
+    "err": true
+  },
+  "set code_graph.enola_path <- false": {
+    "err": true
+  },
+  "set code_graph.enola_path <- null": {
+    "err": true
+  },
+  "set code_graph.enola_path <- true": {
+    "err": true
+  },
+  "set code_graph.enola_path <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- \"\"": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- \"1\"": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- \"s\"": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- \"true\"": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- -1": {
+    "ok": {
+      "code_graph.enola_timeout_secs": -1.0
+    }
+  },
+  "set code_graph.enola_timeout_secs <- 0": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 0.0
+    }
+  },
+  "set code_graph.enola_timeout_secs <- 1": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 1.0
+    }
+  },
+  "set code_graph.enola_timeout_secs <- 1.5": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 1.5
+    }
+  },
+  "set code_graph.enola_timeout_secs <- 5000000000": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 5000000000.0
+    }
+  },
+  "set code_graph.enola_timeout_secs <- 70000": {
+    "ok": {
+      "code_graph.enola_timeout_secs": 70000.0
+    }
+  },
+  "set code_graph.enola_timeout_secs <- [1]": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- false": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- null": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- true": {
+    "err": true
+  },
+  "set code_graph.enola_timeout_secs <- {\"a\":1}": {
     "err": true
   },
   "set cognee_tracing_enabled <- \"\"": {
@@ -5501,6 +5613,57 @@
     }
   },
   "set enable_last_accessed <- {\"a\":1}": {
+    "err": true
+  },
+  "set enola_path <- \"\"": {
+    "ok": {}
+  },
+  "set enola_path <- \"1\"": {
+    "ok": {
+      "code_graph.enola_path": "1"
+    }
+  },
+  "set enola_path <- \"s\"": {
+    "ok": {
+      "code_graph.enola_path": "s"
+    }
+  },
+  "set enola_path <- \"true\"": {
+    "ok": {
+      "code_graph.enola_path": "true"
+    }
+  },
+  "set enola_path <- -1": {
+    "err": true
+  },
+  "set enola_path <- 0": {
+    "err": true
+  },
+  "set enola_path <- 1": {
+    "err": true
+  },
+  "set enola_path <- 1.5": {
+    "err": true
+  },
+  "set enola_path <- 5000000000": {
+    "err": true
+  },
+  "set enola_path <- 70000": {
+    "err": true
+  },
+  "set enola_path <- [1]": {
+    "err": true
+  },
+  "set enola_path <- false": {
+    "err": true
+  },
+  "set enola_path <- null": {
+    "err": true
+  },
+  "set enola_path <- true": {
+    "err": true
+  },
+  "set enola_path <- {\"a\":1}": {
     "err": true
   },
   "set graph.dataset_database_handler <- \"\"": {
@@ -15663,6 +15826,20 @@
       "relational.port": 1
     }
   },
+  "unset code_graph.enola_path": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset code_graph.enola_timeout_secs": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset cognee_tracing_enabled": {
     "ok": {
       "chunk_size": 7,
@@ -16097,6 +16274,13 @@
     }
   },
   "unset enable_last_accessed": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset enola_path": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

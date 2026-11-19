@@ -761,6 +761,12 @@ impl Settings {
         self.section()
     }
 
+    /// The code graph engine section (`code_graph.*`): the enola binary and
+    /// how long one run may take.
+    pub fn code_graph(&self) -> cognee_components::CodeGraphConfig {
+        self.section()
+    }
+
     /// The LLM kind section (`llm.*`): provider, model, credentials, retries,
     /// timeouts and the other settings every LLM adapter shares.
     pub fn llm(&self) -> cognee_components::LlmConfig {
