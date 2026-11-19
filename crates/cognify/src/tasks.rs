@@ -4426,9 +4426,9 @@ pub(crate) fn provenance_node_id(
     data_id: Uuid,
     node_id: Uuid,
 ) -> Uuid {
-    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
-    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{node_id}");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+    cognee_database::provenance_ids::provenance_node_id(
+        tenant_id, user_id, dataset_id, data_id, node_id,
+    )
 }
 
 /// Deterministic provenance edge ID:
@@ -4470,9 +4470,9 @@ fn provenance_edge_id(
     edge_text: &str,
     target_id: Uuid,
 ) -> Uuid {
-    let tid = tenant_id.map_or("None".to_string(), |t| t.to_string());
-    let raw = format!("{tid}{user_id}{dataset_id}{data_id}{source_id}{edge_text}{target_id}");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, raw.as_bytes())
+    cognee_database::provenance_ids::provenance_edge_id(
+        tenant_id, user_id, dataset_id, data_id, source_id, edge_text, target_id,
+    )
 }
 
 /// The data items behind a set of producing chunks, in first-seen order.
@@ -4503,9 +4503,7 @@ fn edge_slug(edge_text: &str) -> Uuid {
 
 /// Deterministic triplet slug, matching `Triplet::new`.
 fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uuid {
-    let raw = format!("{source_id}{relationship_name}{target_id}");
-    let normalized = raw.to_lowercase().replace(' ', "_").replace('\'', "");
-    Uuid::new_v5(&Uuid::NAMESPACE_OID, normalized.as_bytes())
+    cognee_database::provenance_ids::triplet_slug(source_id, relationship_name, target_id)
 }
 
 /// Map each chunk to the data item it came from, for tracing an artifact's
