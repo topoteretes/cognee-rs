@@ -281,16 +281,17 @@ pub struct LlmInputs {
     pub reasoning_override: Option<bool>,
     /// Which structured-output request shape the OpenAI-compatible adapter may
     /// send, from `LLM_STRUCTURED_OUTPUT_MODE` (`auto` | `json_schema` |
-    /// `tools` | `functions` | `json`). [`StructuredOutputMode::Auto`] keeps the
-    /// three-mode cascade; `tools` / `functions` / `json` each pin that one
-    /// shape and never send the others. Applied via
+    /// `tools` | `functions` | `json`). [`StructuredOutputMode::Auto`] tries
+    /// constrained decoding, then the three-mode cascade; `tools` /
+    /// `functions` / `json` each pin that one shape and never send the
+    /// others. Applied via
     /// `OpenAIAdapter::with_structured_output_mode`. Rust deliberately does not
     /// read Python's `llm_instructor_mode` (`LLM_INSTRUCTOR_MODE`): it takes
     /// different values with different semantics. See docs/configuration.md
     /// § "Structured-output request shape".
     ///
-    /// `json_schema` is **not** a pin — it puts constrained decoding *ahead* of
-    /// the cascade and demotes back into it when the endpoint refuses the
+    /// `auto` and its alias `json_schema` are **not** pins — constrained
+    /// decoding demotes back into the cascade when the endpoint refuses the
     /// request shape, so exhaustion there is not terminal. See
     /// [`StructuredOutputMode::JsonSchema`].
     pub structured_output_mode: StructuredOutputMode,
@@ -467,10 +468,10 @@ pub fn parse_reasoning_override(value: &str) -> Option<bool> {
 /// Parse the `LLM_STRUCTURED_OUTPUT_MODE` knob into a
 /// [`StructuredOutputMode`] for [`LlmInputs::structured_output_mode`].
 /// `tools`, `functions` and `json` each pin that one request shape;
-/// `json_schema` *prefers* constrained decoding and demotes out of it on
-/// rejection, leaving the cascade behind it; everything else — including the
-/// default `auto`, an empty value, or an unrecognised token — leaves the
-/// three-mode cascade in place. Case- and whitespace-insensitive.
+/// everything else — `json_schema`, the default `auto`, an empty value, or an
+/// unrecognised token — *prefers* constrained decoding and demotes out of it
+/// on rejection, leaving the three-mode cascade behind it. Case- and
+/// whitespace-insensitive.
 ///
 /// `function_call` and `legacy` are accepted as aliases of `functions`,
 /// `json_object` of `json`, and `jsonschema` / `strict` / `structured_outputs`
@@ -480,13 +481,14 @@ pub fn parse_reasoning_override(value: &str) -> Option<bool> {
 /// one is not a prefix match for the longer: `json` is OpenAI's untyped
 /// `{"type": "json_object"}`, which constrains nothing but the syntax.
 ///
-/// An unrecognised token falls back to the cascade rather than failing, matching
-/// [`parse_reasoning_override`]: a hard failure here would take down a process
-/// over a misspelled optional knob, and the cascade is the safe default in a way
-/// that no particular pin is. It does **warn**, though — not hard-failing is not
-/// a reason to be silent, and a silently-ignored pin is otherwise invisible,
-/// since the operator sees the cascade they were trying to turn off and no
-/// pinned-exhaustion error ever fires.
+/// An unrecognised token falls back to the default rather than failing,
+/// matching [`parse_reasoning_override`]: a hard failure here would take down a
+/// process over a misspelled optional knob, and the default, which can reach
+/// every shape, is safe in a way that no particular pin is. It does **warn**,
+/// though — not hard-failing is not a reason to be silent, and a
+/// silently-ignored pin is otherwise invisible, since the operator sees the
+/// shapes they were trying to turn off and no pinned-exhaustion error ever
+/// fires.
 ///
 /// Lives here — the shared config→[`LlmInputs`] boundary — so the SDK `Settings`
 /// and the standalone HTTP server resolve the knob identically.
@@ -503,7 +505,7 @@ pub fn parse_structured_output_mode(value: &str) -> StructuredOutputMode {
             tracing::warn!(
                 value = other,
                 "LLM_STRUCTURED_OUTPUT_MODE is not one of auto|json_schema|tools|functions|json; \
-                 ignoring it and using the full structured-output cascade",
+                 ignoring it and using the default, auto",
             );
             StructuredOutputMode::Auto
         }
@@ -585,8 +587,8 @@ mod tests {
                 "{js:?}"
             );
         }
-        // The default, empty, and unrecognised tokens all leave the cascade in
-        // place — a misspelled pin must not silently disable every mode.
+        // The default, empty, and unrecognised tokens all give the default —
+        // a misspelled pin must not silently disable every mode.
         for auto in ["auto", "", "   ", "cascade", "tolls", "yes"] {
             assert_eq!(
                 parse_structured_output_mode(auto),
@@ -601,9 +603,9 @@ mod tests {
         let auto = StructuredOutputMode::Auto;
         assert!(auto.allows_tools() && auto.allows_functions() && auto.allows_json());
         assert!(!auto.is_pinned());
-        // Constrained decoding is the one shape `auto` will not probe for: its
-        // failures are hard HTTP errors, not unusable 200s.
-        assert!(!auto.allows_json_schema());
+        // Constrained decoding included: `auto` tries it first and demotes
+        // out of it when the endpoint refuses the shape.
+        assert!(auto.allows_json_schema());
 
         // Each pin permits exactly itself, so a pinned adapter can never send a
         // shape the operator did not ask for.

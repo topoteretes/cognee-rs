@@ -73,6 +73,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Structured output asks for constrained decoding by default (behaviour
+  change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
+  `response_format: json_schema` request first, as Python's default
+  `litellm_native` path does, and falls back to the `tools` → `functions` →
+  `json` cascade when the endpoint refuses that shape or the answer is unusable.
+  An endpoint that refuses it (Baseten's `gpt-oss-120b` answers HTTP 501) pays
+  one rejected request per schema per process. `json_schema` is now an alias of
+  `auto`; set `tools`, `functions` or `json` to pin one shape as before. An
+  unusable constrained answer falls back at once instead of being re-asked.
+  Requests name the schema, tool or function after the schema's `title` (for
+  example `KnowledgeGraph`) instead of `extract_structured_data`, which stays
+  as the fallback. Generated schemas keep their definitions under `$defs`
+  rather than `definitions`, and `required` lists properties in declaration
+  order rather than sorted.
+
 - **`cognify_datasets` and `cognify_dataset_refs` write no extra
   `pipeline_runs` row (SDK-946).** Each run now leaves only the executor's
   `STARTED` → `COMPLETED`/`ERRORED` pair, as Python's per-dataset loop does;

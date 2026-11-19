@@ -1,14 +1,11 @@
 //! OpenAI API adapter with structured-output support.
 //!
-//! This adapter uses OpenAI's tool calling (`tools` + `tool_choice`) — the same
-//! shape Python cognee sends via instructor/litellm — to generate structured
-//! outputs based on JSON schemas derived from Rust types, falling back to legacy
-//! function calling and JSON mode for older OpenAI-compatible servers.
-//!
-//! `LLM_STRUCTURED_OUTPUT_MODE=json_schema` puts a fourth shape *ahead* of that
-//! cascade: `response_format: {"type": "json_schema", …, "strict": true}`,
-//! constrained decoding, matching Python's default `litellm_native` path. It is
-//! opt-in and demotes back into the cascade when an endpoint refuses it — see
+//! By default this adapter asks for structured output with constrained
+//! decoding, `response_format: {"type": "json_schema", …, "strict": true}`,
+//! using JSON schemas derived from Rust types. When an endpoint refuses that
+//! shape or answers it unusably, it falls back to a cascade: OpenAI tool
+//! calling (`tools` + `tool_choice`), then legacy function calling, then JSON
+//! mode, for older OpenAI-compatible servers. See
 //! [`crate::types::StructuredOutputMode`] and [`JsonSchemaMemo`].
 
 use std::collections::HashMap;
@@ -638,17 +635,16 @@ pub struct OpenAIAdapter {
     cascade_probe: Arc<CascadeProbe>,
     /// Which structured-output shapes this endpoint is allowed to be sent.
     ///
-    /// [`StructuredOutputMode::Auto`] — the default — runs the full cascade and
-    /// leans on [`cascade_probe`](Self::cascade_probe) to stop paying for a mode
-    /// that never answers. [`Tools`](StructuredOutputMode::Tools),
+    /// [`StructuredOutputMode::Auto`] — the default — and its alias
+    /// [`JsonSchema`](StructuredOutputMode::JsonSchema) try constrained
+    /// decoding first and demote back into the cascade when the endpoint
+    /// refuses the shape, so every mode below stays reachable and exhaustion
+    /// is not terminal. The cascade leans on
+    /// [`cascade_probe`](Self::cascade_probe) to stop paying for a mode that
+    /// never answers. [`Tools`](StructuredOutputMode::Tools),
     /// [`Functions`](StructuredOutputMode::Functions) and
     /// [`Json`](StructuredOutputMode::Json) each pin one mode: the others are
     /// never sent at all, and exhausting the pinned one is terminal.
-    ///
-    /// [`JsonSchema`](StructuredOutputMode::JsonSchema) is not a pin. It adds
-    /// constrained decoding *ahead* of the cascade and demotes back into it when
-    /// the endpoint refuses the shape, so every mode below stays reachable and
-    /// exhaustion is not terminal.
     ///
     /// The probe and the pin solve the same problem from opposite ends. The
     /// probe *learns* an endpoint's shape at the cost of a miss threshold per
@@ -990,12 +986,10 @@ impl OpenAIAdapter {
     /// why this exists alongside the miss probe.
     ///
     /// `tools`, `functions` and `json` each **pin** one shape and disable the
-    /// cascade; `json_schema` **prefers** constrained decoding and demotes out of
-    /// it, leaving the cascade behind it.
-    ///
-    /// The default, [`StructuredOutputMode::Auto`], is the pre-existing cascade,
-    /// so this is opt-in: an endpoint whose shape the operator does not know
-    /// keeps the behaviour that discovers it.
+    /// cascade. The default, `auto`, and its alias `json_schema` **prefer**
+    /// constrained decoding and demote out of it, leaving the cascade behind
+    /// it, so an endpoint whose shape the operator does not know still gets
+    /// the behaviour that discovers it.
     pub fn with_structured_output_mode(mut self, mode: StructuredOutputMode) -> Self {
         self.structured_output_mode = mode;
         self
@@ -2158,7 +2152,9 @@ impl OpenAIAdapter {
                 Value::Object(obj) => {
                     // Handle $ref references
                     if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str())
-                        && let Some(def_name) = ref_str.strip_prefix("#/definitions/")
+                        && let Some(def_name) = ref_str
+                            .strip_prefix("#/$defs/")
+                            .or_else(|| ref_str.strip_prefix("#/definitions/"))
                         && let Some(defs) = definitions
                         && let Some(def) = defs.get(def_name)
                     {
@@ -2222,7 +2218,7 @@ impl OpenAIAdapter {
             }
         }
 
-        let definitions = schema.get("definitions");
+        let definitions = schema.get("$defs").or_else(|| schema.get("definitions"));
         let example = create_example(schema, definitions);
 
         serde_json::to_string_pretty(&example).unwrap_or_else(|_| "{}".to_string())
@@ -2239,8 +2235,9 @@ impl OpenAIAdapter {
     /// `KnowledgeGraph.edges` on the *non-strict* tool-calling path. Rust/schemars
     /// already derives an equivalent `required` from the absence of
     /// `#[serde(default)]`, so for a correctly-derived schema this is a no-op; it
-    /// exists to guarantee that parity holds for every response model and to keep
-    /// the request byte-aligned with what litellm/instructor sends.
+    /// exists to guarantee that parity holds for every response model. Unlike
+    /// instructor, which sorts `required`, the list keeps property order, as
+    /// Pydantic's own schema does.
     ///
     /// Deliberately shallow: only the top-level `required` is recomputed. It does
     /// NOT recurse into `$defs`, set `additionalProperties:false`, or add
@@ -2252,12 +2249,11 @@ impl OpenAIAdapter {
         let Some(props) = schema.get("properties").and_then(Value::as_object) else {
             return schema;
         };
-        let mut required: Vec<String> = props
+        let required: Vec<String> = props
             .iter()
             .filter(|(_, subschema)| subschema.get("default").is_none())
             .map(|(name, _)| name.clone())
             .collect();
-        required.sort();
         if let Some(obj) = schema.as_object_mut() {
             if required.is_empty() {
                 obj.remove("required");
@@ -2271,14 +2267,10 @@ impl OpenAIAdapter {
     /// Append a corrective instruction so the next attempt carries the failure
     /// reason. Thin wrapper over the shared
     /// [`crate::schema::append_corrective_instruction`] naming the forced tool as
-    /// OpenAI addresses it (a `function` call).
-    fn append_corrective_instruction(request: &mut Value, reason: Option<&str>) {
-        crate::schema::append_corrective_instruction(
-            request,
-            reason,
-            "extract_structured_data",
-            "function",
-        );
+    /// OpenAI addresses it (a `function` call). `name` is the one the request
+    /// declared, from [`crate::schema::schema_name`].
+    fn append_corrective_instruction(request: &mut Value, reason: Option<&str>, name: &str) {
+        crate::schema::append_corrective_instruction(request, reason, name, "function");
     }
 
     /// The constrained-decoding counterpart of
@@ -2596,14 +2588,13 @@ impl OpenAIAdapter {
         let mut truncation_seen: Option<String> = None;
 
         // ------------------------------------------------------------------
-        // Mode 0 (opt-in): constrained decoding.
+        // Mode 0 (the default's first try): constrained decoding.
         //
         // `response_format: {"type": "json_schema", "json_schema": {"strict":
-        // true, "schema": …}}` — the request Python's default `litellm_native`
-        // path sends whenever `litellm.supports_response_schema(model)` is true
-        // (SDK-630). Reached only under `LLM_STRUCTURED_OUTPUT_MODE=json_schema`,
-        // never under `auto`; [`StructuredOutputMode::JsonSchema`] explains why
-        // the opt-in sits with the operator rather than with a probe.
+        // true, "schema": …}}`. Sent under `auto` and its alias `json_schema`;
+        // the three pins skip it. An unusable answer leaves the mode for the
+        // cascade at once rather than re-asking, so a model that cannot use
+        // the shape costs one request, not the retry budget.
         //
         // Structurally this is the JSON-mode loop, not the tool-calling one: the
         // answer arrives in `message.content` as a plain JSON document, so there
@@ -2715,7 +2706,7 @@ impl OpenAIAdapter {
                         object.remove("$schema");
                     }
                     let mut response_format = json!({
-                        "name": "extract_structured_data",
+                        "name": crate::schema::schema_name(json_schema),
                         "schema": body_schema,
                     });
                     if strict {
@@ -2809,30 +2800,35 @@ impl OpenAIAdapter {
                                 }
 
                                 // A structured-outputs refusal arrives *instead of*
-                                // `content`, so without this branch it is
-                                // indistinguishable from an empty answer and the
-                                // next attempt re-asks the identical question. The
-                                // refusal text goes into the corrective instruction
-                                // instead — and only there: it is model output
-                                // derived from the user's ingested documents, which
-                                // this crate does not put in a log sink (see
+                                // `content`. Checked separately from an empty answer
+                                // only for the warning: both leave the mode for the
+                                // cascade. The refusal text is model output derived
+                                // from the user's ingested documents, which this
+                                // crate does not put in a log sink (see
                                 // `LlmError::log_kind`), so the warning records that
                                 // a refusal happened and not what it said.
-                                if let Some(refusal) =
-                                    choice.message.refusal.as_deref().filter(|r| !is_blank(r))
+                                if choice
+                                    .message
+                                    .refusal
+                                    .as_deref()
+                                    .is_some_and(|r| !is_blank(r))
                                 {
                                     warn!(
                                         attempt,
-                                        "model refused the constrained-decoding request"
+                                        "model refused the constrained-decoding request; falling \
+                                         back to the cascade"
                                     );
-                                    js_last_reason = Some(format!("model refused: {refusal}"));
-                                    continue;
+                                    break 'levels;
                                 }
 
                                 let content = choice.message.content.as_deref().unwrap_or("");
                                 if is_blank(content) {
-                                    js_last_reason = None;
-                                    continue;
+                                    debug!(
+                                        attempt,
+                                        "constrained-decoding response is empty; falling back \
+                                         to the cascade",
+                                    );
+                                    break 'levels;
                                 }
                                 match parse_json(content) {
                                     Ok(parsed) => {
@@ -2841,11 +2837,9 @@ impl OpenAIAdapter {
                                                 attempt,
                                                 %reason,
                                                 "constrained-decoding response parsed but failed \
-                                                 typed validation; retrying with corrective \
-                                                 instruction",
+                                                 typed validation; falling back to the cascade",
                                             );
-                                            js_last_reason = Some(reason);
-                                            continue;
+                                            break 'levels;
                                         }
                                         // Record what the endpoint just accepted, so
                                         // the next call skips the probe reservation
@@ -2861,9 +2855,13 @@ impl OpenAIAdapter {
                                         );
                                         return Ok(parsed);
                                     }
-                                    Err(e) => {
-                                        js_last_reason = Some(e.to_string());
-                                        continue;
+                                    Err(_) => {
+                                        debug!(
+                                            attempt,
+                                            "constrained-decoding response is not valid JSON; \
+                                             falling back to the cascade",
+                                        );
+                                        break 'levels;
                                     }
                                 }
                             }
@@ -2907,17 +2905,19 @@ impl OpenAIAdapter {
                         }
                     }
 
-                    // Attempts exhausted with no shape rejection: the endpoint
-                    // accepts constrained decoding, it simply did not answer
-                    // usefully this time. Nothing to demote — that would punish the
-                    // shape for the model's output — so fall through to the cascade
-                    // with the memo untouched.
+                    // Attempts exhausted with no shape rejection, which only
+                    // repeated truncation can cause: every other unusable answer
+                    // leaves the loop at once. Nothing to demote — that would
+                    // punish the shape for the model's output — so fall through
+                    // to the cascade with the memo untouched, as those exits do.
                     break 'levels;
                 }
             }
         }
 
-        // Primary path: OpenAI tool calling (`tools` + forced `tool_choice`).
+        // First cascade mode: OpenAI tool calling (`tools` + forced
+        // `tool_choice`), reached when constrained decoding was skipped,
+        // refused or unusable.
         //
         // This mirrors Python cognee's request: instructor's default `Mode.TOOLS`
         // (used by `LLMGateway.acreate_structured_output`) sends the response
@@ -2938,20 +2938,21 @@ impl OpenAIAdapter {
         // required-field guarantee is further backed by retrying on a
         // malformed/incomplete/validation-failing response with a corrective
         // instruction below.
+        let tool_name = crate::schema::schema_name(json_schema);
         let mut tools_request = json!({
             "model": self.model,
             "messages": Self::convert_messages(&messages),
             "tools": [{
                 "type": "function",
                 "function": {
-                    "name": "extract_structured_data",
+                    "name": tool_name,
                     "description": "Extract structured data from the input",
                     "parameters": schema.clone()
                 }
             }],
             "tool_choice": {
                 "type": "function",
-                "function": {"name": "extract_structured_data"}
+                "function": {"name": tool_name}
             }
         });
 
@@ -3065,6 +3066,7 @@ impl OpenAIAdapter {
                 Self::append_corrective_instruction(
                     &mut request_for_attempt,
                     last_reason.as_deref(),
+                    tool_name,
                 );
                 if !self.is_reasoning_model() {
                     request_for_attempt["temperature"] = json!(0.0);
@@ -3305,11 +3307,11 @@ impl OpenAIAdapter {
             "model": self.model,
             "messages": Self::convert_messages(&messages),
             "functions": [{
-                "name": "extract_structured_data",
+                "name": tool_name,
                 "description": "Extract structured data from the input",
                 "parameters": schema.clone()
             }],
-            "function_call": {"name": "extract_structured_data"}
+            "function_call": {"name": tool_name}
         });
 
         if !self.is_reasoning_model()
@@ -3380,6 +3382,7 @@ impl OpenAIAdapter {
                 Self::append_corrective_instruction(
                     &mut request_for_attempt,
                     legacy_last_reason.as_deref(),
+                    tool_name,
                 );
                 if !self.is_reasoning_model() {
                     request_for_attempt["temperature"] = json!(0.0);

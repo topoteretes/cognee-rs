@@ -106,7 +106,10 @@ fn adapter(base_url: String) -> Arc<OpenAIAdapter> {
             // No transport retries: every request this test counts is a
             // structured-output re-ask, never a network one.
             .with_network_retries(0)
-            .with_structured_output_retries(3),
+            .with_structured_output_retries(3)
+            // The re-ask ladder is the cascade's: under the default, an
+            // invalid constrained answer falls back to it without a re-ask.
+            .with_structured_output_mode(cognee_llm::StructuredOutputMode::Tools),
     )
 }
 

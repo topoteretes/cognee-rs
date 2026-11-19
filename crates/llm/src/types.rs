@@ -160,8 +160,9 @@ pub struct TokenUsage {
 /// OpenAI-compatible adapter. See docs/configuration.md § "Structured-output
 /// request shape" for a value translation.
 ///
-/// [`Self::Auto`] keeps the cascade, bounded per mode by the adapter's own miss
-/// probe. [`Self::Tools`], [`Self::Functions`] and [`Self::Json`] each **pin**
+/// [`Self::Auto`] (and its alias [`Self::JsonSchema`]) tries constrained
+/// decoding first, then the cascade, bounded per mode by the adapter's own
+/// miss probe. [`Self::Tools`], [`Self::Functions`] and [`Self::Json`] each **pin**
 /// one shape: the other two are never sent, and exhausting the pinned mode is
 /// terminal rather than falling through.
 ///
@@ -171,36 +172,38 @@ pub struct TokenUsage {
 /// and the miss probe still has to spend its threshold rediscovering that in
 /// every fresh process — while a pin costs nothing and is exact.
 ///
-/// [`Self::JsonSchema`] is the odd one out: it adds a *fourth* shape ahead of
-/// the cascade rather than choosing among the three, and it is not a pin. See
-/// its docs.
+/// The default adds a *fourth* shape, constrained decoding, ahead of the
+/// cascade rather than choosing among the three, and it is not a pin. See
+/// [`Self::JsonSchema`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 // `snake_case` rather than `lowercase` so `JsonSchema` spells itself
 // `json_schema`. The other four variants are single words, so their wire
 // spelling is unchanged.
 #[serde(rename_all = "snake_case")]
 pub enum StructuredOutputMode {
-    /// Try each mode in cascade order, skipping any the miss probe has tripped.
-    /// The default, and the behaviour before this knob existed.
+    /// The default: constrained decoding first, then each cascade mode in
+    /// order, skipping any the miss probe has tripped. Behaves exactly like
+    /// [`Self::JsonSchema`].
     #[default]
     Auto,
     /// **Prefer** constrained decoding — `response_format: {"type":
     /// "json_schema", "json_schema": {"strict": true, …}}` — ahead of the
     /// cascade, and demote out of it when the endpoint says no.
     ///
-    /// The opt-in half of SDK-630. Python reaches the same request shape on its
-    /// default `litellm_native` path, but only for a model litellm's table
-    /// advertises as `supports_response_schema`; Rust has no such table for an
-    /// arbitrary OpenAI-compatible base URL, so the operator supplies the
-    /// knowledge instead — this knob. (The Bedrock adapter *does* have the
-    /// table, in `adapters::bedrock::caps`, and picks its own native
-    /// `outputConfig` branch from it without consulting this enum.)
+    /// An alias of [`Self::Auto`], kept so existing configs that set it keep
+    /// parsing. Unlike Python, which sends this shape only to models litellm's
+    /// table marks `supports_response_schema`, Rust has no such table for an
+    /// arbitrary OpenAI-compatible base URL, so it sends the shape everywhere
+    /// and relies on the demotion ladder below. (The Bedrock
+    /// adapter *does* have the table, in `adapters::bedrock::caps`, and picks
+    /// its own native `outputConfig` branch from it without consulting this
+    /// enum.)
     ///
     /// **Not a pin, deliberately.** The other three values exclude everything
     /// else and make exhaustion terminal; this one is a *preference* with a
     /// demotion ladder — strict → non-strict → out of the mode entirely, at
-    /// which point the ordinary `tools` → `functions` → `json` cascade runs and
-    /// behaves exactly as under [`Self::Auto`]. A hard pin here would be
+    /// which point the ordinary `tools` → `functions` → `json` cascade runs.
+    /// A hard pin here would be
     /// unusable on the fleet this exists for: Baseten's `gpt-oss-120b` answers
     /// HTTP 501 to a constrained request, so pinning would fail every call
     /// rather than costing one probe. The demotion is memoised per schema, so
@@ -217,13 +220,11 @@ pub enum StructuredOutputMode {
 impl StructuredOutputMode {
     /// Whether the constrained `response_format: json_schema` shape may be sent.
     ///
-    /// False under [`Self::Auto`]: unlike the other three, this mode is not
-    /// something an unknown endpoint can be probed for cheaply — the shapes that
-    /// fail do so with a hard HTTP error rather than an unusable 200, and the
-    /// SDK's own default deployment target is one of them. Opting in is the
-    /// operator's call.
+    /// True under [`Self::Auto`] as well. An endpoint that refuses the shape
+    /// pays one rejected request per schema, after
+    /// which the demotion memo sends the cascade straight away.
     pub fn allows_json_schema(self) -> bool {
-        matches!(self, Self::JsonSchema)
+        matches!(self, Self::Auto | Self::JsonSchema)
     }
 
     /// Whether native tool-calling may be sent.

@@ -196,7 +196,7 @@ async fn structured_output_ignores_configured_default_max_tokens() {
                 ));
             then.status(200)
                 .header("content-type", "application/json")
-                .body(tool_call_response(r#"{"name":"Alice"}"#));
+                .body(json_content_response(r#"{"name":"Alice"}"#));
         })
         .await;
 
@@ -219,16 +219,13 @@ async fn structured_output_ignores_configured_default_max_tokens() {
     mock.assert_calls_async(1).await;
 }
 
-/// Builds the tool-call chat-completion body shape returned by an OpenAI-style
-/// structured-output response (mirrors `openai_structured_output.rs`).
-fn tool_call_response(payload_json: &str) -> String {
+/// Builds the chat-completion body a constrained-decoding (`json_schema`)
+/// request gets back: the payload as the message `content`.
+fn json_content_response(payload_json: &str) -> String {
     let escaped = serde_json::to_string(payload_json).expect("string escapes");
     format!(
         r#"{{"id":"x","object":"chat.completion","created":1,"model":"m",
-            "choices":[{{"index":0,"message":{{"role":"assistant","tool_calls":[
-                {{"id":"c1","type":"function","function":{{
-                    "name":"extract_structured_data","arguments":{escaped}
-                }}}}
-            ]}},"finish_reason":"tool_calls"}}]}}"#
+            "choices":[{{"index":0,"message":{{"role":"assistant","content":{escaped}}},
+            "finish_reason":"stop"}}]}}"#
     )
 }

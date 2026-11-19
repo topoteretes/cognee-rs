@@ -44,7 +44,44 @@ use serde_json::{Map, Value, json};
 )]
 pub fn generate_json_schema<T: JsonSchema>() -> Value {
     let schema = schema_for!(T);
-    serde_json::to_value(schema).expect("Failed to serialize schema")
+    let mut value = serde_json::to_value(schema).expect("Failed to serialize schema");
+    use_dollar_defs(&mut value);
+    value
+}
+
+/// Move schemars' `definitions` to `$defs`, the current JSON Schema keyword
+/// and the one OpenAI documents for structured outputs. schemars 0.8 always
+/// serializes the map as `definitions`, whatever its settings say.
+fn use_dollar_defs(schema: &mut Value) {
+    let Some(root) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(definitions) = root.remove("definitions") else {
+        return;
+    };
+    root.insert("$defs".to_string(), definitions);
+    rewrite_definition_refs(schema);
+}
+
+/// Point every `#/definitions/…` reference at `#/$defs/…` instead.
+fn rewrite_definition_refs(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "$ref"
+                    && let Some(name) = child
+                        .as_str()
+                        .and_then(|r| r.strip_prefix("#/definitions/"))
+                {
+                    *child = Value::String(format!("#/$defs/{name}"));
+                } else {
+                    rewrite_definition_refs(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(rewrite_definition_refs),
+        _ => {}
+    }
 }
 
 /// Generate a JSON schema string for a given type.
@@ -353,8 +390,9 @@ pub fn strict_json_schema(schema: &Value) -> Value {
             }
             return;
         };
-        let mut required: Vec<String> = properties.keys().cloned().collect();
-        required.sort();
+        // Property order, as Pydantic writes `required`: the model fills
+        // fields in schema order, and the list mirrors it.
+        let required: Vec<String> = properties.keys().cloned().collect();
         if required.is_empty() {
             // `"properties": {}` with a leftover `required` naming something
             // that does not exist. Leaving it while closing the node builds a
@@ -393,6 +431,32 @@ pub fn declares_object_root(schema: &Value) -> bool {
         .get("type")
         .and_then(Value::as_str)
         .is_some_and(|declared| declared == "object")
+}
+
+/// The name [`schema_name`] falls back to for a schema without a usable title.
+pub const FALLBACK_SCHEMA_NAME: &str = "extract_structured_data";
+
+/// The name a structured-output request gives its schema, tool or function.
+///
+/// The root `title` (e.g. `KnowledgeGraph`) when it is a valid name for both
+/// OpenAI and Anthropic, `^[a-zA-Z0-9_-]{1,64}$`; otherwise
+/// [`FALLBACK_SCHEMA_NAME`]. The model reads this name, so a descriptive one
+/// tells it what it is building.
+#[must_use]
+pub fn schema_name(schema: &Value) -> &str {
+    schema
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| is_valid_schema_name(title))
+        .unwrap_or(FALLBACK_SCHEMA_NAME)
+}
+
+/// `^[a-zA-Z0-9_-]{1,64}$`, the name pattern OpenAI and Anthropic share.
+fn is_valid_schema_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Whether a node's `type` says it is an object.
@@ -745,15 +809,16 @@ mod tests {
 
         let strict = strict_json_schema(&schema);
 
-        // Root: both properties required even though only one was.
-        assert_eq!(strict["required"], json!(["edges", "nodes"]));
+        // Root: both properties required even though only one was, in
+        // property order rather than sorted.
+        assert_eq!(strict["required"], json!(["nodes", "edges"]));
         assert_eq!(strict["additionalProperties"], json!(false));
         // A `$defs` entry whose optional (nullable) field was omitted from
         // `required` now carries it — the model must say `null` rather than
         // silently drop the key, which is the whole point of strict mode.
         assert_eq!(
             strict["$defs"]["Node"]["required"],
-            json!(["description", "id"])
+            json!(["id", "description"])
         );
         assert_eq!(
             strict["$defs"]["Node"]["additionalProperties"],
@@ -764,6 +829,43 @@ mod tests {
         // `$schema` is a meta-annotation, not a constraint; providers disagree
         // about whether it is even allowed here.
         assert!(strict.get("$schema").is_none());
+    }
+
+    #[test]
+    fn generated_schemas_keep_definitions_under_dollar_defs() {
+        #[derive(schemars::JsonSchema)]
+        struct Inner {
+            _x: String,
+        }
+        #[derive(schemars::JsonSchema)]
+        struct Outer {
+            _items: Vec<Inner>,
+        }
+        let schema = generate_json_schema::<Outer>();
+        assert!(schema.get("definitions").is_none());
+        assert!(schema["$defs"]["Inner"].is_object());
+        assert_eq!(
+            schema["properties"]["_items"]["items"]["$ref"],
+            "#/$defs/Inner"
+        );
+    }
+
+    #[test]
+    fn schema_name_is_the_title_when_it_is_a_valid_name() {
+        assert_eq!(
+            schema_name(&json!({"title": "KnowledgeGraph"})),
+            "KnowledgeGraph"
+        );
+        assert_eq!(schema_name(&json!({})), FALLBACK_SCHEMA_NAME);
+        // Not `^[a-zA-Z0-9_-]{1,64}$`: a provider would reject the request.
+        assert_eq!(
+            schema_name(&json!({"title": "Knowledge Graph"})),
+            FALLBACK_SCHEMA_NAME
+        );
+        assert_eq!(
+            schema_name(&json!({"title": "x".repeat(65)})),
+            FALLBACK_SCHEMA_NAME
+        );
     }
 
     #[test]
@@ -788,7 +890,7 @@ mod tests {
             strict["properties"]["description"].get("default").is_none(),
             "default must not survive into a strict schema",
         );
-        assert_eq!(strict["required"], json!(["bag", "description"]));
+        assert_eq!(strict["required"], json!(["description", "bag"]));
         assert_eq!(
             strict["properties"]["bag"]["additionalProperties"],
             json!(false),

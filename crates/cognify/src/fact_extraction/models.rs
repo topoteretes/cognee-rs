@@ -1224,12 +1224,12 @@ mod tests {
         }
 
         assert_eq!(
-            keys(&schema["definitions"]["Node"]["properties"]),
+            keys(&schema["$defs"]["Node"]["properties"]),
             ["id", "name", "type", "description"],
             "Node properties must be in declaration order — see this test's docs"
         );
         assert_eq!(
-            keys(&schema["definitions"]["Edge"]["properties"]),
+            keys(&schema["$defs"]["Edge"]["properties"]),
             [
                 "source_node_id",
                 "target_node_id",
@@ -1333,7 +1333,7 @@ mod tests {
         let described: Vec<&str> = ["Node", "Edge"]
             .into_iter()
             .flat_map(|def| {
-                rust["definitions"][def]["properties"]
+                rust["$defs"][def]["properties"]
                     .as_object()
                     .into_iter()
                     .flatten()
@@ -1372,13 +1372,10 @@ mod tests {
             "Python's nodes/edges have default_factory"
         );
         assert_eq!(req(&rust), ["edges", "nodes"]);
-        assert_eq!(
-            req(&rust["definitions"]["Edge"]),
-            req(&python["$defs"]["Edge"])
-        );
+        assert_eq!(req(&rust["$defs"]["Edge"]), req(&python["$defs"]["Edge"]));
         let mut node = req(&python["$defs"]["Node"]);
         node.push("name".into());
         node.sort();
-        assert_eq!(req(&rust["definitions"]["Node"]), node);
+        assert_eq!(req(&rust["$defs"]["Node"]), node);
     }
 }

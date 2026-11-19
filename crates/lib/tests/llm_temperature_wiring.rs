@@ -149,15 +149,12 @@ async fn anthropic_sends_the_configured_temperature() {
     mock.assert_async().await;
 }
 
-/// A structured-output reply on the OpenAI tools path (the first mode the
-/// `auto` cascade sends).
-const OPENAI_TOOL_REPLY: &str = r#"{
+/// A structured-output reply to a constrained-decoding (`json_schema`)
+/// request, the first one `auto` sends: the answer is the message `content`.
+const OPENAI_JSON_SCHEMA_REPLY: &str = r#"{
     "id": "chatcmpl-2", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini",
-    "choices": [{"index": 0, "message": {"role": "assistant", "tool_calls": [
-        {"id": "c1", "type": "function", "function": {
-            "name": "extract_structured_data", "arguments": "{\"name\": \"ok\"}"
-        }}
-    ]}, "finish_reason": "tool_calls"}],
+    "choices": [{"index": 0, "message": {"role": "assistant",
+        "content": "{\"name\": \"ok\"}"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
 }"#;
 
@@ -186,7 +183,7 @@ async fn structured_mock(
         .match_body(Matcher::PartialJson(json!({"temperature": temperature})))
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(OPENAI_TOOL_REPLY)
+        .with_body(OPENAI_JSON_SCHEMA_REPLY)
         .expect(1)
         .create_async()
         .await
