@@ -169,6 +169,10 @@ pub enum FailureStage {
     GraphExtraction,
     /// LLM summarization. Failure unit is the chunk; fatality is configurable.
     Summarization,
+    /// Loading a code repository's graph on the CODE_REPO route (SDK-1053).
+    /// Failure unit is the repo item, as in Python's per-item run
+    /// (`run_tasks_data_item.py`).
+    CodeGraph,
 }
 
 impl fmt::Display for FailureStage {
@@ -177,6 +181,7 @@ impl fmt::Display for FailureStage {
             FailureStage::Chunking => "chunking",
             FailureStage::GraphExtraction => "graph extraction",
             FailureStage::Summarization => "summarization",
+            FailureStage::CodeGraph => "code graph",
         };
         f.write_str(name)
     }
@@ -268,6 +273,13 @@ pub struct FailureReport {
     /// `StageResult.budget_exhausted`).
     #[serde(default)]
     budget_exhausted: bool,
+    /// Items a cognify route outside the standard stages took on — the code
+    /// repo items [`crate::tasks::run_code_routes`] loaded or failed. They
+    /// never become documents, so the chunking stage adds them to the
+    /// denominator it records: a repo item that loaded is a survivor, and a
+    /// run whose only standard item failed is then not "no survivors".
+    #[serde(default)]
+    routed_items: usize,
 }
 
 impl Default for FailureReport {
@@ -283,6 +295,7 @@ impl Default for FailureReport {
             total_items: 0,
             cap: FailurePolicy::DEFAULT_REPORT_CAP,
             budget_exhausted: false,
+            routed_items: 0,
         }
     }
 }
@@ -411,6 +424,7 @@ impl FailureReport {
     pub fn absorb(&mut self, other: &FailureReport) {
         self.total += other.total;
         self.summarization_failures += other.summarization_failures;
+        self.routed_items += other.routed_items;
         self.budget_exhausted |= other.budget_exhausted;
         // Unioned, not added: the two branches work the same chunks, so the
         // same `chunk_id` can appear on both sides.
@@ -440,6 +454,19 @@ impl FailureReport {
     pub fn note_totals(&mut self, items: usize, chunks: usize) {
         self.total_items = items;
         self.total_chunks = chunks;
+    }
+
+    /// Note `count` more items handled by a non-standard cognify route (see
+    /// [`Self::routed_items`]).
+    pub fn note_routed_items(&mut self, count: usize) {
+        self.routed_items += count;
+    }
+
+    /// How many items a non-standard cognify route took on, loaded or
+    /// failed. Already included in [`Self::total_items`] once the chunking
+    /// stage has recorded the totals.
+    pub fn routed_items(&self) -> usize {
+        self.routed_items
     }
 
     /// `true` when nothing failed and nothing was left unreached.
@@ -642,6 +669,7 @@ mod tests {
             (FailureStage::Chunking, "chunking"),
             (FailureStage::GraphExtraction, "graph extraction"),
             (FailureStage::Summarization, "summarization"),
+            (FailureStage::CodeGraph, "code graph"),
         ];
         for (stage, expected) in names {
             assert_eq!(stage.to_string(), expected);

@@ -36,7 +36,11 @@ pub enum CognifyRoute {
     /// Declared for parity with Python. Rust's own DLT ingestion still stamps
     /// `external_metadata.source` rather than `system_metadata` and runs down
     /// [`Standard`](Self::Standard) (SDK-1053 decision 2), so only a manifest
-    /// row Python wrote to a shared database classifies here.
+    /// row Python wrote to a shared database (or a stamp Python's
+    /// `f2b4c6d8e0a1` moved there) classifies here. Rust does not read DLT
+    /// stamps from `system_metadata` yet, so cognify refuses such a row with
+    /// [`CognifyRouteError::UnsupportedRoute`] rather than sending its
+    /// structured rows down the LLM pipeline.
     DltSource,
     /// A single code file (`system_metadata.source == "code"`).
     Code,
@@ -80,10 +84,13 @@ pub enum CognifyRouteError {
     /// A data item whose route Rust has no task list for yet. Python wires
     /// every route explicitly and raises for an unmapped one rather than
     /// running the standard pipeline on data routed away from it
-    /// (`cognify.py`); the per-file code route comes with SDK-1053 O9.
+    /// (`cognify.py`). Two routes are refused: the per-file code route (it
+    /// comes with SDK-1053 O9) and the DLT-source route of a row stamped in
+    /// `system_metadata` (Rust reads DLT stamps from `external_metadata`
+    /// only).
     #[error(
-        "Data item {data_id} takes the '{route}' cognify route, which is not supported yet \
-         (the per-file code route); add the project directory instead to build its code graph."
+        "Data item {data_id} takes the '{route}' cognify route, which is not supported yet{}",
+        unsupported_route_hint(*.route)
     )]
     UnsupportedRoute {
         /// The refused row.
@@ -115,6 +122,21 @@ pub fn metadata_source(system_metadata: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// What [`CognifyRouteError::UnsupportedRoute`] tells the caller to do
+/// instead.
+fn unsupported_route_hint(route: CognifyRoute) -> &'static str {
+    match route {
+        CognifyRoute::Code => {
+            " (the per-file code route); add the project directory instead to build its code graph."
+        }
+        CognifyRoute::DltSource => {
+            " (a DLT source stamped in system_metadata); Rust reads DLT stamps from \
+             external_metadata only. Re-add the DLT source from Rust to cognify it."
+        }
+        CognifyRoute::Standard | CognifyRoute::CodeRepo => ".",
+    }
+}
+
 /// The cognify route for one data item: a pure function of the record's
 /// `system_metadata.source` (Python `cognify_route_for`).
 ///
@@ -139,19 +161,18 @@ pub fn cognify_route_for(data: &Data) -> Result<CognifyRoute, CognifyRouteError>
 /// route (`cognify.py`), which stays LLM-free without a key because its
 /// keyless standard route is GLiNER. Rust's standard route has no LLM-free
 /// extractor in every build, so the union is taken over the routes this
-/// run's items actually take: the standard and DLT-source routes need the
-/// LLM (the graph extractor), the code routes never do. A refused item needs
-/// nothing; the run fails on it anyway.
+/// run's items actually take: the standard route needs the LLM (the graph
+/// extractor), the code routes never do. A refused item needs nothing; the
+/// run fails on it anyway.
+///
+/// A DLT-source row is refused too ([`CognifyRouteError::UnsupportedRoute`]).
 ///
 /// Callers use it to skip resolving the graph extractor (which needs an LLM
 /// or a registered LLM-free backend) when no item will reach it.
 pub fn routes_need_llm(items: &[Data]) -> bool {
-    items.iter().any(|item| {
-        matches!(
-            cognify_route_for(item),
-            Ok(CognifyRoute::Standard | CognifyRoute::DltSource)
-        )
-    })
+    items
+        .iter()
+        .any(|item| matches!(cognify_route_for(item), Ok(CognifyRoute::Standard)))
 }
 
 /// The call-level node set a code repo row carries, or `None`. Python's
@@ -292,7 +313,27 @@ mod tests {
         assert!(!routes_need_llm(&[]));
         assert!(!routes_need_llm(&[repo.clone(), file.clone(), legacy]));
         assert!(routes_need_llm(&[repo.clone(), standard]));
-        assert!(routes_need_llm(&[repo, dlt]));
+        // A DLT-source row is refused, so it needs no LLM either.
+        assert!(!routes_need_llm(&[repo, dlt]));
+    }
+
+    #[test]
+    fn unsupported_route_names_the_route_and_what_to_do() {
+        let data_id = Uuid::new_v4();
+        let code = CognifyRouteError::UnsupportedRoute {
+            data_id,
+            route: CognifyRoute::Code,
+        }
+        .to_string();
+        assert!(code.contains("'code' cognify route"), "{code}");
+        assert!(code.contains("add the project directory"), "{code}");
+        let dlt = CognifyRouteError::UnsupportedRoute {
+            data_id,
+            route: CognifyRoute::DltSource,
+        }
+        .to_string();
+        assert!(dlt.contains("'dlt_source' cognify route"), "{dlt}");
+        assert!(dlt.contains("system_metadata"), "{dlt}");
     }
 
     #[test]

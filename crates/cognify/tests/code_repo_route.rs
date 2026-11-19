@@ -24,7 +24,11 @@ use std::sync::Arc;
 use cognee_code_graph::{CodeGraphConfig, CodeNodeType};
 use cognee_cognify::graph_backend::MockChunkGraphExtractor;
 use cognee_cognify::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
-use cognee_cognify::{CognifyConfig, CognifyError, CognifyResult, cognify};
+use cognee_cognify::tasks::run_code_routes;
+use cognee_cognify::{
+    CognifyConfig, CognifyError, CognifyInput, CognifyResult, FailurePolicy, FailureStage,
+    FailureStop, RollbackScope, cognify,
+};
 use cognee_database::ops::data::{get_cognify_completed_data_ids, update_data_system_metadata};
 use cognee_database::ops::datasets::get_dataset_by_name_in_tenant;
 use cognee_database::{
@@ -438,4 +442,323 @@ async fn a_vanished_repository_fails_the_run() {
 
     let error = stack.cognify(items, &config(false)).await.unwrap_err();
     assert!(error.to_string().contains("no longer exists"), "{error}");
+}
+
+// ── Per-item failures (Python `run_tasks_data_item.py:279-305`) ─────────────
+
+fn policy(config: CognifyConfig, stop: FailureStop, scope: RollbackScope) -> CognifyConfig {
+    config.with_failure_stop(stop).with_rollback_scope(scope)
+}
+
+/// `items` with the README pointed at a storage location that does not
+/// exist, so its chunking fails (a file-unit failure, no chunks).
+fn with_unreadable_documents(items: &[Data]) -> Vec<Data> {
+    items
+        .iter()
+        .cloned()
+        .map(|mut item| {
+            if cognify_route_for(&item) == Ok(CognifyRoute::Standard) {
+                item.raw_data_location = format!("{}.missing", item.raw_data_location);
+            }
+            item
+        })
+        .collect()
+}
+
+impl Stack {
+    async fn completed(&self, items: &[Data]) -> HashSet<Uuid> {
+        let ids: Vec<Uuid> = items.iter().map(|item| item.id).collect();
+        get_cognify_completed_data_ids(&self.db, self.dataset_id().await, &ids)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
+}
+
+/// The repo loads and the README fails. Under `WholeRun` the run errors and
+/// the code graph is swept with it; under `FailedItems` the loaded repo item
+/// is a survivor — the run completes, the code graph stays and the repo item
+/// keeps its completion marker, as Python's per-item rollback keeps a
+/// completed item (`modules/cognify/rollback.py`).
+#[tokio::test]
+async fn a_failing_document_beside_a_loaded_repo_follows_the_policy() {
+    for stop in [FailureStop::FailFast, FailureStop::RunToEnd] {
+        for scope in [RollbackScope::WholeRun, RollbackScope::FailedItems] {
+            let (_root, repo) = project();
+            let stack = Stack::new().await;
+            let items = stack.add(&repo, true, None).await;
+            let (manifest, documents) = split(&items);
+            let outcome = stack
+                .cognify(
+                    with_unreadable_documents(&items),
+                    &policy(config(true), stop, scope),
+                )
+                .await;
+            let label = format!("{stop:?}/{scope:?}");
+
+            match scope {
+                RollbackScope::WholeRun => {
+                    let error = outcome.expect_err(&label);
+                    assert!(
+                        matches!(error, CognifyError::RunFailed { .. }),
+                        "{label}: {error}"
+                    );
+                    assert!(
+                        stack.code_node_ids().await.is_empty(),
+                        "{label}: the whole run is swept, code graph included"
+                    );
+                    assert!(stack.completed(&items).await.is_empty(), "{label}");
+                    assert_eq!(
+                        stack.cognify_runs().await,
+                        vec![PipelineRunStatus::Errored],
+                        "{label}"
+                    );
+                }
+                _ => {
+                    let result = outcome.expect(&label);
+                    let failed: Vec<Uuid> =
+                        result.failures.failed_items().iter().copied().collect();
+                    assert_eq!(failed, vec![documents[0].id], "{label}");
+                    assert_eq!(result.failures.total_items(), 2, "{label}");
+                    assert!(
+                        !stack.code_node_ids().await.is_empty(),
+                        "{label}: the loaded code graph is kept"
+                    );
+                    assert_eq!(
+                        stack.completed(&items).await,
+                        HashSet::from([manifest.id]),
+                        "{label}: only the repo item is marked complete"
+                    );
+                    assert_eq!(
+                        stack.cognify_runs().await,
+                        vec![PipelineRunStatus::Completed],
+                        "{label}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The repository moved after the add; the README is fine.
+///
+/// - `FailFast` + `WholeRun` (the default): the repo item's own error fails
+///   the run before the README is touched, as Python re-raises it.
+/// - `FailFast` + `FailedItems`: the run stops at the repo item, the README
+///   is never reached, and with no survivor the run fails.
+/// - `RunToEnd` + `WholeRun`: the README is cognified, then swept with the
+///   failed run.
+/// - `RunToEnd` + `FailedItems`: the README survives and is marked complete;
+///   the repo item is reported failed and left unmarked.
+#[tokio::test]
+async fn a_failing_repo_beside_good_documents_follows_the_policy() {
+    for (stop, scope) in [
+        (FailureStop::FailFast, RollbackScope::WholeRun),
+        (FailureStop::FailFast, RollbackScope::FailedItems),
+        (FailureStop::RunToEnd, RollbackScope::WholeRun),
+        (FailureStop::RunToEnd, RollbackScope::FailedItems),
+    ] {
+        let (root, repo) = project();
+        let stack = Stack::new().await;
+        let items = stack.add(&repo, true, None).await;
+        let (manifest, documents) = split(&items);
+        std::fs::rename(&repo, root.path().join("moved")).unwrap();
+        let label = format!("{stop:?}/{scope:?}");
+
+        let outcome = stack
+            .cognify(items.clone(), &policy(config(true), stop, scope))
+            .await;
+
+        if (stop, scope) == (FailureStop::RunToEnd, RollbackScope::FailedItems) {
+            let result = outcome.expect(&label);
+            assert!(!result.chunks.is_empty(), "{label}: the README was chunked");
+            let failed: Vec<Uuid> = result.failures.failed_items().iter().copied().collect();
+            assert_eq!(failed, vec![manifest.id], "{label}");
+            let entry = &result.failures.entries()[0];
+            assert_eq!(entry.stage, FailureStage::CodeGraph, "{label}");
+            assert!(entry.error.contains("no longer exists"), "{label}: {entry}");
+            assert_eq!(
+                stack.completed(&items).await,
+                HashSet::from([documents[0].id]),
+                "{label}"
+            );
+            assert_eq!(
+                stack.cognify_runs().await,
+                vec![PipelineRunStatus::Completed],
+                "{label}"
+            );
+            continue;
+        }
+
+        let error = outcome.expect_err(&label);
+        assert!(
+            error.to_string().contains("no longer exists"),
+            "{label}: {error}"
+        );
+        if (stop, scope) == (FailureStop::FailFast, RollbackScope::WholeRun) {
+            assert!(
+                matches!(error, CognifyError::CodeGraph(_)),
+                "{label}: the item's own error, {error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error, CognifyError::RunFailed { .. }),
+                "{label}: {error:?}"
+            );
+        }
+        assert!(stack.completed(&items).await.is_empty(), "{label}");
+        assert_eq!(
+            stack.cognify_runs().await,
+            vec![PipelineRunStatus::Errored],
+            "{label}"
+        );
+        // Whatever the README wrote was swept with the run.
+        let ledger = cognee_database::ops::graph_storage::get_nodes_by_dataset(
+            &stack.db,
+            stack.dataset_id().await,
+        )
+        .await
+        .unwrap();
+        assert!(ledger.is_empty(), "{label}: {ledger:?}");
+    }
+}
+
+/// A legacy per-row `dlt` stamp fails the whole run before any item runs, as
+/// Python's task resolver raises for it (`classify_documents`), even beside a
+/// good repo item.
+#[tokio::test]
+async fn a_legacy_dlt_row_fails_the_whole_run() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, true, None).await;
+    let items: Vec<Data> = items
+        .into_iter()
+        .map(|mut item| {
+            if cognify_route_for(&item) == Ok(CognifyRoute::Standard) {
+                item.system_metadata = Some(r#"{"source": "dlt"}"#.to_string());
+            }
+            item
+        })
+        .collect();
+
+    let error = stack
+        .cognify(
+            items.clone(),
+            &policy(config(true), FailureStop::RunToEnd, RollbackScope::FailedItems),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CognifyError::Route(CognifyRouteError::LegacyDltRecord { .. })
+        ),
+        "{error:?}"
+    );
+    assert!(stack.code_node_ids().await.is_empty(), "no enola work");
+    assert!(stack.completed(&items).await.is_empty());
+    assert_eq!(stack.cognify_runs().await, vec![PipelineRunStatus::Errored]);
+}
+
+/// A row stamped `system_metadata.source == "dlt_source"` is refused rather
+/// than sent down the LLM pipeline: Rust reads DLT stamps from
+/// `external_metadata` only.
+#[tokio::test]
+async fn a_dlt_source_row_is_refused() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, true, None).await;
+    let (_, documents) = split(&items);
+    let mut row = documents[0].clone();
+    row.system_metadata = Some(r#"{"source": "dlt_source"}"#.to_string());
+    assert!(!cognee_cognify::routing::routes_need_llm(std::slice::from_ref(&row)));
+
+    let error = stack.cognify(vec![row.clone()], &config(true)).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CognifyError::Route(CognifyRouteError::UnsupportedRoute {
+                route: CognifyRoute::DltSource,
+                data_id,
+            }) if data_id == row.id
+        ),
+        "{error:?}"
+    );
+    assert!(stack.completed(&[row]).await.is_empty());
+    assert_eq!(stack.cognify_runs().await, vec![PipelineRunStatus::Errored]);
+}
+
+/// A repo row whose `external_metadata["node_set"]` is malformed fails as
+/// that item, inside the route (Python reads it in `extract_code_repo_graph`).
+#[tokio::test]
+async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, true, None).await;
+    let (mut manifest, documents) = split(&items);
+    manifest.external_metadata = Some(r#"{"node_set": "team-a"}"#.to_string());
+    let input = CognifyInput {
+        data_items: vec![manifest.clone(), documents[0].clone()],
+        dataset_id: stack.dataset_id().await,
+        user_id: Some(stack.owner_id),
+        tenant_id: None,
+    };
+    let code_graph = config(true).code_graph;
+    let run = |failure_policy: FailurePolicy| {
+        let input = input.clone();
+        let code_graph = code_graph.clone();
+        let stack = &stack;
+        async move {
+            run_code_routes(
+                &input,
+                &*stack.storage,
+                &*stack.graph_db,
+                &*stack.db,
+                &code_graph,
+                None,
+                failure_policy,
+            )
+            .await
+        }
+    };
+
+    // Run to the end: the repo item is recorded, the README goes on.
+    let routed = run(FailurePolicy {
+        stop: FailureStop::RunToEnd,
+        ..FailurePolicy::default()
+    })
+    .await
+    .expect("a per-item failure does not fail the routes");
+    assert_eq!(routed.input.data_items.len(), 1);
+    assert_eq!(routed.input.data_items[0].id, documents[0].id);
+    assert_eq!(routed.failures.routed_items(), 1);
+    let failed: Vec<Uuid> = routed.failures.failed_items().iter().copied().collect();
+    assert_eq!(failed, vec![manifest.id]);
+    let entry = &routed.failures.entries()[0];
+    assert_eq!(entry.stage, FailureStage::CodeGraph);
+    assert!(entry.error.contains("Invalid node_set"), "{entry}");
+
+    // Fail fast, keeping failed items only: the README is never reached.
+    let routed = run(FailurePolicy {
+        stop: FailureStop::FailFast,
+        scope: RollbackScope::FailedItems,
+        ..FailurePolicy::default()
+    })
+    .await
+    .expect("FailedItems keeps the run going");
+    assert!(routed.input.data_items.is_empty());
+    assert!(routed.failures.unreached_items().contains(&documents[0].id));
+
+    // The default fails fast with the item's own error.
+    let error = run(FailurePolicy::default()).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CognifyError::Route(CognifyRouteError::InvalidNodeSet { data_id, .. })
+                if data_id == manifest.id
+        ),
+        "{error:?}"
+    );
+    assert!(stack.code_node_ids().await.is_empty(), "nothing was loaded");
 }
