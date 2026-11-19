@@ -21,6 +21,11 @@ pub enum CodeGraphError {
     /// A code graph setting is unusable (for example a negative timeout).
     #[error("{0}")]
     InvalidConfig(String),
+    /// A code repo data item cannot be loaded: its stored manifest is
+    /// unreadable, or the repository directory it points at is gone. Python
+    /// raises a `ValueError` (`extract_code_repo_graph`).
+    #[error("{0}")]
+    InvalidRepoItem(String),
     /// The graph database failed a read or write.
     #[error("graph database error: {0}")]
     Graph(#[from] cognee_graph::GraphDBError),
@@ -36,6 +41,7 @@ impl CodeGraphError {
             Self::EnolaNotInstalled(_) => "EnolaNotInstalledError",
             Self::EnolaSnapshot(_) => "EnolaSnapshotError",
             Self::InvalidConfig(_) => "CogneeConfigurationError",
+            Self::InvalidRepoItem(_) => "ValueError",
             Self::Graph(_) => "GraphDatabaseError",
             Self::Ledger(_) => "RelationalDatabaseError",
         }

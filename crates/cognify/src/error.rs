@@ -73,6 +73,16 @@ pub enum CognifyError {
     #[error("cognify run failed: {report}")]
     RunFailed { report: Box<FailureReport> },
 
+    /// A data item no route accepts (see [`crate::routing`]).
+    #[error(transparent)]
+    Route(#[from] crate::routing::CognifyRouteError),
+
+    /// The CODE_REPO route failed: enola, its snapshot, the repo item, or the
+    /// code graph write. Kept typed so callers can read Python's exception
+    /// name and status ([`cognee_code_graph::CodeGraphError::name`]).
+    #[error(transparent)]
+    CodeGraph(#[from] cognee_code_graph::CodeGraphError),
+
     #[error("Output type mismatch: expected {expected}, got {actual}")]
     OutputTypeMismatch {
         expected: &'static str,

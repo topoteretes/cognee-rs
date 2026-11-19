@@ -555,6 +555,8 @@ impl Settings {
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
+        // The CODE_REPO route runs enola with the `code_graph.*` section.
+        cfg = cfg.with_code_graph(self.code_graph());
         if let Some(schema) = &self.summarization_schema {
             // Validated when it was set; checked again because a bulk-loaded
             // config could still carry one that fails.

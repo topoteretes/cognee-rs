@@ -9,6 +9,7 @@
 //! Main entry point: [`pipeline::AddPipeline`]. No trait abstraction — it builds
 //! on `StorageTrait` and `IngestDb` from the sibling crates.
 
+pub mod code_repo;
 mod content_hasher;
 pub mod dataset_locks;
 mod file_type;

@@ -465,7 +465,17 @@ pub async fn run_cognify_on_items(
     }
 
     let user_email = best_effort_user_email(svc, owner_id).await;
-    let config = cognify_config_with_opts(svc, opts).await?;
+    // The graph extractor serves only the standard route. When every item
+    // takes a code route nothing needs it, nor the LLM it may need, so it is
+    // not resolved: a keyless deployment cognifies a code project (Python's
+    // `needs_llm` union over the routes in play).
+    let config = if cognee::cognify::routing::routes_need_llm(&data_items) {
+        cognify_config_with_opts(svc, opts).await?
+    } else {
+        let config = apply_cognify_opts(svc.cognify_config.clone(), opts)?;
+        validate_cognify_config(&config)?;
+        config
+    };
 
     let result = cognee_cognify(
         data_items,

@@ -2,6 +2,24 @@
 
 Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
+## Routes
+
+Every item is routed by its `system_metadata.source` (`routing`, Python's
+`cognify_route_for`). A code project's repo item (`code_repo`) runs the
+deterministic code graph (`cognee-code-graph`) as the run's first task
+(`tasks::run_code_routes`), with no LLM and no embedding; the rest run the
+standard stages. All items share one run and its completion markers. A repo
+item that fails to load is a per-item failure, as in Python's per-item run:
+it is recorded in the run's `FailureReport` (stage `CodeGraph`) and the
+failure policy decides the rest. `FailFast` stops at it; `RunToEnd` goes on
+with the other items; under `FailedItems` a repo item that loaded counts as a
+survivor and keeps its graph and completion marker. A per-file code item
+(`code`) and a DLT source stamped in `system_metadata` (`dlt_source`) are not
+supported yet and fail the whole run before any work, as does a legacy `dlt`
+row.
+`routing::routes_need_llm` tells callers whether a run's items need the graph
+extractor at all.
+
 ## Global context index
 
 `global_context_index` builds the retrieval-ready summaries above a dataset that
