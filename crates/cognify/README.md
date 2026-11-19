@@ -2,6 +2,17 @@
 
 Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
+## Routes
+
+Every item is routed by its `system_metadata.source` (`routing`, Python's
+`cognify_route_for`). A code project's repo item (`code_repo`) runs the
+deterministic code graph (`cognee-code-graph`) as the run's first task
+(`tasks::run_code_routes`), with no LLM and no embedding; the rest run the
+standard stages. All items share one run and its completion markers. A
+per-file code item (`code`) is not supported yet and fails the run.
+`routing::routes_need_llm` tells callers whether a run's items need the graph
+extractor at all.
+
 ## Global context index
 
 `global_context_index` builds the retrieval-ready summaries above a dataset that

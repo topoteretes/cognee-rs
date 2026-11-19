@@ -3883,6 +3883,150 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 }
 
 // ---------------------------------------------------------------------------
+// Cognify routes (SDK-1053): the CODE_REPO route ahead of the standard tasks
+// ---------------------------------------------------------------------------
+
+/// Name of the task that runs the code routes ahead of the standard pipeline
+/// (Python's CODE_REPO-route task, `extract_code_repo_graph`).
+pub const EXTRACT_CODE_REPO_GRAPH_TASK_NAME: &str = "extract_code_repo_graph";
+
+/// Run the non-standard routes of a cognify run and hand the rest on.
+///
+/// Port of the route split in Python's `cognify()` (`tasks_by_route` and
+/// `resolve_cognify_tasks`). Every item is routed by
+/// [`crate::routing::cognify_route_for`]:
+///
+/// - standard items, and DLT-source ones (Rust's DLT rows go through the
+///   standard tasks, SDK-1053 decision 2), are returned for the standard
+///   pipeline, unchanged;
+/// - each code-repo item loads its repository's code graph
+///   ([`cognee_code_graph::extract_code_repo_graph`]): the stored manifest
+///   names the repository, the row's `external_metadata["node_set"]` tags
+///   every code node, and every node and edge is recorded in the ownership
+///   ledger under the row and `pipeline_run_id`, so a failed run's sweep and
+///   a later delete find them. No LLM, no embedding;
+/// - a per-file code item, or a refused one, fails the run: Rust has no
+///   per-file code route yet, and Python never runs an unmapped route down
+///   the standard tasks.
+///
+/// Every item is routed before anything is loaded, so a refused item fails
+/// the run before any enola work. A code route failure fails the run, as a
+/// failing item errors Python's run.
+///
+/// # Errors
+///
+/// [`CognifyError::Route`] for a refused item or an invalid node set,
+/// [`CognifyError::StorageError`] when a manifest cannot be read, and
+/// [`CognifyError::CodeGraph`] for what the code graph load raises.
+pub async fn run_code_routes(
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+) -> Result<CognifyInput, CognifyError> {
+    use crate::routing::{CognifyRoute, CognifyRouteError, code_repo_node_set, cognify_route_for};
+
+    let mut standard = Vec::with_capacity(input.data_items.len());
+    let mut repositories = Vec::new();
+    for item in &input.data_items {
+        match cognify_route_for(item)? {
+            CognifyRoute::Standard | CognifyRoute::DltSource => standard.push(item.clone()),
+            CognifyRoute::CodeRepo => repositories.push(item),
+            route @ CognifyRoute::Code => {
+                return Err(CognifyRouteError::UnsupportedRoute {
+                    data_id: item.id,
+                    route,
+                }
+                .into());
+            }
+        }
+    }
+
+    for item in repositories {
+        let node_set = code_repo_node_set(item)?;
+        let manifest = storage
+            .retrieve(&item.raw_data_location)
+            .await
+            .map_err(|e| CognifyError::StorageError(e.to_string()))?;
+        let manifest = String::from_utf8(manifest).map_err(|e| {
+            CognifyError::from(cognee_code_graph::CodeGraphError::InvalidRepoItem(format!(
+                "the code repo manifest of data item {} is not UTF-8: {e}",
+                item.id
+            )))
+        })?;
+        let ledger = cognee_code_graph::CodeGraphLedger {
+            db,
+            owner: cognee_code_graph::CodeGraphOwner {
+                tenant_id: input.tenant_id,
+                user_id: input.user_id.unwrap_or(DEFAULT_LEDGER_USER_ID),
+                dataset_id: input.dataset_id,
+                data_id: item.id,
+                pipeline_run_id,
+            },
+        };
+        cognee_code_graph::extract_code_repo_graph(
+            graph_db,
+            Some(&ledger),
+            code_graph,
+            &manifest,
+            node_set.as_deref(),
+        )
+        .await?;
+    }
+
+    Ok(CognifyInput {
+        data_items: standard,
+        dataset_id: input.dataset_id,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
+    })
+}
+
+/// Build the [`TypedTask`] that runs [`run_code_routes`]; it takes the run's
+/// [`CognifyInput`] and returns the one the standard tasks get. The pipeline
+/// run id comes from the task context, so the ledger rows name the run.
+pub fn make_code_routes_task(
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    db: Arc<dyn RelationalDb>,
+    code_graph: cognee_code_graph::CodeGraphConfig,
+) -> TypedTask<CognifyInput, CognifyInput> {
+    TypedTask::async_fn(move |input: &CognifyInput, ctx| {
+        let input = input.clone();
+        let storage = Arc::clone(&storage);
+        let graph_db = Arc::clone(&graph_db);
+        let db = Arc::clone(&db);
+        let code_graph = code_graph.clone();
+        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
+        Box::pin(async move {
+            let routed = run_code_routes(
+                &input,
+                &*storage,
+                &*graph_db,
+                &*db,
+                &code_graph,
+                pipeline_run_id,
+            )
+            .await?;
+            Ok(Box::new(routed))
+        })
+    })
+}
+
+/// Whether a run over `items` needs [`make_code_routes_task`] ahead of the
+/// standard tasks: some item does not take the standard route.
+fn needs_code_routes(items: &[Data]) -> bool {
+    items.iter().any(|item| {
+        !matches!(
+            crate::routing::cognify_route_for(item),
+            Ok(crate::routing::CognifyRoute::Standard)
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Convenience function: sequential execution of all tasks
 // ---------------------------------------------------------------------------
 
@@ -4102,6 +4246,24 @@ async fn cognify_in_scope(
                 Arc::clone(&ontology_resolver),
                 effective_config.clone(),
             );
+            // ── Routes (SDK-1053) ───────────────────────────────────────────
+            // Python runs each item down its route's task list in one
+            // `cognify_pipeline` run. Here the code routes run as the run's
+            // first task and hand only the standard items to classify, so
+            // every item still shares this one run and its completion
+            // markers. A dataset of standard items keeps the plain pipeline.
+            if needs_code_routes(&data_items) {
+                pipeline.tasks.insert(
+                    0,
+                    cognee_core::TaskInfo::from(make_code_routes_task(
+                        Arc::clone(&storage),
+                        Arc::clone(&graph_db),
+                        Arc::clone(&database),
+                        effective_config.code_graph.clone(),
+                    ))
+                    .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
+                );
+            }
 
             // The executor re-derives `PipelineRunInfo.pipeline_id` from
             // `(pipeline.name, user_id, dataset_id)`; we still carry `pipeline.id`

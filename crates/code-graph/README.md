@@ -24,6 +24,7 @@ does all four for one local repository.
 | Write nodes | `add_code_graph_data_points` | `extract_code_graph.add_code_graph_data_points` |
 | Write edges, stamp | `add_code_graph_edges` | `extract_code_graph.add_code_graph_edges` |
 | The whole load | `load_code_graph` | `extract_code_graph.get_code_graph_tasks` |
+| The CODE_REPO cognify route | `extract_code_repo_graph` | `code_repo.extract_code_repo_graph` |
 
 `parse_enola_snapshot` reads `facts.jsonl`. It also turns `insights.json`
 findings into `insight` facts and `flows.json` entry points into `flow` facts.
@@ -79,6 +80,20 @@ With a `CodeGraphLedger`, every node and edge written is recorded in the
 relational provenance ledger under the owning `Data` row, before the graph
 write it describes, so deleting the row (or rolling back the run) finds it.
 The row ids are the ones cognify uses (`cognee_database::provenance_ids`).
+
+## The CODE_REPO route
+
+`add(<project dir>)` stores a code project as one repo manifest item
+(`cognee_ingestion::code_repo`, Python's `resolve_code_repository`): a JSON
+document naming the repository (`repo_path`) and its source files, stamped
+`system_metadata.source = "code_repo"`. cognify routes that item to
+`cognee_cognify::tasks::run_code_routes`, which reads the stored manifest and
+calls `extract_code_repo_graph`: the repository directory must still exist
+(`CodeGraphError::InvalidRepoItem` otherwise, Python's `ValueError`), and the
+item's `external_metadata["node_set"]` tags every code node. The load runs in
+the cognify run, so its ledger rows carry that run's id. One repository per
+item for now; Python loads a dataset's repositories as one enola cluster
+(SDK-1053 O8).
 
 Not yet ported (SDK-1053 O6): Python's unchanged-snapshot skip, the sweep of
 stale nodes and edges, and the node-set detag. `last_delta` reports zero for

@@ -10,8 +10,9 @@
 //! `external_metadata` is never consulted, so users cannot steer a record into
 //! (or out of) a route.
 //!
-//! Nothing routes on this yet: cognify still runs every item down the
-//! standard pipeline. Later SDK-1053 stages split cognify by route.
+//! [`crate::tasks::cognify`] splits a run's items by route: the standard
+//! items run the standard pipeline, code-repo manifests run the code graph
+//! load ([`cognee_code_graph::extract_code_repo_graph`]) in the same run.
 
 use cognee_models::Data;
 use uuid::Uuid;
@@ -76,6 +77,30 @@ pub enum CognifyRouteError {
         /// The refused row.
         data_id: Uuid,
     },
+    /// A data item whose route Rust has no task list for yet. Python wires
+    /// every route explicitly and raises for an unmapped one rather than
+    /// running the standard pipeline on data routed away from it
+    /// (`cognify.py`); the per-file code route comes with SDK-1053 O9.
+    #[error(
+        "Data item {data_id} takes the '{route}' cognify route, which is not supported yet \
+         (the per-file code route); add the project directory instead to build its code graph."
+    )]
+    UnsupportedRoute {
+        /// The refused row.
+        data_id: Uuid,
+        /// Its route.
+        route: CognifyRoute,
+    },
+    /// A code repo row whose `external_metadata["node_set"]` is not a list of
+    /// non-empty names (Python's `InvalidNodeSetError` from
+    /// `code_repo_node_set`).
+    #[error("Invalid node_set on data item {data_id}: {reason}")]
+    InvalidNodeSet {
+        /// The row.
+        data_id: Uuid,
+        /// What is wrong with it.
+        reason: String,
+    },
 }
 
 /// The `source` of a `system_metadata` JSON text, or `None` when there is no
@@ -105,6 +130,73 @@ pub fn cognify_route_for(data: &Data) -> Result<CognifyRoute, CognifyRouteError>
         Some(SOURCE_CODE) => Ok(CognifyRoute::Code),
         Some(SOURCE_CODE_REPO) => Ok(CognifyRoute::CodeRepo),
         _ => Ok(CognifyRoute::Standard),
+    }
+}
+
+/// Whether any of `items` takes a route that needs the LLM.
+///
+/// Python passes `run_pipeline` the union of `needs_llm` over every wired
+/// route (`cognify.py`), which stays LLM-free without a key because its
+/// keyless standard route is GLiNER. Rust's standard route has no LLM-free
+/// extractor in every build, so the union is taken over the routes this
+/// run's items actually take: the standard and DLT-source routes need the
+/// LLM (the graph extractor), the code routes never do. A refused item needs
+/// nothing; the run fails on it anyway.
+///
+/// Callers use it to skip resolving the graph extractor (which needs an LLM
+/// or a registered LLM-free backend) when no item will reach it.
+pub fn routes_need_llm(items: &[Data]) -> bool {
+    items.iter().any(|item| {
+        matches!(
+            cognify_route_for(item),
+            Ok(CognifyRoute::Standard | CognifyRoute::DltSource)
+        )
+    })
+}
+
+/// The call-level node set a code repo row carries, or `None`. Python's
+/// `code_repo_node_set`: read off the row's `external_metadata` (a non-empty
+/// JSON object) under `node_set`, the same key documents are tagged from,
+/// so every code node the row produces carries the tag its documents got.
+///
+/// # Errors
+///
+/// [`CognifyRouteError::InvalidNodeSet`] when the key holds anything but
+/// `null` or a list of non-empty strings.
+pub fn code_repo_node_set(data: &Data) -> Result<Option<Vec<String>>, CognifyRouteError> {
+    let Some(metadata) = data
+        .external_metadata
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(value) = metadata
+        .as_object()
+        .and_then(|object| object.get("node_set"))
+    else {
+        return Ok(None);
+    };
+    let invalid = |reason: String| CognifyRouteError::InvalidNodeSet {
+        data_id: data.id,
+        reason,
+    };
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .map(|entry| match entry.as_str() {
+                Some(name) if !name.trim().is_empty() => Ok(name.to_owned()),
+                _ => Err(invalid(format!(
+                    "node_set entries must be non-empty strings, got {entry} in {value}"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        other => Err(invalid(format!(
+            "node_set must be a list of names, got {other}"
+        ))),
     }
 }
 
@@ -188,6 +280,57 @@ mod tests {
                 .to_string()
                 .contains("pre-manifest per-row DLT record")
         );
+    }
+
+    #[test]
+    fn llm_need_is_the_union_over_the_items_routes() {
+        let standard = data(None, None);
+        let dlt = data(Some(r#"{"source": "dlt_source"}"#), None);
+        let repo = data(Some(r#"{"source": "code_repo"}"#), None);
+        let file = data(Some(r#"{"source": "code"}"#), None);
+        let legacy = data(Some(r#"{"source": "dlt"}"#), None);
+        assert!(!routes_need_llm(&[]));
+        assert!(!routes_need_llm(&[repo.clone(), file.clone(), legacy]));
+        assert!(routes_need_llm(&[repo.clone(), standard]));
+        assert!(routes_need_llm(&[repo, dlt]));
+    }
+
+    #[test]
+    fn code_repo_node_set_reads_external_metadata() {
+        let cases: &[(Option<&str>, Option<Vec<String>>)] = &[
+            (None, None),
+            (Some(""), None),
+            (Some("not json"), None),
+            (Some("{}"), None),
+            (Some(r#"{"node_set": null}"#), None),
+            (
+                Some(r#"{"node_set": ["team-a", "shared"]}"#),
+                Some(vec!["team-a".into(), "shared".into()]),
+            ),
+            (Some(r#"{"node_set": []}"#), Some(vec![])),
+        ];
+        for (meta, expected) in cases {
+            let item = data(Some(r#"{"source": "code_repo"}"#), *meta);
+            assert_eq!(
+                code_repo_node_set(&item).expect("valid"),
+                *expected,
+                "{meta:?}"
+            );
+        }
+        for bad in [
+            r#"{"node_set": "team-a"}"#,
+            r#"{"node_set": ["", "x"]}"#,
+            r#"{"node_set": [1]}"#,
+        ] {
+            let item = data(None, Some(bad));
+            assert!(
+                matches!(
+                    code_repo_node_set(&item),
+                    Err(CognifyRouteError::InvalidNodeSet { .. })
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -2364,6 +2364,8 @@ pub struct AddPipeline {
     loaders: Arc<LoaderRegistry>,
     // ─── Run-ownership markers (SDK-1039 P22) ─────────────────────────────
     run_ownership_dir: Option<std::path::PathBuf>,
+    // ─── Code projects (SDK-1053) ─────────────────────────────────────────
+    llm_available: bool,
 }
 
 impl AddPipeline {
@@ -2390,6 +2392,7 @@ impl AddPipeline {
             dataset_locks: None,
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
+            llm_available: true,
         }
     }
 
@@ -2414,6 +2417,7 @@ impl AddPipeline {
             dataset_locks: Some(DatasetLocks::global()),
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
+            llm_available: true,
         }
     }
 
@@ -2480,6 +2484,17 @@ impl AddPipeline {
     /// audio input fails with [`IngestionError::UnsupportedDocumentType`].
     pub fn with_loader_registry(mut self, loaders: Arc<LoaderRegistry>) -> Self {
         self.loaders = loaders;
+        self
+    }
+
+    /// Whether a usable LLM is configured (default `true`).
+    ///
+    /// Only a code-project directory reads it: without an LLM its document
+    /// files are left out instead of added, because their routes need one
+    /// (Python's `resolve_code_repository` checks `LLM_API_KEY`). The code
+    /// graph itself never does. See [`crate::code_repo`].
+    pub fn with_llm_available(mut self, available: bool) -> Self {
+        self.llm_available = available;
         self
     }
 
@@ -2585,6 +2600,23 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // ── Directories (Python `resolve_data_directories`) ──────────────
+        // A code project becomes one repo manifest item plus its documents;
+        // any other directory its files. Walks and hashes files, so it runs
+        // off the executor.
+        let inputs = if inputs
+            .iter()
+            .any(|input| matches!(input, DataInput::FilePath(_)))
+        {
+            let llm_available = self.llm_available;
+            tokio::task::spawn_blocking(move || {
+                crate::code_repo::resolve_data_directories(inputs, llm_available)
+            })
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??
+        } else {
+            inputs
+        };
         // A pin names one row, so it can only go with one item (Python's
         // `update()` refuses a list, `update.py:201-206`).
         if params.pinned_id.is_some() && inputs.len() != 1 {

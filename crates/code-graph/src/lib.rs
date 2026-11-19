@@ -8,12 +8,15 @@
 //! ([`map_facts_to_data_points`]), resolves their relations into typed edges
 //! ([`build_code_graph_edges`]) and writes both to a graph
 //! ([`add_code_graph_data_points`], [`add_code_graph_edges`]);
-//! [`load_code_graph`] does all of it for one repository. Node ids,
+//! [`load_code_graph`] does all of it for one repository, and
+//! [`extract_code_repo_graph`] for the repo item cognify's CODE_REPO route
+//! hands it. Node ids,
 //! `fact_hash` values, properties and edges match Python's byte for byte,
 //! which the golden tests under `tests/` check against output Python
 //! produced (`scripts/generate_code_graph_goldens.py`). Settings are the
 //! `code_graph.*` section ([`CodeGraphConfig`]).
 
+mod code_repo;
 mod config;
 mod edges;
 mod error;
@@ -25,6 +28,7 @@ mod runner;
 mod snapshot;
 mod writer;
 
+pub use code_repo::{CODE_REPO_MANIFEST_KIND, extract_code_repo_graph, manifest_repo_path};
 pub use config::{CodeGraphConfig, DEFAULT_ENOLA_TIMEOUT_SECS};
 pub use edges::{CodeGraphEdge, build_code_graph_edges};
 pub use error::{CodeGraphError, CodeGraphResult};
