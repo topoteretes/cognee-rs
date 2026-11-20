@@ -4127,6 +4127,225 @@ fn needs_code_routes(items: &[Data]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// The code graph pipeline (SDK-1053 O5): remember(content_type="code")
+// ---------------------------------------------------------------------------
+
+/// The pipeline name `remember(content_type="code")` records its runs under,
+/// and the second `pipeline_status` entry a built repository is stamped with
+/// (Python `refresh_dataset_code_graph`, `run_custom_pipeline(...,
+/// pipeline_name="code_graph_pipeline")`). Dataset status for this pipeline
+/// (`GET /v1/datasets/status?pipeline=code_graph_pipeline`) reads these runs.
+pub const CODE_GRAPH_PIPELINE_NAME: &str = "code_graph_pipeline";
+
+/// Build the code graph of each code-repo item in one `code_graph_pipeline`
+/// run, and return the run's id.
+///
+/// Port of one `run_custom_pipeline(tasks=get_code_graph_tasks(...),
+/// pipeline_name="code_graph_pipeline")` of Python's
+/// `refresh_dataset_code_graph`. The run's one task is the CODE_REPO adapter
+/// the cognify route uses ([`make_code_routes_task`]), so both build the same
+/// graph through one builder; only the run's name differs. As in Python's
+/// `run_custom_pipeline` the run is not incremental: an item already built is
+/// built again. Each item must be a code-repo item (a refused one fails the
+/// run before any enola work).
+///
+/// On success every item is stamped complete under both
+/// [`COGNIFY_PIPELINE_STAMP_NAME`] and [`CODE_GRAPH_PIPELINE_NAME`] (Python
+/// `mark_data_processed(..., pipeline_names=("cognify_pipeline",
+/// "code_graph_pipeline"))`), so a later `cognify()` of the dataset does not
+/// rerun enola for it. On failure the run is swept as a failed cognify run
+/// is ([`CognifyConfig::rollback_scope`]) and the error returned.
+///
+/// Runs under the dataset's lock and in its scope, as [`cognify`] does.
+///
+/// # Errors
+///
+/// [`CognifyError::CodeGraph`] for a non-code-repo item or what the graph load
+/// raises, and what [`run_code_routes`] raises.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_code_graph_pipeline(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    thread_pool: Arc<dyn CpuPool>,
+    config: &CognifyConfig,
+) -> Result<Uuid, CognifyError> {
+    for item in &data_items {
+        if !matches!(
+            crate::routing::cognify_route_for(item),
+            Ok(crate::routing::CognifyRoute::CodeRepo)
+        ) {
+            // Python `extract_code_repo_graph`'s refusal.
+            return Err(cognee_code_graph::CodeGraphError::InvalidRepoItem(format!(
+                "Data item {} is not a code repo manifest (system_metadata.source != \
+                 'code_repo'); it must not reach the CODE_REPO route.",
+                item.id
+            ))
+            .into());
+        }
+    }
+    DatasetLocks::global()
+        .hold(
+            [dataset_id],
+            cognee_models::dataset_scope::with_dataset(
+                dataset_id,
+                Box::pin(run_code_graph_pipeline_in_scope(
+                    data_items,
+                    dataset_id,
+                    user_id,
+                    user_email,
+                    tenant_id,
+                    storage,
+                    graph_db,
+                    vector_db,
+                    database,
+                    pipeline_run_repo,
+                    thread_pool,
+                    config,
+                )),
+            ),
+        )
+        .await
+}
+
+/// [`run_code_graph_pipeline`], already under the dataset's lock and scope.
+#[allow(clippy::too_many_arguments)]
+async fn run_code_graph_pipeline_in_scope(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    thread_pool: Arc<dyn CpuPool>,
+    config: &CognifyConfig,
+) -> Result<Uuid, CognifyError> {
+    let processed: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
+    // A repository that fails to load fails the run, as the task raises in
+    // Python's `run_custom_pipeline`: nothing here judges a failure report
+    // the way cognify's end-of-run gate does, so a recorded (not raised)
+    // failure would be stamped complete. The sweep still follows the
+    // configured `rollback_scope` (`rollback::on_run_failed` below).
+    let failure_policy = FailurePolicy {
+        stop: FailureStop::FailFast,
+        scope: RollbackScope::WholeRun,
+        ..config.failure_policy()
+    };
+    let mut pipeline = PipelineBuilder::new_with_task(
+        CODE_GRAPH_PIPELINE_NAME,
+        make_code_routes_task(
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&database),
+            config.code_graph.clone(),
+            failure_policy,
+        ),
+    )
+    .with_first_task_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME)
+    .with_name(CODE_GRAPH_PIPELINE_NAME)
+    .build();
+
+    let pipeline_ctx = PipelineContext {
+        pipeline_id: pipeline.id,
+        pipeline_name: CODE_GRAPH_PIPELINE_NAME.to_string(),
+        user_id,
+        tenant_id,
+        dataset_id: Some(dataset_id),
+        current_data: None,
+        run_id: None,
+        user_email,
+        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    };
+    let (_cancel_handle, ctx) = TaskContextBuilder::new()
+        .thread_pool(thread_pool)
+        .database(Arc::clone(&database))
+        .graph_db(Arc::clone(&graph_db))
+        .vector_db(Arc::clone(&vector_db))
+        .pipeline_context(pipeline_ctx)
+        .build()
+        .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
+    let input = CognifyInput {
+        data_items,
+        dataset_id,
+        user_id,
+        tenant_id,
+    };
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
+
+    // The same run bookkeeping as `cognify`: the run id is captured on every
+    // exit path for the sweep, and the ownership marker lets startup recovery
+    // retire a run whose process died.
+    let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
+    let mut ownership = config
+        .run_ownership_dir
+        .as_deref()
+        .map(cognee_core::RunOwnership::acquire);
+    pipeline.recovery_lock = ownership
+        .as_ref()
+        .and_then(cognee_core::RunOwnership::token);
+    let executed = cognee_core::pipeline::execute(&pipeline, inputs, Arc::new(ctx), &watcher)
+        .await
+        .map_err(unwrap_execution_error);
+    if let Some(ownership) = ownership.as_mut()
+        && !watcher.terminal_write_failed()
+    {
+        ownership.mark_closed();
+    }
+
+    let run_ctx = rollback::RunContext {
+        database: Arc::clone(&database),
+        graph_db,
+        vector_db,
+        repo: pipeline_run_repo,
+        dataset_id,
+        pipeline_run_id: watcher.run_id(),
+        pipeline_id: watcher.pipeline_id(),
+        pipeline_name: CODE_GRAPH_PIPELINE_NAME,
+        processed: processed.clone(),
+        config,
+    };
+    if let Err(e) = executed {
+        rollback::on_run_failed(&run_ctx, &e, true).await;
+        return Err(e);
+    }
+    let run_id = watcher.run_id().ok_or_else(|| {
+        CognifyError::Execute("the code graph pipeline completed without a run id".to_string())
+    })?;
+
+    // Python stamps both entries unconditionally once the run succeeded. A
+    // failed write costs only a rebuild on the next cognify(), so it is a
+    // warning, as cognify's own marker writes are.
+    for data_id in processed {
+        for name in [COGNIFY_PIPELINE_STAMP_NAME, CODE_GRAPH_PIPELINE_NAME] {
+            if let Err(e) = cognee_database::ProvenanceDb::mark_pipeline_status_complete(
+                &*database, data_id, dataset_id, name,
+            )
+            .await
+            {
+                warn!(
+                    data_id = %data_id,
+                    dataset_id = %dataset_id,
+                    pipeline = name,
+                    "code graph pipeline: failed to write the completion marker: {e}"
+                );
+            }
+        }
+    }
+    Ok(run_id)
+}
+
+// ---------------------------------------------------------------------------
 // Convenience function: sequential execution of all tasks
 // ---------------------------------------------------------------------------
 

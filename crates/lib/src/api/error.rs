@@ -101,6 +101,12 @@ pub enum ApiError {
     #[error("Component error: {0}")]
     Component(#[from] crate::error::ComponentError),
 
+    /// A repository of `remember(content_type="code")` could not be resolved
+    /// or stored, or its code graph not built (Python's
+    /// `CodeRepositoryError`, whose message is passed through as is).
+    #[error("{0}")]
+    CodeRepository(String),
+
     #[error("Background task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
 }

@@ -651,6 +651,42 @@ pub async fn mark_cognify_pipeline_status_complete(
     data_id: Uuid,
     dataset_id: Uuid,
 ) -> Result<(), DatabaseError> {
+    write_pipeline_status_complete(db, data_id, dataset_id, COGNIFY_PIPELINE_STATUS_KEY).await
+}
+
+/// Mark `data_id` complete for `dataset_id` under the named pipeline's
+/// `pipeline_status` entry (Python `mark_data_processed(..., pipeline_names=...)`
+/// writes one entry per name, e.g. `code_graph_pipeline`).
+///
+/// The same encoding and tolerance as [`mark_cognify_pipeline_status_complete`],
+/// which is this function with `"cognify_pipeline"`.
+#[instrument(
+    name = "cognee.db.relational.data.mark_pipeline_status_complete",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+        cognee.pipeline.name = pipeline_name,
+    ),
+    err,
+)]
+pub async fn mark_pipeline_status_complete(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+    pipeline_name: &str,
+) -> Result<(), DatabaseError> {
+    write_pipeline_status_complete(db, data_id, dataset_id, pipeline_name).await
+}
+
+/// The body of both markers, recording on the caller's span.
+async fn write_pipeline_status_complete(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+    pipeline_name: &str,
+) -> Result<(), DatabaseError> {
     Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
     let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
         .one(db)
@@ -678,7 +714,7 @@ pub async fn mark_cognify_pipeline_status_complete(
     };
 
     let inner = top_map
-        .entry(COGNIFY_PIPELINE_STATUS_KEY.to_string())
+        .entry(pipeline_name.to_string())
         .or_insert_with(|| serde_json::Value::Object(Default::default()));
     if !inner.is_object() {
         *inner = serde_json::Value::Object(Default::default());

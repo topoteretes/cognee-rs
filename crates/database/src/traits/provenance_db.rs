@@ -84,6 +84,15 @@ pub trait ProvenanceDb: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError>;
 
+    /// Mark the data item complete for the dataset under the named pipeline's
+    /// `pipeline_status` entry (e.g. `code_graph_pipeline`).
+    async fn mark_pipeline_status_complete(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<(), DatabaseError>;
+
     /// Which of `data_ids` cognify already completed in the dataset.
     async fn get_cognify_completed_data_ids(
         &self,
@@ -176,6 +185,15 @@ impl ProvenanceDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError> {
         data::mark_cognify_pipeline_status_complete(self, data_id, dataset_id).await
+    }
+
+    async fn mark_pipeline_status_complete(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<(), DatabaseError> {
+        data::mark_pipeline_status_complete(self, data_id, dataset_id, pipeline_name).await
     }
 
     async fn get_cognify_completed_data_ids(

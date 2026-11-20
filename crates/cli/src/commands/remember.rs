@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use cognee::add::AddPipeline;
-use cognee::api::remember;
+use cognee::api::{
+    RememberCodeParams, RememberContentType, RememberOptionCheck, remember, remember_code,
+    validate_remember_options,
+};
 use cognee::core::RayonThreadPool;
 use cognee::models::DataInput;
 use cognee::ontology::{NoOpOntologyResolver, OntologyResolver};
@@ -37,6 +40,22 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         return Err(CliError::Validation(
             "--extractor is not supported with --session-id".to_string(),
         ));
+    }
+
+    let content_type = validate_remember_options(RememberOptionCheck {
+        content_type: args.content_type.as_deref(),
+        session_id: args.session_id.as_deref(),
+        ..RememberOptionCheck::default()
+    })
+    .map_err(|error| CliError::Validation(error.to_string()))?;
+    if content_type == Some(RememberContentType::Code) {
+        if args.extractor.is_some() {
+            // The code route runs enola only: no graph extractor to choose.
+            return Err(CliError::Validation(
+                "--extractor is not supported with --content-type code".to_string(),
+            ));
+        }
+        return run_code(args.data, dataset_name, owner_id, tenant_id, cm);
     }
 
     // `--no-improve` flips the default-on self-improvement (`improve`) pass.
@@ -156,6 +175,71 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
         .map_err(|error| CliError::Runtime(format!("Remember failed: {error}")))?;
 
         info!("{result}");
+
+        Ok(())
+    })
+}
+
+/// `remember --content-type code`: index each path, a local code repository,
+/// as a code graph. Keyless: no LLM, embedding engine or graph extractor is
+/// built.
+fn run_code(
+    data: Vec<String>,
+    dataset_name: String,
+    owner_id: Uuid,
+    tenant_id: Option<Uuid>,
+    cm: Arc<ComponentManager>,
+) -> Result<(), CliError> {
+    let inputs = data.into_iter().map(DataInput::FilePath).collect();
+    crate::teardown::run_command(Arc::clone(&cm), async {
+        let runtime = |e: &dyn std::fmt::Display| CliError::Runtime(format!("{e}"));
+        let storage = cm.storage().await.map_err(|e| runtime(&e))?;
+        let database = cm.database().await.map_err(|e| runtime(&e))?;
+        let graph_db = cm.graph_db().await.map_err(|e| runtime(&e))?;
+        let vector_db = cm.vector_db().await.map_err(|e| runtime(&e))?;
+        let thread_pool = Arc::new(
+            RayonThreadPool::with_default_threads()
+                .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
+        );
+        let add_pipeline = Arc::new(
+            AddPipeline::new(
+                Arc::clone(&storage),
+                Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
+            )
+            .with_thread_pool(thread_pool)
+            .with_graph_db(Arc::clone(&graph_db))
+            .with_vector_db(Arc::clone(&vector_db))
+            .with_database(Arc::clone(&database)),
+        );
+        let cognify_config = Arc::new(cm.settings().cognify_config());
+        let result = remember_code(RememberCodeParams {
+            data: inputs,
+            dataset_name,
+            owner_id,
+            tenant_id,
+            node_set: None,
+            raise_on_error: true,
+            add_pipeline,
+            storage,
+            graph_db,
+            vector_db,
+            db: database,
+            cognify_config,
+        })
+        .await
+        .map_err(|error| CliError::Runtime(format!("Remember failed: {error}")))?;
+
+        info!("{result}");
+        for item in &result.items {
+            info!(
+                "code repository {} -> data id {}, pipeline run {}",
+                item.path.as_deref().unwrap_or_default(),
+                item.id.map(|id| id.to_string()).unwrap_or_default(),
+                item.pipeline_run_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default()
+            );
+        }
 
         Ok(())
     })

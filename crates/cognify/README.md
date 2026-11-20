@@ -20,6 +20,11 @@ row.
 `routing::routes_need_llm` tells callers whether a run's items need the graph
 extractor at all.
 
+`run_code_graph_pipeline` builds code-repo items alone in a
+`code_graph_pipeline` run (Python's `remember(content_type="code")` run): the
+same CODE_REPO adapter, not incremental, and on success each item is stamped
+complete under both `cognify_pipeline` and `code_graph_pipeline`.
+
 ## Global context index
 
 `global_context_index` builds the retrieval-ready summaries above a dataset that

@@ -702,6 +702,13 @@ pub struct RememberArgs {
     #[arg(long = "extractor")]
     pub extractor: Option<String>,
 
+    /// What the data is: `code` indexes each path, a local code repository,
+    /// as a code graph with no LLM (Python `remember(content_type="code")`).
+    /// `skills` is not supported by this SDK yet. Not with `--session-id` or
+    /// `--extractor`.
+    #[arg(long = "content-type")]
+    pub content_type: Option<String>,
+
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
 }

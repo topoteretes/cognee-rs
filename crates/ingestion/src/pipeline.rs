@@ -2724,6 +2724,47 @@ impl AddPipeline {
         .await
     }
 
+    /// Store a resolved code repository as its one code-repo `Data` row,
+    /// without cognifying it. Python's `add_code_repository`.
+    ///
+    /// `remember(content_type="code")` builds the graph itself and needs the
+    /// row only for its id and its dataset listing. It is the same manifest
+    /// item `add(<repo>)` ingests ([`crate::code_repo::resolve_code_repository`]),
+    /// without the repository's documents (`include_documents = false`).
+    ///
+    /// # Errors
+    ///
+    /// The manifest cannot be built (an unreadable directory), what
+    /// [`add`](Self::add) raises, and [`IngestionError::CodeRepositoryMissing`]
+    /// when the add stored no row.
+    pub async fn add_code_repository(
+        &self,
+        repo_path: &std::path::Path,
+        dataset_name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+    ) -> Result<Data, Box<dyn std::error::Error>> {
+        let directory = repo_path.to_path_buf();
+        let resolved = tokio::task::spawn_blocking(move || {
+            crate::code_repo::resolve_code_repository(&directory, false, true)
+        })
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
+        let rows = self
+            .add(
+                vec![resolved.manifest_item],
+                dataset_name,
+                owner_id,
+                tenant_id,
+            )
+            .await?;
+        rows.into_iter().next().ok_or_else(|| {
+            Box::new(IngestionError::CodeRepositoryMissing {
+                repo_path: repo_path.display().to_string(),
+            }) as Box<dyn std::error::Error>
+        })
+    }
+
     /// Like [`add`](Self::add), but accepts additional optional parameters.
     #[instrument(
         name = "ingestion.add_with_params",
@@ -2983,6 +3024,10 @@ pub enum IngestionError {
     /// which dataset holds the id.
     #[error("Data id {data_id} is not available in dataset {dataset_id}.")]
     PinnedIdNotInDataset { data_id: Uuid, dataset_id: Uuid },
+    /// [`AddPipeline::add_code_repository`] stored no row for the repository
+    /// (Python's "was added but its data record ... is missing").
+    #[error("Code repository '{repo_path}' was added but its data record is missing.")]
+    CodeRepositoryMissing { repo_path: String },
 }
 
 // ---------------------------------------------------------------------------

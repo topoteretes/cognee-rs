@@ -18,7 +18,7 @@ feature-gated).
 
 | Command | Purpose | Notable flags | Feature gate |
 |---|---|---|---|
-| `remember <data…>` | Store memory: `add` + `cognify` + (by default) `improve`. `<data…>` is inline text and/or file paths | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id`, `--no-improve` (default OFF — improve runs by default), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`; not with `--session-id`), `--tenant-id` | — |
+| `remember <data…>` | Store memory: `add` + `cognify` + (by default) `improve`. `<data…>` is inline text and/or file paths | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id`, `--no-improve` (default OFF — improve runs by default), `--extractor` (graph extractor for this run: `auto`/`llm`/`gliner`/another registered kind; overrides `GRAPH_EXTRACTOR`; not with `--session-id`), `--content-type code` (each `<data>` is a local code repository, indexed as a code graph with no LLM; not with `--session-id` or `--extractor`), `--tenant-id` | — |
 | `recall <query>` | Query memory with auto-routing (session-aware + graph-backed) | `-t/--query-type` (optional — omit to auto-route), `-d/--datasets` (repeatable), `-k/--top-k` (10), `--session-id`, `-f/--output-format` (`pretty`/`json`/`simple`, default `pretty`), `--tenant-id` (strict tenant match; omit = tenant-less data only) | — |
 | `improve` | Run the improve stages (feedback weights, session/trace bridging, distillation, …) and log one result per stage | `-d/--dataset-name` (the `default_dataset_name` setting, `main_dataset`), `--session-id` (repeatable), `--feedback-alpha` (the `improve.feedback_alpha` setting, `0.1`), `--build-global-context-index[=BOOL]` (force the `global_context_index` stage on or off; absent follows `improve.global_context_index`, default on), `--review-conflicts[=BOOL]` / `--no-review-conflicts` (same for `review_conflicts`, `improve.review_conflicts`, default on), `--build-truth-subspace` (opt in to the `build_truth_subspace` stage; needs `--session-id`), `--tenant-id` | — |
 | `forget` | Remove memory (a dataset, a single data item, or everything) | `-d/--dataset-name` \| `--data-id` (UUID; requires `--dataset-name`; conflicts with `--all`) \| `--all`, `--tenant-id` | — |
@@ -48,6 +48,9 @@ The four primary verbs cover the common workflow end-to-end:
 ```bash
 # Store memory (add + cognify + improve). Inline text and/or file paths.
 cognee-cli remember "Cognee turns data into a knowledge graph" ./notes.txt -d my_dataset
+
+# Index a local repository as a code graph (no LLM key needed; needs enola)
+cognee-cli remember ./my-repo --content-type code -d code
 
 # Scope a turn to a session (session-backed memory) instead of permanent graph memory
 cognee-cli remember "follow-up note" --session-id chat-42
