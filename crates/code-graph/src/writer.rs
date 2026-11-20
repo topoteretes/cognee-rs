@@ -11,9 +11,12 @@
 //! relations (`calls`, `imports`, ...) are written directly afterwards, as
 //! Python writes them through the graph engine.
 //!
-//! Writes are deltas against one read of the graph: a fact node whose
-//! `fact_hash` is unchanged is not rewritten, and an edge the graph already
-//! has is not added again. Repository nodes are always rewritten.
+//! Writes are deltas against the graph: a fact node whose `fact_hash` is
+//! unchanged is not rewritten, and an edge the graph already has is not added
+//! again. Repository nodes are always rewritten. Python reads the whole graph
+//! once for that; here only the snapshot's own nodes and candidate edges are
+//! looked up (`get_nodes`, `has_edges`), which decides the same writes
+//! without loading the rest of the graph.
 //!
 //! Every node and edge of the snapshot, written or left unchanged, is
 //! recorded in the relational provenance ledger (`node` / `edge` tables)
@@ -124,18 +127,21 @@ pub struct NodeDelta {
 }
 
 /// The node write's result, handed to [`add_code_graph_edges`]: the data
-/// points (passed through), and the graph as it was before the write, so the
-/// edge write reuses that one read. Python's `_CodeGraphLoadState`.
+/// points (passed through) and what the node write found and added. Python's
+/// `_CodeGraphLoadState`.
 #[derive(Debug, Clone, Default)]
 pub struct CodeGraphLoadState {
     /// The data points the load was given, unchanged. Empty when the
     /// extraction skipped the load.
     pub data_points: Vec<CodeNode>,
-    /// Every node the graph held before the write.
+    /// The snapshot's nodes the graph held before the write (the scoped read;
+    /// nodes outside the snapshot are not read).
     pub existing_nodes: Vec<GraphNode>,
-    /// `(source, target, relationship)` of every edge the graph held before
-    /// the write.
-    pub existing_edge_keys: HashSet<EdgeKey>,
+    /// `(source, target, relationship)` of the structural edges the node
+    /// write added that the graph did not hold before it. The edge write
+    /// checks its candidates after the node write, so these are told apart
+    /// from edges that were there before the load.
+    pub added_edge_keys: HashSet<EdgeKey>,
     /// What the node write changed.
     pub node_delta: NodeDelta,
 }
@@ -422,10 +428,9 @@ async fn record_in_ledger(
 /// Store code nodes as a delta against the graph. Python's
 /// `add_code_graph_data_points` with `graph_only=True`.
 ///
-/// The graph is read once. A fact node is written when the graph lacks it or
-/// its `fact_hash` differs (or it has none); repository nodes are always
-/// written and not counted. The pre-write graph rides on the returned state
-/// for [`add_code_graph_edges`].
+/// Only the snapshot's nodes are read from the graph. A fact node is written
+/// when the graph lacks it or its `fact_hash` differs (or it has none);
+/// repository nodes are always written and not counted.
 ///
 /// An empty `data_points` (a skipped load) writes and reads nothing.
 ///
@@ -441,7 +446,23 @@ pub async fn add_code_graph_data_points(
         return Ok(CodeGraphLoadState::default());
     }
 
-    let (existing_nodes, existing_edges) = graph.get_graph_data().await?;
+    let mut point_ids: Vec<String> = Vec::with_capacity(data_points.len());
+    let mut seen_ids: HashSet<Uuid> = HashSet::with_capacity(data_points.len());
+    for point in &data_points {
+        if seen_ids.insert(point.id()) {
+            point_ids.push(point.id().to_string());
+        }
+    }
+    // `get_nodes` is a set lookup in storage order: key rows by their own id.
+    let existing_nodes: Vec<GraphNode> = graph
+        .get_nodes(&point_ids)
+        .await?
+        .into_iter()
+        .filter_map(|node| {
+            let id = node.get("id").and_then(Value::as_str)?.to_string();
+            Some((id, node))
+        })
+        .collect();
     let existing_hashes: HashMap<&str, Option<Value>> = existing_nodes
         .iter()
         .map(|(id, properties)| (id.as_str(), node_property(properties, "fact_hash")))
@@ -491,8 +512,24 @@ pub async fn add_code_graph_data_points(
         let (nodes, edges) = storage_walk(&all);
         record_in_ledger(ledger, &nodes, &edges).await?;
     }
+    let mut added_edge_keys: HashSet<EdgeKey> = HashSet::new();
     if !to_write.is_empty() {
         let (nodes, edges) = storage_walk(&to_write);
+        if !edges.is_empty() {
+            let present: HashSet<EdgeKey> = graph
+                .has_edges(&edges)
+                .await?
+                .into_iter()
+                .map(|(source, target, relationship, _)| (source, target, relationship))
+                .collect();
+            added_edge_keys = edges
+                .iter()
+                .map(|(source, target, relationship, _)| {
+                    (source.clone(), target.clone(), relationship.clone())
+                })
+                .filter(|key| !present.contains(key))
+                .collect();
+        }
         graph
             .add_nodes_raw(nodes.into_iter().map(|node| node.properties).collect())
             .await?;
@@ -501,14 +538,10 @@ pub async fn add_code_graph_data_points(
         }
     }
 
-    let existing_edge_keys = existing_edges
-        .into_iter()
-        .map(|(source, target, relationship, _properties)| (source, target, relationship))
-        .collect();
     Ok(CodeGraphLoadState {
         data_points,
         existing_nodes,
-        existing_edge_keys,
+        added_edge_keys,
         node_delta: NodeDelta {
             nodes_added: added.len(),
             nodes_updated: updated.len(),
@@ -605,7 +638,9 @@ async fn stamp_snapshot_identity(
 ///
 /// `state` is what [`add_code_graph_data_points`] returned; an empty one (a
 /// skipped load) writes, sweeps and stamps nothing and returns `None`. Only
-/// edges the graph did not have before the load are written. The repository
+/// edges the graph did not have before the load are written: the candidates
+/// are looked up (`has_edges`), minus the structural edges the node write
+/// itself just added. The repository
 /// stamp comes last, so a load that failed part way is never recorded as
 /// done. Returns the delta stamped on the repository (`None` also when the
 /// snapshot has no identity to stamp).
@@ -635,22 +670,26 @@ pub async fn add_code_graph_edges(
         skipped
     );
 
+    let typed_edges: Vec<EdgeData> = edges.iter().map(typed_edge).collect();
     // Every typed relation of the snapshot is this owner's, written now or
     // already present (see the node write).
-    if ledger.is_some() {
-        let all_edges: Vec<EdgeData> = edges.iter().map(typed_edge).collect();
-        record_in_ledger(ledger, &[], &all_edges).await?;
-    }
-    let new_edges: Vec<EdgeData> = edges
-        .iter()
-        .filter(|edge| {
-            !state.existing_edge_keys.contains(&(
-                edge.source_id.to_string(),
-                edge.target_id.to_string(),
-                edge.relationship_name.clone(),
-            ))
+    record_in_ledger(ledger, &[], &typed_edges).await?;
+    let present: HashSet<EdgeKey> = if typed_edges.is_empty() {
+        HashSet::new()
+    } else {
+        graph
+            .has_edges(&typed_edges)
+            .await?
+            .into_iter()
+            .map(|(source, target, relationship, _)| (source, target, relationship))
+            .filter(|key| !state.added_edge_keys.contains(key))
+            .collect()
+    };
+    let new_edges: Vec<EdgeData> = typed_edges
+        .into_iter()
+        .filter(|(source, target, relationship, _)| {
+            !present.contains(&(source.clone(), target.clone(), relationship.clone()))
         })
-        .map(typed_edge)
         .collect();
     tracing::info!(
         "Code graph edge delta: {} new, {} already present.",
