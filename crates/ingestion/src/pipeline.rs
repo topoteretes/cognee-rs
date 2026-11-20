@@ -946,9 +946,24 @@ pub async fn persist_data_with_acl_and_locks(
     // `IngestDb` trait offers today; it is not worth a cross-process lock for
     // a refresh whose inputs are the caller's own re-add.
     //
+    // A code repository's manifest is pinned to (user, dataset, repo path),
+    // as Python pins it in `resolve_code_repository`: a re-add of a changed
+    // repository refreshes the one row (and clears its cognify marker, so the
+    // next cognify reloads it) instead of adding a row per version. The pin
+    // is derived here, where the dataset is known. Python also clears the
+    // row's add stamp first, so its incremental `add` reaches ingestion; this
+    // `add` never skips an item as already added, so there is none to clear.
+    let pinned_id = processed.pinned_id.or_else(|| {
+        crate::code_repo::code_repo_stamp_path(processed.system_metadata.as_deref()).map(
+            |repo_path| {
+                crate::code_repo::code_repo_data_id(&repo_path, owner_id, tenant_id, dataset.id)
+            },
+        )
+    });
+
     // A pinned item has an identity instead of a lookup: it is locked by its
     // id, and skips the dedup lookup below.
-    let _data_guard = match processed.pinned_id {
+    let _data_guard = match pinned_id {
         Some(pin) => data_id_locks().lock(pin).await,
         None => {
             data_id_locks()
@@ -966,7 +981,7 @@ pub async fn persist_data_with_acl_and_locks(
     // `persist_pinned_row`); a pin that matches no row creates one under the
     // pinned id.
     let mut new_row_id = processed.data_id;
-    if let Some(pin) = processed.pinned_id {
+    if let Some(pin) = pinned_id {
         let resolved = database
             .resolve_data_id(dataset.id, pin)
             .await?
@@ -980,7 +995,7 @@ pub async fn persist_data_with_acl_and_locks(
     // Dedup is a lookup, not an identity (Python `identify_many`): the row
     // holding this content in this dataset for this owner and tenant, if any.
     // The same content in another dataset is another row.
-    let existing = if processed.pinned_id.is_some() {
+    let existing = if pinned_id.is_some() {
         None
     } else {
         database

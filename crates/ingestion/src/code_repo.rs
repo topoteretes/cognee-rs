@@ -21,8 +21,11 @@
 //!
 //! The manifest item's raw data is a small JSON document (repo path, covered
 //! files, combined content hash), so the stored record changes exactly when
-//! the code does. The repository itself is read from its original location at
-//! cognify time.
+//! the code does. Its data id is pinned to `(user, dataset, repo path)`
+//! ([`code_repo_data_id`], applied when the item is stored), so a re-add of
+//! the repository refreshes that one record, and a changed one is cognified
+//! again. The repository itself is read from its original location at cognify
+//! time.
 //!
 //! A directory that is not a code project is flattened into its files, as
 //! Python does.
@@ -427,6 +430,38 @@ pub fn code_repo_system_metadata(directory: &Path, file_count: usize) -> String 
     )
 }
 
+/// The pinned data id of a code repository's manifest: Python's
+/// `get_unique_data_id(f"code_repo:{directory}", user, dataset_id)`
+/// (`resolve_code_repository`). Re-adding the same repository to the same
+/// dataset as the same user then updates one record instead of adding one
+/// per version of the code.
+pub fn code_repo_data_id(
+    repo_path: &str,
+    user_id: uuid::Uuid,
+    tenant_id: Option<uuid::Uuid>,
+    dataset_id: uuid::Uuid,
+) -> uuid::Uuid {
+    crate::id_generation::generate_unique_data_id(
+        &format!("code_repo:{repo_path}"),
+        user_id,
+        tenant_id,
+        Some(dataset_id),
+    )
+}
+
+/// The `repo_path` of a code-repository route stamp (`system_metadata` with
+/// `source == "code_repo"`), `None` for any other stamp.
+pub fn code_repo_stamp_path(system_metadata: Option<&str>) -> Option<String> {
+    let stamp: serde_json::Value = serde_json::from_str(system_metadata?).ok()?;
+    if stamp.get("source").and_then(serde_json::Value::as_str) != Some(SOURCE_CODE_REPO) {
+        return None;
+    }
+    stamp
+        .get("repo_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
 /// What [`resolve_code_repository`] makes of a project directory.
 #[derive(Debug, Clone)]
 pub struct ResolvedCodeRepository {
@@ -449,9 +484,9 @@ pub struct ResolvedCodeRepository {
 /// `include_documents == false` returns no document paths at all, for callers
 /// that index the code graph only.
 ///
-/// The manifest's data id is content-derived: Python pins it to
-/// `(user, dataset, repo path)` and clears its add stamp so a re-add replaces
-/// one record. That comes with the incremental re-ingest (SDK-1053 O6).
+/// The manifest's data id is pinned to `(user, dataset, repo path)` when it
+/// is stored ([`code_repo_data_id`]), so a re-add of the same repository
+/// updates one record.
 ///
 /// # Errors
 ///
@@ -887,6 +922,32 @@ mod tests {
         assert_eq!(first, build_repo_manifest(root, &covered).unwrap());
         write(root, "main.go", b"package main\nfunc main() {}\n");
         assert_ne!(first, build_repo_manifest(root, &covered).unwrap());
+    }
+
+    #[test]
+    fn the_manifest_pin_reads_the_code_repo_stamp() {
+        let stamp = code_repo_system_metadata(Path::new("/src/shop"), 2);
+        assert_eq!(
+            code_repo_stamp_path(Some(&stamp)).as_deref(),
+            Some("/src/shop")
+        );
+        assert_eq!(code_repo_stamp_path(Some(r#"{"source": "code"}"#)), None);
+        assert_eq!(
+            code_repo_stamp_path(Some(r#"{"source": "code_repo"}"#)),
+            None
+        );
+        assert_eq!(code_repo_stamp_path(Some("not json")), None);
+        assert_eq!(code_repo_stamp_path(None), None);
+
+        let (user, dataset) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+        assert_eq!(
+            code_repo_data_id("/src/shop", user, None, dataset),
+            crate::generate_unique_data_id("code_repo:/src/shop", user, None, Some(dataset))
+        );
+        assert_ne!(
+            code_repo_data_id("/src/shop", user, None, dataset),
+            code_repo_data_id("/src/shop", user, None, uuid::Uuid::from_u128(3))
+        );
     }
 
     #[test]

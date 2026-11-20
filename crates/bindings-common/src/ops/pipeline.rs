@@ -588,9 +588,12 @@ pub async fn cognify(
     Ok(cognify_result_json(&result))
 }
 
-/// Sequential add → cognify on the freshly-added items.
+/// Sequential add → cognify on the freshly-added items, plus any duplicate
+/// that is not cognified (no `pipeline_status`): a pinned row the add
+/// refreshed with new content, such as a re-added code repository whose
+/// code changed, has its cognify marker cleared and is cognified again.
 ///
-/// If all inputs were duplicates, cognify is skipped entirely and a zeroed
+/// If there is nothing to cognify, cognify is skipped entirely and a zeroed
 /// `CogneeCognifyResult` is returned. `opts` may be `serde_json::Value::Null`
 /// when no options were provided.
 pub async fn add_and_cognify(
@@ -621,9 +624,19 @@ pub async fn add_and_cognify(
         .map_err(|e| SdkError::Runtime(format!("add failed: {e}")))?;
 
     let (newly_added, duplicates) = partition_added(returned, &pre_existing);
+    let to_cognify: Vec<Data> = newly_added
+        .iter()
+        .chain(
+            duplicates
+                .iter()
+                .filter(|row| row.pipeline_status.is_none()),
+        )
+        .cloned()
+        .collect();
 
-    if newly_added.is_empty() {
-        // Everything was a duplicate: skip cognify, return a zeroed summary.
+    if to_cognify.is_empty() {
+        // Everything was a cognified duplicate: skip cognify, return a zeroed
+        // summary.
         return Ok(json!({
             "add": add_result_json(&newly_added, &duplicates, dataset_name)?,
             "cognify": cognify_result_json(&cognee::cognify::CognifyResult::empty()),
@@ -633,7 +646,7 @@ pub async fn add_and_cognify(
     // Resolve the dataset for its id/tenant, but cognify the just-added items
     // directly (do not re-load the whole dataset).
     let dataset = resolve_dataset(&svc, dataset_name, owner_id, tenant_id).await?;
-    let result = run_cognify_on_items(&svc, &dataset, owner_id, newly_added.clone(), opts).await?;
+    let result = run_cognify_on_items(&svc, &dataset, owner_id, to_cognify, opts).await?;
 
     // Cognify has now counted the added items' tokens, so report the stored
     // rows rather than the pre-cognify snapshot, whose `token_count` is still

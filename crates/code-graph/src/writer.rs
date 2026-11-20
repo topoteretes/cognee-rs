@@ -27,6 +27,9 @@
 //! writes they describe, as cognify writes them, so a failed write can always
 //! be swept.
 //!
+//! A re-added repository keeps its `Data` row (the manifest's pinned id), so
+//! a reload records its rows under the same owner as the load before it.
+//!
 //! Not here yet (SDK-1053 O6): the unchanged-snapshot skip, the stale node
 //! and edge sweep, and the node-set detag. The stamped `last_delta` reports
 //! zero for what they would remove.
