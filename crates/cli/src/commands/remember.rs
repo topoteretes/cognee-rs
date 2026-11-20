@@ -217,6 +217,7 @@ fn run_code(
             dataset_name,
             owner_id,
             tenant_id,
+            dataset_id: None,
             node_set: None,
             raise_on_error: true,
             add_pipeline,

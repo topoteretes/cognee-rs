@@ -2731,6 +2731,9 @@ impl AddPipeline {
     /// row only for its id and its dataset listing. It is the same manifest
     /// item `add(<repo>)` ingests ([`crate::code_repo::resolve_code_repository`]),
     /// without the repository's documents (`include_documents = false`).
+    /// `dataset_id` targets an existing dataset by id, as
+    /// [`AddParams::dataset_id`] does (a shared dataset); `None` resolves
+    /// `dataset_name` for the owner.
     ///
     /// # Errors
     ///
@@ -2743,6 +2746,7 @@ impl AddPipeline {
         dataset_name: &str,
         owner_id: Uuid,
         tenant_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
     ) -> Result<Data, Box<dyn std::error::Error>> {
         let directory = repo_path.to_path_buf();
         let resolved = tokio::task::spawn_blocking(move || {
@@ -2750,12 +2754,17 @@ impl AddPipeline {
         })
         .await
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
+        let params = AddParams {
+            dataset_id,
+            ..AddParams::default()
+        };
         let rows = self
-            .add(
+            .add_with_params(
                 vec![resolved.manifest_item],
                 dataset_name,
                 owner_id,
                 tenant_id,
+                &params,
             )
             .await?;
         rows.into_iter().next().ok_or_else(|| {

@@ -154,6 +154,10 @@ pub struct RememberCodeParams {
     pub dataset_name: String,
     pub owner_id: Uuid,
     pub tenant_id: Option<Uuid>,
+    /// An existing dataset to store into by id (Python's `dataset_id`, e.g. a
+    /// dataset shared with the caller, whose write permission the caller
+    /// checked). `None` resolves `dataset_name` for the owner, creating it.
+    pub dataset_id: Option<Uuid>,
     /// Accepted and ignored, as in Python: the code nodes of
     /// `remember(content_type="code")` are untagged.
     pub node_set: Option<Vec<String>>,
@@ -258,6 +262,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         dataset_name,
         owner_id,
         tenant_id,
+        dataset_id: target_dataset_id,
         node_set: _,
         raise_on_error,
         add_pipeline,
@@ -301,7 +306,33 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         })),
     );
 
-    let dataset_id = cognee_ingestion::generate_dataset_id(&dataset_name, owner_id, tenant_id);
+    // The dataset the rows land in: the given one, else the owner's dataset
+    // of that name, else the id `add` creates it under. A dataset given by id
+    // answers under its own name, as Python's result does (`dataset.name`).
+    let mut dataset_name = dataset_name;
+    let dataset_id = match target_dataset_id {
+        Some(id) => {
+            if let Some(dataset) = cognee_database::IngestDb::get_dataset(&*db, id)
+                .await
+                .map_err(|e| ApiError::Ingestion(e.to_string()))?
+            {
+                dataset_name = dataset.name;
+            }
+            id
+        }
+        None => cognee_database::DeleteDb::get_dataset_by_name_in_tenant(
+            &*db,
+            &dataset_name,
+            owner_id,
+            tenant_id,
+        )
+        .await
+        .map_err(|e| ApiError::Ingestion(e.to_string()))?
+        .map(|dataset| dataset.id)
+        .unwrap_or_else(|| {
+            cognee_ingestion::generate_dataset_id(&dataset_name, owner_id, tenant_id)
+        }),
+    };
     let isolate_failures = !raise_on_error;
     let mut items: Vec<RememberItemInfo> = Vec::with_capacity(specs.len());
     let mut last_run_id = None;
@@ -341,7 +372,13 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
             let mut stored = Vec::with_capacity(resolved.len());
             for (index, path) in &resolved {
                 match add_pipeline
-                    .add_code_repository(path, &dataset_name, owner_id, tenant_id)
+                    .add_code_repository(
+                        path,
+                        &dataset_name,
+                        owner_id,
+                        tenant_id,
+                        target_dataset_id,
+                    )
                     .await
                 {
                     Ok(row) => {

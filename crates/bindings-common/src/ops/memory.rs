@@ -386,6 +386,7 @@ async fn run_remember_code(
         dataset_name: dataset_name.to_string(),
         owner_id,
         tenant_id,
+        dataset_id: None,
         node_set: None,
         raise_on_error,
         add_pipeline: svc.add_pipeline.clone(),

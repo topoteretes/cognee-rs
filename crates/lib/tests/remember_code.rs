@@ -115,6 +115,7 @@ impl Stack {
             dataset_name: DATASET.to_string(),
             owner_id: self.owner_id,
             tenant_id: None,
+            dataset_id: None,
             node_set: None,
             raise_on_error,
             add_pipeline: Arc::new(add_pipeline),
@@ -303,6 +304,37 @@ async fn remembering_again_rebuilds_the_same_graph() {
         "not incremental: a second run"
     );
     assert_eq!(stack.nodes().await.len(), nodes);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dataset_id_targets_that_dataset() {
+    let root = TempDir::new().unwrap();
+    let first = project(root.path(), "shop", "snapshot:basic");
+    let second = project(root.path(), "store", "snapshot:basic");
+    let stack = Stack::new().await;
+
+    stack
+        .remember(stack.params(vec![path_input(&first)], true))
+        .await
+        .unwrap();
+    let dataset_id = stack.dataset_id().await;
+
+    let mut params = stack.params(vec![path_input(&second)], true);
+    params.dataset_id = Some(dataset_id);
+    params.dataset_name = "another name".to_string();
+    let result = stack.remember(params).await.unwrap();
+
+    assert_eq!(result.dataset_id, Some(dataset_id));
+    assert_ne!(
+        result.dataset_name, "another name",
+        "the dataset answers under its own name, as in Python"
+    );
+    let rows = get_dataset_data(&stack.db, dataset_id).await.unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "both repositories in the one dataset: {rows:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
