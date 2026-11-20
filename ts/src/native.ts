@@ -101,7 +101,8 @@ export interface NativeBindings {
   //   { type: "file"; path: string }
   //   { type: "url"; url: string }        // resolved by AddPipeline; cognify/search need normal setup
   //   { type: "binary"; bytes: Buffer | number[] | string /* base64 */; name: string }
-  // (`name` is REQUIRED for binary — used for MIME detection. `s3` and the
+  // (`name` is REQUIRED for binary — used for MIME detection and as the
+  // stored file's name; an empty, `.` or `..` name fails the add. `s3` and the
   // recursive `dataItem` variant are not supported.)
   //
   // `add` returns `{ added, deduplicated, … }`: `added` holds only the items

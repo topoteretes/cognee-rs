@@ -324,11 +324,18 @@ and tenant (by content hash), so the same content in two datasets is two rows.
 Dataset ids stay deterministic (UUID5 of name, owner and tenant). Pipeline:
 [`cognee-ingestion`](../crates/ingestion/) (`AddPipeline`).
 
-Stored files are named by content hash and written directly under
-`data_root_directory`, as in Python: extracted text as `text_<hash>.txt`, a
-fetched page as `text_<hash>.html`, other fetched content as
-`fetched_<hash>.<ext>`. The same content is stored once and shared by every row
-that holds it, and delete removes it only when no row points at it any more.
+Stored files are named by content hash under `data_root_directory`, as in
+Python: extracted text as `text_<hash>.txt`, a fetched page as
+`text_<hash>.html`, other fetched content as `fetched_<hash>.<ext>`, and an
+upload (`DataInput::Binary`) as it arrived, as `<hash>/<file name>`, which the
+row's `original_data_location` points at. The upload's file name is the part
+of its name after the last `/` or `\`; an add fails when that is empty, `.` or
+`..`, holds a NUL byte or is longer than 255 bytes. Rows from older builds
+that say `binary://<name>` are corrected when the same upload is added again.
+A stored file is shared by every row that points at it. Delete removes it,
+with an emptied `<hash>/` folder, only once no row points at it any more, and
+a re-add that moves a row on to another file (say, the same upload under a
+new name) removes the file it left the same way.
 As in Python, fetched content is rewritten in place on a re-add (write, then
 rename), while a loader's text keeps the first version stored: a second
 transcription or image description of the same file, say for another

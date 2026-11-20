@@ -135,7 +135,7 @@ await c.add({ type: "file", path: "/abs/path/to/doc.txt" }, "my-dataset");
 // URL
 await c.add({ type: "url", url: "https://example.com/article" }, "my-dataset");
 
-// Binary (name is required for MIME detection)
+// Binary (name is required: it drives MIME detection and names the stored file)
 await c.add({ type: "binary", bytes: buffer, name: "report.pdf" }, "my-dataset");
 
 // Multiple items at once

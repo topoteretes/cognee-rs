@@ -107,7 +107,9 @@ pub fn marshal_one(value: &serde_json::Value) -> Result<DataInput, SdkError> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
                     SdkError::Validation(
-                        "binary input requires a `name` string (used for MIME detection)".into(),
+                        "binary input requires a `name` string (used for MIME detection \
+                         and as the stored file's name)"
+                            .into(),
                     )
                 })?
                 .to_string();

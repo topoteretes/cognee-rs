@@ -21,7 +21,11 @@ pub enum DataInput {
     /// S3 path (s3://bucket/key) — TODO stub
     S3Path(String),
 
-    /// In-memory binary data with a filename for MIME detection
+    /// In-memory binary data (an upload) with its file name. The name drives
+    /// MIME detection, and the upload is stored as
+    /// `<content_hash>/<file name>`, the part after the last `/` or `\`. An
+    /// add fails when that part is empty, `.` or `..`, holds a NUL byte or is
+    /// longer than 255 bytes.
     Binary { data: Vec<u8>, name: String },
 
     /// DataItem wrapper — wraps any other input with an optional label and metadata

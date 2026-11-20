@@ -185,6 +185,31 @@ impl StorageTrait for LocalStorage {
         })
     }
 
+    async fn remove_empty_parent(&self, location: &str) -> Result<(), StorageError> {
+        let absolute = |path: &Path| std::path::absolute(path).unwrap_or(path.to_path_buf());
+        let root = absolute(&self.base_path);
+        let Some(folder) = self.resolve_location(location).parent().map(absolute) else {
+            return Ok(());
+        };
+        if folder == root || !folder.starts_with(&root) {
+            return Ok(());
+        }
+        match fs::remove_dir(&folder).await {
+            Ok(()) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(StorageError::IoError(format!(
+                "Failed to remove folder: {e}"
+            ))),
+        }
+    }
+
     fn get_full_path(&self, location: &str) -> PathBuf {
         self.resolve_location(location)
     }
@@ -297,13 +322,14 @@ async fn write_atomically(
 }
 
 /// A unique temp file beside `full_path`, so the rename stays in one folder
-/// and two writers of the same file never share a temp file.
+/// and two writers of the same file never share a temp file. Its name does
+/// not repeat the file's, so every name the file system accepts (up to 255
+/// bytes) also fits its temp file.
 fn temp_path_for(full_path: &Path) -> Result<PathBuf, StorageError> {
-    let name = full_path
-        .file_name()
-        .ok_or_else(|| StorageError::InvalidPath(full_path.display().to_string()))?;
-    let temp_name = format!(".{}.{}.tmp", name.to_string_lossy(), Uuid::new_v4());
-    Ok(full_path.with_file_name(temp_name))
+    if full_path.file_name().is_none() {
+        return Err(StorageError::InvalidPath(full_path.display().to_string()));
+    }
+    Ok(full_path.with_file_name(format!(".{}.tmp", Uuid::new_v4())))
 }
 
 #[cfg(test)]

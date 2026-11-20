@@ -122,6 +122,11 @@ pub trait IngestDb: Send + Sync {
         refresh: &DataRowRefresh,
     ) -> Result<DateTime<Utc>, DatabaseError>;
 
+    /// How many `Data` rows reference `location` as their raw or original
+    /// data location, in any dataset. A re-add that moves a row on to new
+    /// files removes an old one only when no row references it any more.
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError>;
+
     /// Make `dataset_id` the owning dataset of the existing row `data_id`
     /// (`data.dataset_id`). Rows are dataset-scoped: a row of another dataset
     /// is refused. The ingest pipeline does not need it (it creates rows with
@@ -224,6 +229,10 @@ impl IngestDb for DatabaseConnection {
         refresh: &DataRowRefresh,
     ) -> Result<DateTime<Utc>, DatabaseError> {
         data::refresh_data_row(self, data_id, refresh).await
+    }
+
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
+        data::count_data_location_references(self, location).await
     }
 
     async fn attach_data_to_dataset(

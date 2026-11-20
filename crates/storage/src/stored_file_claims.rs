@@ -83,6 +83,17 @@ impl RemovalGuard {
         // lock poison is unrecoverable
         CLAIMS.lock().unwrap().contains_key(&claim_key(full_path))
     }
+
+    /// Whether an open scope claims a file inside the folder `full_path`.
+    pub fn is_claimed_under(&self, full_path: &Path) -> bool {
+        let folder = claim_key(full_path);
+        // lock poison is unrecoverable
+        CLAIMS
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|claimed| claimed.starts_with(&folder) && *claimed != folder)
+    }
 }
 
 /// `path` made absolute against the working directory, so an add's

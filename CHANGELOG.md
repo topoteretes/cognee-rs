@@ -242,6 +242,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **A `Binary` upload is stored as it arrived (SDK-1592).** An add of
+  `DataInput::Binary` (bare or in a `DataItem`; the `binary` input of every
+  binding) now keeps the upload at `<content_hash>/<file name>`, as Python
+  does, and records its `file://` URI as `original_data_location`, which used
+  to be the marker `binary://<name>`. The file name is the part of `name`
+  after the last `/` or `\`, and the add now fails with
+  `IngestionError::InvalidUploadName` when that is empty, `.` or `..`, holds
+  a NUL byte or is longer than 255 bytes; such names used to be accepted.
+  Delete removes the upload, and its emptied `<hash>/` folder, once no row
+  points at it. A re-add that moves a row on to other files (the same bytes
+  under a new name) removes the files it left once no row points at them, as
+  Python's `ingest_data` does. Rows that say `binary://<name>` are corrected
+  when the same upload is added again. **Rust API:** `persist_data`,
+  `persist_data_with_acl`, `persist_data_with_acl_and_locks`,
+  `make_persist_data_task` and `make_persist_data_task_with_acl` take the
+  storage as their second argument (first for the task builders), and
+  `IngestDb` gains the required `count_data_location_references`.
+
 - **Code repository re-adds, LLM errors and extractor checks (SDK-1053
   review of #466).**
   - The code repo manifest's data id is pinned to `(user, dataset, repo

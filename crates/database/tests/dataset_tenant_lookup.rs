@@ -78,6 +78,9 @@ impl IngestDb for DefaultsOnly<'_> {
     ) -> Result<chrono::DateTime<chrono::Utc>, DatabaseError> {
         IngestDb::refresh_data_row(self.0, data_id, refresh).await
     }
+    async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
+        IngestDb::count_data_location_references(self.0, location).await
+    }
     async fn update_data(&self, d: Data) -> Result<Data, DatabaseError> {
         IngestDb::update_data(self.0, d).await
     }
