@@ -242,6 +242,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Code repository re-adds, LLM errors and extractor checks (SDK-1053
+  review of #466).**
+  - The code repo manifest's data id is pinned to `(user, dataset, repo
+    path)`, Python's `get_unique_data_id("code_repo:{repo_path}", user,
+    dataset_id)`: re-adding a repository refreshes its one row instead of
+    adding a row per version. A changed repository's row takes the new
+    content and loses its cognify marker, so the next cognify reloads its
+    code graph; an unchanged re-add keeps the marker. `addAndCognify` in the
+    bindings now also cognifies such a refreshed duplicate (any duplicate
+    with no `pipeline_status`).
+  - `cognee add` (CLI) fails when the LLM configuration cannot be resolved
+    (for example a misspelled `LLM_PROVIDER`), as `add-and-cognify` and the
+    bindings do, instead of treating it as "no LLM" and dropping a code
+    project's documents.
+  - A cognify whose items all take a code route (no extractor needed) now
+    validates a `graphBackend` or non-blank `extractor` the caller passes
+    (shape, and registered); the configured default is still not checked,
+    so keyless code-only cognify keeps working. New
+    `graph_backend::check_explicit_graph_backend`.
+  - `add(<project dir>)` no longer walks hidden or `SKIP_DIRS` directories:
+    `RepoPartition::skipped` lists such a directory once instead of every
+    file under it. An unreadable subdirectory or file, or one that vanishes
+    mid-walk, is skipped with a warning (Python's `rglob` skips what it
+    cannot list) instead of failing the add.
+  - Code graph loads ledger every node and edge of the snapshot under the
+    loading `Data` row (idempotent upserts), not only what they wrote, so
+    deleting another row that loaded the same repository keeps the nodes
+    this one still needs. They read only the snapshot's own nodes and
+    candidate edges (`get_nodes` / `has_edges`) instead of the whole graph,
+    run parsing, mapping and edge resolution in `spawn_blocking`, serialise
+    concurrent loads of one repository in the process (cross-process
+    locking is not done), and resolve a relative `code_graph.enola_path`
+    against the process's working directory.
+  API: `CodeGraphLoadState::existing_edge_keys` is replaced by
+  `added_edge_keys` and `existing_nodes` now holds only the snapshot's
+  nodes; `ParsedSnapshot` gains the public fields `facts_digest` and `edges`
+  (struct literals need them) and `ParsedSnapshot::identity`;
+  `find_enola_binary` returns an absolute path for a relative setting. New:
+  `cognee_models::code_repo::{SOURCE_CODE_REPO, CODE_REPO_MANIFEST_KIND}`
+  (the previous paths re-export them), `cognee_ingestion::generate_unique_data_id`,
+  `code_repo::{code_repo_data_id, code_repo_stamp_path}`, and
+  `cognee::add::{code_repo, generate_unique_data_id}`.
+
 - **`add(<directory>)` and the CODE_REPO cognify route (SDK-1053).** A
   `DataInput::FilePath` naming a directory is now expanded on `add` instead
   of failing: a code project (Python's `detect_code_project`) becomes one
@@ -255,10 +298,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `system_metadata` and a legacy `dlt` row fail the whole run. Without an
   LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
   CLI) a code project's documents are left out at add and the repo item
-  cognifies keyless. The manifest's data id is content-derived for now:
-  Python pins it to (user, dataset, repo path) so a re-add replaces one
-  record; that comes with the incremental re-ingest (SDK-1053 O6), so until
-  then a changed repository is added as a new item.
+  cognifies keyless. The manifest's data id is pinned to (user, dataset,
+  repo path) as in Python, so a re-add updates one record (see the next
+  entry).
   API: `CognifyConfig.code_graph` is a new public field (struct literals
   need it; `..CognifyConfig::default()` covers it); new variants on enums
   that are not `#[non_exhaustive]`: `CognifyError::{Route, CodeGraph}`,
