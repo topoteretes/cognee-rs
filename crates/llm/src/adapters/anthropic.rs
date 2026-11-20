@@ -28,9 +28,6 @@ use crate::error::{LlmError, LlmResult};
 use crate::llm_trait::{Llm, StructuredOutputValidator};
 use crate::types::{GenerationOptions, GenerationResponse, Message, MessageRole, TokenUsage};
 
-/// Name of the single forced tool used to carry structured output.
-const STRUCTURED_OUTPUT_TOOL: &str = "extract_structured_data";
-
 /// Native adapter for the Anthropic Messages API.
 pub struct AnthropicAdapter {
     /// Dump every request/response body to stderr (`llm.debug_requests`).
@@ -741,9 +738,10 @@ impl AnthropicAdapter {
     /// Append a corrective instruction to the last user turn so the next attempt
     /// carries the failure reason. Thin wrapper over the shared
     /// [`crate::schema::append_corrective_instruction`] naming the forced tool as
-    /// Anthropic addresses it (`tool_use`).
-    fn append_corrective_instruction(body: &mut Value, reason: Option<&str>) {
-        crate::schema::append_corrective_instruction(body, reason, STRUCTURED_OUTPUT_TOOL, "tool");
+    /// Anthropic addresses it (`tool_use`). `tool_name` is the tool the request
+    /// forces.
+    fn append_corrective_instruction(body: &mut Value, reason: Option<&str>, tool_name: &str) {
+        crate::schema::append_corrective_instruction(body, reason, tool_name, "tool");
     }
 
     /// Shared structured-output loop with instructor-style corrective retries.
@@ -762,13 +760,14 @@ impl AnthropicAdapter {
     ) -> LlmResult<Value> {
         let opts = self.resolve_options(options);
         let mut body = self.base_request(&messages, &opts);
+        let tool_name = crate::schema::schema_name(json_schema);
         body["tools"] = json!([{
-            "name": STRUCTURED_OUTPUT_TOOL,
+            "name": tool_name,
             "description": "Return the extracted data in the required schema.",
             "input_schema": Self::sanitize_tool_schema(json_schema),
         }]);
         // Force the model to call exactly this tool, so its `input` is the answer.
-        body["tool_choice"] = json!({ "type": "tool", "name": STRUCTURED_OUTPUT_TOOL });
+        body["tool_choice"] = json!({ "type": "tool", "name": tool_name });
 
         let mut last_error =
             LlmError::InvalidResponse("No structured-output attempt made".to_string());
@@ -889,21 +888,25 @@ impl AnthropicAdapter {
                         last_error = LlmError::InvalidResponse(format!(
                             "Anthropic structured output truncated: {reason}"
                         ));
-                        Self::append_corrective_instruction(&mut body, Some(reason));
+                        Self::append_corrective_instruction(&mut body, Some(reason), tool_name);
                         // Explicit, because the tool-input match below must stay
                         // unreachable for a truncated response however complete
                         // the partial object happens to look.
                         continue;
                     }
 
-                    match response.tool_input(STRUCTURED_OUTPUT_TOOL) {
+                    match response.tool_input(tool_name) {
                         Some(input) => match validator.map(|v| v(&input)) {
                             None | Some(Ok(())) => return Ok(input),
                             Some(Err(reason)) => {
                                 last_error = LlmError::InvalidResponse(format!(
                                     "Anthropic tool input failed validation: {reason}"
                                 ));
-                                Self::append_corrective_instruction(&mut body, Some(&reason));
+                                Self::append_corrective_instruction(
+                                    &mut body,
+                                    Some(&reason),
+                                    tool_name,
+                                );
                             }
                         },
                         None => {
@@ -911,7 +914,7 @@ impl AnthropicAdapter {
                                 "Anthropic response did not contain the forced tool_use block"
                                     .to_string(),
                             );
-                            Self::append_corrective_instruction(&mut body, None);
+                            Self::append_corrective_instruction(&mut body, None, tool_name);
                         }
                     }
                 }
@@ -948,7 +951,11 @@ impl AnthropicAdapter {
                 // attempt differs, the way instructor always reasks with changed
                 // content.
                 Err(e) => {
-                    Self::append_corrective_instruction(&mut body, Some(&e.to_string()));
+                    Self::append_corrective_instruction(
+                        &mut body,
+                        Some(&e.to_string()),
+                        tool_name,
+                    );
                     last_error = e;
                 }
             }
@@ -1328,7 +1335,11 @@ mod tests {
     fn corrective_instruction_appends_user_turn_when_last_is_assistant() {
         // A no-op here would silently drop the correction; a new user turn is added.
         let mut body = json!({ "messages": [{ "role": "assistant", "content": "prior" }] });
-        AnthropicAdapter::append_corrective_instruction(&mut body, Some("missing field `x`"));
+        AnthropicAdapter::append_corrective_instruction(
+            &mut body,
+            Some("missing field `x`"),
+            "Person",
+        );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2, "a new user turn must carry the correction");
         assert_eq!(msgs[1]["role"], "user");
@@ -1407,14 +1418,16 @@ mod tests {
                 {
                     "type": "tool_use",
                     "id": "toolu_1",
-                    "name": STRUCTURED_OUTPUT_TOOL,
+                    "name": crate::schema::FALLBACK_SCHEMA_NAME,
                     "input": { "name": "Ada", "age": 36 }
                 }
             ],
             "stop_reason": "tool_use"
         }))
         .unwrap();
-        let input = response.tool_input(STRUCTURED_OUTPUT_TOOL).unwrap();
+        let input = response
+            .tool_input(crate::schema::FALLBACK_SCHEMA_NAME)
+            .unwrap();
         assert_eq!(input["name"], "Ada");
         assert_eq!(input["age"], 36);
         assert!(response.tool_input("other_tool").is_none());

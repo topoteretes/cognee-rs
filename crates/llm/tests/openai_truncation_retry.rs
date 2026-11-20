@@ -390,7 +390,7 @@ async fn truncation_at_the_ceiling_fails_without_running_the_cascade() {
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/chat/completions")
-                .body_includes(r#""response_format""#);
+                .body_includes(r#""json_object""#);
             then.status(200)
                 .header("content-type", "application/json")
                 .body(complete_tool_call());

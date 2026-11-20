@@ -580,11 +580,13 @@ shape). `LLM_REASONING` overrides that detection:
 ### Structured-output request shape (`LLM_STRUCTURED_OUTPUT_MODE`)
 
 Nothing in the OpenAI-compatible protocol advertises which structured-output
-shape a server understands, so by default the adapter cascades: native `tools`,
-then legacy `functions`, then `response_format: {"type": "json_object"}`. The
-first shape that yields a parseable payload wins.
+shape a server understands. By default the adapter first asks for constrained
+decoding (`response_format: {"type": "json_schema"}`, see below). If the
+endpoint refuses that shape or the answer is unusable, it cascades: native
+`tools`, then legacy `functions`, then `response_format: {"type":
+"json_object"}`. The first shape that yields a parseable payload wins.
 
-That cascade costs nothing on an endpoint that answers the first shape, and a
+The cascade costs nothing on an endpoint that answers the first shape, and a
 great deal on one that answers none of them. A vLLM deployment started without
 `--enable-auto-tool-choice --tool-call-parser` returns no tool call at all: every
 call then pays all three modes. The adapter keeps a per-mode miss counter and
@@ -595,16 +597,17 @@ still spends the threshold in every fresh process.
 `LLM_STRUCTURED_OUTPUT_MODE` skips the discovery when you already know the
 answer:
 
-- `auto` (default) — cascade as above, bounded by the miss counter.
-- `json_schema` — try constrained decoding first, then cascade. See below.
+- `auto` (default) — constrained decoding first, then the cascade, bounded by
+  the miss counter. See below.
+- `json_schema` — an alias of `auto`, kept for configs that set it.
 - `tools` — only native tool-calling.
 - `functions` — only the legacy `functions`/`function_call` pair.
 - `json` — only JSON mode.
 
 Pick `json` when the server **rejects** `tools`/`functions` outright. If it
 merely *ignores* them — accepting the request and echoing JSON in `content` —
-leave it on `auto`: tool-calling mode already succeeds there in one request, and
-it is the only mode that puts the real JSON schema on the wire. JSON mode sends a
+leave it on `auto`: the constrained or tool-calling request already succeeds
+there, and both put the real JSON schema on the wire. JSON mode sends a
 prose example derived from the schema instead, so pinning it trades one wasted
 request for permanently weaker schema pressure, which shows up as more missing
 fields and more corrective retries.
@@ -630,7 +633,7 @@ yourself. The two differ in four ways:
   else falls back to `auto` here.
 - **Empty value.** Empty means the provider's entry in Python's static table
   (`instructor_modes.py`, for example `json_schema_mode` for OpenAI). In Rust,
-  `auto` means the cascade.
+  empty means `auto`: constrained decoding, then the cascade.
 - **Scope and pinning.** Python's mode applies to every adapter, and
   `json_schema_mode` is a pin. Rust's knob applies only to the OpenAI-compatible
   adapter, and `json_schema` is not a pin (see below).
@@ -639,15 +642,19 @@ Rough translation: `json_schema_mode` → `json_schema`; `tool_call` /
 `tools_strict` / `parallel_tool_call` → `tools`; `function_call` → `functions`;
 `json_mode` / `markdown_json_mode` → `json`.
 
-#### `json_schema` — constrained decoding
+#### Constrained decoding (`auto`, `json_schema`)
 
-`json_schema` is the odd one out: it is **not a pin**. It sends
+The default is **not a pin**. It sends
 
 ```json
 "response_format": {"type": "json_schema",
-                    "json_schema": {"name": "extract_structured_data",
+                    "json_schema": {"name": "KnowledgeGraph",
                                     "strict": true, "schema": {…}}}
 ```
+
+The name is the schema's `title` (`KnowledgeGraph`, `SummarizedContent`, …),
+or `extract_structured_data` when the schema has no title that is a valid name.
+The tool and function requests of the cascade use the same name.
 
 ahead of the cascade, and falls back to it when the endpoint says no. On a
 backend that supports it this is *constrained* decoding — the sampler cannot
@@ -657,23 +664,26 @@ one runaway-prone chunk over an OpenAI chat-completions endpoint, the
 unconstrained `tools` arms dropped a required `target_node_id` in 8 of 11
 payloads while the strict arms were 5/5 clean.
 
-Why it is opt-in rather than part of `auto`: Python requests the same shape on
-its default path, but only for a model litellm's table advertises as
+Unlike Python, Rust sends this shape to every endpoint. Python requests it on
+its default path only for a model litellm's table advertises as
 `supports_response_schema`. There is no such table for an arbitrary
-OpenAI-compatible base URL — anything can sit behind `LLM_ENDPOINT` — and one of
-the backends cognee is deployed against (Baseten's `gpt-oss-120b`) answers
-**HTTP 501** to a constrained request. So you supply the knowledge the table
-would have.
+OpenAI-compatible base URL — anything can sit behind `LLM_ENDPOINT` — and some
+backends refuse a constrained request (Baseten's `gpt-oss-120b` answers
+**HTTP 501**). Such an endpoint pays two rejected requests per schema per
+process, one strict and one non-strict, then gets the cascade straight away.
 
-Setting it is safe on a mixed fleet even so, because the mode demotes rather than
-failing:
+An answer that arrives but is unusable — empty, a refusal, not JSON, or failing
+validation — leaves the mode for the cascade at once rather than being re-asked.
+Only a truncated answer is re-asked, with a raised output budget.
+
+This is safe on a mixed fleet because the mode demotes rather than failing:
 
 1. `strict: true` with the all-required / `additionalProperties: false` schema;
 2. on rejection, the same envelope without `strict`, carrying the ordinary
    schema — for gateways that reject the keyword but handle the response format
    (older Azure api-versions, some vLLM builds);
 3. on rejection again, out of the mode entirely: the `tools` → `functions` →
-   `json` cascade runs exactly as under `auto`.
+   `json` cascade runs, and later calls with this schema go straight to it.
 
 Only an outright refusal of the request *shape* moves that ladder — HTTP 501, or
 an HTTP 400 whose body names `response_format` / `json_schema` / `schema` /

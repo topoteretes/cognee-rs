@@ -48,7 +48,7 @@ async fn truncation_retry_raises_max_tokens_to_the_effective_cap() {
                         "role": "assistant",
                         "model": "claude-sonnet-4-20250514",
                         "content": [
-                            {"type": "tool_use", "name": "extract_structured_data",
+                            {"type": "tool_use", "name": "Person",
                              "input": {"name": "Ada", "age": 36}}
                         ],
                         "stop_reason": "max_tokens",
@@ -75,7 +75,7 @@ async fn truncation_retry_raises_max_tokens_to_the_effective_cap() {
                         "role": "assistant",
                         "model": "claude-sonnet-4-20250514",
                         "content": [
-                            {"type": "tool_use", "name": "extract_structured_data",
+                            {"type": "tool_use", "name": "Person",
                              "input": {"name": "Ada Lovelace", "age": 36}}
                         ],
                         "stop_reason": "tool_use",
@@ -147,7 +147,7 @@ async fn truncation_at_a_binding_ceiling_fails_terminally_without_raising() {
                         "role": "assistant",
                         "model": "claude-sonnet-4-20250514",
                         "content": [
-                            {"type": "tool_use", "name": "extract_structured_data",
+                            {"type": "tool_use", "name": "Person",
                              "input": {"name": "Ada", "age": 36}}
                         ],
                         "stop_reason": "max_tokens",
@@ -208,7 +208,7 @@ async fn truncation_at_the_model_cap_fails_terminally_without_looping() {
                         "role": "assistant",
                         "model": "claude-3-5-sonnet-20241022",
                         "content": [
-                            {"type": "tool_use", "name": "extract_structured_data",
+                            {"type": "tool_use", "name": "Person",
                              "input": {"name": "Ada", "age": 36}}
                         ],
                         "stop_reason": "max_tokens",
@@ -357,7 +357,7 @@ async fn truncation_without_a_tool_use_block_is_re_asked_with_a_raised_budget() 
                         "role": "assistant",
                         "model": "claude-sonnet-4-20250514",
                         "content": [
-                            {"type": "tool_use", "name": "extract_structured_data",
+                            {"type": "tool_use", "name": "Person",
                              "input": {"name": "Ada Lovelace", "age": 36}}
                         ],
                         "stop_reason": "tool_use",

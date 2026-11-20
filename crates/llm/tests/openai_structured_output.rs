@@ -16,7 +16,7 @@
     reason = "integration test code — panics are acceptable"
 )]
 
-use cognee_llm::{Llm, LlmError, LlmExt, OpenAIAdapter};
+use cognee_llm::{Llm, LlmError, LlmExt, OpenAIAdapter, StructuredOutputMode};
 use httpmock::prelude::*;
 use serde_json::json;
 
@@ -321,7 +321,9 @@ async fn typed_validation_failure_retries_with_corrective_and_succeeds() {
     let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
         .unwrap()
         .with_network_retries(0)
-        .with_structured_output_retries(3);
+        .with_structured_output_retries(3)
+        // The tool-calling path is what this pins.
+        .with_structured_output_mode(StructuredOutputMode::Tools);
 
     let node: Node = adapter
         .create_structured_output("some input", "extract a node", None)
@@ -354,7 +356,9 @@ async fn typed_validation_failure_exhausts_retries_and_surfaces_error() {
     let adapter = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
         .unwrap()
         .with_network_retries(0)
-        .with_structured_output_retries(3);
+        .with_structured_output_retries(3)
+        // The tool-calling path is what this pins.
+        .with_structured_output_mode(StructuredOutputMode::Tools);
 
     let err = adapter
         .create_structured_output::<Node>("some input", "extract a node", None)

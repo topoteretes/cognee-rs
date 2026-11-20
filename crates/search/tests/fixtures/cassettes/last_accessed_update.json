@@ -2,43 +2,43 @@
   "version": 1,
   "model": "gpt-4.1-mini",
   "entries": {
-    "aa6dfb09bec9a5c3cfd2571eea8698f93a8e7956c12b3451745c918a9e9fc59e": {
+    "3d82f245aa12675f9b4d2457692e01aff8b77cd8c3a9b5650654f3007d177870": {
       "method": "structured_output",
       "user_input_preview": "Artificial intelligence enables machines to simulate human intelligence.",
       "schema_name": "KnowledgeGraph",
       "response": {
         "nodes": [
           {
-            "id": "artificial_intelligence",
+            "id": "Artificial_intelligence",
             "name": "Artificial intelligence",
             "type": "Concept",
             "description": "Artificial intelligence enables machines to simulate human intelligence."
           },
           {
-            "id": "machines",
+            "id": "Machines",
             "name": "Machines",
-            "type": "Entity",
-            "description": "Machines that can simulate human intelligence."
+            "type": "Concept",
+            "description": "Machines that can simulate human intelligence by using artificial intelligence."
           },
           {
-            "id": "human_intelligence",
+            "id": "Human_intelligence",
             "name": "Human intelligence",
             "type": "Concept",
-            "description": "Human intelligence that can be simulated by machines through artificial intelligence."
+            "description": "Intelligence characteristic of humans, simulated by machines using artificial intelligence."
           }
         ],
         "edges": [
           {
-            "source_node_id": "artificial_intelligence",
-            "target_node_id": "machines",
+            "source_node_id": "Artificial_intelligence",
+            "target_node_id": "Machines",
             "relationship_name": "enables",
-            "description": "Artificial intelligence enables machines."
+            "description": "Artificial intelligence enables Machines."
           },
           {
-            "source_node_id": "machines",
-            "target_node_id": "human_intelligence",
+            "source_node_id": "Machines",
+            "target_node_id": "Human_intelligence",
             "relationship_name": "simulate",
-            "description": "Machines simulate human intelligence."
+            "description": "Machines simulate Human intelligence."
           }
         ]
       }

@@ -66,6 +66,17 @@ fn tool_call_response(payload_json: &str) -> String {
     )
 }
 
+/// Body of an OpenAI response whose `content` is `payload_json`: how a
+/// constrained (`json_schema`) request is answered.
+fn content_response(payload_json: &str) -> String {
+    let escaped = serde_json::to_string(payload_json).expect("string escapes");
+    format!(
+        r#"{{"id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{{"index":0,"message":{{"role":"assistant","content":{escaped}}},
+              "finish_reason":"stop"}}]}}"#
+    )
+}
+
 /// A graph whose single edge points at a `RUNAWAY_LEN`-character node id.
 fn degenerate_graph_payload() -> String {
     serde_json::json!({
@@ -105,6 +116,19 @@ fn adapter(base_url: String) -> Arc<OpenAIAdapter> {
             .unwrap()
             // No transport retries: every request this test counts is a
             // structured-output re-ask, never a network one.
+            .with_network_retries(0)
+            .with_structured_output_retries(3)
+            // The re-ask ladder is the cascade's: under the default, an
+            // invalid constrained answer falls back to it without a re-ask.
+            .with_structured_output_mode(cognee_llm::StructuredOutputMode::Tools),
+    )
+}
+
+/// The same adapter on the default mode, `auto`.
+fn auto_adapter(base_url: String) -> Arc<OpenAIAdapter> {
+    Arc::new(
+        OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(base_url))
+            .unwrap()
             .with_network_retries(0)
             .with_structured_output_retries(3),
     )
@@ -200,4 +224,42 @@ async fn an_unrecoverable_oversized_identifier_fails_the_chunk() {
         "the surfaced error must name the offending field, got: {msg}"
     );
     always_degenerate.assert_calls_async(3).await;
+}
+
+/// Under the default `auto`, the runaway in the constrained answer fails
+/// validation and the cascade takes over at once: one constrained request,
+/// then the cascade's 3 re-asks.
+#[tokio::test]
+async fn under_auto_a_runaway_costs_one_constrained_request_plus_the_cascade() {
+    let server = MockServer::start_async().await;
+    let constrained = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(content_response(&degenerate_graph_payload()));
+        })
+        .await;
+    let cascade = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_excludes("\"json_schema\"");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(tool_call_response(&degenerate_graph_payload()));
+        })
+        .await;
+
+    let extractor = FactExtractor::new(auto_adapter(server.base_url()));
+    let err = extractor
+        .extract_facts("Alice went to Wonderland.", None)
+        .await
+        .expect_err("a payload that never stops being degenerate must fail the chunk");
+
+    assert!(err.to_string().contains("edges[].target_node_id"), "{err}");
+    constrained.assert_calls_async(1).await;
+    cascade.assert_calls_async(3).await;
 }

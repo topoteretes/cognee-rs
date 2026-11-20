@@ -44,7 +44,7 @@
     reason = "integration test code — panics are acceptable"
 )]
 
-use cognee_llm::{Llm, OpenAIAdapter, StructuredOutputMode};
+use cognee_llm::{Llm, LlmExt, OpenAIAdapter, StructuredOutputMode};
 use httpmock::prelude::*;
 use serde_json::json;
 
@@ -69,6 +69,12 @@ fn schema() -> serde_json::Value {
 /// A second, structurally different schema — for the per-schema memo test.
 fn other_schema() -> serde_json::Value {
     json!({"type": "object", "properties": {"baz": {"type": "string"}}})
+}
+
+/// A typed target, so the typed validator runs: an answer without `foo` fails it.
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct Foo {
+    foo: String,
 }
 
 fn adapter(server: &MockServer, mode: StructuredOutputMode) -> OpenAIAdapter {
@@ -144,7 +150,7 @@ async fn sends_a_strict_constrained_request_and_nothing_else() {
                 .body_includes("\"type\":\"json_schema\"")
                 .body_includes("\"name\":\"extract_structured_data\"")
                 .body_includes("\"strict\":true")
-                .body_includes("\"required\":[\"bar\",\"foo\"]")
+                .body_includes("\"required\":[\"foo\",\"bar\"]")
                 .body_includes("\"additionalProperties\":false");
             then.status(200)
                 .header("content-type", "application/json")
@@ -173,7 +179,7 @@ async fn sends_a_strict_constrained_request_and_nothing_else() {
 }
 
 #[tokio::test]
-async fn auto_never_sends_a_constrained_request() {
+async fn auto_sends_a_constrained_request_first() {
     let server = MockServer::start_async().await;
     let strict = strict_mock(&server, 200, USABLE).await;
     let non_strict = non_strict_mock(&server, 200, USABLE).await;
@@ -183,13 +189,61 @@ async fn auto_never_sends_a_constrained_request() {
         .create_structured_output_raw("input text", "system prompt", &schema(), None)
         .await;
 
-    assert!(result.is_ok(), "auto still answers: {result:?}");
-    assert_eq!(tools.calls_async().await, 1, "auto starts at the cascade");
+    assert!(result.is_ok(), "auto answers: {result:?}");
     assert_eq!(
-        strict.calls_async().await + non_strict.calls_async().await,
+        strict.calls_async().await,
+        1,
+        "auto starts with strict json_schema"
+    );
+    assert_eq!(
+        non_strict.calls_async().await,
         0,
-        "constrained decoding is opt-in — `auto` must not probe for it, because \
-         the shapes that fail do so with a hard HTTP error",
+        "strict answered, no demotion"
+    );
+    assert_eq!(tools.calls_async().await, 0, "the cascade is not reached");
+}
+
+#[tokio::test]
+async fn the_schema_title_names_the_request_in_every_mode() {
+    let server = MockServer::start_async().await;
+    let mut titled = schema();
+    titled["title"] = json!("Person");
+    // Both constrained rungs carry the title and are refused, so the cascade runs.
+    let constrained = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"")
+                .body_includes("\"name\":\"Person\"");
+            then.status(501).body("{}");
+        })
+        .await;
+    let tools = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"tools\"")
+                .body_includes("\"function\":{\"name\":\"Person\"}");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(USABLE);
+        })
+        .await;
+
+    let result = adapter(&server, StructuredOutputMode::Auto)
+        .create_structured_output_raw("input text", "system prompt", &titled, None)
+        .await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        constrained.calls_async().await,
+        2,
+        "strict, then non-strict"
+    );
+    assert_eq!(
+        tools.calls_async().await,
+        1,
+        "the tool and its forced choice"
     );
 }
 
@@ -263,50 +317,27 @@ async fn demotes_on_not_implemented_and_falls_through_to_the_cascade() {
 }
 
 #[tokio::test]
-async fn a_retry_carries_the_failure_reason_and_names_no_function() {
-    // Two things this pins that the one-attempt cases cannot.
-    //
-    // First, the refusal text has to *reach* the re-ask. With
-    // `structured_output_retries(1)` the mode falls through before a second
-    // request is ever built, so a regression that dropped the text entirely
-    // would leave every other test green.
-    //
-    // Second, the re-ask must not tell the model to "call the
-    // `extract_structured_data` function again" — the wording the other three
-    // modes use. A constrained request carries no tool and no function, so that
-    // directive names something the model cannot see.
+async fn an_unusable_answer_leaves_the_mode_at_once() {
+    // A refusal (like an empty, unparseable or invalid answer) is not
+    // re-asked in constrained-decoding mode even with retries to spare: the
+    // cascade takes over after one request. Needs `structured_output_retries`
+    // above 1, or the mode would fall through after one attempt anyway.
     let server = MockServer::start_async().await;
     let refused = r#"{"id":"x","object":"chat.completion","created":1,"model":"m",
         "choices":[{"index":0,"message":{"role":"assistant","content":null,
             "refusal":"I will not do that."},
           "finish_reason":"stop"}]}"#;
-    // First attempt: no corrective text yet.
-    let first = server
+    let constrained = server
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/chat/completions")
-                .body_includes("\"json_schema\"")
-                .body_excludes("previous response");
+                .body_includes("\"json_schema\"");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(refused);
         })
         .await;
-    // Second attempt: carries the refusal verbatim, and asks for a JSON object
-    // rather than a function call.
-    let retry = server
-        .mock_async(|when, then| {
-            when.method(POST)
-                .path("/chat/completions")
-                .body_includes("\"json_schema\"")
-                .body_includes("I will not do that.")
-                .body_includes("ONE complete JSON object")
-                .body_excludes("extract_structured_data` function");
-            then.status(200)
-                .header("content-type", "application/json")
-                .body(USABLE);
-        })
-        .await;
+    let tools = tools_mock(&server, USABLE).await;
     let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
         .unwrap()
         .with_network_retries(0)
@@ -318,12 +349,60 @@ async fn a_retry_carries_the_failure_reason_and_names_no_function() {
         .await;
 
     assert_eq!(result.unwrap(), json!({"foo": "bar"}));
-    assert_eq!(first.calls_async().await, 1);
-    assert_eq!(
-        retry.calls_async().await,
-        1,
-        "the re-ask carried the refusal and a directive the request can satisfy",
+    assert_eq!(constrained.calls_async().await, 1, "no constrained re-ask");
+    assert_eq!(tools.calls_async().await, 1, "the cascade answered");
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_empty_answer() {
+    assert_one_constrained_request_then_the_cascade(r#""""#).await;
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_answer_that_is_not_json() {
+    assert_one_constrained_request_then_the_cascade(r#""Sure, here it is.""#).await;
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_answer_that_fails_validation() {
+    // Valid JSON without the required `foo`.
+    assert_one_constrained_request_then_the_cascade(r#""{\"bar\":\"x\"}""#).await;
+}
+
+/// Answers the constrained request with `content` (a JSON string literal) and
+/// asserts that `auto`, with retries to spare, sends it once and then lets the
+/// cascade answer.
+async fn assert_one_constrained_request_then_the_cascade(content: &str) {
+    let server = MockServer::start_async().await;
+    let unusable = format!(
+        r#"{{"id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{{"index":0,"message":{{"role":"assistant","content":{content}}},
+              "finish_reason":"stop"}}]}}"#
     );
+    let constrained = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(&unusable);
+        })
+        .await;
+    let tools = tools_mock(&server, USABLE).await;
+    let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(3);
+
+    let answer: Foo = llm
+        .create_structured_output("input text", "system prompt", None)
+        .await
+        .unwrap();
+
+    assert_eq!(answer.foo, "bar");
+    assert_eq!(constrained.calls_async().await, 1, "no constrained re-ask");
+    assert_eq!(tools.calls_async().await, 1, "the cascade answered");
 }
 
 #[tokio::test]
