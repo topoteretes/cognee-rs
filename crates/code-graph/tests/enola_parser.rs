@@ -10,8 +10,8 @@
 mod common;
 
 use cognee_code_graph::{
-    CodeNodeType, SUPPORTED_FORMAT_VERSIONS, build_code_graph_edges, map_facts_to_data_points,
-    parse_enola_snapshot, snapshot_identity, validate_receipt,
+    CodeNodeType, ParsedSnapshot, SUPPORTED_FORMAT_VERSIONS, build_code_graph_edges,
+    map_facts_to_data_points, parse_enola_snapshot, snapshot_identity, validate_receipt,
 };
 use common::{by_name, entity, facts, id, write_snapshot};
 use serde_json::{Value, json};
@@ -282,6 +282,27 @@ fn snapshot_identity_prefers_the_receipt_then_hashes_facts() {
         Some(format!("sha256:{digest}"))
     );
     assert_eq!(snapshot_identity(dir.path().join("missing"), None), None);
+}
+
+/// The parsed snapshot's identity is the one `snapshot_identity` computes,
+/// from the digest taken while reading (CRLF and all: the bytes, not the
+/// parsed lines).
+#[test]
+fn a_parsed_snapshot_knows_its_identity_without_a_second_read() {
+    let dir = tempfile::tempdir().unwrap();
+    write_snapshot(dir.path(), &two_facts(), None, None, None);
+    let text = std::fs::read_to_string(dir.path().join("facts.jsonl")).unwrap();
+    std::fs::write(
+        dir.path().join("facts.jsonl"),
+        text.replace('\n', "\r\n") + "\n\n",
+    )
+    .unwrap();
+    let parsed = ParsedSnapshot::read(dir.path()).unwrap();
+    assert_eq!(parsed.identity(), snapshot_identity(dir.path(), None));
+    assert!(parsed.identity().unwrap().starts_with("sha256:"));
+    std::fs::write(dir.path().join("receipt.json"), receipt().to_string()).unwrap();
+    let parsed = ParsedSnapshot::read(dir.path()).unwrap();
+    assert_eq!(parsed.identity().as_deref(), Some("sha256:1ceea542"));
 }
 
 // --- test_enola_contract.py: facts, kinds, target ids -------------------------

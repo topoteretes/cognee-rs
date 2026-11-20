@@ -50,7 +50,7 @@ use crate::mapping::{
     CODE_GRAPH_MAPPING_VERSION, fact_node_id, fact_repo, is_mappable_fact, resolve_fallback_repo,
 };
 use crate::models::{CODE_INDEX_FIELDS, CodeNode, CodeNodeType, CodeRepository, code_metadata};
-use crate::snapshot::{Fact, ParsedSnapshot, Receipt, snapshot_identity};
+use crate::snapshot::{Fact, ParsedSnapshot, Receipt};
 
 /// `receipt.json` fields kept on the repository node. Python's
 /// `_RECEIPT_PROJECTION_KEYS`: run specifics that describe the machine rather
@@ -646,7 +646,8 @@ async fn stamp_snapshot_identity(
 /// snapshot has no identity to stamp).
 ///
 /// `repo_path` must be the value the nodes were mapped with, so edge
-/// endpoints match node ids.
+/// endpoints match node ids. Edges already on the snapshot
+/// ([`ParsedSnapshot::edges`]) are used as they are.
 ///
 /// # Errors
 ///
@@ -663,12 +664,21 @@ pub async fn add_code_graph_edges(
         return Ok(None);
     }
 
-    let (edges, skipped) = build_code_graph_edges(&snapshot.facts, repo_path);
-    tracing::info!(
-        "Resolved {} code graph edge(s), skipped {}.",
-        edges.len(),
-        skipped
-    );
+    // Resolved ahead by `extract_code_graph` (off the runtime), else here.
+    let resolved;
+    let edges: &[CodeGraphEdge] = match snapshot.edges.as_deref() {
+        Some(edges) => edges,
+        None => {
+            let (edges, skipped) = build_code_graph_edges(&snapshot.facts, repo_path);
+            tracing::info!(
+                "Resolved {} code graph edge(s), skipped {}.",
+                edges.len(),
+                skipped
+            );
+            resolved = edges;
+            &resolved
+        }
+    };
 
     let typed_edges: Vec<EdgeData> = edges.iter().map(typed_edge).collect();
     // Every typed relation of the snapshot is this owner's, written now or
@@ -700,8 +710,7 @@ pub async fn add_code_graph_edges(
         graph.add_edges(&new_edges).await?;
     }
 
-    let Some(snapshot_id) = snapshot_identity(&snapshot.snapshot_dir, snapshot.receipt.as_ref())
-    else {
+    let Some(snapshot_id) = snapshot.identity() else {
         return Ok(None);
     };
     let mut delta = match serde_json::to_value(&state.node_delta) {

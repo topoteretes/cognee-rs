@@ -14,7 +14,8 @@ use cognee_graph::GraphDBTrait;
 use serde_json::{Map, Value};
 
 use crate::config::CodeGraphConfig;
-use crate::error::CodeGraphResult;
+use crate::edges::build_code_graph_edges;
+use crate::error::{CodeGraphError, CodeGraphResult};
 use crate::mapping::map_facts_to_data_points;
 use crate::models::CodeNode;
 use crate::runner::run_enola_generate;
@@ -41,7 +42,11 @@ async fn lock_repository(repo_path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
         .or_else(|_| std::path::absolute(repo_path))
         .unwrap_or_else(|_| repo_path.to_path_buf());
     let lock = {
-        let mut locks = REPO_LOCKS.lock().unwrap(); // lock poison is unrecoverable
+        // A panic while holding this map cannot leave it inconsistent (one
+        // insert or prune at a time), so a poisoned lock is still usable.
+        let mut locks = REPO_LOCKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         locks.retain(|_, lock| lock.strong_count() > 0);
         match locks.get(&key).and_then(Weak::upgrade) {
             Some(lock) => lock,
@@ -93,8 +98,32 @@ pub async fn extract_code_graph(
         Some(dir) => dir.to_path_buf(),
         None => run_enola_generate(config, repo_path).await?,
     };
-    let snapshot = ParsedSnapshot::read(&snapshot_dir)?;
+    // Parsing, mapping and edge resolution are CPU and file work: off the
+    // async runtime.
+    let repo_path_text = repo_path.to_string_lossy().into_owned();
+    let node_set = node_set.map(<[String]>::to_vec);
+    let (snapshot, data_points) = tokio::task::spawn_blocking(move || {
+        parse_and_map(&snapshot_dir, &repo_path_text, node_set.as_deref())
+    })
+    .await
+    .map_err(|error| {
+        CodeGraphError::EnolaSnapshot(format!("reading the enola snapshot failed: {error}"))
+    })??;
     drop(guard);
+    Ok(ExtractedCodeGraph {
+        snapshot,
+        data_points,
+    })
+}
+
+/// Read the snapshot, map its facts to code nodes and resolve its typed
+/// edges (stored on [`ParsedSnapshot::edges`]). Blocking.
+fn parse_and_map(
+    snapshot_dir: &Path,
+    repo_path_text: &str,
+    node_set: Option<&[String]>,
+) -> CodeGraphResult<(ParsedSnapshot, Vec<CodeNode>)> {
+    let mut snapshot = ParsedSnapshot::read(snapshot_dir)?;
 
     if let Some(receipt) = snapshot.receipt.as_ref() {
         let field = |key: &str| {
@@ -111,18 +140,21 @@ pub async fn extract_code_graph(
         );
     }
 
-    let repo_path_text = repo_path.to_string_lossy();
     let data_points =
-        map_facts_to_data_points(&snapshot.facts, Some(&repo_path_text), None, node_set);
+        map_facts_to_data_points(&snapshot.facts, Some(repo_path_text), None, node_set);
     tracing::info!(
         "Mapped {} enola fact(s) to {} data point(s).",
         snapshot.facts.len(),
         data_points.len()
     );
-    Ok(ExtractedCodeGraph {
-        snapshot,
-        data_points,
-    })
+    let (edges, skipped) = build_code_graph_edges(&snapshot.facts, Some(repo_path_text));
+    tracing::info!(
+        "Resolved {} code graph edge(s), skipped {}.",
+        edges.len(),
+        skipped
+    );
+    snapshot.edges = Some(edges);
+    Ok((snapshot, data_points))
 }
 
 /// What one load did.

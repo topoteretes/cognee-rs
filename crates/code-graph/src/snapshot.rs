@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::edges::CodeGraphEdge;
 use crate::error::{CodeGraphError, CodeGraphResult};
 use crate::pyjson::{is_truthy, py_repr, py_str, py_strip};
 
@@ -80,18 +81,43 @@ pub struct ParsedSnapshot {
     pub facts: Vec<Fact>,
     /// `receipt.json`, when present and an object.
     pub receipt: Option<Receipt>,
+    /// `sha256:<hex>` of `facts.jsonl` as it was read: the identity fallback
+    /// ([`ParsedSnapshot::identity`]), hashed while reading so the file is
+    /// not read twice.
+    pub facts_digest: Option<String>,
+    /// The typed edges, when already resolved (by
+    /// [`extract_code_graph`](crate::extract_code_graph), with the load's
+    /// repository path). Python's `ParsedSnapshot.edges`.
+    /// [`add_code_graph_edges`](crate::add_code_graph_edges) resolves them
+    /// itself when `None`.
+    pub edges: Option<Vec<CodeGraphEdge>>,
 }
 
 impl ParsedSnapshot {
-    /// Parse `snapshot_dir` ([`parse_enola_snapshot`]).
+    /// Parse `snapshot_dir` ([`parse_enola_snapshot`]). Blocking file I/O.
     pub fn read(snapshot_dir: impl AsRef<Path>) -> CodeGraphResult<Self> {
         let snapshot_dir = snapshot_dir.as_ref();
-        let (facts, receipt) = parse_enola_snapshot(snapshot_dir)?;
+        let (facts, receipt, facts_digest) = parse_snapshot(snapshot_dir)?;
         Ok(Self {
             snapshot_dir: snapshot_dir.to_path_buf(),
             facts,
             receipt,
+            facts_digest: Some(facts_digest),
+            edges: None,
         })
+    }
+
+    /// Stable identity of the snapshot's content: [`snapshot_identity`]
+    /// without reading `facts.jsonl` again (the receipt's `snapshot_id`, else
+    /// [`ParsedSnapshot::facts_digest`]).
+    pub fn identity(&self) -> Option<String> {
+        if let Some(receipt) = self.receipt.as_ref().filter(|receipt| !receipt.is_empty())
+            && let Some(Value::String(snapshot_id)) = receipt.get("snapshot_id")
+            && !snapshot_id.is_empty()
+        {
+            return Some(snapshot_id.clone());
+        }
+        self.facts_digest.clone()
     }
 }
 
@@ -110,7 +136,13 @@ impl ParsedSnapshot {
 pub fn parse_enola_snapshot(
     snapshot_dir: impl AsRef<Path>,
 ) -> CodeGraphResult<(Vec<Fact>, Option<Receipt>)> {
-    let snapshot_dir = snapshot_dir.as_ref();
+    let (facts, receipt, _digest) = parse_snapshot(snapshot_dir.as_ref())?;
+    Ok((facts, receipt))
+}
+
+/// [`parse_enola_snapshot`], plus the `sha256:<hex>` digest of
+/// `facts.jsonl`.
+fn parse_snapshot(snapshot_dir: &Path) -> CodeGraphResult<(Vec<Fact>, Option<Receipt>, String)> {
     let facts_path = snapshot_dir.join("facts.jsonl");
     if !facts_path.is_file() {
         return Err(CodeGraphError::EnolaSnapshot(format!(
@@ -119,7 +151,7 @@ pub fn parse_enola_snapshot(
         )));
     }
 
-    let facts = read_facts(&facts_path)?;
+    let (facts, facts_digest) = read_facts(&facts_path)?;
 
     let receipt = read_json_file(&snapshot_dir.join("receipt.json"))
         .map_err(|()| {
@@ -158,13 +190,14 @@ pub fn parse_enola_snapshot(
         flow_count,
         facts_path.display()
     );
-    Ok((facts, receipt))
+    Ok((facts, receipt, facts_digest))
 }
 
 /// Read `facts.jsonl`: one JSON object per line, Python's universal newlines
 /// (`\n`, `\r\n` and `\r` all end a line), blank lines skipped, corrupt and
-/// non-object lines counted and skipped.
-fn read_facts(facts_path: &Path) -> CodeGraphResult<Vec<Fact>> {
+/// non-object lines counted and skipped. Returns the facts and the
+/// `sha256:<hex>` digest of the file's bytes.
+fn read_facts(facts_path: &Path) -> CodeGraphResult<(Vec<Fact>, String)> {
     let read_error = |error: std::io::Error| {
         CodeGraphError::EnolaSnapshot(format!(
             "Could not read '{}': {error}",
@@ -176,12 +209,14 @@ fn read_facts(facts_path: &Path) -> CodeGraphResult<Vec<Fact>> {
     let mut corrupt_lines = 0usize;
     let mut line_number = 0usize;
     let mut buffer = Vec::new();
+    let mut digest = Sha256::new();
     loop {
         buffer.clear();
         let read = reader.read_until(b'\n', &mut buffer).map_err(read_error)?;
         if read == 0 {
             break;
         }
+        digest.update(&buffer);
         let chunk = std::str::from_utf8(&buffer).map_err(|error| {
             CodeGraphError::EnolaSnapshot(format!(
                 "'{}' is not valid UTF-8: {error}",
@@ -230,7 +265,7 @@ fn read_facts(facts_path: &Path) -> CodeGraphResult<Vec<Fact>> {
             facts_path.display()
         );
     }
-    Ok(facts)
+    Ok((facts, format!("sha256:{}", hex::encode(digest.finalize()))))
 }
 
 /// Read a JSON file: `Ok(None)` when it does not exist, `Err(())` when it
