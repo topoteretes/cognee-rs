@@ -45,5 +45,6 @@ pub use snapshot::{
 };
 pub use writer::{
     CodeGraphLedger, CodeGraphLoadState, CodeGraphOwner, NodeDelta, RECEIPT_PROJECTION_KEYS,
-    add_code_graph_data_points, add_code_graph_edges, receipt_projection,
+    StoredRepositoryState, add_code_graph_data_points, add_code_graph_edges, receipt_projection,
+    stored_repository_state,
 };

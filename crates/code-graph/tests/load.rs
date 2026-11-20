@@ -273,18 +273,81 @@ async fn a_tagged_load_matches_python_and_links_node_sets() {
     }
 }
 
+/// The stored repository node of the primary repository.
+async fn repository_node(graph: &MockGraphDB, repo_path: &Path) -> NodeData {
+    nodes_of_types(graph, &HashSet::from(["CodeRepository"]))
+        .await
+        .into_iter()
+        .map(|(_, node)| node)
+        .find(|node| node["path"] == json!(repo_path.to_string_lossy()))
+        .unwrap()
+}
+
+type EdgeKeySet = BTreeSet<(String, String, String)>;
+
+/// Node ids and edge keys of the whole graph.
+async fn graph_shape(graph: &MockGraphDB) -> (BTreeSet<String>, EdgeKeySet) {
+    let (nodes, edges) = graph.get_graph_data().await.unwrap();
+    (
+        nodes.into_iter().map(|(id, _)| id).collect(),
+        edges
+            .into_iter()
+            .map(|(source, target, relationship, _)| (source, target, relationship))
+            .collect(),
+    )
+}
+
+/// Switch the repository's fake enola run to another snapshot fixture.
+fn switch_snapshot(repo_path: &Path, snapshot: &str) {
+    std::fs::write(
+        repo_path.join(".fake-enola"),
+        format!("snapshot:{snapshot}"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(repo_path.join(".enola")).unwrap();
+}
+
+/// Python's skip (`test_extract_skips_when_stored_snapshot_id_matches`): an
+/// untagged repository whose node already carries this snapshot id and
+/// mapping version is not loaded again: no write, no new stamp.
 #[tokio::test]
-async fn an_unchanged_reload_writes_no_fact_node_and_no_edge() {
+async fn an_unchanged_untagged_reload_is_skipped() {
     let (_root, repo_path) = repo("snapshot:docs_and_flows");
     let graph = MockGraphDB::new();
     let first = load_code_graph(&graph, None, &config(), &repo_path, None)
         .await
         .unwrap();
-    let edges_after_first = graph.edge_count();
+    assert!(!first.skipped);
+    let shape = graph_shape(&graph).await;
+    let stamped = repository_node(&graph, &repo_path).await;
 
     let second = load_code_graph(&graph, None, &config(), &repo_path, None)
         .await
         .unwrap();
+    assert!(second.skipped);
+    assert_eq!(second.delta, None);
+    assert!(second.state.data_points.is_empty());
+    assert_eq!(graph_shape(&graph).await, shape);
+    let again = repository_node(&graph, &repo_path).await;
+    assert_eq!(again["last_delta"], stamped["last_delta"], "not restamped");
+    assert_eq!(again["last_snapshot_id"], stamped["last_snapshot_id"]);
+}
+
+/// A tagged load is never skipped, but an unchanged one writes no fact node
+/// and no edge (the delta write).
+#[tokio::test]
+async fn an_unchanged_tagged_reload_writes_no_fact_node_and_no_edge() {
+    let (_root, repo_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    let first = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+        .await
+        .unwrap();
+    let shape = graph_shape(&graph).await;
+
+    let second = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+        .await
+        .unwrap();
+    assert!(!second.skipped);
     let delta = second.delta.unwrap();
     assert_eq!(delta["nodes_added"], json!(0));
     assert_eq!(delta["nodes_updated"], json!(0));
@@ -293,7 +356,277 @@ async fn an_unchanged_reload_writes_no_fact_node_and_no_edge() {
         first.delta.unwrap()["nodes_added"]
     );
     assert_eq!(delta["edges_added"], json!(0));
-    assert_eq!(graph.edge_count(), edges_after_first);
+    assert_eq!(delta["nodes_removed"], json!(0));
+    assert_eq!(delta["edges_removed"], json!(0));
+    assert_eq!(delta["node_set_detagged"], json!([]));
+    assert_eq!(graph_shape(&graph).await, shape);
+}
+
+/// A repository whose node still carries a tag is loaded again even by an
+/// untagged call, which then removes the tag.
+#[tokio::test]
+async fn an_untagged_reload_of_a_tagged_repository_loads_and_detags() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+        .await
+        .unwrap();
+
+    let reload = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert!(!reload.skipped);
+    let delta = reload.delta.unwrap();
+    assert_eq!(delta["node_set_detagged"], json!(["shared", "team-a"]));
+
+    let (_, edges) = graph_shape(&graph).await;
+    assert!(
+        edges
+            .iter()
+            .all(|(_, _, relationship)| relationship != "belongs_to_set"),
+        "no code node belongs to a set any more"
+    );
+    for (_, node) in nodes_of_types(&graph, &code_types()).await {
+        let tags = node.get("belongs_to_set").cloned().unwrap_or(Value::Null);
+        assert!(
+            tags.is_null() || tags == json!([]),
+            "{}: {tags}",
+            node["name"]
+        );
+    }
+    // The next untagged reload of the now untagged repository is skipped.
+    let third = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert!(third.skipped);
+}
+
+/// A retag removes the old node sets from every code node, edges and
+/// property, and keeps the new one (`_detag_stale_code_graph`).
+#[tokio::test]
+async fn a_retag_replaces_the_old_node_sets() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+        .await
+        .unwrap();
+
+    let retag = vec!["team-b".to_string(), "shared".to_string()];
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag))
+        .await
+        .unwrap()
+        .delta
+        .unwrap();
+    assert_eq!(delta["node_set_detagged"], json!(["team-a"]));
+
+    let sets: Vec<(String, NodeData)> = nodes_of_types(&graph, &HashSet::from(["NodeSet"])).await;
+    let set_id = |name: &str| {
+        sets.iter()
+            .find(|(_, node)| node["name"] == name)
+            .map(|(id, _)| id.clone())
+            .unwrap()
+    };
+    let code_nodes = nodes_of_types(&graph, &code_types()).await;
+    let (_, edges) = graph_shape(&graph).await;
+    let members = |set: &str| {
+        let id = set_id(set);
+        edges
+            .iter()
+            .filter(|(_, target, relationship)| relationship == "belongs_to_set" && *target == id)
+            .count()
+    };
+    assert_eq!(members("team-a"), 0);
+    assert_eq!(members("team-b"), code_nodes.len());
+    assert_eq!(members("shared"), code_nodes.len());
+    for (_, node) in &code_nodes {
+        let mut tags: Vec<&str> = node["belongs_to_set"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tag| tag.as_str().unwrap())
+            .collect();
+        tags.sort_unstable();
+        assert_eq!(tags, ["shared", "team-b"], "{}", node["name"]);
+    }
+}
+
+/// Python's `test_sweep_removes_stale_nodes_and_edges_and_stamps_snapshot`,
+/// end to end: a changed snapshot removes the facts and relations it no
+/// longer has, and the graph equals a fresh load of the new snapshot.
+#[tokio::test]
+async fn a_changed_snapshot_sweeps_what_it_no_longer_derives() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+
+    switch_snapshot(&repo_path, "basic_v2");
+    let reload = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert!(!reload.skipped);
+    let delta = reload.delta.unwrap();
+    assert_eq!(delta["nodes_removed"], json!(2));
+    assert_eq!(delta["samples_removed"], json!(["Color", "orders_table"]));
+    assert_eq!(
+        delta["edges_removed"],
+        json!(1),
+        "shop-api injects PostgresStore"
+    );
+    assert_eq!(delta["nodes_added"], json!(1));
+    assert_eq!(delta["samples_added"], json!(["Save"]));
+    assert_eq!(delta["samples_updated"], json!(["Load"]));
+    assert_eq!(delta["snapshot_id"], json!("sha256:abc123def789"));
+    let repository = repository_node(&graph, &repo_path).await;
+    assert_eq!(repository["last_snapshot_id"], json!("sha256:abc123def789"));
+
+    let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
+    let fresh = MockGraphDB::new();
+    load_code_graph(&fresh, None, &config(), &fresh_path, None)
+        .await
+        .unwrap();
+    assert_eq!(graph_shape(&graph).await, graph_shape(&fresh).await);
+}
+
+/// Python's `test_sweep_failure_prevents_snapshot_stamp`: a load that fails
+/// in the sweep records no new snapshot id, so the next load is not skipped
+/// and finishes the job.
+#[tokio::test]
+async fn a_failed_sweep_records_no_new_stamp() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+
+    switch_snapshot(&repo_path, "basic_v2");
+    graph.set_delete_nodes_error("graph down");
+    load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap_err();
+    // The node write rewrote the repository node without a stamp (as
+    // Python's does); what matters is that the new snapshot id is not on it.
+    let repository = repository_node(&graph, &repo_path).await;
+    assert_ne!(repository["last_snapshot_id"], json!("sha256:abc123def789"));
+
+    graph.clear_delete_nodes_error();
+    let retry = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert!(!retry.skipped);
+    assert_eq!(retry.delta.unwrap()["nodes_removed"], json!(2));
+}
+
+/// Another repository in the same graph is outside the sweep.
+#[tokio::test]
+async fn the_sweep_leaves_other_repositories_alone() {
+    let (_other_root, other_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &other_path, None)
+        .await
+        .unwrap();
+    let other = graph_shape(&graph).await;
+
+    let (_root, repo_path) = repo("snapshot:basic");
+    load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    switch_snapshot(&repo_path, "basic_v2");
+    load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+
+    let (nodes, edges) = graph_shape(&graph).await;
+    assert!(other.0.is_subset(&nodes));
+    assert!(other.1.is_subset(&edges));
+}
+
+/// A skipped load still records the snapshot under its owner, so a second
+/// owner (another dataset over the same graph) keeps the graph when the
+/// first owner is deleted.
+#[tokio::test]
+async fn a_skipped_load_still_claims_the_snapshot_for_its_owner() {
+    let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+    cognee_database::initialize(&db).await.unwrap();
+    let user_id = Uuid::new_v4();
+    let owner = |dataset_id, data_id| CodeGraphOwner {
+        tenant_id: None,
+        user_id,
+        dataset_id,
+        data_id,
+        pipeline_run_id: None,
+    };
+    let (first, second) = (
+        owner(Uuid::new_v4(), Uuid::new_v4()),
+        owner(Uuid::new_v4(), Uuid::new_v4()),
+    );
+    for owner in [first, second] {
+        cognee_database::ops::datasets::create_dataset(
+            &db,
+            cognee_models::Dataset::new("code".into(), user_id, None, owner.dataset_id),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(
+        &graph,
+        Some(&CodeGraphLedger {
+            db: &db,
+            owner: first,
+        }),
+        &config(),
+        &repo_path,
+        None,
+    )
+    .await
+    .unwrap();
+    let skipped = load_code_graph(
+        &graph,
+        Some(&CodeGraphLedger {
+            db: &db,
+            owner: second,
+        }),
+        &config(),
+        &repo_path,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(skipped.skipped);
+
+    let (nodes, edges) = graph_shape(&graph).await;
+    let claimed: BTreeSet<String> = cognee_database::ops::graph_storage::get_nodes_by_data(
+        &db,
+        second.data_id,
+        second.dataset_id,
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| row.slug.to_string())
+    .collect();
+    assert_eq!(claimed, nodes);
+    let claimed: EdgeKeySet = cognee_database::ops::graph_storage::get_edges_by_data(
+        &db,
+        second.data_id,
+        second.dataset_id,
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| {
+        (
+            row.source_node_id.to_string(),
+            row.destination_node_id.to_string(),
+            row.relationship_name.clone(),
+        )
+    })
+    .collect();
+    assert_eq!(claimed, edges);
 }
 
 #[tokio::test]
@@ -475,6 +808,78 @@ async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
         .unwrap();
         assert!(only_first.is_empty(), "{only_first:?}");
     }
+}
+
+/// The incremental load against Ladybug, whose nodes keep their properties
+/// in a JSON blob: a retag and a changed snapshot leave the same graph as a
+/// fresh load of the new snapshot with the new tag, and an unchanged untagged
+/// reload is skipped.
+#[tokio::test]
+async fn the_incremental_load_on_ladybug_matches_a_fresh_load() {
+    async fn ladybug(dir: &Path) -> cognee_graph::LadybugAdapter {
+        let adapter = cognee_graph::LadybugAdapter::new(dir.join("graph.db").to_str().unwrap())
+            .await
+            .unwrap();
+        adapter.initialize().await.unwrap();
+        adapter
+    }
+    async fn shape(graph: &dyn GraphDBTrait) -> (BTreeSet<String>, EdgeKeySet) {
+        let (nodes, edges) = graph.get_graph_data().await.unwrap();
+        (
+            nodes.into_iter().map(|(id, _)| id).collect(),
+            edges
+                .into_iter()
+                .map(|(source, target, relationship, _)| (source, target, relationship))
+                .collect(),
+        )
+    }
+
+    let store = tempfile::tempdir().unwrap();
+    let graph = ladybug(store.path()).await;
+    let (_root, repo_path) = repo("snapshot:basic");
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+        .await
+        .unwrap();
+    switch_snapshot(&repo_path, "basic_v2");
+    let retag = vec!["team-b".to_string()];
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag))
+        .await
+        .unwrap()
+        .delta
+        .unwrap();
+    assert_eq!(delta["nodes_removed"], json!(2));
+    assert_eq!(delta["node_set_detagged"], json!(["shared", "team-a"]));
+
+    let fresh_store = tempfile::tempdir().unwrap();
+    let fresh = ladybug(fresh_store.path()).await;
+    let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
+    load_code_graph(&fresh, None, &config(), &fresh_path, Some(&retag))
+        .await
+        .unwrap();
+    let (nodes, edges) = shape(&graph).await;
+    let (fresh_nodes, fresh_edges) = shape(&fresh).await;
+    // The old node sets stay as nodes (Python never deletes them); nothing
+    // links to them any more.
+    let old_sets: BTreeSet<String> = nodes.difference(&fresh_nodes).cloned().collect();
+    assert_eq!(old_sets.len(), 2, "{old_sets:?}");
+    assert_eq!(edges, fresh_edges);
+    for (_, node) in graph.get_graph_data().await.unwrap().0 {
+        if node["type"] == "NodeSet" {
+            continue;
+        }
+        let tags = node.get("belongs_to_set").cloned().unwrap_or(Value::Null);
+        assert_eq!(tags, json!(["team-b"]), "{}", node["name"]);
+    }
+
+    // Untagging, then an unchanged untagged reload, which is skipped.
+    let untag = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert_eq!(untag.delta.unwrap()["node_set_detagged"], json!(["team-b"]));
+    let skipped = load_code_graph(&graph, None, &config(), &repo_path, None)
+        .await
+        .unwrap();
+    assert!(skipped.skipped);
 }
 
 /// Two loads of one repository at once take turns: the fake enola fails a

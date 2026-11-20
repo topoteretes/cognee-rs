@@ -49,8 +49,9 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   code-repo item without its documents, and its graph is built by one
   `code_graph_pipeline` run over that item (the CODE_REPO route's enola
   adapter), which also stamps it complete for `cognify_pipeline`, so a later
-  `cognify` of the dataset does not rebuild it. Every run rebuilds (it is not
-  incremental). The result has one item per repository, `{kind:
+  `cognify` of the dataset does not rebuild it. Runs are incremental: an
+  unchanged repository (same enola snapshot) writes nothing, and a changed one
+  writes only changed facts and removes what left it. The result has one item per repository, `{kind:
   "code_repository", source, path, id, pipeline_run_id}`; with
   `raise_on_error = false` a failed repository is reported on its item
   (`status: "errored"`, `error`) and the rest go on. No LLM or embedding engine
@@ -397,7 +398,11 @@ item (`code_repo`) runs the deterministic code graph instead of the stages
 above — one `enola --generate` over the original directory, its snapshot
 mapped to code nodes and typed edges ([`cognee-code-graph`](../crates/code-graph/)),
 tagged with the item's node set, recorded in the ownership ledger, with no LLM
-and no embedding call. Every other item runs the stages above. Both kinds share
+and no embedding call. The load is incremental: an unchanged snapshot of an
+untagged repository is skipped, and a changed one writes only changed facts,
+sweeps the nodes and edges that left it and strips node-set tags the call no
+longer passes. Forgetting the item removes its code graph and leaves other
+repositories' alone. Every other item runs the stages above. Both kinds share
 one pipeline run and its completion markers. A per-file code item
 (`source: "code"`) is not supported yet and fails the run. A run whose items
 are all code-routed resolves no graph extractor, so a deployment without an

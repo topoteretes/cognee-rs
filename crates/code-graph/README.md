@@ -22,7 +22,8 @@ does all four for one local repository.
 | Run `enola --generate` | `run_enola_generate` | `enola.run_enola_generate` |
 | Extract | `extract_code_graph` | `extract_code_graph.extract_code_graph` |
 | Write nodes | `add_code_graph_data_points` | `extract_code_graph.add_code_graph_data_points` |
-| Write edges, stamp | `add_code_graph_edges` | `extract_code_graph.add_code_graph_edges` |
+| Write edges, sweep, detag, stamp | `add_code_graph_edges` | `extract_code_graph.add_code_graph_edges` |
+| Read the stamp | `stored_repository_state` | `extract_code_graph._stored_repository_state` |
 | The whole load | `load_code_graph` | `extract_code_graph.get_code_graph_tasks` |
 | The CODE_REPO cognify route | `extract_code_repo_graph` | `code_repo.extract_code_repo_graph` |
 
@@ -60,26 +61,57 @@ enola is an external binary, and this is a production subprocess:
 
 ## Writing the graph
 
-Writes are graph-only (no embedding call) and are deltas against one read of
-the graph (`get_graph_data`):
+A load is incremental, as Python's is:
 
-- A fact node is written when the graph lacks it or its `fact_hash`
-  changed. Repository nodes are always written. Each written node goes
-  through Python's storage walk: a `part_of` edge to its repository, and per
-  node set a `NodeSet` node and a `belongs_to_set` edge, with Python's
-  default edge properties (`edge_object_id`, `feedback_weight`, the fallback
-  `edge_text`).
-- Typed relations (`calls`, `imports`, ...) the graph does not have yet are
-  added with `add_edges`.
-- Last, every repository of the snapshot is stamped with
+- **Unchanged snapshot.** `extract_code_graph` reads the repository node
+  first. When it already carries this snapshot's id (`receipt.json`'s
+  `snapshot_id`, else the hash of `facts.jsonl`) and the current mapping
+  version, the snapshot is not mapped and nothing is written
+  (`CodeGraphLoad::skipped`). Only an untagged repository is skipped: a tagged
+  call, or a repository node that still carries a tag, always loads. A failed
+  read of the stamp loads in full.
+- **Nodes.** Writes are graph-only (no embedding call) and deltas against the
+  graph: only the snapshot's own nodes are read (`get_nodes`). A fact node is
+  written when the graph lacks it or its `fact_hash` changed; repository nodes
+  are always written. Each written node goes through Python's storage walk: a
+  `part_of` edge to its repository, and per node set a `NodeSet` node and a
+  `belongs_to_set` edge, with Python's default edge properties
+  (`edge_object_id`, `feedback_weight`, the fallback `edge_text`).
+- **Typed relations** (`calls`, `imports`, ...) the graph does not have yet
+  are added with `add_edges`.
+- **Stale sweep.** What earlier loads of the same repositories derived and
+  this snapshot no longer does is removed: code nodes of the snapshot's
+  repositories that are not in it, and edges between the snapshot's nodes
+  that it no longer has (`delete_nodes`, `GraphDBTrait::delete_edge_triples`).
+  Other repositories and non-code nodes are never touched.
+- **Detag.** Node-set tags the repository's nodes carry but this call does
+  not are removed: the `belongs_to_set` edges (by node-set id) and the names
+  in the `belongs_to_set` property (by exact name).
+- **Stamp.** Last, every repository of the snapshot is stamped with
   `last_snapshot_id`, `last_mapping_version`, `last_receipt` (the receipt
-  projection) and `last_delta`. A load that fails before the stamp is never
-  recorded as done.
+  projection) and `last_delta` (added, updated, unchanged and removed counts
+  with up to 20 sample names each, `edges_added`, `edges_removed`,
+  `node_set_detagged`). A load that fails before the stamp is never recorded
+  as done, so it is not skipped next time.
 
-With a `CodeGraphLedger`, every node and edge written is recorded in the
-relational provenance ledger under the owning `Data` row, before the graph
-write it describes, so deleting the row (or rolling back the run) finds it.
-The row ids are the ones cognify uses (`cognee_database::provenance_ids`).
+Python reads the whole graph (`get_graph_data`) for the sweep and the detag.
+Here one scoped read is taken instead, after the writes: the repositories'
+nodes and their one-hop neighbourhood (`get_neighborhood(repos, 1)`). Every
+code node of a repository has a `part_of` edge to it, so that read holds them
+all, plus the node sets the repository belongs to and every edge among them.
+A code node that lost its `part_of` edge outside this crate is not seen.
+
+With a `CodeGraphLedger`, every node and edge of the snapshot, written or left
+unchanged, is recorded in the relational provenance ledger under the owning
+`Data` row, before the graph write it describes, so deleting the row (or
+rolling back the run) finds it. The row ids are the ones cognify uses
+(`cognee_database::provenance_ids`). A skipped load records its rows too
+(Python records none): its owner may be another dataset over the same graph,
+which deleting the first owner must not strip. The sweep leaves the ledger
+alone, as Python's does: a swept node's rows stay with their owner, and
+deleting the owner later finds nothing more to delete. Deleting a repository's
+`Data` row (`forget`) removes its code graph through these rows and leaves
+other repositories' nodes, and node sets they share, in place.
 
 ## The CODE_REPO route
 
@@ -95,9 +127,10 @@ the cognify run, so its ledger rows carry that run's id. One repository per
 item for now; Python loads a dataset's repositories as one enola cluster
 (SDK-1053 O8).
 
-Not yet ported (SDK-1053 O6): Python's unchanged-snapshot skip, the sweep of
-stale nodes and edges, and the node-set detag. `last_delta` reports zero for
-what they would remove.
+Python drops a deleted repository's survivors' completion stamps so the next
+`cognify()` re-extracts them as a cluster (`mark_dataset_code_repos_for_rebuild`);
+that comes with the clusters (SDK-1053 O8). Python also invalidates its CODE
+retriever's snapshot cache after every write; Rust has no such cache yet.
 
 ## Nodes
 

@@ -278,8 +278,21 @@ async fn a_node_set_is_ignored() {
     );
 }
 
+/// The stored repository node: its stamp.
+async fn repository_stamp(stack: &Stack) -> cognee_graph::NodeData {
+    stack
+        .nodes()
+        .await
+        .into_iter()
+        .map(|(_, node)| node)
+        .find(|node| node["type"] == "CodeRepository")
+        .expect("a repository node")
+}
+
+/// Re-remembering an unchanged repository is a no-op (SDK-1053 O6): a second
+/// run, but the same graph, the same snapshot id and no new stamp.
 #[tokio::test(flavor = "multi_thread")]
-async fn remembering_again_rebuilds_the_same_graph() {
+async fn remembering_an_unchanged_repository_again_writes_nothing() {
     let root = TempDir::new().unwrap();
     let repo = project(root.path(), "shop", "snapshot:basic");
     let stack = Stack::new().await;
@@ -288,7 +301,8 @@ async fn remembering_again_rebuilds_the_same_graph() {
         .remember(stack.params(vec![path_input(&repo)], true))
         .await
         .unwrap();
-    let nodes = stack.nodes().await.len();
+    let (nodes, edges) = (stack.graph_db.node_count(), stack.graph_db.edge_count());
+    let stamp = repository_stamp(&stack).await;
     let second = stack
         .remember(stack.params(vec![path_input(&repo)], true))
         .await
@@ -301,9 +315,110 @@ async fn remembering_again_rebuilds_the_same_graph() {
     );
     assert_ne!(
         first.pipeline_run_id, second.pipeline_run_id,
-        "not incremental: a second run"
+        "a second run"
     );
-    assert_eq!(stack.nodes().await.len(), nodes);
+    assert_eq!(stack.graph_db.node_count(), nodes);
+    assert_eq!(stack.graph_db.edge_count(), edges);
+    let again = repository_stamp(&stack).await;
+    assert_eq!(again["last_snapshot_id"], stamp["last_snapshot_id"]);
+    assert_eq!(again["last_delta"], stamp["last_delta"], "not restamped");
+}
+
+/// A changed repository is loaded incrementally: what left the snapshot
+/// leaves the graph.
+#[tokio::test(flavor = "multi_thread")]
+async fn remembering_a_changed_repository_sweeps_what_left_it() {
+    let root = TempDir::new().unwrap();
+    let repo = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    stack
+        .remember(stack.params(vec![path_input(&repo)], true))
+        .await
+        .unwrap();
+
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic_v2").unwrap();
+    stack
+        .remember(stack.params(vec![path_input(&repo)], true))
+        .await
+        .unwrap();
+
+    let names: BTreeSet<String> = stack
+        .nodes()
+        .await
+        .into_iter()
+        .filter_map(|(_, node)| node.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    assert!(names.contains("Save"), "{names:?}");
+    assert!(!names.contains("Color"), "{names:?}");
+    assert!(!names.contains("orders_table"), "{names:?}");
+    let stamp = repository_stamp(&stack).await;
+    assert_eq!(stamp["last_snapshot_id"], json!("sha256:abc123def789"));
+    assert_eq!(stamp["last_delta"]["nodes_removed"], json!(2));
+}
+
+/// Forgetting one of two remembered repositories removes that repository's
+/// code graph through its ledger rows and leaves the other one whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_one_of_two_repositories_keeps_the_other() {
+    use cognee::api::forget::{DatasetRef, ForgetTarget, forget};
+    use cognee::delete::DeleteService;
+    use cognee_database::DeleteDb;
+
+    let root = TempDir::new().unwrap();
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    let kept = stack
+        .remember(stack.params(vec![path_input(&shop)], true))
+        .await
+        .unwrap();
+    let kept_shape = graph_shape(&stack).await;
+    let other = project(root.path(), "other", "snapshot:docs_and_flows");
+    let forgotten = stack
+        .remember(stack.params(vec![path_input(&other)], true))
+        .await
+        .unwrap();
+    let forgotten_id = forgotten.items[0].id.unwrap();
+    assert_ne!(kept.items[0].id.unwrap(), forgotten_id);
+    assert!(graph_shape(&stack).await.0.len() > kept_shape.0.len());
+
+    let service = DeleteService::new(
+        Arc::clone(&stack.storage),
+        Arc::clone(&stack.db) as Arc<dyn DeleteDb>,
+    )
+    .with_graph_db(Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>)
+    .with_vector_db(Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>);
+    let dataset_id = stack.dataset_id().await;
+    forget(
+        ForgetTarget::Item {
+            data_id: forgotten_id,
+            dataset: DatasetRef::Id(dataset_id),
+        },
+        stack.owner_id,
+        None,
+        &service,
+        Some(stack.db.as_ref() as &dyn IngestDb),
+    )
+    .await
+    .expect("forget the second repository");
+
+    assert_eq!(graph_shape(&stack).await, kept_shape);
+    let rows = get_dataset_data(&stack.db, dataset_id).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(Some(rows[0].id), kept.items[0].id);
+}
+
+type EdgeKeys = BTreeSet<(String, String, String)>;
+
+/// Node ids and edge keys of the stack's graph.
+async fn graph_shape(stack: &Stack) -> (BTreeSet<String>, EdgeKeys) {
+    let (nodes, edges) = stack.graph_db.get_graph_data().await.unwrap();
+    (
+        nodes.into_iter().map(|(id, _)| id).collect(),
+        edges
+            .into_iter()
+            .map(|(source, target, relationship, _)| (source, target, relationship))
+            .collect(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]

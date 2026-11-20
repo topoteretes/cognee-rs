@@ -32,7 +32,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-cognee-graph = { path = "../graph", features = ["testing"] }
+# `ladybug`: the incremental load against a real backend (`tests/load.rs`).
+cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-models = { path = "../models" }
 cognee-database = { path = "../database", features = ["sqlite"] }
 tempfile.workspace = true
