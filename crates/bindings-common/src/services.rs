@@ -248,6 +248,9 @@ impl CogneeServices {
 
         // Taken out of the guard here: the builder chain below awaits.
         let run_ownership_dir = cm.settings().run_ownership_dir();
+        // A code project's documents need an LLM; without one `add` leaves
+        // them out of a project directory (Python `resolve_code_repository`).
+        let llm_available = cm.llm_available().await?;
         let add_pipeline = Arc::new(
             AddPipeline::new(
                 Arc::clone(&storage),
@@ -265,7 +268,8 @@ impl CogneeServices {
             // `add` included, so recovery can close an abandoned one.
             .with_run_ownership_dir(run_ownership_dir)
             // Python runs its image and audio loaders at `add`.
-            .with_loader_registry(cm.add_loader_registry().await),
+            .with_loader_registry(cm.add_loader_registry().await)
+            .with_llm_available(llm_available),
         );
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase

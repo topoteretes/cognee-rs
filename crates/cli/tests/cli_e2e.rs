@@ -798,6 +798,39 @@ fn the_extractor_flag_and_the_keyless_auto_default() {
         ));
 }
 
+/// `add` resolves the LLM to decide whether a code project's documents are
+/// kept. A provider nothing is registered under fails the add, as in the
+/// bindings, instead of silently dropping the documents; nothing is stored.
+#[test]
+fn add_fails_on_an_unresolvable_llm_provider() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+
+    make_cmd_in(&config_home, workdir.path())
+        .env("LLM_PROVIDER", "no-such-llm-provider")
+        .env("LLM_API_KEY", "sk-test")
+        .env_remove("MOCK_LLM")
+        .args(["add", "Alice knows Bob.", "--dataset-name", "llm_ds"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("no-such-llm-provider"));
+    assert_eq!(count_data_rows(&db_file_path), 0);
+}
+
 #[test]
 fn delete_all_preview_and_force_execution() {
     let config_home = TempDir::new().expect("temp dir should be created");

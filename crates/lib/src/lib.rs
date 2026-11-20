@@ -34,12 +34,15 @@ pub mod core {
 
 /// Data ingestion (add) pipeline.
 pub mod add {
+    /// Code-project detection and the repo manifest (`add(<directory>)`).
+    pub use cognee_ingestion::code_repo;
     pub use cognee_ingestion::{
         AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, LoaderRegistry,
         ProcessedInput, build_add_pipeline, build_add_pipeline_with_acl, generate_dataset_id,
-        make_persist_data_task, make_persist_data_task_with_acl, make_process_input_task,
-        make_process_input_task_with_loaders, persist_data, persist_data_with_acl,
-        persist_data_with_acl_and_locks, process_input, process_input_with_loaders,
+        generate_unique_data_id, make_persist_data_task, make_persist_data_task_with_acl,
+        make_process_input_task, make_process_input_task_with_loaders, persist_data,
+        persist_data_with_acl, persist_data_with_acl_and_locks, process_input,
+        process_input_with_loaders,
     };
 }
 

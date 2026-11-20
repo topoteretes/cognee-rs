@@ -67,7 +67,16 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_pipeline_run_repo(pipeline_run_repo)
         .with_run_ownership_dir(run_ownership_dir)
         // Python runs its image and audio loaders at `add`.
-        .with_loader_registry(cm.add_loader_registry().await);
+        .with_loader_registry(cm.add_loader_registry().await)
+        // A code project's documents need an LLM (Python `resolve_code_repository`).
+        // An LLM configuration that cannot be resolved (a misspelled provider)
+        // fails the add, as in the bindings: treating it as "no LLM" would
+        // silently drop a code project's documents.
+        .with_llm_available(
+            cm.llm_available()
+                .await
+                .map_err(|error| CliError::Runtime(format!("{error}")))?,
+        );
 
         let inputs = args
             .data

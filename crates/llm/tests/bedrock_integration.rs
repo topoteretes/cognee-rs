@@ -77,7 +77,7 @@ fn schema() -> Value {
 }
 
 #[tokio::test]
-async fn generate_posts_converse_with_the_un_normalised_id_and_no_budget() {
+async fn generate_posts_converse_with_the_un_normalised_id_and_the_configured_ceiling() {
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -88,13 +88,12 @@ async fn generate_posts_converse_with_the_un_normalised_id_and_no_budget() {
                 // Bearer auth: a plain header, no SigV4 (plan §1.2).
                 .header("authorization", format!("Bearer {BEARER_KEY}"))
                 .header_excludes("authorization", "AWS4-HMAC-SHA256")
-                // `generate(..., None)` passes no budget, so no `maxTokens` is
-                // sent at all and Bedrock applies the model maximum. This is the
-                // Python-parity contract: Python's Bedrock adapter never
-                // serialises a budget on any path, so its body carries a literal
-                // `"inferenceConfig": {}`. Substituting the ceiling here is what
-                // truncated extraction at 16384 against Sonnet 4.5's 64000.
-                .body_excludes(r#""maxTokens""#)
+                // `generate(..., None)` passes no budget, so the configured
+                // ceiling (`LLM_MAX_COMPLETION_TOKENS`, default 16384) is sent,
+                // clamped to the model cap — nova-lite answers at most 10000.
+                // Omitting it let a runaway generation run to the model maximum
+                // whatever the operator configured.
+                .body_includes(r#""maxTokens":10000"#)
                 // System messages are hoisted out of `messages` into `system`.
                 .body_includes(r#""system":[{"text":"be terse"}]"#)
                 .body_includes(r#""content":[{"text":"hello"}]"#)
@@ -668,4 +667,46 @@ async fn truncation_at_the_effective_cap_is_re_asked_until_the_budget_is_gone() 
     // Every attempt is spent, rather than bailing out after the first — that is
     // the whole change. A real runaway usually clears on the second try.
     mock.assert_calls_async(3).await;
+}
+
+/// The production regression: with `LLM_MAX_COMPLETION_TOKENS=16384`
+/// configured, a graph-extraction call (cognify passes `max_tokens: None`) went
+/// out with no `maxTokens` at all, so a runaway generation ran to Sonnet 4.5's
+/// 64000-token maximum (`output_tokens=64000 truncated=true budget=None`). The
+/// configured ceiling must reach the structured-output request body.
+#[tokio::test]
+async fn structured_output_without_a_caller_budget_sends_the_configured_ceiling() {
+    let server = MockServer::start_async().await;
+    let mock = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path(converse_path(SONNET))
+                .body_includes(r#""inferenceConfig":{"maxTokens":12345}"#);
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"output":{"message":{"content":[{"text":"{\"name\":\"Ada\"}"}]}},
+                        "stopReason":"end_turn"}"#,
+                );
+        })
+        .await;
+
+    let value = adapter(&server, SONNET)
+        .await
+        .with_max_completion_tokens(12_345)
+        .create_structured_output_with_messages_raw(
+            vec![Message::user("who?")],
+            &schema(),
+            // What cognify's `extraction_options()` passes: no budget of its own.
+            Some(GenerationOptions {
+                max_tokens: None,
+                temperature: None,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("the mock answers only a request carrying the ceiling");
+
+    assert_eq!(value["name"], "Ada");
+    mock.assert_calls_async(1).await;
 }

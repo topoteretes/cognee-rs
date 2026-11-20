@@ -75,6 +75,13 @@ pub struct BedrockAdapter {
     base_model: String,
     /// Capabilities resolved once from [`base_model`](Self::base_model).
     caps: ModelCaps,
+    /// The model's documented output-token cap, or `None` when the model is
+    /// not in [`caps::MODEL_CAPS`]. For an unlisted model, `caps` holds the
+    /// conservative [`caps::UNKNOWN_MODEL_CAPS`] guess (4 096). That guess must
+    /// not bound output, so every output budget goes through
+    /// [`model_output_bound`](Self::model_output_bound), not
+    /// `caps.max_output_tokens`.
+    listed_output_cap: Option<u32>,
     /// Resolved runtime endpoint, without a trailing slash.
     endpoint: String,
     /// Resolved AWS region — kept for diagnostics; the transport holds its own
@@ -150,11 +157,10 @@ pub struct BedrockAdapter {
     /// the wire when the budget expires still runs to its own timeout: the
     /// effective ceiling is `request_deadline + request_timeout`.
     request_deadline: Option<std::time::Duration>,
-    /// Output-token ceiling (Python's `llm_max_completion_tokens`). Applied only
-    /// when the CALLER supplies a budget: the per-request
-    /// `inferenceConfig.maxTokens` is then `min(caller, this, the model cap)`.
-    /// A caller passing `None` gets no `maxTokens` at all and this bounds
-    /// nothing — see `effective_max_tokens`.
+    /// Output-token ceiling (`llm_max_completion_tokens`). Bounds every request:
+    /// the per-request `inferenceConfig.maxTokens` is `min(caller, this, the
+    /// model cap)`, and a caller passing `None` gets `min(this, the model cap)`
+    /// — see `effective_max_tokens`.
     max_completion_tokens: u32,
     /// Operator-configured sampling temperature, or `None` when unset.
     ///
@@ -252,6 +258,18 @@ impl BedrockAdapter {
 
         let base_model = model_id::base_model(&model);
         let caps = caps::caps_for_base_model(&base_model);
+        let listed_output_cap = caps::lookup_base_model(&base_model).map(|c| c.max_output_tokens);
+        if listed_output_cap.is_none() {
+            // Once per adapter. The component factory builds the adapter once
+            // per configured LLM, so this is not a per-request line.
+            warn!(
+                model = model.as_str(),
+                base_model = base_model.as_str(),
+                "Bedrock model not in the caps table; its output limit is unknown, so \
+                 LLM_MAX_COMPLETION_TOKENS is the effective output cap. Lower it if the \
+                 model's limit is smaller, or the model will reject requests",
+            );
+        }
         debug!(
             model = model.as_str(),
             base_model = base_model.as_str(),
@@ -267,6 +285,7 @@ impl BedrockAdapter {
             model,
             base_model,
             caps,
+            listed_output_cap,
             endpoint,
             region,
             transport,
@@ -500,72 +519,67 @@ impl BedrockAdapter {
         self.caps
     }
 
-    /// The `inferenceConfig.maxTokens` to send: `min(caller value, configured
-    /// ceiling, model cap)`, floored at 1 (plan §1.0).
-    ///
-    /// The configured ceiling bounds **every** path, not only the
-    /// `max_tokens: None` one, so a caller cannot silently bypass a lower
-    /// operator-configured ceiling. The model cap is applied last so Bedrock
-    /// never 400s on `maxTokens > model limit`.
-    ///
-    /// A caller who passes NO budget of their own — `None`, which is also what
-    /// `GenerationOptions::default()` leaves in `max_tokens` since SDK-581 —
-    /// gets `None` back, and `maxTokens` is omitted from the request entirely.
-    /// Bedrock then applies the model maximum, matching the Python engine, whose
-    /// Bedrock adapter never serialises a budget at all.
-    ///
-    /// CONSEQUENCE, deliberate and worth knowing before you rely on it:
-    /// `llm_max_completion_tokens` does NOT bound such a call. On the cognify
-    /// path — which passes `max_tokens: None` by design — a runaway generation
-    /// can bill up to the model maximum per chunk, and there is no setting that
-    /// caps it. That is Python's behaviour too: there the setting only sizes
-    /// input chunks and never reaches the request. A caller that needs a bound
-    /// passes one explicitly, and it is clamped by the ceiling and then the
-    /// model cap.
-    fn effective_max_tokens(&self, opts: &GenerationOptions) -> Option<u32> {
-        // `None` is sent as an ABSENT `maxTokens`, not as the configured
-        // ceiling. Bedrock documents the omitted case as "the maximum allowed
-        // value for the model that you are using", which is what the Python
-        // engine gets: its Bedrock adapter never serialises a budget, so its
-        // Converse body carries a literal `"inferenceConfig": {}`.
-        //
-        // Substituting the ceiling here reversed the caller's intent. Cognify's
-        // `extraction_options()` sets `max_tokens: None` with a comment stating
-        // it means "use the model's full default output budget, for Python
-        // parity" — and this function turned that into 16384, a quarter of
-        // Sonnet 4.5's 64000. Three chunks of a 55-chunk document then truncated
-        // at a limit Python never applies, and `RollbackScope::WholeRun`
-        // discarded the other 52.
-        //
-        // POLICY NOTE: `llm_max_completion_tokens` therefore no longer bounds a
-        // caller that passes no budget of its own. That matches Python, where
-        // the setting only ever sizes input chunks
-        // (`cognee/infrastructure/llm/utils.py`) and never reaches the Bedrock
-        // request. A caller that needs a bound passes one explicitly, and it is
-        // still clamped by the ceiling and the model cap below.
-        let requested = opts.max_tokens?;
-        Some(
-            requested
-                .min(self.max_completion_tokens)
-                .min(self.caps.max_output_tokens)
-                .max(1),
-        )
+    /// The configured ceiling bounded by the model's documented output cap. For
+    /// a model not in [`caps::MODEL_CAPS`], the cap is unknown, so this is the
+    /// ceiling alone (the constructor logs a warning). Not floored; callers
+    /// floor at 1.
+    fn model_output_bound(&self) -> u32 {
+        match self.listed_output_cap {
+            Some(model_cap) => self.max_completion_tokens.min(model_cap),
+            None => self.max_completion_tokens,
+        }
     }
 
-    /// The output budget a truncation retry may raise to.
+    /// The `inferenceConfig.maxTokens` to send: `min(caller value, configured
+    /// ceiling, model cap)`, floored at 1 (plan §1.0). A caller that passes no
+    /// budget of its own — `None`, which is what `GenerationOptions::default()`
+    /// leaves in `max_tokens` and what cognify's graph extraction passes — gets
+    /// the configured ceiling (`llm_max_completion_tokens`,
+    /// `LLM_MAX_COMPLETION_TOKENS`), still clamped to the model cap. For a
+    /// model not in the caps table there is no model cap to apply (see
+    /// [`model_output_bound`](Self::model_output_bound)).
     ///
-    /// When the caller supplied a budget, the ceiling still bounds the raise.
-    /// When it did not, the request went out with no `maxTokens` at all and the
-    /// model's own maximum was already in force — so there is nothing above it
-    /// to climb to, and a truncation there is genuinely terminal.
-    fn effective_output_cap(&self, opts: &GenerationOptions) -> u32 {
-        if opts.max_tokens.is_none() {
-            return self.caps.max_output_tokens.max(1);
-        }
-        self.caps
-            .max_output_tokens
-            .min(self.max_completion_tokens)
-            .max(1)
+    /// Always bounded, so `base_request` always sends `maxTokens`. The ceiling
+    /// bounds **every** path, the way the Anthropic and OpenAI-compatible
+    /// adapters apply it, so a caller cannot silently bypass an
+    /// operator-configured ceiling by passing no budget. A listed model's cap
+    /// is applied last so Bedrock never 400s on `maxTokens > model limit`.
+    ///
+    /// HISTORY: this intentionally diverges from Python, and reverses #190
+    /// (2c4d611). #190 made a `None` budget omit `maxTokens` entirely, for
+    /// parity with Python, whose Bedrock adapter never sends one (so Bedrock
+    /// applies the model maximum, 64000 for Sonnet 4.5). That left
+    /// `LLM_MAX_COMPLETION_TOKENS` with no effect on the cognify path, and the
+    /// cost showed up in production: a stochastic runaway generation (~4.5% of
+    /// Sonnet 4.5 extraction calls, see the truncation branch of
+    /// `structured_output_impl`) ran to 64000 output tokens on a 2303-token
+    /// chunk, with `LLM_MAX_COMPLETION_TOKENS=16384` configured, and was then
+    /// re-asked at the same 64000. In that run no well-formed answer out of
+    /// 26068 extraction calls exceeded 11170 output tokens. A runaway is now
+    /// cut at the ceiling, and the truncation re-ask that usually clears it is
+    /// 4x cheaper. An operator who needs the model's full output budget sets
+    /// `LLM_MAX_COMPLETION_TOKENS` to it (64000 for Sonnet 4.5); anything above
+    /// the model cap is clamped to it.
+    fn effective_max_tokens(&self, opts: &GenerationOptions) -> u32 {
+        let requested = opts.max_tokens.unwrap_or(self.max_completion_tokens);
+        requested.min(self.model_output_bound()).max(1)
+    }
+
+    /// The budget a truncation re-ask may raise to: the configured ceiling,
+    /// bounded by a listed model's cap. A request already at it has no larger
+    /// budget to move to.
+    ///
+    /// TRADE-OFF: the ceiling is a hard cap here. A re-ask never escalates
+    /// above `LLM_MAX_COMPLETION_TOKENS`, which #190 allowed (it re-asked up to
+    /// the model maximum). So a genuinely dense answer longer than the ceiling
+    /// now fails after its re-asks instead of growing to 64000. That is the
+    /// intended choice: unbounded re-asks turned one runaway into three
+    /// 64000-token calls, and the largest well-formed extraction answer in
+    /// 26068 production calls was 11170 tokens. For dense corpora, raise
+    /// `LLM_MAX_COMPLETION_TOKENS`. With `RollbackScope::FailedItems`, one such
+    /// failed chunk drops one document, not the run.
+    fn effective_output_cap(&self) -> u32 {
+        self.model_output_bound().max(1)
     }
 
     /// Build the Converse body shared by completion, structured output and the
@@ -595,7 +609,7 @@ impl BedrockAdapter {
         // no key.
         body["inferenceConfig"] = converse::inference_config(
             opts,
-            self.effective_max_tokens(opts),
+            Some(self.effective_max_tokens(opts)),
             self.default_temperature,
         );
         converse::merge_additional_model_request_fields(
@@ -959,13 +973,15 @@ impl BedrockAdapter {
 
             match self.call_converse_before(&body, call_deadline).await {
                 Ok(response) => {
-                    // Emitted at INFO so a single production run can tell the two
-                    // parity fixes apart. If output_tokens now sit near the
-                    // previously-expected ~5-6k, the runaway was driven by the
-                    // 0.1 temperature and dropping it is what mattered. If some
-                    // calls legitimately exceed 16384, the runaway is real and
-                    // omitting `maxTokens` is what saved them. Without this the
-                    // two are indistinguishable from a green run.
+                    // Emitted at INFO so a production run shows how close real
+                    // answers come to the budget. `budget` is always present: the
+                    // adapter always sends `maxTokens` (the configured ceiling when
+                    // the caller set none). This intentionally diverges from Python,
+                    // which sends no `maxTokens`. Answers that keep landing at
+                    // `truncated = true` with `output_tokens == budget` mean the
+                    // ceiling is too low for the corpus: raise
+                    // `LLM_MAX_COMPLETION_TOKENS`. Isolated ones are the stochastic
+                    // runaway the truncation branch below re-asks.
                     if let Some(usage) = response.usage.as_ref() {
                         info!(
                             attempt,
@@ -997,21 +1013,20 @@ impl BedrockAdapter {
                         // that happened to finish at the budget from one whose
                         // nested list/string was cut off. Re-asking with the SAME
                         // budget would truncate at the same point, so raise it
-                        // toward the effective output budget. That budget is the
-                        // model cap bounded by the configured
-                        // `llm_max_completion_tokens` ceiling, which is an upper
-                        // bound on every path — so when we are already at it,
-                        // fail terminally rather than loop until
-                        // MaxRetriesExceeded.
-                        let cap = self.effective_output_cap(&opts);
-                        // An ABSENT maxTokens means the model's own maximum was
-                        // already in force, so read `current` as that maximum
-                        // rather than 0 — otherwise a truncation at the model
-                        // ceiling would look like headroom and drive a pointless
-                        // re-ask at the very budget that just truncated.
+                        // toward the effective output cap: the configured
+                        // `llm_max_completion_tokens` ceiling, bounded by a listed
+                        // model's cap. It is a hard upper bound on every path; a
+                        // re-ask never escalates past it (see
+                        // `effective_output_cap` for the trade-off).
+                        let cap = self.effective_output_cap();
+                        // `base_request` always sends `maxTokens`, so it is
+                        // present here. Should it ever be missing, read it as
+                        // already AT the cap: never as headroom, and never as
+                        // the model maximum, which would let a re-ask escalate
+                        // past the configured ceiling.
                         let current = body["inferenceConfig"]["maxTokens"]
                             .as_u64()
-                            .map_or(self.caps.max_output_tokens, |v| v as u32);
+                            .map_or(cap, |v| u32::try_from(v).unwrap_or(u32::MAX));
                         truncation_retry = true;
                         // At the cap there is no larger budget to move to, but a
                         // re-ask is still worth an attempt, because this failure
@@ -1229,11 +1244,11 @@ impl Llm for BedrockAdapter {
         self.caps.max_input_tokens
     }
 
-    /// The configured ceiling clamped by the model's documented output cap —
-    /// the same `min` [`effective_max_tokens`](Self::effective_max_tokens)
-    /// applies per request.
+    /// The configured ceiling clamped by a listed model's documented output
+    /// cap — the same bound [`effective_max_tokens`](Self::effective_max_tokens)
+    /// applies per request. For an unlisted model, the ceiling alone.
     fn max_completion_tokens(&self) -> u32 {
-        self.max_completion_tokens.min(self.caps.max_output_tokens)
+        self.model_output_bound()
     }
 
     fn supports_vision(&self) -> bool {
@@ -1296,7 +1311,7 @@ impl Llm for BedrockAdapter {
             .as_ref()
             .and_then(|o| o.max_tokens)
             .unwrap_or(300)
-            .min(self.caps.max_output_tokens.min(self.max_completion_tokens))
+            .min(self.model_output_bound())
             .max(1);
 
         // Built directly rather than via `base_request`, so `LLM_ARGS` do not
@@ -1349,33 +1364,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_absent_caller_budget_sends_no_max_tokens() {
-        // The whole point of the fix: no caller budget => no `maxTokens` on the
-        // wire => Bedrock applies the model maximum, exactly as the Python
-        // engine gets (its body carries a literal `"inferenceConfig": {}`).
-        // Previously this substituted the 16384 ceiling and truncated real
-        // extractions a quarter of the way into Sonnet 4.5's 64000.
-        for model in [
-            "eu.amazon.nova-lite-v1:0",
-            "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ] {
-            let a = adapter(model).await;
-            assert_eq!(
-                a.effective_max_tokens(&GenerationOptions::default()),
-                None,
-                "{model}: an unset budget must be omitted, not substituted",
-            );
-        }
-        // A configured ceiling does NOT resurrect a budget the caller declined
-        // to set — matching Python, where llm_max_completion_tokens only ever
-        // sizes input chunks and never reaches the Converse request.
+    async fn an_absent_caller_budget_sends_the_configured_ceiling() {
+        // `LLM_MAX_COMPLETION_TOKENS` bounds a call that passes no budget of
+        // its own — cognify's graph extraction passes `max_tokens: None`. A
+        // production run with the ceiling at 16384 still let a runaway
+        // extraction emit 64000 tokens because `None` used to omit `maxTokens`.
+        let sonnet = adapter("eu.anthropic.claude-sonnet-4-5-20250929-v1:0").await;
+        assert_eq!(
+            sonnet.effective_max_tokens(&GenerationOptions::default()),
+            BedrockAdapter::DEFAULT_MAX_COMPLETION_TOKENS,
+            "the default ceiling applies when the caller sets no budget",
+        );
         let capped = adapter("eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
             .await
-            .with_max_completion_tokens(2_000);
+            .with_max_completion_tokens(16_384);
         assert_eq!(
             capped.effective_max_tokens(&GenerationOptions::default()),
-            None
+            16_384
         );
+        // Still clamped by the model cap: nova-lite answers at most 10000.
+        let nova = adapter("eu.amazon.nova-lite-v1:0").await;
+        assert_eq!(
+            nova.effective_max_tokens(&GenerationOptions::default()),
+            10_000,
+        );
+        // An operator who wants the model's full budget raises the ceiling;
+        // anything past the model cap is clamped to it.
+        let full = adapter("eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+            .await
+            .with_max_completion_tokens(1_000_000);
+        assert_eq!(
+            full.effective_max_tokens(&GenerationOptions::default()),
+            64_000
+        );
+        assert_eq!(full.effective_output_cap(), 64_000);
+        assert_eq!(capped.effective_output_cap(), 16_384);
+        // And the body actually carries it, on the plain-completion path too.
+        let body = capped.base_request(&[Message::user("hi")], &GenerationOptions::default());
+        assert_eq!(body["inferenceConfig"]["maxTokens"], 16_384);
     }
 
     #[tokio::test]
@@ -1388,7 +1414,7 @@ mod tests {
                 max_tokens: Some(50_000),
                 ..Default::default()
             }),
-            Some(10_000),
+            10_000,
             "clamped to the nova-lite model cap",
         );
         let capped = adapter("eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
@@ -1399,7 +1425,7 @@ mod tests {
                 max_tokens: Some(9_000),
                 ..Default::default()
             }),
-            Some(2_000),
+            2_000,
             "clamped to the configured ceiling",
         );
         let zeroed = adapter("eu.amazon.nova-lite-v1:0")
@@ -1410,9 +1436,64 @@ mod tests {
                 max_tokens: Some(500),
                 ..Default::default()
             }),
-            Some(1),
+            1,
             "a zero ceiling must not 400 every request",
         );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_model_sends_the_ceiling_not_the_fallback_cap() {
+        // An unlisted model gets UNKNOWN_MODEL_CAPS (max_output_tokens 4096).
+        // That guess must not clamp a no-budget call: cognify extraction would
+        // be silently cut to 4096 tokens. The ceiling is the effective cap.
+        let model = "converse/acme.some-future-model-v9:0";
+        let unknown = adapter(model).await.with_max_completion_tokens(16_384);
+        assert_eq!(
+            unknown.caps(),
+            caps::UNKNOWN_MODEL_CAPS,
+            "{model} must be unlisted"
+        );
+        assert_eq!(unknown.listed_output_cap, None);
+        assert_eq!(
+            unknown.effective_max_tokens(&GenerationOptions::default()),
+            16_384,
+            "no budget: the configured ceiling, not the 4096 fallback",
+        );
+        assert_eq!(unknown.effective_output_cap(), 16_384);
+        assert_eq!(Llm::max_completion_tokens(&unknown), 16_384);
+        let body = unknown.base_request(&[Message::user("hi")], &GenerationOptions::default());
+        assert_eq!(body["inferenceConfig"]["maxTokens"], 16_384);
+        // A caller budget still applies, bounded by the ceiling.
+        assert_eq!(
+            unknown.effective_max_tokens(&GenerationOptions {
+                max_tokens: Some(6_000),
+                ..Default::default()
+            }),
+            6_000,
+        );
+        assert_eq!(
+            unknown.effective_max_tokens(&GenerationOptions {
+                max_tokens: Some(50_000),
+                ..Default::default()
+            }),
+            16_384,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_listed_model_below_the_ceiling_is_still_clamped_to_its_cap() {
+        // Claude 3 Haiku is listed with a 4096 output cap. Unlike the unlisted
+        // fallback, that cap is documented, so it still bounds the request.
+        let haiku = adapter("anthropic.claude-3-haiku-20240307-v1:0")
+            .await
+            .with_max_completion_tokens(16_384);
+        assert_eq!(haiku.listed_output_cap, Some(4_096));
+        assert_eq!(
+            haiku.effective_max_tokens(&GenerationOptions::default()),
+            4_096
+        );
+        assert_eq!(haiku.effective_output_cap(), 4_096);
+        assert_eq!(Llm::max_completion_tokens(&haiku), 4_096);
     }
 
     #[tokio::test]

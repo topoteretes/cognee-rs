@@ -32,6 +32,8 @@ pub mod memify;
 pub mod pipeline;
 /// Run-orchestration policy: what a finished run sweeps, marks and records.
 pub mod rollback;
+/// Cognify routing policy: which task route a data item takes.
+pub mod routing;
 /// Summarization module.
 pub mod summarization;
 /// Pipeline tasks module.
@@ -82,6 +84,7 @@ pub use memify::{
     distill_sessions_in_knowledge_graph, persist_sessions_in_knowledge_graph,
     render_lesson_document,
 };
+pub use routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 
 /// Re-export of the truth-subspace default slot capacity so callers (e.g.
 /// `crates/lib`'s `improve()` Stage 2d) can pass it without depending on

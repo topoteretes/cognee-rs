@@ -30,6 +30,7 @@ members = [
     "crates/truth-subspace",
     "crates/test-utils",
     "crates/visualization",
+    "crates/code-graph",
     "crates/migration",
     "crates/observability",
     "crates/telemetry",
@@ -199,7 +200,16 @@ tiktoken-rs = "0.6"
 # Cost is `indexmap` plus a little memory per map. Nothing here is `no_std`
 # (zero `#![no_std]` crates in the workspace), so the `std` requirement it pulls
 # in costs us nothing.
-serde_json = { version = "1", features = ["preserve_order"] }
+#
+# `float_roundtrip` is enabled workspace-wide for the same reason: without it
+# serde_json's fast float parser can land one ULP off for a 17-significant-
+# digit literal, where Python's `json.loads` (and Rust's `str::parse`) give the
+# correctly rounded double. cognee-code-graph hashes parsed enola facts into
+# `fact_hash`, which must equal Python's byte for byte. A per-crate opt-in
+# would not be one: cognee-code-graph is linked into every cognee build, so
+# feature unification would turn it on everywhere anyway. It changes no
+# output formatting, only makes parsing exact, at a small parse-speed cost.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 tempfile = "3"
 texting_robots = "0.2"
 tokenizers = "0.21"

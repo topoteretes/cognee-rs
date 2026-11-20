@@ -27,6 +27,9 @@ cognee-vector = { path = "../vector", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }
 md-5.workspace = true
 sha2.workspace = true
+# `code_repo`: the repo manifest hash and the Git LFS pointer match.
+hex.workspace = true
+regex.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 mime_guess.workspace = true

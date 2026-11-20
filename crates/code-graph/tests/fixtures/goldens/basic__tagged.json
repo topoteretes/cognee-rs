@@ -1,0 +1,895 @@
+{
+  "edges": [
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+        "target_node_id": "24f82656-e63e-5d85-a340-c5cb07380d90"
+      },
+      "relationship_name": "declares",
+      "source": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+      "target": "24f82656-e63e-5d85-a340-c5cb07380d90"
+    },
+    {
+      "properties": {
+        "edge_text": "imports",
+        "relationship_name": "imports",
+        "source_node_id": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+        "target_node_id": "028b4726-d8c7-5192-9ba6-54d4608471fe"
+      },
+      "relationship_name": "imports",
+      "source": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+      "target": "028b4726-d8c7-5192-9ba6-54d4608471fe"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "24f82656-e63e-5d85-a340-c5cb07380d90",
+        "target_node_id": "69e64d4b-482a-5050-a3d0-facc5d0f6113"
+      },
+      "relationship_name": "calls",
+      "source": "24f82656-e63e-5d85-a340-c5cb07380d90",
+      "target": "69e64d4b-482a-5050-a3d0-facc5d0f6113"
+    },
+    {
+      "properties": {
+        "edge_text": "instantiates",
+        "relationship_name": "instantiates",
+        "source_node_id": "24f82656-e63e-5d85-a340-c5cb07380d90",
+        "target_node_id": "7551d254-2c54-5e48-81af-05dd2c7b9736"
+      },
+      "relationship_name": "instantiates",
+      "source": "24f82656-e63e-5d85-a340-c5cb07380d90",
+      "target": "7551d254-2c54-5e48-81af-05dd2c7b9736"
+    },
+    {
+      "properties": {
+        "edge_text": "has method",
+        "relationship_name": "has_method",
+        "source_node_id": "7551d254-2c54-5e48-81af-05dd2c7b9736",
+        "target_node_id": "fca77ad7-2a77-5821-b86f-4a743a24913a"
+      },
+      "relationship_name": "has_method",
+      "source": "7551d254-2c54-5e48-81af-05dd2c7b9736",
+      "target": "fca77ad7-2a77-5821-b86f-4a743a24913a"
+    },
+    {
+      "properties": {
+        "edge_text": "implements",
+        "relationship_name": "implements",
+        "source_node_id": "41724f17-d469-5fa3-94b1-301086e27e70",
+        "target_node_id": "e305f34e-8845-5492-a282-e0043475d748"
+      },
+      "relationship_name": "implements",
+      "source": "41724f17-d469-5fa3-94b1-301086e27e70",
+      "target": "e305f34e-8845-5492-a282-e0043475d748"
+    },
+    {
+      "properties": {
+        "edge_text": "handled by",
+        "relationship_name": "handled_by",
+        "source_node_id": "b328f929-9450-57d5-8619-35d17dfde8ab",
+        "target_node_id": "69e64d4b-482a-5050-a3d0-facc5d0f6113"
+      },
+      "relationship_name": "handled_by",
+      "source": "b328f929-9450-57d5-8619-35d17dfde8ab",
+      "target": "69e64d4b-482a-5050-a3d0-facc5d0f6113"
+    },
+    {
+      "properties": {
+        "edge_text": "depends on",
+        "relationship_name": "depends_on",
+        "source_node_id": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+        "target_node_id": "5aba3209-369b-52c7-b97f-7eb59e3ea69b"
+      },
+      "relationship_name": "depends_on",
+      "source": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+      "target": "5aba3209-369b-52c7-b97f-7eb59e3ea69b"
+    },
+    {
+      "properties": {
+        "edge_text": "injects",
+        "relationship_name": "injects",
+        "source_node_id": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+        "target_node_id": "41724f17-d469-5fa3-94b1-301086e27e70"
+      },
+      "relationship_name": "injects",
+      "source": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+      "target": "41724f17-d469-5fa3-94b1-301086e27e70"
+    }
+  ],
+  "facts": [
+    {
+      "file": "app/main.go",
+      "kind": "module",
+      "line": 1,
+      "name": "app",
+      "props": {
+        "language": "go"
+      },
+      "relations": [
+        {
+          "target": "main",
+          "type": "declares"
+        },
+        {
+          "kind": "imports",
+          "to": "utils"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "utils/utils.go",
+      "kind": "module",
+      "line": 1,
+      "name": "utils",
+      "props": {
+        "language": "go"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/main.go",
+      "kind": "symbol",
+      "line": 12,
+      "name": "main",
+      "props": {
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "rel": "calls",
+          "target_name": "helper"
+        },
+        {
+          "target": "Config",
+          "type": "instantiates"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "utils/utils.go",
+      "kind": "symbol",
+      "line": 8,
+      "name": "helper",
+      "props": {
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "target": "ghost_function",
+          "type": "calls"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/config.go",
+      "kind": "symbol",
+      "line": 5,
+      "name": "Config",
+      "props": {
+        "symbol_kind": "struct"
+      },
+      "relations": [
+        {
+          "target": "Load",
+          "type": "has_method"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/config.go",
+      "kind": "symbol",
+      "line": 21,
+      "name": "Load",
+      "props": {
+        "symbol_kind": "method"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "store/store.go",
+      "kind": "symbol",
+      "line": 4,
+      "name": "Storer",
+      "props": {
+        "symbol_kind": "interface"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "store/postgres.go",
+      "kind": "symbol",
+      "line": 10,
+      "name": "PostgresStore",
+      "props": {
+        "symbol_kind": "class"
+      },
+      "relations": [
+        {
+          "target": "Storer",
+          "type": "implements"
+        },
+        {
+          "foo": "bar"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/config.go",
+      "kind": "symbol",
+      "line": 3,
+      "name": "MAX_RETRIES",
+      "props": {
+        "symbol_kind": "constant"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/config.go",
+      "kind": "symbol",
+      "line": 4,
+      "name": "log_level",
+      "props": {
+        "symbol_kind": "variable"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/theme.go",
+      "kind": "symbol",
+      "line": 2,
+      "name": "Color",
+      "props": {
+        "symbol_kind": "enum"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/types.go",
+      "kind": "symbol",
+      "line": 6,
+      "name": "OrderID",
+      "props": {
+        "symbol_kind": "type"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/routes.go",
+      "kind": "route",
+      "line": 14,
+      "name": "GET /orders",
+      "props": {
+        "method": "GET",
+        "path": "/orders"
+      },
+      "relations": [
+        {
+          "target": "helper",
+          "type": "handled_by"
+        }
+      ],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "store/postgres.go",
+      "kind": "storage",
+      "line": 30,
+      "name": "orders_table",
+      "props": {
+        "storage_type": "postgres_table"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "kind": "dependency",
+      "name": "github.com/lib/pq",
+      "props": {
+        "version": "v1.10.9"
+      },
+      "relations": [],
+      "repo": "acme/shop"
+    },
+    {
+      "file": "app/main.go",
+      "kind": "service",
+      "line": 1,
+      "name": "shop-api",
+      "props": {
+        "port": 8080
+      },
+      "relations": [
+        {
+          "target": "github.com/lib/pq",
+          "type": "depends_on"
+        },
+        {
+          "target": "PostgresStore",
+          "type": "injects"
+        }
+      ],
+      "repo": "acme/shop"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "0178fe51-7409-5533-9357-8bb4bd0412d5",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=type",
+        "fact_hash": "sha256:2e0c22a61fdd254379c17b7a5fc37f4cc1f372a1937ce6f0addd5e3117ff4bbc",
+        "fact_properties": {
+          "symbol_kind": "type"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/types.go",
+        "id": "0178fe51-7409-5533-9357-8bb4bd0412d5",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 6,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "OrderID",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "type",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "028b4726-d8c7-5192-9ba6-54d4608471fe",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=go",
+        "fact_hash": "sha256:a5870cf816dd7edbe59c0779839f30e32c539cd2f1f05ec61bfbba8de754d71b",
+        "fact_properties": {
+          "language": "go"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "utils/utils.go",
+        "id": "028b4726-d8c7-5192-9ba6-54d4608471fe",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "utils",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=go",
+        "fact_hash": "sha256:846f8ecf628ea97e239e5f968b9fa461749eb604e2f5c3afc3b0ea65172cf321",
+        "fact_properties": {
+          "language": "go"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/main.go",
+        "id": "0fab59bb-20ae-5f83-94a0-ec1d5821cd73",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "app",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "1a0d59f0-c6f4-564e-b8d7-19f1af50157c",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "storage: storage_type=postgres_table",
+        "fact_hash": "sha256:f57d173a375deffb9ae0ccf6150119520c10953d0c036a130b9f73d65d54d722",
+        "fact_properties": {
+          "storage_type": "postgres_table"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "store/postgres.go",
+        "id": "1a0d59f0-c6f4-564e-b8d7-19f1af50157c",
+        "importance_weight": 0.5,
+        "kind": "storage",
+        "line": 30,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "orders_table",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "StorageResource",
+        "version": 1
+      },
+      "type": "StorageResource"
+    },
+    {
+      "id": "1c36e207-88c1-5c06-9fb0-d03fba1ae9f1",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=variable",
+        "fact_hash": "sha256:7dccf72886bfe5f671edc7a99385d4bfded78f1a1b494fea07e264838721c04e",
+        "fact_properties": {
+          "symbol_kind": "variable"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/config.go",
+        "id": "1c36e207-88c1-5c06-9fb0-d03fba1ae9f1",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 4,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "log_level",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "variable",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "24f82656-e63e-5d85-a340-c5cb07380d90",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=function",
+        "fact_hash": "sha256:e01a60253a9410362e1eb18446f35e1e2ec16f39f101d2ac58d348abde5ee93d",
+        "fact_properties": {
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/main.go",
+        "id": "24f82656-e63e-5d85-a340-c5cb07380d90",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 12,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "main",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "41724f17-d469-5fa3-94b1-301086e27e70",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=class",
+        "fact_hash": "sha256:fabf132ff5fa4dd3f7701765e9f22733c4f4fd6238de88fc9a8a00ba3681984a",
+        "fact_properties": {
+          "symbol_kind": "class"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "store/postgres.go",
+        "id": "41724f17-d469-5fa3-94b1-301086e27e70",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 10,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "PostgresStore",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "class",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "5aba3209-369b-52c7-b97f-7eb59e3ea69b",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "dependency: version=v1.10.9",
+        "fact_hash": "sha256:65e29d2617c9dcacb5b5d28ced15e33f8e1f483fe257a567e972c77c28758052",
+        "fact_properties": {
+          "version": "v1.10.9"
+        },
+        "feedback_weight": 0.5,
+        "id": "5aba3209-369b-52c7-b97f-7eb59e3ea69b",
+        "importance_weight": 0.5,
+        "kind": "dependency",
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "github.com/lib/pq",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "ExternalDependency",
+        "version": 1
+      },
+      "type": "ExternalDependency"
+    },
+    {
+      "id": "621cfd1c-921f-53b3-af28-9d7c496dc4a8",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=constant",
+        "fact_hash": "sha256:da0c5b536dbb8e1f8d1476e79da599346fe96354bbb230a318ac7a65aae9d6b1",
+        "fact_properties": {
+          "symbol_kind": "constant"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/config.go",
+        "id": "621cfd1c-921f-53b3-af28-9d7c496dc4a8",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 3,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "MAX_RETRIES",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "constant",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "69e64d4b-482a-5050-a3d0-facc5d0f6113",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=function",
+        "fact_hash": "sha256:47f0f51f205fbdd018776be678ed215eff86460069ff9389e4df7b121a5072ea",
+        "fact_properties": {
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "utils/utils.go",
+        "id": "69e64d4b-482a-5050-a3d0-facc5d0f6113",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 8,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "helper",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "7551d254-2c54-5e48-81af-05dd2c7b9736",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=struct",
+        "fact_hash": "sha256:03a1a174cbbed49ed6cdcf7ad1c81b87065239869cd926504bc2840228cac6ab",
+        "fact_properties": {
+          "symbol_kind": "struct"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/config.go",
+        "id": "7551d254-2c54-5e48-81af-05dd2c7b9736",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Config",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "struct",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "feedback_weight": 0.5,
+        "id": "8b166c03-b383-50d2-a2f1-25e80fdb6b0a",
+        "importance_weight": 0.5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "acme/shop",
+        "ontology_valid": false,
+        "path": "/tmp/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeRepository",
+        "version": 1
+      },
+      "type": "CodeRepository"
+    },
+    {
+      "id": "b328f929-9450-57d5-8619-35d17dfde8ab",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "route: method=GET, path=/orders",
+        "fact_hash": "sha256:b98fa68bd9ba58e554a300798e5956117c03e0997ada5a7b412d5e34a17ca541",
+        "fact_properties": {
+          "method": "GET",
+          "path": "/orders"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/routes.go",
+        "id": "b328f929-9450-57d5-8619-35d17dfde8ab",
+        "importance_weight": 0.5,
+        "kind": "route",
+        "line": 14,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "GET /orders",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "ApiEndpoint",
+        "version": 1
+      },
+      "type": "ApiEndpoint"
+    },
+    {
+      "id": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "service: port=8080",
+        "fact_hash": "sha256:9e2a4ba05d2ca5660b00e2c09752c60a7e60f20da92df7af2d59a9a8f897da01",
+        "fact_properties": {
+          "port": 8080
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/main.go",
+        "id": "ced0dedf-063f-5e6d-80a2-2049c1f80c8d",
+        "importance_weight": 0.5,
+        "kind": "service",
+        "line": 1,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "shop-api",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeService",
+        "version": 1
+      },
+      "type": "CodeService"
+    },
+    {
+      "id": "d5681970-fab1-5446-8378-69516e0e0745",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=enum",
+        "fact_hash": "sha256:6c96325dd450eafd8ed5d08541e0ce769b36371ded9bd208399b8143d8cc80bc",
+        "fact_properties": {
+          "symbol_kind": "enum"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/theme.go",
+        "id": "d5681970-fab1-5446-8378-69516e0e0745",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 2,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Color",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "enum",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "e305f34e-8845-5492-a282-e0043475d748",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=interface",
+        "fact_hash": "sha256:214808cb420bb6cbc9e9516eadcbb2deaee06ee4aeceacd2c68e4f3d80a3dd6f",
+        "fact_properties": {
+          "symbol_kind": "interface"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "store/store.go",
+        "id": "e305f34e-8845-5492-a282-e0043475d748",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 4,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Storer",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "interface",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "fca77ad7-2a77-5821-b86f-4a743a24913a",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: symbol_kind=method",
+        "fact_hash": "sha256:7e1685b30578c48bc4e3bb153231f8870a64b0c57fc5565b8673a806bc0e6876",
+        "fact_properties": {
+          "symbol_kind": "method"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app/config.go",
+        "id": "fca77ad7-2a77-5821-b86f-4a743a24913a",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 21,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "Load",
+        "ontology_valid": false,
+        "repo": "acme/shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "method",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    }
+  ],
+  "skipped": 2
+}

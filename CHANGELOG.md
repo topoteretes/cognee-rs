@@ -18,6 +18,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Data.system_metadata` and the cognify route policy (SDK-1053).** The
+  `data` table gains Python's nullable `system_metadata` JSON column
+  (migration `m20261118_000001_data_system_metadata`, Python alembic
+  `f2b4c6d8e0a1`; skipped when Python added it first). It is the cognee-owned
+  route stamp of a row and is never merged with the user's
+  `external_metadata`. `DataInput::DataItem` gains `system_metadata`, which
+  ingestion writes to the column; like Python's `dict | None` it must be a
+  JSON object (`null` is no stamp), anything else fails the add with
+  `IngestionError::InvalidSystemMetadata`. On a re-add it follows the content
+  as in Python (an item's own stamp replaces the stored one; without one the
+  column is not written unless the content changed, which clears it).
+  `DataRowRefresh::system_metadata` is a patch: `None` leaves the column
+  untouched. `cognee_cognify::routing` ports
+  Python's `CognifyRoute` / `cognify_route_for`: `code` → `Code`,
+  `code_repo` → `CodeRepo`, `dlt_source` → `DltSource`, anything else →
+  `Standard`, and a legacy per-row `dlt` stamp is refused with Python's
+  message. Nothing routes on it yet. Unlike Python's revision the migration
+  does not move DLT stamps out of `external_metadata`: Rust's DLT route still
+  reads them there; Python's revision still moves them on a shared SQLite
+  file whoever added the column, so such rows lose their
+  `external_metadata` stamp once Python upgrades it. **[BREAKING]** for code
+  that builds `Data`,
+  `DataInput::DataItem` or `DataRowRefresh` with a struct literal: each gains
+  a `system_metadata` field.
+
+- **`cognee-code-graph`: the deterministic enola code graph (SDK-1053).** A
+  new crate ports Python's `cognee/tasks/code_graph` mapping at parity pin
+  `a59433e6b` (enola 0.5.1). It reads an enola snapshot directory
+  (`parse_enola_snapshot`: `facts.jsonl`, `insights.json` findings, and
+  `flows.json` when `receipt.json` vouches for it; `validate_receipt` rejects
+  an unknown artifact format), maps the facts onto the 15 code node types
+  (`map_facts_to_data_points`) and resolves their relations into typed edges
+  (`build_code_graph_edges`). Node ids (`fact_node_id`), `fact_hash` values,
+  properties and edges match Python byte for byte, checked by goldens Python
+  produced. It is the pure half: it runs no subprocess and writes no graph.
+  serde_json's `float_roundtrip` is now enabled workspace-wide so a
+  17-digit float parses to the same double as Python's `json.loads`.
+
+- **enola runner, code graph writer and `code_graph.*` config (SDK-1053).**
+  `cognee-code-graph` gains the runner and writer halves of Python's
+  `cognee/tasks/code_graph`. `run_enola_generate` runs `enola --generate
+  <repo>` as a subprocess (repository as cwd, update check and prompts off,
+  a timeout, Python's not-installed and snapshot error messages).
+  `add_code_graph_data_points` / `add_code_graph_edges` write the graph as a
+  delta against what is stored (by `fact_hash` and edge key), record
+  provenance ledger rows under the owning `Data` row and stamp the
+  `CodeRepository` node last. `extract_code_graph` / `load_code_graph` run
+  the whole sequence for one local repository. New config section
+  `code_graph`: `code_graph.enola_path` (env alias `ENOLA_PATH`; unset means
+  `enola` is looked up on `PATH`) and `code_graph.enola_timeout_secs`
+  (default `600`), readable as `Settings::code_graph()`. Nothing calls it
+  from cognify yet.
+
 - **`cleanup_unused_data` (SDK-1048).** `cognee::api::cleanup_unused_data`
   ports Python's `cognee/tasks/cleanup/cleanup_unused_data.py`: it finds the
   documents not accessed for `minutes_threshold` minutes, or never, and —
@@ -82,6 +135,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well, cognifying the caller's other datasets and the named ones twice. Both
   functions now also run a dataset reached more than once (by name and by id,
   or by a repeated ref) only once, returning one result for it.
+
+- **Bedrock: `LLM_MAX_COMPLETION_TOKENS` bounds calls that pass no budget
+  again.** A call without a budget of its own — cognify's graph extraction
+  passes `max_tokens: None` — now sends `inferenceConfig.maxTokens =
+  min(llm_max_completion_tokens, model cap)` instead of omitting it, as the
+  Anthropic and OpenAI-compatible adapters already do. This reverses the
+  "absent caller budget sends no `maxTokens`" entry below. Omitting it let a
+  stochastic runaway extraction run to the model maximum (64000 output tokens
+  for Claude Sonnet 4.5) with `LLM_MAX_COMPLETION_TOKENS=16384` configured,
+  and the truncation re-ask paid that again; in the same production run no
+  well-formed extraction out of 26068 exceeded 11170 output tokens.
+  **Behaviour change:** with the default ceiling (16384) Bedrock extraction is
+  now capped at 16384 output tokens. To keep the model's full output budget, set
+  `LLM_MAX_COMPLETION_TOKENS` to it (64000 for Sonnet 4.5); values above the
+  model cap are clamped to it. This intentionally diverges from Python, which
+  sends no `maxTokens`.
+  The truncation re-ask never raises the budget above the ceiling either (#190
+  re-asked up to the model maximum). A dense answer longer than the ceiling
+  now fails after its re-asks, so raise `LLM_MAX_COMPLETION_TOKENS` for dense
+  corpora; with `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items` one such chunk
+  drops one document, not the run.
+  A model missing from the Bedrock caps table is bounded by the ceiling alone,
+  not by the table's 4096-token fallback guess, and the adapter logs a warning
+  at construction.
 
 - **Storing an agent trace step now extracts agent context, as Python
   (SDK-1048).** While `auto_feedback` is on, `add_agent_trace_step` runs
@@ -182,6 +259,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_persist_data_task` and `make_persist_data_task_with_acl` take the
   storage as their second argument (first for the task builders), and
   `IngestDb` gains the required `count_data_location_references`.
+
+- **Code repository re-adds, LLM errors and extractor checks (SDK-1053
+  review of #466).**
+  - The code repo manifest's data id is pinned to `(user, dataset, repo
+    path)`, Python's `get_unique_data_id("code_repo:{repo_path}", user,
+    dataset_id)`: re-adding a repository refreshes its one row instead of
+    adding a row per version. A changed repository's row takes the new
+    content and loses its cognify marker, so the next cognify reloads its
+    code graph; an unchanged re-add keeps the marker. `addAndCognify` in the
+    bindings now also cognifies such a refreshed duplicate (any duplicate
+    with no `pipeline_status`).
+  - `cognee add` (CLI) fails when the LLM configuration cannot be resolved
+    (for example a misspelled `LLM_PROVIDER`), as `add-and-cognify` and the
+    bindings do, instead of treating it as "no LLM" and dropping a code
+    project's documents.
+  - A cognify whose items all take a code route (no extractor needed) now
+    validates a `graphBackend` or non-blank `extractor` the caller passes
+    (shape, and registered); the configured default is still not checked,
+    so keyless code-only cognify keeps working. New
+    `graph_backend::check_explicit_graph_backend`.
+  - `add(<project dir>)` no longer walks hidden or `SKIP_DIRS` directories:
+    `RepoPartition::skipped` lists such a directory once instead of every
+    file under it. An unreadable subdirectory or file, or one that vanishes
+    mid-walk, is skipped with a warning (Python's `rglob` skips what it
+    cannot list) instead of failing the add.
+  - Code graph loads ledger every node and edge of the snapshot under the
+    loading `Data` row (idempotent upserts), not only what they wrote, so
+    deleting another row that loaded the same repository keeps the nodes
+    this one still needs. They read only the snapshot's own nodes and
+    candidate edges (`get_nodes` / `has_edges`) instead of the whole graph,
+    run parsing, mapping and edge resolution in `spawn_blocking`, serialise
+    concurrent loads of one repository in the process (cross-process
+    locking is not done), and resolve a relative `code_graph.enola_path`
+    against the process's working directory.
+  API: `CodeGraphLoadState::existing_edge_keys` is replaced by
+  `added_edge_keys` and `existing_nodes` now holds only the snapshot's
+  nodes; `ParsedSnapshot` gains the public fields `facts_digest` and `edges`
+  (struct literals need them) and `ParsedSnapshot::identity`;
+  `find_enola_binary` returns an absolute path for a relative setting. New:
+  `cognee_models::code_repo::{SOURCE_CODE_REPO, CODE_REPO_MANIFEST_KIND}`
+  (the previous paths re-export them), `cognee_ingestion::generate_unique_data_id`,
+  `code_repo::{code_repo_data_id, code_repo_stamp_path}`, and
+  `cognee::add::{code_repo, generate_unique_data_id}`.
+
+- **`add(<directory>)` and the CODE_REPO cognify route (SDK-1053).** A
+  `DataInput::FilePath` naming a directory is now expanded on `add` instead
+  of failing: a code project (Python's `detect_code_project`) becomes one
+  repo manifest item stamped `system_metadata.source = "code_repo"` plus its
+  documents, any other directory is flattened into its files. cognify runs a
+  repo item down the deterministic code graph (`cognee-code-graph`'s
+  `extract_code_repo_graph`, no LLM, no embedding) in the same run as the
+  standard items; a repo item that fails to load is a per-item failure
+  under the failure policy (`FailureStage::CodeGraph`), and one that loaded
+  counts as a survivor. A per-file code item, a DLT source stamped in
+  `system_metadata` and a legacy `dlt` row fail the whole run. Without an
+  LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
+  CLI) a code project's documents are left out at add and the repo item
+  cognifies keyless. The manifest's data id is pinned to (user, dataset,
+  repo path) as in Python, so a re-add updates one record (see the next
+  entry).
+  API: `CognifyConfig.code_graph` is a new public field (struct literals
+  need it; `..CognifyConfig::default()` covers it); new variants on enums
+  that are not `#[non_exhaustive]`: `CognifyError::{Route, CodeGraph}`,
+  `CodeGraphError::InvalidRepoItem`,
+  `CognifyRouteError::{UnsupportedRoute, InvalidNodeSet}` and
+  `FailureStage::CodeGraph`; new `AddPipeline::with_llm_available`,
+  `routing::routes_need_llm`, `tasks::run_code_routes` /
+  `make_code_routes_task` / `RoutedCognifyInput` /
+  `make_classify_routed_documents_task`, and
+  `FailureReport::{note_routed_items, routed_items}`.
 
 - **`token_count` is `null` until cognify runs, in every binding (SDK-951).**
   The data rows returned by `add`, `addAndCognify` and `listData` used to

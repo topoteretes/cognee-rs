@@ -555,6 +555,8 @@ impl Settings {
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
+        // The CODE_REPO route runs enola with the `code_graph.*` section.
+        cfg = cfg.with_code_graph(self.code_graph());
         if let Some(schema) = &self.summarization_schema {
             // Validated when it was set; checked again because a bulk-loaded
             // config could still carry one that fails.
@@ -758,6 +760,12 @@ impl Settings {
     /// The graph-extraction kind section (`graph_extraction.*`): the default
     /// extractor backend.
     pub fn graph_extraction(&self) -> cognee_components::GraphExtractionConfig {
+        self.section()
+    }
+
+    /// The code graph engine section (`code_graph.*`): the enola binary and
+    /// how long one run may take.
+    pub fn code_graph(&self) -> cognee_components::CodeGraphConfig {
         self.section()
     }
 

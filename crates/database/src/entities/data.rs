@@ -23,6 +23,9 @@ pub struct Model {
     pub raw_content_hash: Option<String>,
     pub tenant_id: Option<String>,
     pub external_metadata: Option<String>,
+    /// Cognee-owned JSON route stamp (Python `Data.system_metadata`), added by
+    /// `m20261118_000001_data_system_metadata`.
+    pub system_metadata: Option<String>,
     pub node_set: Option<String>,
     pub pipeline_status: Option<String>,
     pub token_count: i64,

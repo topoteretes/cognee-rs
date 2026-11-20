@@ -83,11 +83,11 @@ async fn a_truncated_native_answer_is_reported_as_truncation_not_as_unparseable_
         .mock_async(|when, then| {
             when.method(POST)
                 .path(converse_path(SONNET))
-                // No caller budget => no `maxTokens` on the wire; Bedrock
-                // applies the model maximum (64000 for Sonnet 4.5). A
-                // truncation there is terminal because there is nothing above
-                // the model's own ceiling to raise into.
-                .body_excludes(r#""maxTokens""#);
+                // No caller budget => the configured ceiling goes on the
+                // wire (`LLM_MAX_COMPLETION_TOKENS`, default 16384, under
+                // Sonnet 4.5's 64000 cap). That is already the effective cap,
+                // so there is nothing above it to raise into.
+                .body_includes(r#""maxTokens":16384"#);
             then.status(200)
                 .header("content-type", "application/json")
                 // Cut off mid-value: exactly what a real `maxTokens` stop emits,
@@ -137,11 +137,11 @@ async fn a_blank_truncated_native_answer_is_reported_as_truncation() {
         .mock_async(|when, then| {
             when.method(POST)
                 .path(converse_path(SONNET))
-                // No caller budget => no `maxTokens` on the wire; Bedrock
-                // applies the model maximum (64000 for Sonnet 4.5). A
-                // truncation there is terminal because there is nothing above
-                // the model's own ceiling to raise into.
-                .body_excludes(r#""maxTokens""#);
+                // No caller budget => the configured ceiling goes on the
+                // wire (`LLM_MAX_COMPLETION_TOKENS`, default 16384, under
+                // Sonnet 4.5's 64000 cap). That is already the effective cap,
+                // so there is nothing above it to raise into.
+                .body_includes(r#""maxTokens":16384"#);
             then.status(200)
                 .header("content-type", "application/json")
                 .body(

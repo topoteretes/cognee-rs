@@ -1673,6 +1673,31 @@ key is logged as a warning — Python forwards unknown `cognify()`
 keywords into the LLM call instead of raising. See
 [the custom graph schema guide](guides/custom-graph-schema.md).
 
+## Code graph
+
+The `code_graph` section is an engine section, registered with the kind
+sections. It configures the deterministic code graph (`cognee-code-graph`),
+which runs the external [enola](https://github.com/enola-labs/enola) binary on
+a repository and loads its snapshot as code nodes and typed edges.
+
+| Env var | Key (alias) | Default |
+|---|---|---|
+| `ENOLA_PATH` | `code_graph.enola_path` (`enola_path`) | _(empty)_ |
+| — | `code_graph.enola_timeout_secs` | `600` |
+
+`code_graph.enola_path` names the enola binary. When it is set, the file must
+exist, or the load fails with `EnolaNotInstalledError`. When it is empty,
+`enola` is looked up on `PATH` when the process starts, and a missing binary
+fails the same way. Python also looks in its own environment's scripts
+directory, where the `enola-cli` wheel puts the binary; Rust has no such
+directory, so install the wheel (`pip install enola-cli==0.5.1`) or the binary
+and put it on `PATH` or in `ENOLA_PATH`.
+
+`code_graph.enola_timeout_secs` bounds one `enola --generate` run. A run that
+takes longer is killed and fails with `EnolaSnapshotError`. Python has no
+setting for it: its callers pass `timeout` (default 600 seconds). It must be a
+positive number.
+
 ## System paths, users & datasets
 
 | Env var | `Settings` field | Default |
