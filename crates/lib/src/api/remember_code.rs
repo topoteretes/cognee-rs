@@ -303,6 +303,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
             "repository_count": specs.len(),
             "index_vectors": false,
             "run_in_background": false,
+            "cognee_version": cognee_telemetry::cognee_version(),
         })),
     );
 
