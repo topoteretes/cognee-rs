@@ -274,11 +274,49 @@ pub async fn update_data_node_set(
     Ok(updated_at)
 }
 
+/// Set only the `system_metadata` column (the cognee-owned route stamp, see
+/// [`Data::system_metadata`]) of a Data record, stamping `updated_at`. `None`
+/// clears it. A targeted update like [`update_data_node_set`], so concurrent
+/// writes to other columns survive.
+///
+/// Returns the `updated_at` written; [`DatabaseError::NotFound`] when no row
+/// has `data_id`.
+#[instrument(
+    name = "cognee.db.relational.data.update_data_system_metadata",
+    level = "info",
+    skip_all,
+    fields(cognee.db.system = tracing::field::Empty),
+    err,
+)]
+pub async fn update_data_system_metadata(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    system_metadata: Option<&str>,
+) -> Result<DateTime<Utc>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let updated_at = Utc::now().trunc_subsecs(6);
+    let result = data::Entity::update_many()
+        .col_expr(
+            data::Column::SystemMetadata,
+            Expr::value(system_metadata.map(str::to_owned)),
+        )
+        .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)))
+        .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))
+        .exec(db)
+        .await
+        .map_err(map_sea_err)?;
+
+    if result.rows_affected == 0 {
+        return Err(DatabaseError::NotFound(format!("Data {data_id} not found")));
+    }
+    Ok(updated_at)
+}
+
 /// The columns Python's `ingest_data` update branch rewrites on a re-add of
 /// an existing row (`ingest_data.py` ~470-545), minus the ones the dedup
 /// lookup already fixes (`content_hash`, `owner_id`, `tenant_id`,
-/// `dataset_id`). `label` is only written when `Some` (Python: "absent means
-/// leave unchanged").
+/// `dataset_id`). `label` and `system_metadata` are only written when `Some`
+/// (Python: "absent means leave unchanged").
 #[derive(Debug, Clone)]
 pub struct DataRowRefresh {
     pub name: String,
@@ -294,6 +332,13 @@ pub struct DataRowRefresh {
     pub label: Option<String>,
     pub node_set: Option<String>,
     pub external_metadata: Option<String>,
+    /// The item's own route stamp, a patch: `Some` replaces the stored
+    /// `system_metadata`, `None` leaves the column untouched. Python writes
+    /// the column on a re-add only when the item carries a stamp or the
+    /// content changed (`ingest_data.py:589-590`), and a dedup hit never
+    /// changes the content. To clear the stamp use
+    /// [`update_data_system_metadata`].
+    pub system_metadata: Option<String>,
 }
 
 /// Rewrite the re-add columns of `data_id` (see [`DataRowRefresh`]) and stamp
@@ -360,6 +405,12 @@ pub async fn refresh_data_row(
         .col_expr(data::Column::UpdatedAt, Expr::value(Some(updated_at)));
     if let Some(label) = &refresh.label {
         update = update.col_expr(data::Column::Label, Expr::value(Some(label.clone())));
+    }
+    if let Some(system_metadata) = &refresh.system_metadata {
+        update = update.col_expr(
+            data::Column::SystemMetadata,
+            Expr::value(Some(system_metadata.clone())),
+        );
     }
     let result = update
         .filter(data::Column::Id.eq(uuid_hex::to_hex(data_id)))

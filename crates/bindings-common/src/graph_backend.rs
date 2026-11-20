@@ -277,6 +277,26 @@ pub fn check_graph_backend_registered(cm: &ComponentManager, opts: &Value) -> Re
     Err(unknown_kind(cm, &resolved))
 }
 
+/// [`check_graph_backend_registered`] for a selection the opts make
+/// themselves (a `graphBackend`, or a non-blank `extractor`); the configured
+/// default is not checked.
+///
+/// For a cognify that needs no extractor (every item takes a code route): a
+/// keyless deployment's default (`auto`) may name an extractor this build
+/// does not serve, and must keep working, but a misspelled or malformed
+/// selection the caller passed is still refused rather than ignored.
+///
+/// # Errors
+/// As [`check_graph_backend_registered`], for an explicit selection only.
+pub fn check_explicit_graph_backend(cm: &ComponentManager, opts: &Value) -> Result<(), SdkError> {
+    let explicit = graph_backend_spec(opts)?.is_some()
+        || extractor_opt(opts)?.is_some_and(|kind| !kind.trim().is_empty());
+    if explicit {
+        check_graph_backend_registered(cm, opts)?;
+    }
+    Ok(())
+}
+
 /// Build the backend this call uses, or `None` for the built-in LLM
 /// extractor. The handle's registry is consulted first, then the
 /// process-wide [`register_graph_backend`] shim.

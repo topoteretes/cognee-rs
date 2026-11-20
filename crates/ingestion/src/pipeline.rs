@@ -126,6 +126,13 @@ pub struct ProcessedInput {
     /// in. A re-add of existing content patches the stored metadata from it
     /// (Python `merge_existing_row_metadata`): absent keeps the stored value.
     pub item_external_metadata: Option<String>,
+    /// The item's own `system_metadata` (the cognee-owned route stamp of a
+    /// [`DataInput::DataItem`]), written to `Data.system_metadata` and never
+    /// merged into `external_metadata` (Python `DataItem.system_metadata`,
+    /// `ingest_data.py:437-444`); only a JSON object, `null` reading as
+    /// none. On a re-add it follows the content: a value replaces the stored
+    /// stamp, absent keeps it unless the content changed.
+    pub system_metadata: Option<String>,
     /// Where the content came from (`_cognee.source_uri`), if anywhere.
     pub source_uri: Option<String>,
     /// Node-set names for graph organisation — the add call's
@@ -410,6 +417,12 @@ async fn process_input_reusing(
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
+    let item_system_metadata = match input {
+        DataInput::DataItem {
+            system_metadata, ..
+        } => item_system_metadata_object(system_metadata.as_deref())?,
+        _ => None,
+    };
 
     // Determine filename and metadata before streaming.
     // For URL inputs the Content-Type-derived metadata takes precedence.
@@ -677,6 +690,7 @@ async fn process_input_reusing(
         tenant_id,
         external_metadata,
         item_external_metadata: data_item_metadata,
+        system_metadata: item_system_metadata,
         source_uri,
         node_set: None,
         importance_weight: None,
@@ -932,9 +946,24 @@ pub async fn persist_data_with_acl_and_locks(
     // `IngestDb` trait offers today; it is not worth a cross-process lock for
     // a refresh whose inputs are the caller's own re-add.
     //
+    // A code repository's manifest is pinned to (user, dataset, repo path),
+    // as Python pins it in `resolve_code_repository`: a re-add of a changed
+    // repository refreshes the one row (and clears its cognify marker, so the
+    // next cognify reloads it) instead of adding a row per version. The pin
+    // is derived here, where the dataset is known. Python also clears the
+    // row's add stamp first, so its incremental `add` reaches ingestion; this
+    // `add` never skips an item as already added, so there is none to clear.
+    let pinned_id = processed.pinned_id.or_else(|| {
+        crate::code_repo::code_repo_stamp_path(processed.system_metadata.as_deref()).map(
+            |repo_path| {
+                crate::code_repo::code_repo_data_id(&repo_path, owner_id, tenant_id, dataset.id)
+            },
+        )
+    });
+
     // A pinned item has an identity instead of a lookup: it is locked by its
     // id, and skips the dedup lookup below.
-    let _data_guard = match processed.pinned_id {
+    let _data_guard = match pinned_id {
         Some(pin) => data_id_locks().lock(pin).await,
         None => {
             data_id_locks()
@@ -952,7 +981,7 @@ pub async fn persist_data_with_acl_and_locks(
     // `persist_pinned_row`); a pin that matches no row creates one under the
     // pinned id.
     let mut new_row_id = processed.data_id;
-    if let Some(pin) = processed.pinned_id {
+    if let Some(pin) = pinned_id {
         let resolved = database
             .resolve_data_id(dataset.id, pin)
             .await?
@@ -966,7 +995,7 @@ pub async fn persist_data_with_acl_and_locks(
     // Dedup is a lookup, not an identity (Python `identify_many`): the row
     // holding this content in this dataset for this owner and tenant, if any.
     // The same content in another dataset is another row.
-    let existing = if processed.pinned_id.is_some() {
+    let existing = if pinned_id.is_some() {
         None
     } else {
         database
@@ -1044,6 +1073,13 @@ pub async fn persist_data_with_acl_and_locks(
             label: processed.label.clone(),
             node_set: node_set_column_to_write,
             external_metadata,
+            // A dedup hit is the same content (`content_changed` is false), so
+            // the column is written only when the item carries its own stamp
+            // (Python `ingest_data.py:589-590`: `if item_system_metadata is
+            // not None or content_changed`). `None` leaves the stored stamp
+            // untouched in the database, not rewritten from this snapshot,
+            // so a stamp written since the read above survives.
+            system_metadata: processed.system_metadata.clone(),
         };
         let unchanged = existing_data.name == refresh.name
             && existing_data.raw_data_location == refresh.raw_data_location
@@ -1066,7 +1102,10 @@ pub async fn persist_data_with_acl_and_locks(
             && same_json(
                 existing_data.external_metadata.as_deref(),
                 refresh.external_metadata.as_deref(),
-            );
+            )
+            && refresh.system_metadata.as_deref().is_none_or(|stamp| {
+                same_json(existing_data.system_metadata.as_deref(), Some(stamp))
+            });
         if !unchanged {
             // A row deleted since the read above fails the write with
             // `DatabaseError::NotFound`, which propagates: the call does
@@ -1091,6 +1130,9 @@ pub async fn persist_data_with_acl_and_locks(
             }
             existing_data.node_set = refresh.node_set;
             existing_data.external_metadata = refresh.external_metadata;
+            if refresh.system_metadata.is_some() {
+                existing_data.system_metadata = refresh.system_metadata;
+            }
             existing_data.updated_at = Some(updated_at);
         }
         info!(data_id = %data_id, is_duplicate = true, "input processed");
@@ -1130,6 +1172,9 @@ pub async fn persist_data_with_acl_and_locks(
     }
     if let Some(meta) = external_metadata {
         data_builder = data_builder.external_metadata(meta);
+    }
+    if let Some(meta) = &processed.system_metadata {
+        data_builder = data_builder.system_metadata(meta.clone());
     }
     if let Some(column) = node_set_column {
         data_builder = data_builder.node_set(column);
@@ -1205,6 +1250,12 @@ async fn persist_pinned_row(
     row.tenant_id = processed.tenant_id;
     row.external_metadata = external_metadata;
     row.node_set = row_node_set;
+    // The route stamp follows the content (Python `ingest_data.py:583-590`):
+    // new content gets the stamp its own item carries, including none, so a
+    // replacement of another kind is not routed down the old route.
+    if processed.system_metadata.is_some() || content_changed {
+        row.system_metadata = processed.system_metadata.clone();
+    }
     if let Some(label) = &processed.label {
         row.label = Some(label.clone());
     }
@@ -1549,6 +1600,7 @@ async fn resolve_input_for_processing(
             data,
             label,
             external_metadata,
+            ..
         } => {
             if let DataInput::Url(_url) = data.as_ref() {
                 #[cfg(feature = "html-loader")]
@@ -1597,6 +1649,34 @@ enum ItemMetadata {
     /// Valid JSON that is not an object, or text that is not JSON at all;
     /// kept verbatim under `data_item_external_metadata_raw` when merged.
     Raw(String),
+}
+
+/// The route stamp of a [`DataInput::DataItem`], checked against Python's
+/// contract for `DataItem.system_metadata`: `dict | None`
+/// (`tasks/ingestion/data_item.py:21`), stored in a SQLAlchemy `JSON` column.
+/// A JSON object is kept as given; `null` is Python's `None`, no stamp. Any
+/// other value (an array, a string, a number, text that is not JSON) is
+/// refused before anything is stored: cognify routes on the stamp's `source`
+/// key, which only an object can carry. Python has no explicit check, so the
+/// message is this SDK's own.
+fn item_system_metadata_object(
+    system_metadata: Option<&str>,
+) -> Result<Option<String>, IngestionError> {
+    let Some(text) = system_metadata else {
+        return Ok(None);
+    };
+    let kind = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Null) => return Ok(None),
+        Ok(serde_json::Value::Object(_)) => return Ok(Some(text.to_owned())),
+        Ok(serde_json::Value::Array(_)) => "an array".to_owned(),
+        Ok(serde_json::Value::String(_)) => "a string".to_owned(),
+        Ok(serde_json::Value::Number(_)) => "a number".to_owned(),
+        Ok(serde_json::Value::Bool(_)) => "a boolean".to_owned(),
+        Err(e) => format!("text that is not valid JSON ({e})"),
+    };
+    Err(IngestionError::InvalidSystemMetadata {
+        reason: format!("expected a JSON object or null, got {kind}"),
+    })
 }
 
 fn classify_item_metadata(metadata: Option<&str>) -> ItemMetadata {
@@ -2299,6 +2379,8 @@ pub struct AddPipeline {
     loaders: Arc<LoaderRegistry>,
     // ─── Run-ownership markers (SDK-1039 P22) ─────────────────────────────
     run_ownership_dir: Option<std::path::PathBuf>,
+    // ─── Code projects (SDK-1053) ─────────────────────────────────────────
+    llm_available: bool,
 }
 
 impl AddPipeline {
@@ -2325,6 +2407,7 @@ impl AddPipeline {
             dataset_locks: None,
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
+            llm_available: true,
         }
     }
 
@@ -2349,6 +2432,7 @@ impl AddPipeline {
             dataset_locks: Some(DatasetLocks::global()),
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
+            llm_available: true,
         }
     }
 
@@ -2415,6 +2499,17 @@ impl AddPipeline {
     /// audio input fails with [`IngestionError::UnsupportedDocumentType`].
     pub fn with_loader_registry(mut self, loaders: Arc<LoaderRegistry>) -> Self {
         self.loaders = loaders;
+        self
+    }
+
+    /// Whether a usable LLM is configured (default `true`).
+    ///
+    /// Only a code-project directory reads it: without an LLM its document
+    /// files are left out instead of added, because their routes need one
+    /// (Python's `resolve_code_repository` checks `LLM_API_KEY`). The code
+    /// graph itself never does. See [`crate::code_repo`].
+    pub fn with_llm_available(mut self, available: bool) -> Self {
+        self.llm_available = available;
         self
     }
 
@@ -2520,6 +2615,23 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // ── Directories (Python `resolve_data_directories`) ──────────────
+        // A code project becomes one repo manifest item plus its documents;
+        // any other directory its files. Walks and hashes files, so it runs
+        // off the executor.
+        let inputs = if inputs
+            .iter()
+            .any(|input| matches!(input, DataInput::FilePath(_)))
+        {
+            let llm_available = self.llm_available;
+            tokio::task::spawn_blocking(move || {
+                crate::code_repo::resolve_data_directories(inputs, llm_available)
+            })
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??
+        } else {
+            inputs
+        };
         // A pin names one row, so it can only go with one item (Python's
         // `update()` refuses a list, `update.py:201-206`).
         if params.pinned_id.is_some() && inputs.len() != 1 {
@@ -2700,6 +2812,11 @@ pub enum IngestionError {
     /// Port of Python's `InvalidNodeSetError`, a 400-class client error.
     #[error("Invalid node_set: {reason}")]
     InvalidNodeSet { reason: String },
+    /// A data item's `system_metadata` is not a JSON object or `null`
+    /// (Python types `DataItem.system_metadata` as `dict | None`). A
+    /// 400-class client error, refused before anything is stored.
+    #[error("Invalid system_metadata: {reason}")]
+    InvalidSystemMetadata { reason: String },
     /// An add pinned to a data id ([`AddParams::pinned_id`]) got a number of
     /// items other than one.
     #[error("A pinned add replaces exactly one item; got {items}.")]
@@ -2948,6 +3065,7 @@ mod tests {
                 data: Box::new(DataInput::Url(url.clone())),
                 label: Some("wrapped-label".to_string()),
                 external_metadata: Some(r#"{"custom":"keep","rank":7}"#.to_string()),
+                system_metadata: None,
             },
             &storage,
             HashAlgorithm::Md5,
@@ -2997,6 +3115,7 @@ mod tests {
                     data: Box::new(DataInput::Url(url.clone())),
                     label: Some("invalid-meta".to_string()),
                     external_metadata: Some(user_metadata.to_string()),
+                    system_metadata: None,
                 },
                 &storage,
                 HashAlgorithm::Md5,
@@ -3461,6 +3580,7 @@ mod tests {
                     data: Box::new(DataInput::Text("Wrapped audit text".to_string())),
                     label: Some("wrapped".to_string()),
                     external_metadata: None,
+                    system_metadata: None,
                 }],
                 "audit_wrapped",
                 owner_id,
@@ -3841,6 +3961,7 @@ mod tests {
                     data: Box::new(DataInput::Text("labelled content".to_string())),
                     label: Some("my-label".to_string()),
                     external_metadata: None,
+                    system_metadata: None,
                 }],
                 "ds",
                 owner_id,
@@ -3943,6 +4064,7 @@ mod tests {
                     data: Box::new(DataInput::Text("dlt content".to_string())),
                     label: Some("dlt-label".to_string()),
                     external_metadata: Some(meta_json.clone()),
+                    system_metadata: None,
                 }],
                 "ds",
                 owner_id,
@@ -3970,6 +4092,7 @@ mod tests {
                     data: Box::new(DataInput::Text("no metadata".to_string())),
                     label: Some("plain-label".to_string()),
                     external_metadata: None,
+                    system_metadata: None,
                 }],
                 "ds",
                 owner_id,
@@ -4178,6 +4301,7 @@ mod tests {
                 data: Box::new(DataInput::Text("Refreshed content".into())),
                 label: Some(label.into()),
                 external_metadata: meta.map(String::from),
+                system_metadata: None,
             }]
         };
         let first = pipeline
@@ -4324,6 +4448,7 @@ mod tests {
                     data: Box::new(DataInput::Text("Empty node set".into())),
                     label: Some("item".into()),
                     external_metadata: Some(r#"{"source":"crm"}"#.into()),
+                    system_metadata: None,
                 }],
                 "empty_set_ds",
                 Uuid::new_v4(),
@@ -4380,6 +4505,7 @@ mod tests {
                         data: Box::new(DataInput::Text("Bad item key".into())),
                         label: Some("item".into()),
                         external_metadata: Some(bad.into()),
+                        system_metadata: None,
                     }],
                     "invalid_set_ds",
                     owner_id,
@@ -4416,6 +4542,7 @@ mod tests {
                     data: Box::new(DataInput::Text("Null item key".into())),
                     label: Some("item".into()),
                     external_metadata: Some(r#"{"node_set": null}"#.into()),
+                    system_metadata: None,
                 }],
                 "null_set_ds",
                 owner_id,
@@ -4516,6 +4643,7 @@ mod tests {
             data: Box::new(data),
             label: Some("l".into()),
             external_metadata: Some(meta.to_string()),
+            system_metadata: None,
         };
         assert_eq!(
             source_uri_from_input(&DataInput::Url("https://example.com/a".into())),
@@ -4593,6 +4721,7 @@ mod tests {
                 data: Box::new(DataInput::Text("Direct persist".into())),
                 label: Some("item".into()),
                 external_metadata: Some(r#"{"source":"crm","node_set":["stale"]}"#.into()),
+                system_metadata: None,
             },
             &storage,
             HashAlgorithm::Md5,
@@ -4920,6 +5049,7 @@ mod tests {
                 data: Box::new(DataInput::Text("old content".into())),
                 label: Some("item".into()),
                 external_metadata: Some(r#"{"source":"crm"}"#.into()),
+                system_metadata: None,
             },
             &storage,
             HashAlgorithm::Md5,
@@ -4981,6 +5111,7 @@ mod tests {
                 data: Box::new(data),
                 label: label.map(str::to_string),
                 external_metadata: metadata.map(str::to_string),
+                system_metadata: None,
             };
 
         let plain = process(text()).await;
@@ -5030,6 +5161,7 @@ mod tests {
             data: Box::new(DataInput::Text("a note".into())),
             label: Some("finance".into()),
             external_metadata: None,
+            system_metadata: None,
         };
         let again = process_input(&labelled, &storage, HashAlgorithm::Md5, owner_id, None)
             .await
@@ -5059,6 +5191,7 @@ mod tests {
             data: Box::new(DataInput::Text("same content".into())),
             label: label.map(str::to_string),
             external_metadata: Some(metadata.into()),
+            system_metadata: None,
         };
 
         let first = process_input(
@@ -5091,6 +5224,226 @@ mod tests {
         let meta: serde_json::Value =
             serde_json::from_str(refreshed.external_metadata.as_deref().unwrap()).unwrap();
         assert_eq!(meta["source"], "erp", "the new metadata is written: {meta}");
+    }
+
+    /// `DataItem.system_metadata` is written to `Data.system_metadata`, never
+    /// merged into `external_metadata`, and on a dedup re-add follows Python's
+    /// rule (`ingest_data.py:589`): the item's own stamp replaces the stored
+    /// one, an item without one keeps it (the content did not change).
+    #[tokio::test]
+    async fn system_metadata_is_persisted_and_kept_on_a_plain_re_add() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let item = |system: Option<&str>| DataInput::DataItem {
+            data: Box::new(DataInput::Text("manifest body".into())),
+            label: None,
+            external_metadata: Some(r#"{"user":"note"}"#.into()),
+            system_metadata: system.map(str::to_string),
+        };
+        let add = |input: DataInput| {
+            let storage = &storage;
+            let db = &db;
+            async move {
+                let processed = process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap();
+                persist_data(&processed, db, "ds", owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+        let reread = |id: Uuid| {
+            let db = &db;
+            async move { IngestDb::get_data(db, id).await.unwrap().unwrap() }
+        };
+
+        let stored = add(item(Some(r#"{"source":"code_repo"}"#))).await;
+        let row = reread(stored.id).await;
+        assert_eq!(
+            row.system_metadata.as_deref(),
+            Some(r#"{"source":"code_repo"}"#)
+        );
+        let meta: serde_json::Value =
+            serde_json::from_str(row.external_metadata.as_deref().unwrap()).unwrap();
+        assert!(meta.get("source").is_none(), "not merged: {meta}");
+
+        let again = add(item(None)).await;
+        assert_eq!(again.id, stored.id);
+        assert_eq!(
+            reread(stored.id).await.system_metadata.as_deref(),
+            Some(r#"{"source":"code_repo"}"#),
+            "a re-add without a stamp keeps the stored one"
+        );
+
+        let restamped = add(item(Some(r#"{"source":"code"}"#))).await;
+        assert_eq!(
+            restamped.system_metadata.as_deref(),
+            Some(r#"{"source":"code"}"#)
+        );
+        assert_eq!(
+            reread(stored.id).await.system_metadata.as_deref(),
+            Some(r#"{"source":"code"}"#),
+            "the item's own stamp replaces the stored one"
+        );
+
+        let plain = add(DataInput::Text("plain text".into())).await;
+        assert_eq!(reread(plain.id).await.system_metadata, None);
+    }
+
+    /// A dedup re-add that changes only the label: Python writes the label
+    /// and, with no stamp on the item and unchanged content, never touches
+    /// `system_metadata` (`ingest_data.py:589-597`). The refresh write still
+    /// happens (the label changed) and must keep the stored stamp.
+    #[tokio::test]
+    async fn a_relabelling_re_add_without_a_stamp_keeps_the_stored_one() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let item = |label: &str, system: Option<&str>| DataInput::DataItem {
+            data: Box::new(DataInput::Text("labelled manifest".into())),
+            label: Some(label.into()),
+            external_metadata: None,
+            system_metadata: system.map(str::to_string),
+        };
+        let add = |input: DataInput| {
+            let storage = &storage;
+            let db = &db;
+            async move {
+                let processed = process_input(&input, storage, HashAlgorithm::Md5, owner_id, None)
+                    .await
+                    .unwrap();
+                persist_data(&processed, db, "ds", owner_id, None)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let stored = add(item("first", Some(r#"{"source":"code_repo"}"#))).await;
+        let again = add(item("second", None)).await;
+        assert_eq!(again.id, stored.id);
+        assert_eq!(again.label.as_deref(), Some("second"));
+        assert_eq!(
+            again.system_metadata.as_deref(),
+            Some(r#"{"source":"code_repo"}"#),
+            "the returned row keeps the stamp"
+        );
+        let row = IngestDb::get_data(&db, stored.id).await.unwrap().unwrap();
+        assert_eq!(row.label.as_deref(), Some("second"), "label rewritten");
+        assert_eq!(
+            row.system_metadata.as_deref(),
+            Some(r#"{"source":"code_repo"}"#),
+            "stamp untouched"
+        );
+    }
+
+    /// Python types `DataItem.system_metadata` as `dict | None`
+    /// (`data_item.py:21`): an object is stored, `null` is no stamp, and
+    /// anything else is refused before anything is stored.
+    #[tokio::test]
+    async fn system_metadata_must_be_a_json_object() {
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let item = |system: &str| DataInput::DataItem {
+            data: Box::new(DataInput::Text("stamped body".into())),
+            label: None,
+            external_metadata: None,
+            system_metadata: Some(system.to_string()),
+        };
+
+        for bad in [r#"["code"]"#, r#""code""#, "7", "true", "", "{not json"] {
+            let err = process_input(&item(bad), &storage, HashAlgorithm::Md5, owner_id, None)
+                .await
+                .expect_err("a non-object stamp is refused");
+            assert!(
+                matches!(
+                    err.downcast_ref::<IngestionError>(),
+                    Some(IngestionError::InvalidSystemMetadata { .. })
+                ),
+                "stamp {bad:?}: typed error, got: {err}"
+            );
+        }
+
+        let processed = process_input(&item("null"), &storage, HashAlgorithm::Md5, owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(processed.system_metadata, None, "null is no stamp");
+        let processed = process_input(
+            &item(r#"{"source": "code"}"#),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            processed.system_metadata.as_deref(),
+            Some(r#"{"source": "code"}"#),
+            "an object is kept as given"
+        );
+    }
+
+    /// A pinned re-ingest (`update()`): the stamp follows the content. New
+    /// content gets the stamp its own item carries, including none
+    /// (Python `ingest_data.py:583-590`); unchanged content keeps it.
+    #[tokio::test]
+    async fn a_pinned_re_ingest_of_new_content_drops_the_old_stamp() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let storage = MockStorage::new();
+        let owner_id = Uuid::new_v4();
+        let stamped = DataInput::DataItem {
+            data: Box::new(DataInput::Text("v1".into())),
+            label: None,
+            external_metadata: None,
+            system_metadata: Some(r#"{"source":"code"}"#.into()),
+        };
+        let first = process_input(&stamped, &storage, HashAlgorithm::Md5, owner_id, None)
+            .await
+            .unwrap();
+        let stored = persist_data(&first, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+
+        // Same content, no stamp: kept.
+        let mut same = process_input(
+            &DataInput::Text("v1".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        same.pinned_id = Some(stored.id);
+        let kept = persist_data(&same, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            kept.system_metadata.as_deref(),
+            Some(r#"{"source":"code"}"#)
+        );
+
+        // New content, no stamp: cleared.
+        let mut changed = process_input(
+            &DataInput::Text("v2".into()),
+            &storage,
+            HashAlgorithm::Md5,
+            owner_id,
+            None,
+        )
+        .await
+        .unwrap();
+        changed.pinned_id = Some(stored.id);
+        let replaced = persist_data(&changed, &db, "ds", owner_id, None)
+            .await
+            .unwrap();
+        assert_eq!(replaced.id, stored.id);
+        let row = IngestDb::get_data(&db, stored.id).await.unwrap().unwrap();
+        assert_eq!(row.system_metadata, None);
     }
 
     /// A pinned add takes exactly one item.

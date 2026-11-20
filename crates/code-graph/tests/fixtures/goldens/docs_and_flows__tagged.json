@@ -1,0 +1,1480 @@
+{
+  "edges": [
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+        "target_node_id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+      },
+      "relationship_name": "declares",
+      "source": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+      "target": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+    },
+    {
+      "properties": {
+        "edge_text": "handled by",
+        "relationship_name": "handled_by",
+        "source_node_id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+        "target_node_id": "5c74bd57-b97c-56c4-bffe-94c35530702e"
+      },
+      "relationship_name": "handled_by",
+      "source": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+      "target": "5c74bd57-b97c-56c4-bffe-94c35530702e"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "a2f73496-0928-5127-92ba-4d0731b4909a",
+        "target_node_id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839"
+      },
+      "relationship_name": "calls",
+      "source": "a2f73496-0928-5127-92ba-4d0731b4909a",
+      "target": "1a17bf7c-3551-554b-b1a0-1b863cdc3839"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "a2f73496-0928-5127-92ba-4d0731b4909a",
+        "target_node_id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66"
+      },
+      "relationship_name": "declares",
+      "source": "a2f73496-0928-5127-92ba-4d0731b4909a",
+      "target": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+        "target_node_id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66"
+      },
+      "relationship_name": "declares",
+      "source": "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+      "target": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "c2200376-8242-5e8c-969c-aa81be5e3a03",
+        "target_node_id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0"
+      },
+      "relationship_name": "declares",
+      "source": "c2200376-8242-5e8c-969c-aa81be5e3a03",
+      "target": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+        "target_node_id": "c2200376-8242-5e8c-969c-aa81be5e3a03"
+      },
+      "relationship_name": "calls",
+      "source": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+      "target": "c2200376-8242-5e8c-969c-aa81be5e3a03"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+        "target_node_id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0"
+      },
+      "relationship_name": "declares",
+      "source": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+      "target": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+        "target_node_id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a"
+      },
+      "relationship_name": "calls",
+      "source": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+      "target": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+        "target_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+      },
+      "relationship_name": "calls",
+      "source": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+      "target": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+        "target_node_id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+      },
+      "relationship_name": "declares",
+      "source": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+      "target": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+        "target_node_id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+      },
+      "relationship_name": "declares",
+      "source": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+      "target": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+        "target_node_id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+      },
+      "relationship_name": "declares",
+      "source": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+      "target": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef"
+    },
+    {
+      "properties": {
+        "edge_text": "calls",
+        "relationship_name": "calls",
+        "source_node_id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+        "target_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+      },
+      "relationship_name": "calls",
+      "source": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+      "target": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+    },
+    {
+      "properties": {
+        "edge_text": "declares",
+        "relationship_name": "declares",
+        "source_node_id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+        "target_node_id": "c8774c26-8ba4-5e47-bf67-d7115d00caf8"
+      },
+      "relationship_name": "declares",
+      "source": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+      "target": "c8774c26-8ba4-5e47-bf67-d7115d00caf8"
+    },
+    {
+      "properties": {
+        "edge_text": "flow entry",
+        "relationship_name": "flow_entry",
+        "source_node_id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "target_node_id": "5c74bd57-b97c-56c4-bffe-94c35530702e"
+      },
+      "relationship_name": "flow_entry",
+      "source": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "target": "5c74bd57-b97c-56c4-bffe-94c35530702e"
+    },
+    {
+      "properties": {
+        "edge_text": "flow stage",
+        "relationship_name": "flow_stage",
+        "source_node_id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "target_node_id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a"
+      },
+      "relationship_name": "flow_stage",
+      "source": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "target": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a"
+    },
+    {
+      "properties": {
+        "edge_text": "flow stage",
+        "relationship_name": "flow_stage",
+        "source_node_id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "target_node_id": "c2200376-8242-5e8c-969c-aa81be5e3a03"
+      },
+      "relationship_name": "flow_stage",
+      "source": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "target": "c2200376-8242-5e8c-969c-aa81be5e3a03"
+    },
+    {
+      "properties": {
+        "edge_text": "flow stage",
+        "relationship_name": "flow_stage",
+        "source_node_id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "target_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+      },
+      "relationship_name": "flow_stage",
+      "source": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "target": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+    },
+    {
+      "properties": {
+        "edge_text": "flow route",
+        "relationship_name": "flow_route",
+        "source_node_id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "target_node_id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b"
+      },
+      "relationship_name": "flow_route",
+      "source": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "target": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b"
+    },
+    {
+      "properties": {
+        "edge_text": "flow entry",
+        "relationship_name": "flow_entry",
+        "source_node_id": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+        "target_node_id": "a2f73496-0928-5127-92ba-4d0731b4909a"
+      },
+      "relationship_name": "flow_entry",
+      "source": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+      "target": "a2f73496-0928-5127-92ba-4d0731b4909a"
+    },
+    {
+      "properties": {
+        "edge_text": "flow stage",
+        "relationship_name": "flow_stage",
+        "source_node_id": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+        "target_node_id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839"
+      },
+      "relationship_name": "flow_stage",
+      "source": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+      "target": "1a17bf7c-3551-554b-b1a0-1b863cdc3839"
+    },
+    {
+      "properties": {
+        "edge_text": "flow entry",
+        "relationship_name": "flow_entry",
+        "source_node_id": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+        "target_node_id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c"
+      },
+      "relationship_name": "flow_entry",
+      "source": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+      "target": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c"
+    },
+    {
+      "properties": {
+        "edge_text": "flow stage",
+        "relationship_name": "flow_stage",
+        "source_node_id": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+        "target_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+      },
+      "relationship_name": "flow_stage",
+      "source": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+      "target": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+    },
+    {
+      "properties": {
+        "edge_text": "has method",
+        "relationship_name": "has_method",
+        "source_node_id": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+        "target_node_id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+      },
+      "relationship_name": "has_method",
+      "source": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+      "target": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d"
+    }
+  ],
+  "facts": [
+    {
+      "file": ".",
+      "id": "608c12386353274f113238897bdfb416",
+      "kind": "module",
+      "name": ".",
+      "props": {
+        "language": "python"
+      },
+      "repo": "shop"
+    },
+    {
+      "file": "auth",
+      "id": "1a3e4e710b88ca85879662485d23be4b",
+      "kind": "module",
+      "name": "auth",
+      "props": {
+        "language": "python"
+      },
+      "repo": "shop"
+    },
+    {
+      "file": "orders",
+      "id": "5d386f991ee5bde76306c0bd41efdefd",
+      "kind": "module",
+      "name": "orders",
+      "props": {
+        "language": "python"
+      },
+      "repo": "shop"
+    },
+    {
+      "file": "scripts",
+      "id": "e9d7509db4e0f70a035168cd5784d56d",
+      "kind": "module",
+      "name": "scripts",
+      "props": {
+        "language": "python"
+      },
+      "repo": "shop"
+    },
+    {
+      "file": "orders/routes.py",
+      "id": "01c1396efb449bb82f899a68648fdd30",
+      "kind": "route",
+      "line": 8,
+      "name": "/checkout",
+      "props": {
+        "framework": "fastapi",
+        "language": "python",
+        "method": "POST"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": "orders",
+          "target_id": "5d386f991ee5bde76306c0bd41efdefd"
+        },
+        {
+          "kind": "handled_by",
+          "target": "orders/checkout.place_order",
+          "target_id": "7005efd41c3df03d785196bc41a50700"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "app.py",
+      "id": "8ea13bd2c0d8bbd731ae334cb2acc8d7",
+      "kind": "symbol",
+      "line": 12,
+      "name": "app.main",
+      "props": {
+        "doc": "Start the shop's HTTP server and register its routes.",
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "app.serve",
+          "target_id": "abd4ad58261e68be12abd3bf6adba5ab"
+        },
+        {
+          "kind": "declares",
+          "target": ".",
+          "target_id": "608c12386353274f113238897bdfb416"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "app.py",
+      "id": "abd4ad58261e68be12abd3bf6adba5ab",
+      "kind": "symbol",
+      "line": 21,
+      "name": "app.serve",
+      "props": {
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": ".",
+          "target_id": "608c12386353274f113238897bdfb416"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "auth/tokens.py",
+      "id": "918ab0aca0d00d8356108f913d08596e",
+      "kind": "symbol",
+      "line": 30,
+      "name": "auth/tokens.decode",
+      "props": {
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "jwt.decode"
+        },
+        {
+          "kind": "declares",
+          "target": "auth",
+          "target_id": "1a3e4e710b88ca85879662485d23be4b"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "auth/tokens.py",
+      "id": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+      "kind": "symbol",
+      "line": 9,
+      "name": "auth/tokens.validate_token",
+      "props": {
+        "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "auth/tokens.decode",
+          "target_id": "918ab0aca0d00d8356108f913d08596e"
+        },
+        {
+          "kind": "declares",
+          "target": "auth",
+          "target_id": "1a3e4e710b88ca85879662485d23be4b"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "orders/checkout.py",
+      "id": "7005efd41c3df03d785196bc41a50700",
+      "kind": "symbol",
+      "line": 14,
+      "name": "orders/checkout.place_order",
+      "props": {
+        "doc": "Turn the cart in the request into an order and charge the customer.",
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "auth/tokens.validate_token",
+          "target_id": "d18f1ba5d1f48d7dd7aaa47130f7c10b"
+        },
+        {
+          "kind": "calls",
+          "target": "orders/repository.OrderRepository.save",
+          "target_id": "902fefc888717ece9db7fc355f660556"
+        },
+        {
+          "kind": "declares",
+          "target": "orders",
+          "target_id": "5d386f991ee5bde76306c0bd41efdefd"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "orders/repository.py",
+      "id": "37cc15a67384c53c3328d9ec4c6d7f88",
+      "kind": "symbol",
+      "line": 6,
+      "name": "orders/repository.OrderRepository",
+      "props": {
+        "doc": "Persist orders in the orders table.",
+        "language": "python",
+        "symbol_kind": "class"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": "orders",
+          "target_id": "5d386f991ee5bde76306c0bd41efdefd"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "orders/repository.py",
+      "id": "902fefc888717ece9db7fc355f660556",
+      "kind": "symbol",
+      "line": 12,
+      "name": "orders/repository.OrderRepository.save",
+      "props": {
+        "language": "python",
+        "symbol_kind": "method"
+      },
+      "relations": [
+        {
+          "kind": "declares",
+          "target": "orders",
+          "target_id": "5d386f991ee5bde76306c0bd41efdefd"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "scripts/seed.py",
+      "id": "2476070b88f851c09edd9a7eb4005798",
+      "kind": "symbol",
+      "line": 5,
+      "name": "scripts/seed.main",
+      "props": {
+        "doc": "Fill a development database with sample orders.",
+        "language": "python",
+        "symbol_kind": "function"
+      },
+      "relations": [
+        {
+          "kind": "calls",
+          "target": "orders/repository.OrderRepository.save",
+          "target_id": "902fefc888717ece9db7fc355f660556"
+        },
+        {
+          "kind": "declares",
+          "target": "scripts",
+          "target_id": "e9d7509db4e0f70a035168cd5784d56d"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "orders/checkout.py",
+      "id": "19fff23f7659d1e32f5ff8a83f1abda9",
+      "kind": "flow",
+      "line": 14,
+      "name": "POST /checkout",
+      "props": {
+        "entry": {
+          "doc": "Turn the cart in the request into an order and charge the customer.",
+          "file": "orders/checkout.py",
+          "id": "7005efd41c3df03d785196bc41a50700",
+          "line": 14,
+          "name": "orders/checkout.place_order"
+        },
+        "mechanism": "route",
+        "metrics": {
+          "max_depth": 2,
+          "modules": 2,
+          "reach": 4,
+          "unresolved_calls": 1
+        },
+        "modules": [
+          {
+            "name": "auth",
+            "symbols": 2
+          },
+          {
+            "name": "orders",
+            "symbols": 2
+          }
+        ],
+        "rank": 1,
+        "routes": [
+          {
+            "file": "orders/routes.py",
+            "id": "01c1396efb449bb82f899a68648fdd30",
+            "line": 8,
+            "method": "POST",
+            "name": "/checkout"
+          }
+        ],
+        "stages": [
+          {
+            "depth": 1,
+            "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+            "file": "auth/tokens.py",
+            "id": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+            "line": 9,
+            "name": "auth/tokens.validate_token",
+            "order": 1,
+            "reach": 2
+          },
+          {
+            "depth": 2,
+            "file": "auth/tokens.py",
+            "id": "918ab0aca0d00d8356108f913d08596e",
+            "line": 30,
+            "name": "auth/tokens.decode",
+            "order": 2,
+            "parent": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+            "reach": 1
+          },
+          {
+            "depth": 1,
+            "file": "orders/repository.py",
+            "id": "902fefc888717ece9db7fc355f660556",
+            "line": 12,
+            "name": "orders/repository.OrderRepository.save",
+            "order": 3,
+            "reach": 1
+          }
+        ],
+        "summary": "POST /checkout is served by orders/checkout.place_order (\"Turn the cart in the request into an order and charge the customer.\"). It hands off to tokens.validate_token, which calls tokens.decode, and to repository.OrderRepository.save. Its 4 symbols sit in auth (2 symbols) and orders (2)."
+      },
+      "relations": [
+        {
+          "kind": "flow_entry",
+          "target": "orders/checkout.place_order",
+          "target_id": "7005efd41c3df03d785196bc41a50700"
+        },
+        {
+          "kind": "flow_stage",
+          "target": "auth/tokens.validate_token",
+          "target_id": "d18f1ba5d1f48d7dd7aaa47130f7c10b"
+        },
+        {
+          "kind": "flow_stage",
+          "target": "auth/tokens.decode",
+          "target_id": "918ab0aca0d00d8356108f913d08596e"
+        },
+        {
+          "kind": "flow_stage",
+          "target": "orders/repository.OrderRepository.save",
+          "target_id": "902fefc888717ece9db7fc355f660556"
+        },
+        {
+          "kind": "flow_route",
+          "target": "/checkout",
+          "target_id": "01c1396efb449bb82f899a68648fdd30"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "app.py",
+      "id": "f31a15f82e4314c2fc5c507ae5b7dccb",
+      "kind": "flow",
+      "line": 12,
+      "name": "app.main",
+      "props": {
+        "entry": {
+          "doc": "Start the shop's HTTP server and register its routes.",
+          "file": "app.py",
+          "id": "8ea13bd2c0d8bbd731ae334cb2acc8d7",
+          "line": 12,
+          "name": "app.main"
+        },
+        "mechanism": "main",
+        "metrics": {
+          "max_depth": 1,
+          "modules": 1,
+          "reach": 2,
+          "unresolved_calls": 0
+        },
+        "modules": [
+          {
+            "name": ".",
+            "symbols": 2
+          }
+        ],
+        "rank": 2,
+        "stages": [
+          {
+            "depth": 1,
+            "file": "app.py",
+            "id": "abd4ad58261e68be12abd3bf6adba5ab",
+            "line": 21,
+            "name": "app.serve",
+            "order": 1,
+            "reach": 1
+          }
+        ],
+        "summary": "The program starts at app.main (\"Start the shop's HTTP server and register its routes.\"). It hands off to app.serve. Its 2 symbols sit in . (2 symbols)."
+      },
+      "relations": [
+        {
+          "kind": "flow_entry",
+          "target": "app.main",
+          "target_id": "8ea13bd2c0d8bbd731ae334cb2acc8d7"
+        },
+        {
+          "kind": "flow_stage",
+          "target": "app.serve",
+          "target_id": "abd4ad58261e68be12abd3bf6adba5ab"
+        }
+      ],
+      "repo": "shop"
+    },
+    {
+      "file": "scripts/seed.py",
+      "id": "30a87d2645d2b11df9ad16984e1a0589",
+      "kind": "flow",
+      "line": 5,
+      "name": "scripts/seed.main",
+      "props": {
+        "entry": {
+          "doc": "Fill a development database with sample orders.",
+          "file": "scripts/seed.py",
+          "id": "2476070b88f851c09edd9a7eb4005798",
+          "line": 5,
+          "name": "scripts/seed.main"
+        },
+        "mechanism": "main",
+        "metrics": {
+          "max_depth": 1,
+          "modules": 2,
+          "reach": 2,
+          "unresolved_calls": 0
+        },
+        "modules": [
+          {
+            "name": "orders",
+            "symbols": 1
+          },
+          {
+            "name": "scripts",
+            "symbols": 1
+          }
+        ],
+        "rank": 3,
+        "side": true,
+        "stages": [
+          {
+            "depth": 1,
+            "file": "orders/repository.py",
+            "id": "902fefc888717ece9db7fc355f660556",
+            "line": 12,
+            "name": "orders/repository.OrderRepository.save",
+            "order": 1,
+            "reach": 1
+          }
+        ],
+        "summary": "A side entry: scripts/seed.main (\"Fill a development database with sample orders.\") hands off to repository.OrderRepository.save. Its 2 symbols sit in orders (1 symbol) and scripts (1)."
+      },
+      "relations": [
+        {
+          "kind": "flow_entry",
+          "target": "scripts/seed.main",
+          "target_id": "2476070b88f851c09edd9a7eb4005798"
+        },
+        {
+          "kind": "flow_stage",
+          "target": "orders/repository.OrderRepository.save",
+          "target_id": "902fefc888717ece9db7fc355f660556"
+        }
+      ],
+      "repo": "shop"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Persist orders in the orders table.",
+        "doc": "Persist orders in the orders table.",
+        "enola_id": "37cc15a67384c53c3328d9ec4c6d7f88",
+        "fact_hash": "sha256:f9527198dc31f1fbc917a50c90ac9425690dd609fb11c4a323b6bb57528b6b08",
+        "fact_properties": {
+          "doc": "Persist orders in the orders table.",
+          "language": "python",
+          "symbol_kind": "class"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders/repository.py",
+        "id": "0c14c945-4a36-5b2c-a1c1-32eb2ab3ff1d",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 6,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "orders/repository.OrderRepository",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "class",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "feedback_weight": 0.5,
+        "id": "0cdcbf52-5199-5f87-a8ff-14ac6960f9ae",
+        "importance_weight": 0.5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "shop",
+        "ontology_valid": false,
+        "path": "/tmp/shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeRepository",
+        "version": 1
+      },
+      "type": "CodeRepository"
+    },
+    {
+      "id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: language=python, symbol_kind=function",
+        "enola_id": "abd4ad58261e68be12abd3bf6adba5ab",
+        "fact_hash": "sha256:781605ad3abac1497eff775c6f557b40117607fa0f2ec0398f59ebeea8fb5645",
+        "fact_properties": {
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app.py",
+        "id": "1a17bf7c-3551-554b-b1a0-1b863cdc3839",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 21,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "app.serve",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "The program starts at app.main (\"Start the shop's HTTP server and register its routes.\"). It hands off to app.serve. Its 2 symbols sit in . (2 symbols).",
+        "enola_id": "f31a15f82e4314c2fc5c507ae5b7dccb",
+        "fact_hash": "sha256:6a0a401c4de8c6ce2ad497600145ed4c15bd79852f938db905db5f1e17228e55",
+        "fact_properties": {
+          "entry": {
+            "doc": "Start the shop's HTTP server and register its routes.",
+            "file": "app.py",
+            "id": "8ea13bd2c0d8bbd731ae334cb2acc8d7",
+            "line": 12,
+            "name": "app.main"
+          },
+          "mechanism": "main",
+          "metrics": {
+            "max_depth": 1,
+            "modules": 1,
+            "reach": 2,
+            "unresolved_calls": 0
+          },
+          "modules": [
+            {
+              "name": ".",
+              "symbols": 2
+            }
+          ],
+          "rank": 2,
+          "stages": [
+            {
+              "depth": 1,
+              "file": "app.py",
+              "id": "abd4ad58261e68be12abd3bf6adba5ab",
+              "line": 21,
+              "name": "app.serve",
+              "order": 1,
+              "reach": 1
+            }
+          ],
+          "summary": "The program starts at app.main (\"Start the shop's HTTP server and register its routes.\"). It hands off to app.serve. Its 2 symbols sit in . (2 symbols)."
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app.py",
+        "id": "1a9aa0fb-d481-59c8-800e-ddb25b394455",
+        "importance_weight": 0.5,
+        "kind": "flow",
+        "line": 12,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "app.main",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeFlow",
+        "version": 1
+      },
+      "type": "CodeFlow"
+    },
+    {
+      "id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=python",
+        "enola_id": "608c12386353274f113238897bdfb416",
+        "fact_hash": "sha256:c9a6bec034c20c2dbad04662c1aa6748aca12db823289d3cf849ef5716307d69",
+        "fact_properties": {
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": ".",
+        "id": "4ee4a5f0-afb3-5f13-8c4c-e14bb29bca66",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": ".",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "A side entry: scripts/seed.main (\"Fill a development database with sample orders.\") hands off to repository.OrderRepository.save. Its 2 symbols sit in orders (1 symbol) and scripts (1).",
+        "enola_id": "30a87d2645d2b11df9ad16984e1a0589",
+        "fact_hash": "sha256:482f7ffa6999a9fa330a03830d6778d82350ebb22f09f6331f13150764c331e0",
+        "fact_properties": {
+          "entry": {
+            "doc": "Fill a development database with sample orders.",
+            "file": "scripts/seed.py",
+            "id": "2476070b88f851c09edd9a7eb4005798",
+            "line": 5,
+            "name": "scripts/seed.main"
+          },
+          "mechanism": "main",
+          "metrics": {
+            "max_depth": 1,
+            "modules": 2,
+            "reach": 2,
+            "unresolved_calls": 0
+          },
+          "modules": [
+            {
+              "name": "orders",
+              "symbols": 1
+            },
+            {
+              "name": "scripts",
+              "symbols": 1
+            }
+          ],
+          "rank": 3,
+          "side": true,
+          "stages": [
+            {
+              "depth": 1,
+              "file": "orders/repository.py",
+              "id": "902fefc888717ece9db7fc355f660556",
+              "line": 12,
+              "name": "orders/repository.OrderRepository.save",
+              "order": 1,
+              "reach": 1
+            }
+          ],
+          "summary": "A side entry: scripts/seed.main (\"Fill a development database with sample orders.\") hands off to repository.OrderRepository.save. Its 2 symbols sit in orders (1 symbol) and scripts (1)."
+        },
+        "feedback_weight": 0.5,
+        "file_path": "scripts/seed.py",
+        "id": "51cc00e7-5a5e-56b0-afde-adfa303cf797",
+        "importance_weight": 0.5,
+        "kind": "flow",
+        "line": 5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "scripts/seed.main",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeFlow",
+        "version": 1
+      },
+      "type": "CodeFlow"
+    },
+    {
+      "id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Turn the cart in the request into an order and charge the customer.",
+        "doc": "Turn the cart in the request into an order and charge the customer.",
+        "enola_id": "7005efd41c3df03d785196bc41a50700",
+        "fact_hash": "sha256:b66b2b1770114bf521447b58bd72a8a690eb3df0a93e50ae7bb4bc1d92013bf7",
+        "fact_properties": {
+          "doc": "Turn the cart in the request into an order and charge the customer.",
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders/checkout.py",
+        "id": "5c74bd57-b97c-56c4-bffe-94c35530702e",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 14,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "orders/checkout.place_order",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: language=python, symbol_kind=method",
+        "enola_id": "902fefc888717ece9db7fc355f660556",
+        "fact_hash": "sha256:9080a8ed0ba29cb69965aa5a623802f00a4fa62b2a57d5704e72fa241a89e1d8",
+        "fact_properties": {
+          "language": "python",
+          "symbol_kind": "method"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders/repository.py",
+        "id": "902bbd7e-2872-508b-b1b2-5bcc61a63e1d",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 12,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "orders/repository.OrderRepository.save",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "method",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "a2f73496-0928-5127-92ba-4d0731b4909a",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Start the shop's HTTP server and register its routes.",
+        "doc": "Start the shop's HTTP server and register its routes.",
+        "enola_id": "8ea13bd2c0d8bbd731ae334cb2acc8d7",
+        "fact_hash": "sha256:c152090d64ab1c8773b35affc794b8f64f564517c4bcdc6fb5499794f309b7e9",
+        "fact_properties": {
+          "doc": "Start the shop's HTTP server and register its routes.",
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "app.py",
+        "id": "a2f73496-0928-5127-92ba-4d0731b4909a",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 12,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "app.main",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=python",
+        "enola_id": "1a3e4e710b88ca85879662485d23be4b",
+        "fact_hash": "sha256:9439216812ccdf0d2b4dd84dc58f602e0d9b8bf2ea33c0abc3004fa85fdbca71",
+        "fact_properties": {
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "auth",
+        "id": "a3d96438-5b6a-51fd-a7bf-74ec729d10e0",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "auth",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=python",
+        "enola_id": "5d386f991ee5bde76306c0bd41efdefd",
+        "fact_hash": "sha256:2ec45e3b78b30654c2268e278bb91b1a7d7200c16d00e50c24868338c118aa05",
+        "fact_properties": {
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders",
+        "id": "ab7b70ad-b75a-5e63-97a8-4f38cc0024ef",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "orders",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "POST /checkout is served by orders/checkout.place_order (\"Turn the cart in the request into an order and charge the customer.\"). It hands off to tokens.validate_token, which calls tokens.decode, and to repository.OrderRepository.save. Its 4 symbols sit in auth (2 symbols) and orders (2).",
+        "enola_id": "19fff23f7659d1e32f5ff8a83f1abda9",
+        "fact_hash": "sha256:54b112949d99961dd16c90bcba8a950178213f15631dd687f7dc489ef482041a",
+        "fact_properties": {
+          "entry": {
+            "doc": "Turn the cart in the request into an order and charge the customer.",
+            "file": "orders/checkout.py",
+            "id": "7005efd41c3df03d785196bc41a50700",
+            "line": 14,
+            "name": "orders/checkout.place_order"
+          },
+          "mechanism": "route",
+          "metrics": {
+            "max_depth": 2,
+            "modules": 2,
+            "reach": 4,
+            "unresolved_calls": 1
+          },
+          "modules": [
+            {
+              "name": "auth",
+              "symbols": 2
+            },
+            {
+              "name": "orders",
+              "symbols": 2
+            }
+          ],
+          "rank": 1,
+          "routes": [
+            {
+              "file": "orders/routes.py",
+              "id": "01c1396efb449bb82f899a68648fdd30",
+              "line": 8,
+              "method": "POST",
+              "name": "/checkout"
+            }
+          ],
+          "stages": [
+            {
+              "depth": 1,
+              "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+              "file": "auth/tokens.py",
+              "id": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+              "line": 9,
+              "name": "auth/tokens.validate_token",
+              "order": 1,
+              "reach": 2
+            },
+            {
+              "depth": 2,
+              "file": "auth/tokens.py",
+              "id": "918ab0aca0d00d8356108f913d08596e",
+              "line": 30,
+              "name": "auth/tokens.decode",
+              "order": 2,
+              "parent": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+              "reach": 1
+            },
+            {
+              "depth": 1,
+              "file": "orders/repository.py",
+              "id": "902fefc888717ece9db7fc355f660556",
+              "line": 12,
+              "name": "orders/repository.OrderRepository.save",
+              "order": 3,
+              "reach": 1
+            }
+          ],
+          "summary": "POST /checkout is served by orders/checkout.place_order (\"Turn the cart in the request into an order and charge the customer.\"). It hands off to tokens.validate_token, which calls tokens.decode, and to repository.OrderRepository.save. Its 4 symbols sit in auth (2 symbols) and orders (2)."
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders/checkout.py",
+        "id": "b2a68318-e77a-5902-96c0-22c7e8647804",
+        "importance_weight": 0.5,
+        "kind": "flow",
+        "line": 14,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "POST /checkout",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeFlow",
+        "version": 1
+      },
+      "type": "CodeFlow"
+    },
+    {
+      "id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+        "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+        "enola_id": "d18f1ba5d1f48d7dd7aaa47130f7c10b",
+        "fact_hash": "sha256:2d19f88c38ebaa62eea3cc6b92163135835ed72d55b0bd7e4389684dee11a6aa",
+        "fact_properties": {
+          "doc": "Check a bearer token's signature and expiry, then return the user it was issued to.",
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "auth/tokens.py",
+        "id": "b917b92e-f1cd-54ad-8394-5d50a18f0f7a",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 9,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "auth/tokens.validate_token",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "c2200376-8242-5e8c-969c-aa81be5e3a03",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "symbol: language=python, symbol_kind=function",
+        "enola_id": "918ab0aca0d00d8356108f913d08596e",
+        "fact_hash": "sha256:c0494823fe8748b5a5a1d77af9455a1253e2ff1b9b969c9de4132b228f73d075",
+        "fact_properties": {
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "auth/tokens.py",
+        "id": "c2200376-8242-5e8c-969c-aa81be5e3a03",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 30,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "auth/tokens.decode",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    },
+    {
+      "id": "c8774c26-8ba4-5e47-bf67-d7115d00caf8",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "module: language=python",
+        "enola_id": "e9d7509db4e0f70a035168cd5784d56d",
+        "fact_hash": "sha256:7da5f1a58717f330db7388d1910d2d287c6f3200326c4bdadd133e09bcac889c",
+        "fact_properties": {
+          "language": "python"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "scripts",
+        "id": "c8774c26-8ba4-5e47-bf67-d7115d00caf8",
+        "importance_weight": 0.5,
+        "kind": "module",
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "scripts",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "CodeModule",
+        "version": 1
+      },
+      "type": "CodeModule"
+    },
+    {
+      "id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "route: framework=fastapi, language=python, method=POST",
+        "enola_id": "01c1396efb449bb82f899a68648fdd30",
+        "fact_hash": "sha256:300196878bd75cbb5cdea235c861082ac9f11d696e369464b4d3ca5f8716e78b",
+        "fact_properties": {
+          "framework": "fastapi",
+          "language": "python",
+          "method": "POST"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "orders/routes.py",
+        "id": "e5aa1eb4-47ca-55b5-b99e-7d630440a27b",
+        "importance_weight": 0.5,
+        "kind": "route",
+        "line": 8,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "/checkout",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "topological_rank": 0,
+        "type": "ApiEndpoint",
+        "version": 1
+      },
+      "type": "ApiEndpoint"
+    },
+    {
+      "id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+      "properties": {
+        "belongs_to_set": [
+          "team-a",
+          "shared"
+        ],
+        "description": "Fill a development database with sample orders.",
+        "doc": "Fill a development database with sample orders.",
+        "enola_id": "2476070b88f851c09edd9a7eb4005798",
+        "fact_hash": "sha256:a812c755159464203db10aefa9523bdf4b182e816b6bdf7f532cf8285e1a78fe",
+        "fact_properties": {
+          "doc": "Fill a development database with sample orders.",
+          "language": "python",
+          "symbol_kind": "function"
+        },
+        "feedback_weight": 0.5,
+        "file_path": "scripts/seed.py",
+        "id": "eb403ee9-f3c4-5690-a2cd-0b0c6072111c",
+        "importance_weight": 0.5,
+        "kind": "symbol",
+        "line": 5,
+        "metadata": {
+          "index_fields": [
+            "name"
+          ]
+        },
+        "name": "scripts/seed.main",
+        "ontology_valid": false,
+        "repo": "shop",
+        "source_node_set": "team-a, shared",
+        "symbol_kind": "function",
+        "topological_rank": 0,
+        "type": "CodeSymbol",
+        "version": 1
+      },
+      "type": "CodeSymbol"
+    }
+  ],
+  "skipped": 1
+}

@@ -103,7 +103,13 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
             .with_run_ownership_dir(run_ownership_dir)
             // Python runs its image and audio loaders at `add`.
-            .with_loader_registry(cm.add_loader_registry().await);
+            .with_loader_registry(cm.add_loader_registry().await)
+            // A code project's documents need an LLM (Python `resolve_code_repository`).
+            .with_llm_available(
+                cm.llm_available()
+                    .await
+                    .map_err(|e| CliError::Runtime(format!("{e}")))?,
+            );
 
         let inputs = args
             .data

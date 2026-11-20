@@ -47,6 +47,15 @@ pub struct Data {
     pub tenant_id: Option<Uuid>,
     /// Arbitrary JSON metadata blob
     pub external_metadata: Option<String>,
+    /// System-derived JSON metadata, owned by cognee and never user-writable
+    /// (Python `Data.system_metadata`). Its `source` key is the row's cognify
+    /// route stamp (`"code"`, `"code_repo"`, `"dlt_source"`; see
+    /// `cognee_cognify::routing`). Never merged with
+    /// [`external_metadata`](Self::external_metadata), which is the user's
+    /// free-form field and is never consulted for routing. A row Python
+    /// wrote may hold the JSON text `null`, which means none.
+    #[serde(default)]
+    pub system_metadata: Option<String>,
     /// JSON list of node IDs associated with this data item
     pub node_set: Option<String>,
     /// Pipeline processing status
@@ -103,6 +112,7 @@ impl Data {
             loader_engine: None,
             raw_content_hash: None,
             external_metadata: None,
+            system_metadata: None,
             node_set: None,
             importance_weight: None,
             data_size: -1,
@@ -128,6 +138,7 @@ pub struct DataBuilder {
     loader_engine: Option<String>,
     raw_content_hash: Option<String>,
     external_metadata: Option<String>,
+    system_metadata: Option<String>,
     node_set: Option<String>,
     importance_weight: Option<f64>,
     data_size: i64,
@@ -161,6 +172,11 @@ impl DataBuilder {
     }
     pub fn external_metadata(mut self, v: impl Into<String>) -> Self {
         self.external_metadata = Some(v.into());
+        self
+    }
+    /// The row's system metadata (see [`Data::system_metadata`]).
+    pub fn system_metadata(mut self, v: impl Into<String>) -> Self {
+        self.system_metadata = Some(v.into());
         self
     }
     pub fn data_size(mut self, v: i64) -> Self {
@@ -200,6 +216,7 @@ impl DataBuilder {
             loader_engine: self.loader_engine,
             raw_content_hash: self.raw_content_hash,
             external_metadata: self.external_metadata,
+            system_metadata: self.system_metadata,
             node_set: self.node_set,
             pipeline_status: None,
             // TODO(COG-4456): compute token_count at ingestion time using TokenCounterKind::resolve()

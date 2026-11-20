@@ -47,6 +47,8 @@ cognee-database = { path = "../database", version = "0.2.0" }
 cognee-session = { path = "../session", version = "0.2.0" }
 cognee-truth-subspace = { path = "../truth-subspace", version = "0.2.0" }
 cognee-delete = { path = "../delete", version = "0.2.0" }
+# The CODE_REPO route: the deterministic code graph (SDK-1053).
+cognee-code-graph = { path = "../code-graph", version = "0.2.0" }
 
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }

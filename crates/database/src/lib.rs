@@ -6,6 +6,7 @@ pub mod entities;
 pub mod migrator;
 pub mod ops;
 pub mod pipelines;
+pub mod provenance_ids;
 pub mod session_qa;
 pub mod sync;
 mod traits;

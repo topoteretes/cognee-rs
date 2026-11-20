@@ -338,6 +338,17 @@ claimed, so a concurrent delete in another dataset keeps them until the add's
 rows are saved (within one process, as in Python). Rows from builds before this
 change point at random `ab/cd/` folders; they keep working as they are.
 
+A directory path is resolved first (Python's `resolve_data_directories`). A
+directory whose root carries a project marker (`pyproject.toml`, `go.mod`,
+`package.json`, `Cargo.toml`, `.git`, ...) is a **code project**: it is added as
+one repo manifest item (a small JSON document naming the repository and its
+source files, stamped `system_metadata.source = "code_repo"`) plus its document
+files (`README.md`, PDFs, images, ...), each added on its own. Hidden files,
+build directories (`node_modules`, `target`, ...), binaries, media, symlinks and
+Git LFS pointers are skipped. Without a usable LLM the documents are left out
+too: their routes need one, the code graph does not. Any other directory is
+added file by file. See [`cognee-ingestion`'s `code_repo`](../crates/ingestion/src/code_repo.rs).
+
 ### cognify (knowledge-graph extraction)
 
 Turns stored data into a knowledge graph in five stages: **classify** documents →
@@ -352,6 +363,18 @@ and `DltColumn` nodes (vector collections `SchemaTable_*`,
 `SchemaRelationship_*`, `DltColumn_properties`) and the row edges. Configurable via `CognifyConfig`
 (chunk strategy, custom prompts/schemas). Pipeline:
 [`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
+
+Each item first takes its **route** (`cognee_cognify::routing`, Python's
+`cognify_route_for`), read from its `system_metadata`: a code project's repo
+item (`code_repo`) runs the deterministic code graph instead of the stages
+above — one `enola --generate` over the original directory, its snapshot
+mapped to code nodes and typed edges ([`cognee-code-graph`](../crates/code-graph/)),
+tagged with the item's node set, recorded in the ownership ledger, with no LLM
+and no embedding call. Every other item runs the stages above. Both kinds share
+one pipeline run and its completion markers. A per-file code item
+(`source: "code"`) is not supported yet and fails the run. A run whose items
+are all code-routed resolves no graph extractor, so a deployment without an
+LLM key builds a code project's graph.
 
 Dates come out of the default extraction, with no separate temporal pipeline
 (Rust's event-graph `temporal_cognify` was removed in SDK-1039; Python ignores

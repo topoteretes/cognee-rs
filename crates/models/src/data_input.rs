@@ -29,6 +29,12 @@ pub enum DataInput {
         data: Box<DataInput>,
         label: Option<String>,
         external_metadata: Option<String>,
+        /// System-derived JSON metadata (e.g. a route stamp such as
+        /// `{"source": "code_repo"}`), persisted to `Data.system_metadata` and
+        /// never merged with `external_metadata` (Python
+        /// `DataItem.system_metadata`). Set by cognee itself, not by users.
+        #[serde(default)]
+        system_metadata: Option<String>,
     },
 }
 
@@ -209,6 +215,7 @@ mod tests {
             data: Box::new(inner),
             label: Some("my label".to_string()),
             external_metadata: None,
+            system_metadata: None,
         };
         assert_eq!(item.classify(), "text");
     }
