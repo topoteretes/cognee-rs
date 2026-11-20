@@ -40,7 +40,10 @@ const STDERR_TAIL_CHARS: usize = 2000;
 /// The enola binary to run. Python's `find_enola_binary`.
 ///
 /// `code_graph.enola_path` (Python's `ENOLA_PATH`) wins and must name an
-/// existing file. Otherwise the bare program name `enola` is returned and
+/// existing file. A relative path is made absolute against the process's
+/// working directory first, so the file checked is the file spawned: enola
+/// runs with the repository as its working directory, which would otherwise
+/// resolve a relative program path against the repository. Otherwise the bare program name `enola` is returned and
 /// the operating system resolves it on `PATH` when the process is spawned:
 /// this crate never reads the environment itself, and a missing binary then
 /// surfaces from [`run_enola_generate`] as the same
@@ -53,8 +56,11 @@ const STDERR_TAIL_CHARS: usize = 2000;
 pub fn find_enola_binary(config: &CodeGraphConfig) -> CodeGraphResult<PathBuf> {
     let configured = config.enola_path.as_str();
     if !configured.is_empty() {
-        if Path::new(configured).is_file() {
-            return Ok(PathBuf::from(configured));
+        // `absolute` fails only for an empty path or an unreadable working
+        // directory; the configured text is then checked as given.
+        let path = std::path::absolute(configured).unwrap_or_else(|_| PathBuf::from(configured));
+        if path.is_file() {
+            return Ok(path);
         }
         return Err(CodeGraphError::EnolaNotInstalled(format!(
             "ENOLA_PATH is set to '{configured}' but no file exists there. {INSTALL_HINT}"
@@ -189,7 +195,11 @@ pub async fn run_enola_generate(
 ) -> CodeGraphResult<PathBuf> {
     let binary = find_enola_binary(config)?;
     let timeout = config.enola_timeout()?;
-    let repo_path = repo_path.as_ref();
+    // Absolute for the same reason as the binary: it is both the argument
+    // and the working directory.
+    let repo_path =
+        std::path::absolute(repo_path.as_ref()).unwrap_or_else(|_| repo_path.as_ref().into());
+    let repo_path = repo_path.as_path();
 
     if !repo_path.is_dir() {
         return Err(CodeGraphError::EnolaSnapshot(format!(
@@ -241,6 +251,46 @@ mod tests {
                  {INSTALL_HINT}"
             )
         );
+    }
+
+    #[test]
+    fn a_relative_configured_path_is_made_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("enola"), "").unwrap();
+        // A path relative to this process's working directory.
+        let cwd = std::env::current_dir().unwrap();
+        let relative = pathdiff(dir.path(), &cwd);
+        assert!(relative.is_relative());
+        let config = CodeGraphConfig {
+            enola_path: relative.join("enola").to_string_lossy().into_owned(),
+            ..CodeGraphConfig::default()
+        };
+        let found = find_enola_binary(&config).unwrap();
+        assert!(found.is_absolute(), "{}", found.display());
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            dir.path().join("enola").canonicalize().unwrap()
+        );
+    }
+
+    /// `target` relative to `base` (both absolute): `..` up to the common
+    /// prefix, then down.
+    fn pathdiff(target: &Path, base: &Path) -> PathBuf {
+        let target = target.canonicalize().unwrap();
+        let base = base.canonicalize().unwrap();
+        let common = target
+            .components()
+            .zip(base.components())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let mut relative = PathBuf::new();
+        for _ in base.components().skip(common) {
+            relative.push("..");
+        }
+        for component in target.components().skip(common) {
+            relative.push(component);
+        }
+        relative
     }
 
     #[test]

@@ -477,6 +477,24 @@ async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
     }
 }
 
+/// A relative `enola_path` names a file under the process's working
+/// directory (cargo runs tests from the package root), although enola runs
+/// with the repository as its working directory.
+#[tokio::test]
+async fn a_relative_enola_path_is_resolved_against_the_process_cwd() {
+    let relative = Path::new("tests/fixtures/bin/enola");
+    assert!(relative.is_file(), "run from the package root");
+    let config = CodeGraphConfig {
+        enola_path: relative.to_string_lossy().into_owned(),
+        ..CodeGraphConfig::default()
+    };
+    let (_root, repo_path) = repo("snapshot:basic");
+    let load = load_code_graph(&MockGraphDB::new(), None, &config, &repo_path, None)
+        .await
+        .unwrap();
+    assert!(load.delta.is_some());
+}
+
 #[tokio::test]
 async fn a_missing_configured_binary_is_enola_not_installed() {
     let (_root, repo_path) = repo("snapshot:basic");
