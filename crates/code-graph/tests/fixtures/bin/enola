@@ -4,6 +4,8 @@
 # Called as `enola --generate <repo>`. The repository's `.fake-enola` file
 # says what to do:
 #   snapshot:<name>  copy tests/fixtures/snapshots/<name>/ into <repo>/.enola/
+#   slow:<name>      the same, slowly, failing if another run on <repo> is
+#                    in progress (a `<repo>/.fake-enola-running` marker)
 #   fail             write to stderr and exit 3
 #   hang             sleep longer than any test timeout
 #   empty            exit 0 without writing a snapshot
@@ -17,6 +19,18 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$2
 mode=$(cat "$repo/.fake-enola")
 case "$mode" in
+  slow:*)
+    marker="$repo/.fake-enola-running"
+    if ! mkdir "$marker" 2>/dev/null; then
+      echo "overlapping enola runs on $repo" >&2
+      exit 9
+    fi
+    sleep 0.3
+    name=${mode#slow:}
+    mkdir -p "$repo/.enola"
+    cp "$here/../snapshots/$name/"* "$repo/.enola/"
+    rmdir "$marker"
+    ;;
   snapshot:*)
     name=${mode#snapshot:}
     mkdir -p "$repo/.enola"

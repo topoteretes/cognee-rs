@@ -477,6 +477,21 @@ async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
     }
 }
 
+/// Two loads of one repository at once take turns: the fake enola fails a
+/// run that overlaps another on the same directory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_loads_of_one_repository_serialise() {
+    let (_root, repo_path) = repo("slow:basic");
+    let graph = MockGraphDB::new();
+    let config = config();
+    let (first, second) = tokio::join!(
+        load_code_graph(&graph, None, &config, &repo_path, None),
+        load_code_graph(&graph, None, &config, &repo_path, None),
+    );
+    first.unwrap();
+    second.unwrap();
+}
+
 /// A relative `enola_path` names a file under the process's working
 /// directory (cargo runs tests from the package root), although enola runs
 /// with the repository as its working directory.

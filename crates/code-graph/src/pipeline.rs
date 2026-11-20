@@ -6,7 +6,9 @@
 //! pipeline tasks; here they are three functions run in order by
 //! [`load_code_graph`], which the cognify route calls.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use cognee_graph::GraphDBTrait;
 use serde_json::{Map, Value};
@@ -20,6 +22,38 @@ use crate::snapshot::ParsedSnapshot;
 use crate::writer::{
     CodeGraphLedger, CodeGraphLoadState, add_code_graph_data_points, add_code_graph_edges,
 };
+
+/// One async lock per repository directory, so two loads of the same
+/// repository in this process do not run enola into the same `.enola/` at
+/// once or read a snapshot another run is rewriting. Entries hold the lock
+/// weakly and are dropped once nobody holds or waits for it.
+///
+/// In-process only: two processes loading the same repository can still
+/// race on `.enola/` (cross-process locking is out of scope).
+static REPO_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Take the [`REPO_LOCKS`] lock of `repo_path`, keyed by its canonical path
+/// (the absolute one when it cannot be canonicalised), so two spellings of
+/// one directory share a lock.
+async fn lock_repository(repo_path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+    let key = std::fs::canonicalize(repo_path)
+        .or_else(|_| std::path::absolute(repo_path))
+        .unwrap_or_else(|_| repo_path.to_path_buf());
+    let lock = {
+        let mut locks = REPO_LOCKS.lock().unwrap(); // lock poison is unrecoverable
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        match locks.get(&key).and_then(Weak::upgrade) {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                locks.insert(key, Arc::downgrade(&lock));
+                lock
+            }
+        }
+    };
+    lock.lock_owned().await
+}
 
 /// A repository's code graph, extracted: the snapshot it was read from and
 /// the nodes it maps to.
@@ -40,6 +74,10 @@ pub struct ExtractedCodeGraph {
 /// The unchanged-snapshot skip Python does here comes with SDK-1053 O6; this
 /// always maps the whole snapshot.
 ///
+/// The enola run and the snapshot read hold a per-repository lock, so
+/// concurrent loads of one repository in this process take turns (see
+/// [`REPO_LOCKS`]).
+///
 /// # Errors
 ///
 /// What [`run_enola_generate`] and
@@ -50,11 +88,13 @@ pub async fn extract_code_graph(
     snapshot_dir: Option<&Path>,
     node_set: Option<&[String]>,
 ) -> CodeGraphResult<ExtractedCodeGraph> {
+    let guard = lock_repository(repo_path).await;
     let snapshot_dir = match snapshot_dir {
         Some(dir) => dir.to_path_buf(),
         None => run_enola_generate(config, repo_path).await?,
     };
     let snapshot = ParsedSnapshot::read(&snapshot_dir)?;
+    drop(guard);
 
     if let Some(receipt) = snapshot.receipt.as_ref() {
         let field = |key: &str| {
@@ -131,4 +171,37 @@ pub async fn load_code_graph(
     )
     .await?;
     Ok(CodeGraphLoad { state, delta })
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_repository_is_locked_by_its_canonical_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let held = lock_repository(dir.path()).await;
+        // Another spelling of the same directory waits.
+        let spelled = dir.path().join("sub/..");
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let waiting = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            lock_repository(&spelled),
+        )
+        .await;
+        assert!(waiting.is_err(), "the same repository must wait");
+        // A different repository does not.
+        let _other = lock_repository(other.path()).await;
+        drop(held);
+        let _again =
+            tokio::time::timeout(std::time::Duration::from_secs(5), lock_repository(&spelled))
+                .await
+                .unwrap();
+    }
 }
