@@ -100,8 +100,9 @@ pub struct CodeGraphLoad {
 /// repository stamp. Python's `get_code_graph_tasks` run as a pipeline,
 /// graph-only (`index_vectors=False`, the opt-in comes later).
 ///
-/// With a `ledger`, every node and edge written is recorded under its owner
-/// (the repository's `Data` row), so deleting the row finds them.
+/// With a `ledger`, every node and edge of the snapshot (written or already
+/// present) is recorded under its owner (the repository's `Data` row), so
+/// deleting the row finds them and deleting another owner keeps them.
 ///
 /// # Errors
 ///

@@ -15,11 +15,14 @@
 //! `fact_hash` is unchanged is not rewritten, and an edge the graph already
 //! has is not added again. Repository nodes are always rewritten.
 //!
-//! Every node and edge written is recorded in the relational provenance
-//! ledger (`node` / `edge` tables) under the owning `Data` row when a
-//! [`CodeGraphLedger`] is given, so deleting that row finds them. The rows
-//! are written before the graph writes they describe, as cognify writes them,
-//! so a failed write can always be swept.
+//! Every node and edge of the snapshot, written or left unchanged, is
+//! recorded in the relational provenance ledger (`node` / `edge` tables)
+//! under the owning `Data` row when a [`CodeGraphLedger`] is given, so
+//! deleting that row finds them, and deleting another row that also loaded
+//! them (an earlier owner of the same repository) leaves them in place. The
+//! inserts are idempotent upserts. The rows are written before the graph
+//! writes they describe, as cognify writes them, so a failed write can always
+//! be swept.
 //!
 //! Not here yet (SDK-1053 O6): the unchanged-snapshot skip, the stale node
 //! and edge sweep, and the node-set detag. The stamped `last_delta` reports
@@ -480,9 +483,16 @@ pub async fn add_code_graph_data_points(
         unchanged
     );
 
+    // The ledger covers the whole snapshot, not only what is written: a node
+    // left unchanged still belongs to this owner, and without its row a
+    // delete of an earlier owner that wrote it would take it out of the graph.
+    if ledger.is_some() {
+        let all: Vec<&CodeNode> = data_points.iter().collect();
+        let (nodes, edges) = storage_walk(&all);
+        record_in_ledger(ledger, &nodes, &edges).await?;
+    }
     if !to_write.is_empty() {
         let (nodes, edges) = storage_walk(&to_write);
-        record_in_ledger(ledger, &nodes, &edges).await?;
         graph
             .add_nodes_raw(nodes.into_iter().map(|node| node.properties).collect())
             .await?;
@@ -625,6 +635,12 @@ pub async fn add_code_graph_edges(
         skipped
     );
 
+    // Every typed relation of the snapshot is this owner's, written now or
+    // already present (see the node write).
+    if ledger.is_some() {
+        let all_edges: Vec<EdgeData> = edges.iter().map(typed_edge).collect();
+        record_in_ledger(ledger, &[], &all_edges).await?;
+    }
     let new_edges: Vec<EdgeData> = edges
         .iter()
         .filter(|edge| {
@@ -642,7 +658,6 @@ pub async fn add_code_graph_edges(
         edges.len() - new_edges.len()
     );
     if !new_edges.is_empty() {
-        record_in_ledger(ledger, &[], &new_edges).await?;
         graph.add_edges(&new_edges).await?;
     }
 

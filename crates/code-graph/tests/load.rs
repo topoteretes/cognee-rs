@@ -19,6 +19,7 @@ use cognee_code_graph::{
     CODE_GRAPH_MAPPING_VERSION, CodeGraphConfig, CodeGraphError, CodeGraphLedger, CodeGraphOwner,
     CodeNodeType, load_code_graph, run_enola_generate,
 };
+use cognee_database::ClaimantScope;
 use cognee_graph::{GraphDBTrait, MockGraphDB, NodeData};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -369,6 +370,111 @@ async fn the_ledger_records_every_node_and_edge_under_the_data_row() {
         .map(|(source, target, relationship, _)| (source, target, relationship))
         .collect();
     assert_eq!(recorded, stored);
+}
+
+/// A second owner whose load finds every node already in the graph still
+/// records the whole snapshot, so deleting the first owner (what delete
+/// removes: the rows only it claims) leaves the graph the second one needs.
+#[tokio::test]
+async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
+    let db = cognee_database::connect("sqlite::memory:").await.unwrap();
+    cognee_database::initialize(&db).await.unwrap();
+    let (user_id, dataset_id) = (Uuid::new_v4(), Uuid::new_v4());
+    cognee_database::ops::datasets::create_dataset(
+        &db,
+        cognee_models::Dataset::new("code".into(), user_id, None, dataset_id),
+    )
+    .await
+    .unwrap();
+    let owner = |data_id| CodeGraphOwner {
+        tenant_id: None,
+        user_id,
+        dataset_id,
+        data_id,
+        pipeline_run_id: None,
+    };
+    let (first, second) = (owner(Uuid::new_v4()), owner(Uuid::new_v4()));
+
+    let (_root, repo_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    load_code_graph(
+        &graph,
+        Some(&CodeGraphLedger {
+            db: &db,
+            owner: first,
+        }),
+        &config(),
+        &repo_path,
+        Some(&tag()),
+    )
+    .await
+    .unwrap();
+    let reload = load_code_graph(
+        &graph,
+        Some(&CodeGraphLedger {
+            db: &db,
+            owner: second,
+        }),
+        &config(),
+        &repo_path,
+        Some(&tag()),
+    )
+    .await
+    .unwrap();
+    let delta = reload.delta.unwrap();
+    assert_eq!(delta["nodes_added"], json!(0));
+    assert_eq!(delta["edges_added"], json!(0));
+
+    let (nodes, edges) = graph.get_graph_data().await.unwrap();
+    let second_nodes: BTreeSet<String> =
+        cognee_database::ops::graph_storage::get_nodes_by_data(&db, second.data_id, dataset_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.slug.to_string())
+            .collect();
+    let stored: BTreeSet<String> = nodes.iter().map(|(id, _)| id.clone()).collect();
+    assert_eq!(second_nodes, stored);
+    let second_edges =
+        cognee_database::ops::graph_storage::get_edges_by_data(&db, second.data_id, dataset_id)
+            .await
+            .unwrap();
+    let second_edges: BTreeSet<(String, String, String)> = second_edges
+        .iter()
+        .map(|row| {
+            (
+                row.source_node_id.to_string(),
+                row.destination_node_id.to_string(),
+                row.relationship_name.clone(),
+            )
+        })
+        .collect();
+    let stored: BTreeSet<(String, String, String)> = edges
+        .into_iter()
+        .map(|(source, target, relationship, _)| (source, target, relationship))
+        .collect();
+    assert_eq!(second_edges, stored);
+
+    for scope in [ClaimantScope::SameDataset, ClaimantScope::AnyDataset] {
+        let only_first = cognee_database::ops::graph_storage::get_unique_nodes_for_data(
+            &db,
+            first.data_id,
+            dataset_id,
+            scope,
+        )
+        .await
+        .unwrap();
+        assert!(only_first.is_empty(), "{only_first:?}");
+        let only_first = cognee_database::ops::graph_storage::get_unique_edges_for_data(
+            &db,
+            first.data_id,
+            dataset_id,
+            scope,
+        )
+        .await
+        .unwrap();
+        assert!(only_first.is_empty(), "{only_first:?}");
+    }
 }
 
 #[tokio::test]
