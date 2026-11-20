@@ -69,12 +69,14 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         // Python runs its image and audio loaders at `add`.
         .with_loader_registry(cm.add_loader_registry().await)
         // A code project's documents need an LLM (Python `resolve_code_repository`).
-        // An LLM that cannot even be resolved (an unregistered provider) is
-        // not usable either; `add` itself never calls it, so it must not fail.
-        .with_llm_available(cm.llm_available().await.unwrap_or_else(|error| {
-            tracing::warn!("LLM is not usable ({error}); treating it as unavailable");
-            false
-        }));
+        // An LLM configuration that cannot be resolved (a misspelled provider)
+        // fails the add, as in the bindings: treating it as "no LLM" would
+        // silently drop a code project's documents.
+        .with_llm_available(
+            cm.llm_available()
+                .await
+                .map_err(|error| CliError::Runtime(format!("{error}")))?,
+        );
 
         let inputs = args
             .data
