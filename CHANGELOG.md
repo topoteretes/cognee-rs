@@ -79,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `litellm_native` path does, and falls back to the `tools` → `functions` →
   `json` cascade when the endpoint refuses that shape or the answer is unusable.
   An endpoint that refuses it (Baseten's `gpt-oss-120b` answers HTTP 501) pays
-  one rejected request per schema per process. `json_schema` is now an alias of
+  two rejected requests (strict, then non-strict) per schema per process.
+  `json_schema` is now an alias of
   `auto`; set `tools`, `functions` or `json` to pin one shape as before. An
   unusable constrained answer falls back at once instead of being re-asked.
   Requests name the schema, tool or function after the schema's `title` (for

@@ -669,8 +669,8 @@ its default path only for a model litellm's table advertises as
 `supports_response_schema`. There is no such table for an arbitrary
 OpenAI-compatible base URL — anything can sit behind `LLM_ENDPOINT` — and some
 backends refuse a constrained request (Baseten's `gpt-oss-120b` answers
-**HTTP 501**). Such an endpoint pays one rejected request per schema per
-process, then gets the cascade straight away.
+**HTTP 501**). Such an endpoint pays two rejected requests per schema per
+process, one strict and one non-strict, then gets the cascade straight away.
 
 An answer that arrives but is unusable — empty, a refusal, not JSON, or failing
 validation — leaves the mode for the cascade at once rather than being re-asked.

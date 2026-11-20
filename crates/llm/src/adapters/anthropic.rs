@@ -738,15 +738,10 @@ impl AnthropicAdapter {
     /// Append a corrective instruction to the last user turn so the next attempt
     /// carries the failure reason. Thin wrapper over the shared
     /// [`crate::schema::append_corrective_instruction`] naming the forced tool as
-    /// Anthropic addresses it (`tool_use`). The name is read back from the
-    /// body's own `tool_choice`, so the instruction always names the tool the
-    /// request forces.
-    fn append_corrective_instruction(body: &mut Value, reason: Option<&str>) {
-        let tool_name = body["tool_choice"]["name"]
-            .as_str()
-            .unwrap_or(crate::schema::FALLBACK_SCHEMA_NAME)
-            .to_owned();
-        crate::schema::append_corrective_instruction(body, reason, &tool_name, "tool");
+    /// Anthropic addresses it (`tool_use`). `tool_name` is the tool the request
+    /// forces.
+    fn append_corrective_instruction(body: &mut Value, reason: Option<&str>, tool_name: &str) {
+        crate::schema::append_corrective_instruction(body, reason, tool_name, "tool");
     }
 
     /// Shared structured-output loop with instructor-style corrective retries.
@@ -893,7 +888,7 @@ impl AnthropicAdapter {
                         last_error = LlmError::InvalidResponse(format!(
                             "Anthropic structured output truncated: {reason}"
                         ));
-                        Self::append_corrective_instruction(&mut body, Some(reason));
+                        Self::append_corrective_instruction(&mut body, Some(reason), tool_name);
                         // Explicit, because the tool-input match below must stay
                         // unreachable for a truncated response however complete
                         // the partial object happens to look.
@@ -907,7 +902,11 @@ impl AnthropicAdapter {
                                 last_error = LlmError::InvalidResponse(format!(
                                     "Anthropic tool input failed validation: {reason}"
                                 ));
-                                Self::append_corrective_instruction(&mut body, Some(&reason));
+                                Self::append_corrective_instruction(
+                                    &mut body,
+                                    Some(&reason),
+                                    tool_name,
+                                );
                             }
                         },
                         None => {
@@ -915,7 +914,7 @@ impl AnthropicAdapter {
                                 "Anthropic response did not contain the forced tool_use block"
                                     .to_string(),
                             );
-                            Self::append_corrective_instruction(&mut body, None);
+                            Self::append_corrective_instruction(&mut body, None, tool_name);
                         }
                     }
                 }
@@ -952,7 +951,11 @@ impl AnthropicAdapter {
                 // attempt differs, the way instructor always reasks with changed
                 // content.
                 Err(e) => {
-                    Self::append_corrective_instruction(&mut body, Some(&e.to_string()));
+                    Self::append_corrective_instruction(
+                        &mut body,
+                        Some(&e.to_string()),
+                        tool_name,
+                    );
                     last_error = e;
                 }
             }
@@ -1332,7 +1335,11 @@ mod tests {
     fn corrective_instruction_appends_user_turn_when_last_is_assistant() {
         // A no-op here would silently drop the correction; a new user turn is added.
         let mut body = json!({ "messages": [{ "role": "assistant", "content": "prior" }] });
-        AnthropicAdapter::append_corrective_instruction(&mut body, Some("missing field `x`"));
+        AnthropicAdapter::append_corrective_instruction(
+            &mut body,
+            Some("missing field `x`"),
+            "Person",
+        );
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2, "a new user turn must carry the correction");
         assert_eq!(msgs[1]["role"], "user");

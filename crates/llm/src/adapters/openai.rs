@@ -203,7 +203,8 @@ impl CascadeProbe {
 /// How much constrained decoding this endpoint has been observed to accept for
 /// **one particular schema**.
 ///
-/// Only reachable under [`StructuredOutputMode::JsonSchema`], and only ever
+/// Reachable under [`StructuredOutputMode::Auto`] (the default) and its alias
+/// [`StructuredOutputMode::JsonSchema`], and only ever
 /// moves in one direction (a demotion is never undone for the life of the
 /// adapter). Mirrors what litellm's `litellm_native` adapter caches per
 /// `(model, response_model)`: it tries `strict: true` first and remembers the
@@ -343,7 +344,7 @@ impl JsonSchemaMemo {
     ///
     /// The memo is keyed on caller-supplied schemas, and
     /// `create_structured_output_raw` takes an arbitrary `Value`, so a
-    /// long-lived multi-tenant service that opts into this mode could otherwise
+    /// long-lived multi-tenant service on the default mode could otherwise
     /// grow it without bound. 1024 is ~200x any real workload — cognify uses a
     /// handful — so the reset below is not something a genuine deployment
     /// reaches.
@@ -2603,9 +2604,9 @@ impl OpenAIAdapter {
         // turn on across a heterogeneous fleet. See [`JsonSchemaMemo`].
         // ------------------------------------------------------------------
         if mode_pin.allows_json_schema() {
-            // Computed here rather than above the `if` so the default `auto`
-            // path and the three cascade pins — none of which consult the memo —
-            // do not pay a recursive hash of the schema on every call.
+            // Computed here rather than above the `if` so the three cascade
+            // pins, which never consult the memo, do not pay a recursive hash
+            // of the schema on every call.
             let fingerprint = crate::schema::schema_fingerprint(json_schema);
             // Reason carried into the next attempt's corrective instruction, so
             // a retry is never a byte-identical re-send. Separate from the

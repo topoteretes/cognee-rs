@@ -44,7 +44,7 @@
     reason = "integration test code — panics are acceptable"
 )]
 
-use cognee_llm::{Llm, OpenAIAdapter, StructuredOutputMode};
+use cognee_llm::{Llm, LlmExt, OpenAIAdapter, StructuredOutputMode};
 use httpmock::prelude::*;
 use serde_json::json;
 
@@ -69,6 +69,12 @@ fn schema() -> serde_json::Value {
 /// A second, structurally different schema — for the per-schema memo test.
 fn other_schema() -> serde_json::Value {
     json!({"type": "object", "properties": {"baz": {"type": "string"}}})
+}
+
+/// A typed target, so the typed validator runs: an answer without `foo` fails it.
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct Foo {
+    foo: String,
 }
 
 fn adapter(server: &MockServer, mode: StructuredOutputMode) -> OpenAIAdapter {
@@ -343,6 +349,58 @@ async fn an_unusable_answer_leaves_the_mode_at_once() {
         .await;
 
     assert_eq!(result.unwrap(), json!({"foo": "bar"}));
+    assert_eq!(constrained.calls_async().await, 1, "no constrained re-ask");
+    assert_eq!(tools.calls_async().await, 1, "the cascade answered");
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_empty_answer() {
+    assert_one_constrained_request_then_the_cascade(r#""""#).await;
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_answer_that_is_not_json() {
+    assert_one_constrained_request_then_the_cascade(r#""Sure, here it is.""#).await;
+}
+
+#[tokio::test]
+async fn auto_leaves_the_mode_at_once_on_an_answer_that_fails_validation() {
+    // Valid JSON without the required `foo`.
+    assert_one_constrained_request_then_the_cascade(r#""{\"bar\":\"x\"}""#).await;
+}
+
+/// Answers the constrained request with `content` (a JSON string literal) and
+/// asserts that `auto`, with retries to spare, sends it once and then lets the
+/// cascade answer.
+async fn assert_one_constrained_request_then_the_cascade(content: &str) {
+    let server = MockServer::start_async().await;
+    let unusable = format!(
+        r#"{{"id":"x","object":"chat.completion","created":1,"model":"m",
+            "choices":[{{"index":0,"message":{{"role":"assistant","content":{content}}},
+              "finish_reason":"stop"}}]}}"#
+    );
+    let constrained = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/chat/completions")
+                .body_includes("\"json_schema\"");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(&unusable);
+        })
+        .await;
+    let tools = tools_mock(&server, USABLE).await;
+    let llm = OpenAIAdapter::new("gpt-4o-mini", "test-key", Some(server.base_url()))
+        .unwrap()
+        .with_network_retries(0)
+        .with_structured_output_retries(3);
+
+    let answer: Foo = llm
+        .create_structured_output("input text", "system prompt", None)
+        .await
+        .unwrap();
+
+    assert_eq!(answer.foo, "bar");
     assert_eq!(constrained.calls_async().await, 1, "no constrained re-ask");
     assert_eq!(tools.calls_async().await, 1, "the cascade answered");
 }

@@ -221,7 +221,7 @@ impl StructuredOutputMode {
     /// Whether the constrained `response_format: json_schema` shape may be sent.
     ///
     /// True under [`Self::Auto`] as well. An endpoint that refuses the shape
-    /// pays one rejected request per schema, after
+    /// pays two rejected requests per schema (strict, then non-strict), after
     /// which the demotion memo sends the cascade straight away.
     pub fn allows_json_schema(self) -> bool {
         matches!(self, Self::Auto | Self::JsonSchema)
