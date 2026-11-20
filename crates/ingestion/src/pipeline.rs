@@ -1131,6 +1131,7 @@ pub async fn persist_data_with_acl_and_locks(
             );
         if !unchanged {
             let replaced = replaced_locations(
+                storage,
                 &existing_data,
                 &refresh.raw_data_location,
                 &refresh.original_data_location,
@@ -1259,7 +1260,12 @@ async fn persist_pinned_row(
         content_changed,
     )?;
 
-    let replaced = replaced_locations(&row, &processed.raw_data_uri, &processed.original_location);
+    let replaced = replaced_locations(
+        storage,
+        &row,
+        &processed.raw_data_uri,
+        &processed.original_location,
+    );
     row.name = processed.name.clone();
     row.raw_data_location = processed.raw_data_uri.clone();
     row.original_data_location = processed.original_location.clone();
@@ -1292,11 +1298,24 @@ async fn persist_pinned_row(
 }
 
 /// The files `row` points at now and will not once it holds `raw` and
-/// `original` (Python `ingest_data`'s `replaced_locations`).
-fn replaced_locations(row: &Data, raw: &str, original: &str) -> Vec<String> {
+/// `original` (Python `ingest_data`'s `replaced_locations`). A location
+/// spelled differently from a new one but naming the same file on disk is
+/// kept: on a case-insensitive file system `<hash>/Notes.txt` and
+/// `<hash>/notes.txt` are one file, which the re-add just overwrote.
+fn replaced_locations(
+    storage: &dyn StorageTrait,
+    row: &Data,
+    raw: &str,
+    original: &str,
+) -> Vec<String> {
+    let same_file = |old: &str, new: &str| {
+        old == new
+            || same_file::is_same_file(storage.get_full_path(old), storage.get_full_path(new))
+                .unwrap_or(false)
+    };
     let mut replaced: Vec<String> = Vec::new();
     for old in [&row.raw_data_location, &row.original_data_location] {
-        if old != raw && old != original && !replaced.contains(old) {
+        if !same_file(old, raw) && !same_file(old, original) && !replaced.contains(old) {
             replaced.push(old.clone());
         }
     }
@@ -1315,6 +1334,9 @@ async fn release_replaced_files(
         return Ok(());
     }
     let removal = cognee_storage::removing_stored_files().await;
+    // Every file is tried; the ones that could not be removed are reported
+    // together (Python `StoredFileNotRemovedError`).
+    let mut failures: Vec<String> = Vec::new();
     for location in locations {
         if !cognee_storage::is_storage_managed(storage.base_path(), location)
             || removal.is_claimed(&storage.get_full_path(location))
@@ -1327,16 +1349,17 @@ async fn release_replaced_files(
             Err(cognee_storage::StorageError::NotFound(_)) => {
                 warn!(%location, "replaced file was already gone");
             }
-            Err(error) => {
-                return Err(format!(
-                    "The new content was stored, but its replaced file {location} \
-                     could not be removed: {error}"
-                )
-                .into());
-            }
+            Err(error) => failures.push(format!("{location}: {error}")),
         }
     }
-    Ok(())
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "The new content was stored, but its replaced files could not be removed: {}",
+        failures.join("; ")
+    )
+    .into())
 }
 
 /// The `external_metadata` and `node_set` column a re-ingested (pinned) row
@@ -5255,6 +5278,24 @@ mod tests {
         assert!(written.is_empty(), "nothing is stored: {written:?}");
     }
 
+    /// The longest name accepted, 255 bytes, is stored: its temp file must
+    /// fit the file system's name limit too.
+    #[tokio::test]
+    async fn a_binary_upload_with_a_255_byte_name_is_stored() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(temp_dir.path().to_path_buf());
+        let name = format!("{}.txt", "a".repeat(251));
+        let input = DataInput::Binary {
+            data: b"a note with a long name".to_vec(),
+            name: name.clone(),
+        };
+        let processed = process_input(&input, &storage, HashAlgorithm::Md5, Uuid::new_v4(), None)
+            .await
+            .unwrap();
+        let stored = temp_dir.path().join(&processed.content_hash).join(&name);
+        assert!(stored.exists(), "{}", stored.display());
+    }
+
     /// An upload whose loader fails is not stored: no row will point at it.
     #[tokio::test]
     async fn a_failed_add_leaves_no_upload_behind() {
@@ -5393,6 +5434,106 @@ mod tests {
         let folder = temp_dir.path().join(&new.content_hash);
         assert!(folder.join("old.txt").exists(), "ds2's row still uses it");
         assert!(folder.join("new.txt").exists());
+    }
+
+    /// `location` with its file name lowercased.
+    fn lowercase_name(location: &str) -> String {
+        match location.rsplit_once('/') {
+            Some((folder, name)) => format!("{folder}/{}", name.to_lowercase()),
+            None => location.to_lowercase(),
+        }
+    }
+
+    /// A store on a case-insensitive file system (APFS, NTFS): names that
+    /// differ only in case are one file. Locations come back as given.
+    struct CaseInsensitive(cognee_storage::LocalStorage);
+
+    #[async_trait::async_trait]
+    impl StorageTrait for CaseInsensitive {
+        async fn store(
+            &self,
+            data: &[u8],
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.0.store(data, &lowercase_name(file_name)).await?;
+            Ok(file_name.to_string())
+        }
+        async fn store_stream_dyn(
+            &self,
+            reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+            file_name: &str,
+        ) -> Result<String, cognee_storage::StorageError> {
+            self.0
+                .store_stream_dyn(reader, &lowercase_name(file_name))
+                .await?;
+            Ok(file_name.to_string())
+        }
+        async fn create_writer(
+            &self,
+            file_name: &str,
+        ) -> Result<cognee_storage::StorageWriter, cognee_storage::StorageError> {
+            self.0.create_writer(&lowercase_name(file_name)).await
+        }
+        async fn retrieve(&self, location: &str) -> Result<Vec<u8>, cognee_storage::StorageError> {
+            self.0.retrieve(&lowercase_name(location)).await
+        }
+        async fn exists(&self, location: &str) -> Result<bool, cognee_storage::StorageError> {
+            self.0.exists(&lowercase_name(location)).await
+        }
+        async fn delete(&self, location: &str) -> Result<(), cognee_storage::StorageError> {
+            self.0.delete(&lowercase_name(location)).await
+        }
+        fn get_full_path(&self, location: &str) -> PathBuf {
+            self.0.get_full_path(&lowercase_name(location))
+        }
+        fn base_path(&self) -> &str {
+            self.0.base_path()
+        }
+        async fn initialize(&self) -> Result<(), cognee_storage::StorageError> {
+            self.0.initialize().await
+        }
+        async fn remove_all(&self) -> Result<(), cognee_storage::StorageError> {
+            self.0.remove_all().await
+        }
+        async fn remove_empty_parent(
+            &self,
+            location: &str,
+        ) -> Result<(), cognee_storage::StorageError> {
+            self.0.remove_empty_parent(&lowercase_name(location)).await
+        }
+    }
+
+    /// On a case-insensitive file system, re-adding an upload under a name
+    /// that differs only in case overwrites the same file; it is not removed
+    /// as replaced.
+    #[tokio::test]
+    async fn re_adding_under_a_name_differing_in_case_keeps_the_file() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = CaseInsensitive(cognee_storage::LocalStorage::new(
+            temp_dir.path().to_path_buf(),
+        ));
+        let owner_id = Uuid::new_v4();
+        let mut row = None;
+        for name in ["Notes.txt", "notes.txt"] {
+            let input = DataInput::Binary {
+                data: b"an uploaded note".to_vec(),
+                name: name.into(),
+            };
+            let processed = process_input(&input, &storage, HashAlgorithm::Md5, owner_id, None)
+                .await
+                .unwrap();
+            row = Some(
+                persist_data(&processed, &storage, &db, "ds", owner_id, None)
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let row = row.unwrap();
+        assert!(row.original_data_location.ends_with("/notes.txt"));
+        assert!(storage.exists(&row.original_data_location).await.unwrap());
     }
 
     /// A re-add whose item carries metadata but no label keeps the stored

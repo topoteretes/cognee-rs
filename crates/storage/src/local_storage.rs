@@ -322,13 +322,14 @@ async fn write_atomically(
 }
 
 /// A unique temp file beside `full_path`, so the rename stays in one folder
-/// and two writers of the same file never share a temp file.
+/// and two writers of the same file never share a temp file. Its name does
+/// not repeat the file's, so every name the file system accepts (up to 255
+/// bytes) also fits its temp file.
 fn temp_path_for(full_path: &Path) -> Result<PathBuf, StorageError> {
-    let name = full_path
-        .file_name()
-        .ok_or_else(|| StorageError::InvalidPath(full_path.display().to_string()))?;
-    let temp_name = format!(".{}.{}.tmp", name.to_string_lossy(), Uuid::new_v4());
-    Ok(full_path.with_file_name(temp_name))
+    if full_path.file_name().is_none() {
+        return Err(StorageError::InvalidPath(full_path.display().to_string()));
+    }
+    Ok(full_path.with_file_name(format!(".{}.tmp", Uuid::new_v4())))
 }
 
 #[cfg(test)]

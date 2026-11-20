@@ -48,8 +48,11 @@ pub async fn remove_stored_file(
     let folder_in_use = full_path
         .parent()
         .is_some_and(|folder| removal.is_claimed_under(folder));
-    if !folder_in_use {
-        storage.remove_empty_parent(location).await?;
+    // Removing the folder is housekeeping: the file is gone, so a folder
+    // that cannot be removed (permissions, a scanner holding it) is only
+    // reported.
+    if !folder_in_use && let Err(error) = storage.remove_empty_parent(location).await {
+        tracing::warn!(%location, %error, "could not remove an emptied storage folder");
     }
     Ok(())
 }
