@@ -23,8 +23,7 @@ pub const SOURCE_DLT_SOURCE: &str = "dlt_source";
 pub const SOURCE_DLT_LEGACY: &str = "dlt";
 /// The `system_metadata.source` stamp of a single code file.
 pub const SOURCE_CODE: &str = "code";
-/// The `system_metadata.source` stamp of a code-repository manifest.
-pub const SOURCE_CODE_REPO: &str = "code_repo";
+pub use cognee_models::code_repo::SOURCE_CODE_REPO;
 
 /// The task routes cognify can send a data item down (Python `CognifyRoute`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

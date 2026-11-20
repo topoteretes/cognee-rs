@@ -138,8 +138,7 @@ pub const DOCUMENT_EXTENSIONS: &[&str] = &[
     "msg", "epub",
 ];
 
-/// The `system_metadata.source` stamp of a code-repository manifest.
-pub const SOURCE_CODE_REPO: &str = "code_repo";
+pub use cognee_models::code_repo::{CODE_REPO_MANIFEST_KIND, SOURCE_CODE_REPO};
 
 /// Git LFS leaves a file it did not download as a small pointer (under 1024
 /// bytes: a version line, optional ext lines, then oid and size). Python's
@@ -338,7 +337,7 @@ pub fn build_repo_manifest(directory: &Path, covered: &[PathBuf]) -> io::Result<
         format!("[\n{}\n  ]", lines.join(",\n"))
     };
     Ok(format!(
-        "{{\n  \"kind\": \"code_repo_manifest\",\n  \"repo_path\": {},\n  \"file_count\": {},\n  \"files\": {},\n  \"content_hash\": \"{}\"\n}}",
+        "{{\n  \"kind\": \"{CODE_REPO_MANIFEST_KIND}\",\n  \"repo_path\": {},\n  \"file_count\": {},\n  \"files\": {},\n  \"content_hash\": \"{}\"\n}}",
         py_json_string(&path_text(directory)),
         files.len(),
         files_json,

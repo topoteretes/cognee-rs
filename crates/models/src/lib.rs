@@ -1,6 +1,8 @@
 //! Core data types shared across the cognee-rust crates (Data, Dataset, Document, DocumentChunk, Entity, KnowledgeGraph, and more).
 
 mod backend_overrides;
+/// Code-repository route stamp and manifest kind.
+pub mod code_repo;
 mod data;
 mod data_input;
 mod data_point;

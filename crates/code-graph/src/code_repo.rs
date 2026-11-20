@@ -17,8 +17,7 @@ use crate::error::{CodeGraphError, CodeGraphResult};
 use crate::pipeline::{CodeGraphLoad, load_code_graph};
 use crate::writer::CodeGraphLedger;
 
-/// The `kind` of a repo manifest (Python's `build_repo_manifest`).
-pub const CODE_REPO_MANIFEST_KIND: &str = "code_repo_manifest";
+pub use cognee_models::code_repo::CODE_REPO_MANIFEST_KIND;
 
 /// The repository path a stored repo manifest points at (its `repo_path`).
 ///
