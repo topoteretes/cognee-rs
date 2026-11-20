@@ -1493,6 +1493,32 @@ impl GraphDBTrait for PgGraphAdapter {
         self.add_edges(&[edge]).await
     }
 
+    /// One `DELETE … USING unnest(...)` per `ID_BATCH` keys. The keys are
+    /// sanitized as `add_edges` sanitizes the rows it writes (see `has_edges`),
+    /// so a NUL-bearing triple matches the row it was stored as.
+    async fn delete_edge_triples(&self, edges: &[crate::traits::EdgeKey]) -> GraphDBResult<()> {
+        for chunk in edges.chunks(ID_BATCH) {
+            let mut sources = Vec::with_capacity(chunk.len());
+            let mut targets = Vec::with_capacity(chunk.len());
+            let mut rels = Vec::with_capacity(chunk.len());
+            for (source, target, relationship) in chunk {
+                sources.push(sanitize_str(source).into_owned());
+                targets.push(sanitize_str(target).into_owned());
+                rels.push(sanitize_str(relationship).into_owned());
+            }
+            self.execute_tuned(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "DELETE FROM graph_edge e \
+                 USING unnest($1::text[], $2::text[], $3::text[]) AS v(s, t, r) \
+                 WHERE e.source_id = v.s AND e.target_id = v.t AND e.relationship_name = v.r",
+                [sources.into(), targets.into(), rels.into()],
+            ))
+            .await
+            .map_err(|e| GraphDBError::EdgeError(format!("Failed to delete edges: {e}")))?;
+        }
+        Ok(())
+    }
+
     async fn add_edges(&self, edges: &[EdgeData]) -> GraphDBResult<()> {
         if edges.is_empty() {
             return Ok(());

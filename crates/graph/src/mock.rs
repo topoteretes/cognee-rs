@@ -179,7 +179,8 @@ impl MockGraphDB {
     /// `"get_candidate_nodes_by_label"`, `"get_nodeset_subgraph"`,
     /// `"get_neighborhood"`, `"get_timestamps_in_range"`,
     /// `"get_temporal_anchors"`, `"get_node_truth_state"`,
-    /// `"set_node_truth_state"`, `"delete_nodes"`, and `"close"`.
+    /// `"set_node_truth_state"`, `"delete_nodes"`, `"delete_edge_triples"`,
+    /// and `"close"`.
     pub fn get_call_log(&self) -> Vec<String> {
         self.call_log.lock().unwrap().clone() // lock poison is unrecoverable
     }
@@ -327,6 +328,24 @@ impl GraphDBTrait for MockGraphDB {
         }
 
         Ok(existing)
+    }
+
+    async fn delete_edge_triples(&self, edges: &[crate::EdgeKey]) -> GraphDBResult<()> {
+        self.call_log
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .push("delete_edge_triples".to_string());
+        let removed: HashSet<(&str, &str, &str)> = edges
+            .iter()
+            .map(|(src, tgt, rel)| (src.as_str(), tgt.as_str(), rel.as_str()))
+            .collect();
+        self.edges
+            .lock()
+            .unwrap() // lock poison is unrecoverable
+            .retain(|(src, tgt, rel, _)| {
+                !removed.contains(&(src.as_str(), tgt.as_str(), rel.as_str()))
+            });
+        Ok(())
     }
 
     async fn add_edge(
@@ -1263,6 +1282,28 @@ mod tests {
         // Edges between surviving nodes stay.
         assert!(db.has_edge("a", "c", "untouched").await.unwrap());
         assert_eq!(db.edge_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_edge_triples_removes_only_the_named_edges() {
+        let db = MockGraphDB::new();
+        for id in ["a", "b"] {
+            db.add_node_raw(serde_json::json!({"id": id, "type": "T"}))
+                .await
+                .unwrap();
+        }
+        db.add_edge("a", "b", "calls", None).await.unwrap();
+        db.add_edge("a", "b", "imports", None).await.unwrap();
+        db.add_edge("b", "a", "calls", None).await.unwrap();
+
+        db.delete_edge_triples(&[("a".into(), "b".into(), "calls".into())])
+            .await
+            .unwrap();
+
+        assert_eq!(db.node_count(), 2);
+        assert!(!db.has_edge("a", "b", "calls").await.unwrap());
+        assert!(db.has_edge("a", "b", "imports").await.unwrap());
+        assert!(db.has_edge("b", "a", "calls").await.unwrap());
     }
 
     #[tokio::test]

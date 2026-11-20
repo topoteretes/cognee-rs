@@ -25,3 +25,4 @@ macro_rules! mock_test {
 mock_test!(test_get_top_degree_node_ids_matches_default);
 mock_test!(test_get_bounded_neighborhood_matches_default);
 mock_test!(test_get_entity_type_names_matches_default);
+mock_test!(test_delete_edge_triples);

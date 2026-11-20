@@ -317,6 +317,40 @@ pub async fn test_has_edges(db: &dyn GraphDBTrait) {
     assert_eq!(found[0].2, "rel");
 }
 
+/// `delete_edge_triples` removes exactly the named `(source, target,
+/// relationship)` edges: the endpoints, the same pair under another name, the
+/// reverse direction and unrelated edges all survive, and an unknown key is
+/// ignored.
+pub async fn test_delete_edge_triples(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let a = TestNode::new("da", "A", "T", 0);
+    let b = TestNode::new("db", "B", "T", 0);
+    let c = TestNode::new("dc", "C", "T", 0);
+    db.add_nodes(&[&a, &b, &c]).await.unwrap();
+    db.add_edge("da", "db", "calls", None).await.unwrap();
+    db.add_edge("da", "db", "imports", None).await.unwrap();
+    db.add_edge("db", "da", "calls", None).await.unwrap();
+    db.add_edge("db", "dc", "uses", None).await.unwrap();
+
+    db.delete_edge_triples(&[
+        ("da".into(), "db".into(), "calls".into()),
+        ("db".into(), "dc".into(), "uses".into()),
+        ("dx".into(), "dy".into(), "calls".into()),
+    ])
+    .await
+    .unwrap();
+
+    assert!(!db.has_edge("da", "db", "calls").await.unwrap());
+    assert!(!db.has_edge("db", "dc", "uses").await.unwrap());
+    assert!(db.has_edge("da", "db", "imports").await.unwrap());
+    assert!(db.has_edge("db", "da", "calls").await.unwrap());
+    for id in ["da", "db", "dc"] {
+        assert!(db.has_node(id).await.unwrap(), "{id} survives");
+    }
+    db.delete_edge_triples(&[]).await.unwrap();
+}
+
 /// Equivalence + property-preservation check for the batched `has_edges`.
 ///
 /// Asserts the set-based `has_edges` returns exactly the same subset as calling
