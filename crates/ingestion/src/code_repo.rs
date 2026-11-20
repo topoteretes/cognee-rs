@@ -163,12 +163,15 @@ pub fn detect_code_project(directory: &Path) -> bool {
         .any(|marker| directory.join(marker).exists())
 }
 
+/// Whether one path component names a skipped directory or a hidden entry.
+fn is_skipped_name(part: &std::ffi::OsStr) -> bool {
+    let part = part.to_string_lossy();
+    SKIP_DIRS.contains(&part.as_ref()) || part.starts_with('.')
+}
+
 fn is_skipped_path(relative: &Path) -> bool {
     relative.components().any(|component| match component {
-        Component::Normal(part) => {
-            let part = part.to_string_lossy();
-            SKIP_DIRS.contains(&part.as_ref()) || part.starts_with('.')
-        }
+        Component::Normal(part) => is_skipped_name(part),
         _ => false,
     })
 }
@@ -202,20 +205,70 @@ fn python_path_order(left: &Path, right: &Path) -> Ordering {
     left.components().cmp(right.components())
 }
 
-/// Every entry under `directory`, as Python's `directory.rglob("*")` lists it:
-/// files, directories and symlinks, without descending into symlinked
-/// directories.
-fn walk(directory: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
+/// A directory walk's output.
+#[derive(Debug, Default)]
+struct Walk {
+    /// Every entry listed, as Python's `directory.rglob("*")` lists it:
+    /// files, directories and symlinks, without descending into symlinked
+    /// directories.
+    entries: Vec<PathBuf>,
+    /// Directories not descended into because their name is skipped
+    /// ([`SKIP_DIRS`] or hidden), when the walk prunes.
+    pruned: Vec<PathBuf>,
+}
+
+/// Walk `directory`. With `prune`, a directory whose name is skipped is
+/// recorded in [`Walk::pruned`] and not descended into: everything under it
+/// would be skipped anyway, and a `node_modules` or `.git` can be huge.
+///
+/// Like Python's `rglob`, a subdirectory that cannot be listed, an entry that
+/// cannot be read and an entry that vanished mid-walk are skipped (logged)
+/// rather than failing the walk.
+///
+/// # Errors
+///
+/// `directory` itself cannot be listed.
+fn walk(directory: &Path, prune: bool) -> io::Result<Walk> {
+    let mut walk = Walk::default();
+    walk_entries(fs::read_dir(directory)?, prune, &mut walk);
+    Ok(walk)
+}
+
+fn walk_entries(entries: fs::ReadDir, prune: bool, walk: &mut Walk) {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!("Skipping an unreadable directory entry: {error}");
+                continue;
+            }
+        };
         let path = entry.path();
-        let file_type = entry.file_type()?;
-        out.push(path.clone());
+        // Does not follow symlinks: a symlinked directory is not descended.
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                tracing::warn!("Skipping '{}': {error}", path.display());
+                continue;
+            }
+        };
+        if file_type.is_dir() && prune && is_skipped_name(&entry.file_name()) {
+            walk.pruned.push(path);
+            continue;
+        }
+        walk.entries.push(path.clone());
         if file_type.is_dir() {
-            walk(&path, out)?;
+            match fs::read_dir(&path) {
+                Ok(children) => walk_entries(children, prune, walk),
+                Err(error) => {
+                    tracing::warn!(
+                        "Skipping unreadable directory '{}': {error}",
+                        path.display()
+                    );
+                }
+            }
         }
     }
-    Ok(())
 }
 
 /// A project tree split by [`partition_repo_files`].
@@ -226,8 +279,10 @@ pub struct RepoPartition {
     pub covered: Vec<PathBuf>,
     /// Files whose extension a non-code loader claims: added individually.
     pub documents: Vec<PathBuf>,
-    /// Hidden files and directories, build junk, unclaimed extensions,
-    /// skipped media, symlinks and Git LFS pointers: never ingested.
+    /// Hidden files, build junk, unclaimed extensions, skipped media,
+    /// symlinks, Git LFS pointers and unreadable files: never ingested. A
+    /// hidden or [`SKIP_DIRS`] directory is listed once, as the directory,
+    /// since it is not walked.
     pub skipped: Vec<PathBuf>,
 }
 
@@ -236,20 +291,29 @@ pub struct RepoPartition {
 ///
 /// Symlinks are skipped rather than followed: a repository containing
 /// `creds.py -> ~/.aws/credentials` must not pull the target into the
-/// manifest.
+/// manifest. Hidden and [`SKIP_DIRS`] directories are not walked. An
+/// unreadable subdirectory or file, or one that vanishes mid-walk, is
+/// skipped with a warning (Python's `rglob` skips what it cannot list).
 ///
 /// # Errors
 ///
-/// A directory that cannot be listed or a file whose metadata or (for a
-/// possible LFS pointer) content cannot be read.
+/// `directory` itself cannot be listed.
 pub fn partition_repo_files(directory: &Path) -> io::Result<RepoPartition> {
-    let mut entries = Vec::new();
-    walk(directory, &mut entries)?;
+    let Walk {
+        mut entries,
+        pruned,
+    } = walk(directory, true)?;
     entries.sort_by(|left, right| python_path_order(left, right));
 
     let mut partition = RepoPartition::default();
     for file_path in entries {
-        let metadata = fs::symlink_metadata(&file_path)?;
+        let metadata = match fs::symlink_metadata(&file_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                tracing::warn!("Skipping '{}': {error}", file_path.display());
+                continue;
+            }
+        };
         if metadata.file_type().is_symlink() {
             partition.skipped.push(file_path);
             continue;
@@ -273,14 +337,23 @@ pub fn partition_repo_files(directory: &Path) -> io::Result<RepoPartition> {
             partition.covered.push(file_path);
         } else if REPO_SKIPPED_MEDIA_EXTENSIONS.contains(&extension.as_str()) {
             partition.skipped.push(file_path);
-        } else if DOCUMENT_EXTENSIONS.contains(&extension.as_str())
-            && !is_lfs_pointer(&file_path, metadata.len())?
-        {
-            partition.documents.push(file_path);
+        } else if DOCUMENT_EXTENSIONS.contains(&extension.as_str()) {
+            match is_lfs_pointer(&file_path, metadata.len()) {
+                Ok(false) => partition.documents.push(file_path),
+                Ok(true) => partition.skipped.push(file_path),
+                Err(error) => {
+                    tracing::warn!("Skipping unreadable '{}': {error}", file_path.display());
+                    partition.skipped.push(file_path);
+                }
+            }
         } else {
             partition.skipped.push(file_path);
         }
     }
+    partition.skipped.extend(pruned);
+    partition
+        .skipped
+        .sort_by(|left, right| python_path_order(left, right));
     Ok(partition)
 }
 
@@ -433,10 +506,10 @@ pub fn resolve_code_repository(
 }
 
 /// Every regular file under `directory`, recursively (Python's
-/// `rglob("*")` + `is_file()`), in Python's path order.
+/// `rglob("*")` + `is_file()`), in Python's path order. Hidden directories
+/// are walked (only a code project skips them); unreadable ones are skipped.
 fn flatten_directory(directory: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut entries = Vec::new();
-    walk(directory, &mut entries)?;
+    let mut entries = walk(directory, false)?.entries;
     entries.sort_by(|left, right| python_path_order(left, right));
     // `is_file` follows symlinks, as Python's does.
     Ok(entries.into_iter().filter(|path| path.is_file()).collect())
@@ -578,20 +651,96 @@ mod tests {
             names(root, &partition.documents),
             vec!["README.md", "docs/guide.pdf", "logo.png"]
         );
+        // Python lists every file under a skipped directory; the directory
+        // is not walked here, so it is listed once instead.
         let mut skipped = names(root, &partition.skipped);
         skipped.sort();
         assert_eq!(
             skipped,
             vec![
                 ".env",
-                ".git/config",
+                ".git",
                 "bin/tool.exe",
-                "node_modules/lib/index.js",
-                "pkg/__pycache__/mod.cpython-312.pyc",
+                "node_modules",
+                "pkg/__pycache__",
                 "promo.mp4",
                 "uv.lock",
             ]
         );
+    }
+
+    #[test]
+    fn skipped_directories_are_not_walked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "go.mod", b"module x\n");
+        write(root, "node_modules/lib/deep/index.js", b"x\n");
+        write(root, ".git/objects/ab/cdef", b"\x00");
+        write(root, "src/.cache/x.go", b"package x\n");
+        write(root, "src/main.go", b"package main\n");
+
+        let walked = walk(root, true).unwrap();
+        let entries = names(root, &walked.entries);
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.starts_with("node_modules"))
+        );
+        assert!(!entries.iter().any(|entry| entry.starts_with(".git")));
+        assert!(!entries.iter().any(|entry| entry.contains(".cache")));
+        let mut pruned = names(root, &walked.pruned);
+        pruned.sort();
+        assert_eq!(pruned, vec![".git", "node_modules", "src/.cache"]);
+
+        // A plain directory flattens everything, hidden directories included.
+        let flat = flatten_directory(root).unwrap();
+        assert!(
+            flat.iter()
+                .any(|path| path.ends_with("node_modules/lib/deep/index.js"))
+        );
+        assert!(
+            flat.iter()
+                .any(|path| path.ends_with(".git/objects/ab/cdef"))
+        );
+    }
+
+    // Python's rglob skips a directory it cannot list.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "go.mod", b"module x\n");
+        write(root, "src/main.go", b"package main\n");
+        write(root, "locked/secret.go", b"package locked\n");
+        write(root, "README.md", b"# r\n");
+        let locked = root.join("locked");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&locked).is_ok() {
+            // Running as root: permissions are not enforced.
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let partition = partition_repo_files(root);
+        let flattened = flatten_directory(root);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let partition = partition.unwrap();
+        assert_eq!(
+            names(root, &partition.covered),
+            vec!["go.mod", "src/main.go"]
+        );
+        assert_eq!(names(root, &partition.documents), vec!["README.md"]);
+        let flattened = flattened.unwrap();
+        assert_eq!(flattened.len(), 3, "{flattened:?}");
+    }
+
+    #[test]
+    fn an_unlistable_root_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(partition_repo_files(&dir.path().join("missing")).is_err());
     }
 
     // Python: test_lfs_pointers_of_documents_are_skipped
