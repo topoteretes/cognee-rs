@@ -472,6 +472,9 @@ pub async fn run_cognify_on_items(
     let config = if cognee::cognify::routing::routes_need_llm(&data_items) {
         cognify_config_with_opts(svc, opts).await?
     } else {
+        // Nothing is built, but a selection the caller made is still checked
+        // (shape, and registered); the configured default is not.
+        crate::graph_backend::check_explicit_graph_backend(&svc.component_manager, opts)?;
         let config = apply_cognify_opts(svc.cognify_config.clone(), opts)?;
         validate_cognify_config(&config)?;
         config

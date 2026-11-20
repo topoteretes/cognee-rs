@@ -83,3 +83,50 @@ async fn a_keyless_handle_cognifies_a_code_project() {
         .expect("second cognify");
     assert_eq!(again["alreadyCompleted"], true);
 }
+
+/// A code-only cognify builds no extractor, but a selection the caller
+/// passed is still validated: a misspelled or malformed `graphBackend` or
+/// `extractor` is refused, while the keyless default and an explicit `llm`
+/// are not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_code_only_cognify_still_validates_an_explicit_extractor() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("shop");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("go.mod"), "module shop\n").unwrap();
+    std::fs::write(repo.join("main.go"), "package main\n").unwrap();
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic").unwrap();
+
+    let state = HandleState::from_settings(settings_under(&dir));
+    pipeline::add(
+        &state,
+        json!({ "type": "file", "path": repo.to_string_lossy() }),
+        "code",
+        &Value::Null,
+    )
+    .await
+    .expect("add the project");
+
+    for opts in [
+        json!({ "graphBackend": "no-such-backend" }),
+        json!({ "graphBackend": { "kind": "no-such-backend" } }),
+        json!({ "extractor": "no-such-extractor" }),
+    ] {
+        let error = pipeline::cognify(&state, "code", &opts)
+            .await
+            .expect_err("an unregistered explicit selection is refused");
+        assert!(error.to_string().contains("no-such-"), "{opts}: {error}");
+    }
+    for opts in [json!({ "graphBackend": 5 }), json!({ "extractor": 5 })] {
+        pipeline::cognify(&state, "code", &opts)
+            .await
+            .expect_err("a malformed selection is refused");
+    }
+
+    // Blank and `llm` selections resolve to no extractor at all.
+    for opts in [json!({ "extractor": "" }), json!({ "extractor": "llm" })] {
+        pipeline::cognify(&state, "code", &opts)
+            .await
+            .unwrap_or_else(|error| panic!("{opts}: {error}"));
+    }
+}
