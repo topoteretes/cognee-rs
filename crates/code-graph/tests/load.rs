@@ -450,6 +450,46 @@ async fn a_retag_replaces_the_old_node_sets() {
     }
 }
 
+/// A respelled tag (`Team-A` to `team-a`) names the same node set: the
+/// membership edges stay, the old spelling is reported as detagged (Python
+/// reads it off the pre-write node property), and the nodes carry the new one.
+#[tokio::test]
+async fn a_respelled_tag_keeps_the_node_set_and_reports_the_old_spelling() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    let old = vec!["Team-A".to_string()];
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&old))
+        .await
+        .unwrap();
+
+    let new = vec!["team-a".to_string()];
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&new))
+        .await
+        .unwrap()
+        .delta
+        .unwrap();
+    assert_eq!(delta["node_set_detagged"], json!(["Team-A"]));
+
+    let sets = nodes_of_types(&graph, &HashSet::from(["NodeSet"])).await;
+    assert_eq!(sets.len(), 1, "one node set for both spellings");
+    let set_id = sets[0].0.clone();
+    let code_nodes = nodes_of_types(&graph, &code_types()).await;
+    let (_, edges) = graph_shape(&graph).await;
+    let members = edges
+        .iter()
+        .filter(|(_, target, relationship)| relationship == "belongs_to_set" && *target == set_id)
+        .count();
+    assert_eq!(members, code_nodes.len(), "membership edges survive");
+    for (_, node) in &code_nodes {
+        assert_eq!(
+            node["belongs_to_set"],
+            json!(["team-a"]),
+            "{}",
+            node["name"]
+        );
+    }
+}
+
 /// Python's `test_sweep_removes_stale_nodes_and_edges_and_stamps_snapshot`,
 /// end to end: a changed snapshot removes the facts and relations it no
 /// longer has, and the graph equals a fresh load of the new snapshot.

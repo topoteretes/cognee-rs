@@ -39,7 +39,9 @@
 //! one scoped read is taken instead: the repositories' nodes and their
 //! one-hop neighbourhood (`get_neighborhood`), which holds every code node of
 //! those repositories (each has a `part_of` edge to its repository), the
-//! node sets they belong to, and every edge among them.
+//! node sets they belong to, and every edge among them. The detag takes the
+//! nodes' own tags from the node write's pre-write read instead, as Python
+//! does, since the write replaces the tags of the nodes it rewrites.
 //!
 //! The sweep does not touch the ledger: a swept node's rows stay with their
 //! owner, as Python's do, and deleting that owner later deletes nothing more.
@@ -872,14 +874,22 @@ fn tag_values(node: &NodeData) -> Vec<Value> {
 /// edges and property), so a tag a crashed run left behind is found too. An
 /// edge is stale by node-set id, the property by exact name: a respelling
 /// (`Team-A` to `team-a`) keeps the shared edge but drops the old spelling.
+///
+/// The code nodes and their property tags come from `existing_nodes`, the
+/// snapshot's nodes as the graph held them before this load's node write
+/// (Python reads its pre-write `existing_nodes` here): the write replaces the
+/// property of a rewritten node on most backends, so reading it afterwards
+/// would miss an old spelling. Edges and node-set names come from the
+/// post-write read: the write adds edges, never removes them, and only
+/// rewrites node sets this call still carries.
 async fn detag_stale_code_graph(
     graph: &dyn GraphDBTrait,
     scope: &RepositoryScope,
+    existing_nodes: &[GraphNode],
     stored: &StoredRepositoryGraph,
     node_set: Option<&[String]>,
 ) -> CodeGraphResult<Vec<String>> {
-    let code_node_ids: Vec<&str> = stored
-        .nodes
+    let code_node_ids: Vec<&str> = existing_nodes
         .iter()
         .filter(|(node_id, properties)| {
             scope.current_ids.contains(node_id) && scope.is_repo_code_node(properties)
@@ -908,8 +918,7 @@ async fn detag_stale_code_graph(
             }
         })
         .collect();
-    let property_names: BTreeSet<String> = stored
-        .nodes
+    let property_names: BTreeSet<String> = existing_nodes
         .iter()
         .filter(|(node_id, _)| code_node_id_set.contains(node_id.as_str()))
         .flat_map(|(_, properties)| tag_names(properties))
@@ -1172,7 +1181,8 @@ pub async fn add_code_graph_edges(
     // Retag: strip node-set names the repository's nodes carried before but
     // not any more. No graph write when nothing is stale, the untagged case
     // included.
-    let detagged = detag_stale_code_graph(graph, &scope, &stored, node_set).await?;
+    let detagged =
+        detag_stale_code_graph(graph, &scope, &state.existing_nodes, &stored, node_set).await?;
 
     let Some(snapshot_id) = snapshot.identity() else {
         return Ok(None);
