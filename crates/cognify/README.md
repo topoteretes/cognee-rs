@@ -25,6 +25,15 @@ extractor at all.
 same CODE_REPO adapter, not incremental, and on success each item is stamped
 complete under both `cognify_pipeline` and `code_graph_pipeline`.
 
+A dataset holding several code repositories is one enola cluster
+(`code_cluster`, Python's `cluster.py`): cognify's CODE_REPO route loads every
+member from the run's first repo item (`load_dataset_cluster`), each under its
+own row, with the edges between repositories; `remember(content_type="code")`
+plans the refresh (`plan_dataset_refresh`) and rebuilds the dataset's other
+repositories with the new ones (`refresh_dataset_code_graph`), past
+`CLUSTER_INLINE_REBUILD_LIMIT` only marking the rest for the next cognify
+(`mark_code_repos_for_rebuild`).
+
 ## Global context index
 
 `global_context_index` builds the retrieval-ready summaries above a dataset that

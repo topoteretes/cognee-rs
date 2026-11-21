@@ -864,6 +864,15 @@ async fn a_dataset_of_two_repositories_cognifies_as_one_enola_cluster() {
         .await
         .unwrap();
     assert_eq!(completed.len(), 2);
+
+    // After a delete, the survivors are marked for the next cognify
+    // (Python's `mark_dataset_code_repos_for_rebuild`): their completion
+    // stamps go, so the next run re-extracts the cluster instead of skipping.
+    cognee_cognify::code_cluster::mark_dataset_code_repos_for_rebuild(&*stack.db, dataset_id).await;
+    let completed = get_cognify_completed_data_ids(&stack.db, dataset_id, &ids)
+        .await
+        .unwrap();
+    assert!(completed.is_empty(), "{completed:?}");
 }
 
 #[tokio::test]

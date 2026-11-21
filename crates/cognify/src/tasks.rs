@@ -3943,7 +3943,7 @@ pub enum CodeRepoLoadMode {
 ///   a later delete find them. No LLM, no embedding. Under
 ///   [`CodeRepoLoadMode::Dataset`] a dataset of several repositories is
 ///   loaded as one enola cluster instead (see
-///   [`crate::code_cluster::load_dataset_cluster`]);
+///   `code_cluster::load_dataset_cluster`);
 /// - a per-file code item, a DLT-source row stamped in `system_metadata`,
 ///   or a refused (legacy `dlt`) item fails the whole run before any enola
 ///   work: Rust has no task list for those routes yet, and Python resolves
@@ -4066,8 +4066,10 @@ pub async fn run_code_routes(
 /// Load one code repo item's code graph: Python's `extract_code_repo_graph`
 /// body for one data item (`tasks/code_graph/code_repo.py`).
 ///
-/// The item's node set and manifest are read, and its directory checked,
-/// before the dataset's cluster is considered, as in Python.
+/// The item's manifest is read, and its directory checked, before the
+/// dataset's cluster is considered, as in Python. Its node set is read first
+/// (Python reads it after the cluster check, where the member load reads
+/// every member's own), so a malformed one fails the item either way.
 #[allow(clippy::too_many_arguments)]
 async fn load_code_repo_item(
     item: &Data,

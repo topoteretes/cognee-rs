@@ -1,5 +1,6 @@
 //! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
+pub mod code_cluster;
 /// Configuration module for the cognify pipeline.
 pub mod config;
 /// Dataset resolver module.
@@ -34,9 +35,6 @@ pub mod pipeline;
 pub mod rollback;
 /// Cognify routing policy: which task route a data item takes.
 pub mod routing;
-
-/// A dataset's code repositories as one enola cluster (SDK-1053 O8).
-pub mod code_cluster;
 /// Summarization module.
 pub mod summarization;
 /// Pipeline tasks module.

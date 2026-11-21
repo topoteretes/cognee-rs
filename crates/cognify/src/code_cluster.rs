@@ -18,12 +18,12 @@
 //! older snapshot would keep cross-repository facts the current one no
 //! longer holds. Three callers:
 //!
-//! - cognify's CODE_REPO route ([`load_dataset_cluster`]): the first repo
+//! - cognify's CODE_REPO route (`load_dataset_cluster`): the first repo
 //!   item of a run loads every member;
 //! - `remember(content_type="code")` ([`plan_dataset_refresh`], then
 //!   [`refresh_dataset_code_graph`]): the dataset's other repositories are
 //!   rebuilt with the new ones, up to
-//!   [`CLUSTER_INLINE_REBUILD_LIMIT`](cognee_code_graph::CLUSTER_INLINE_REBUILD_LIMIT);
+//!   [`CLUSTER_INLINE_REBUILD_LIMIT`];
 //! - a delete ([`mark_dataset_code_repos_for_rebuild`]): the remaining
 //!   repositories are marked for the next cognify.
 
@@ -69,14 +69,12 @@ pub struct ClusterMemberLoad {
 }
 
 /// The repository directory a code-repo row points at
-/// (`system_metadata.repo_path`), or `None`. Python's `code_repo_path`.
+/// (`system_metadata.repo_path`), or `None`. Python's `code_repo_path`, over
+/// the route stamp reader [`cognee_ingestion::code_repo::code_repo_stamp_path`].
 pub fn code_repo_path(data: &Data) -> Option<PathBuf> {
-    let metadata: serde_json::Value =
-        serde_json::from_str(data.system_metadata.as_deref()?).ok()?;
-    match metadata.get("repo_path")? {
-        serde_json::Value::String(path) if !path.is_empty() => Some(PathBuf::from(path)),
-        _ => None,
-    }
+    cognee_ingestion::code_repo::code_repo_stamp_path(data.system_metadata.as_deref())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Every code-repo `Data` row of a dataset. Python's `dataset_code_repo_rows`.
@@ -259,7 +257,7 @@ pub struct RefreshPlan {
 ///
 /// The dataset's other code-repo rows join the run (so the new repositories
 /// get their edges to them) up to
-/// [`CLUSTER_INLINE_REBUILD_LIMIT`](cognee_code_graph::CLUSTER_INLINE_REBUILD_LIMIT);
+/// [`CLUSTER_INLINE_REBUILD_LIMIT`];
 /// beyond it they are deferred to the next `cognify()` of the dataset, which
 /// rebuilds the whole cluster. A row whose directory is one of the new paths
 /// is the same repository remembered again, and counts as new. The new

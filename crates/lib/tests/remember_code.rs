@@ -1390,3 +1390,37 @@ async fn past_the_inline_limit_the_other_repositories_are_left_to_the_next_cogni
         "one more run, for the new repository only"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repository_whose_directory_is_gone_is_left_out_of_the_rebuild() {
+    let root = TempDir::new().unwrap();
+    let golf = project(root.path(), "golf", "cluster:cluster");
+    let ui = project(root.path(), "ui", "cluster:cluster");
+    let stack = Stack::new().await;
+    stack
+        .remember(stack.params(vec![path_input(&golf)], true))
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&golf).unwrap();
+
+    let result = stack
+        .remember(stack.params(vec![path_input(&ui)], true))
+        .await
+        .expect("a stale row never fails a later remember");
+
+    // Python's `test_refresh_leaves_out_a_repository_whose_directory_is_gone`:
+    // with one repository left there is no cluster, and the gone one is
+    // neither a member nor rebuilt on its own.
+    assert_eq!(result.status, RememberStatus::Completed, "{result}");
+    let dataset_id = stack.dataset_id().await;
+    assert!(ui.join(".enola").is_dir());
+    assert!(
+        !ui.join(cognee_code_graph::cluster_output_dir(dataset_id))
+            .exists()
+    );
+    assert_eq!(
+        code_graph_run_ids(&stack).await.len(),
+        2,
+        "golf once, then ui alone"
+    );
+}
