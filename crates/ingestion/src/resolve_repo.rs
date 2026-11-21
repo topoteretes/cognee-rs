@@ -619,23 +619,34 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v4.is_unspecified()
                 || v4.is_broadcast()
                 || v4.is_documentation()
-                // Shared address space (100.64/10), "this network" (0/8) and
-                // the reserved 240/4.
-                || (a == 100 && (64..=127).contains(&b))
+                // "This network" (0/8), the reserved 240/4, IETF protocol
+                // assignments (192.0.0.0/29, 192.0.0.170/31) and benchmarking
+                // (198.18/15), all in Python's `is_private`/`is_reserved`.
                 || a == 0
                 || a >= 240
+                || (a == 192 && b == 0 && v4.octets()[2] == 0
+                    && (v4.octets()[3] < 8 || matches!(v4.octets()[3], 170 | 171)))
+                || (a == 198 && (b & 0xfe) == 18)
+                // Shared address space (100.64/10): stricter than Python,
+                // whose flags leave carrier-grade NAT addresses unblocked.
+                || (a == 100 && (64..=127).contains(&b))
         }
         IpAddr::V6(v6) => {
-            let first = v6.segments()[0];
+            let [first, second, ..] = v6.segments();
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                // Deprecated site-local (fec0::/10) and documentation
-                // (2001:db8::/32).
-                || (first & 0xffc0) == 0xfec0
-                || (first == 0x2001 && v6.segments()[1] == 0x0db8)
+                // Python's `is_reserved` covers everything outside the global
+                // unicast 2000::/3 (IPv4-compatible ::/96, NAT64 64:ff9b::/96,
+                // 100::/64, ...); unique-local fc00::/7, link-local fe80::/10
+                // and the deprecated site-local fec0::/10 lie outside it too.
+                || (first & 0xe000) != 0x2000
+                // `is_private` inside 2000::/3: IETF protocol assignments
+                // (2001::/23, which holds Teredo 2001::/32), documentation
+                // (2001:db8::/32) and 6to4 (2002::/16).
+                || (first == 0x2001 && second < 0x0200)
+                || (first == 0x2001 && second == 0x0db8)
+                || first == 0x2002
         }
     }
 }
@@ -856,8 +867,17 @@ pub fn resolve_local_repo(spec: &str) -> Result<PathBuf, CodeRepositoryError> {
              Pass a local repo path or a remote git URL."
         ))
     };
-    let local = spec.strip_prefix("file://").unwrap_or(spec);
-    let path = std::fs::canonicalize(Path::new(local)).map_err(|_| not_a_directory())?;
+    // Python `os.path.realpath(os.path.expanduser(spec))`: a leading `~` is
+    // the home directory; a `file://` string is no local path (it fails as
+    // a missing directory, as in Python).
+    let local = match spec.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => dirs::home_dir().map_or_else(
+            || PathBuf::from(spec),
+            |home| home.join(rest.trim_start_matches('/')),
+        ),
+        _ => PathBuf::from(spec),
+    };
+    let path = std::fs::canonicalize(&local).map_err(|_| not_a_directory())?;
     if path.is_dir() {
         Ok(path)
     } else {
@@ -1346,10 +1366,27 @@ mod tests {
             "fe80::1",
             "fec0::1",
             "::ffff:127.0.0.1",
+            // Blocked by Python 3.12's `ipaddress` flags too.
+            "198.18.0.1",
+            "192.0.0.1",
+            "192.0.2.1",
+            "203.0.113.1",
+            "64:ff9b::808:808",
+            "::8.8.8.8",
+            "2001::1",
+            "2002::1",
+            "2001:db8::1",
         ] {
             assert!(is_blocked_ip(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["8.8.8.8", "140.82.112.3", "2606:4700::1111"] {
+        for ip in [
+            "8.8.8.8",
+            "140.82.112.3",
+            "192.0.0.9",
+            "2606:4700::1111",
+            "2001:4860::8888",
+            "::ffff:8.8.8.8",
+        ] {
             assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip}");
         }
     }
@@ -1386,6 +1423,24 @@ mod tests {
                 .await
                 .unwrap_err()
                 .contains("non-public address")
+        );
+    }
+
+    // Python `resolve_local_path`: `expanduser`, then `realpath`; a
+    // `file://` string is not expanded into a path.
+    #[test]
+    fn local_specs_expand_the_home_directory_only() {
+        if let Some(home) = dirs::home_dir().and_then(|h| h.canonicalize().ok()) {
+            assert_eq!(resolve_local_repo("~").unwrap(), home);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let spec = format!("file://{}", dir.path().display());
+        assert_eq!(
+            resolve_local_repo(&spec).unwrap_err().to_string(),
+            format!(
+                "Repository path '{spec}' is not a directory. \
+                 Pass a local repo path or a remote git URL."
+            )
         );
     }
 
