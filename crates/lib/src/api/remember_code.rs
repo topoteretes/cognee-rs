@@ -492,7 +492,22 @@ fn fail(item: &mut RememberItemInfo, e: &ApiError, index: usize, total: usize) {
         index + 1
     );
     item.status = Some("errored".to_string());
-    item.error = Some(e.to_string());
+    item.error = Some(item_error(e));
+}
+
+/// The error text of a failed item: Python's `str(exc)`. A
+/// `CodeRepositoryError` (a `CogneeApiError`) prints as `<Name>: <message>
+/// (Status code: <code>)`; anything else as its message.
+fn item_error(e: &ApiError) -> String {
+    match e {
+        ApiError::CodeRepository(message) => {
+            format!("CodeRepositoryError: {message} (Status code: 500)")
+        }
+        ApiError::CodeRepositoryForbidden(message) => {
+            format!("CodeRepositoryError: {message} (Status code: 403)")
+        }
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]

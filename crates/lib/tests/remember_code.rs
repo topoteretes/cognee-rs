@@ -548,8 +548,8 @@ async fn a_missing_directory_raises_or_is_recorded_on_its_item() {
         result.error.as_deref(),
         Some(
             format!(
-                "{}: Repository path '{}' is not a directory. Pass a local repo path or a \
-                 remote git URL.",
+                "{}: CodeRepositoryError: Repository path '{}' is not a directory. Pass a \
+                 local repo path or a remote git URL. (Status code: 500)",
                 missing.display(),
                 missing.display()
             )
