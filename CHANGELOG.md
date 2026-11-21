@@ -258,6 +258,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file
+  with one of enola's extensions (`loaders::code::SUPPORTED_CODE_EXTENSIONS`,
+  Python's `SUPPORTED_CODE_EXTENSIONS`: `.py`, `.rs`, `.ts`, `.go`, ...) is
+  claimed by name by the new `code_loader` (`loaders::code::CodeLoader`,
+  registered as `"code"` in `LoaderRegistry::default_registry`), as Python's
+  `code_loader.py` does. Its text is strict UTF-8 with Python's universal
+  newlines and is stored as `code_<content_hash>.<ext lowercased>` instead
+  of `text_<content_hash>.txt`; `loader_engine` is `code_loader` and the row
+  is stamped `system_metadata = {"source": "code"}` unless the item carries
+  its own stamp. `get_loader_name` returns `code_loader` for these
+  extensions. `preferred_loaders = ["text_loader"]` keeps the old plain-text
+  reading. Until the per-file CODE cognify route lands (SDK-1053 O9),
+  `cognify` of a dataset holding such a row fails with
+  `CognifyRouteError::UnsupportedRoute`. Project directories are not
+  affected.
+
 - **A `Binary` upload is stored as it arrived (SDK-1592).** An add of
   `DataInput::Binary` (bare or in a `DataItem`; the `binary` input of every
   binding) now keeps the upload at `<content_hash>/<file name>`, as Python
@@ -856,8 +872,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails with `IngestionError::NoLoaderForFile` (Python: "No loader found")
   instead of falling back to the text loader. **Differences kept:** a local
   `.html` file still goes to the HTML text extractor and keeps its `html` /
-  `text/html` metadata (D14), and Rust has no `code_loader`, so source files
-  are read by the text loader.
+  `text/html` metadata (D14). (Source files have since moved to
+  `code_loader`; see "Source files are read by `code_loader`".)
 
 - **URL add stores the raw page and `external_metadata` is Python's (SDK-1039).**
   `add` of an `http(s)` URL that returns HTML now stores the page as Python's
