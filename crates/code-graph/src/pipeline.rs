@@ -92,7 +92,7 @@ pub struct ExtractedCodeGraph {
 ///
 /// The enola run and the snapshot read hold a per-repository lock, so
 /// concurrent loads of one repository in this process take turns (see
-/// [`REPO_LOCKS`]).
+/// `REPO_LOCKS`).
 ///
 /// # Errors
 ///
