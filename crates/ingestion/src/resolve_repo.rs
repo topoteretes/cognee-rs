@@ -705,7 +705,9 @@ pub async fn validate_outbound_url(url: &str) -> Result<(), String> {
 /// ended it) and its standard error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitOutput {
+    /// The exit status; `-1` when a signal ended git.
     pub status: i32,
+    /// Everything git wrote to standard error (lossy UTF-8).
     pub stderr: String,
 }
 
