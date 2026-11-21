@@ -699,6 +699,59 @@ async fn an_unreadable_code_file_is_a_per_item_failure() {
     assert!(matches!(error, CognifyError::StorageError(_)), "{error}");
 }
 
+/// Stored text that is not UTF-8 fails its item as Python's strict text-mode
+/// read does (`UnicodeDecodeError`, a `ValueError`): the run errors on it
+/// under the default policy, and no code node is written for it.
+#[tokio::test]
+async fn a_code_file_that_is_not_utf8_fails_its_item() {
+    let (_root, paths) = code_files(&[("latin.py", "x = 1\n")]);
+    let stack = Stack::new().await;
+    let mut items = stack.add_paths(&paths, None).await;
+    items[0].raw_data_location = stack
+        .storage
+        .store(b"x = '\xe9'\n", "latin_not_utf8.py")
+        .await
+        .unwrap();
+
+    let error = stack.cognify(items, &config(false)).await.unwrap_err();
+    match &error {
+        CognifyError::CodeGraph(inner) => {
+            assert!(
+                matches!(inner, cognee_code_graph::CodeGraphError::InvalidCodeItem(_)),
+                "{inner}"
+            );
+            assert_eq!(inner.name(), "ValueError");
+            assert!(inner.to_string().contains("not UTF-8"), "{inner}");
+        }
+        other => panic!("expected a code graph error, got {other}"),
+    }
+    assert!(stack.code_node_ids().await.is_empty());
+}
+
+/// The stored text is read with universal newlines, as Python's text mode
+/// reads it: a CRLF file and its LF twin stage byte-identical content, so
+/// enola sees the same snapshot (the fake enola's snapshot id is a checksum
+/// of the staged files).
+#[tokio::test]
+async fn crlf_text_is_staged_with_universal_newlines() {
+    let (_root, paths) = code_files(&[
+        ("crlf/mod.py", "def f():\r\n    pass\r\n"),
+        ("lf/mod.py", "def f():\n    pass\n"),
+    ]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, None).await;
+    assert_eq!(items.len(), 2, "{items:?}");
+    stack.cognify(items, &config(false)).await.unwrap();
+
+    let snapshots: BTreeSet<String> = stack
+        .nodes_of_type("CodeRepository")
+        .await
+        .into_iter()
+        .map(|(_, node)| node["last_snapshot_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(snapshots.len(), 1, "{snapshots:?}");
+}
+
 /// A repository that moved after the add fails the run with Python's message.
 #[tokio::test]
 async fn a_vanished_repository_fails_the_run() {

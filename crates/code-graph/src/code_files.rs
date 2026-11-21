@@ -59,8 +59,14 @@ pub fn is_code_sourced(data: &Data) -> bool {
 /// keeps the real one (the stored row's `extension` is content-sniffed), so
 /// the staged copy reuses this name.
 pub fn original_file_name(data: &Data) -> String {
-    let location = data.original_data_location.trim_end_matches('/');
-    location.rsplit('/').next().unwrap_or(location).to_string()
+    // `os.path.basename` splits on `/`, and on Windows on `\` too.
+    let is_separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    let location = data.original_data_location.trim_end_matches(is_separator);
+    location
+        .rsplit(is_separator)
+        .next()
+        .unwrap_or(location)
+        .to_string()
 }
 
 /// The staged repository's name: `<original file name>_<data id>` (Python's
