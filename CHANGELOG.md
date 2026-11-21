@@ -18,6 +18,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Keyless `remember(content_type="code")` (SDK-1053).** A port of the
+  `content_type == "code"` branch of Python's `_remember_inner`:
+  `cognee::api::remember_code` (`RememberCodeParams`) stores each repository
+  as one code-repo `Data` row without its documents
+  (`AddPipeline::add_code_repository`), builds its code graph in a
+  `code_graph_pipeline` run (`cognee_cognify::run_code_graph_pipeline`, the
+  same builder as cognify's CODE_REPO route) and stamps the row complete under
+  `cognify_pipeline` and `code_graph_pipeline`. No LLM is built or
+  validated. Options are checked in Python's order (`content_type`,
+  `index_vectors`, `repo_credentials`, `branch`, `session_id`); result items
+  carry Python's `{kind: "code_repository", source, path, id,
+  pipeline_run_id}` shape, with `status: "errored"` / `error` for a failed
+  repository when `raise_on_error=false`. Telemetry event
+  `cognee.remember.code_graph`. New `ProvenanceDb::mark_pipeline_status_complete`
+  and `CODE_GRAPH_PIPELINE_NAME`. Bindings gain `contentType`, `nodeSet`,
+  `raiseOnError` on `remember`; the CLI gains `remember --content-type code`.
+
+- **Incremental code graph re-ingest (SDK-1053).** A reload of an unchanged
+  snapshot is skipped when the repository node's stamp matches (snapshot id
+  and mapping version); otherwise the load sweeps the code nodes and edges
+  the snapshot no longer derives, strips node-set tags the call no longer
+  passes, and stamps the snapshot last, as Python's `extract_code_graph`
+  does. `last_delta` reports real removal counts. New
+  `GraphDBTrait::delete_edge_triples(&[EdgeKey])` (deletes edges, keeps their
+  endpoints) with a generic default, so out-of-tree backends keep compiling;
+  Ladybug, pggraph and the mock override it. `forget(data_id)` of a code-repo
+  row removes only that repository's graph. **Signature change:**
+  `cognee_code_graph::extract_code_graph` takes the graph.
+
+- **Git URLs for code repositories (SDK-1053).** New
+  `cognee_ingestion::resolve_repo` (re-exported as `cognee::add::resolve_repo`)
+  ports Python's `resolve_repo.py`: shallow clones with symlinks and LFS off,
+  branch checks, refresh by fast-forward pull, credentials passed only as
+  environment-level git config and scrubbed from errors, and Python's
+  outbound address check before an http(s) clone. `remember(content_type=
+  "code")` accepts git URLs and `repo_credentials` (a refused gate is the new
+  `ApiError::CodeRepositoryForbidden`, 403), and `add(<GitHub/GitLab URL>)`
+  clones the repository and stores a code-repo manifest plus its documents
+  (`AddParams::branch`). New config keys `code_graph.clones_dir`
+  (`COGNEE_REPOS_DIR`, default `~/.cognee/repos`) and
+  `code_graph.allow_http_requests` (`ALLOW_HTTP_REQUESTS`). Remote
+  repositories are refused until a host wires `AddPipeline::with_repo_sources`.
+
+- **A dataset's code repositories as one enola cluster (SDK-1053).** Ports
+  Python's `cluster.py`: one enola run per dataset (`run_enola_cluster`) gives
+  the edges between repositories, and each member is loaded, skip-checked and
+  stamped under its own `Data` row (`load_cluster_member`). cognify's
+  CODE_REPO route loads the whole cluster once per run;
+  `remember(content_type="code")` plans the refresh under the dataset lock
+  and rebuilds up to `CLUSTER_INLINE_REBUILD_LIMIT` existing repositories
+  inline, marking the rest for the next cognify. New
+  `ProvenanceDb::clear_pipeline_status_for_data`.
+
 - **`remember(content_type="code", index_vectors=true)` (SDK-1053).** The
   opt-in vector index of a code graph, as Python's `index_vectors`: the code
   nodes the call writes are also embedded (each node's `name` into
