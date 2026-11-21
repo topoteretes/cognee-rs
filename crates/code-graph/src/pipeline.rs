@@ -20,6 +20,7 @@ use crate::mapping::{CODE_GRAPH_MAPPING_VERSION, map_facts_to_data_points, resol
 use crate::models::CodeNode;
 use crate::runner::run_enola_generate;
 use crate::snapshot::ParsedSnapshot;
+use crate::vectors::CodeGraphVectors;
 use crate::writer::{
     CodeGraphLedger, CodeGraphLoadState, StoredRepositoryState, add_code_graph_data_points,
     add_code_graph_edges, member_edges, record_snapshot_in_ledger, stored_repository_state,
@@ -244,8 +245,10 @@ pub struct CodeGraphLoad {
 /// Load the code graph of the repository at `repo_path` into `graph`: run
 /// enola, map its snapshot, write the nodes, then the typed edges, sweep and
 /// detag what the snapshot no longer derives, then stamp the repository.
-/// Python's `get_code_graph_tasks` run as a pipeline, graph-only
-/// (`index_vectors=False`, the opt-in comes later).
+/// Python's `get_code_graph_tasks` run as a pipeline. Graph-only
+/// (`index_vectors=False`) when `vectors` is `None`; with `vectors`
+/// (`index_vectors=True`) the nodes the load writes are also embedded (see
+/// [`add_code_graph_data_points`]).
 ///
 /// With a `ledger`, every node and edge of the snapshot (written or already
 /// present) is recorded under its owner (the repository's `Data` row), so
@@ -265,6 +268,7 @@ pub async fn load_code_graph(
     config: &CodeGraphConfig,
     repo_path: &Path,
     node_set: Option<&[String]>,
+    vectors: Option<&CodeGraphVectors>,
 ) -> CodeGraphResult<CodeGraphLoad> {
     let ExtractedCodeGraph {
         snapshot,
@@ -286,7 +290,7 @@ pub async fn load_code_graph(
             skipped: true,
         });
     }
-    let state = add_code_graph_data_points(graph, ledger, data_points).await?;
+    let state = add_code_graph_data_points(graph, ledger, data_points, vectors).await?;
     let delta = add_code_graph_edges(
         graph,
         ledger,
@@ -306,7 +310,8 @@ pub async fn load_code_graph(
 /// Load one member of a multi-repo snapshot (a dataset's enola cluster,
 /// [`crate::snapshot_dataset_code_repos`]) into `graph`, under its own
 /// `ledger` owner. Python's `get_code_graph_tasks(repo_path, snapshot=...,
-/// repo_scope=label)` run as a pipeline, graph-only.
+/// repo_scope=label)` run as a pipeline; graph-only unless `vectors` is given
+/// (`index_vectors`, as in [`load_code_graph`]).
 ///
 /// `snapshot` is the cluster's, parsed once for every member (its
 /// [`edges`](ParsedSnapshot::edges) resolved once too); `repo_path` is the
@@ -330,6 +335,7 @@ pub async fn load_cluster_member(
     repo_path: &Path,
     repo_scope: &str,
     node_set: Option<&[String]>,
+    vectors: Option<&CodeGraphVectors>,
 ) -> CodeGraphResult<CodeGraphLoad> {
     let repo_path_text = repo_path.to_string_lossy().into_owned();
     let skipped = already_loaded(graph, snapshot, repo_scope, node_set).await;
@@ -392,7 +398,7 @@ pub async fn load_cluster_member(
         });
     }
 
-    let state = add_code_graph_data_points(graph, ledger, data_points).await?;
+    let state = add_code_graph_data_points(graph, ledger, data_points, vectors).await?;
     let delta = write_code_graph_edges(
         graph,
         ledger,

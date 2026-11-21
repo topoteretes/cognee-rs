@@ -3994,6 +3994,7 @@ pub async fn run_code_routes(
     pipeline_run_id: Option<Uuid>,
     failure_policy: FailurePolicy,
     mode: &CodeRepoLoadMode,
+    vectors: Option<&cognee_code_graph::CodeGraphVectors>,
 ) -> Result<RoutedCognifyInput, CognifyError> {
     use crate::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 
@@ -4041,6 +4042,7 @@ pub async fn run_code_routes(
                 code_graph,
                 pipeline_run_id,
                 mode,
+                vectors,
                 &mut cluster,
             )
             .await
@@ -4105,6 +4107,7 @@ async fn load_code_repo_item(
     code_graph: &cognee_code_graph::CodeGraphConfig,
     pipeline_run_id: Option<Uuid>,
     mode: &CodeRepoLoadMode,
+    vectors: Option<&cognee_code_graph::CodeGraphVectors>,
     cluster: &mut crate::code_cluster::ClusterVerdict,
 ) -> Result<(), CognifyError> {
     let node_set = crate::routing::code_repo_node_set(item)?;
@@ -4137,6 +4140,7 @@ async fn load_code_repo_item(
                 &member.repo_path,
                 &member.label,
                 node_set.as_deref(),
+                vectors,
             )
             .await?;
             tracing::info!(
@@ -4168,6 +4172,7 @@ async fn load_code_repo_item(
         code_graph,
         &manifest,
         node_set.as_deref(),
+        vectors,
     )
     .await?;
     Ok(())
@@ -4239,6 +4244,7 @@ pub fn make_code_routes_task(
     code_graph: cognee_code_graph::CodeGraphConfig,
     failure_policy: FailurePolicy,
     mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
 ) -> TypedTask<CognifyInput, RoutedCognifyInput> {
     TypedTask::async_fn(move |input: &CognifyInput, ctx| {
         let input = input.clone();
@@ -4247,6 +4253,7 @@ pub fn make_code_routes_task(
         let db = Arc::clone(&db);
         let code_graph = code_graph.clone();
         let mode = mode.clone();
+        let vectors = vectors.clone();
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let routed = run_code_routes(
@@ -4258,6 +4265,7 @@ pub fn make_code_routes_task(
                 pipeline_run_id,
                 failure_policy,
                 &mode,
+                vectors.as_ref(),
             )
             .await?;
             Ok(Box::new(routed))
@@ -4332,6 +4340,7 @@ pub async fn run_code_graph_pipeline(
     thread_pool: Arc<dyn CpuPool>,
     config: &CognifyConfig,
     mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
 ) -> Result<Uuid, CognifyError> {
     for item in &data_items {
         if !matches!(
@@ -4366,6 +4375,7 @@ pub async fn run_code_graph_pipeline(
                     thread_pool,
                     config,
                     mode,
+                    vectors,
                 )),
             ),
         )
@@ -4388,6 +4398,7 @@ async fn run_code_graph_pipeline_in_scope(
     thread_pool: Arc<dyn CpuPool>,
     config: &CognifyConfig,
     mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
 ) -> Result<Uuid, CognifyError> {
     let processed: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
     // A repository that fails to load fails the run, as the task raises in
@@ -4409,6 +4420,7 @@ async fn run_code_graph_pipeline_in_scope(
             config.code_graph.clone(),
             failure_policy,
             mode,
+            vectors,
         ),
     )
     .with_first_task_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME)
@@ -4756,6 +4768,9 @@ async fn cognify_in_scope(
                         effective_config.code_graph.clone(),
                         effective_config.failure_policy(),
                         CodeRepoLoadMode::Dataset,
+                        // cognify builds code graphs graph-only, as Python's
+                        // CODE_REPO route does (`graph_only=True`).
+                        None,
                     ))
                     .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
                 );

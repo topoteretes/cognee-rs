@@ -30,6 +30,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// What `index_vectors` embeds with ([`refresh_dataset_code_graph`]).
+pub use cognee_code_graph::CodeGraphVectors;
 use cognee_code_graph::{
     CLUSTER_INLINE_REBUILD_LIMIT, CodeGraphConfig, CodeGraphError, DatasetCodeSnapshot,
     ParsedSnapshot, snapshot_dataset_code_repos,
@@ -144,6 +146,8 @@ fn replay(error: &CognifyError) -> CognifyError {
                 CodeGraphError::InvalidCodeItem(message.clone())
             }
             CodeGraphError::Staging(message) => CodeGraphError::Staging(message.clone()),
+            CodeGraphError::Embedding(message) => CodeGraphError::Embedding(message.clone()),
+            CodeGraphError::Vector(message) => CodeGraphError::Vector(message.clone()),
             CodeGraphError::Graph(error) => {
                 return CognifyError::GraphDatabaseError(error.to_string());
             }
@@ -226,6 +230,8 @@ async fn load_cluster(
             &member.repo_path,
             &member.label,
             node_set.as_deref(),
+            // cognify's CODE_REPO route is graph-only.
+            None,
         )
         .await?;
         info!(
@@ -338,12 +344,15 @@ pub struct MemberRun {
     pub repo_path: PathBuf,
     /// Its cluster label, `None` outside a cluster.
     pub label: Option<String>,
+    /// Whether this run embedded the nodes it wrote (`index_vectors`): only
+    /// for a row the caller stored, and only when the caller asked.
+    pub index_vectors: bool,
     /// The `code_graph_pipeline` run's id, or why it failed.
     pub result: Result<Uuid, CognifyError>,
 }
 
 /// Rebuild the code graph of every repository in a dataset. Python's
-/// `refresh_dataset_code_graph` (graph-only: `index_vectors` comes later).
+/// `refresh_dataset_code_graph`.
 ///
 /// One `code_graph_pipeline` run per repository, over that repository's
 /// row, so each row owns the nodes of its own repository; with several
@@ -353,6 +362,11 @@ pub struct MemberRun {
 /// whose members are bound to these rows by directory. The dataset's other
 /// rows come from the plan; its deferred rows are marked for the next
 /// `cognify()` ([`mark_code_repos_for_rebuild`]).
+///
+/// `vectors` is the caller's `index_vectors` (`None`: graph-only, no
+/// embedding call) and applies to `known_repos` only. The dataset's other
+/// repositories are rebuilt graph-only, as cognify's CODE_REPO route
+/// rebuilds them: a rebuild never embeds on behalf of an earlier call.
 ///
 /// A repository whose run fails is reported on its [`MemberRun`] and does
 /// not stop the others; each successful run stamps its row complete for
@@ -368,7 +382,11 @@ pub async fn refresh_dataset_code_graph(
     target: &CodeGraphRunTarget,
     known_repos: Vec<(Data, PathBuf)>,
     plan: Option<RefreshPlan>,
+    vectors: Option<CodeGraphVectors>,
 ) -> Result<Vec<MemberRun>, CognifyError> {
+    let known_ids: Vec<Uuid> = known_repos.iter().map(|(row, _)| row.id).collect();
+    // Python's `_member_index_vectors`.
+    let member_index_vectors = |data: &Data| vectors.is_some() && known_ids.contains(&data.id);
     let plan = match plan {
         Some(plan) => plan,
         None => {
@@ -412,6 +430,7 @@ pub async fn refresh_dataset_code_graph(
             };
             runs.push((
                 MemberRun {
+                    index_vectors: member_index_vectors(&data),
                     data,
                     repo_path: member.repo_path,
                     label: Some(member.label),
@@ -434,6 +453,7 @@ pub async fn refresh_dataset_code_graph(
             }
             runs.push((
                 MemberRun {
+                    index_vectors: member_index_vectors(&data),
                     data,
                     repo_path,
                     label: None,
@@ -460,6 +480,7 @@ pub async fn refresh_dataset_code_graph(
             Arc::clone(&target.thread_pool),
             &target.config,
             mode,
+            vectors.clone().filter(|_| run.index_vectors),
         ))
         .await;
         if let Err(error) = &run.result {

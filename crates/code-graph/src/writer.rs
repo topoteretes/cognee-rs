@@ -3,7 +3,8 @@
 //! Port of Python's `add_code_graph_data_points`, `add_code_graph_edges`,
 //! `receipt_projection` and `_stamp_snapshot_identity`
 //! (`cognee/tasks/code_graph/extract_code_graph.py`). Writes are graph-only:
-//! no embedding call, no vector index (`index_vectors` is a later opt-in).
+//! no embedding call, no vector index, unless the caller opts in
+//! (`index_vectors`, [`crate::CodeGraphVectors`]).
 //!
 //! Nodes go through the storage walk Python's `add_data_points` does for a
 //! code node: the node itself, a `part_of` edge to its repository, and for
@@ -67,6 +68,7 @@ use crate::mapping::{
 };
 use crate::models::{CODE_INDEX_FIELDS, CodeNode, CodeNodeType, CodeRepository, code_metadata};
 use crate::snapshot::{Fact, ParsedSnapshot, Receipt};
+use crate::vectors::{CodeGraphVectors, index_code_graph_vectors};
 
 /// `receipt.json` fields kept on the repository node. Python's
 /// `_RECEIPT_PROJECTION_KEYS`: run specifics that describe the machine rather
@@ -527,21 +529,31 @@ pub(crate) async fn record_snapshot_in_ledger(
 }
 
 /// Store code nodes as a delta against the graph. Python's
-/// `add_code_graph_data_points` with `graph_only=True`.
+/// `add_code_graph_data_points`: graph-only (`graph_only=True`) when
+/// `vectors` is `None`, the default, which makes no embedding call.
 ///
 /// Only the snapshot's nodes are read from the graph. A fact node is written
 /// when the graph lacks it or its `fact_hash` differs (or it has none);
 /// repository nodes are always written and not counted.
 ///
+/// With `vectors` (`index_vectors=True`, Python's `graph_only=False`), the
+/// nodes written and the structural edges of their storage walk are then
+/// embedded ([`crate::index_code_graph_vectors`]): the `name` of each code
+/// node into `{type}_name` and the edges' retrieval texts into
+/// `EdgeType_relationship_name`. Only what this call writes is embedded, as
+/// in Python: an unchanged node keeps whatever vector it had.
+///
 /// An empty `data_points` (a skipped load) writes and reads nothing.
 ///
 /// # Errors
 ///
-/// A graph read or write, or the ledger write, failed.
+/// A graph read or write, the ledger write, or (with `vectors`) the
+/// embedding or vector write failed.
 pub async fn add_code_graph_data_points(
     graph: &dyn GraphDBTrait,
     ledger: Option<&CodeGraphLedger<'_>>,
     data_points: Vec<CodeNode>,
+    vectors: Option<&CodeGraphVectors>,
 ) -> CodeGraphResult<CodeGraphLoadState> {
     if data_points.is_empty() {
         return Ok(CodeGraphLoadState::default());
@@ -636,6 +648,10 @@ pub async fn add_code_graph_data_points(
             .await?;
         if !edges.is_empty() {
             graph.add_edges(&edges).await?;
+        }
+        // Graph before vectors: a vector never exists without its graph row.
+        if let Some(vectors) = vectors {
+            index_code_graph_vectors(vectors, &to_write, &edges).await?;
         }
     }
 
@@ -1607,7 +1623,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let snapshot = write_snapshot(dir.path());
         let graph = MockGraphDB::new();
-        let state = add_code_graph_data_points(&graph, None, Vec::new())
+        let state = add_code_graph_data_points(&graph, None, Vec::new(), None)
             .await
             .unwrap();
         assert!(state.data_points.is_empty());

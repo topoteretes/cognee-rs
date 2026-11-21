@@ -220,7 +220,7 @@ async fn an_edge_into_a_member_not_loaded_yet_waits_for_that_member() {
     let graph = MockGraphDB::new();
 
     // The frontend loads first: the backend route it reaches is not there.
-    let load = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None)
+    let load = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None, None)
         .await
         .unwrap();
     assert!(!load.skipped);
@@ -249,7 +249,7 @@ async fn an_edge_into_a_member_not_loaded_yet_waits_for_that_member() {
 
     // The backend loads next, with the frontend in the graph: it writes the
     // edge between them along with its own.
-    load_cluster_member(&graph, None, &snapshot, &golf, "golf", None)
+    load_cluster_member(&graph, None, &snapshot, &golf, "golf", None, None)
         .await
         .unwrap();
     let written = edge_keys(&graph).await;
@@ -272,7 +272,7 @@ async fn an_edge_into_a_member_not_loaded_yet_waits_for_that_member() {
     );
 
     // Loading the frontend again changes nothing: its own stamp matches.
-    let again = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None)
+    let again = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None, None)
         .await
         .unwrap();
     assert!(again.skipped);
@@ -282,7 +282,7 @@ async fn an_edge_into_a_member_not_loaded_yet_waits_for_that_member() {
 async fn a_member_load_does_not_sweep_the_other_members_nodes_or_edges() {
     let (_root, golf, ui, snapshot) = cluster_snapshot().await;
     let graph = MockGraphDB::new();
-    load_cluster_member(&graph, None, &snapshot, &golf, "golf", None)
+    load_cluster_member(&graph, None, &snapshot, &golf, "golf", None, None)
         .await
         .unwrap();
     let handled_by = (
@@ -292,7 +292,7 @@ async fn a_member_load_does_not_sweep_the_other_members_nodes_or_edges() {
     );
     assert!(edge_keys(&graph).await.contains(&handled_by));
 
-    let load = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None)
+    let load = load_cluster_member(&graph, None, &snapshot, &ui, "ui", None, None)
         .await
         .unwrap();
 
@@ -314,9 +314,17 @@ async fn a_member_load_keeps_the_other_members_node_set_tags() {
     let (_root, golf, ui, snapshot) = cluster_snapshot().await;
     let graph = MockGraphDB::new();
     let tags = |name: &str| vec![name.to_string()];
-    load_cluster_member(&graph, None, &snapshot, &ui, "ui", Some(&tags("team-ui")))
-        .await
-        .unwrap();
+    load_cluster_member(
+        &graph,
+        None,
+        &snapshot,
+        &ui,
+        "ui",
+        Some(&tags("team-ui")),
+        None,
+    )
+    .await
+    .unwrap();
     load_cluster_member(
         &graph,
         None,
@@ -324,6 +332,7 @@ async fn a_member_load_keeps_the_other_members_node_set_tags() {
         &golf,
         "golf",
         Some(&tags("old-golf")),
+        None,
     )
     .await
     .unwrap();
@@ -336,6 +345,7 @@ async fn a_member_load_keeps_the_other_members_node_set_tags() {
         &golf,
         "golf",
         Some(&tags("team-golf")),
+        None,
     )
     .await
     .unwrap();

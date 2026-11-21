@@ -382,7 +382,9 @@ fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkErro
 /// graph ([`remember_code`]). Keyless: no LLM or graph extractor is resolved.
 /// `nodeSet` is accepted and ignored, as in Python; `raiseOnError` (default
 /// `true`, Python's default) set to `false` records a failed repository on
-/// its item instead of failing the call.
+/// its item instead of failing the call. `indexVectors: true` also embeds the
+/// code nodes through the handle's embedding engine (the default makes no
+/// embedding call).
 async fn run_remember_code(
     state: &HandleState,
     inputs: Vec<cognee::models::DataInput>,
@@ -391,6 +393,7 @@ async fn run_remember_code(
     opts: &serde_json::Value,
 ) -> Result<serde_json::Value, SdkError> {
     let raise_on_error = opt_bool(opts, "raiseOnError")?.unwrap_or(true);
+    let index_vectors = opt_bool(opts, "indexVectors")?.unwrap_or(false);
     let svc = state.services().await?;
     // Nothing is extracted, but a graph extractor selection the caller made
     // is still checked (shape, and registered), as for a keyless cognify of
@@ -405,6 +408,8 @@ async fn run_remember_code(
         dataset_id: None,
         node_set: None,
         repo_credentials: opt_str(opts, "repoCredentials")?.map(str::to_string),
+        index_vectors,
+        embedding_engine: index_vectors.then(|| svc.embedding_engine.clone()),
         raise_on_error,
         add_pipeline: svc.add_pipeline.clone(),
         storage: svc.storage.clone(),

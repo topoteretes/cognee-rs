@@ -45,6 +45,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
     let content_type = validate_remember_options(RememberOptionCheck {
         content_type: args.content_type.as_deref(),
         session_id: args.session_id.as_deref(),
+        index_vectors: args.index_vectors.then_some(true),
         ..RememberOptionCheck::default()
     })
     .map_err(|error| CliError::Validation(error.to_string()))?;
@@ -55,7 +56,14 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
                 "--extractor is not supported with --content-type code".to_string(),
             ));
         }
-        return run_code(args.data, dataset_name, owner_id, tenant_id, cm);
+        return run_code(
+            args.data,
+            dataset_name,
+            owner_id,
+            tenant_id,
+            args.index_vectors,
+            cm,
+        );
     }
 
     // `--no-improve` flips the default-on self-improvement (`improve`) pass.
@@ -185,13 +193,15 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
 }
 
 /// `remember --content-type code`: index each path, a local code repository,
-/// as a code graph. Keyless: no LLM, embedding engine or graph extractor is
-/// built.
+/// as a code graph. Keyless: no LLM or graph extractor is built, and no
+/// embedding engine unless `--index-vectors` asks for the code nodes to be
+/// embedded.
 fn run_code(
     data: Vec<String>,
     dataset_name: String,
     owner_id: Uuid,
     tenant_id: Option<Uuid>,
+    index_vectors: bool,
     cm: Arc<ComponentManager>,
 ) -> Result<(), CliError> {
     let inputs = data.into_iter().map(DataInput::FilePath).collect();
@@ -221,6 +231,11 @@ fn run_code(
             .with_repo_sources(repo_sources),
         );
         let cognify_config = Arc::new(cm.settings().cognify_config());
+        let embedding_engine = if index_vectors {
+            Some(cm.embedding_engine().await.map_err(|e| runtime(&e))?)
+        } else {
+            None
+        };
         let result = remember_code(RememberCodeParams {
             data: inputs,
             dataset_name,
@@ -229,6 +244,8 @@ fn run_code(
             dataset_id: None,
             node_set: None,
             repo_credentials: None,
+            index_vectors,
+            embedding_engine,
             raise_on_error: true,
             add_pipeline,
             storage,

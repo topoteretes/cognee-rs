@@ -15,6 +15,7 @@ use cognee_graph::GraphDBTrait;
 use crate::config::CodeGraphConfig;
 use crate::error::{CodeGraphError, CodeGraphResult};
 use crate::pipeline::{CodeGraphLoad, load_code_graph};
+use crate::vectors::CodeGraphVectors;
 use crate::writer::CodeGraphLedger;
 
 pub use cognee_models::code_repo::CODE_REPO_MANIFEST_KIND;
@@ -62,6 +63,7 @@ pub async fn extract_code_repo_graph(
     config: &CodeGraphConfig,
     manifest_text: &str,
     node_set: Option<&[String]>,
+    vectors: Option<&CodeGraphVectors>,
 ) -> CodeGraphResult<CodeGraphLoad> {
     let repo_path = manifest_repo_path(manifest_text)?;
     if !repo_path.is_dir() {
@@ -71,7 +73,7 @@ pub async fn extract_code_repo_graph(
             repo_path.display()
         )));
     }
-    let load = load_code_graph(graph, ledger, config, &repo_path, node_set).await?;
+    let load = load_code_graph(graph, ledger, config, &repo_path, node_set, vectors).await?;
     tracing::info!(
         "Code repo graph extracted for {}{}.",
         repo_path.display(),
@@ -119,6 +121,7 @@ mod tests {
             None,
             &CodeGraphConfig::default(),
             "{\"repo_path\": \"/definitely/not/here\"}",
+            None,
             None,
         )
         .await

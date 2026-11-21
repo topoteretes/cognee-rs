@@ -56,6 +56,12 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   `raise_on_error = false` a failed repository is reported on its item
   (`status: "errored"`, `error`) and the rest go on. No LLM or embedding engine
   is built or validated on this path, and `node_set` is ignored, as in Python.
+  `index_vectors = true` (CLI `--index-vectors`, bindings `indexVectors`)
+  also embeds the code nodes the call writes (each node's `name` into
+  `{type}_name`, its structural edges' texts into `EdgeType_relationship_name`)
+  for the semantic and completion retrievers; it needs an embedding provider,
+  and applies to the call's own repositories only: the dataset's other
+  repositories, rebuilt with them, stay graph-only.
   `session_id`, `branch`, an unknown content type, and `index_vectors` or
   `repo_credentials` without code are refused as in Python. A remote git URL
   (`https://`, `http://`, `git@`, `ssh://`) is shallow-cloned under
@@ -73,7 +79,7 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   beyond five only the new ones are built and the rest are marked for the
   next `cognify`. A failure of a repository already in the dataset is reported
   in the result's `error`, never raised. Not ported yet, and refused:
-  `content_type = "skills"`, `index_vectors = true`. rustdoc:
+  `content_type = "skills"`. rustdoc:
   `api::remember_code`, `cognee_cognify::code_cluster`.
 
   `add` of a GitHub/GitLab repository URL (a repository root, or any http(s)

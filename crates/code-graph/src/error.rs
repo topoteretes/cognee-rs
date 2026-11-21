@@ -42,6 +42,14 @@ pub enum CodeGraphError {
     /// The relational provenance ledger failed a write.
     #[error("provenance ledger error: {0}")]
     Ledger(#[from] cognee_database::DatabaseError),
+    /// The embedding engine failed while indexing the code graph's vectors
+    /// (`index_vectors`).
+    #[error("embedding error: {0}")]
+    Embedding(String),
+    /// The vector store failed while indexing the code graph's vectors
+    /// (`index_vectors`).
+    #[error("vector database error: {0}")]
+    Vector(String),
 }
 
 impl CodeGraphError {
@@ -55,6 +63,8 @@ impl CodeGraphError {
             Self::Staging(_) => "OSError",
             Self::Graph(_) => "GraphDatabaseError",
             Self::Ledger(_) => "RelationalDatabaseError",
+            Self::Embedding(_) => "EmbeddingException",
+            Self::Vector(_) => "VectorDatabaseError",
         }
     }
 

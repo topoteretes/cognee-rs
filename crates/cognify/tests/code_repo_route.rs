@@ -1048,6 +1048,7 @@ async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
                 None,
                 failure_policy,
                 &cognee_cognify::CodeRepoLoadMode::Dataset,
+                None,
             )
             .await
         }
@@ -1225,6 +1226,7 @@ async fn a_failed_cluster_run_fails_every_repo_item_of_the_run() {
             ..FailurePolicy::default()
         },
         &cognee_cognify::CodeRepoLoadMode::Dataset,
+        None,
     )
     .await
     .unwrap();

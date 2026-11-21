@@ -180,7 +180,7 @@ pub async fn extract_code_file_graph(
     .await
     .map_err(|error| CodeGraphError::Staging(format!("staging the code file failed: {error}")))??;
 
-    let load = load_code_graph(graph, ledger, config, &repo_dir, None).await;
+    let load = load_code_graph(graph, ledger, config, &repo_dir, None, None).await;
     // The staging directory goes either way; a failed load's error wins.
     let removed = tokio::task::spawn_blocking(move || staging.close()).await;
     let load = load?;

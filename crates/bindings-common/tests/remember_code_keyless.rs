@@ -91,6 +91,30 @@ async fn a_keyless_handle_remembers_a_code_repository() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn index_vectors_embeds_through_the_handles_engine() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = project(&dir);
+    let state = HandleState::from_settings(settings_under(&dir));
+
+    let result = memory::run_remember(
+        &state,
+        json!({ "type": "file", "path": repo.to_string_lossy() }),
+        "code",
+        &json!({ "contentType": "code", "indexVectors": true }),
+    )
+    .await
+    .expect("remember the repository with its vectors");
+    assert_eq!(result["status"], "PipelineRunCompleted", "{result}");
+
+    let svc = state.services().await.unwrap();
+    let collections = svc.vector_db.list_collections().await.unwrap();
+    assert!(
+        collections.contains(&("CodeRepository".to_string(), "name".to_string())),
+        "{collections:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn content_type_options_are_validated_before_anything_runs() {
     let dir = TempDir::new().expect("tempdir");
     let state = HandleState::from_settings(settings_under(&dir));
@@ -120,10 +144,6 @@ async fn content_type_options_are_validated_before_anything_runs() {
         (
             json!({ "contentType": "code", "sessionId": "s1" }),
             "session_id is not applicable to content_type='code'",
-        ),
-        (
-            json!({ "contentType": "code", "indexVectors": true }),
-            "index_vectors is not supported by this SDK yet",
         ),
         (
             json!({ "contentType": "code", "repoCredentials": 7 }),

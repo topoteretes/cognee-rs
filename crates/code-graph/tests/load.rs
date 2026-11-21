@@ -110,7 +110,7 @@ async fn check_against_golden(snapshot: &str, tag: &str, node_set: Option<&[Stri
     let (_root, repo_path) = repo(&format!("snapshot:{snapshot}"));
     let graph = MockGraphDB::new();
 
-    let load = load_code_graph(&graph, None, &config(), &repo_path, node_set)
+    let load = load_code_graph(&graph, None, &config(), &repo_path, node_set, None)
         .await
         .unwrap();
 
@@ -228,7 +228,7 @@ async fn a_tagged_load_matches_python_and_links_node_sets() {
 
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
 
@@ -314,14 +314,14 @@ fn switch_snapshot(repo_path: &Path, snapshot: &str) {
 async fn an_unchanged_untagged_reload_is_skipped() {
     let (_root, repo_path) = repo("snapshot:docs_and_flows");
     let graph = MockGraphDB::new();
-    let first = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let first = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(!first.skipped);
     let shape = graph_shape(&graph).await;
     let stamped = repository_node(&graph, &repo_path).await;
 
-    let second = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let second = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(second.skipped);
@@ -339,12 +339,12 @@ async fn an_unchanged_untagged_reload_is_skipped() {
 async fn an_unchanged_tagged_reload_writes_no_fact_node_and_no_edge() {
     let (_root, repo_path) = repo("snapshot:docs_and_flows");
     let graph = MockGraphDB::new();
-    let first = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    let first = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
     let shape = graph_shape(&graph).await;
 
-    let second = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    let second = load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
     assert!(!second.skipped);
@@ -368,11 +368,11 @@ async fn an_unchanged_tagged_reload_writes_no_fact_node_and_no_edge() {
 async fn an_untagged_reload_of_a_tagged_repository_loads_and_detags() {
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
 
-    let reload = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let reload = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(!reload.skipped);
@@ -395,7 +395,7 @@ async fn an_untagged_reload_of_a_tagged_repository_loads_and_detags() {
         );
     }
     // The next untagged reload of the now untagged repository is skipped.
-    let third = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let third = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(third.skipped);
@@ -407,12 +407,12 @@ async fn an_untagged_reload_of_a_tagged_repository_loads_and_detags() {
 async fn a_retag_replaces_the_old_node_sets() {
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
 
     let retag = vec!["team-b".to_string(), "shared".to_string()];
-    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag))
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag), None)
         .await
         .unwrap()
         .delta
@@ -458,12 +458,12 @@ async fn a_respelled_tag_keeps_the_node_set_and_reports_the_old_spelling() {
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
     let old = vec!["Team-A".to_string()];
-    load_code_graph(&graph, None, &config(), &repo_path, Some(&old))
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&old), None)
         .await
         .unwrap();
 
     let new = vec!["team-a".to_string()];
-    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&new))
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&new), None)
         .await
         .unwrap()
         .delta
@@ -497,12 +497,12 @@ async fn a_respelled_tag_keeps_the_node_set_and_reports_the_old_spelling() {
 async fn a_changed_snapshot_sweeps_what_it_no_longer_derives() {
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &repo_path, None)
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
 
     switch_snapshot(&repo_path, "basic_v2");
-    let reload = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let reload = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(!reload.skipped);
@@ -523,7 +523,7 @@ async fn a_changed_snapshot_sweeps_what_it_no_longer_derives() {
 
     let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
     let fresh = MockGraphDB::new();
-    load_code_graph(&fresh, None, &config(), &fresh_path, None)
+    load_code_graph(&fresh, None, &config(), &fresh_path, None, None)
         .await
         .unwrap();
     assert_eq!(graph_shape(&graph).await, graph_shape(&fresh).await);
@@ -536,13 +536,13 @@ async fn a_changed_snapshot_sweeps_what_it_no_longer_derives() {
 async fn a_failed_sweep_records_no_new_stamp() {
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &repo_path, None)
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
 
     switch_snapshot(&repo_path, "basic_v2");
     graph.set_delete_nodes_error("graph down");
-    load_code_graph(&graph, None, &config(), &repo_path, None)
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap_err();
     // The node write rewrote the repository node without a stamp (as
@@ -551,7 +551,7 @@ async fn a_failed_sweep_records_no_new_stamp() {
     assert_ne!(repository["last_snapshot_id"], json!("sha256:abc123def789"));
 
     graph.clear_delete_nodes_error();
-    let retry = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let retry = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(!retry.skipped);
@@ -563,17 +563,17 @@ async fn a_failed_sweep_records_no_new_stamp() {
 async fn the_sweep_leaves_other_repositories_alone() {
     let (_other_root, other_path) = repo("snapshot:docs_and_flows");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config(), &other_path, None)
+    load_code_graph(&graph, None, &config(), &other_path, None, None)
         .await
         .unwrap();
     let other = graph_shape(&graph).await;
 
     let (_root, repo_path) = repo("snapshot:basic");
-    load_code_graph(&graph, None, &config(), &repo_path, None)
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     switch_snapshot(&repo_path, "basic_v2");
-    load_code_graph(&graph, None, &config(), &repo_path, None)
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
 
@@ -621,6 +621,7 @@ async fn a_skipped_load_still_claims_the_snapshot_for_its_owner() {
         &config(),
         &repo_path,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -632,6 +633,7 @@ async fn a_skipped_load_still_claims_the_snapshot_for_its_owner() {
         }),
         &config(),
         &repo_path,
+        None,
         None,
     )
     .await
@@ -690,9 +692,16 @@ async fn the_ledger_records_every_node_and_edge_under_the_data_row() {
 
     let (_root, repo_path) = repo("snapshot:basic");
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, Some(&ledger), &config(), &repo_path, Some(&tag()))
-        .await
-        .unwrap();
+    load_code_graph(
+        &graph,
+        Some(&ledger),
+        &config(),
+        &repo_path,
+        Some(&tag()),
+        None,
+    )
+    .await
+    .unwrap();
 
     let (nodes, edges) = graph.get_graph_data().await.unwrap();
     let node_rows = cognee_database::ops::graph_storage::get_nodes_by_data(
@@ -779,6 +788,7 @@ async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
         &config(),
         &repo_path,
         Some(&tag()),
+        None,
     )
     .await
     .unwrap();
@@ -791,6 +801,7 @@ async fn an_unchanged_load_claims_the_whole_snapshot_for_its_owner() {
         &config(),
         &repo_path,
         Some(&tag()),
+        None,
     )
     .await
     .unwrap();
@@ -877,12 +888,12 @@ async fn the_incremental_load_on_ladybug_matches_a_fresh_load() {
     let store = tempfile::tempdir().unwrap();
     let graph = ladybug(store.path()).await;
     let (_root, repo_path) = repo("snapshot:basic");
-    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()))
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await
         .unwrap();
     switch_snapshot(&repo_path, "basic_v2");
     let retag = vec!["team-b".to_string()];
-    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag))
+    let delta = load_code_graph(&graph, None, &config(), &repo_path, Some(&retag), None)
         .await
         .unwrap()
         .delta
@@ -893,7 +904,7 @@ async fn the_incremental_load_on_ladybug_matches_a_fresh_load() {
     let fresh_store = tempfile::tempdir().unwrap();
     let fresh = ladybug(fresh_store.path()).await;
     let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
-    load_code_graph(&fresh, None, &config(), &fresh_path, Some(&retag))
+    load_code_graph(&fresh, None, &config(), &fresh_path, Some(&retag), None)
         .await
         .unwrap();
     let (nodes, edges) = shape(&graph).await;
@@ -912,11 +923,11 @@ async fn the_incremental_load_on_ladybug_matches_a_fresh_load() {
     }
 
     // Untagging, then an unchanged untagged reload, which is skipped.
-    let untag = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let untag = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert_eq!(untag.delta.unwrap()["node_set_detagged"], json!(["team-b"]));
-    let skipped = load_code_graph(&graph, None, &config(), &repo_path, None)
+    let skipped = load_code_graph(&graph, None, &config(), &repo_path, None, None)
         .await
         .unwrap();
     assert!(skipped.skipped);
@@ -930,8 +941,8 @@ async fn concurrent_loads_of_one_repository_serialise() {
     let graph = MockGraphDB::new();
     let config = config();
     let (first, second) = tokio::join!(
-        load_code_graph(&graph, None, &config, &repo_path, None),
-        load_code_graph(&graph, None, &config, &repo_path, None),
+        load_code_graph(&graph, None, &config, &repo_path, None, None),
+        load_code_graph(&graph, None, &config, &repo_path, None, None),
     );
     first.unwrap();
     second.unwrap();
@@ -949,7 +960,7 @@ async fn a_relative_enola_path_is_resolved_against_the_process_cwd() {
         ..CodeGraphConfig::default()
     };
     let (_root, repo_path) = repo("snapshot:basic");
-    let load = load_code_graph(&MockGraphDB::new(), None, &config, &repo_path, None)
+    let load = load_code_graph(&MockGraphDB::new(), None, &config, &repo_path, None, None)
         .await
         .unwrap();
     assert!(load.delta.is_some());
@@ -965,7 +976,7 @@ async fn a_missing_configured_binary_is_enola_not_installed() {
             .into_owned(),
         ..CodeGraphConfig::default()
     };
-    let error = load_code_graph(&MockGraphDB::new(), None, &config, &repo_path, None)
+    let error = load_code_graph(&MockGraphDB::new(), None, &config, &repo_path, None, None)
         .await
         .unwrap_err();
     assert!(
@@ -1088,7 +1099,7 @@ async fn real_enola_on_the_python_e2e_fixture() {
     );
 
     let graph = MockGraphDB::new();
-    load_code_graph(&graph, None, &config, &repo_path, None)
+    load_code_graph(&graph, None, &config, &repo_path, None, None)
         .await
         .unwrap();
     let (nodes, edges) = graph.get_graph_data().await.unwrap();

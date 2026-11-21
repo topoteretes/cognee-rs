@@ -1,8 +1,8 @@
 //! `remember(content_type="code")` (SDK-1053 O5): keyless code graphs of
 //! local repositories.
 //!
-//! No LLM or embedding engine is given to `remember_code` at all, so the path
-//! is keyless by construction. enola is the shell script the
+//! No LLM or embedding engine is given to `remember_code` (except by the
+//! `index_vectors` tests), so the path is keyless by construction. enola is the shell script the
 //! `cognee-code-graph` tests use (`tests/fixtures/bin/enola`), which copies a
 //! snapshot fixture into the repository's `.enola/`; the `#[ignore]`d test at
 //! the end runs the real enola 0.5.1 on Python's e2e fixture.
@@ -118,6 +118,8 @@ impl Stack {
             dataset_id: None,
             node_set: None,
             repo_credentials: None,
+            index_vectors: false,
+            embedding_engine: None,
             raise_on_error,
             add_pipeline: Arc::new(add_pipeline),
             storage: Arc::clone(&self.storage),
@@ -1422,5 +1424,225 @@ async fn a_repository_whose_directory_is_gone_is_left_out_of_the_rebuild() {
         code_graph_run_ids(&stack).await.len(),
         2,
         "golf once, then ui alone"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// index_vectors (SDK-1053 O10)
+// ---------------------------------------------------------------------------
+
+/// An embedding engine that fails the test on any call: the default
+/// (graph-only) path must never reach it.
+struct PanickingEmbedder;
+
+#[async_trait::async_trait]
+impl cognee_embedding::EmbeddingEngine for PanickingEmbedder {
+    async fn embed(&self, _: &[&str]) -> cognee_embedding::EmbeddingResult<Vec<Vec<f32>>> {
+        panic!("remember(content_type=\"code\") embedded without index_vectors");
+    }
+    fn dimension(&self) -> usize {
+        8
+    }
+    fn batch_size(&self) -> usize {
+        8
+    }
+    fn max_sequence_length(&self) -> usize {
+        512
+    }
+}
+
+/// The ids of the graph's nodes of `class`.
+async fn node_ids_of(stack: &Stack, class: &str) -> Vec<Uuid> {
+    stack
+        .nodes()
+        .await
+        .into_iter()
+        .filter(|(_, node)| node.get("type").and_then(Value::as_str) == Some(class))
+        .map(|(id, _)| Uuid::parse_str(&id).unwrap())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_default_makes_no_embedding_call() {
+    let root = TempDir::new().unwrap();
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    let mut params = stack.params(vec![path_input(&shop)], true);
+    // Given an engine, but not asked to index: it must not be called.
+    params.embedding_engine = Some(Arc::new(PanickingEmbedder));
+    let result = stack.remember(params).await.unwrap();
+    assert_eq!(result.status, RememberStatus::Completed);
+    assert!(!node_ids_of(&stack, "CodeRepository").await.is_empty());
+    assert!(stack.vector_db.list_collections().await.unwrap().is_empty());
+    assert_eq!(stack.vector_db.index_points_call_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn index_vectors_embeds_the_code_nodes_and_their_edges() {
+    let root = TempDir::new().unwrap();
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    let mut params = stack.params(vec![path_input(&shop)], true);
+    params.index_vectors = true;
+    let engine = Arc::new(cognee_embedding::MockEmbeddingEngine::new(8));
+    params.embedding_engine =
+        Some(Arc::clone(&engine) as Arc<dyn cognee_embedding::EmbeddingEngine>);
+    let result = stack.remember(params).await.unwrap();
+    assert_eq!(result.status, RememberStatus::Completed);
+    let dataset_id = stack.dataset_id().await;
+
+    let collections: BTreeSet<(String, String)> = stack
+        .vector_db
+        .list_collections()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert!(collections.contains(&("CodeRepository".into(), "name".into())));
+    assert!(collections.contains(&("EdgeType".into(), "relationship_name".into())));
+    assert!(!collections.iter().any(|(class, _)| class == "NodeSet"));
+
+    // Every code node written has its `name` vector, under its own class.
+    let mut indexed = 0;
+    for (id, node) in stack.nodes().await {
+        let class = node
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let id = Uuid::parse_str(&id).unwrap();
+        let payload = stack
+            .vector_db
+            .get_payload(&class, "name", id)
+            .unwrap_or_else(|| panic!("no {class}_name vector for {id}"));
+        assert_eq!(payload["text"], node["name"]);
+        assert_eq!(payload["id"], json!(id.to_string()));
+        assert_eq!(payload["type"], json!("IndexSchema"));
+        assert_eq!(payload["dataset_id"], json!(dataset_id.to_string()));
+        indexed += 1;
+    }
+    assert!(indexed > 1);
+    assert!(engine.call_count() > 0);
+
+    // The structural `part_of` edges' retrieval texts are edge types.
+    let (_, edges) = stack.graph_db.get_graph_data().await.unwrap();
+    let part_of = edges
+        .iter()
+        .find(|(_, _, relationship, _)| relationship == "part_of")
+        .expect("a part_of edge");
+    let text = part_of.3["edge_text"].as_str().unwrap();
+    let edge_type_id = cognee_models::EdgeType::deterministic_id(text);
+    let payload = stack
+        .vector_db
+        .get_payload("EdgeType", "relationship_name", edge_type_id)
+        .expect("the part_of edge text is indexed");
+    assert_eq!(payload["text"], json!(text));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn index_vectors_without_an_engine_is_refused() {
+    let root = TempDir::new().unwrap();
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    let mut params = stack.params(vec![path_input(&shop)], true);
+    params.index_vectors = true;
+    let error = stack.remember(params).await.unwrap_err();
+    assert!(
+        matches!(&error, ApiError::InvalidArgument(m) if m.contains("embedding engine")),
+        "{error:?}"
+    );
+    assert!(node_ids_of(&stack, "CodeRepository").await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn index_vectors_applies_to_this_calls_repositories_only() {
+    let root = TempDir::new().unwrap();
+    let stack = Stack::new().await;
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    stack
+        .remember(stack.params(vec![path_input(&shop)], true))
+        .await
+        .unwrap();
+    let first: HashSet<Uuid> = node_ids_of(&stack, "CodeRepository")
+        .await
+        .into_iter()
+        .collect();
+
+    // A second repository, with index_vectors: the first one is rebuilt with
+    // it (its repository node is always rewritten) but not embedded.
+    let other = project(root.path(), "other", "snapshot:docs_and_flows");
+    let mut params = stack.params(vec![path_input(&other)], true);
+    params.index_vectors = true;
+    params.embedding_engine = Some(Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)));
+    let result = stack.remember(params).await.unwrap();
+    assert_eq!(result.status, RememberStatus::Completed, "{result:?}");
+
+    let repositories = node_ids_of(&stack, "CodeRepository").await;
+    let mut embedded = 0;
+    for id in repositories {
+        let payload = stack.vector_db.get_payload("CodeRepository", "name", id);
+        if first.contains(&id) {
+            assert!(
+                payload.is_none(),
+                "the earlier repository {id} was embedded"
+            );
+        } else {
+            assert!(
+                payload.is_some(),
+                "the new repository {id} was not embedded"
+            );
+            embedded += 1;
+        }
+    }
+    assert!(embedded > 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn forgetting_an_indexed_repository_removes_its_vectors() {
+    use cognee::api::forget::{DatasetRef, ForgetTarget, forget};
+    use cognee::delete::DeleteService;
+    use cognee_database::DeleteDb;
+
+    let root = TempDir::new().unwrap();
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    let mut params = stack.params(vec![path_input(&shop)], true);
+    params.index_vectors = true;
+    params.embedding_engine = Some(Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)));
+    let result = stack.remember(params).await.unwrap();
+    let data_id = result.items[0].id.unwrap();
+    let repositories = node_ids_of(&stack, "CodeRepository").await;
+    assert!(
+        stack
+            .vector_db
+            .get_payload("CodeRepository", "name", repositories[0])
+            .is_some()
+    );
+
+    let service = DeleteService::new(
+        Arc::clone(&stack.storage),
+        Arc::clone(&stack.db) as Arc<dyn DeleteDb>,
+    )
+    .with_graph_db(Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>)
+    .with_vector_db(Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>);
+    let dataset_id = stack.dataset_id().await;
+    forget(
+        ForgetTarget::Item {
+            data_id,
+            dataset: DatasetRef::Id(dataset_id),
+        },
+        stack.owner_id,
+        None,
+        &service,
+        Some(stack.db.as_ref() as &dyn IngestDb),
+    )
+    .await
+    .expect("forget the repository");
+
+    assert!(
+        stack
+            .vector_db
+            .get_payload("CodeRepository", "name", repositories[0])
+            .is_none()
     );
 }

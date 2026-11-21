@@ -709,6 +709,13 @@ pub struct RememberArgs {
     #[arg(long = "content-type")]
     pub content_type: Option<String>,
 
+    /// With `--content-type code`: also embed the code nodes into the vector
+    /// store, for the semantic and completion retrievers (Python
+    /// `index_vectors=True`; needs an embedding provider). Off by default:
+    /// the code graph is built with no embedding call.
+    #[arg(long = "index-vectors", default_value_t = false)]
+    pub index_vectors: bool,
+
     #[arg(long = "tenant-id")]
     pub tenant_id: Option<String>,
 }

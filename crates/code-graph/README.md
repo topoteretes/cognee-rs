@@ -78,13 +78,25 @@ A load is incremental, as Python's is:
   (`CodeGraphLoad::skipped`). Only an untagged repository is skipped: a tagged
   call, or a repository node that still carries a tag, always loads. A failed
   read of the stamp loads in full.
-- **Nodes.** Writes are graph-only (no embedding call) and deltas against the
-  graph: only the snapshot's own nodes are read (`get_nodes`). A fact node is
+- **Nodes.** Writes are graph-only by default (no embedding call) and deltas
+  against the graph: only the snapshot's own nodes are read (`get_nodes`). A fact node is
   written when the graph lacks it or its `fact_hash` changed; repository nodes
   are always written. Each written node goes through Python's storage walk: a
   `part_of` edge to its repository, and per node set a `NodeSet` node and a
   `belongs_to_set` edge, with Python's default edge properties
   (`edge_object_id`, `feedback_weight`, the fallback `edge_text`).
+- **Vectors (opt-in, `index_vectors`).** Given a `CodeGraphVectors`
+  (embedding engine, vector store, dataset), the nodes the write stored are
+  then embedded, after their graph rows: each code node's `name` into
+  `{type}_name` (`CodeSymbol_name`, `CodeRepository_name`, ...; a `NodeSet`
+  indexes nothing), and the retrieval texts (`edge_text`, else the
+  relationship name) of the structural edges written with them into
+  `EdgeType_relationship_name`, as Python's `add_data_points(...,
+  graph_only=False)` does (`index_code_graph_vectors`). Unchanged nodes are not
+  re-embedded, and a skipped (unchanged) load embeds nothing. The typed
+  relations below are never indexed, as in Python. Only
+  `remember(content_type="code", index_vectors=true)` asks for this; the
+  cognify routes are always graph-only.
 - **Typed relations** (`calls`, `imports`, ...) the graph does not have yet
   are added with `add_edges`.
 - **Stale sweep.** What earlier loads of the same repositories derived and

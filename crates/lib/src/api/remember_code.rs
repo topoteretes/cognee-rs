@@ -16,8 +16,10 @@
 //! rebuilt with the new ones, which is where the edges between repositories
 //! come from.
 //!
-//! Not yet ported (a later SDK-1053 stage): `index_vectors` (O10), which is
-//! refused with a clear error rather than ignored.
+//! `index_vectors=true` also embeds the code nodes the call writes (their
+//! `name`, and the retrieval texts of their structural edges), for the
+//! semantic and completion retrievers; it needs an embedding engine. The
+//! default makes no embedding call: `SearchType.CODE` reads the graph only.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,9 +27,10 @@ use std::time::Instant;
 
 use cognee_cognify::CognifyConfig;
 use cognee_cognify::code_cluster::{
-    CodeGraphRunTarget, plan_dataset_refresh, refresh_dataset_code_graph,
+    CodeGraphRunTarget, CodeGraphVectors, plan_dataset_refresh, refresh_dataset_code_graph,
 };
 use cognee_database::{PipelineRunRepository, RelationalDb};
+use cognee_embedding::EmbeddingEngine;
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
 use cognee_ingestion::resolve_repo::{CodeRepositoryError, RepoSourceSettings};
@@ -109,8 +112,7 @@ pub struct RememberOptionCheck<'a> {
 /// - `index_vectors` without `content_type="code"`;
 /// - `repo_credentials` without `content_type="code"`;
 /// - `branch` with any `content_type`;
-/// - `session_id` with `content_type="code"`;
-/// - `index_vectors=true` (vector indexing of code is not ported yet).
+/// - `session_id` with `content_type="code"`.
 ///
 /// # Errors
 ///
@@ -139,12 +141,6 @@ pub fn validate_remember_options(
              stored in the permanent graph, not a session cache.",
         );
     }
-    if check.index_vectors == Some(true) {
-        return invalid(
-            "index_vectors is not supported by this SDK yet: the code graph is built \
-             graph-only.",
-        );
-    }
     Ok(content_type)
 }
 
@@ -168,6 +164,15 @@ pub struct RememberCodeParams {
     /// git only through environment-level git config, never argv, a URL, a
     /// result item, a log line or an error.
     pub repo_credentials: Option<String>,
+    /// Python's `index_vectors`: also embed the code nodes this call writes
+    /// into the vector store, through `embedding_engine`. `false` (the
+    /// default) builds the graph only and makes no embedding call. Applies to
+    /// the repositories of this call only: the dataset's other repositories,
+    /// rebuilt with them, stay graph-only.
+    pub index_vectors: bool,
+    /// The engine `index_vectors` embeds with; required when it is `true`,
+    /// ignored (and best left `None`, so no engine is built) otherwise.
+    pub embedding_engine: Option<Arc<dyn EmbeddingEngine>>,
     /// `false` records a failed repository as an errored item of the result
     /// (as Python's HTTP router asks) instead of returning the error.
     pub raise_on_error: bool,
@@ -269,6 +274,8 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         dataset_id: target_dataset_id,
         node_set: _,
         repo_credentials,
+        index_vectors,
+        embedding_engine,
         raise_on_error,
         add_pipeline,
         storage,
@@ -291,6 +298,16 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
     };
     // Before anything runs: a refusal must reach the caller, not a failed item.
     check_remote_repos_allowed(&specs, add_pipeline.repo_sources())?;
+    let embedding_engine = match (index_vectors, embedding_engine) {
+        (false, _) => None,
+        (true, Some(engine)) => Some(engine),
+        (true, None) => {
+            return Err(ApiError::InvalidArgument(
+                "index_vectors=true needs an embedding engine to embed the code graph with."
+                    .to_string(),
+            ));
+        }
+    };
 
     // Python `send_telemetry("cognee.remember.code_graph", ...)`.
     #[cfg(feature = "telemetry")]
@@ -300,7 +317,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         Some(serde_json::json!({
             "dataset_name": dataset_name,
             "repository_count": specs.len(),
-            "index_vectors": false,
+            "index_vectors": index_vectors,
             "run_in_background": false,
             "cognee_version": cognee_telemetry::cognee_version(),
         })),
@@ -465,7 +482,12 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                 .iter()
                 .map(|(_, row, path)| (row.clone(), path.clone()))
                 .collect();
-            let runs = match refresh_dataset_code_graph(&target, known, plan).await {
+            let vectors = embedding_engine.as_ref().map(|engine| CodeGraphVectors {
+                embedding_engine: Arc::clone(engine),
+                vector_db: Arc::clone(&vector_db),
+                dataset_id: Some(dataset_id),
+            });
+            let runs = match refresh_dataset_code_graph(&target, known, plan, vectors).await {
                 Ok(runs) => runs,
                 Err(e) => {
                     let e = ApiError::Cognify(e.to_string());
@@ -702,13 +724,13 @@ mod tests {
             .unwrap(),
             Some(RememberContentType::Code)
         );
-        // Not ported yet: refused, never ignored.
-        assert!(
-            message(validate_remember_options(RememberOptionCheck {
+        assert_eq!(
+            validate_remember_options(RememberOptionCheck {
                 index_vectors: Some(true),
                 ..check()
-            }))
-            .starts_with("index_vectors is not supported by this SDK yet")
+            })
+            .unwrap(),
+            Some(RememberContentType::Code)
         );
     }
 

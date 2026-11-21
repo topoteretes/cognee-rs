@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`remember(content_type="code", index_vectors=true)` (SDK-1053).** The
+  opt-in vector index of a code graph, as Python's `index_vectors`: the code
+  nodes the call writes are also embedded (each node's `name` into
+  `{type}_name`, the retrieval texts of their structural edges into
+  `EdgeType_relationship_name`), after their graph rows; the default still
+  makes no embedding call. It applies to the call's own repositories only
+  (the dataset's other repositories, rebuilt in the same cluster run, stay
+  graph-only), and the cognify routes stay graph-only. `index_vectors=true` was
+  refused before. API: `RememberCodeParams::{index_vectors, embedding_engine}`
+  (`InvalidArgument` when asked without an engine), bindings `indexVectors`,
+  CLI `remember --index-vectors`; `cognee_code_graph::{CodeGraphVectors,
+  index_code_graph_vectors, IndexedCollections}` and new
+  `CodeGraphError::{Embedding, Vector}` variants. **Signature changes:**
+  `load_code_graph`, `load_cluster_member`, `extract_code_repo_graph` and
+  `add_code_graph_data_points` take a trailing `Option<&CodeGraphVectors>`;
+  `cognee_cognify::{run_code_routes, make_code_routes_task,
+  run_code_graph_pipeline}` and `code_cluster::refresh_dataset_code_graph` a
+  trailing vectors option; `code_cluster::MemberRun` gains `index_vectors`.
+
 - **The per-file CODE cognify route (SDK-1053).** cognify loads a lone code
   file (a row stamped `system_metadata.source = "code"` by `code_loader`)
   into the deterministic code graph instead of failing the run with

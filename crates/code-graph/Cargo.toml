@@ -18,9 +18,12 @@ workspace = true
 chrono.workspace = true
 cognee-config-core = { path = "../config-core", version = "0.2.0" }
 cognee-database = { path = "../database", version = "0.2.0" }
+# `index_vectors`: the opt-in vector index of a load (`vectors`).
+cognee-embedding = { path = "../embedding", version = "0.2.0" }
 cognee-graph = { path = "../graph", version = "0.2.0" }
 cognee-models = { path = "../models", version = "0.2.0" }
 cognee-utils = { path = "../utils", version = "0.2.0" }
+cognee-vector = { path = "../vector", version = "0.2.0" }
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,6 +37,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+cognee-vector = { path = "../vector", features = ["testing"] }
 # `ladybug`: the incremental load against a real backend (`tests/load.rs`).
 cognee-graph = { path = "../graph", features = ["testing", "ladybug"] }
 cognee-models = { path = "../models" }

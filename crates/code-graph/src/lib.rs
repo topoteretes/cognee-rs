@@ -19,6 +19,10 @@
 //! which the golden tests under `tests/` check against output Python
 //! produced (`scripts/generate_code_graph_goldens.py`). Settings are the
 //! `code_graph.*` section ([`CodeGraphConfig`]).
+//!
+//! Loads are graph-only by default: no embedding call, no vector index.
+//! `index_vectors` opts a load in ([`CodeGraphVectors`]): the nodes it writes
+//! are then embedded too ([`index_code_graph_vectors`]).
 
 mod cluster;
 mod code_files;
@@ -32,6 +36,7 @@ mod pipeline;
 pub mod pyjson;
 mod runner;
 mod snapshot;
+mod vectors;
 mod writer;
 
 pub use cluster::{
@@ -63,6 +68,7 @@ pub use snapshot::{
     normalize_relation, parse_enola_snapshot, receipt_vouches_for_flows, relation_target_id,
     snapshot_identity, validate_receipt,
 };
+pub use vectors::{CodeGraphVectors, IndexedCollections, index_code_graph_vectors};
 pub use writer::{
     CodeGraphLedger, CodeGraphLoadState, CodeGraphOwner, NodeDelta, RECEIPT_PROJECTION_KEYS,
     StoredRepositoryState, add_code_graph_data_points, add_code_graph_edges, receipt_projection,
