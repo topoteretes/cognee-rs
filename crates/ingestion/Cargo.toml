@@ -31,7 +31,13 @@ sha2.workspace = true
 hex.workspace = true
 regex.workspace = true
 uuid.workspace = true
-tokio.workspace = true
+# `process`: git for remote repositories (`resolve_repo`); `net`: the host
+# lookup of the outbound-URL check a clone passes first.
+tokio = { workspace = true, features = ["process", "net"] }
+# `resolve_repo`: the out-of-band credentials header and the default clones
+# directory (`~/.cognee/repos`).
+base64.workspace = true
+dirs.workspace = true
 mime_guess.workspace = true
 infer.workspace = true
 same-file.workspace = true

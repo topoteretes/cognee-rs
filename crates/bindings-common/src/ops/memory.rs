@@ -24,16 +24,23 @@
 //! ```json
 //! {"sessionId":"...", "selfImprovement":bool, "tenant":"<uuid>",
 //!  "extractor":"auto"|"llm"|"gliner", "graphBackend":...,
-//!  "contentType":"code", "nodeSet":[...], "raiseOnError":bool}
+//!  "contentType":"code", "nodeSet":[...], "raiseOnError":bool,
+//!  "repoCredentials":"<token>"}
 //! ```
 //!
-//! `{"contentType":"code", "nodeSet":[...], "raiseOnError":bool}` indexes local
-//! repository paths (`{type:"file", path}` or a path string) as a code graph,
-//! keyless (Python `remember(content_type="code")`): one item per repository,
-//! `{kind:"code_repository", source, path, id, pipeline_run_id}`. `nodeSet` is
-//! ignored, as in Python. `sessionId`, `branch`, `repoCredentials` and
-//! `indexVectors: true` are refused with it (the last two are not ported
-//! yet), as is `indexVectors` or `repoCredentials` without it.
+//! `{"contentType":"code", "nodeSet":[...], "raiseOnError":bool}` indexes
+//! repositories as a code graph, keyless (Python
+//! `remember(content_type="code")`): local paths (`{type:"file", path}` or a
+//! path string) and remote git URLs, shallow-cloned under
+//! `code_graph.clones_dir` (refused when `code_graph.allow_http_requests`
+//! disables them). One item per repository,
+//! `{kind:"code_repository", source, path, id, pipeline_run_id}`; `source`
+//! never carries URL credentials. `repoCredentials` is a token for private
+//! https remotes, handed to git through its environment only. `nodeSet` is
+//! ignored, as in Python. `sessionId`, `branch` and `indexVectors: true` are
+//! refused with it (the last is not ported yet), as is `indexVectors` or
+//! `repoCredentials` without it. `branch` without `contentType` (Python
+//! forwards it to `add`) is refused too: pass it to `add` instead.
 //!
 //! `extractor` (Python's argument) and `graphBackend` select the graph
 //! extractor as for `cognify`; `extractor` with `sessionId` is an error, as in
@@ -268,6 +275,15 @@ pub async fn run_remember(
     if content_type == Some(RememberContentType::Code) {
         return run_remember_code(state, inputs, dataset_name, tenant_id, opts).await;
     }
+    // Python forwards `branch` to `add()`; this `remember` does not take add
+    // options yet, so it is refused rather than dropped.
+    if opt_str(opts, "branch")?.is_some() {
+        return Err(SdkError::Validation(
+            "`branch` is not supported by remember() in this SDK yet: call add() with the \
+             branch, then cognify()."
+                .to_string(),
+        ));
+    }
     if session_id.is_some()
         && opts
             .get(crate::graph_backend::EXTRACTOR_OPT)
@@ -388,6 +404,7 @@ async fn run_remember_code(
         tenant_id,
         dataset_id: None,
         node_set: None,
+        repo_credentials: opt_str(opts, "repoCredentials")?.map(str::to_string),
         raise_on_error,
         add_pipeline: svc.add_pipeline.clone(),
         storage: svc.storage.clone(),

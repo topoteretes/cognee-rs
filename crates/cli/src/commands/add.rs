@@ -66,6 +66,8 @@ pub fn run(args: AddArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> {
         .with_database(database)
         .with_pipeline_run_repo(pipeline_run_repo)
         .with_run_ownership_dir(run_ownership_dir)
+        // A GitHub/GitLab repository URL is cloned (`code_graph.clones_dir`).
+        .with_repo_sources(cm.settings().repo_sources())
         // Python runs its image and audio loaders at `add`.
         .with_loader_registry(cm.add_loader_registry().await)
         // A code project's documents need an LLM (Python `resolve_code_repository`).

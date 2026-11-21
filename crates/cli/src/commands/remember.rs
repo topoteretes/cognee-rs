@@ -125,6 +125,7 @@ pub fn run(args: RememberArgs, cm: Arc<ComponentManager>) -> Result<(), CliError
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
             .with_database(Arc::clone(&database))
+            .with_repo_sources(cm.settings().repo_sources())
             // Python runs its image and audio loaders at `add`.
             .with_loader_registry(cm.add_loader_registry().await),
         );
@@ -209,7 +210,9 @@ fn run_code(
             .with_thread_pool(thread_pool)
             .with_graph_db(Arc::clone(&graph_db))
             .with_vector_db(Arc::clone(&vector_db))
-            .with_database(Arc::clone(&database)),
+            .with_database(Arc::clone(&database))
+            // Remote repositories are cloned under `code_graph.clones_dir`.
+            .with_repo_sources(cm.settings().repo_sources()),
         );
         let cognify_config = Arc::new(cm.settings().cognify_config());
         let result = remember_code(RememberCodeParams {
@@ -219,6 +222,7 @@ fn run_code(
             tenant_id,
             dataset_id: None,
             node_set: None,
+            repo_credentials: None,
             raise_on_error: true,
             add_pipeline,
             storage,

@@ -117,6 +117,7 @@ impl Stack {
             tenant_id: None,
             dataset_id: None,
             node_set: None,
+            repo_credentials: None,
             raise_on_error,
             add_pipeline: Arc::new(add_pipeline),
             storage: Arc::clone(&self.storage),
@@ -491,13 +492,16 @@ async fn data_that_names_no_repository_is_refused_before_anything_is_stored() {
              (or a list of them) as data."
         );
     }
+    // An add pipeline that configured nothing refuses remote repositories
+    // (Python's API default), before anything is stored or cloned.
     for url in ["https://github.com/o/r", "git@github.com:o/r.git"] {
         let error = stack
             .remember(stack.params(vec![DataInput::Text(url.to_string())], false))
             .await
             .unwrap_err();
         assert!(
-            matches!(&error, ApiError::InvalidArgument(m) if m.starts_with("remote git repositories")),
+            matches!(&error, ApiError::CodeRepositoryForbidden(m)
+                if m.starts_with("Outbound HTTP requests are disabled by default")),
             "{error}"
         );
     }
@@ -797,5 +801,405 @@ async fn real_enola_remembers_the_python_e2e_fixture() {
                 name_of(id)
             );
         }
+    }
+}
+
+// ─── Remote repositories (SDK-1053 O7) ────────────────────────────────────────
+
+mod remote {
+    use std::process::Command;
+
+    use cognee_ingestion::AddParams;
+    use cognee_ingestion::code_repo::code_repo_data_id;
+    use cognee_ingestion::resolve_repo::{
+        CodeRepositoryError, GitOutput, RepoSourceSettings, RepoTransport, SystemGit, clone_dir,
+    };
+
+    use super::*;
+
+    const URL: &str = "https://github.com/org/shop";
+    const TOKEN_URL: &str = "https://x-access-token:tok-SECRET@github.com/org/shop";
+
+    fn git_installed() -> bool {
+        Command::new("git").arg("--version").output().is_ok()
+    }
+
+    /// Git on a bare configuration (the developer's global config could
+    /// sign or hook the commits made here).
+    fn hermetic_env(root: &Path) -> Vec<(String, String)> {
+        let config = root.join("gitconfig");
+        if !config.exists() {
+            std::fs::write(&config, "").unwrap();
+        }
+        vec![
+            (
+                "GIT_CONFIG_GLOBAL".to_string(),
+                config.to_string_lossy().into_owned(),
+            ),
+            ("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string()),
+            ("GIT_AUTHOR_NAME".to_string(), "t".to_string()),
+            ("GIT_AUTHOR_EMAIL".to_string(), "t@example.com".to_string()),
+            ("GIT_COMMITTER_NAME".to_string(), "t".to_string()),
+            (
+                "GIT_COMMITTER_EMAIL".to_string(),
+                "t@example.com".to_string(),
+            ),
+        ]
+    }
+
+    fn git(root: &Path, cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .envs(hermetic_env(root))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A bare origin holding the shop project on `main`, and on `dev` with
+    /// one more module.
+    fn origin(root: &Path) -> PathBuf {
+        let work = project(root, "work", "snapshot:basic");
+        let bare = root.join("origin.git");
+        git(
+            root,
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                &bare.to_string_lossy(),
+            ],
+        );
+        git(root, &work, &["init", "-q", "-b", "main"]);
+        git(root, &work, &["add", "-A"]);
+        git(root, &work, &["commit", "-q", "-m", "main"]);
+        git(
+            root,
+            &work,
+            &["push", "-q", &bare.to_string_lossy(), "main"],
+        );
+        git(root, &work, &["switch", "-q", "-c", "dev"]);
+        std::fs::write(work.join("dev.py"), "def dev():\n    pass\n").unwrap();
+        git(root, &work, &["add", "-A"]);
+        git(root, &work, &["commit", "-q", "-m", "dev"]);
+        git(root, &work, &["push", "-q", &bare.to_string_lossy(), "dev"]);
+        bare
+    }
+
+    /// Real git with the github.com URL (with or without a token) mapped to
+    /// the bare origin; the outbound check passes. Records every argv.
+    struct LocalOrigin {
+        remote: String,
+        env: Vec<(String, String)>,
+        argv: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RepoTransport for LocalOrigin {
+        async fn run_git(
+            &self,
+            args: &[String],
+            cwd: Option<&Path>,
+            env: &[(String, String)],
+        ) -> Result<GitOutput, CodeRepositoryError> {
+            self.argv.lock().unwrap().push(args.join(" "));
+            let args: Vec<String> = args
+                .iter()
+                .map(|arg| {
+                    if arg == URL || arg == TOKEN_URL {
+                        self.remote.clone()
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect();
+            let mut env = env.to_vec();
+            env.extend(self.env.iter().cloned());
+            SystemGit.run_git(&args, cwd, &env).await
+        }
+
+        async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct Remote {
+        _root: TempDir,
+        clones: PathBuf,
+        transport: Arc<LocalOrigin>,
+    }
+
+    impl Remote {
+        fn new() -> Option<Self> {
+            if !git_installed() {
+                eprintln!("skipped: git is required");
+                return None;
+            }
+            let root = TempDir::new().unwrap();
+            let base = root.path().canonicalize().unwrap();
+            let bare = origin(&base);
+            Some(Self {
+                clones: base.join("clones"),
+                transport: Arc::new(LocalOrigin {
+                    remote: format!("file://{}", bare.to_string_lossy()),
+                    env: hermetic_env(&base),
+                    argv: std::sync::Mutex::new(Vec::new()),
+                }),
+                _root: root,
+            })
+        }
+
+        fn wire(&self, pipeline: AddPipeline) -> AddPipeline {
+            pipeline
+                .with_repo_sources(RepoSourceSettings::new(
+                    &self.clones.to_string_lossy(),
+                    "",
+                    false,
+                ))
+                .with_repo_transport(Arc::clone(&self.transport) as Arc<dyn RepoTransport>)
+        }
+    }
+
+    fn with_pipeline(
+        params: RememberCodeParams,
+        f: impl FnOnce(AddPipeline) -> AddPipeline,
+    ) -> RememberCodeParams {
+        let pipeline = Arc::try_unwrap(params.add_pipeline)
+            .ok()
+            .expect("the only handle");
+        RememberCodeParams {
+            add_pipeline: Arc::new(f(pipeline)),
+            ..params
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_remote_repository_is_cloned_and_remembered_without_its_token() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let mut params = with_pipeline(
+            stack.params(vec![DataInput::Url(TOKEN_URL.to_string())], true),
+            |p| remote.wire(p),
+        );
+        params.repo_credentials = Some("oob-SECRET".to_string());
+
+        let result = stack.remember(params).await.unwrap();
+        assert_eq!(result.status, RememberStatus::Completed, "{result}");
+        let clone = clone_dir(URL, None, &remote.clones);
+        let item = &result.items[0];
+        assert_eq!(item.source.as_deref(), Some(URL));
+        assert_eq!(item.path.as_deref(), Some(clone.to_string_lossy().as_ref()));
+        assert!(clone.join("main.py").is_file());
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("SECRET"), "{json}");
+
+        // The row records the credential-free URL and is pinned to the clone.
+        let data_id = item.id.unwrap();
+        let dataset_id = stack.dataset_id().await;
+        assert_eq!(
+            data_id,
+            code_repo_data_id(&clone.to_string_lossy(), stack.owner_id, None, dataset_id)
+        );
+        let row = get_data(&stack.db, data_id).await.unwrap().unwrap();
+        let stamp: Value = serde_json::from_str(row.system_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(stamp["repo_url"], URL);
+        assert_eq!(stamp["repo_path"], clone.to_string_lossy().as_ref());
+        assert!(stack.node_types().await.contains("CodeRepository"));
+
+        // The out-of-band token never reached argv; the stored remote is clean.
+        let argv = remote.transport.argv.lock().unwrap().join("\n");
+        assert!(!argv.contains("oob-SECRET"), "{argv}");
+        // (The transport maps the URL itself onto the local origin, so the
+        // rewrite is read off the argv rather than the clone's config.)
+        assert!(
+            argv.lines()
+                .any(|line| line == format!("remote set-url origin {URL}")),
+            "{argv}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_disabled_gate_refuses_before_anything_is_cloned_or_stored() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let params = with_pipeline(
+            stack.params(vec![DataInput::Url(URL.to_string())], false),
+            |p| {
+                remote.wire(p).with_repo_sources(RepoSourceSettings::new(
+                    &remote.clones.to_string_lossy(),
+                    "off",
+                    false,
+                ))
+            },
+        );
+        let error = stack.remember(params).await.unwrap_err();
+        assert!(
+            matches!(&error, ApiError::CodeRepositoryForbidden(m)
+                if m.contains("ALLOW_HTTP_REQUESTS=off")),
+            "{error}"
+        );
+        assert!(remote.transport.argv.lock().unwrap().is_empty());
+        assert!(
+            get_dataset_by_name_in_tenant(&stack.db, DATASET, stack.owner_id, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn add_pipeline(stack: &Stack, remote: &Remote) -> AddPipeline {
+        remote.wire(
+            AddPipeline::new(
+                Arc::clone(&stack.storage),
+                Arc::clone(&stack.db) as Arc<dyn IngestDb>,
+            )
+            .with_thread_pool(Arc::new(
+                cognee::core::RayonThreadPool::with_default_threads().unwrap(),
+            ))
+            .with_graph_db(Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>)
+            .with_vector_db(Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>)
+            .with_database(stack.db.clone()),
+        )
+    }
+
+    /// Python `add(<GitHub URL>, branch=...)`: the clone is resolved like a
+    /// local project (one manifest plus its documents), and every branch of
+    /// the URL shares the manifest's one row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_clones_a_repository_url_on_its_branch() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let pipeline = add_pipeline(&stack, &remote);
+        let add = |branch: Option<&str>| {
+            let params = AddParams {
+                branch: branch.map(str::to_string),
+                ..AddParams::default()
+            };
+            let pipeline = &pipeline;
+            let owner = stack.owner_id;
+            async move {
+                pipeline
+                    .add_with_params(
+                        vec![DataInput::Url(format!("{URL}/?tab=readme#top"))],
+                        DATASET,
+                        owner,
+                        None,
+                        &params,
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let rows = add(Some("dev")).await;
+        let dataset_id = stack.dataset_id().await;
+        let manifests: Vec<_> = rows
+            .iter()
+            .filter(|row| cognify_route_for(row) == Ok(CognifyRoute::CodeRepo))
+            .collect();
+        assert_eq!(manifests.len(), 1, "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.name.starts_with("README")),
+            "the README is a document: {rows:?}"
+        );
+        let manifest = manifests[0];
+        let default_clone = clone_dir(URL, None, &remote.clones);
+        let dev_clone = clone_dir(URL, Some("dev"), &remote.clones);
+        assert!(dev_clone.join("dev.py").is_file());
+        let stamp: Value =
+            serde_json::from_str(manifest.system_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(stamp["repo_url"], URL);
+        assert_eq!(stamp["repo_path"], dev_clone.to_string_lossy().as_ref());
+        // Keyed on the default branch's clone, as Python's `identity`.
+        assert_eq!(
+            manifest.id,
+            code_repo_data_id(
+                &default_clone.to_string_lossy(),
+                stack.owner_id,
+                None,
+                dataset_id
+            )
+        );
+
+        // The default branch: its own clone, the same row.
+        let rows = add(None).await;
+        let manifest_main = rows
+            .iter()
+            .find(|row| cognify_route_for(row) == Ok(CognifyRoute::CodeRepo))
+            .unwrap();
+        assert_eq!(manifest_main.id, manifest.id);
+        assert!(default_clone.join("main.py").is_file());
+        assert!(!default_clone.join("dev.py").exists());
+        let stamp: Value =
+            serde_json::from_str(manifest_main.system_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(stamp["repo_path"], default_clone.to_string_lossy().as_ref());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_refuses_a_bad_branch_before_anything_is_stored() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let params = AddParams {
+            branch: Some("--upload-pack=touch /tmp/x".to_string()),
+            ..AddParams::default()
+        };
+        let error = add_pipeline(&stack, &remote)
+            .add_with_params(
+                vec![DataInput::Url(URL.to_string())],
+                DATASET,
+                stack.owner_id,
+                None,
+                &params,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("Invalid branch name '--upload-pack"),
+            "{error}"
+        );
+        assert!(remote.transport.argv.lock().unwrap().is_empty());
+        assert!(
+            get_dataset_by_name_in_tenant(&stack.db, DATASET, stack.owner_id, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_of_a_repository_url_follows_the_gate() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let pipeline = add_pipeline(&stack, &remote).with_repo_sources(RepoSourceSettings::new(
+            &remote.clones.to_string_lossy(),
+            "",
+            true,
+        ));
+        let error = pipeline
+            .add(
+                vec![DataInput::Url(URL.to_string())],
+                DATASET,
+                stack.owner_id,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("Outbound HTTP requests are disabled by default"),
+            "{error}"
+        );
+        assert!(remote.transport.argv.lock().unwrap().is_empty());
     }
 }

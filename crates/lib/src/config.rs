@@ -763,10 +763,23 @@ impl Settings {
         self.section()
     }
 
-    /// The code graph engine section (`code_graph.*`): the enola binary and
-    /// how long one run may take.
+    /// The code graph engine section (`code_graph.*`): the enola binary,
+    /// how long one run may take, and where remote repositories are cloned.
     pub fn code_graph(&self) -> cognee_components::CodeGraphConfig {
         self.section()
+    }
+
+    /// Where an SDK, CLI or binding call clones remote repositories, and
+    /// whether it may (`code_graph.clones_dir`,
+    /// `code_graph.allow_http_requests`: unset allows, as Python's SDK
+    /// does). An HTTP server builds its own with `api_request = true`.
+    pub fn repo_sources(&self) -> cognee_ingestion::resolve_repo::RepoSourceSettings {
+        let code_graph = self.code_graph();
+        cognee_ingestion::resolve_repo::RepoSourceSettings::new(
+            &code_graph.clones_dir,
+            &code_graph.allow_http_requests,
+            false,
+        )
     }
 
     /// The LLM kind section (`llm.*`): provider, model, credentials, retries,

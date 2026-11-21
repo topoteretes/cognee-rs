@@ -3,18 +3,19 @@
 //!
 //! Port of the `content_type == "code"` branch of Python's `_remember_inner`
 //! (`cognee/api/v1/remember/remember.py` at the parity pin a59433e6b) for
-//! local repositories: each repository becomes one code-repo `Data` row
-//! (Python `add_code_repository`) and its code graph is built by one
+//! local repositories and remote git URLs: each repository is resolved to a
+//! local directory (a remote one shallow-cloned,
+//! [`cognee_ingestion::resolve_repo`]), becomes one code-repo `Data` row
+//! (Python `add_code_repository`), and its code graph is built by one
 //! `code_graph_pipeline` run over that row
 //! ([`cognee_cognify::run_code_graph_pipeline`], the CODE_REPO adapter the
 //! cognify route uses). No LLM is built, called or validated on this path.
 //!
-//! Not yet ported (later SDK-1053 stages): remote git URLs and
-//! `repo_credentials` (O7), several repositories of a dataset extracted as one
-//! enola cluster (O8), and `index_vectors` (O10). Each is refused with a
-//! clear error rather than ignored.
+//! Not yet ported (later SDK-1053 stages): several repositories of a dataset
+//! extracted as one enola cluster (O8), and `index_vectors` (O10), which is
+//! refused with a clear error rather than ignored.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,6 +23,7 @@ use cognee_cognify::CognifyConfig;
 use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
+use cognee_ingestion::resolve_repo::{CodeRepositoryError, RepoSourceSettings};
 use cognee_models::DataInput;
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
@@ -101,7 +103,6 @@ pub struct RememberOptionCheck<'a> {
 /// - `repo_credentials` without `content_type="code"`;
 /// - `branch` with any `content_type`;
 /// - `session_id` with `content_type="code"`;
-/// - `repo_credentials` (remote repositories are not ported yet);
 /// - `index_vectors=true` (vector indexing of code is not ported yet).
 ///
 /// # Errors
@@ -131,12 +132,6 @@ pub fn validate_remember_options(
              stored in the permanent graph, not a session cache.",
         );
     }
-    if check.repo_credentials {
-        return invalid(
-            "repo_credentials is not supported by this SDK yet: remote git repositories \
-             cannot be indexed. Pass a local repository path.",
-        );
-    }
     if check.index_vectors == Some(true) {
         return invalid(
             "index_vectors is not supported by this SDK yet: the code graph is built \
@@ -161,9 +156,17 @@ pub struct RememberCodeParams {
     /// Accepted and ignored, as in Python: the code nodes of
     /// `remember(content_type="code")` are untagged.
     pub node_set: Option<Vec<String>>,
+    /// An out-of-band token for private https remotes (Python
+    /// `repo_credentials`, e.g. a GitHub App installation token). It reaches
+    /// git only through environment-level git config, never argv, a URL, a
+    /// result item, a log line or an error.
+    pub repo_credentials: Option<String>,
     /// `false` records a failed repository as an errored item of the result
     /// (as Python's HTTP router asks) instead of returning the error.
     pub raise_on_error: bool,
+    /// Stores the rows. Its [`AddPipeline::repo_sources`] say where remote
+    /// repositories are cloned and whether they may be
+    /// (`ALLOW_HTTP_REQUESTS`); its [`AddPipeline::repo_transport`] runs git.
     pub add_pipeline: Arc<AddPipeline>,
     pub storage: Arc<dyn StorageTrait>,
     pub graph_db: Arc<dyn GraphDBTrait>,
@@ -174,34 +177,38 @@ pub struct RememberCodeParams {
     pub cognify_config: Arc<CognifyConfig>,
 }
 
-/// The prefixes that make a repository spec a remote git URL (Python
-/// `_REMOTE_PREFIXES`).
-const REMOTE_PREFIXES: [&str; 4] = ["https://", "http://", "git@", "ssh://"];
+pub use cognee_ingestion::resolve_repo::{is_remote_repo, redact_repo_spec};
 
-/// Whether a repository spec is a remote git URL rather than a local path
-/// (Python `is_remote_repo`).
-pub fn is_remote_repo(spec: &str) -> bool {
-    REMOTE_PREFIXES
-        .iter()
-        .any(|prefix| spec.starts_with(prefix))
+/// A repository failure as the API error Python raises: a refusal (HTTP 403)
+/// or a resolution failure.
+fn repository_error(error: CodeRepositoryError) -> ApiError {
+    match error {
+        CodeRepositoryError::Refused(message) => ApiError::CodeRepositoryForbidden(message),
+        CodeRepositoryError::Failed(message) => ApiError::CodeRepository(message),
+        CodeRepositoryError::InvalidBranch(message) => ApiError::InvalidArgument(message),
+    }
 }
 
-/// The spec with any URL-embedded credentials removed (Python
-/// `redact_repo_spec`): `https://user:token@host/x` becomes `https://host/x`.
-pub fn redact_repo_spec(spec: &str) -> String {
-    let Some(scheme_end) = spec.find("://") else {
-        return spec.to_string();
-    };
-    let rest_start = scheme_end + 3;
-    let rest = &spec[rest_start..];
-    let netloc_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let netloc = &rest[..netloc_end];
-    match netloc.rsplit_once('@') {
-        Some((_userinfo, host)) => {
-            format!("{}{}{}", &spec[..rest_start], host, &rest[netloc_end..])
-        }
-        None => spec.to_string(),
+/// Refuse remote repositories up front when outbound HTTP requests are
+/// disabled (`remember.py:1822-1835`): before any clone starts, and before a
+/// background run is handed the batch, where the refusal would reach only
+/// the log.
+///
+/// # Errors
+///
+/// [`ApiError::CodeRepositoryForbidden`] when a spec is a remote git URL
+/// and `settings` refuse remote repositories.
+pub fn check_remote_repos_allowed<S: AsRef<str>>(
+    specs: &[S],
+    settings: &RepoSourceSettings,
+) -> Result<(), ApiError> {
+    if specs.iter().any(|spec| is_remote_repo(spec.as_ref())) {
+        settings
+            .http_requests
+            .require_allowed()
+            .map_err(repository_error)?;
     }
+    Ok(())
 }
 
 /// The repository spec of one `data` entry, or `None` when it cannot name one.
@@ -213,27 +220,12 @@ fn repo_spec(input: &DataInput) -> Option<String> {
     }
 }
 
-/// A local repository spec resolved to its directory (Python
-/// `resolve_repo_source` for a local path: the real path, which must be a
-/// directory).
-fn resolve_local_repo(spec: &str) -> Result<PathBuf, ApiError> {
-    let not_a_directory = || {
-        ApiError::CodeRepository(format!(
-            "Repository path '{spec}' is not a directory. \
-             Pass a local repo path or a remote git URL."
-        ))
-    };
-    let path = std::fs::canonicalize(Path::new(spec)).map_err(|_| not_a_directory())?;
-    if path.is_dir() {
-        Ok(path)
-    } else {
-        Err(not_a_directory())
-    }
-}
-
-/// Index local code repositories as a code graph, keyless.
+/// Index code repositories (local paths or remote git URLs) as a code
+/// graph, keyless.
 ///
-/// For each repository, in order: its spec is resolved to a local directory,
+/// For each repository, in order: its spec is resolved to a local directory
+/// (a remote one shallow-cloned into the clones directory, outside the
+/// dataset lock),
 /// its one code-repo `Data` row is stored in the dataset without its
 /// documents ([`AddPipeline::add_code_repository`]), and its code graph is
 /// built by a `code_graph_pipeline` run over that row
@@ -251,10 +243,11 @@ fn resolve_local_repo(spec: &str) -> Result<PathBuf, ApiError> {
 /// # Errors
 ///
 /// [`ApiError::InvalidArgument`] when `data` is empty or holds anything but
-/// repository paths, or names a remote URL (not ported yet); with
+/// repository specs; [`ApiError::CodeRepositoryForbidden`] when it names a
+/// remote repository while outbound HTTP requests are disabled; with
 /// `raise_on_error`, the first repository failure
-/// ([`ApiError::CodeRepository`], [`ApiError::Ingestion`] or
-/// [`ApiError::Cognify`]).
+/// ([`ApiError::CodeRepository`], [`ApiError::CodeRepositoryForbidden`],
+/// [`ApiError::Ingestion`] or [`ApiError::Cognify`]).
 pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult, ApiError> {
     let start = Instant::now();
     let RememberCodeParams {
@@ -264,6 +257,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         tenant_id,
         dataset_id: target_dataset_id,
         node_set: _,
+        repo_credentials,
         raise_on_error,
         add_pipeline,
         storage,
@@ -285,13 +279,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         }
     };
     // Before anything runs: a refusal must reach the caller, not a failed item.
-    if specs.iter().any(|spec| is_remote_repo(spec)) {
-        return Err(ApiError::InvalidArgument(
-            "remote git repositories are not supported by this SDK yet for \
-             content_type='code'. Pass a local repository path."
-                .to_string(),
-        ));
-    }
+    check_remote_repos_allowed(&specs, add_pipeline.repo_sources())?;
 
     // Python `send_telemetry("cognee.remember.code_graph", ...)`.
     #[cfg(feature = "telemetry")]
@@ -338,9 +326,9 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
     let mut items: Vec<RememberItemInfo> = Vec::with_capacity(specs.len());
     let mut last_run_id = None;
 
-    // Resolve every spec first: for a local path this only validates it, and
-    // it needs no dataset state, so it runs before the lock (Python clones
-    // remote repositories here).
+    // Resolve every spec first: cloning a remote repository is the slow,
+    // network-bound part and reads no dataset state, so nothing else on the
+    // dataset waits for it (it runs before the lock).
     let mut resolved: Vec<(usize, PathBuf)> = Vec::with_capacity(specs.len());
     for (index, spec) in specs.iter().enumerate() {
         items.push(RememberItemInfo {
@@ -348,7 +336,16 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
             source: Some(redact_repo_spec(spec)),
             ..RememberItemInfo::default()
         });
-        match resolve_local_repo(spec) {
+        let resolved_path = cognee_ingestion::resolve_repo::resolve_repo_source(
+            spec,
+            add_pipeline.repo_sources(),
+            repo_credentials.as_deref(),
+            None,
+            add_pipeline.repo_transport().as_ref(),
+        )
+        .await
+        .map_err(repository_error);
+        match resolved_path {
             Ok(path) => {
                 items[index].path = Some(path.display().to_string());
                 resolved.push((index, path));
@@ -372,6 +369,11 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         .hold([dataset_id], async {
             let mut stored = Vec::with_capacity(resolved.len());
             for (index, path) in &resolved {
+                // The credential-free spec of a remote repository is its
+                // `repo_url` (Python `source_url=item["source"]`).
+                let source_url = is_remote_repo(&specs[*index])
+                    .then(|| items[*index].source.clone())
+                    .flatten();
                 match add_pipeline
                     .add_code_repository(
                         path,
@@ -379,6 +381,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                         owner_id,
                         tenant_id,
                         target_dataset_id,
+                        source_url.as_deref(),
                     )
                     .await
                 {
@@ -577,14 +580,15 @@ mod tests {
             }))
             .starts_with("session_id is not applicable to content_type='code'")
         );
-        // Not ported yet: refused, never ignored.
-        assert!(
-            message(validate_remember_options(RememberOptionCheck {
+        assert_eq!(
+            validate_remember_options(RememberOptionCheck {
                 repo_credentials: true,
                 ..check()
-            }))
-            .starts_with("repo_credentials is not supported by this SDK yet")
+            })
+            .unwrap(),
+            Some(RememberContentType::Code)
         );
+        // Not ported yet: refused, never ignored.
         assert!(
             message(validate_remember_options(RememberOptionCheck {
                 index_vectors: Some(true),
@@ -607,31 +611,17 @@ mod tests {
     }
 
     #[test]
-    fn remote_specs_and_redaction_follow_python() {
-        assert!(is_remote_repo("https://github.com/o/r"));
-        assert!(is_remote_repo("git@github.com:o/r.git"));
-        assert!(is_remote_repo("ssh://git@host/r"));
-        assert!(!is_remote_repo("/tmp/repo"));
-        assert!(!is_remote_repo("./repo"));
-        assert_eq!(
-            redact_repo_spec("https://x-access-token:secret@github.com/o/r?x=1"),
-            "https://github.com/o/r?x=1"
-        );
-        assert_eq!(
-            redact_repo_spec("https://github.com/o/r"),
-            "https://github.com/o/r"
-        );
-        assert_eq!(redact_repo_spec("/tmp/repo"), "/tmp/repo");
-        assert_eq!(redact_repo_spec("git@github.com:o/r"), "git@github.com:o/r");
-    }
-
-    #[test]
-    fn a_missing_path_is_not_a_directory() {
-        let error = resolve_local_repo("/definitely/not/here/repo").unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Repository path '/definitely/not/here/repo' is not a directory. \
-             Pass a local repo path or a remote git URL."
+    fn remote_repositories_need_the_gate_open() {
+        let sdk = RepoSourceSettings::new("/c", "", false);
+        let api = RepoSourceSettings::new("/c", "", true);
+        check_remote_repos_allowed(&["https://github.com/o/r"], &sdk).unwrap();
+        check_remote_repos_allowed(&["/tmp/repo"], &api).unwrap();
+        let error =
+            check_remote_repos_allowed(&["/tmp/r", "git@github.com:o/r"], &api).unwrap_err();
+        assert!(
+            matches!(&error, ApiError::CodeRepositoryForbidden(m)
+                if m.starts_with("Outbound HTTP requests are disabled by default")),
+            "{error}"
         );
     }
 

@@ -86,6 +86,15 @@ pub struct AddParams {
     /// row that belongs to another dataset is refused. A pinned add takes
     /// exactly one input (`update()` replaces one document).
     pub pinned_id: Option<Uuid>,
+
+    /// The branch to clone for each GitHub/GitLab repository URL among the
+    /// inputs, instead of the remote's default (Python `add(branch=...)`).
+    /// Each branch is cloned into a directory of its own; a dataset still
+    /// holds one row per URL, so adding it on another branch replaces that
+    /// row's code graph. Checked ([`crate::resolve_repo::check_branch_name`])
+    /// before anything is stored; inputs that are no repository URL ignore
+    /// it.
+    pub branch: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,7 +1025,7 @@ pub async fn persist_data_with_acl_and_locks(
     // row's add stamp first, so its incremental `add` reaches ingestion; this
     // `add` never skips an item as already added, so there is none to clear.
     let pinned_id = processed.pinned_id.or_else(|| {
-        crate::code_repo::code_repo_stamp_path(processed.system_metadata.as_deref()).map(
+        crate::code_repo::code_repo_stamp_identity(processed.system_metadata.as_deref()).map(
             |repo_path| {
                 crate::code_repo::code_repo_data_id(&repo_path, owner_id, tenant_id, dataset.id)
             },
@@ -2532,6 +2541,8 @@ pub struct AddPipeline {
     run_ownership_dir: Option<std::path::PathBuf>,
     // ─── Code projects (SDK-1053) ─────────────────────────────────────────
     llm_available: bool,
+    repo_sources: crate::resolve_repo::RepoSourceSettings,
+    repo_transport: Arc<dyn crate::resolve_repo::RepoTransport>,
 }
 
 impl AddPipeline {
@@ -2559,6 +2570,8 @@ impl AddPipeline {
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
             llm_available: true,
+            repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
+            repo_transport: crate::resolve_repo::system_git(),
         }
     }
 
@@ -2584,6 +2597,8 @@ impl AddPipeline {
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
             llm_available: true,
+            repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
+            repo_transport: crate::resolve_repo::system_git(),
         }
     }
 
@@ -2664,6 +2679,40 @@ impl AddPipeline {
         self
     }
 
+    /// Where remote repositories are cloned and whether they may be
+    /// (`code_graph.clones_dir`, `ALLOW_HTTP_REQUESTS`). Read by `add` for a
+    /// GitHub/GitLab repository URL and by `remember(content_type="code")`.
+    ///
+    /// The default is fail-closed: the default clones directory, with remote
+    /// repositories refused (Python's API default). SDK, CLI and binding
+    /// hosts pass [`RepoSourceSettings::new`] with `api_request = false`.
+    ///
+    /// [`RepoSourceSettings::new`]: crate::resolve_repo::RepoSourceSettings::new
+    pub fn with_repo_sources(mut self, settings: crate::resolve_repo::RepoSourceSettings) -> Self {
+        self.repo_sources = settings;
+        self
+    }
+
+    /// The settings wired with [`Self::with_repo_sources`].
+    pub fn repo_sources(&self) -> &crate::resolve_repo::RepoSourceSettings {
+        &self.repo_sources
+    }
+
+    /// Reach git (and the outbound-URL check before a clone) through
+    /// `transport` instead of [`crate::resolve_repo::SystemGit`]. For tests.
+    pub fn with_repo_transport(
+        mut self,
+        transport: Arc<dyn crate::resolve_repo::RepoTransport>,
+    ) -> Self {
+        self.repo_transport = transport;
+        self
+    }
+
+    /// The transport wired with [`Self::with_repo_transport`].
+    pub fn repo_transport(&self) -> &Arc<dyn crate::resolve_repo::RepoTransport> {
+        &self.repo_transport
+    }
+
     /// Attach the CPU pool used by [`cognee_core::TaskContext`].
     pub fn with_thread_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
         self.thread_pool = Some(pool);
@@ -2733,7 +2782,8 @@ impl AddPipeline {
     /// without the repository's documents (`include_documents = false`).
     /// `dataset_id` targets an existing dataset by id, as
     /// [`AddParams::dataset_id`] does (a shared dataset); `None` resolves
-    /// `dataset_name` for the owner.
+    /// `dataset_name` for the owner. `source_url` (credential-free) records a
+    /// cloned repository's remote as `system_metadata["repo_url"]`.
     ///
     /// # Errors
     ///
@@ -2747,10 +2797,17 @@ impl AddPipeline {
         owner_id: Uuid,
         tenant_id: Option<Uuid>,
         dataset_id: Option<Uuid>,
+        source_url: Option<&str>,
     ) -> Result<Data, Box<dyn std::error::Error>> {
         let directory = repo_path.to_path_buf();
+        let source_url = source_url.map(str::to_string);
         let resolved = tokio::task::spawn_blocking(move || {
-            crate::code_repo::resolve_code_repository(&directory, false, true)
+            crate::code_repo::resolve_code_repository(
+                &directory,
+                false,
+                true,
+                source_url.as_deref(),
+            )
         })
         .await
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
@@ -2816,6 +2873,17 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // Python `add()` checks the branch before anything is written, and
+        // before the name can reach git.
+        if let Some(branch) = params.branch.as_deref() {
+            crate::resolve_repo::check_branch_name(branch)?;
+        }
+        // ── Repository URLs (Python `resolve_code_repository_url`) ───────
+        // A GitHub/GitLab repository URL is a code project, not a web page:
+        // it is shallow-cloned and resolved like a local project directory.
+        let inputs = self
+            .resolve_repository_urls(inputs, params.branch.as_deref())
+            .await?;
         // ── Directories (Python `resolve_data_directories`) ──────────────
         // A code project becomes one repo manifest item plus its documents;
         // any other directory its files. Walks and hashes files, so it runs
@@ -2929,6 +2997,69 @@ impl AddPipeline {
         let outputs = executed.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
         extract_data_outputs(outputs)
+    }
+}
+
+impl AddPipeline {
+    /// Replace every GitHub/GitLab repository URL among `inputs`
+    /// ([`crate::resolve_repo::code_repo_clone_url`]) with its clone's one
+    /// repo manifest item plus its documents, in place (Python
+    /// `resolve_data_directories` → `resolve_code_repository_url`). The
+    /// manifest records the credential-free URL as `repo_url`; its data id
+    /// is keyed on the default branch's clone
+    /// ([`crate::code_repo::code_repo_stamp_identity`]). Other inputs pass
+    /// through unchanged.
+    async fn resolve_repository_urls(
+        &self,
+        inputs: Vec<DataInput>,
+        branch: Option<&str>,
+    ) -> Result<Vec<DataInput>, Box<dyn std::error::Error>> {
+        let is_repository_url = |input: &DataInput| {
+            matches!(input, DataInput::Url(url)
+                if crate::resolve_repo::code_repo_clone_url(url).is_some())
+        };
+        if !inputs.iter().any(is_repository_url) {
+            return Ok(inputs);
+        }
+        let mut resolved = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let DataInput::Url(url) = &input else {
+                resolved.push(input);
+                continue;
+            };
+            let Some(clone_url) = crate::resolve_repo::code_repo_clone_url(url) else {
+                resolved.push(input);
+                continue;
+            };
+            let repo_path = crate::resolve_repo::resolve_repo_source(
+                &clone_url,
+                &self.repo_sources,
+                None,
+                branch,
+                self.repo_transport.as_ref(),
+            )
+            .await?;
+            let source_url = crate::resolve_repo::redact_repo_spec(&clone_url);
+            let llm_available = self.llm_available;
+            let repository = tokio::task::spawn_blocking(move || {
+                crate::code_repo::resolve_code_repository(
+                    &repo_path,
+                    true,
+                    llm_available,
+                    Some(&source_url),
+                )
+            })
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
+            resolved.push(repository.manifest_item);
+            resolved.extend(
+                repository
+                    .document_paths
+                    .iter()
+                    .map(|document| DataInput::FilePath(document.to_string_lossy().into_owned())),
+            );
+        }
+        Ok(resolved)
     }
 }
 

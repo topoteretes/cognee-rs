@@ -126,8 +126,12 @@ async fn content_type_options_are_validated_before_anything_runs() {
             "index_vectors is not supported by this SDK yet",
         ),
         (
-            json!({ "contentType": "code", "repoCredentials": "token" }),
-            "repo_credentials is not supported by this SDK yet",
+            json!({ "contentType": "code", "repoCredentials": 7 }),
+            "`repoCredentials` must be a string",
+        ),
+        (
+            json!({ "branch": "dev" }),
+            "`branch` is not supported by remember() in this SDK yet",
         ),
         (
             json!({ "contentType": "code" }),

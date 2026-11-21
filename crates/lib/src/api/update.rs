@@ -181,6 +181,7 @@ pub async fn update(
         importance_weight: None,
         incremental_loading,
         pinned_id: Some(pinned_id),
+        branch: None,
     };
     let data_items = add_pipeline
         .add_with_params(new_data, dataset_name, owner_id, tenant_id, &params)

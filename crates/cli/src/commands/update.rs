@@ -85,6 +85,7 @@ pub fn run(args: UpdateArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
         .with_database(Arc::clone(&database))
+        .with_repo_sources(cm.settings().repo_sources())
         .with_loader_registry(cm.add_loader_registry().await);
         let delete_service = super::build_delete_service(&cm).await?;
 

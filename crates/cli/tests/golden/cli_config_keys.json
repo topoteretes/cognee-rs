@@ -19,6 +19,8 @@
     "chunk_size",
     "chunk_strategy",
     "classification_model",
+    "code_graph.allow_http_requests",
+    "code_graph.clones_dir",
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
     "cognee_tracing_enabled",
@@ -346,6 +348,8 @@
     "graph_extraction.backend",
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
+    "code_graph.clones_dir",
+    "code_graph.allow_http_requests",
     "vector.pgvector.hnsw_m",
     "vector.pgvector.hnsw_ef_construction",
     "vector.pgvector.maintenance_workers",
@@ -416,6 +420,57 @@
     "ok": {}
   },
   "set allow_cypher_query <- {\"a\":1}": {
+    "err": true
+  },
+  "set allow_http_requests <- \"\"": {
+    "ok": {}
+  },
+  "set allow_http_requests <- \"1\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "1"
+    }
+  },
+  "set allow_http_requests <- \"s\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "s"
+    }
+  },
+  "set allow_http_requests <- \"true\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "true"
+    }
+  },
+  "set allow_http_requests <- -1": {
+    "err": true
+  },
+  "set allow_http_requests <- 0": {
+    "err": true
+  },
+  "set allow_http_requests <- 1": {
+    "err": true
+  },
+  "set allow_http_requests <- 1.5": {
+    "err": true
+  },
+  "set allow_http_requests <- 5000000000": {
+    "err": true
+  },
+  "set allow_http_requests <- 70000": {
+    "err": true
+  },
+  "set allow_http_requests <- [1]": {
+    "err": true
+  },
+  "set allow_http_requests <- false": {
+    "err": true
+  },
+  "set allow_http_requests <- null": {
+    "err": true
+  },
+  "set allow_http_requests <- true": {
+    "err": true
+  },
+  "set allow_http_requests <- {\"a\":1}": {
     "err": true
   },
   "set anthropic_base_url <- \"\"": {
@@ -2296,6 +2351,108 @@
     "err": true
   },
   "set classification_model <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- \"\"": {
+    "ok": {}
+  },
+  "set code_graph.allow_http_requests <- \"1\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "1"
+    }
+  },
+  "set code_graph.allow_http_requests <- \"s\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "s"
+    }
+  },
+  "set code_graph.allow_http_requests <- \"true\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "true"
+    }
+  },
+  "set code_graph.allow_http_requests <- -1": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- 0": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- 1": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- 1.5": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- 5000000000": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- 70000": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- [1]": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- false": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- null": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- true": {
+    "err": true
+  },
+  "set code_graph.allow_http_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- \"\"": {
+    "ok": {}
+  },
+  "set code_graph.clones_dir <- \"1\"": {
+    "ok": {
+      "code_graph.clones_dir": "1"
+    }
+  },
+  "set code_graph.clones_dir <- \"s\"": {
+    "ok": {
+      "code_graph.clones_dir": "s"
+    }
+  },
+  "set code_graph.clones_dir <- \"true\"": {
+    "ok": {
+      "code_graph.clones_dir": "true"
+    }
+  },
+  "set code_graph.clones_dir <- -1": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- 0": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- 1": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- 1.5": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- 5000000000": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- 70000": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- [1]": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- false": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- null": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- true": {
+    "err": true
+  },
+  "set code_graph.clones_dir <- {\"a\":1}": {
     "err": true
   },
   "set code_graph.enola_path <- \"\"": {
@@ -13077,6 +13234,57 @@
   "set relational_db_url <- {\"a\":1}": {
     "err": true
   },
+  "set repos_root_directory <- \"\"": {
+    "ok": {}
+  },
+  "set repos_root_directory <- \"1\"": {
+    "ok": {
+      "code_graph.clones_dir": "1"
+    }
+  },
+  "set repos_root_directory <- \"s\"": {
+    "ok": {
+      "code_graph.clones_dir": "s"
+    }
+  },
+  "set repos_root_directory <- \"true\"": {
+    "ok": {
+      "code_graph.clones_dir": "true"
+    }
+  },
+  "set repos_root_directory <- -1": {
+    "err": true
+  },
+  "set repos_root_directory <- 0": {
+    "err": true
+  },
+  "set repos_root_directory <- 1": {
+    "err": true
+  },
+  "set repos_root_directory <- 1.5": {
+    "err": true
+  },
+  "set repos_root_directory <- 5000000000": {
+    "err": true
+  },
+  "set repos_root_directory <- 70000": {
+    "err": true
+  },
+  "set repos_root_directory <- [1]": {
+    "err": true
+  },
+  "set repos_root_directory <- false": {
+    "err": true
+  },
+  "set repos_root_directory <- null": {
+    "err": true
+  },
+  "set repos_root_directory <- true": {
+    "err": true
+  },
+  "set repos_root_directory <- {\"a\":1}": {
+    "err": true
+  },
   "set search.allow_cypher_query <- \"\"": {
     "err": true
   },
@@ -15575,6 +15783,13 @@
       "relational.port": 1
     }
   },
+  "unset allow_http_requests": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset anthropic_base_url": {
     "ok": {
       "chunk_size": 7,
@@ -15820,6 +16035,20 @@
     }
   },
   "unset classification_model": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset code_graph.allow_http_requests": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset code_graph.clones_dir": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",
@@ -17293,6 +17522,13 @@
     }
   },
   "unset relational_db_url": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset repos_root_directory": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

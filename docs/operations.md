@@ -43,8 +43,8 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   setting is invalid, as Python's `self_improvement and auto_improve_enabled()`.
 
 - **Code repositories** — `content_type = "code"` (CLI `--content-type code`,
-  bindings `contentType: "code"`) indexes each input, a local repository path,
-  as a deterministic code graph with no LLM: Python's
+  bindings `contentType: "code"`) indexes each input, a local repository path
+  or a remote git URL, as a deterministic code graph with no LLM: Python's
   `remember(content_type="code")`. Each repository is stored as its one
   code-repo item without its documents, and its graph is built by one
   `code_graph_pipeline` run over that item (the CODE_REPO route's enola
@@ -57,11 +57,25 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   (`status: "errored"`, `error`) and the rest go on. No LLM or embedding engine
   is built or validated on this path, and `node_set` is ignored, as in Python.
   `session_id`, `branch`, an unknown content type, and `index_vectors` or
-  `repo_credentials` without code are refused as in Python. Not ported yet,
-  and refused: `content_type = "skills"`, remote git URLs and
-  `repo_credentials`, `index_vectors = true`; several repositories of one
-  dataset are built one run each, not as one enola cluster. rustdoc:
-  `api::remember_code`.
+  `repo_credentials` without code are refused as in Python. A remote git URL
+  (`https://`, `http://`, `git@`, `ssh://`) is shallow-cloned under
+  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed
+  best-effort, on later calls; `repo_credentials` (bindings `repoCredentials`)
+  is a token for private https remotes that reaches git through its
+  environment only, and a token in the URL is redacted from the item, the
+  clone's directory and remote, logs and errors. Remote repositories follow
+  `ALLOW_HTTP_REQUESTS` (`code_graph.allow_http_requests`; allowed when unset
+  outside an HTTP server) and an http(s) host must not be internal. Not ported
+  yet, and refused: `content_type = "skills"`, `index_vectors = true`; several
+  repositories of one dataset are built one run each, not as one enola
+  cluster. rustdoc: `api::remember_code`.
+
+  `add` of a GitHub/GitLab repository URL (a repository root, or any http(s)
+  URL ending in `.git`) clones it the same way and resolves it like a local
+  code project: one code-repo item, recording the credential-free URL as
+  `system_metadata.repo_url`, plus the repository's documents. Bindings `add`
+  takes `branch` to clone another branch than the remote's default, into a
+  directory of its own; every branch of a URL shares the dataset's one row.
 
 `remember ≈ add + cognify + improve`. rustdoc: `api::remember`.
 
