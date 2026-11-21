@@ -14,7 +14,7 @@
 //! The default load is graph-only and never reaches this module: no
 //! embedding call, no vector collection.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use cognee_embedding::EmbeddingEngine;
@@ -56,7 +56,9 @@ pub type IndexedCollections = BTreeMap<(String, String), usize>;
 /// write, so a node's vector never exists without its graph row.
 ///
 /// Nodes are grouped by class into `{class}_name`; a node id given twice
-/// keeps its last occurrence, as Python's per-collection dict does. Edge
+/// keeps its first occurrence, as Python's storage walk
+/// (`get_graph_from_model`, then `deduplicate_nodes_and_edges`) hands
+/// `index_data_points` each node once, first occurrence first. Edge
 /// texts are the edges' non-blank `edge_text`, else their relationship name
 /// ([`EdgeType::retrieval_text`]); blank ones are dropped, and texts that
 /// share an [`EdgeType`] id are written once, with their counts summed.
@@ -103,32 +105,27 @@ async fn index_in_scope(
 ) -> CodeGraphResult<IndexedCollections> {
     let mut stats = IndexedCollections::new();
 
-    // Nodes: one collection per class and index field, last occurrence wins.
-    let mut collections: BTreeMap<&'static str, (Vec<Uuid>, HashMap<Uuid, Entry<'_>>)> =
-        BTreeMap::new();
+    // Nodes: one collection per class and index field, each node once, its
+    // first occurrence (the storage walk's dedup).
+    let mut seen: HashSet<Uuid> = HashSet::with_capacity(nodes.len());
+    let mut collections: BTreeMap<&'static str, Vec<Entry<'_>>> = BTreeMap::new();
     for node in nodes {
+        let id = node.id();
+        if !seen.insert(id) {
+            continue;
+        }
         let class_name = node
             .node_type()
             .map_or("CodeGraphEntity", CodeNodeType::class_name);
-        let (order, entries) = collections.entry(class_name).or_default();
-        let id = node.id();
-        if entries
-            .insert(
-                id,
-                Entry {
-                    id,
-                    text: node.name().to_string(),
-                    source: node.data_point(),
-                },
-            )
-            .is_none()
-        {
-            order.push(id);
-        }
+        collections.entry(class_name).or_default().push(Entry {
+            id,
+            text: node.name().to_string(),
+            source: node.data_point(),
+        });
     }
     for field in CODE_INDEX_FIELDS {
-        for (class_name, (order, entries)) in &collections {
-            let points: Vec<&Entry<'_>> = order.iter().filter_map(|id| entries.get(id)).collect();
+        for (class_name, entries) in &collections {
+            let points: Vec<&Entry<'_>> = entries.iter().collect();
             write_collection(vectors, class_name, field, &points).await?;
             stats.insert((class_name.to_string(), field.to_string()), points.len());
         }
@@ -160,30 +157,13 @@ async fn index_in_scope(
 /// text, counted, folded by id (two texts normalising to one id sum their
 /// counts), in text order.
 fn edge_types(edges: &[EdgeData], dataset_id: Option<Uuid>) -> Vec<EdgeType> {
-    let mut counts: BTreeMap<String, i32> = BTreeMap::new();
-    for (_, _, relationship, properties) in edges {
-        let text = EdgeType::retrieval_text(
+    let texts = edges.iter().map(|(_, _, relationship, properties)| {
+        EdgeType::retrieval_text(
             properties.get("edge_text").and_then(Value::as_str),
             relationship,
-        );
-        if !text.is_empty() {
-            *counts.entry(text).or_insert(0) += 1;
-        }
-    }
-    let mut slot_of: HashMap<Uuid, usize> = HashMap::with_capacity(counts.len());
-    let mut folded: Vec<EdgeType> = Vec::with_capacity(counts.len());
-    for (text, count) in counts {
-        let id = EdgeType::deterministic_id(&text);
-        if let Some(edge_type) = slot_of.get(&id).and_then(|&slot| folded.get_mut(slot)) {
-            edge_type.set_count(edge_type.count().saturating_add(count));
-            continue;
-        }
-        slot_of.insert(id, folded.len());
-        let mut edge_type = EdgeType::new_deterministic(text, dataset_id);
-        edge_type.set_count(count);
-        folded.push(edge_type);
-    }
-    folded
+        )
+    });
+    EdgeType::fold_texts(texts, dataset_id)
 }
 
 /// Embed `points` and write them to the `data_type`/`field` collection,
@@ -258,6 +238,7 @@ async fn write_collection(
 )]
 mod tests {
     use std::borrow::Cow;
+    use std::collections::HashMap;
 
     use super::*;
 

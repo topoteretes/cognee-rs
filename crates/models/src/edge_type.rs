@@ -184,6 +184,49 @@ impl EdgeType {
     pub fn count(&self) -> i32 {
         self.number_of_edges
     }
+
+    /// Fold edge retrieval texts into one `EdgeType` per derived point id
+    /// (port of Python's `create_edge_type_datapoints`, SDK-778).
+    ///
+    /// Blank texts are dropped. Texts are counted in a `BTreeMap`, so they
+    /// fold in lexicographic order: the surviving `relationship_name` of an
+    /// id several texts normalise to ([`Self::deterministic_id`]) is the
+    /// smallest spelling, and its count is the sum of theirs. Python keys
+    /// its `Counter` on the raw text and keeps whichever colliding row its
+    /// adapter writes last; summing is the deliberate Rust divergence
+    /// (`number_of_edges` is write-only in both SDKs), shared by every Rust
+    /// writer of `EdgeType_relationship_name` so a backfill agrees with them.
+    pub fn fold_texts<I>(texts: I, dataset_id: Option<Uuid>) -> Vec<EdgeType>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut counts_by_text: std::collections::BTreeMap<String, i32> =
+            std::collections::BTreeMap::new();
+        for edge_text in texts {
+            if edge_text.is_empty() {
+                continue;
+            }
+            *counts_by_text.entry(edge_text).or_insert(0) += 1;
+        }
+
+        // `slot_of` maps a derived id to the index it already occupies in
+        // `folded`, recorded as the entry is pushed; `folded` only grows.
+        let mut slot_of: std::collections::HashMap<Uuid, usize> =
+            std::collections::HashMap::with_capacity(counts_by_text.len());
+        let mut folded: Vec<EdgeType> = Vec::with_capacity(counts_by_text.len());
+        for (text, count) in counts_by_text {
+            let id = Self::deterministic_id(&text);
+            if let Some(existing) = slot_of.get(&id).and_then(|&slot| folded.get_mut(slot)) {
+                existing.set_count(existing.count().saturating_add(count));
+                continue;
+            }
+            slot_of.insert(id, folded.len());
+            let mut edge_type = Self::new_deterministic(&text, dataset_id);
+            edge_type.set_count(count);
+            folded.push(edge_type);
+        }
+        folded
+    }
 }
 
 impl HasDataPoint for EdgeType {
@@ -364,5 +407,18 @@ mod tests {
         assert_eq!(et.data_point().id, dp_id);
         let mut et2 = et;
         assert_eq!(et2.data_point_mut().id, dp_id);
+    }
+
+    #[test]
+    fn fold_texts_counts_drops_blanks_and_sums_colliding_ids() {
+        let texts = ["is_a", "Is A", "is_a", "", "works_at"].map(String::from);
+        let folded = EdgeType::fold_texts(texts, None);
+        let found: Vec<(&str, i32)> = folded
+            .iter()
+            .map(|edge_type| (edge_type.relationship_name.as_str(), edge_type.count()))
+            .collect();
+        // "Is A" and "is_a" share an id: the smaller spelling survives, summed.
+        assert_eq!(found, vec![("Is A", 3), ("works_at", 1)]);
+        assert_eq!(folded[0].base.id, EdgeType::deterministic_id("is_a"));
     }
 }

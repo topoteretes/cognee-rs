@@ -2989,36 +2989,7 @@ fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut counts_by_text: BTreeMap<String, i32> = BTreeMap::new();
-    for edge_text in texts {
-        if edge_text.is_empty() {
-            continue;
-        }
-        *counts_by_text.entry(edge_text).or_insert(0) += 1;
-    }
-
-    // `slot_of` maps a derived id to the index it already occupies in `folded`.
-    // The index is recorded as the entry is pushed and `folded` only ever grows,
-    // so every stored index stays in bounds — no lookup here can panic.
-    let mut slot_of: HashMap<Uuid, usize> = HashMap::with_capacity(counts_by_text.len());
-    let mut folded: Vec<EdgeType> = Vec::with_capacity(counts_by_text.len());
-    for (text, count) in counts_by_text {
-        let id = EdgeType::deterministic_id(&text);
-        match slot_of.get(&id) {
-            Some(&idx) => {
-                let existing: &mut EdgeType = &mut folded[idx];
-                existing.set_count(existing.count().saturating_add(count));
-            }
-            None => {
-                slot_of.insert(id, folded.len());
-                let mut edge_type = EdgeType::new_deterministic(&text, Some(dataset_id));
-                edge_type.set_count(count);
-                folded.push(edge_type);
-            }
-        }
-    }
-
-    folded
+    EdgeType::fold_texts(texts, Some(dataset_id))
 }
 
 /// Id of the single `DltRow` chunk a DLT document produces.
