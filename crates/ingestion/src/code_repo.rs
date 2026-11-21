@@ -107,13 +107,9 @@ pub const REPO_SKIPPED_MEDIA_EXTENSIONS: &[&str] = &[
     "wav", "webm",
 ];
 
-/// Source-file extensions of the languages enola extracts. Python's
-/// `SUPPORTED_CODE_EXTENSIONS` (`cognee/infrastructure/loaders/core/code_loader.py`).
-pub const SUPPORTED_CODE_EXTENSIONS: &[&str] = &[
-    "c", "cc", "cpp", "cs", "cxx", "dart", "fs", "go", "h", "hcl", "hh", "hpp", "java", "js",
-    "jsx", "kt", "kts", "php", "proto", "py", "rake", "rb", "rs", "scala", "svelte", "swift", "tf",
-    "ts", "tsx", "vb", "vue",
-];
+/// Source-file extensions of the languages enola extracts, owned by the code
+/// loader ([`crate::loaders::code`]).
+pub use crate::loaders::code::SUPPORTED_CODE_EXTENSIONS;
 
 /// Every extension a non-code loader claims by name. Python's
 /// `_document_extensions()` evaluated over its default loaders (text, PDF,

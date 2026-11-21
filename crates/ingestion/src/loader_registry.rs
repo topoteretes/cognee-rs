@@ -2,6 +2,10 @@
 /// Even if we cannot process a file type yet, it must store the correct
 /// loader_engine name for cross-SDK database compatibility.
 pub fn get_loader_name(extension: &str) -> &'static str {
+    if crate::loaders::code::is_code_extension(extension) {
+        // Python's first loader claims source files by name (`code_loader.py`).
+        return crate::loaders::code::CODE_LOADER_NAME;
+    }
     match extension.to_lowercase().as_str() {
         // Text formats
         "txt" | "md" | "json" | "xml" | "yaml" | "yml" | "log" => "text_loader",
@@ -71,12 +75,11 @@ mod tests {
     }
 
     #[test]
-    fn test_source_code_extensions_use_default() {
-        // Source code extensions are not explicitly mapped -- they fall
-        // through to the default text_loader, matching Python's behavior
-        // of not including them in EXTENSION_TO_DOCUMENT_CLASS.
-        for ext in &["py", "rs", "js", "ts", "c", "cpp", "go", "java", "rb", "sh"] {
-            assert_eq!(get_loader_name(ext), "text_loader");
+    fn test_source_code_extensions_use_the_code_loader() {
+        for ext in &["py", "rs", "js", "ts", "c", "cpp", "go", "java", "rb", "PY"] {
+            assert_eq!(get_loader_name(ext), "code_loader");
         }
+        // Not one of the code loader's languages: the default text loader.
+        assert_eq!(get_loader_name("sh"), "text_loader");
     }
 }

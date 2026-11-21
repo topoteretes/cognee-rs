@@ -461,7 +461,7 @@ async fn process_input_reusing(
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
-    let item_system_metadata = match input {
+    let mut item_system_metadata = match input {
         DataInput::DataItem {
             system_metadata, ..
         } => item_system_metadata_object(system_metadata.as_deref())?,
@@ -512,6 +512,9 @@ async fn process_input_reusing(
     // Python's `get_file_metadata` does; set below once the bytes are in hand.
     let mut original_extension = original_extension;
     let mut original_mime_type = original_mime_type;
+    // The name's own suffix, before the sniffed type replaces
+    // `original_extension`: a code file's stored name keeps it.
+    let path_extension = original_extension.clone();
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
     // the fetched content (a page as its raw HTML text); for everything else
@@ -690,8 +693,14 @@ async fn process_input_reusing(
             // A loader's text is kept once stored (Python `overwrite=False`):
             // when an earlier add, in any dataset, stored it, use it instead
             // of calling the loader again, which may be a paid model whose
-            // answer would be thrown away anyway.
-            let stored_name = format!("text_{content_hash}.txt");
+            // answer would be thrown away anyway. A code file's text keeps
+            // its own extension (`code_loader.py:96-98`).
+            let is_code = doc_type == "code";
+            let stored_name = if is_code {
+                crate::loaders::code::code_storage_file_name(&content_hash, &path_extension)
+            } else {
+                format!("text_{content_hash}.txt")
+            };
             let (location, text_bytes) = match kept_loader_text(storage, &claims, &stored_name)
                 .await?
             {
@@ -705,8 +714,24 @@ async fn process_input_reusing(
             };
 
             // Stored-file metadata now describes the stored text.
-            stored_extension = "txt".to_string();
-            stored_mime_type = "text/plain".to_string();
+            if is_code {
+                // Python describes the stored code text as reading it back
+                // would (`describe_derived_text`): sniffed, under its
+                // `code_<hash>.<ext>` name, so plain text in practice.
+                let described = crate::file_type::guess_file_type(&text_bytes, &path_extension);
+                stored_extension = described.extension;
+                stored_mime_type = described.mime;
+                // The loader's route stamp, unless the item carries its own
+                // (Python `ingest_data.py`: `if loader_result.system_metadata
+                // is not None and item_system_metadata is None`).
+                if item_system_metadata.is_none() {
+                    item_system_metadata =
+                        Some(crate::loaders::code::CODE_SYSTEM_METADATA.to_string());
+                }
+            } else {
+                stored_extension = "txt".to_string();
+                stored_mime_type = "text/plain".to_string();
+            }
             loader_engine = loader.engine_name().to_string();
 
             let raw_content_hash =
@@ -1561,12 +1586,12 @@ fn content_lock_key(
 
 /// Resolve the MIME type for a file extension.
 ///
-/// If the extension maps to `"text_loader"` in the loader registry, return
-/// `"text/plain"` to match Python's behaviour (Python's `filetype.guess()`
-/// returns `text/plain` for `.md`, `.json`, `.xml`, etc. because they have no
-/// magic bytes). Otherwise fall back to `mime_guess`.
+/// If the extension maps to `"text_loader"` or `"code_loader"` in the loader
+/// registry, return `"text/plain"` to match Python's behaviour (Python's
+/// `filetype.guess()` returns `text/plain` for `.md`, `.json`, `.py`, etc.
+/// because they have no magic bytes). Otherwise fall back to `mime_guess`.
 fn resolve_mime(extension: &str, path_for_guess: &str) -> String {
-    if get_loader_name(extension) == "text_loader" {
+    if matches!(get_loader_name(extension), "text_loader" | "code_loader") {
         "text/plain".to_string()
     } else {
         mime_guess::from_path(path_for_guess)
@@ -3654,6 +3679,191 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
+    }
+
+    // -- code loader (SDK-1053 O9a) ---------------------------------------------
+
+    /// A CRLF / lone-CR `.PY` file with a non-ASCII character. The expected
+    /// values are what Python's `CodeLoader.load` and `get_file_metadata`
+    /// produce for the same bytes at a59433e6b.
+    const CODE_FIXTURE: &[u8] =
+        b"import os\r\n\r\ndef pay(amount):\r\n    return amount * 2\rprint(\"caf\xc3\xa9\")\n";
+
+    #[tokio::test]
+    async fn a_code_file_is_stored_by_the_code_loader_as_python_stores_it() {
+        let (pipeline, _db) = make_pipeline().await;
+        let dir = tempfile::tempdir().unwrap();
+        let pipeline = AddPipeline {
+            storage: Arc::new(cognee_storage::LocalStorage::new(dir.path().join("data"))),
+            ..pipeline
+        };
+        let path = dir.path().join("Payments.PY");
+        std::fs::write(&path, CODE_FIXTURE).unwrap();
+
+        let data = pipeline
+            .add(
+                vec![DataInput::FilePath(path.to_str().unwrap().to_string())],
+                "code",
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .unwrap();
+        let row = &data[0];
+        assert_eq!(row.name, "Payments");
+        assert_eq!(row.content_hash, "0f2b9b6fe2566aa1cac1a576fe123ffb");
+        assert_eq!(
+            row.raw_content_hash.as_deref(),
+            Some("4f4aee5d38e96ea1a8acfdd2bf2fde65")
+        );
+        assert_eq!(row.loader_engine.as_deref(), Some("code_loader"));
+        assert_eq!(
+            (row.extension.as_str(), row.mime_type.as_str()),
+            ("txt", "text/plain")
+        );
+        assert_eq!(
+            (
+                row.original_extension.as_deref(),
+                row.original_mime_type.as_deref()
+            ),
+            (Some("txt"), Some("text/plain"))
+        );
+        assert_eq!(row.data_size, 68);
+        assert!(
+            row.raw_data_location
+                .ends_with("code_0f2b9b6fe2566aa1cac1a576fe123ffb.py"),
+            "{}",
+            row.raw_data_location
+        );
+        let stamp: serde_json::Value =
+            serde_json::from_str(row.system_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(stamp, serde_json::json!({"source": "code"}));
+
+        let stored = pipeline
+            .storage
+            .retrieve("code_0f2b9b6fe2566aa1cac1a576fe123ffb.py")
+            .await
+            .unwrap();
+        assert_eq!(
+            stored,
+            b"import os\n\ndef pay(amount):\n    return amount * 2\nprint(\"caf\xc3\xa9\")\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_uploaded_code_file_is_claimed_by_its_name_and_an_item_stamp_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let loaders = LoaderRegistry::default_registry();
+        let upload = |name: &str| DataInput::Binary {
+            name: name.to_string(),
+            data: b"export const x = 1;\n".to_vec(),
+        };
+
+        let processed = process_input_with_loaders(
+            &upload("widget.ts"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "code_loader");
+        assert_eq!(
+            processed.storage_location,
+            format!("code_{}.ts", processed.content_hash)
+        );
+        assert_eq!(
+            processed.system_metadata.as_deref(),
+            Some(crate::loaders::code::CODE_SYSTEM_METADATA)
+        );
+
+        // The item's own stamp is kept (Python: the loader's stamp applies
+        // only when the item carries none).
+        let item = DataInput::DataItem {
+            data: Box::new(upload("widget.ts")),
+            label: None,
+            external_metadata: None,
+            system_metadata: Some(r#"{"source": "mine"}"#.to_string()),
+        };
+        let processed = process_input_with_loaders(
+            &item,
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            processed.system_metadata.as_deref(),
+            Some(r#"{"source": "mine"}"#)
+        );
+
+        // A document type stays a document, unstamped.
+        let processed = process_input_with_loaders(
+            &upload("notes.md"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    #[tokio::test]
+    async fn preferring_the_text_loader_reads_a_code_file_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let processed = process_input_preferring(
+            &DataInput::Binary {
+                name: "a.py".to_string(),
+                data: b"x = 1\r\n".to_vec(),
+            },
+            &storage,
+            &LoaderRegistry::default_registry(),
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+            &["text_loader".to_string()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(
+            processed.storage_location,
+            format!("text_{}.txt", processed.content_hash)
+        );
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    #[tokio::test]
+    async fn a_code_file_that_is_not_utf8_fails_the_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let result = process_input_with_loaders(
+            &DataInput::Binary {
+                name: "bad.rs".to_string(),
+                data: vec![0xFF, 0xFE, b'x'],
+            },
+            &storage,
+            &LoaderRegistry::default_registry(),
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("non-UTF-8 code must fail");
+        };
+        assert!(error.to_string().contains("UTF-8"), "{error}");
     }
 
     #[tokio::test]
