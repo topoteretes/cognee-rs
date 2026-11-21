@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`COGNEE_REPOS_DIR`, default `~/.cognee/repos`) and
   `code_graph.allow_http_requests` (`ALLOW_HTTP_REQUESTS`). Remote
   repositories are refused until a host wires `AddPipeline::with_repo_sources`.
+  Beyond Python: a new clone is made in a `<name>.partial-<random>` sibling
+  and moved into place only once complete, so an interrupted clone is never
+  reused; an API request's git follows no http redirect
+  (`http.followRedirects=false`); git's stderr is scrubbed of credentials
+  before it is cut to its tail. As in Python, an empty `repo_credentials` is
+  no token.
 
 - **A dataset's code repositories as one enola cluster (SDK-1053).** Ports
   Python's `cluster.py`: one enola run per dataset (`run_enola_cluster`) gives
@@ -362,6 +368,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extensions. `preferred_loaders = ["text_loader"]` keeps the old plain-text
   reading. cognify loads such a row down the per-file CODE route (see
   "The per-file CODE cognify route" under Added). Project directories are not affected.
+  **cognify now needs the `enola` binary (0.5.1) for such rows**: on `PATH`,
+  or named by `code_graph.enola_path` (`ENOLA_PATH`). Without it the first
+  code file fails its item, and under the default fail-fast policy the whole
+  cognify run, so the dataset's other documents are not cognified either.
+  Install enola wherever cognify runs (Python ships it as its core
+  `enola-cli==0.5.1` dependency; the Rust crates do not bundle it), or keep
+  the old reading with `preferred_loaders = ["text_loader"]`. Cloning git
+  URLs (`remember(content_type="code")`, `add(<GitHub/GitLab URL>)`) also
+  needs `git` on `PATH`. The file's text is no longer chunked or embedded,
+  and Rust has no CODE search type yet (SDK-1056).
 
 - **A `Binary` upload is stored as it arrived (SDK-1592).** An add of
   `DataInput::Binary` (bare or in a `DataItem`; the `binary` input of every

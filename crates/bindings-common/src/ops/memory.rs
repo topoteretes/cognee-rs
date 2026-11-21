@@ -25,7 +25,7 @@
 //! {"sessionId":"...", "selfImprovement":bool, "tenant":"<uuid>",
 //!  "extractor":"auto"|"llm"|"gliner", "graphBackend":...,
 //!  "contentType":"code", "nodeSet":[...], "raiseOnError":bool,
-//!  "repoCredentials":"<token>"}
+//!  "repoCredentials":"<token>", "indexVectors":bool}
 //! ```
 //!
 //! `{"contentType":"code", "nodeSet":[...], "raiseOnError":bool}` indexes
@@ -36,10 +36,12 @@
 //! disables them). One item per repository,
 //! `{kind:"code_repository", source, path, id, pipeline_run_id}`; `source`
 //! never carries URL credentials. `repoCredentials` is a token for private
-//! https remotes, handed to git through its environment only. `nodeSet` is
-//! ignored, as in Python. `sessionId`, `branch` and `indexVectors: true` are
-//! refused with it (the last is not ported yet), as is `indexVectors` or
-//! `repoCredentials` without it. `branch` without `contentType` (Python
+//! https remotes, handed to git through its environment only (an empty one
+//! is none). `indexVectors: true` also embeds the code graph's nodes through
+//! the configured embedding engine (Python `index_vectors`; off by default,
+//! so the default run makes no embedding call). `nodeSet` is ignored, as in
+//! Python. `sessionId` and `branch` are refused with it, as is `indexVectors`
+//! or `repoCredentials` without it. `branch` without `contentType` (Python
 //! forwards it to `add`) is refused too: pass it to `add` instead.
 //!
 //! `extractor` (Python's argument) and `graphBackend` select the graph

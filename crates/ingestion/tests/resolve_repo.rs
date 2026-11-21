@@ -93,6 +93,24 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
 }
 
+/// Asserts `staged` is the staging sibling a clone of `target` is made in
+/// (`<name>.partial-<random>`, next to it) and is gone once resolved.
+fn assert_staged_for(staged: &str, target: &Path) {
+    let staged = Path::new(staged);
+    assert_eq!(staged.parent(), target.parent(), "{}", staged.display());
+    let name = target.file_name().unwrap().to_string_lossy();
+    assert!(
+        staged
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(&format!("{name}.partial-")),
+        "{}",
+        staged.display()
+    );
+    assert!(!staged.exists(), "{} was left behind", staged.display());
+}
+
 fn existing_clone(clones: &Path, name: &str) -> PathBuf {
     let dir = clones.join(name);
     std::fs::create_dir_all(dir.join(".git")).unwrap();
@@ -236,17 +254,12 @@ async fn a_remote_is_shallow_cloned() {
     // core.symlinks=false is a security requirement: without it a symlink
     // committed in the remote is materialized and later written through.
     assert_eq!(
-        calls[0],
-        strings(&[
-            "clone",
-            "-c",
-            "core.symlinks=false",
-            "--depth",
-            "1",
-            URL,
-            &resolved.to_string_lossy(),
-        ])
+        calls[0][..6],
+        strings(&["clone", "-c", "core.symlinks=false", "--depth", "1", URL,])[..]
     );
+    assert_eq!(calls[0].len(), 7);
+    assert_staged_for(&calls[0][6], &resolved);
+    assert!(resolved.is_dir());
 }
 
 #[tokio::test]
@@ -462,14 +475,19 @@ async fn the_clone_slug_and_remote_never_carry_the_token() {
         &strings(&["clone", "-c", "core.symlinks=false", "--depth", "1"])[..]
     );
     assert!(calls[0].0.contains(&TOKEN_GIT_URL.to_string()));
-    // The persisted remote is rewritten to the credential-free URL.
+    // The persisted remote is rewritten to the credential-free URL, in the
+    // staging directory: the clone only reaches its place once the token is
+    // out of its config.
     assert_eq!(
-        (calls[1].0.clone(), calls[1].1.clone()),
-        (
-            strings(&["remote", "set-url", "origin", CLEAN_GIT_URL]),
-            Some(resolved)
-        )
+        calls[1].0,
+        strings(&["remote", "set-url", "origin", CLEAN_GIT_URL])
     );
+    let staged = calls[1].1.clone().unwrap();
+    assert_eq!(
+        calls[0].0.last(),
+        Some(&staged.to_string_lossy().into_owned())
+    );
+    assert_staged_for(&staged.to_string_lossy(), &resolved);
 }
 
 #[tokio::test]
@@ -524,17 +542,17 @@ async fn out_of_band_credentials_ride_the_environment() {
     let (args, _, env) = &calls[0];
     // argv carries only the clean URL.
     assert_eq!(
-        args,
-        &strings(&[
+        args[..6],
+        strings(&[
             "clone",
             "-c",
             "core.symlinks=false",
             "--depth",
             "1",
             CLEAN_GIT_URL,
-            &resolved.to_string_lossy(),
-        ])
+        ])[..]
     );
+    assert_staged_for(&args[6], &resolved);
     assert!(!args.join(" ").contains("tok-SECRET"));
     // ...and the token rides GIT_CONFIG_* as a basic-auth header scoped to
     // the repository's origin.
@@ -944,4 +962,264 @@ async fn a_committed_symlink_is_written_as_a_plain_file() {
         assert!(!link.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(link).unwrap(), "/etc/passwd");
     }
+}
+
+// ─── Final review fixes (SDK-1053) ────────────────────────────────────────────
+
+/// How [`HalfClone`] ends a clone after writing `<dir>/.git`.
+#[derive(Clone, Copy)]
+enum HalfCloneEnd {
+    /// git exits non-zero.
+    Fails,
+    /// git cannot finish (the timeout's error).
+    Errors,
+    /// git never returns; the caller drops the future.
+    Hangs,
+}
+
+/// A clone that writes `<dir>/.git` and then does not finish, as a git
+/// killed part way leaves it; every other command succeeds.
+struct HalfClone {
+    end: HalfCloneEnd,
+    calls: Mutex<Vec<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl RepoTransport for HalfClone {
+    async fn run_git(
+        &self,
+        args: &[String],
+        _cwd: Option<&Path>,
+        _env: &[(String, String)],
+    ) -> Result<GitOutput, CodeRepositoryError> {
+        self.calls.lock().unwrap().push(args.to_vec());
+        if args[0] != "clone" {
+            return Ok(ok(args));
+        }
+        let dir = PathBuf::from(args.last().unwrap());
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git").join("config"), "[core]\n").unwrap();
+        match self.end {
+            HalfCloneEnd::Fails => Ok(GitOutput {
+                status: 128,
+                stderr: "fatal: early EOF".to_string(),
+            }),
+            HalfCloneEnd::Errors => Err(CodeRepositoryError::Failed(
+                "git clone timed out after 600s.".to_string(),
+            )),
+            HalfCloneEnd::Hangs => std::future::pending().await,
+        }
+    }
+
+    async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// A clone killed part way leaves no `.git` behind that a later call would
+/// take for a finished clone (and reuse after a failing pull): the next call
+/// clones again.
+#[tokio::test]
+async fn an_unfinished_clone_leaves_nothing_to_reuse() {
+    for end in [
+        HalfCloneEnd::Fails,
+        HalfCloneEnd::Errors,
+        HalfCloneEnd::Hangs,
+    ] {
+        let clones = TempDir::new().unwrap();
+        let git = HalfClone {
+            end,
+            calls: Mutex::new(Vec::new()),
+        };
+        let settings = sdk(clones.path());
+        let resolving = resolve_repo_source(TOKEN_URL, &settings, None, None, &git);
+        match end {
+            HalfCloneEnd::Hangs => {
+                // An HTTP client giving up drops the request's future.
+                let dropped =
+                    tokio::time::timeout(std::time::Duration::from_millis(50), resolving).await;
+                assert!(dropped.is_err());
+            }
+            _ => {
+                resolving.await.unwrap_err();
+            }
+        }
+        assert!(
+            entries(clones.path()).is_empty(),
+            "{:?}",
+            entries(clones.path())
+        );
+
+        let retry = Recording::new(ok);
+        let resolved = resolve_repo_source(URL, &sdk(clones.path()), None, None, &retry)
+            .await
+            .unwrap();
+        assert_eq!(retry.args()[0][0], "clone", "the half clone was reused");
+        assert_eq!(entries(clones.path()), vec!["github.com-org-repo"]);
+        assert!(resolved.is_dir());
+    }
+}
+
+/// A clone finished by a concurrent call first is kept; this call's own
+/// clone is discarded.
+#[tokio::test]
+async fn a_clone_that_lost_the_race_keeps_the_winner() {
+    struct Racing {
+        target: PathBuf,
+    }
+    #[async_trait::async_trait]
+    impl RepoTransport for Racing {
+        async fn run_git(
+            &self,
+            args: &[String],
+            _cwd: Option<&Path>,
+            _env: &[(String, String)],
+        ) -> Result<GitOutput, CodeRepositoryError> {
+            std::fs::create_dir_all(PathBuf::from(args.last().unwrap()).join(".git")).unwrap();
+            std::fs::create_dir_all(self.target.join(".git")).unwrap();
+            std::fs::write(self.target.join("winner"), "").unwrap();
+            Ok(ok(args))
+        }
+
+        async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let clones = TempDir::new().unwrap();
+    let target = clones.path().join("github.com-org-repo");
+    let resolved = resolve_repo_source(
+        URL,
+        &sdk(clones.path()),
+        None,
+        None,
+        &Racing {
+            target: target.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved, target);
+    assert!(target.join("winner").exists());
+    assert_eq!(entries(clones.path()), vec!["github.com-org-repo"]);
+}
+
+/// The stderr tail is taken after the scrub: a cut that lands inside a URL's
+/// userinfo would otherwise leave the token's tail in the error.
+#[tokio::test]
+async fn a_token_straddling_the_stderr_cut_is_still_scrubbed() {
+    let clones = TempDir::new().unwrap();
+    // The last 1000 characters start right after "tok-".
+    let filler = 1000 - "SECRET".len() - "@github.com/org/repo.git' failed ".len();
+    let git = Recording::new(|_| GitOutput {
+        status: 128,
+        stderr: format!(
+            "fatal: unable to access '{TOKEN_GIT_URL}' failed {}",
+            "x".repeat(1000 - "SECRET".len() - "@github.com/org/repo.git' failed ".len())
+        ),
+    });
+    let error = resolve_repo_source(TOKEN_GIT_URL, &sdk(clones.path()), None, None, &git)
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(!message.contains("SECRET"), "{message}");
+    assert!(message.ends_with(&"x".repeat(filler)), "{message}");
+}
+
+/// An empty token is no token (Python `if credentials`): git gets no
+/// `Authorization` header for it.
+#[tokio::test]
+async fn an_empty_token_sends_no_header() {
+    let clones = TempDir::new().unwrap();
+    let git = Recording::new(ok);
+    resolve_repo_source(CLEAN_GIT_URL, &sdk(clones.path()), Some(""), None, &git)
+        .await
+        .unwrap();
+    let calls = git.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].2.is_empty(), "{:?}", calls[0].2);
+}
+
+/// An API request's git follows no http redirect (one would take it past
+/// the outbound check), on every command that reaches the remote, with the
+/// credential header alongside; a local SDK caller keeps git's default.
+#[tokio::test]
+async fn api_requests_follow_no_redirects() {
+    let clones = TempDir::new().unwrap();
+    let api = RepoSourceSettings::new(&clones.path().to_string_lossy(), "true", true);
+    let git = Recording::new(|args| GitOutput {
+        status: i32::from(args[0] == "fetch"),
+        stderr: String::new(),
+    });
+    // A clone (with an ls-remote for the branch), then a fetch and ls-remote
+    // refresh of it.
+    let clone = resolve_repo_source(CLEAN_GIT_URL, &api, Some("tok"), Some("dev"), &git)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(clone.join(".git")).unwrap();
+    resolve_repo_source(CLEAN_GIT_URL, &api, Some("tok"), Some("dev"), &git)
+        .await
+        .unwrap();
+    let remote_calls: Vec<Call> = git
+        .calls()
+        .into_iter()
+        .filter(|(args, _, _)| args[0] != "reset")
+        .collect();
+    assert_eq!(
+        remote_calls
+            .iter()
+            .map(|(args, _, _)| args[0].as_str())
+            .collect::<Vec<_>>(),
+        vec!["ls-remote", "clone", "fetch", "ls-remote"]
+    );
+    for (args, _, env) in &remote_calls {
+        assert_eq!(
+            env[..3],
+            credential_env("tok", CLEAN_GIT_URL)[..3]
+                .iter()
+                .map(|(k, v)| if k == "GIT_CONFIG_COUNT" {
+                    (k.clone(), "2".to_string())
+                } else {
+                    (k.clone(), v.clone())
+                })
+                .collect::<Vec<_>>()[..],
+            "{args:?}"
+        );
+        assert_eq!(
+            env[3..],
+            [
+                (
+                    "GIT_CONFIG_KEY_1".to_string(),
+                    "http.followRedirects".to_string()
+                ),
+                ("GIT_CONFIG_VALUE_1".to_string(), "false".to_string()),
+            ],
+            "{args:?}"
+        );
+    }
+
+    let sdk_git = Recording::new(ok);
+    let sdk_clones = TempDir::new().unwrap();
+    resolve_repo_source(URL, &sdk(sdk_clones.path()), None, None, &sdk_git)
+        .await
+        .unwrap();
+    assert!(sdk_git.calls()[0].2.is_empty());
+
+    // git reads the setting from that environment.
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let env = &remote_calls[1].2;
+    let output = Command::new("git")
+        .args(["config", "--get", "http.followRedirects"])
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "false");
 }

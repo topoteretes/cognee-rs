@@ -11,7 +11,10 @@
 //! Clones live under the clones directory ([`RepoSourceSettings::clones_dir`],
 //! `code_graph.clones_dir` / `COGNEE_REPOS_DIR`, default `~/.cognee/repos`)
 //! and are reused across calls: an existing clone is refreshed best-effort.
-//! A `branch` is cloned into a directory of its own.
+//! A `branch` is cloned into a directory of its own. A new clone is made in
+//! a staging sibling and moved into place only once complete, so a clone
+//! that fails, times out or is cancelled part way leaves nothing a later
+//! call would reuse (Python clones in place).
 //!
 //! Secrets never reach a loggable string. Out-of-band credentials go to git
 //! only through environment-level git config ([`credential_env`]); a token in
@@ -22,7 +25,9 @@
 //!
 //! Remote resolution follows Python's `ALLOW_HTTP_REQUESTS` gate
 //! ([`HttpRequestsGate`]) and, for an http(s) URL, the outbound-address check
-//! web ingestion applies ([`validate_outbound_url`]).
+//! web ingestion applies ([`validate_outbound_url`]). For an API request git
+//! also follows no http redirect (`http.followRedirects=false`), which
+//! Python does not set: a redirect would otherwise take git past the check.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -577,6 +582,12 @@ pub fn check_branch_name(branch: &str) -> Result<(), CodeRepositoryError> {
 /// (`http.<origin>/.extraHeader`), so git and git-lfs send it only to that
 /// host.
 pub fn credential_env(token: &str, url: &str) -> Vec<(String, String)> {
+    git_config_env(&[credential_header(token, url)])
+}
+
+/// The scoped `http.<origin>/.extraHeader` entry [`credential_env`] sets, as
+/// a `(key, value)` git config pair.
+fn credential_header(token: &str, url: &str) -> (String, String) {
     let parts = split_url(url);
     // The netloc, not the hostname: an IPv6 literal keeps its brackets,
     // which git needs.
@@ -586,17 +597,52 @@ pub fn credential_env(token: &str, url: &str) -> Vec<(String, String)> {
         .map_or(parts.netloc, |(_, h)| h);
     let origin = format!("{}://{host}", parts.scheme);
     let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
-    vec![
-        ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
-        (
-            "GIT_CONFIG_KEY_0".to_string(),
-            format!("http.{origin}/.extraHeader"),
-        ),
-        (
-            "GIT_CONFIG_VALUE_0".to_string(),
-            format!("Authorization: Basic {basic}"),
-        ),
-    ]
+    (
+        format!("http.{origin}/.extraHeader"),
+        format!("Authorization: Basic {basic}"),
+    )
+}
+
+/// Git config `(key, value)` pairs as environment-level config
+/// (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`); no
+/// pairs is no environment at all.
+fn git_config_env(pairs: &[(String, String)]) -> Vec<(String, String)> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), pairs.len().to_string())];
+    for (index, (key, value)) in pairs.iter().enumerate() {
+        env.push((format!("GIT_CONFIG_KEY_{index}"), key.clone()));
+        env.push((format!("GIT_CONFIG_VALUE_{index}"), value.clone()));
+    }
+    env
+}
+
+/// The environment of every git command of [`resolve_repo_source`] that
+/// reaches the remote (clone, pull, fetch, ls-remote): the scoped
+/// credential header when there is a token, and, for an API request,
+/// `http.followRedirects=false`.
+///
+/// The outbound check resolves and checks the URL's host once, before git
+/// runs; git would otherwise follow an http redirect of its first request
+/// (`http.followRedirects=initial`, its default) to wherever it points, an
+/// internal address included, and the stderr tail returned in the error
+/// would tell the caller what answered there. Python passes no redirect
+/// setting (a known gap of `resolve_repo.py`); a renamed repository then
+/// needs its new URL. A local SDK caller keeps git's default.
+fn remote_git_env(
+    credentials: Option<&str>,
+    clean_url: &str,
+    settings: &RepoSourceSettings,
+) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if let Some(token) = credentials {
+        pairs.push(credential_header(token, clean_url));
+    }
+    if settings.http_requests.api_request {
+        pairs.push(("http.followRedirects".to_string(), "false".to_string()));
+    }
+    git_config_env(&pairs)
 }
 
 // ─── Outbound address check ───────────────────────────────────────────────────
@@ -969,19 +1015,24 @@ pub async fn resolve_repo_source(
     // both leak it and (through the directory name) clone anew per token.
     let clean_url = redact_repo_spec(url);
     let has_credentials = clean_url != url;
-    let scrub = |text: &str| -> String {
-        // git's error output often echoes the URL, token included: strip the
-        // exact spec, then any other URL userinfo git may print.
+    // git's error output often echoes the URL, token included: strip the
+    // exact spec, then any other URL userinfo git may print. The whole
+    // output is scrubbed before its tail is taken: a cut inside a URL's
+    // userinfo would leave a token fragment neither pattern matches (Python
+    // cuts first, `_scrub(stderr[-1000:])`).
+    let scrubbed_tail = |text: &str, n: usize| -> String {
         let text = if has_credentials {
             text.replace(url, &clean_url)
         } else {
             text.to_string()
         };
-        URL_USERINFO.replace_all(&text, "://").into_owned()
+        let text = URL_USERINFO.replace_all(&text, "://");
+        tail_chars(&text, n).to_string()
     };
-    let auth_env = credentials
-        .map(|token| credential_env(token, &clean_url))
-        .unwrap_or_default();
+    // An empty token is no token (Python `if credentials`): a header of
+    // `x-access-token:` would turn an anonymous clone into a 401.
+    let credentials = credentials.filter(|token| !token.is_empty());
+    let auth_env = remote_git_env(credentials, &clean_url, settings);
 
     let base = settings.clones_dir.as_path();
     let target = clone_dir(&clean_url, branch, base);
@@ -1044,7 +1095,7 @@ pub async fn resolve_repo_source(
         if !refreshed.ok() {
             // A stale clone is still indexable; the caller asked for the
             // repository, not for freshness guarantees.
-            refreshed.stderr = scrub(tail_chars(&refreshed.stderr, 500));
+            refreshed.stderr = scrubbed_tail(&refreshed.stderr, 500);
             tracing::warn!(
                 "Reusing existing clone at {} (refresh failed: {})",
                 target.display(),
@@ -1070,6 +1121,13 @@ pub async fn resolve_repo_source(
         return Err(branch_not_found(branch));
     }
     tracing::info!("Cloning {clean_url} into {}", target.display());
+    // The clone is made in a staging sibling and renamed onto `target` only
+    // once it is complete (and its remote credential-free): a clone that
+    // fails, times out or is dropped part way (git is killed with its
+    // future) would otherwise leave a `.git` at `target`, which every later
+    // call takes for a finished clone and reuses after a failing refresh.
+    // The guard removes the staging directory on every early exit.
+    let staging = PartialClone::create(base, &target)?;
     // core.symlinks=false: git would otherwise materialize symlinks committed
     // in the remote, and nothing re-validates paths under the clone (a
     // `.enola -> ~/.ssh` link would have the enola snapshot written through
@@ -1081,24 +1139,85 @@ pub async fn resolve_repo_source(
         args.push(branch.to_string());
     }
     args.push(url.to_string());
-    args.push(target.to_string_lossy().into_owned());
+    args.push(staging.path().to_string_lossy().into_owned());
     let cloned = transport.run_git(&args, None, &auth_env).await?;
     if !cloned.ok() {
         return Err(CodeRepositoryError::Failed(format!(
             "Failed to clone '{clean_url}': {}",
-            scrub(tail_chars(&cloned.stderr, 1000))
+            scrubbed_tail(&cloned.stderr, 1000)
         )));
     }
     if has_credentials {
         transport
             .run_git(
                 &strings(&["remote", "set-url", "origin", &clean_url]),
-                Some(&target),
+                Some(staging.path()),
                 &[],
             )
             .await?;
     }
+    staging.finish(&target)?;
     Ok(target)
+}
+
+/// A clone in progress: a staging directory next to its target
+/// (`<name>.partial-<random>`), removed when dropped unless
+/// [`Self::finish`] moved it onto the target.
+struct PartialClone {
+    path: PathBuf,
+    finished: bool,
+}
+
+impl PartialClone {
+    /// Create the (empty) staging directory for `target` under `base`; git
+    /// clones into an existing empty directory.
+    fn create(base: &Path, target: &Path) -> Result<Self, CodeRepositoryError> {
+        let name = target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let path = base.join(format!("{name}.partial-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&path).map_err(|error| {
+            CodeRepositoryError::Failed(format!(
+                "Could not create the clone directory {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(Self {
+            path,
+            finished: false,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Move the finished clone onto `target`. When a concurrent call for the
+    /// same repository got there first, its clone is kept and this one is
+    /// discarded.
+    fn finish(mut self, target: &Path) -> Result<(), CodeRepositoryError> {
+        match std::fs::rename(&self.path, target) {
+            Ok(()) => {
+                self.finished = true;
+                Ok(())
+            }
+            Err(_) if target.join(".git").is_dir() => Ok(()),
+            Err(error) => Err(CodeRepositoryError::Failed(format!(
+                "Could not move the clone into {}: {error}",
+                target.display()
+            ))),
+        }
+    }
+}
+
+impl Drop for PartialClone {
+    fn drop(&mut self) {
+        if !self.finished {
+            // Best effort: a leftover staging directory is never reused.
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 #[cfg(test)]
