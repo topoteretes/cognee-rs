@@ -428,7 +428,11 @@ snapshot, each under its own item, with the edges between them; the run's
 other repo items have nothing left to do. Forgetting the item removes its code graph and leaves other
 repositories' alone. Every other item runs the stages above. Both kinds share
 one pipeline run and its completion markers. A per-file code item
-(`source: "code"`) is not supported yet and fails the run. A run whose items
+(`source: "code"`, a lone source file added through `code_loader`) loads the
+code graph of that one file: its stored text is staged in a temporary
+directory under its original name (plus a `tsconfig.json` for plain
+JavaScript) and enola runs on it, as a repository named `<file name>_<data
+id>`, untagged, with no LLM and no embedding. A run whose items
 are all code-routed resolves no graph extractor, so a deployment without an
 LLM key builds a code project's graph.
 

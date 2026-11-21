@@ -140,6 +140,10 @@ fn replay(error: &CognifyError) -> CognifyError {
             CodeGraphError::InvalidRepoItem(message) => {
                 CodeGraphError::InvalidRepoItem(message.clone())
             }
+            CodeGraphError::InvalidCodeItem(message) => {
+                CodeGraphError::InvalidCodeItem(message.clone())
+            }
+            CodeGraphError::Staging(message) => CodeGraphError::Staging(message.clone()),
             CodeGraphError::Graph(error) => {
                 return CognifyError::GraphDatabaseError(error.to_string());
             }

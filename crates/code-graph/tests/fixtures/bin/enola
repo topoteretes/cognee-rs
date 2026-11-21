@@ -1,8 +1,9 @@
 #!/bin/sh
 # A stand-in for the enola binary in the cognee-code-graph tests.
 #
-# Called as `enola --generate <repo>`. The repository's `.fake-enola` file
-# says what to do:
+# Called as `enola --generate <repo>`. Without a `.fake-enola` file the
+# repository is a staged per-file run (see below). Otherwise the file says
+# what to do:
 #   snapshot:<name>  copy tests/fixtures/snapshots/<name>/ into <repo>/.enola/
 #   cluster:<name>   the same (and a cluster member, see below)
 #   slow:<name>      the same, slowly, failing if another run on <repo> is
@@ -98,6 +99,30 @@ case "$repo" in
     esac
     ;;
 esac
+if [ ! -f "$repo/.fake-enola" ]; then
+  # A staged per-file run (cognify's per-file CODE route): one module fact
+  # per staged source file, with no `repo` label (the repository is named
+  # after the staging directory). As real enola does, plain JavaScript
+  # (.js/.jsx) yields facts only with a tsconfig.json beside it, and the
+  # marker itself is no fact. The snapshot id is a checksum of the staged
+  # files, so an unchanged file gives an unchanged snapshot.
+  mkdir -p "$repo/.enola"
+  facts="$repo/.enola/facts.jsonl"
+  : > "$facts"
+  for file in "$repo"/*; do
+    [ -f "$file" ] || continue
+    name=$(basename "$file")
+    case "$name" in
+      tsconfig.json) continue ;;
+      *.js|*.jsx|*.JS|*.JSX) [ -f "$repo/tsconfig.json" ] || continue ;;
+    esac
+    printf '{"kind": "module", "name": "%s", "file": "%s", "line": 1, "props": {"language": "fake"}, "relations": []}\n' \
+      "${name%.*}" "$name" >> "$facts"
+  done
+  sum=$(cat "$repo"/* | cksum | cut -d ' ' -f 1)
+  printf '{"format_version": 1, "snapshot_id": "sha256:staged-%s"}\n' "$sum" > "$repo/.enola/receipt.json"
+  exit 0
+fi
 mode=$(cat "$repo/.fake-enola")
 case "$mode" in
   slow:*)

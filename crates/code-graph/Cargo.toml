@@ -25,6 +25,8 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The per-file CODE route stages each code file in a temporary directory.
+tempfile.workspace = true
 thiserror.workspace = true
 # `process`: the enola subprocess (`runner`).
 tokio = { workspace = true, features = ["process"] }

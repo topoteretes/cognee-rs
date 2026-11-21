@@ -3890,7 +3890,9 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 // ---------------------------------------------------------------------------
 
 /// Name of the task that runs the code routes ahead of the standard pipeline
-/// (Python's CODE_REPO-route task, `extract_code_repo_graph`).
+/// (Python's CODE_REPO-route task, `extract_code_repo_graph`). The same task
+/// also runs the per-file CODE route, whose Python task is
+/// `extract_code_files_graph`.
 pub const EXTRACT_CODE_REPO_GRAPH_TASK_NAME: &str = "extract_code_repo_graph";
 
 /// What [`run_code_routes`] hands the standard pipeline: the standard items,
@@ -3944,13 +3946,20 @@ pub enum CodeRepoLoadMode {
 ///   [`CodeRepoLoadMode::Dataset`] a dataset of several repositories is
 ///   loaded as one enola cluster instead (see
 ///   `code_cluster::load_dataset_cluster`);
-/// - a per-file code item, a DLT-source row stamped in `system_metadata`,
-///   or a refused (legacy `dlt`) item fails the whole run before any enola
-///   work: Rust has no task list for those routes yet, and Python resolves
-///   every item's task list before any item runs (`run_tasks.py`), raising
-///   for an unmapped or refused one.
+/// - each per-file code item (`system_metadata.source == "code"`) loads the
+///   code graph of its stored file on its own enola run, staged under its
+///   original name in a temporary directory
+///   ([`cognee_code_graph::extract_code_file_graph`], Python's CODE route
+///   `extract_code_files_graph`): untagged, recorded in the ledger under
+///   the row and the run, no LLM, no embedding;
+/// - a DLT-source row stamped in `system_metadata`, or a refused (legacy
+///   `dlt`) item, fails the whole run before any enola work: Rust has no
+///   task list for that route yet, and Python resolves every item's task
+///   list before any item runs (`run_tasks.py`), raising for an unmapped or
+///   refused one.
 ///
-/// A repo item that fails to load is a per-item failure, as an item's tasks
+/// Code items load in input order. A code item (repo or file) that fails to
+/// load is a per-item failure, as an item's tasks
 /// fail in Python's `run_tasks_data_item` (`run_tasks_data_item.py:279-305`):
 /// the manifest read, its node set and the code graph load are all inside
 /// it. What happens next follows `failure_policy`, as for a document:
@@ -3989,12 +3998,15 @@ pub async fn run_code_routes(
     use crate::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 
     let mut standard = Vec::with_capacity(input.data_items.len());
-    let mut repositories = Vec::new();
+    // The code-routed items, in input order, with their route.
+    let mut code_items = Vec::new();
     for item in &input.data_items {
         match cognify_route_for(item)? {
             CognifyRoute::Standard => standard.push(item.clone()),
-            CognifyRoute::CodeRepo => repositories.push(item),
-            route @ (CognifyRoute::Code | CognifyRoute::DltSource) => {
+            route @ (CognifyRoute::CodeRepo | CognifyRoute::Code) => {
+                code_items.push((item, route));
+            }
+            route @ CognifyRoute::DltSource => {
                 return Err(CognifyRouteError::UnsupportedRoute {
                     data_id: item.id,
                     route,
@@ -4006,24 +4018,37 @@ pub async fn run_code_routes(
 
     let mut failures = FailureReport::with_policy(&failure_policy);
     let mut cluster = crate::code_cluster::ClusterVerdict::default();
-    for (index, item) in repositories.iter().enumerate() {
+    for (index, (item, route)) in code_items.iter().enumerate() {
         failures.note_routed_items(1);
-        let Err(error) = load_code_repo_item(
-            item,
-            input,
-            storage,
-            graph_db,
-            db,
-            code_graph,
-            pipeline_run_id,
-            mode,
-            &mut cluster,
-        )
-        .await
-        else {
+        let loaded = if *route == CognifyRoute::Code {
+            load_code_file_item(
+                item,
+                input,
+                storage,
+                graph_db,
+                db,
+                code_graph,
+                pipeline_run_id,
+            )
+            .await
+        } else {
+            load_code_repo_item(
+                item,
+                input,
+                storage,
+                graph_db,
+                db,
+                code_graph,
+                pipeline_run_id,
+                mode,
+                &mut cluster,
+            )
+            .await
+        };
+        let Err(error) = loaded else {
             continue;
         };
-        warn!(data_id = %item.id, "code repo item failed to load: {error}");
+        warn!(data_id = %item.id, route = %route, "code item failed to load: {error}");
         if failure_policy.stop == FailureStop::FailFast
             && failure_policy.scope != RollbackScope::FailedItems
         {
@@ -4042,7 +4067,7 @@ pub async fn run_code_routes(
         if failure_policy.stop == FailureStop::FailFast {
             // `FailedItems`: stop here and keep what already loaded. Nothing
             // after this item is attempted, standard items included.
-            for later in &repositories[index + 1..] {
+            for (later, _) in &code_items[index + 1..] {
                 failures.mark_unreached(later.id);
             }
             for item in standard.drain(..) {
@@ -4145,6 +4170,41 @@ async fn load_code_repo_item(
         node_set.as_deref(),
     )
     .await?;
+    Ok(())
+}
+
+/// Load one per-file code item's code graph: Python's
+/// `extract_code_files_graph` body for one data item
+/// (`tasks/code_graph/code_files.py`).
+///
+/// The stored text is read as Python's text mode reads it (strict UTF-8,
+/// universal newlines), then staged and loaded by
+/// [`cognee_code_graph::extract_code_file_graph`]: untagged, graph-only,
+/// recorded in the ledger under the item's row. Its own enola run, never part
+/// of the dataset's repository cluster.
+async fn load_code_file_item(
+    item: &Data,
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+) -> Result<(), CognifyError> {
+    let raw = storage
+        .retrieve(&item.raw_data_location)
+        .await
+        .map_err(|e| CognifyError::StorageError(e.to_string()))?;
+    let text = String::from_utf8(raw).map_err(|e| {
+        CognifyError::from(cognee_code_graph::CodeGraphError::InvalidCodeItem(format!(
+            "the stored text of code data item {} is not UTF-8: {e}",
+            item.id
+        )))
+    })?;
+    let content = cognee_ingestion::loaders::code::universal_newlines(&text);
+    let ledger = code_graph_ledger(db, input, item.id, pipeline_run_id);
+    cognee_code_graph::extract_code_file_graph(graph_db, Some(&ledger), code_graph, item, &content)
+        .await?;
     Ok(())
 }
 

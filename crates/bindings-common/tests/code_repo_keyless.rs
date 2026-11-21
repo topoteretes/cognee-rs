@@ -258,3 +258,36 @@ async fn add_and_cognify_reloads_a_changed_repository() {
         .unwrap();
     assert_eq!(after["alreadyCompleted"], true, "{after}");
 }
+
+/// SDK-1053 O9: with no LLM key, `add(<code file>)` then `cognify()` loads the
+/// file's code graph down the per-file CODE route: the file is a code item,
+/// so cognify resolves no extractor.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keyless_handle_cognifies_a_code_file() {
+    let dir = TempDir::new().expect("tempdir");
+    let file = dir.path().join("payments.py");
+    std::fs::write(&file, "def pay():\n    pass\n").unwrap();
+
+    let state = HandleState::from_settings(settings_under(&dir));
+    let added = pipeline::add(
+        &state,
+        json!({ "type": "file", "path": file.to_string_lossy() }),
+        "code",
+        &Value::Null,
+    )
+    .await
+    .expect("add the code file");
+    let rows = added["added"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+
+    let result = pipeline::cognify(&state, "code", &Value::Null)
+        .await
+        .expect("a code file cognifies without an LLM or extractor");
+    assert_eq!(result["chunks"], 0);
+    assert_eq!(result["alreadyCompleted"], false);
+
+    let again = pipeline::cognify(&state, "code", &Value::Null)
+        .await
+        .expect("second cognify");
+    assert_eq!(again["alreadyCompleted"], true);
+}

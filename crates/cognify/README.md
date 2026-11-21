@@ -14,9 +14,12 @@ it is recorded in the run's `FailureReport` (stage `CodeGraph`) and the
 failure policy decides the rest. `FailFast` stops at it; `RunToEnd` goes on
 with the other items; under `FailedItems` a repo item that loaded counts as a
 survivor and keeps its graph and completion marker. A per-file code item
-(`code`) and a DLT source stamped in `system_metadata` (`dlt_source`) are not
-supported yet and fail the whole run before any work, as does a legacy `dlt`
-row.
+(`code`, a lone source file `code_loader` stored) loads its code graph on its
+own enola run, staged under its original file name in a temporary directory
+(`cognee_code_graph::extract_code_file_graph`, Python's `code_files.py`),
+untagged, with the same per-item failure handling. A DLT source stamped in
+`system_metadata` (`dlt_source`) is not supported yet and fails the whole run
+before any work, as does a legacy `dlt` row.
 `routing::routes_need_llm` tells callers whether a run's items need the graph
 extractor at all.
 

@@ -10,15 +10,18 @@
 //! ([`add_code_graph_data_points`], [`add_code_graph_edges`]);
 //! [`load_code_graph`] does all of it for one repository, and
 //! [`extract_code_repo_graph`] for the repo item cognify's CODE_REPO route
-//! hands it. A dataset's repositories are extracted together as one enola
-//! cluster ([`snapshot_dataset_code_repos`], [`load_cluster_member`]), which
-//! gives the edges between them. Node ids,
+//! hands it; [`extract_code_file_graph`] loads one stored code file of the
+//! per-file CODE route, staged in a temporary directory. A dataset's
+//! repositories are extracted together as one enola cluster
+//! ([`snapshot_dataset_code_repos`], [`load_cluster_member`]), which gives
+//! the edges between them. Node ids,
 //! `fact_hash` values, properties and edges match Python's byte for byte,
 //! which the golden tests under `tests/` check against output Python
 //! produced (`scripts/generate_code_graph_goldens.py`). Settings are the
 //! `code_graph.*` section ([`CodeGraphConfig`]).
 
 mod cluster;
+mod code_files;
 mod code_repo;
 mod config;
 mod edges;
@@ -35,6 +38,10 @@ pub use cluster::{
     CLUSTER_ENOLA_TIMEOUT_CAP_SECS, CLUSTER_INLINE_REBUILD_LIMIT, ClusterMember,
     DatasetCodeSnapshot, cluster_enola_timeout, cluster_output_dir, resolve_member_labels,
     snapshot_dataset_code_repos,
+};
+pub use code_files::{
+    CODE_FILE_STAGING_PREFIX, detection_markers, extract_code_file_graph, is_code_sourced,
+    original_file_name, stage_code_file, staged_repo_name,
 };
 pub use code_repo::{CODE_REPO_MANIFEST_KIND, extract_code_repo_graph, manifest_repo_path};
 pub use config::{CodeGraphConfig, DEFAULT_ENOLA_TIMEOUT_SECS};

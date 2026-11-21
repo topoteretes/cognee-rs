@@ -26,6 +26,16 @@ pub enum CodeGraphError {
     /// raises a `ValueError` (`extract_code_repo_graph`).
     #[error("{0}")]
     InvalidRepoItem(String),
+    /// A per-file code data item cannot be loaded: it is not stamped as a
+    /// code file, or its stored text is not UTF-8. Python raises a
+    /// `ValueError` (`extract_code_files_graph`; a `UnicodeDecodeError` is
+    /// one).
+    #[error("{0}")]
+    InvalidCodeItem(String),
+    /// Staging a code file for its enola run failed on the filesystem.
+    /// Python lets the `OSError` propagate (`_stage_code_file`).
+    #[error("{0}")]
+    Staging(String),
     /// The graph database failed a read or write.
     #[error("graph database error: {0}")]
     Graph(#[from] cognee_graph::GraphDBError),
@@ -41,7 +51,8 @@ impl CodeGraphError {
             Self::EnolaNotInstalled(_) => "EnolaNotInstalledError",
             Self::EnolaSnapshot(_) => "EnolaSnapshotError",
             Self::InvalidConfig(_) => "CogneeConfigurationError",
-            Self::InvalidRepoItem(_) => "ValueError",
+            Self::InvalidRepoItem(_) | Self::InvalidCodeItem(_) => "ValueError",
+            Self::Staging(_) => "OSError",
             Self::Graph(_) => "GraphDatabaseError",
             Self::Ledger(_) => "RelationalDatabaseError",
         }

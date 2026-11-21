@@ -26,6 +26,7 @@ does all four for one local repository.
 | Read the stamp | `stored_repository_state` | `extract_code_graph._stored_repository_state` |
 | The whole load | `load_code_graph` | `extract_code_graph.get_code_graph_tasks` |
 | The CODE_REPO cognify route | `extract_code_repo_graph` | `code_repo.extract_code_repo_graph` |
+| The per-file CODE cognify route | `extract_code_file_graph`, `stage_code_file`, `staged_repo_name`, `detection_markers` | `code_files.extract_code_files_graph`, `_stage_code_file`, `_staged_repo_name`, `_DETECTION_MARKERS` |
 | Run enola over a cluster | `render_cluster_config`, `run_enola_cluster` | `enola.render_cluster_config`, `enola.run_enola_cluster` |
 | Snapshot a dataset's repositories | `snapshot_dataset_code_repos`, `resolve_member_labels`, `cluster_output_dir` | `cluster.snapshot_dataset_code_repos`, `cluster.resolve_member_labels`, `cluster.cluster_output_dir` |
 | Load one member of a cluster | `load_cluster_member` | `get_code_graph_tasks(..., repo_scope=label, snapshot=...)` |
@@ -135,6 +136,27 @@ several repositories is loaded as one enola cluster instead (next section).
 
 Python also invalidates its CODE retriever's snapshot cache after every
 write; Rust has no such cache yet.
+
+## The per-file CODE route
+
+`add(<code file>)` stores a lone source file through `code_loader`
+(`cognee_ingestion::loaders::code`), stamped `system_metadata.source =
+"code"`. cognify routes the item to `run_code_routes`, which reads its stored
+text (strict UTF-8, universal newlines, as Python's text mode reads it) and
+calls `extract_code_file_graph` (Python's `code_files.py`). enola only accepts
+directories, so the text is staged in a temporary `cognee_code_*` directory as
+`<file name>_<data id>/<file name>` (`stage_code_file`): the original file
+name keeps the extension enola detects the language by, and the directory
+name is the repository's name, stable across re-adds of the row and unique per
+row, so two `utils.py` files never share or sweep one repository. Plain
+JavaScript (`.js`, `.jsx`) gets a `tsconfig.json` beside it, the one marker
+enola needs (`detection_markers`); no manifest is ever fabricated. The standard
+load runs on the staged directory, graph-only and untagged (an add's
+`node_set` does not reach the nodes), with ledger rows under the item's row
+and the run; the staging directory is removed afterwards. An item that is not
+stamped as code fails with `CodeGraphError::InvalidCodeItem` (Python's
+`ValueError`), a staging failure with `CodeGraphError::Staging`. Each file is
+its own enola run, never part of the dataset's repository cluster.
 
 ## Datasets of several repositories: one enola cluster
 

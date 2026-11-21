@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The per-file CODE cognify route (SDK-1053).** cognify loads a lone code
+  file (a row stamped `system_metadata.source = "code"` by `code_loader`)
+  into the deterministic code graph instead of failing the run with
+  `CognifyRouteError::UnsupportedRoute`, as Python's `code_files.py` does:
+  its stored text is staged under its original file name in a temporary
+  directory named `<file name>_<data id>` (plus a `tsconfig.json` for
+  `.js`/`.jsx`) and enola runs on it, with no LLM and no embedding call. The
+  nodes are untagged and recorded in the ownership ledger under the row and
+  the run; a file that fails to load is a per-item failure
+  (`FailureStage::CodeGraph`), like a repo item. Code files and code
+  projects in one dataset share one run. API: `cognee_code_graph::
+  {extract_code_file_graph, stage_code_file, staged_repo_name,
+  original_file_name, is_code_sourced, detection_markers,
+  CODE_FILE_STAGING_PREFIX}`; new `CodeGraphError::{InvalidCodeItem, Staging}`
+  variants (the enum is not `#[non_exhaustive]`);
+  `cognee_models::code_repo::{SOURCE_CODE, system_metadata_source}`
+  (`routing::SOURCE_CODE` re-exports it, and `routing::metadata_source`
+  delegates).
+
 - **`Data.system_metadata` and the cognify route policy (SDK-1053).** The
   `data` table gains Python's nullable `system_metadata` JSON column
   (migration `m20261118_000001_data_system_metadata`, Python alembic
@@ -269,10 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is stamped `system_metadata = {"source": "code"}` unless the item carries
   its own stamp. `get_loader_name` returns `code_loader` for these
   extensions. `preferred_loaders = ["text_loader"]` keeps the old plain-text
-  reading. Until the per-file CODE cognify route lands (SDK-1053 O9),
-  `cognify` of a dataset holding such a row fails with
-  `CognifyRouteError::UnsupportedRoute`. Project directories are not
-  affected.
+  reading. cognify loads such a row down the per-file CODE route (see
+  "The per-file CODE cognify route" under Added). Project directories are not affected.
 
 - **A `Binary` upload is stored as it arrived (SDK-1592).** An add of
   `DataInput::Binary` (bare or in a `DataItem`; the `binary` input of every
@@ -344,8 +361,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extract_code_repo_graph`, no LLM, no embedding) in the same run as the
   standard items; a repo item that fails to load is a per-item failure
   under the failure policy (`FailureStage::CodeGraph`), and one that loaded
-  counts as a survivor. A per-file code item, a DLT source stamped in
-  `system_metadata` and a legacy `dlt` row fail the whole run. Without an
+  counts as a survivor. A DLT source stamped in `system_metadata` and a
+  legacy `dlt` row fail the whole run. Without an
   LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
   CLI) a code project's documents are left out at add and the repo item
   cognifies keyless. The manifest's data id is pinned to (user, dataset,
