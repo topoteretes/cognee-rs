@@ -10,6 +10,7 @@
 //! - [`prune`] -- Selective backend cleanup
 //! - [`recall`] -- Smart search with session routing
 //! - [`remember`] -- One-call add + cognify + optional improve
+//! - [`remember_code`] -- `remember(content_type="code")`: keyless code graph of local repositories
 //! - [`improve`] -- Staged self-improvement orchestrator
 
 pub mod auto_improve_debounce;
@@ -21,6 +22,7 @@ pub mod improve;
 pub mod prune;
 pub mod recall;
 pub mod remember;
+pub mod remember_code;
 pub mod update;
 pub mod user;
 
@@ -44,10 +46,14 @@ pub use recall::{
     normalize_scope, recall,
 };
 pub use remember::{
-    AutoImproveAdmission, AutoImproveContext, RememberItemInfo, RememberResult, RememberStatus,
-    SessionAutoImprove, SessionAutoImproveLaunch, auto_improve_skip_reason,
-    clear_auto_improve_admission, launch_session_auto_improve, register_auto_improve_admission,
-    remember, remember_entry,
+    AutoImproveAdmission, AutoImproveContext, CODE_REPOSITORY_ITEM_KIND, RememberItemInfo,
+    RememberResult, RememberStatus, SessionAutoImprove, SessionAutoImproveLaunch,
+    auto_improve_skip_reason, clear_auto_improve_admission, launch_session_auto_improve,
+    register_auto_improve_admission, remember, remember_entry,
+};
+pub use remember_code::{
+    RememberCodeParams, RememberContentType, RememberOptionCheck, remember_code,
+    validate_remember_options,
 };
 pub use update::{UpdateResult, update};
 pub use user::get_or_create_default_user;

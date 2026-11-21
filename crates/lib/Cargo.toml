@@ -231,6 +231,7 @@ required-features = ["visualization"]
 
 [dev-dependencies]
 cognee-test-utils = { path = "../test-utils" }
+cognee-code-graph = { path = "../code-graph" }
 cognee-storage = { path = "../storage", features = ["testing"] }
 cognee-graph = { path = "../graph", features = ["testing"] }
 cognee-vector = { path = "../vector", features = ["testing"] }

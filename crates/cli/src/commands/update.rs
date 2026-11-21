@@ -77,6 +77,9 @@ pub fn run(args: UpdateArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
             RayonThreadPool::with_default_threads()
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
+        // Read before the builder chain: the settings guard must not live
+        // across its awaits.
+        let repo_sources = cm.settings().repo_sources();
         let add_pipeline = AddPipeline::new(
             Arc::clone(&storage),
             Arc::clone(&database) as Arc<dyn IngestDb>,
@@ -85,6 +88,7 @@ pub fn run(args: UpdateArgs, cm: Arc<ComponentManager>) -> Result<(), CliError> 
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
         .with_database(Arc::clone(&database))
+        .with_repo_sources(repo_sources)
         .with_loader_registry(cm.add_loader_registry().await);
         let delete_service = super::build_delete_service(&cm).await?;
 

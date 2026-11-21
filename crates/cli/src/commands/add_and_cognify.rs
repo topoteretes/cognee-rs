@@ -95,6 +95,9 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
 
         // Run-ownership markers for startup recovery, as every Python run holds.
         let run_ownership_dir = cm.settings().run_ownership_dir();
+        // Read before the builder chain: the settings guard must not live
+        // across its awaits.
+        let repo_sources = cm.settings().repo_sources();
         let ingest = AddPipeline::new(Arc::clone(&storage), database.clone() as Arc<dyn IngestDb>)
             .with_thread_pool(thread_pool_for_add)
             .with_graph_db(graph_db_for_add)
@@ -102,6 +105,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .with_database(Arc::clone(&database))
             .with_pipeline_run_repo(Arc::clone(&pipeline_run_repo))
             .with_run_ownership_dir(run_ownership_dir)
+            // A GitHub/GitLab repository URL is cloned (`code_graph.clones_dir`).
+            .with_repo_sources(repo_sources)
             // Python runs its image and audio loaders at `add`.
             .with_loader_registry(cm.add_loader_registry().await)
             // A code project's documents need an LLM (Python `resolve_code_repository`).

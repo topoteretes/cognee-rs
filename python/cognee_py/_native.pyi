@@ -807,7 +807,9 @@ class Cognee:
         """One-call add + cognify + optional self-improvement.
 
         Accepted *opts* keys: ``sessionId``, ``selfImprovement`` (default
-        ``True``, as in Python), ``tenant``
+        ``True``, as in Python), ``tenant``, ``extractor``, ``contentType``
+        (``"code"`` indexes local repository paths as a code graph, no LLM),
+        ``nodeSet`` (ignored with code) and ``raiseOnError`` (code only)
         (``snake_case`` spellings accepted too).
         Returns the ``RememberResult`` as a dict.
         """

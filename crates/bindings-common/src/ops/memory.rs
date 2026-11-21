@@ -23,8 +23,26 @@
 //! ### `remember` opts
 //! ```json
 //! {"sessionId":"...", "selfImprovement":bool, "tenant":"<uuid>",
-//!  "extractor":"auto"|"llm"|"gliner", "graphBackend":...}
+//!  "extractor":"auto"|"llm"|"gliner", "graphBackend":...,
+//!  "contentType":"code", "nodeSet":[...], "raiseOnError":bool,
+//!  "repoCredentials":"<token>", "indexVectors":bool}
 //! ```
+//!
+//! `{"contentType":"code", "nodeSet":[...], "raiseOnError":bool}` indexes
+//! repositories as a code graph, keyless (Python
+//! `remember(content_type="code")`): local paths (`{type:"file", path}` or a
+//! path string) and remote git URLs, shallow-cloned under
+//! `code_graph.clones_dir` (refused when `code_graph.allow_http_requests`
+//! disables them). One item per repository,
+//! `{kind:"code_repository", source, path, id, pipeline_run_id}`; `source`
+//! never carries URL credentials. `repoCredentials` is a token for private
+//! https remotes, handed to git through its environment only (an empty one
+//! is none). `indexVectors: true` also embeds the code graph's nodes through
+//! the configured embedding engine (Python `index_vectors`; off by default,
+//! so the default run makes no embedding call). `nodeSet` is ignored, as in
+//! Python. `sessionId` and `branch` are refused with it, as is `indexVectors`
+//! or `repoCredentials` without it. `branch` without `contentType` (Python
+//! forwards it to `add`) is refused too: pass it to `add` instead.
 //!
 //! `extractor` (Python's argument) and `graphBackend` select the graph
 //! extractor as for `cognify`; `extractor` with `sessionId` is an error, as in
@@ -83,7 +101,10 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use cognee::api::{ImproveParams, ImproveResult, remember, remember_entry};
+use cognee::api::{
+    ImproveParams, ImproveResult, RememberCodeParams, RememberContentType, RememberOptionCheck,
+    remember, remember_code, remember_entry, validate_remember_options,
+};
 use cognee::models::{FeedbackEntry, MemoryEntry, QAEntry, TraceEntry};
 
 use crate::wire::marshal_inputs;
@@ -242,6 +263,29 @@ pub async fn run_remember(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let session_id: Option<&str> = session_id_owned.as_deref();
+
+    // `contentType` and the options that depend on it, checked in Python's
+    // order before anything is stored.
+    let content_type = validate_remember_options(RememberOptionCheck {
+        content_type: opt_str(opts, "contentType")?,
+        session_id,
+        branch: opt_str(opts, "branch")?,
+        repo_credentials: opts.get("repoCredentials").is_some_and(|v| !v.is_null()),
+        index_vectors: opt_bool(opts, "indexVectors")?,
+    })
+    .map_err(remember_error)?;
+    if content_type == Some(RememberContentType::Code) {
+        return run_remember_code(state, inputs, dataset_name, tenant_id, opts).await;
+    }
+    // Python forwards `branch` to `add()`; this `remember` does not take add
+    // options yet, so it is refused rather than dropped.
+    if opt_str(opts, "branch")?.is_some() {
+        return Err(SdkError::Validation(
+            "`branch` is not supported by remember() in this SDK yet: call add() with the \
+             branch, then cognify()."
+                .to_string(),
+        ));
+    }
     if session_id.is_some()
         && opts
             .get(crate::graph_backend::EXTRACTOR_OPT)
@@ -302,6 +346,82 @@ pub async fn run_remember(
     )
     .await
     .map_err(|e| SdkError::Runtime(format!("remember failed: {e}")))?;
+
+    crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "remember").await;
+
+    serde_json::to_value(&result)
+        .map_err(|e| SdkError::Runtime(format!("failed to serialize RememberResult: {e}")))
+}
+
+/// A refused argument is a validation error carrying Python's message as is;
+/// anything else failed the remember.
+fn remember_error(error: cognee::api::ApiError) -> SdkError {
+    match error {
+        cognee::api::ApiError::InvalidArgument(message) => SdkError::Validation(message),
+        other => SdkError::Runtime(format!("remember failed: {other}")),
+    }
+}
+
+/// An optional string option; present but not a string is a validation error.
+fn opt_str<'a>(opts: &'a serde_json::Value, key: &str) -> Result<Option<&'a str>, SdkError> {
+    match opts.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s.as_str())),
+        Some(_) => Err(SdkError::Validation(format!("`{key}` must be a string"))),
+    }
+}
+
+/// An optional boolean option; present but not a boolean is a validation error.
+fn opt_bool(opts: &serde_json::Value, key: &str) -> Result<Option<bool>, SdkError> {
+    match opts.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(SdkError::Validation(format!("`{key}` must be a boolean"))),
+    }
+}
+
+/// `remember` with `contentType: "code"`: index local repositories as a code
+/// graph ([`remember_code`]). Keyless: no LLM or graph extractor is resolved.
+/// `nodeSet` is accepted and ignored, as in Python; `raiseOnError` (default
+/// `true`, Python's default) set to `false` records a failed repository on
+/// its item instead of failing the call. `indexVectors: true` also embeds the
+/// code nodes through the handle's embedding engine (the default makes no
+/// embedding call).
+async fn run_remember_code(
+    state: &HandleState,
+    inputs: Vec<cognee::models::DataInput>,
+    dataset_name: &str,
+    tenant_id: Option<uuid::Uuid>,
+    opts: &serde_json::Value,
+) -> Result<serde_json::Value, SdkError> {
+    let raise_on_error = opt_bool(opts, "raiseOnError")?.unwrap_or(true);
+    let index_vectors = opt_bool(opts, "indexVectors")?.unwrap_or(false);
+    let svc = state.services().await?;
+    // Nothing is extracted, but a graph extractor selection the caller made
+    // is still checked (shape, and registered), as for a keyless cognify of
+    // code items; the configured default is not.
+    crate::graph_backend::check_explicit_graph_backend(&svc.component_manager, opts)?;
+    let owner_id = state.owner_id().await?;
+    let result = remember_code(RememberCodeParams {
+        data: inputs,
+        dataset_name: dataset_name.to_string(),
+        owner_id,
+        tenant_id,
+        dataset_id: None,
+        node_set: None,
+        repo_credentials: opt_str(opts, "repoCredentials")?.map(str::to_string),
+        index_vectors,
+        embedding_engine: index_vectors.then(|| svc.embedding_engine.clone()),
+        raise_on_error,
+        add_pipeline: svc.add_pipeline.clone(),
+        storage: svc.storage.clone(),
+        graph_db: svc.graph_db.clone(),
+        vector_db: svc.vector_db.clone(),
+        db: svc.database.clone(),
+        cognify_config: Arc::new(svc.cognify_config.clone()),
+    })
+    .await
+    .map_err(remember_error)?;
 
     crate::ops::lifecycle::checkpoint_graph_after(svc.as_ref(), "remember").await;
 

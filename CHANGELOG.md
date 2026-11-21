@@ -18,6 +18,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Keyless `remember(content_type="code")` (SDK-1053).** A port of the
+  `content_type == "code"` branch of Python's `_remember_inner`:
+  `cognee::api::remember_code` (`RememberCodeParams`) stores each repository
+  as one code-repo `Data` row without its documents
+  (`AddPipeline::add_code_repository`), builds its code graph in a
+  `code_graph_pipeline` run (`cognee_cognify::run_code_graph_pipeline`, the
+  same builder as cognify's CODE_REPO route) and stamps the row complete under
+  `cognify_pipeline` and `code_graph_pipeline`. No LLM is built or
+  validated. Options are checked in Python's order (`content_type`,
+  `index_vectors`, `repo_credentials`, `branch`, `session_id`); result items
+  carry Python's `{kind: "code_repository", source, path, id,
+  pipeline_run_id}` shape, with `status: "errored"` / `error` for a failed
+  repository when `raise_on_error=false`. Telemetry event
+  `cognee.remember.code_graph`. New `ProvenanceDb::mark_pipeline_status_complete`
+  and `CODE_GRAPH_PIPELINE_NAME`. Bindings gain `contentType`, `nodeSet`,
+  `raiseOnError` on `remember`; the CLI gains `remember --content-type code`.
+
+- **Incremental code graph re-ingest (SDK-1053).** A reload of an unchanged
+  snapshot is skipped when the repository node's stamp matches (snapshot id
+  and mapping version); otherwise the load sweeps the code nodes and edges
+  the snapshot no longer derives, strips node-set tags the call no longer
+  passes, and stamps the snapshot last, as Python's `extract_code_graph`
+  does. `last_delta` reports real removal counts. New
+  `GraphDBTrait::delete_edge_triples(&[EdgeKey])` (deletes edges, keeps their
+  endpoints) with a generic default, so out-of-tree backends keep compiling;
+  Ladybug, pggraph and the mock override it. `forget(data_id)` of a code-repo
+  row removes only that repository's graph. **Signature change:**
+  `cognee_code_graph::extract_code_graph` takes the graph.
+
+- **Git URLs for code repositories (SDK-1053).** New
+  `cognee_ingestion::resolve_repo` (re-exported as `cognee::add::resolve_repo`)
+  ports Python's `resolve_repo.py`: shallow clones with symlinks and LFS off,
+  branch checks, refresh by fast-forward pull, credentials passed only as
+  environment-level git config and scrubbed from errors, and Python's
+  outbound address check before an http(s) clone. `remember(content_type=
+  "code")` accepts git URLs and `repo_credentials` (a refused gate is the new
+  `ApiError::CodeRepositoryForbidden`, 403), and `add(<GitHub/GitLab URL>)`
+  clones the repository and stores a code-repo manifest plus its documents
+  (`AddParams::branch`). New config keys `code_graph.clones_dir`
+  (`COGNEE_REPOS_DIR`, default `~/.cognee/repos`) and
+  `code_graph.allow_http_requests` (`ALLOW_HTTP_REQUESTS`). Remote
+  repositories are refused until a host wires `AddPipeline::with_repo_sources`.
+  Beyond Python: a new clone is made in a `<name>.partial-<random>` sibling
+  and moved into place only once complete, so an interrupted clone is never
+  reused; an API request's git follows no http redirect
+  (`http.followRedirects=false`); git's stderr is scrubbed of credentials
+  before it is cut to its tail. As in Python, an empty `repo_credentials` is
+  no token.
+
+- **A dataset's code repositories as one enola cluster (SDK-1053).** Ports
+  Python's `cluster.py`: one enola run per dataset (`run_enola_cluster`) gives
+  the edges between repositories, and each member is loaded, skip-checked and
+  stamped under its own `Data` row (`load_cluster_member`). cognify's
+  CODE_REPO route loads the whole cluster once per run;
+  `remember(content_type="code")` plans the refresh under the dataset lock
+  and rebuilds up to `CLUSTER_INLINE_REBUILD_LIMIT` existing repositories
+  inline, marking the rest for the next cognify. New
+  `ProvenanceDb::clear_pipeline_status_for_data`.
+
+- **`remember(content_type="code", index_vectors=true)` (SDK-1053).** The
+  opt-in vector index of a code graph, as Python's `index_vectors`: the code
+  nodes the call writes are also embedded (each node's `name` into
+  `{type}_name`, the retrieval texts of their structural edges into
+  `EdgeType_relationship_name`), after their graph rows; the default still
+  makes no embedding call. It applies to the call's own repositories only
+  (the dataset's other repositories, rebuilt in the same cluster run, stay
+  graph-only), and the cognify routes stay graph-only. `index_vectors=true` was
+  refused before. API: `RememberCodeParams::{index_vectors, embedding_engine}`
+  (`InvalidArgument` when asked without an engine), bindings `indexVectors`,
+  CLI `remember --index-vectors`; `cognee_code_graph::{CodeGraphVectors,
+  index_code_graph_vectors, IndexedCollections}` and new
+  `CodeGraphError::{Embedding, Vector}` variants. **Signature changes:**
+  `load_code_graph`, `load_cluster_member`, `extract_code_repo_graph` and
+  `add_code_graph_data_points` take a trailing `Option<&CodeGraphVectors>`;
+  `cognee_cognify::{run_code_routes, make_code_routes_task,
+  run_code_graph_pipeline}` and `code_cluster::refresh_dataset_code_graph` a
+  trailing vectors option; `code_cluster::MemberRun` gains `index_vectors`.
+
+- **The per-file CODE cognify route (SDK-1053).** cognify loads a lone code
+  file (a row stamped `system_metadata.source = "code"` by `code_loader`)
+  into the deterministic code graph instead of failing the run with
+  `CognifyRouteError::UnsupportedRoute`, as Python's `code_files.py` does:
+  its stored text is staged under its original file name in a temporary
+  directory named `<file name>_<data id>` (plus a `tsconfig.json` for
+  `.js`/`.jsx`) and enola runs on it, with no LLM and no embedding call. The
+  nodes are untagged and recorded in the ownership ledger under the row and
+  the run; a file that fails to load is a per-item failure
+  (`FailureStage::CodeGraph`), like a repo item. Code files and code
+  projects in one dataset share one run. API: `cognee_code_graph::
+  {extract_code_file_graph, stage_code_file, staged_repo_name,
+  original_file_name, is_code_sourced, detection_markers,
+  CODE_FILE_STAGING_PREFIX}`; new `CodeGraphError::{InvalidCodeItem, Staging}`
+  variants (the enum is not `#[non_exhaustive]`);
+  `cognee_models::code_repo::{SOURCE_CODE, system_metadata_source}`
+  (`routing::SOURCE_CODE` re-exports it, and `routing::metadata_source`
+  delegates).
+
 - **`Data.system_metadata` and the cognify route policy (SDK-1053).** The
   `data` table gains Python's nullable `system_metadata` JSON column
   (migration `m20261118_000001_data_system_metadata`, Python alembic
@@ -258,6 +355,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file
+  with one of enola's extensions (`loaders::code::SUPPORTED_CODE_EXTENSIONS`,
+  Python's `SUPPORTED_CODE_EXTENSIONS`: `.py`, `.rs`, `.ts`, `.go`, ...) is
+  claimed by name by the new `code_loader` (`loaders::code::CodeLoader`,
+  registered as `"code"` in `LoaderRegistry::default_registry`), as Python's
+  `code_loader.py` does. Its text is strict UTF-8 with Python's universal
+  newlines and is stored as `code_<content_hash>.<ext lowercased>` instead
+  of `text_<content_hash>.txt`; `loader_engine` is `code_loader` and the row
+  is stamped `system_metadata = {"source": "code"}` unless the item carries
+  its own stamp. `get_loader_name` returns `code_loader` for these
+  extensions. `preferred_loaders = ["text_loader"]` keeps the old plain-text
+  reading. cognify loads such a row down the per-file CODE route (see
+  "The per-file CODE cognify route" under Added). Project directories are not affected.
+  **cognify now needs the `enola` binary (0.5.1) for such rows**: on `PATH`,
+  or named by `code_graph.enola_path` (`ENOLA_PATH`). Without it the first
+  code file fails its item, and under the default fail-fast policy the whole
+  cognify run, so the dataset's other documents are not cognified either.
+  Install enola wherever cognify runs (Python ships it as its core
+  `enola-cli==0.5.1` dependency; the Rust crates do not bundle it), or keep
+  the old reading with `preferred_loaders = ["text_loader"]`. Cloning git
+  URLs (`remember(content_type="code")`, `add(<GitHub/GitLab URL>)`) also
+  needs `git` on `PATH`. The file's text is no longer chunked or embedded,
+  and Rust has no CODE search type yet (SDK-1056).
+
 - **A `Binary` upload is stored as it arrived (SDK-1592).** An add of
   `DataInput::Binary` (bare or in a `DataItem`; the `binary` input of every
   binding) now keeps the upload at `<content_hash>/<file name>`, as Python
@@ -328,8 +449,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extract_code_repo_graph`, no LLM, no embedding) in the same run as the
   standard items; a repo item that fails to load is a per-item failure
   under the failure policy (`FailureStage::CodeGraph`), and one that loaded
-  counts as a survivor. A per-file code item, a DLT source stamped in
-  `system_metadata` and a legacy `dlt` row fail the whole run. Without an
+  counts as a survivor. A DLT source stamped in `system_metadata` and a
+  legacy `dlt` row fail the whole run. Without an
   LLM (`AddPipeline::with_llm_available(false)`, set by the services and the
   CLI) a code project's documents are left out at add and the repo item
   cognifies keyless. The manifest's data id is pinned to (user, dataset,
@@ -856,8 +977,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails with `IngestionError::NoLoaderForFile` (Python: "No loader found")
   instead of falling back to the text loader. **Differences kept:** a local
   `.html` file still goes to the HTML text extractor and keeps its `html` /
-  `text/html` metadata (D14), and Rust has no `code_loader`, so source files
-  are read by the text loader.
+  `text/html` metadata (D14). (Source files have since moved to
+  `code_loader`; see "Source files are read by `code_loader`".)
 
 - **URL add stores the raw page and `external_metadata` is Python's (SDK-1039).**
   `add` of an `http(s)` URL that returns HTML now stores the page as Python's

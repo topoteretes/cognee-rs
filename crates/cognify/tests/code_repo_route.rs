@@ -1,4 +1,5 @@
-//! `add(<project dir>)` then `cognify()`: the CODE_REPO route (SDK-1053 O4).
+//! `add(<project dir>)` then `cognify()`: the CODE_REPO route (SDK-1053 O4),
+//! and `add(<code file>)` then `cognify()`: the per-file CODE route (O9).
 //!
 //! A code project directory is added as one repo manifest item plus its
 //! documents; cognify runs the manifest down the code graph load and the
@@ -29,7 +30,7 @@ use cognee_cognify::{
     CognifyConfig, CognifyError, CognifyInput, CognifyResult, FailurePolicy, FailureStage,
     FailureStop, RollbackScope, cognify,
 };
-use cognee_database::ops::data::{get_cognify_completed_data_ids, update_data_system_metadata};
+use cognee_database::ops::data::get_cognify_completed_data_ids;
 use cognee_database::ops::datasets::get_dataset_by_name_in_tenant;
 use cognee_database::{
     DatabaseConnection, IngestDb, PipelineRunRepository, PipelineRunStatus,
@@ -384,52 +385,371 @@ async fn a_keyless_add_keeps_only_the_code_graph() {
     );
 }
 
-/// A per-file code item has no Rust route yet: the run fails on it before any
-/// enola work, and nothing is marked complete.
-#[tokio::test]
-async fn a_per_file_code_item_fails_the_run() {
-    let (_root, repo) = project();
-    let stack = Stack::new().await;
-    let items = stack.add(&repo, true, None).await;
-    let (_, documents) = split(&items);
-    let mut document = documents[0].clone();
-    let stamp = r#"{"source": "code"}"#;
-    update_data_system_metadata(&stack.db, document.id, Some(stamp))
-        .await
-        .unwrap();
-    document.system_metadata = Some(stamp.to_string());
+// ── The per-file CODE route (SDK-1053 O9, Python `code_files.py`) ─────────
 
-    let error = stack
-        .cognify(
-            items
-                .iter()
-                .map(|item| {
-                    if item.id == document.id {
-                        document.clone()
-                    } else {
-                        item.clone()
-                    }
-                })
-                .collect(),
-            &config(true),
+/// Write `files` (`(relative path, content)`) under a new temporary
+/// directory and return their absolute paths.
+fn code_files(files: &[(&str, &str)]) -> (tempfile::TempDir, Vec<PathBuf>) {
+    let root = tempfile::tempdir().unwrap();
+    let paths = files
+        .iter()
+        .map(|(name, content)| {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.canonicalize().unwrap()
+        })
+        .collect();
+    (root, paths)
+}
+
+impl Stack {
+    /// Add each of `paths` (files or project directories) to the `code`
+    /// dataset, in one add.
+    async fn add_paths(&self, paths: &[PathBuf], node_set: Option<&[&str]>) -> Vec<Data> {
+        let pipeline = AddPipeline::new(
+            Arc::clone(&self.storage),
+            Arc::clone(&self.db) as Arc<dyn IngestDb>,
+        )
+        .with_thread_pool(Self::thread_pool())
+        .with_graph_db(Arc::clone(&self.graph_db) as Arc<dyn GraphDBTrait>)
+        .with_vector_db(Arc::clone(&self.vector_db) as Arc<dyn VectorDB>)
+        .with_database(self.db.clone())
+        .with_llm_available(true);
+        let params = AddParams {
+            node_set: node_set.map(|names| names.iter().map(|name| name.to_string()).collect()),
+            ..AddParams::default()
+        };
+        pipeline
+            .add_with_params(
+                paths
+                    .iter()
+                    .map(|path| DataInput::FilePath(path.to_string_lossy().into_owned()))
+                    .collect(),
+                "code",
+                self.owner_id,
+                None,
+                &params,
+            )
+            .await
+            .expect("add the paths")
+    }
+
+    /// The graph's nodes of class `node_type`.
+    async fn nodes_of_type(&self, node_type: &str) -> Vec<(String, cognee_graph::NodeData)> {
+        self.nodes()
+            .await
+            .into_iter()
+            .filter(|(_, node)| node["type"] == node_type)
+            .collect()
+    }
+
+    /// The ledger's node ids owned by `data_id`, each checked to name a run.
+    async fn owned_node_ids(&self, data_id: Uuid) -> BTreeSet<String> {
+        let ledger = cognee_database::ops::graph_storage::get_nodes_by_dataset(
+            &self.db,
+            self.dataset_id().await,
         )
         .await
-        .unwrap_err();
+        .unwrap();
+        ledger
+            .iter()
+            .filter(|row| row.data_id == data_id)
+            .inspect(|row| assert!(row.pipeline_run_id.is_some(), "{row:?}"))
+            .map(|row| row.slug.to_string())
+            .collect()
+    }
+}
+
+/// A source file added on its own is a one-file repository: `add(file.py)`
+/// + `cognify()` loads its code graph through a staged enola run, with no
+/// LLM and no graph extractor, under a repository named
+/// `<file name>_<data id>` (Python `_staged_repo_name`), owned by the row in
+/// the ledger, in one completed run.
+#[tokio::test]
+async fn a_code_file_cognifies_into_a_one_file_repository_without_the_llm() {
+    let (_root, paths) = code_files(&[("shop/payments.py", "def pay():\r\n    pass\r\n")]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, None).await;
+    assert_eq!(items.len(), 1);
+    let item = items[0].clone();
+    assert_eq!(cognify_route_for(&item), Ok(CognifyRoute::Code));
+    assert!(!cognee_cognify::routing::routes_need_llm(&items));
+
+    let result = stack
+        .cognify(items.clone(), &config(false))
+        .await
+        .expect("cognify completes");
     assert!(
-        matches!(
-            error,
-            CognifyError::Route(CognifyRouteError::UnsupportedRoute {
-                route: CognifyRoute::Code,
-                ..
-            })
-        ),
-        "{error}"
+        result.chunks.is_empty(),
+        "nothing went down the standard route"
+    );
+
+    let repositories = stack.nodes_of_type("CodeRepository").await;
+    assert_eq!(repositories.len(), 1, "{repositories:?}");
+    let (repository_id, repository) = &repositories[0];
+    assert_eq!(repository["name"], format!("payments.py_{}", item.id));
+    assert!(
+        repository["last_snapshot_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("sha256:staged-")),
+        "the load stamped the repository: {repository:?}"
+    );
+    let modules = stack.nodes_of_type("CodeModule").await;
+    assert_eq!(modules.len(), 1, "{modules:?}");
+    assert_eq!(modules[0].1["name"], "payments");
+
+    let owned = stack.owned_node_ids(item.id).await;
+    assert!(owned.contains(repository_id), "{owned:?}");
+    assert!(owned.contains(&modules[0].0), "{owned:?}");
+
+    assert_eq!(
+        stack.cognify_runs().await,
+        vec![PipelineRunStatus::Completed]
+    );
+    assert_eq!(stack.completed(&items).await, HashSet::from([item.id]));
+
+    // The staging directory is gone.
+    let staged = std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("cognee_code_")
+        })
+        .any(|entry| {
+            entry
+                .path()
+                .join(format!("payments.py_{}", item.id))
+                .exists()
+        });
+    assert!(!staged, "the staged copy is removed after the load");
+}
+
+/// Plain JavaScript is only claimed by enola next to a `tsconfig.json`, so
+/// staging fabricates one for `.js` / `.jsx` (Python `_DETECTION_MARKERS`);
+/// without it the fake enola, like the real one, finds no module.
+#[tokio::test]
+async fn a_javascript_file_is_staged_with_its_tsconfig_marker() {
+    let (_root, paths) = code_files(&[
+        ("web/app.js", "export const app = 1;\n"),
+        ("web/view.jsx", "export const View = () => null;\n"),
+    ]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, None).await;
+    assert_eq!(items.len(), 2);
+    stack.cognify(items, &config(false)).await.unwrap();
+
+    let names: BTreeSet<String> = stack
+        .nodes_of_type("CodeModule")
+        .await
+        .into_iter()
+        .map(|(_, node)| node["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["app".to_string(), "view".to_string()])
     );
     assert!(
-        stack.code_node_ids().await.is_empty(),
-        "no enola work was done"
+        stack
+            .nodes()
+            .await
+            .iter()
+            .all(|(_, node)| node["name"] != "tsconfig"),
+        "the marker itself yields no node"
     );
-    assert_eq!(stack.cognify_runs().await, vec![PipelineRunStatus::Errored]);
+}
+
+/// Two files with one name are two repositories: the row id in the staged
+/// repository name keeps their graphs (and sweeps) apart.
+#[tokio::test]
+async fn same_named_files_are_separate_repositories() {
+    let (_root, paths) = code_files(&[
+        ("a/utils.py", "def a():\n    pass\n"),
+        ("b/utils.py", "def b():\n    pass\n"),
+    ]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, None).await;
+    assert_eq!(items.len(), 2);
+    stack.cognify(items.clone(), &config(false)).await.unwrap();
+
+    let names: BTreeSet<String> = stack
+        .nodes_of_type("CodeRepository")
+        .await
+        .into_iter()
+        .map(|(_, node)| node["name"].as_str().unwrap().to_string())
+        .collect();
+    let expected: BTreeSet<String> = items
+        .iter()
+        .map(|item| format!("utils.py_{}", item.id))
+        .collect();
+    assert_eq!(names, expected);
+    assert_eq!(stack.nodes_of_type("CodeModule").await.len(), 2);
+    let first = stack.owned_node_ids(items[0].id).await;
+    let second = stack.owned_node_ids(items[1].id).await;
+    assert!(!first.is_empty() && !second.is_empty());
+    assert!(first.is_disjoint(&second), "{first:?} / {second:?}");
+}
+
+/// The per-file route is untagged, as in Python: an add's node set does not
+/// reach the file's code nodes.
+#[tokio::test]
+async fn the_add_node_set_does_not_tag_a_code_file() {
+    let (_root, paths) = code_files(&[("payments.py", "def pay():\n    pass\n")]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, Some(&["team-a"])).await;
+    stack.cognify(items, &config(false)).await.unwrap();
+
+    let code_nodes = stack.code_node_ids().await;
+    assert!(!code_nodes.is_empty());
+    let (_, edges) = stack.graph_db.get_graph_data().await.unwrap();
+    assert!(
+        edges.iter().all(|(source, _, relationship, _)| {
+            relationship != "belongs_to_set" || !code_nodes.contains(source)
+        }),
+        "no code node belongs to a node set"
+    );
+}
+
+/// A project directory, a lone code file and the project's README in one
+/// dataset are one run: the repository and the file each get their code
+/// graph, the README goes down the standard route, and every item is marked
+/// complete by that run.
+#[tokio::test]
+async fn a_code_file_beside_a_project_runs_in_one_pipeline_run() {
+    let (_root, repo) = project();
+    let (_files, paths) = code_files(&[("scripts/tool.py", "def tool():\n    pass\n")]);
+    let stack = Stack::new().await;
+    let items = stack
+        .add_paths(&[repo.clone(), paths[0].clone()], None)
+        .await;
+    assert_eq!(
+        items.len(),
+        3,
+        "the manifest, README.md and tool.py: {items:?}"
+    );
+    let file = items
+        .iter()
+        .find(|item| cognify_route_for(item) == Ok(CognifyRoute::Code))
+        .expect("the code file item")
+        .clone();
+
+    let result = stack.cognify(items.clone(), &config(true)).await.unwrap();
+    assert!(!result.chunks.is_empty(), "the README was chunked");
+    let names: BTreeSet<String> = stack
+        .nodes_of_type("CodeRepository")
+        .await
+        .into_iter()
+        .map(|(_, node)| node["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&format!("tool.py_{}", file.id)), "{names:?}");
+    assert_eq!(names.len(), 2, "the project and the file: {names:?}");
+    assert_eq!(
+        stack.cognify_runs().await,
+        vec![PipelineRunStatus::Completed]
+    );
+    assert_eq!(stack.completed(&items).await.len(), 3);
+}
+
+/// A code file whose stored text cannot be read is a per-item failure, as
+/// an item's tasks fail in Python's per-item run: under `RunToEnd` +
+/// `FailedItems` the other file survives and is marked complete.
+#[tokio::test]
+async fn an_unreadable_code_file_is_a_per_item_failure() {
+    let (_root, paths) = code_files(&[
+        ("good.py", "def good():\n    pass\n"),
+        ("bad.py", "def bad():\n    pass\n"),
+    ]);
+    let stack = Stack::new().await;
+    let mut items = stack.add_paths(&paths, None).await;
+    let bad = items
+        .iter_mut()
+        .find(|item| item.original_data_location.ends_with("bad.py"))
+        .unwrap();
+    bad.raw_data_location = format!("{}.missing", bad.raw_data_location);
+    let bad_id = bad.id;
+
+    let result = stack
+        .cognify(
+            items.clone(),
+            &policy(
+                config(false),
+                FailureStop::RunToEnd,
+                RollbackScope::FailedItems,
+            ),
+        )
+        .await
+        .expect("the good file survives");
+    let failed: Vec<Uuid> = result.failures.failed_items().iter().copied().collect();
+    assert_eq!(failed, vec![bad_id]);
+    assert_eq!(result.failures.total_items(), 2);
+    let good_id = items.iter().find(|item| item.id != bad_id).unwrap().id;
+    assert_eq!(stack.completed(&items).await, HashSet::from([good_id]));
+    assert_eq!(stack.nodes_of_type("CodeModule").await.len(), 1);
+
+    // Under the default policy the item's own error fails the run.
+    let stack = Stack::new().await;
+    let mut items = stack.add_paths(&paths, None).await;
+    for item in &mut items {
+        item.raw_data_location = format!("{}.missing", item.raw_data_location);
+    }
+    let error = stack.cognify(items, &config(false)).await.unwrap_err();
+    assert!(matches!(error, CognifyError::StorageError(_)), "{error}");
+}
+
+/// Stored text that is not UTF-8 fails its item as Python's strict text-mode
+/// read does (`UnicodeDecodeError`, a `ValueError`): the run errors on it
+/// under the default policy, and no code node is written for it.
+#[tokio::test]
+async fn a_code_file_that_is_not_utf8_fails_its_item() {
+    let (_root, paths) = code_files(&[("latin.py", "x = 1\n")]);
+    let stack = Stack::new().await;
+    let mut items = stack.add_paths(&paths, None).await;
+    items[0].raw_data_location = stack
+        .storage
+        .store(b"x = '\xe9'\n", "latin_not_utf8.py")
+        .await
+        .unwrap();
+
+    let error = stack.cognify(items, &config(false)).await.unwrap_err();
+    match &error {
+        CognifyError::CodeGraph(inner) => {
+            assert!(
+                matches!(inner, cognee_code_graph::CodeGraphError::InvalidCodeItem(_)),
+                "{inner}"
+            );
+            assert_eq!(inner.name(), "ValueError");
+            assert!(inner.to_string().contains("not UTF-8"), "{inner}");
+        }
+        other => panic!("expected a code graph error, got {other}"),
+    }
+    assert!(stack.code_node_ids().await.is_empty());
+}
+
+/// The stored text is read with universal newlines, as Python's text mode
+/// reads it: a CRLF file and its LF twin stage byte-identical content, so
+/// enola sees the same snapshot (the fake enola's snapshot id is a checksum
+/// of the staged files).
+#[tokio::test]
+async fn crlf_text_is_staged_with_universal_newlines() {
+    let (_root, paths) = code_files(&[
+        ("crlf/mod.py", "def f():\r\n    pass\r\n"),
+        ("lf/mod.py", "def f():\n    pass\n"),
+    ]);
+    let stack = Stack::new().await;
+    let items = stack.add_paths(&paths, None).await;
+    assert_eq!(items.len(), 2, "{items:?}");
+    stack.cognify(items, &config(false)).await.unwrap();
+
+    let snapshots: BTreeSet<String> = stack
+        .nodes_of_type("CodeRepository")
+        .await
+        .into_iter()
+        .map(|(_, node)| node["last_snapshot_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(snapshots.len(), 1, "{snapshots:?}");
 }
 
 /// A repository that moved after the add fails the run with Python's message.
@@ -727,6 +1047,8 @@ async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
                 &code_graph,
                 None,
                 failure_policy,
+                &cognee_cognify::CodeRepoLoadMode::Dataset,
+                None,
             )
             .await
         }
@@ -770,4 +1092,158 @@ async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
         "{error:?}"
     );
     assert!(stack.code_node_ids().await.is_empty(), "nothing was loaded");
+}
+
+/// A Python project named `name` under `root` whose fake enola cluster run
+/// copies the `cluster` snapshot (a frontend `ui` reaching a backend `golf`).
+fn cluster_project(root: &Path, name: &str) -> PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("pyproject.toml"),
+        format!("[project]\nname = \"{name}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(repo.join("main.py"), "def main():\n    pass\n").unwrap();
+    // Whichever row comes first leads the cluster run.
+    std::fs::write(repo.join(".fake-enola"), "cluster:cluster").unwrap();
+    repo.canonicalize().unwrap()
+}
+
+#[tokio::test]
+async fn a_dataset_of_two_repositories_cognifies_as_one_enola_cluster() {
+    let root = tempfile::tempdir().unwrap();
+    let golf = cluster_project(root.path(), "golf");
+    let ui = cluster_project(root.path(), "ui");
+    let stack = Stack::new().await;
+    let mut items = stack.add(&golf, false, None).await;
+    items.extend(stack.add(&ui, false, None).await);
+    assert_eq!(items.len(), 2, "one manifest per repository: {items:?}");
+    let dataset_id = stack.dataset_id().await;
+
+    stack
+        .cognify(items.clone(), &config(false))
+        .await
+        .expect("cognify completes");
+
+    // One cluster run into the dataset's own directory of every member; no
+    // per-repository run.
+    let output_dir = cognee_code_graph::cluster_output_dir(dataset_id);
+    for repo in [&golf, &ui] {
+        assert!(repo.join(&output_dir).join("facts.jsonl").is_file());
+        assert!(!repo.join(".enola").exists(), "no single run on {repo:?}");
+    }
+    let config_seen = [&golf, &ui]
+        .iter()
+        .filter(|repo| repo.join(&output_dir).join("cluster-config.yaml").is_file())
+        .count();
+    assert_eq!(config_seen, 1, "enola ran once");
+
+    // The edge between the repositories.
+    let id = |repo: &str, kind: &str, name: &str| {
+        cognee_code_graph::fact_node_id(repo, kind, name).to_string()
+    };
+    let (_, edges) = stack.graph_db.get_graph_data().await.unwrap();
+    assert!(edges.iter().any(|(source, target, relationship, _)| {
+        *source == id("ui", "route", "/api/rounds")
+            && *target == id("golf", "route", "/api/rounds")
+            && relationship == "reaches_route"
+    }));
+
+    // Each repository's nodes are owned by its own row.
+    let row_of = |repo: &Path| {
+        items
+            .iter()
+            .find(|item| {
+                cognee_cognify::code_cluster::code_repo_path(item).as_deref() == Some(repo)
+            })
+            .unwrap()
+            .id
+    };
+    let ledger = cognee_database::ops::graph_storage::get_nodes_by_dataset(&stack.db, dataset_id)
+        .await
+        .unwrap();
+    let owner = |node_id: &str| -> BTreeSet<Uuid> {
+        ledger
+            .iter()
+            .filter(|row| row.slug.to_string() == node_id)
+            .map(|row| row.data_id)
+            .collect()
+    };
+    assert_eq!(
+        owner(&id("golf", "repository", "golf")),
+        BTreeSet::from([row_of(&golf)])
+    );
+    assert_eq!(
+        owner(&id("ui", "symbol", "api.fetchRounds")),
+        BTreeSet::from([row_of(&ui)])
+    );
+
+    // Both repo items are complete.
+    let ids: Vec<Uuid> = items.iter().map(|item| item.id).collect();
+    let completed = get_cognify_completed_data_ids(&stack.db, dataset_id, &ids)
+        .await
+        .unwrap();
+    assert_eq!(completed.len(), 2);
+
+    // After a delete, the survivors are marked for the next cognify
+    // (Python's `mark_dataset_code_repos_for_rebuild`): their completion
+    // stamps go, so the next run re-extracts the cluster instead of skipping.
+    cognee_cognify::code_cluster::mark_dataset_code_repos_for_rebuild(&*stack.db, dataset_id).await;
+    let completed = get_cognify_completed_data_ids(&stack.db, dataset_id, &ids)
+        .await
+        .unwrap();
+    assert!(completed.is_empty(), "{completed:?}");
+}
+
+#[tokio::test]
+async fn a_failed_cluster_run_fails_every_repo_item_of_the_run() {
+    let root = tempfile::tempdir().unwrap();
+    let golf = cluster_project(root.path(), "golf");
+    let ui = cluster_project(root.path(), "ui");
+    std::fs::write(golf.join(".fake-enola"), "fail").unwrap();
+    std::fs::write(ui.join(".fake-enola"), "fail").unwrap();
+    let stack = Stack::new().await;
+    let mut items = stack.add(&golf, false, None).await;
+    items.extend(stack.add(&ui, false, None).await);
+    let dataset_id = stack.dataset_id().await;
+
+    let input = CognifyInput {
+        data_items: items.clone(),
+        dataset_id,
+        user_id: Some(stack.owner_id),
+        tenant_id: None,
+    };
+    let routed = run_code_routes(
+        &input,
+        &*stack.storage,
+        &*stack.graph_db,
+        &*stack.db,
+        &config(false).code_graph,
+        None,
+        FailurePolicy {
+            stop: FailureStop::RunToEnd,
+            ..FailurePolicy::default()
+        },
+        &cognee_cognify::CodeRepoLoadMode::Dataset,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Both items fail with enola's error; enola ran once (the second item
+    // replays the verdict instead of running it again).
+    let failures: Vec<_> = routed
+        .failures
+        .entries()
+        .iter()
+        .filter(|failure| failure.stage == FailureStage::CodeGraph)
+        .collect();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures
+            .iter()
+            .all(|failure| failure.error.contains("exited with code 3")),
+        "{failures:?}"
+    );
 }

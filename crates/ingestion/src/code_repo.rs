@@ -107,13 +107,9 @@ pub const REPO_SKIPPED_MEDIA_EXTENSIONS: &[&str] = &[
     "wav", "webm",
 ];
 
-/// Source-file extensions of the languages enola extracts. Python's
-/// `SUPPORTED_CODE_EXTENSIONS` (`cognee/infrastructure/loaders/core/code_loader.py`).
-pub const SUPPORTED_CODE_EXTENSIONS: &[&str] = &[
-    "c", "cc", "cpp", "cs", "cxx", "dart", "fs", "go", "h", "hcl", "hh", "hpp", "java", "js",
-    "jsx", "kt", "kts", "php", "proto", "py", "rake", "rb", "rs", "scala", "svelte", "swift", "tf",
-    "ts", "tsx", "vb", "vue",
-];
+/// Source-file extensions of the languages enola extracts, owned by the code
+/// loader ([`crate::loaders::code`]).
+pub use crate::loaders::code::SUPPORTED_CODE_EXTENSIONS;
 
 /// Every extension a non-code loader claims by name. Python's
 /// `_document_extensions()` evaluated over its default loaders (text, PDF,
@@ -422,10 +418,18 @@ pub fn build_repo_manifest(directory: &Path, covered: &[PathBuf]) -> io::Result<
 }
 
 /// The `system_metadata` stamp of a repo item, as Python's `json.dumps`
-/// writes the dict: `{"source": "code_repo", "repo_path": ..., "file_count": ...}`.
-pub fn code_repo_system_metadata(directory: &Path, file_count: usize) -> String {
+/// writes the dict: `{"source": "code_repo", "repo_path": ..., "file_count": ...}`,
+/// plus `"repo_url"` (credential-free) for a cloned remote repository.
+pub fn code_repo_system_metadata(
+    directory: &Path,
+    file_count: usize,
+    source_url: Option<&str>,
+) -> String {
+    let repo_url = source_url
+        .map(|url| format!(", \"repo_url\": {}", py_json_string(url)))
+        .unwrap_or_default();
     format!(
-        "{{\"source\": \"{SOURCE_CODE_REPO}\", \"repo_path\": {}, \"file_count\": {file_count}}}",
+        "{{\"source\": \"{SOURCE_CODE_REPO}\", \"repo_path\": {}, \"file_count\": {file_count}{repo_url}}}",
         py_json_string(&path_text(directory))
     )
 }
@@ -462,6 +466,25 @@ pub fn code_repo_stamp_path(system_metadata: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The identity a code-repository route stamp pins its data id to
+/// ([`code_repo_data_id`]): its `repo_path`, except for a cloned remote
+/// repository (a stamp with `repo_url`), which is keyed on the default
+/// branch's clone directory, as Python passes `identity=clone_dir(source_url)`
+/// (`resolve_code_repository_url`). Rows of one URL keep one id whichever
+/// branch was cloned, since their code graphs share the repository's node
+/// ids. `None` for any other stamp.
+pub fn code_repo_stamp_identity(system_metadata: Option<&str>) -> Option<String> {
+    let repo_path = code_repo_stamp_path(system_metadata)?;
+    let stamp: serde_json::Value = serde_json::from_str(system_metadata?).ok()?;
+    let Some(repo_url) = stamp.get("repo_url").and_then(serde_json::Value::as_str) else {
+        return Some(repo_path);
+    };
+    let clones_dir = Path::new(&repo_path).parent()?;
+    Some(path_text(&crate::resolve_repo::clone_dir(
+        repo_url, None, clones_dir,
+    )))
+}
+
 /// What [`resolve_code_repository`] makes of a project directory.
 #[derive(Debug, Clone)]
 pub struct ResolvedCodeRepository {
@@ -486,7 +509,8 @@ pub struct ResolvedCodeRepository {
 ///
 /// The manifest's data id is pinned to `(user, dataset, repo path)` when it
 /// is stored ([`code_repo_data_id`]), so a re-add of the same repository
-/// updates one record.
+/// updates one record. `source_url` (credential-free) records where a cloned
+/// repository came from as `system_metadata["repo_url"]`.
 ///
 /// # Errors
 ///
@@ -495,6 +519,7 @@ pub fn resolve_code_repository(
     directory: &Path,
     include_documents: bool,
     llm_available: bool,
+    source_url: Option<&str>,
 ) -> io::Result<ResolvedCodeRepository> {
     let RepoPartition {
         covered,
@@ -524,7 +549,11 @@ pub fn resolve_code_repository(
         data: Box::new(DataInput::Text(manifest_text)),
         label: Some(format!("code_repo:{directory_name}")),
         external_metadata: None,
-        system_metadata: Some(code_repo_system_metadata(directory, covered.len())),
+        system_metadata: Some(code_repo_system_metadata(
+            directory,
+            covered.len(),
+            source_url,
+        )),
     };
 
     tracing::info!(
@@ -600,7 +629,7 @@ pub fn resolve_data_directories(
         let directory = fs::canonicalize(local).map_err(error)?;
         if detect_code_project(&directory) {
             let repository =
-                resolve_code_repository(&directory, true, llm_available).map_err(error)?;
+                resolve_code_repository(&directory, true, llm_available, None).map_err(error)?;
             resolved.push(repository.manifest_item);
             resolved.extend(
                 repository
@@ -926,7 +955,7 @@ mod tests {
 
     #[test]
     fn the_manifest_pin_reads_the_code_repo_stamp() {
-        let stamp = code_repo_system_metadata(Path::new("/src/shop"), 2);
+        let stamp = code_repo_system_metadata(Path::new("/src/shop"), 2, None);
         assert_eq!(
             code_repo_stamp_path(Some(&stamp)).as_deref(),
             Some("/src/shop")
@@ -953,8 +982,39 @@ mod tests {
     #[test]
     fn system_metadata_is_python_json() {
         assert_eq!(
-            code_repo_system_metadata(Path::new("/r\u{e9}po"), 3),
+            code_repo_system_metadata(Path::new("/r\u{e9}po"), 3, None),
             "{\"source\": \"code_repo\", \"repo_path\": \"/r\\u00e9po\", \"file_count\": 3}"
+        );
+        // Python appends `repo_url` last for a cloned repository.
+        assert_eq!(
+            code_repo_system_metadata(
+                Path::new("/c/github.com-o-r"),
+                1,
+                Some("https://github.com/o/r")
+            ),
+            "{\"source\": \"code_repo\", \"repo_path\": \"/c/github.com-o-r\", \"file_count\": 1, \"repo_url\": \"https://github.com/o/r\"}"
+        );
+    }
+
+    // Python: resolve_code_repository_url keys every branch of a URL on the
+    // default branch's clone (`identity=clone_dir(source_url)`).
+    #[test]
+    fn a_cloned_repository_is_pinned_to_its_default_clone() {
+        let url = "https://github.com/o/r";
+        let branch_clone = crate::resolve_repo::clone_dir(url, Some("dev"), Path::new("/c"));
+        let stamp = code_repo_system_metadata(&branch_clone, 1, Some(url));
+        assert_eq!(
+            code_repo_stamp_identity(Some(&stamp)).as_deref(),
+            Some("/c/github.com-o-r")
+        );
+        let local = code_repo_system_metadata(Path::new("/src/shop"), 1, None);
+        assert_eq!(
+            code_repo_stamp_identity(Some(&local)).as_deref(),
+            Some("/src/shop")
+        );
+        assert_eq!(
+            code_repo_stamp_identity(Some(r#"{"source": "code"}"#)),
+            None
         );
     }
 
@@ -1014,13 +1074,13 @@ mod tests {
         let root = dir.path();
         write(root, "go.mod", b"module x\n");
         write(root, "README.md", b"# hi\n");
-        let resolved = resolve_code_repository(root, true, false).unwrap();
+        let resolved = resolve_code_repository(root, true, false, None).unwrap();
         assert!(resolved.document_paths.is_empty());
         assert_eq!(resolved.skipped, 1);
-        let with_llm = resolve_code_repository(root, true, true).unwrap();
+        let with_llm = resolve_code_repository(root, true, true, None).unwrap();
         assert_eq!(with_llm.document_paths.len(), 1);
         // Python: test_documents_omitted_for_a_code_graph_only_caller
-        let code_only = resolve_code_repository(root, false, true).unwrap();
+        let code_only = resolve_code_repository(root, false, true, None).unwrap();
         assert!(code_only.document_paths.is_empty());
     }
 

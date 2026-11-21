@@ -6,6 +6,7 @@
 
 #[cfg(feature = "audio-loader")]
 pub mod audio;
+pub mod code;
 #[cfg(feature = "csv-loader")]
 pub mod csv_loader;
 #[cfg(feature = "html-loader")]
@@ -123,7 +124,7 @@ impl LoaderRegistry {
     /// Register a loader for a document type.
     ///
     /// `document_type` values match `Document.document_type`:
-    /// "text", "pdf", "csv", "html", "image", "audio", "unstructured".
+    /// "text", "code", "pdf", "csv", "html", "image", "audio", "unstructured".
     pub fn register(&mut self, document_type: &str, loader: Arc<dyn DocumentLoader>) {
         self.loaders.insert(document_type.to_string(), loader);
     }
@@ -142,6 +143,7 @@ impl LoaderRegistry {
     pub fn default_registry() -> Self {
         let mut registry = Self::new();
         registry.register("text", Arc::new(text::TextLoader));
+        registry.register("code", Arc::new(code::CodeLoader));
 
         #[cfg(feature = "html-loader")]
         registry.register("html", Arc::new(html::HtmlLoader));
@@ -202,6 +204,15 @@ mod tests {
             loader.expect("just checked is_some").engine_name(),
             "text_loader"
         );
+    }
+
+    #[test]
+    fn default_registry_has_code_loader() {
+        let registry = LoaderRegistry::default();
+        let loader = registry
+            .get("code")
+            .expect("the code loader is always registered");
+        assert_eq!(loader.engine_name(), "code_loader");
     }
 
     #[test]

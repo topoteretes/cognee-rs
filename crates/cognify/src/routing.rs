@@ -21,9 +21,7 @@ use uuid::Uuid;
 pub const SOURCE_DLT_SOURCE: &str = "dlt_source";
 /// The `system_metadata.source` stamp of a pre-manifest per-row DLT record.
 pub const SOURCE_DLT_LEGACY: &str = "dlt";
-/// The `system_metadata.source` stamp of a single code file.
-pub const SOURCE_CODE: &str = "code";
-pub use cognee_models::code_repo::SOURCE_CODE_REPO;
+pub use cognee_models::code_repo::{SOURCE_CODE, SOURCE_CODE_REPO};
 
 /// The task routes cognify can send a data item down (Python `CognifyRoute`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,10 +81,9 @@ pub enum CognifyRouteError {
     /// A data item whose route Rust has no task list for yet. Python wires
     /// every route explicitly and raises for an unmapped one rather than
     /// running the standard pipeline on data routed away from it
-    /// (`cognify.py`). Two routes are refused: the per-file code route (it
-    /// comes with SDK-1053 O9) and the DLT-source route of a row stamped in
-    /// `system_metadata` (Rust reads DLT stamps from `external_metadata`
-    /// only).
+    /// (`cognify.py`). One route is refused: the DLT-source route of a row
+    /// stamped in `system_metadata` (Rust reads DLT stamps from
+    /// `external_metadata` only).
     #[error(
         "Data item {data_id} takes the '{route}' cognify route, which is not supported yet{}",
         unsupported_route_hint(*.route)
@@ -113,26 +110,18 @@ pub enum CognifyRouteError {
 /// metadata, it is not a JSON object, or its `source` is not a string
 /// (Python `metadata_source`). A Python-written `null` reads as none.
 pub fn metadata_source(system_metadata: Option<&str>) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(system_metadata?).ok()?;
-    value
-        .as_object()?
-        .get("source")?
-        .as_str()
-        .map(str::to_owned)
+    cognee_models::code_repo::system_metadata_source(system_metadata)
 }
 
 /// What [`CognifyRouteError::UnsupportedRoute`] tells the caller to do
 /// instead.
 fn unsupported_route_hint(route: CognifyRoute) -> &'static str {
     match route {
-        CognifyRoute::Code => {
-            " (the per-file code route); add the project directory instead to build its code graph."
-        }
         CognifyRoute::DltSource => {
             " (a DLT source stamped in system_metadata); Rust reads DLT stamps from \
              external_metadata only. Re-add the DLT source from Rust to cognify it."
         }
-        CognifyRoute::Standard | CognifyRoute::CodeRepo => ".",
+        CognifyRoute::Standard | CognifyRoute::Code | CognifyRoute::CodeRepo => ".",
     }
 }
 
@@ -319,13 +308,6 @@ mod tests {
     #[test]
     fn unsupported_route_names_the_route_and_what_to_do() {
         let data_id = Uuid::new_v4();
-        let code = CognifyRouteError::UnsupportedRoute {
-            data_id,
-            route: CognifyRoute::Code,
-        }
-        .to_string();
-        assert!(code.contains("'code' cognify route"), "{code}");
-        assert!(code.contains("add the project directory"), "{code}");
         let dlt = CognifyRouteError::UnsupportedRoute {
             data_id,
             route: CognifyRoute::DltSource,

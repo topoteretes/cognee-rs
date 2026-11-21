@@ -17,6 +17,7 @@ mod id_generation;
 mod loader_registry;
 pub mod loaders;
 pub mod pipeline;
+pub mod resolve_repo;
 // URL crawling + HTML extraction. The `extract_html` extractor is shared with
 // the HTML document loader, so both live behind the `html-loader` feature.
 #[cfg(feature = "html-loader")]

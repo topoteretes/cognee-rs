@@ -84,6 +84,26 @@ pub trait ProvenanceDb: Send + Sync {
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError>;
 
+    /// Mark the data item complete for the dataset under the named pipeline's
+    /// `pipeline_status` entry (e.g. `code_graph_pipeline`).
+    async fn mark_pipeline_status_complete(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<(), DatabaseError>;
+
+    /// Clear the named pipelines' completion entries for the dataset from the
+    /// data item's `pipeline_status` (Python `reset_data_pipeline_status(...,
+    /// pipeline_names=...)`), so the next run of those pipelines processes it
+    /// again.
+    async fn clear_pipeline_status_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_names: &[&str],
+    ) -> Result<(), DatabaseError>;
+
     /// Which of `data_ids` cognify already completed in the dataset.
     async fn get_cognify_completed_data_ids(
         &self,
@@ -176,6 +196,24 @@ impl ProvenanceDb for DatabaseConnection {
         dataset_id: Uuid,
     ) -> Result<(), DatabaseError> {
         data::mark_cognify_pipeline_status_complete(self, data_id, dataset_id).await
+    }
+
+    async fn mark_pipeline_status_complete(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_name: &str,
+    ) -> Result<(), DatabaseError> {
+        data::mark_pipeline_status_complete(self, data_id, dataset_id, pipeline_name).await
+    }
+
+    async fn clear_pipeline_status_for_data(
+        &self,
+        data_id: Uuid,
+        dataset_id: Uuid,
+        pipeline_names: &[&str],
+    ) -> Result<(), DatabaseError> {
+        data::clear_pipeline_status_for_data(self, data_id, dataset_id, pipeline_names).await
     }
 
     async fn get_cognify_completed_data_ids(

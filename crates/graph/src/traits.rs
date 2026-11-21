@@ -301,6 +301,62 @@ pub trait GraphDBTrait: Send + Sync {
     ///
     async fn has_edges(&self, edges: &[EdgeData]) -> GraphDBResult<Vec<EdgeData>>;
 
+    /// Delete the edges with these `(source_id, target_id, relationship_name)`
+    /// keys, keeping their endpoint nodes. Keys the graph does not hold are
+    /// ignored. Port of Python's `delete_edge_triples`.
+    ///
+    /// Default implementation works through the per-node trait surface, as the
+    /// default [`update_node_property`](GraphDBTrait::update_node_property)
+    /// does: for each distinct source that has a matching edge it reads the
+    /// node and its incident edges, deletes the node (which detaches every
+    /// incident edge), re-adds it and restores the incident edges that are not
+    /// being deleted. Backends should override it with a direct delete.
+    ///
+    /// **A backend whose `get_edges` does not report the stored direction MUST
+    /// override this method** (the default restores the edges it read, so a
+    /// fabricated direction would be written back). Ladybug is such a backend,
+    /// and does.
+    async fn delete_edge_triples(&self, edges: &[EdgeKey]) -> GraphDBResult<()> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+        let remove: HashSet<(&str, &str, &str)> = edges
+            .iter()
+            .map(|(source, target, relationship)| {
+                (source.as_str(), target.as_str(), relationship.as_str())
+            })
+            .collect();
+        let mut seen_sources: HashSet<&str> = HashSet::new();
+        for (source, _, _) in edges {
+            if !seen_sources.insert(source.as_str()) {
+                continue;
+            }
+            let incident = self.get_edges(source).await?;
+            let is_removed =
+                |(s, t, r, _): &EdgeData| remove.contains(&(s.as_str(), t.as_str(), r.as_str()));
+            if !incident.iter().any(is_removed) {
+                continue;
+            }
+            let Some(node) = self.get_node(source).await? else {
+                continue;
+            };
+            let properties: serde_json::Map<String, Value> = node
+                .into_iter()
+                .map(|(key, value)| (key.into_owned(), value))
+                .collect();
+            let keep: Vec<EdgeData> = incident
+                .into_iter()
+                .filter(|edge| !is_removed(edge))
+                .collect();
+            self.delete_node(source).await?;
+            self.add_node_raw(Value::Object(properties)).await?;
+            if !keep.is_empty() {
+                self.add_edges(&keep).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Add a single edge between two nodes.
     ///
     /// # Arguments
@@ -1624,6 +1680,52 @@ mod tests {
             .await
             .expect("candidates");
         assert_eq!(node_ids(&nodes), vec!["a", "b"]);
+    }
+
+    /// The default edge delete removes exactly the named triples: the
+    /// endpoints, their properties and every other incident edge (in either
+    /// direction, of the same pair under another name) survive, and an
+    /// unknown key is ignored.
+    #[tokio::test]
+    async fn default_delete_edge_triples_keeps_nodes_and_other_edges() {
+        let db = DefaultImplDb::default();
+        seed(
+            &db,
+            &["a", "b", "c"],
+            &[
+                ("a", "b", "calls"),
+                ("a", "b", "imports"),
+                ("b", "a", "calls"),
+                ("c", "a", "calls"),
+                ("a", "c", "uses"),
+            ],
+        )
+        .await;
+        db.update_node_property("a", "extra", serde_json::json!(7))
+            .await
+            .unwrap();
+
+        db.delete_edge_triples(&[
+            ("a".into(), "b".into(), "calls".into()),
+            ("a".into(), "c".into(), "uses".into()),
+            ("x".into(), "y".into(), "calls".into()),
+        ])
+        .await
+        .unwrap();
+
+        let (nodes, edges) = db.get_graph_data().await.unwrap();
+        assert_eq!(node_ids(&nodes), ["a", "b", "c"]);
+        let a = nodes.iter().find(|(id, _)| id == "a").unwrap();
+        assert_eq!(a.1["extra"], serde_json::json!(7));
+        assert_eq!(
+            edge_keys(&edges),
+            [
+                ("a".into(), "b".into(), "imports".into()),
+                ("b".into(), "a".into(), "calls".into()),
+                ("c".into(), "a".into(), "calls".into()),
+            ]
+        );
+        db.delete_edge_triples(&[]).await.unwrap();
     }
 
     /// The defaulted `close()` must be a no-op *and* idempotent for a backend

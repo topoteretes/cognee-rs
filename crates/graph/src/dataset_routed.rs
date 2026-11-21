@@ -153,6 +153,10 @@ impl GraphDBTrait for DatasetRoutedGraphDB {
         self.engine().await?.has_edges(edges).await
     }
 
+    async fn delete_edge_triples(&self, edges: &[crate::traits::EdgeKey]) -> GraphDBResult<()> {
+        self.engine().await?.delete_edge_triples(edges).await
+    }
+
     async fn add_edge(
         &self,
         source_id: &str,

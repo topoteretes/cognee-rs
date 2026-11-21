@@ -101,6 +101,19 @@ pub enum ApiError {
     #[error("Component error: {0}")]
     Component(#[from] crate::error::ComponentError),
 
+    /// A repository of `remember(content_type="code")` could not be resolved
+    /// or stored, or its code graph not built (Python's
+    /// `CodeRepositoryError`, whose message is passed through as is).
+    #[error("{0}")]
+    CodeRepository(String),
+
+    /// A repository of `remember(content_type="code")` was refused: a remote
+    /// repository while outbound HTTP requests are disabled
+    /// (`ALLOW_HTTP_REQUESTS`), or a clone of an internal address (Python's
+    /// `CodeRepositoryError` with HTTP 403, message passed through as is).
+    #[error("{0}")]
+    CodeRepositoryForbidden(String),
+
     #[error("Background task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
 }

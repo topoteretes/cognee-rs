@@ -36,6 +36,10 @@ pub mod core {
 pub mod add {
     /// Code-project detection and the repo manifest (`add(<directory>)`).
     pub use cognee_ingestion::code_repo;
+    /// Remote repositories: clone URLs, branches, credentials, redaction
+    /// and the `ALLOW_HTTP_REQUESTS` gate (`add(<repository URL>)`,
+    /// `remember(content_type="code")`).
+    pub use cognee_ingestion::resolve_repo;
     pub use cognee_ingestion::{
         AddParams, AddPipeline, ContentHasher, HashAlgorithm, IngestionError, LoaderRegistry,
         ProcessedInput, build_add_pipeline, build_add_pipeline_with_acl, generate_dataset_id,

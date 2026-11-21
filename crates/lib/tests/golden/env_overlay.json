@@ -28,6 +28,70 @@
   "ALLOW_CYPHER_QUERY=\"{\\\"a\\\":1}\"": {},
   "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":true}\"": {},
+  "ALLOW_HTTP_REQUESTS=\"  \"": {
+    "code_graph.allow_http_requests": "  "
+  },
+  "ALLOW_HTTP_REQUESTS=\"\"": {},
+  "ALLOW_HTTP_REQUESTS=\"-1\"": {
+    "code_graph.allow_http_requests": "-1"
+  },
+  "ALLOW_HTTP_REQUESTS=\"0\"": {
+    "code_graph.allow_http_requests": "0"
+  },
+  "ALLOW_HTTP_REQUESTS=\"1\"": {
+    "code_graph.allow_http_requests": "1"
+  },
+  "ALLOW_HTTP_REQUESTS=\"1.5\"": {
+    "code_graph.allow_http_requests": "1.5"
+  },
+  "ALLOW_HTTP_REQUESTS=\"42\"": {
+    "code_graph.allow_http_requests": "42"
+  },
+  "ALLOW_HTTP_REQUESTS=\"5000000000\"": {
+    "code_graph.allow_http_requests": "5000000000"
+  },
+  "ALLOW_HTTP_REQUESTS=\"70000\"": {
+    "code_graph.allow_http_requests": "70000"
+  },
+  "ALLOW_HTTP_REQUESTS=\"TRUE\"": {
+    "code_graph.allow_http_requests": "TRUE"
+  },
+  "ALLOW_HTTP_REQUESTS=\"[1]\"": {
+    "code_graph.allow_http_requests": "[1]"
+  },
+  "ALLOW_HTTP_REQUESTS=\"abc\"": {
+    "code_graph.allow_http_requests": "abc"
+  },
+  "ALLOW_HTTP_REQUESTS=\"false\"": {
+    "code_graph.allow_http_requests": "false"
+  },
+  "ALLOW_HTTP_REQUESTS=\"no\"": {
+    "code_graph.allow_http_requests": "no"
+  },
+  "ALLOW_HTTP_REQUESTS=\"on\"": {
+    "code_graph.allow_http_requests": "on"
+  },
+  "ALLOW_HTTP_REQUESTS=\"require\"": {
+    "code_graph.allow_http_requests": "require"
+  },
+  "ALLOW_HTTP_REQUESTS=\"true\"": {
+    "code_graph.allow_http_requests": "true"
+  },
+  "ALLOW_HTTP_REQUESTS=\"v\"": {
+    "code_graph.allow_http_requests": "v"
+  },
+  "ALLOW_HTTP_REQUESTS=\"yes\"": {
+    "code_graph.allow_http_requests": "yes"
+  },
+  "ALLOW_HTTP_REQUESTS=\"{\\\"a\\\":1}\"": {
+    "code_graph.allow_http_requests": "{\"a\":1}"
+  },
+  "ALLOW_HTTP_REQUESTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "code_graph.allow_http_requests": "{\"ssl\":\"verify-full\"}"
+  },
+  "ALLOW_HTTP_REQUESTS=\"{\\\"ssl\\\":true}\"": {
+    "code_graph.allow_http_requests": "{\"ssl\":true}"
+  },
   "ANTHROPIC_API_BASE=\"  \"": {
     "llm.anthropic.base_url": "  "
   },
@@ -2496,6 +2560,70 @@
   },
   "COGNEE_RECORD_LLM=\"{\\\"ssl\\\":true}\"": {
     "llm.record_path": "{\"ssl\":true}"
+  },
+  "COGNEE_REPOS_DIR=\"  \"": {
+    "code_graph.clones_dir": "  "
+  },
+  "COGNEE_REPOS_DIR=\"\"": {},
+  "COGNEE_REPOS_DIR=\"-1\"": {
+    "code_graph.clones_dir": "-1"
+  },
+  "COGNEE_REPOS_DIR=\"0\"": {
+    "code_graph.clones_dir": "0"
+  },
+  "COGNEE_REPOS_DIR=\"1\"": {
+    "code_graph.clones_dir": "1"
+  },
+  "COGNEE_REPOS_DIR=\"1.5\"": {
+    "code_graph.clones_dir": "1.5"
+  },
+  "COGNEE_REPOS_DIR=\"42\"": {
+    "code_graph.clones_dir": "42"
+  },
+  "COGNEE_REPOS_DIR=\"5000000000\"": {
+    "code_graph.clones_dir": "5000000000"
+  },
+  "COGNEE_REPOS_DIR=\"70000\"": {
+    "code_graph.clones_dir": "70000"
+  },
+  "COGNEE_REPOS_DIR=\"TRUE\"": {
+    "code_graph.clones_dir": "TRUE"
+  },
+  "COGNEE_REPOS_DIR=\"[1]\"": {
+    "code_graph.clones_dir": "[1]"
+  },
+  "COGNEE_REPOS_DIR=\"abc\"": {
+    "code_graph.clones_dir": "abc"
+  },
+  "COGNEE_REPOS_DIR=\"false\"": {
+    "code_graph.clones_dir": "false"
+  },
+  "COGNEE_REPOS_DIR=\"no\"": {
+    "code_graph.clones_dir": "no"
+  },
+  "COGNEE_REPOS_DIR=\"on\"": {
+    "code_graph.clones_dir": "on"
+  },
+  "COGNEE_REPOS_DIR=\"require\"": {
+    "code_graph.clones_dir": "require"
+  },
+  "COGNEE_REPOS_DIR=\"true\"": {
+    "code_graph.clones_dir": "true"
+  },
+  "COGNEE_REPOS_DIR=\"v\"": {
+    "code_graph.clones_dir": "v"
+  },
+  "COGNEE_REPOS_DIR=\"yes\"": {
+    "code_graph.clones_dir": "yes"
+  },
+  "COGNEE_REPOS_DIR=\"{\\\"a\\\":1}\"": {
+    "code_graph.clones_dir": "{\"a\":1}"
+  },
+  "COGNEE_REPOS_DIR=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "code_graph.clones_dir": "{\"ssl\":\"verify-full\"}"
+  },
+  "COGNEE_REPOS_DIR=\"{\\\"ssl\\\":true}\"": {
+    "code_graph.clones_dir": "{\"ssl\":true}"
   },
   "COGNEE_SESSION_STORE=\"  \"": {
     "session.store": "  "

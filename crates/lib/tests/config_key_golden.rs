@@ -199,6 +199,8 @@ const ENV_VARS: &[&str] = &[
     "GRAPH_MAX_DB_SIZE",
     // `code_graph.*` (cognee-code-graph, SDK-1053).
     "ENOLA_PATH",
+    "COGNEE_REPOS_DIR",
+    "ALLOW_HTTP_REQUESTS",
     "COGNEE_DEBUG_LLM_REQUEST",
     "LLM_VISION_MODEL",
     "TRANSCRIPTION_MODEL",

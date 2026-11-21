@@ -2989,36 +2989,7 @@ fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut counts_by_text: BTreeMap<String, i32> = BTreeMap::new();
-    for edge_text in texts {
-        if edge_text.is_empty() {
-            continue;
-        }
-        *counts_by_text.entry(edge_text).or_insert(0) += 1;
-    }
-
-    // `slot_of` maps a derived id to the index it already occupies in `folded`.
-    // The index is recorded as the entry is pushed and `folded` only ever grows,
-    // so every stored index stays in bounds — no lookup here can panic.
-    let mut slot_of: HashMap<Uuid, usize> = HashMap::with_capacity(counts_by_text.len());
-    let mut folded: Vec<EdgeType> = Vec::with_capacity(counts_by_text.len());
-    for (text, count) in counts_by_text {
-        let id = EdgeType::deterministic_id(&text);
-        match slot_of.get(&id) {
-            Some(&idx) => {
-                let existing: &mut EdgeType = &mut folded[idx];
-                existing.set_count(existing.count().saturating_add(count));
-            }
-            None => {
-                slot_of.insert(id, folded.len());
-                let mut edge_type = EdgeType::new_deterministic(&text, Some(dataset_id));
-                edge_type.set_count(count);
-                folded.push(edge_type);
-            }
-        }
-    }
-
-    folded
+    EdgeType::fold_texts(texts, Some(dataset_id))
 }
 
 /// Id of the single `DltRow` chunk a DLT document produces.
@@ -3890,7 +3861,9 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 // ---------------------------------------------------------------------------
 
 /// Name of the task that runs the code routes ahead of the standard pipeline
-/// (Python's CODE_REPO-route task, `extract_code_repo_graph`).
+/// (Python's CODE_REPO-route task, `extract_code_repo_graph`). The same task
+/// also runs the per-file CODE route, whose Python task is
+/// `extract_code_files_graph`.
 pub const EXTRACT_CODE_REPO_GRAPH_TASK_NAME: &str = "extract_code_repo_graph";
 
 /// What [`run_code_routes`] hands the standard pipeline: the standard items,
@@ -3909,6 +3882,25 @@ pub struct RoutedCognifyInput {
     pub failures: FailureReport,
 }
 
+/// How the code routes load a run's code-repo items.
+#[derive(Debug, Clone, Default)]
+pub enum CodeRepoLoadMode {
+    /// cognify's CODE_REPO route: when the dataset holds several code
+    /// repositories, the first repo item of the run loads every one of them
+    /// from one enola cluster snapshot (with the edges between them), each
+    /// under its own row, and the run's other repo items have nothing left to
+    /// do (Python `load_dataset_cluster`). A dataset with one repository
+    /// keeps the per-repository run.
+    #[default]
+    Dataset,
+    /// Each item's repository on its own enola run (Python
+    /// `get_code_graph_tasks(repo_path)`).
+    Single,
+    /// The item is one member of a cluster snapshot already taken (Python
+    /// `get_code_graph_tasks(repo_path, snapshot=..., repo_scope=label)`).
+    Member(crate::code_cluster::ClusterMemberLoad),
+}
+
 /// Run the non-standard routes of a cognify run and hand the rest on.
 ///
 /// Port of the route split in Python's `cognify()` (`tasks_by_route` and
@@ -3921,14 +3913,24 @@ pub struct RoutedCognifyInput {
 ///   names the repository, the row's `external_metadata["node_set"]` tags
 ///   every code node, and every node and edge is recorded in the ownership
 ///   ledger under the row and `pipeline_run_id`, so a failed run's sweep and
-///   a later delete find them. No LLM, no embedding;
-/// - a per-file code item, a DLT-source row stamped in `system_metadata`,
-///   or a refused (legacy `dlt`) item fails the whole run before any enola
-///   work: Rust has no task list for those routes yet, and Python resolves
-///   every item's task list before any item runs (`run_tasks.py`), raising
-///   for an unmapped or refused one.
+///   a later delete find them. No LLM, no embedding. Under
+///   [`CodeRepoLoadMode::Dataset`] a dataset of several repositories is
+///   loaded as one enola cluster instead (see
+///   `code_cluster::load_dataset_cluster`);
+/// - each per-file code item (`system_metadata.source == "code"`) loads the
+///   code graph of its stored file on its own enola run, staged under its
+///   original name in a temporary directory
+///   ([`cognee_code_graph::extract_code_file_graph`], Python's CODE route
+///   `extract_code_files_graph`): untagged, recorded in the ledger under
+///   the row and the run, no LLM, no embedding;
+/// - a DLT-source row stamped in `system_metadata`, or a refused (legacy
+///   `dlt`) item, fails the whole run before any enola work: Rust has no
+///   task list for that route yet, and Python resolves every item's task
+///   list before any item runs (`run_tasks.py`), raising for an unmapped or
+///   refused one.
 ///
-/// A repo item that fails to load is a per-item failure, as an item's tasks
+/// Code items load in input order. A code item (repo or file) that fails to
+/// load is a per-item failure, as an item's tasks
 /// fail in Python's `run_tasks_data_item` (`run_tasks_data_item.py:279-305`):
 /// the manifest read, its node set and the code graph load are all inside
 /// it. What happens next follows `failure_policy`, as for a document:
@@ -3962,16 +3964,21 @@ pub async fn run_code_routes(
     code_graph: &cognee_code_graph::CodeGraphConfig,
     pipeline_run_id: Option<Uuid>,
     failure_policy: FailurePolicy,
+    mode: &CodeRepoLoadMode,
+    vectors: Option<&cognee_code_graph::CodeGraphVectors>,
 ) -> Result<RoutedCognifyInput, CognifyError> {
     use crate::routing::{CognifyRoute, CognifyRouteError, cognify_route_for};
 
     let mut standard = Vec::with_capacity(input.data_items.len());
-    let mut repositories = Vec::new();
+    // The code-routed items, in input order, with their route.
+    let mut code_items = Vec::new();
     for item in &input.data_items {
         match cognify_route_for(item)? {
             CognifyRoute::Standard => standard.push(item.clone()),
-            CognifyRoute::CodeRepo => repositories.push(item),
-            route @ (CognifyRoute::Code | CognifyRoute::DltSource) => {
+            route @ (CognifyRoute::CodeRepo | CognifyRoute::Code) => {
+                code_items.push((item, route));
+            }
+            route @ CognifyRoute::DltSource => {
                 return Err(CognifyRouteError::UnsupportedRoute {
                     data_id: item.id,
                     route,
@@ -3982,22 +3989,39 @@ pub async fn run_code_routes(
     }
 
     let mut failures = FailureReport::with_policy(&failure_policy);
-    for (index, item) in repositories.iter().enumerate() {
+    let mut cluster = crate::code_cluster::ClusterVerdict::default();
+    for (index, (item, route)) in code_items.iter().enumerate() {
         failures.note_routed_items(1);
-        let Err(error) = load_code_repo_item(
-            item,
-            input,
-            storage,
-            graph_db,
-            db,
-            code_graph,
-            pipeline_run_id,
-        )
-        .await
-        else {
+        let loaded = if *route == CognifyRoute::Code {
+            load_code_file_item(
+                item,
+                input,
+                storage,
+                graph_db,
+                db,
+                code_graph,
+                pipeline_run_id,
+            )
+            .await
+        } else {
+            load_code_repo_item(
+                item,
+                input,
+                storage,
+                graph_db,
+                db,
+                code_graph,
+                pipeline_run_id,
+                mode,
+                vectors,
+                &mut cluster,
+            )
+            .await
+        };
+        let Err(error) = loaded else {
             continue;
         };
-        warn!(data_id = %item.id, "code repo item failed to load: {error}");
+        warn!(data_id = %item.id, route = %route, "code item failed to load: {error}");
         if failure_policy.stop == FailureStop::FailFast
             && failure_policy.scope != RollbackScope::FailedItems
         {
@@ -4016,7 +4040,7 @@ pub async fn run_code_routes(
         if failure_policy.stop == FailureStop::FailFast {
             // `FailedItems`: stop here and keep what already loaded. Nothing
             // after this item is attempted, standard items included.
-            for later in &repositories[index + 1..] {
+            for (later, _) in &code_items[index + 1..] {
                 failures.mark_unreached(later.id);
             }
             for item in standard.drain(..) {
@@ -4039,6 +4063,11 @@ pub async fn run_code_routes(
 
 /// Load one code repo item's code graph: Python's `extract_code_repo_graph`
 /// body for one data item (`tasks/code_graph/code_repo.py`).
+///
+/// The item's manifest is read, and its directory checked, before the
+/// dataset's cluster is considered, as in Python. Its node set is read first
+/// (Python reads it after the cluster check, where the member load reads
+/// every member's own), so a malformed one fails the item either way.
 #[allow(clippy::too_many_arguments)]
 async fn load_code_repo_item(
     item: &Data,
@@ -4048,6 +4077,9 @@ async fn load_code_repo_item(
     db: &dyn RelationalDb,
     code_graph: &cognee_code_graph::CodeGraphConfig,
     pipeline_run_id: Option<Uuid>,
+    mode: &CodeRepoLoadMode,
+    vectors: Option<&cognee_code_graph::CodeGraphVectors>,
+    cluster: &mut crate::code_cluster::ClusterVerdict,
 ) -> Result<(), CognifyError> {
     let node_set = crate::routing::code_repo_node_set(item)?;
     let manifest = storage
@@ -4060,25 +4092,116 @@ async fn load_code_repo_item(
             item.id
         )))
     })?;
-    let ledger = cognee_code_graph::CodeGraphLedger {
-        db,
-        owner: cognee_code_graph::CodeGraphOwner {
-            tenant_id: input.tenant_id,
-            user_id: input.user_id.unwrap_or(DEFAULT_LEDGER_USER_ID),
-            dataset_id: input.dataset_id,
-            data_id: item.id,
-            pipeline_run_id,
-        },
-    };
+    let repo_path = cognee_code_graph::manifest_repo_path(&manifest)?;
+    if !repo_path.is_dir() {
+        return Err(cognee_code_graph::CodeGraphError::InvalidRepoItem(format!(
+            "Code repository '{}' no longer exists; the repo item reads the original directory \
+             at cognify time. Re-add the repository from its current location.",
+            repo_path.display()
+        ))
+        .into());
+    }
+    let ledger = code_graph_ledger(db, input, item.id, pipeline_run_id);
+    match mode {
+        CodeRepoLoadMode::Member(member) => {
+            cognee_code_graph::load_cluster_member(
+                graph_db,
+                Some(&ledger),
+                &member.snapshot,
+                &member.repo_path,
+                &member.label,
+                node_set.as_deref(),
+                vectors,
+            )
+            .await?;
+            tracing::info!(
+                "Code repo graph extracted for {} ({}).",
+                member.repo_path.display(),
+                member.label
+            );
+            return Ok(());
+        }
+        CodeRepoLoadMode::Dataset => {
+            if crate::code_cluster::load_dataset_cluster(
+                cluster,
+                input,
+                graph_db,
+                db,
+                code_graph,
+                pipeline_run_id,
+            )
+            .await?
+            {
+                return Ok(());
+            }
+        }
+        CodeRepoLoadMode::Single => {}
+    }
     cognee_code_graph::extract_code_repo_graph(
         graph_db,
         Some(&ledger),
         code_graph,
         &manifest,
         node_set.as_deref(),
+        vectors,
     )
     .await?;
     Ok(())
+}
+
+/// Load one per-file code item's code graph: Python's
+/// `extract_code_files_graph` body for one data item
+/// (`tasks/code_graph/code_files.py`).
+///
+/// The stored text is read as Python's text mode reads it (strict UTF-8,
+/// universal newlines), then staged and loaded by
+/// [`cognee_code_graph::extract_code_file_graph`]: untagged, graph-only,
+/// recorded in the ledger under the item's row. Its own enola run, never part
+/// of the dataset's repository cluster.
+async fn load_code_file_item(
+    item: &Data,
+    input: &CognifyInput,
+    storage: &dyn StorageTrait,
+    graph_db: &dyn GraphDBTrait,
+    db: &dyn RelationalDb,
+    code_graph: &cognee_code_graph::CodeGraphConfig,
+    pipeline_run_id: Option<Uuid>,
+) -> Result<(), CognifyError> {
+    let raw = storage
+        .retrieve(&item.raw_data_location)
+        .await
+        .map_err(|e| CognifyError::StorageError(e.to_string()))?;
+    let text = String::from_utf8(raw).map_err(|e| {
+        CognifyError::from(cognee_code_graph::CodeGraphError::InvalidCodeItem(format!(
+            "the stored text of code data item {} is not UTF-8: {e}",
+            item.id
+        )))
+    })?;
+    let content = cognee_ingestion::loaders::code::universal_newlines(&text);
+    let ledger = code_graph_ledger(db, input, item.id, pipeline_run_id);
+    cognee_code_graph::extract_code_file_graph(graph_db, Some(&ledger), code_graph, item, &content)
+        .await?;
+    Ok(())
+}
+
+/// The ledger a code repo item's load records its nodes and edges in: the
+/// item's row, in the run's dataset, under the run.
+pub(crate) fn code_graph_ledger<'a>(
+    db: &'a dyn RelationalDb,
+    input: &CognifyInput,
+    data_id: Uuid,
+    pipeline_run_id: Option<Uuid>,
+) -> cognee_code_graph::CodeGraphLedger<'a> {
+    cognee_code_graph::CodeGraphLedger {
+        db,
+        owner: cognee_code_graph::CodeGraphOwner {
+            tenant_id: input.tenant_id,
+            user_id: input.user_id.unwrap_or(DEFAULT_LEDGER_USER_ID),
+            dataset_id: input.dataset_id,
+            data_id,
+            pipeline_run_id,
+        },
+    }
 }
 
 /// Build the [`TypedTask`] that runs [`run_code_routes`]; it takes the run's
@@ -4091,6 +4214,8 @@ pub fn make_code_routes_task(
     db: Arc<dyn RelationalDb>,
     code_graph: cognee_code_graph::CodeGraphConfig,
     failure_policy: FailurePolicy,
+    mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
 ) -> TypedTask<CognifyInput, RoutedCognifyInput> {
     TypedTask::async_fn(move |input: &CognifyInput, ctx| {
         let input = input.clone();
@@ -4098,6 +4223,8 @@ pub fn make_code_routes_task(
         let graph_db = Arc::clone(&graph_db);
         let db = Arc::clone(&db);
         let code_graph = code_graph.clone();
+        let mode = mode.clone();
+        let vectors = vectors.clone();
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let routed = run_code_routes(
@@ -4108,6 +4235,8 @@ pub fn make_code_routes_task(
                 &code_graph,
                 pipeline_run_id,
                 failure_policy,
+                &mode,
+                vectors.as_ref(),
             )
             .await?;
             Ok(Box::new(routed))
@@ -4124,6 +4253,238 @@ fn needs_code_routes(items: &[Data]) -> bool {
             Ok(crate::routing::CognifyRoute::Standard)
         )
     })
+}
+
+// ---------------------------------------------------------------------------
+// The code graph pipeline (SDK-1053 O5): remember(content_type="code")
+// ---------------------------------------------------------------------------
+
+/// The pipeline name `remember(content_type="code")` records its runs under,
+/// and the second `pipeline_status` entry a built repository is stamped with
+/// (Python `refresh_dataset_code_graph`, `run_custom_pipeline(...,
+/// pipeline_name="code_graph_pipeline")`). Dataset status for this pipeline
+/// (`GET /v1/datasets/status?pipeline=code_graph_pipeline`) reads these runs.
+pub const CODE_GRAPH_PIPELINE_NAME: &str = "code_graph_pipeline";
+
+/// Build the code graph of each code-repo item in one `code_graph_pipeline`
+/// run, and return the run's id.
+///
+/// Port of one `run_custom_pipeline(tasks=get_code_graph_tasks(...),
+/// pipeline_name="code_graph_pipeline")` of Python's
+/// `refresh_dataset_code_graph`. The run's one task is the CODE_REPO adapter
+/// the cognify route uses ([`make_code_routes_task`]), so both build the same
+/// graph through one builder; only the run's name differs. As in Python's
+/// `run_custom_pipeline` the run is not incremental: an item already built is
+/// built again. Each item must be a code-repo item (a refused one fails the
+/// run before any enola work).
+///
+/// On success every item is stamped complete under both
+/// [`COGNIFY_PIPELINE_STAMP_NAME`] and [`CODE_GRAPH_PIPELINE_NAME`] (Python
+/// `mark_data_processed(..., pipeline_names=("cognify_pipeline",
+/// "code_graph_pipeline"))`), so a later `cognify()` of the dataset does not
+/// rerun enola for it. On failure the run is swept as a failed cognify run
+/// is ([`CognifyConfig::rollback_scope`]) and the error returned.
+///
+/// Runs under the dataset's lock and in its scope, as [`cognify`] does.
+///
+/// `mode` says how the items load: [`CodeRepoLoadMode::Single`] runs enola
+/// on each item's repository, [`CodeRepoLoadMode::Member`] loads the one item
+/// as a member of a cluster snapshot already taken (see
+/// [`crate::code_cluster::refresh_dataset_code_graph`]).
+///
+/// # Errors
+///
+/// [`CognifyError::CodeGraph`] for a non-code-repo item or what the graph load
+/// raises, and what [`run_code_routes`] raises.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_code_graph_pipeline(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    thread_pool: Arc<dyn CpuPool>,
+    config: &CognifyConfig,
+    mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
+) -> Result<Uuid, CognifyError> {
+    for item in &data_items {
+        if !matches!(
+            crate::routing::cognify_route_for(item),
+            Ok(crate::routing::CognifyRoute::CodeRepo)
+        ) {
+            // Python `extract_code_repo_graph`'s refusal.
+            return Err(cognee_code_graph::CodeGraphError::InvalidRepoItem(format!(
+                "Data item {} is not a code repo manifest (system_metadata.source != \
+                 'code_repo'); it must not reach the CODE_REPO route.",
+                item.id
+            ))
+            .into());
+        }
+    }
+    DatasetLocks::global()
+        .hold(
+            [dataset_id],
+            cognee_models::dataset_scope::with_dataset(
+                dataset_id,
+                Box::pin(run_code_graph_pipeline_in_scope(
+                    data_items,
+                    dataset_id,
+                    user_id,
+                    user_email,
+                    tenant_id,
+                    storage,
+                    graph_db,
+                    vector_db,
+                    database,
+                    pipeline_run_repo,
+                    thread_pool,
+                    config,
+                    mode,
+                    vectors,
+                )),
+            ),
+        )
+        .await
+}
+
+/// [`run_code_graph_pipeline`], already under the dataset's lock and scope.
+#[allow(clippy::too_many_arguments)]
+async fn run_code_graph_pipeline_in_scope(
+    data_items: Vec<Data>,
+    dataset_id: Uuid,
+    user_id: Option<Uuid>,
+    user_email: Option<String>,
+    tenant_id: Option<Uuid>,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    database: Arc<dyn RelationalDb>,
+    pipeline_run_repo: Arc<dyn PipelineRunRepository>,
+    thread_pool: Arc<dyn CpuPool>,
+    config: &CognifyConfig,
+    mode: CodeRepoLoadMode,
+    vectors: Option<cognee_code_graph::CodeGraphVectors>,
+) -> Result<Uuid, CognifyError> {
+    let processed: Vec<Uuid> = data_items.iter().map(|item| item.id).collect();
+    // A repository that fails to load fails the run, as the task raises in
+    // Python's `run_custom_pipeline`: nothing here judges a failure report
+    // the way cognify's end-of-run gate does, so a recorded (not raised)
+    // failure would be stamped complete. The sweep still follows the
+    // configured `rollback_scope` (`rollback::on_run_failed` below).
+    let failure_policy = FailurePolicy {
+        stop: FailureStop::FailFast,
+        scope: RollbackScope::WholeRun,
+        ..config.failure_policy()
+    };
+    let mut pipeline = PipelineBuilder::new_with_task(
+        CODE_GRAPH_PIPELINE_NAME,
+        make_code_routes_task(
+            Arc::clone(&storage),
+            Arc::clone(&graph_db),
+            Arc::clone(&database),
+            config.code_graph.clone(),
+            failure_policy,
+            mode,
+            vectors,
+        ),
+    )
+    .with_first_task_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME)
+    .with_name(CODE_GRAPH_PIPELINE_NAME)
+    .build();
+
+    let pipeline_ctx = PipelineContext {
+        pipeline_id: pipeline.id,
+        pipeline_name: CODE_GRAPH_PIPELINE_NAME.to_string(),
+        user_id,
+        tenant_id,
+        dataset_id: Some(dataset_id),
+        current_data: None,
+        run_id: None,
+        user_email,
+        provenance_visited: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    };
+    let (_cancel_handle, ctx) = TaskContextBuilder::new()
+        .thread_pool(thread_pool)
+        .database(Arc::clone(&database))
+        .graph_db(Arc::clone(&graph_db))
+        .vector_db(Arc::clone(&vector_db))
+        .pipeline_context(pipeline_ctx)
+        .build()
+        .map_err(|e| CognifyError::ContextBuild(e.to_string()))?;
+    let input = CognifyInput {
+        data_items,
+        dataset_id,
+        user_id,
+        tenant_id,
+    };
+    let inputs: Vec<Arc<dyn Value>> = vec![Arc::new(input) as Arc<dyn Value>];
+
+    // The same run bookkeeping as `cognify`: the run id is captured on every
+    // exit path for the sweep, and the ownership marker lets startup recovery
+    // retire a run whose process died.
+    let watcher = rollback::RunIdCapturingWatcher::new(Arc::clone(&pipeline_run_repo));
+    let mut ownership = config
+        .run_ownership_dir
+        .as_deref()
+        .map(cognee_core::RunOwnership::acquire);
+    pipeline.recovery_lock = ownership
+        .as_ref()
+        .and_then(cognee_core::RunOwnership::token);
+    let executed = cognee_core::pipeline::execute(&pipeline, inputs, Arc::new(ctx), &watcher)
+        .await
+        .map_err(unwrap_execution_error);
+    if let Some(ownership) = ownership.as_mut()
+        && !watcher.terminal_write_failed()
+    {
+        ownership.mark_closed();
+    }
+
+    let run_ctx = rollback::RunContext {
+        database: Arc::clone(&database),
+        graph_db,
+        vector_db,
+        repo: pipeline_run_repo,
+        dataset_id,
+        pipeline_run_id: watcher.run_id(),
+        pipeline_id: watcher.pipeline_id(),
+        pipeline_name: CODE_GRAPH_PIPELINE_NAME,
+        processed: processed.clone(),
+        config,
+    };
+    if let Err(e) = executed {
+        rollback::on_run_failed(&run_ctx, &e, true).await;
+        return Err(e);
+    }
+    let run_id = watcher.run_id().ok_or_else(|| {
+        CognifyError::Execute("the code graph pipeline completed without a run id".to_string())
+    })?;
+
+    // Python stamps both entries unconditionally once the run succeeded. A
+    // failed write costs only a rebuild on the next cognify(), so it is a
+    // warning, as cognify's own marker writes are.
+    for data_id in processed {
+        for name in [COGNIFY_PIPELINE_STAMP_NAME, CODE_GRAPH_PIPELINE_NAME] {
+            if let Err(e) = cognee_database::ProvenanceDb::mark_pipeline_status_complete(
+                &*database, data_id, dataset_id, name,
+            )
+            .await
+            {
+                warn!(
+                    data_id = %data_id,
+                    dataset_id = %dataset_id,
+                    pipeline = name,
+                    "code graph pipeline: failed to write the completion marker: {e}"
+                );
+            }
+        }
+    }
+    Ok(run_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -4377,6 +4738,10 @@ async fn cognify_in_scope(
                         Arc::clone(&database),
                         effective_config.code_graph.clone(),
                         effective_config.failure_policy(),
+                        CodeRepoLoadMode::Dataset,
+                        // cognify builds code graphs graph-only, as Python's
+                        // CODE_REPO route does (`graph_only=True`).
+                        None,
                     ))
                     .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
                 );

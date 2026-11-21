@@ -151,14 +151,6 @@ fn is_heic(buf: &[u8]) -> bool {
             .any(|i| buf.get(i..i + 4) == Some(b"heic".as_slice()))
 }
 
-/// Source-file extensions `code_loader` claims
-/// (`core/code_loader.py`, `SUPPORTED_CODE_EXTENSIONS`).
-const CODE_EXTENSIONS: &[&str] = &[
-    "c", "cc", "cpp", "cs", "cxx", "dart", "fs", "go", "h", "hcl", "hh", "hpp", "java", "js",
-    "jsx", "kt", "kts", "php", "proto", "py", "rake", "rb", "rs", "scala", "svelte", "swift", "tf",
-    "ts", "tsx", "vb", "vue",
-];
-
 const TEXT_EXTENSIONS: &[&str] = &["txt", "md", "json", "xml", "yaml", "yml", "log"];
 const TEXT_MIMES: &[&str] = &[
     "text/plain",
@@ -220,7 +212,7 @@ fn accepts(extensions: &[&str], mimes: &[&str], ext: &str, mime: &str) -> bool {
 fn can_handle(doc_type: &str, ext: &str, mime: &str) -> bool {
     match doc_type {
         // `code_loader` matches by extension only (`code_loader.py:85-86`).
-        "code" => CODE_EXTENSIONS.contains(&ext.to_lowercase().as_str()),
+        "code" => crate::loaders::code::is_code_extension(ext),
         "text" => accepts(TEXT_EXTENSIONS, TEXT_MIMES, ext, mime),
         "pdf" => ext == "pdf" && mime == "application/pdf",
         "image" => accepts(IMAGE_EXTENSIONS, IMAGE_MIMES, ext, mime),
@@ -255,9 +247,9 @@ pub(crate) fn route_loader(path_ext: &str, sniffed: &FileType) -> Option<&'stati
 
 /// Python loader names (`loader_name`) a caller can prefer, with the document
 /// type Rust reads them with and the Python loader whose `can_handle` they
-/// share. `code_loader` has no Rust loader of its own, so it reads as `text`.
+/// share.
 const PREFERRABLE: [(&str, &str, &str); 7] = [
-    ("code_loader", "text", "code"),
+    ("code_loader", "code", "code"),
     ("text_loader", "text", "text"),
     ("pypdf_loader", "pdf", "pdf"),
     ("image_loader", "image", "image"),
@@ -291,10 +283,10 @@ pub(crate) fn route_loader_preferring(
     if matches!(path_ext.to_lowercase().as_str(), "html" | "htm") && sniffed.mime == "text/plain" {
         return Some("html");
     }
-    // `code_loader` is Python's first loader; Rust has no code loader, so its
-    // files are read by the text loader (same bytes, same stored text).
+    // `code_loader` is Python's first loader: code files sniff as plain text,
+    // so the text loader would claim them otherwise (`LoaderEngine.py`).
     const PRIORITY: [(&str, &str); 7] = [
-        ("code", "text"),
+        ("code", "code"),
         ("text", "text"),
         ("pdf", "pdf"),
         ("image", "image"),
@@ -405,7 +397,11 @@ mod tests {
         assert_eq!(route(b"hello", ""), Some("text"));
         assert_eq!(route(b"a,b\n1,2\n", "csv"), Some("csv"));
         assert_eq!(route(b"a,b\n1,2\n", "CSV"), Some("csv"));
-        assert_eq!(route(b"fn main() {}", "rs"), Some("text"));
+        assert_eq!(route(b"fn main() {}", "rs"), Some("code"));
+        assert_eq!(route(b"print(1)", "PY"), Some("code"));
+        // Markup and config are documents, not code.
+        assert_eq!(route(b"a: 1", "yml"), Some("text"));
+        assert_eq!(route(b"#!/bin/sh", "sh"), Some("text"));
         assert_eq!(route(b"<p>hi</p>", "html"), Some("html"));
         // An office file sniffs as its own type; the loader is by extension.
         let docx = FileType::new(
@@ -426,7 +422,7 @@ mod tests {
         // PK zip header named `.zip`.
         assert_eq!(route(&[b'P', b'K', 3, 4, 0, 0, 0, 0], "zip"), None);
         // PNG with a code extension: code_loader claims it by name, as Python.
-        assert_eq!(route(PNG, "py"), Some("text"));
+        assert_eq!(route(PNG, "py"), Some("code"));
     }
 
     fn ft(bytes: &[u8]) -> (String, String) {
@@ -541,11 +537,22 @@ mod tests {
             route_loader_preferring("", &t, &names(&["image_loader"]), |_| true),
             Some("image")
         );
-        // Python's `code_loader` reads as the text document type.
+        // Python's `code_loader` is the code document type; preferring the
+        // text loader reads a code file as text.
         let py = guess_file_type(b"print(1)", "py");
         assert_eq!(
             route_loader_preferring("py", &py, &names(&["code_loader"]), |_| true),
+            Some("code")
+        );
+        assert_eq!(
+            route_loader_preferring("py", &py, &names(&["text_loader"]), |_| true),
             Some("text")
+        );
+        // An unregistered code loader is skipped; the default order then
+        // still names it, and the add fails on the missing loader.
+        assert_eq!(
+            route_loader_preferring("py", &py, &names(&["code_loader"]), |d| d != "code"),
+            Some("code")
         );
         // A preferred loader that does not accept the file is skipped, as is
         // an unknown name and an unregistered loader; the default order wins.

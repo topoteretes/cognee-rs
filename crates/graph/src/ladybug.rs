@@ -1457,6 +1457,48 @@ impl GraphDBTrait for LadybugAdapter {
         Ok(found)
     }
 
+    /// One `UNWIND … MATCH … DELETE r` per 500 keys (Python's Ladybug
+    /// `delete_edge_triples`). `DELETE r`, not `DETACH DELETE`, so only the
+    /// matched relationships go and the endpoint nodes stay.
+    async fn delete_edge_triples(&self, edges: &[crate::traits::EdgeKey]) -> GraphDBResult<()> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+
+        let _write_guard = self.write_lock.lock().await;
+        let db = self.db()?;
+        let conn = Connection::new(&db).map_err(|e| {
+            GraphDBError::ConnectionError(format!("Failed to create connection: {e}"))
+        })?;
+
+        const BATCH_SIZE: usize = 500;
+        for chunk in edges.chunks(BATCH_SIZE) {
+            let items: Vec<String> = chunk
+                .iter()
+                .map(|(source, target, relationship)| {
+                    format!(
+                        "{{s:'{}', t:'{}', rel:'{}'}}",
+                        Self::escape_cypher_string(source),
+                        Self::escape_cypher_string(target),
+                        Self::escape_cypher_string(relationship),
+                    )
+                })
+                .collect();
+            let query = format!(
+                "UNWIND [{}] AS e \
+                 MATCH (a:Node)-[r:EDGE]->(b:Node) \
+                 WHERE a.id = e.s AND b.id = e.t AND r.relationship_name = e.rel \
+                 DELETE r",
+                items.join(", ")
+            );
+            conn.query(&query).map_err(|e| {
+                GraphDBError::EdgeError(format!("Failed to delete {} edges: {e}", chunk.len()))
+            })?;
+        }
+
+        Ok(())
+    }
+
     async fn add_edge(
         &self,
         source_id: &str,
@@ -4140,6 +4182,39 @@ mod tests {
 
     /// The batched `has_edges` must agree with the per-edge check it replaced:
     /// only stored triples come back, in input order, with properties intact.
+    #[tokio::test]
+    async fn delete_edge_triples_removes_only_the_named_relationships() {
+        let (adapter, _temp_dir) = setup_adapter().await;
+        for (id, name, n) in [("n-a", "A", 1), ("n-b", "B", 2), ("n'c", "C", 3)] {
+            adapter.add_node(&TestNode::new(id, name, n)).await.unwrap();
+        }
+        adapter.add_edge("n-a", "n-b", "calls", None).await.unwrap();
+        adapter
+            .add_edge("n-a", "n-b", "imports", None)
+            .await
+            .unwrap();
+        adapter.add_edge("n-b", "n-a", "calls", None).await.unwrap();
+        adapter.add_edge("n-a", "n'c", "it's", None).await.unwrap();
+
+        adapter
+            .delete_edge_triples(&[
+                ("n-a".into(), "n-b".into(), "calls".into()),
+                ("n-a".into(), "n'c".into(), "it's".into()),
+                ("n-x".into(), "n-y".into(), "calls".into()),
+            ])
+            .await
+            .unwrap();
+
+        assert!(!adapter.has_edge("n-a", "n-b", "calls").await.unwrap());
+        assert!(!adapter.has_edge("n-a", "n'c", "it's").await.unwrap());
+        assert!(adapter.has_edge("n-a", "n-b", "imports").await.unwrap());
+        assert!(adapter.has_edge("n-b", "n-a", "calls").await.unwrap());
+        for id in ["n-a", "n-b", "n'c"] {
+            assert!(adapter.has_node(id).await.unwrap(), "{id} survives");
+        }
+        adapter.delete_edge_triples(&[]).await.unwrap();
+    }
+
     #[tokio::test]
     #[serial]
     async fn has_edges_batched_reports_only_stored_triples() {

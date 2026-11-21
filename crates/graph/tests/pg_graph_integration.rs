@@ -133,6 +133,7 @@ pggraph_test!(test_add_edges_batch);
 pggraph_test!(test_edge_upsert_same_key);
 pggraph_test!(test_has_edges);
 pggraph_test!(test_has_edges_batch_equivalence);
+pggraph_test!(test_delete_edge_triples);
 pggraph_test!(test_get_edges);
 pggraph_test!(test_get_neighbors);
 pggraph_test!(test_get_connections);

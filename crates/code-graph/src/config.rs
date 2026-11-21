@@ -10,9 +10,10 @@ use crate::error::{CodeGraphError, CodeGraphResult};
 pub const DEFAULT_ENOLA_TIMEOUT_SECS: f64 = 600.0;
 
 config_section! {
-    /// The deterministic code graph: where the enola binary is and how long
-    /// one `enola --generate` run may take. An engine section, registered
-    /// with the kind sections.
+    /// The deterministic code graph: where the enola binary is, how long
+    /// one `enola --generate` run may take, where remote repositories are
+    /// cloned and whether they may be. An engine section, registered with
+    /// the kind sections.
     pub struct CodeGraphConfig in "code_graph" {
         /// Path to the enola binary (Python's `ENOLA_PATH`). Must name an
         /// existing file when set; empty looks `enola` up on `PATH` when the
@@ -24,6 +25,22 @@ config_section! {
         /// (Python's `timeout`, default 600).
         pub enola_timeout_secs: f64 = DEFAULT_ENOLA_TIMEOUT_SECS => {
             env: [], alias: [], secret: false,
+        },
+        /// Where remote git repositories are shallow-cloned, for
+        /// `remember(content_type="code")` and the GitHub/GitLab repository
+        /// URLs `add` takes (Python's `BaseConfig.repos_root_directory`,
+        /// `COGNEE_REPOS_DIR`). Always a local directory. Empty is
+        /// `~/.cognee/repos`, Python's default.
+        pub clones_dir: String = String::new() => {
+            env: ["COGNEE_REPOS_DIR"], alias: ["repos_root_directory"], secret: false,
+        },
+        /// Python's `ALLOW_HTTP_REQUESTS` for remote repositories: only
+        /// `true`, `1`, `yes` or `on` (any case) allow cloning them, any
+        /// other value refuses it. Unset or blank, SDK, CLI and binding calls
+        /// may clone and HTTP API requests may not. Gates repository clones
+        /// only; web-page URLs `add` fetches are not gated by it yet.
+        pub allow_http_requests: String = String::new() => {
+            env: ["ALLOW_HTTP_REQUESTS"], alias: ["allow_http_requests"], secret: false,
         },
     }
 }
@@ -67,6 +84,8 @@ mod tests {
         let config = CodeGraphConfig::default();
         assert_eq!(config.enola_path, "");
         assert_eq!(config.enola_timeout().unwrap(), Duration::from_secs(600));
+        assert_eq!(config.clones_dir, "");
+        assert_eq!(config.allow_http_requests, "");
     }
 
     #[test]
@@ -81,6 +100,11 @@ mod tests {
             vec![
                 ("code_graph.enola_path", &["ENOLA_PATH"][..]),
                 ("code_graph.enola_timeout_secs", &[][..]),
+                ("code_graph.clones_dir", &["COGNEE_REPOS_DIR"][..]),
+                (
+                    "code_graph.allow_http_requests",
+                    &["ALLOW_HTTP_REQUESTS"][..]
+                ),
             ]
         );
         let mut values = ConfigValues::new();

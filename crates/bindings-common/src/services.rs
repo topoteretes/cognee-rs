@@ -248,6 +248,9 @@ impl CogneeServices {
 
         // Taken out of the guard here: the builder chain below awaits.
         let run_ownership_dir = cm.settings().run_ownership_dir();
+        // Where `add` and `remember(content_type="code")` clone remote
+        // repositories, and whether they may.
+        let repo_sources = cm.settings().repo_sources();
         // A code project's documents need an LLM; without one `add` leaves
         // them out of a project directory (Python `resolve_code_repository`).
         let llm_available = cm.llm_available().await?;
@@ -269,7 +272,8 @@ impl CogneeServices {
             .with_run_ownership_dir(run_ownership_dir)
             // Python runs its image and audio loaders at `add`.
             .with_loader_registry(cm.add_loader_registry().await)
-            .with_llm_available(llm_available),
+            .with_llm_available(llm_available)
+            .with_repo_sources(repo_sources),
         );
 
         // Unauthorized DeleteService; the ACL-enforcing wrapper is a later-phase

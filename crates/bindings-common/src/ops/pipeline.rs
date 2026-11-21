@@ -548,9 +548,28 @@ pub async fn add(
     // newly-created items from duplicates (the pipeline returns both).
     let pre_existing = existing_data_ids(&svc, dataset_name, owner_id, tenant_id).await?;
 
+    // `branch`: the branch to clone for each GitHub/GitLab repository URL
+    // (Python `add(branch=...)`), checked before anything is stored.
+    let branch = match opts.get("branch") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(branch)) => {
+            cognee::add::resolve_repo::check_branch_name(branch)
+                .map_err(|e| SdkError::Validation(e.to_string()))?;
+            Some(branch.clone())
+        }
+        Some(_) => {
+            return Err(SdkError::Validation(
+                "`branch` must be a string".to_string(),
+            ));
+        }
+    };
+    let params = cognee::add::AddParams {
+        branch,
+        ..cognee::add::AddParams::default()
+    };
     let returned = svc
         .add_pipeline
-        .add(inputs, dataset_name, owner_id, tenant_id)
+        .add_with_params(inputs, dataset_name, owner_id, tenant_id, &params)
         .await
         .map_err(|e| SdkError::Runtime(format!("add failed: {e}")))?;
 

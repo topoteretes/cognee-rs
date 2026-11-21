@@ -349,6 +349,7 @@ fn remember_item_info_serde_roundtrip() {
         token_count: Some(42),
         data_size: Some(1024),
         mime_type: Some("text/plain".to_string()),
+        ..RememberItemInfo::default()
     };
     let j = serde_json::to_string(&info).expect("ser");
     let back: RememberItemInfo = serde_json::from_str(&j).expect("de");

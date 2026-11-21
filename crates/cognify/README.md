@@ -14,11 +14,28 @@ it is recorded in the run's `FailureReport` (stage `CodeGraph`) and the
 failure policy decides the rest. `FailFast` stops at it; `RunToEnd` goes on
 with the other items; under `FailedItems` a repo item that loaded counts as a
 survivor and keeps its graph and completion marker. A per-file code item
-(`code`) and a DLT source stamped in `system_metadata` (`dlt_source`) are not
-supported yet and fail the whole run before any work, as does a legacy `dlt`
-row.
+(`code`, a lone source file `code_loader` stored) loads its code graph on its
+own enola run, staged under its original file name in a temporary directory
+(`cognee_code_graph::extract_code_file_graph`, Python's `code_files.py`),
+untagged, with the same per-item failure handling. A DLT source stamped in
+`system_metadata` (`dlt_source`) is not supported yet and fails the whole run
+before any work, as does a legacy `dlt` row.
 `routing::routes_need_llm` tells callers whether a run's items need the graph
 extractor at all.
+
+`run_code_graph_pipeline` builds code-repo items alone in a
+`code_graph_pipeline` run (Python's `remember(content_type="code")` run): the
+same CODE_REPO adapter, not incremental, and on success each item is stamped
+complete under both `cognify_pipeline` and `code_graph_pipeline`.
+
+A dataset holding several code repositories is one enola cluster
+(`code_cluster`, Python's `cluster.py`): cognify's CODE_REPO route loads every
+member from the run's first repo item (`load_dataset_cluster`), each under its
+own row, with the edges between repositories; `remember(content_type="code")`
+plans the refresh (`plan_dataset_refresh`) and rebuilds the dataset's other
+repositories with the new ones (`refresh_dataset_code_graph`), past
+`CLUSTER_INLINE_REBUILD_LIMIT` only marking the rest for the next cognify
+(`mark_code_repos_for_rebuild`).
 
 ## Global context index
 

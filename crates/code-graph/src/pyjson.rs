@@ -56,6 +56,14 @@ fn write_object(map: &Map<String, Value>, out: &mut String) {
     out.push('}');
 }
 
+/// `json.dumps(text)` for one string: Python's `ensure_ascii=True` escaping,
+/// double-quoted.
+pub fn dumps_str(text: &str) -> String {
+    let mut out = String::new();
+    write_string(text, &mut out);
+    out
+}
+
 /// A JSON string as Python's `ensure_ascii=True` encoder writes it: every
 /// character outside printable ASCII is a `\uXXXX` escape (a surrogate pair
 /// above the BMP), with the short escapes for the usual control characters.

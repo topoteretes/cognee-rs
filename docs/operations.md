@@ -42,6 +42,53 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   the same gate: off when `improve.auto_enabled` is off or an `improve.*`
   setting is invalid, as Python's `self_improvement and auto_improve_enabled()`.
 
+- **Code repositories** — `content_type = "code"` (CLI `--content-type code`,
+  bindings `contentType: "code"`) indexes each input, a local repository path
+  or a remote git URL, as a deterministic code graph with no LLM: Python's
+  `remember(content_type="code")`. Each repository is stored as its one
+  code-repo item without its documents, and its graph is built by one
+  `code_graph_pipeline` run over that item (the CODE_REPO route's enola
+  adapter), which also stamps it complete for `cognify_pipeline`, so a later
+  `cognify` of the dataset does not rebuild it. Runs are incremental: an
+  unchanged repository (same enola snapshot) writes nothing, and a changed one
+  writes only changed facts and removes what left it. The result has one item per repository, `{kind:
+  "code_repository", source, path, id, pipeline_run_id}`; with
+  `raise_on_error = false` a failed repository is reported on its item
+  (`status: "errored"`, `error`) and the rest go on. No LLM or embedding engine
+  is built or validated on this path, and `node_set` is ignored, as in Python.
+  `index_vectors = true` (CLI `--index-vectors`, bindings `indexVectors`)
+  also embeds the code nodes the call writes (each node's `name` into
+  `{type}_name`, its structural edges' texts into `EdgeType_relationship_name`)
+  for the semantic and completion retrievers; it needs an embedding provider,
+  and applies to the call's own repositories only: the dataset's other
+  repositories, rebuilt with them, stay graph-only.
+  `session_id`, `branch`, an unknown content type, and `index_vectors` or
+  `repo_credentials` without code are refused as in Python. A remote git URL
+  (`https://`, `http://`, `git@`, `ssh://`) is shallow-cloned under
+  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed
+  best-effort, on later calls; `repo_credentials` (bindings `repoCredentials`)
+  is a token for private https remotes that reaches git through its
+  environment only, and a token in the URL is redacted from the item, the
+  clone's directory and remote, logs and errors. Remote repositories follow
+  `ALLOW_HTTP_REQUESTS` (`code_graph.allow_http_requests`; allowed when unset
+  outside an HTTP server) and an http(s) host must not be internal. A
+  dataset's repositories are extracted together as one enola cluster, which
+  gives the edges between them (a frontend call to the backend route that
+  serves it): the dataset's other repositories, up to five, are rebuilt with
+  the new ones by one enola run, each still under its own item and run;
+  beyond five only the new ones are built and the rest are marked for the
+  next `cognify`. A failure of a repository already in the dataset is reported
+  in the result's `error`, never raised. Not ported yet, and refused:
+  `content_type = "skills"`. rustdoc:
+  `api::remember_code`, `cognee_cognify::code_cluster`.
+
+  `add` of a GitHub/GitLab repository URL (a repository root, or any http(s)
+  URL ending in `.git`) clones it the same way and resolves it like a local
+  code project: one code-repo item, recording the credential-free URL as
+  `system_metadata.repo_url`, plus the repository's documents. Bindings `add`
+  takes `branch` to clone another branch than the remote's default, into a
+  directory of its own; every branch of a URL shares the dataset's one row.
+
 `remember ≈ add + cognify + improve`. rustdoc: `api::remember`.
 
 ### recall
@@ -377,9 +424,21 @@ item (`code_repo`) runs the deterministic code graph instead of the stages
 above — one `enola --generate` over the original directory, its snapshot
 mapped to code nodes and typed edges ([`cognee-code-graph`](../crates/code-graph/)),
 tagged with the item's node set, recorded in the ownership ledger, with no LLM
-and no embedding call. Every other item runs the stages above. Both kinds share
+and no embedding call. The load is incremental: an unchanged snapshot of an
+untagged repository is skipped, and a changed one writes only changed facts,
+sweeps the nodes and edges that left it and strips node-set tags the call no
+longer passes. A dataset holding several code repositories is one enola
+cluster: the run's first repo item runs enola once over all of them (into
+each one's `.enola-<dataset_id>`) and loads every repository from that
+snapshot, each under its own item, with the edges between them; the run's
+other repo items have nothing left to do. Forgetting the item removes its code graph and leaves other
+repositories' alone. Every other item runs the stages above. Both kinds share
 one pipeline run and its completion markers. A per-file code item
-(`source: "code"`) is not supported yet and fails the run. A run whose items
+(`source: "code"`, a lone source file added through `code_loader`) loads the
+code graph of that one file: its stored text is staged in a temporary
+directory under its original name (plus a `tsconfig.json` for plain
+JavaScript) and enola runs on it, as a repository named `<file name>_<data
+id>`, untagged, with no LLM and no embedding. A run whose items
 are all code-routed resolves no graph extractor, so a deployment without an
 LLM key builds a code project's graph.
 

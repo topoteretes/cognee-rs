@@ -2289,3 +2289,100 @@ fn cognify_help_lists_graph_schema_flags() {
                 .and(predicate::str::contains("--chunk-attachment")),
         );
 }
+
+/// `remember --content-type code` indexes a local repository as a code graph
+/// on a keyless setup (SDK-1053 O5): one code-repo row, no documents, no LLM.
+/// enola is the fake script of the `cognee-code-graph` tests. The content
+/// type refuses `--session-id`, `--extractor` and unknown values.
+#[cfg(unix)]
+#[test]
+fn remember_content_type_code_is_keyless() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    let enola =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-graph/tests/fixtures/bin/enola");
+    let repo = workdir.path().join("shop");
+    std::fs::create_dir(&repo).expect("repo dir");
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"shop\"\n").expect("write");
+    std::fs::write(repo.join("main.py"), "def main():\n    pass\n").expect("write");
+    std::fs::write(repo.join("README.md"), "Shop.\n").expect("write");
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic").expect("write");
+
+    let keyless = || {
+        let mut cmd = make_cmd_in(&config_home, workdir.path());
+        for var in [
+            "LLM_API_KEY",
+            "OPENAI_TOKEN",
+            "EMBEDDING_API_KEY",
+            "LLM_PROVIDER",
+            "MOCK_LLM",
+            "COGNEE_SKIP_PREFLIGHT",
+            "COGNEE_SKIP_CONNECTION_TEST",
+            "GRAPH_EXTRACTOR",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.env("MOCK_EMBEDDING", "true");
+        cmd.env("ENOLA_PATH", &enola);
+        cmd
+    };
+
+    keyless()
+        .args([
+            "remember",
+            repo.to_str().expect("utf-8 path"),
+            "--content-type",
+            "code",
+            "--dataset-name",
+            "code_ds",
+        ])
+        .assert()
+        .success();
+    assert_eq!(count_data_rows(&db_file_path), 1, "the repository only");
+    assert!(repo.join(".enola").join("facts.jsonl").is_file());
+
+    for (extra, message) in [
+        (
+            vec!["--session-id", "s1"],
+            "session_id is not applicable to content_type='code'",
+        ),
+        (
+            vec!["--extractor", "llm"],
+            "--extractor is not supported with --content-type code",
+        ),
+    ] {
+        let mut args = vec![
+            "remember",
+            repo.to_str().expect("utf-8 path"),
+            "--content-type",
+            "code",
+        ];
+        args.extend(extra);
+        keyless()
+            .args(args)
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains(message));
+    }
+    keyless()
+        .args(["remember", "x", "--content-type", "skills"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "content_type='skills' is not supported by this SDK yet",
+        ));
+}

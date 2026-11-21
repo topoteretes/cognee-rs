@@ -86,6 +86,15 @@ pub struct AddParams {
     /// row that belongs to another dataset is refused. A pinned add takes
     /// exactly one input (`update()` replaces one document).
     pub pinned_id: Option<Uuid>,
+
+    /// The branch to clone for each GitHub/GitLab repository URL among the
+    /// inputs, instead of the remote's default (Python `add(branch=...)`).
+    /// Each branch is cloned into a directory of its own; a dataset still
+    /// holds one row per URL, so adding it on another branch replaces that
+    /// row's code graph. Checked ([`crate::resolve_repo::check_branch_name`])
+    /// before anything is stored; inputs that are no repository URL ignore
+    /// it.
+    pub branch: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +461,7 @@ async fn process_input_reusing(
 
     let (effective_input, resolved_url_metadata, resolved_label, data_item_metadata) =
         resolve_input_for_processing(input).await?;
-    let item_system_metadata = match input {
+    let mut item_system_metadata = match input {
         DataInput::DataItem {
             system_metadata, ..
         } => item_system_metadata_object(system_metadata.as_deref())?,
@@ -503,6 +512,9 @@ async fn process_input_reusing(
     // Python's `get_file_metadata` does; set below once the bytes are in hand.
     let mut original_extension = original_extension;
     let mut original_mime_type = original_mime_type;
+    // The name's own suffix, before the sniffed type replaces
+    // `original_extension`: a code file's stored name keeps it.
+    let path_extension = original_extension.clone();
 
     // Buffer the (effective) input bytes. For URL inputs `effective_input` is
     // the fetched content (a page as its raw HTML text); for everything else
@@ -681,8 +693,14 @@ async fn process_input_reusing(
             // A loader's text is kept once stored (Python `overwrite=False`):
             // when an earlier add, in any dataset, stored it, use it instead
             // of calling the loader again, which may be a paid model whose
-            // answer would be thrown away anyway.
-            let stored_name = format!("text_{content_hash}.txt");
+            // answer would be thrown away anyway. A code file's text keeps
+            // its own extension (`code_loader.py:96-98`).
+            let is_code = doc_type == "code";
+            let stored_name = if is_code {
+                crate::loaders::code::code_storage_file_name(&content_hash, &path_extension)
+            } else {
+                format!("text_{content_hash}.txt")
+            };
             let (location, text_bytes) = match kept_loader_text(storage, &claims, &stored_name)
                 .await?
             {
@@ -696,8 +714,24 @@ async fn process_input_reusing(
             };
 
             // Stored-file metadata now describes the stored text.
-            stored_extension = "txt".to_string();
-            stored_mime_type = "text/plain".to_string();
+            if is_code {
+                // Python describes the stored code text as reading it back
+                // would (`describe_derived_text`): sniffed, under its
+                // `code_<hash>.<ext>` name, so plain text in practice.
+                let described = crate::file_type::guess_file_type(&text_bytes, &path_extension);
+                stored_extension = described.extension;
+                stored_mime_type = described.mime;
+                // The loader's route stamp, unless the item carries its own
+                // (Python `ingest_data.py`: `if loader_result.system_metadata
+                // is not None and item_system_metadata is None`).
+                if item_system_metadata.is_none() {
+                    item_system_metadata =
+                        Some(crate::loaders::code::CODE_SYSTEM_METADATA.to_string());
+                }
+            } else {
+                stored_extension = "txt".to_string();
+                stored_mime_type = "text/plain".to_string();
+            }
             loader_engine = loader.engine_name().to_string();
 
             let raw_content_hash =
@@ -1016,7 +1050,7 @@ pub async fn persist_data_with_acl_and_locks(
     // row's add stamp first, so its incremental `add` reaches ingestion; this
     // `add` never skips an item as already added, so there is none to clear.
     let pinned_id = processed.pinned_id.or_else(|| {
-        crate::code_repo::code_repo_stamp_path(processed.system_metadata.as_deref()).map(
+        crate::code_repo::code_repo_stamp_identity(processed.system_metadata.as_deref()).map(
             |repo_path| {
                 crate::code_repo::code_repo_data_id(&repo_path, owner_id, tenant_id, dataset.id)
             },
@@ -1552,12 +1586,12 @@ fn content_lock_key(
 
 /// Resolve the MIME type for a file extension.
 ///
-/// If the extension maps to `"text_loader"` in the loader registry, return
-/// `"text/plain"` to match Python's behaviour (Python's `filetype.guess()`
-/// returns `text/plain` for `.md`, `.json`, `.xml`, etc. because they have no
-/// magic bytes). Otherwise fall back to `mime_guess`.
+/// If the extension maps to `"text_loader"` or `"code_loader"` in the loader
+/// registry, return `"text/plain"` to match Python's behaviour (Python's
+/// `filetype.guess()` returns `text/plain` for `.md`, `.json`, `.py`, etc.
+/// because they have no magic bytes). Otherwise fall back to `mime_guess`.
 fn resolve_mime(extension: &str, path_for_guess: &str) -> String {
-    if get_loader_name(extension) == "text_loader" {
+    if matches!(get_loader_name(extension), "text_loader" | "code_loader") {
         "text/plain".to_string()
     } else {
         mime_guess::from_path(path_for_guess)
@@ -2532,6 +2566,8 @@ pub struct AddPipeline {
     run_ownership_dir: Option<std::path::PathBuf>,
     // ─── Code projects (SDK-1053) ─────────────────────────────────────────
     llm_available: bool,
+    repo_sources: crate::resolve_repo::RepoSourceSettings,
+    repo_transport: Arc<dyn crate::resolve_repo::RepoTransport>,
 }
 
 impl AddPipeline {
@@ -2559,6 +2595,8 @@ impl AddPipeline {
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
             llm_available: true,
+            repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
+            repo_transport: crate::resolve_repo::system_git(),
         }
     }
 
@@ -2584,6 +2622,8 @@ impl AddPipeline {
             loaders: Arc::new(LoaderRegistry::default_registry()),
             run_ownership_dir: None,
             llm_available: true,
+            repo_sources: crate::resolve_repo::RepoSourceSettings::closed(),
+            repo_transport: crate::resolve_repo::system_git(),
         }
     }
 
@@ -2664,6 +2704,40 @@ impl AddPipeline {
         self
     }
 
+    /// Where remote repositories are cloned and whether they may be
+    /// (`code_graph.clones_dir`, `ALLOW_HTTP_REQUESTS`). Read by `add` for a
+    /// GitHub/GitLab repository URL and by `remember(content_type="code")`.
+    ///
+    /// The default is fail-closed: the default clones directory, with remote
+    /// repositories refused (Python's API default). SDK, CLI and binding
+    /// hosts pass [`RepoSourceSettings::new`] with `api_request = false`.
+    ///
+    /// [`RepoSourceSettings::new`]: crate::resolve_repo::RepoSourceSettings::new
+    pub fn with_repo_sources(mut self, settings: crate::resolve_repo::RepoSourceSettings) -> Self {
+        self.repo_sources = settings;
+        self
+    }
+
+    /// The settings wired with [`Self::with_repo_sources`].
+    pub fn repo_sources(&self) -> &crate::resolve_repo::RepoSourceSettings {
+        &self.repo_sources
+    }
+
+    /// Reach git (and the outbound-URL check before a clone) through
+    /// `transport` instead of [`crate::resolve_repo::SystemGit`]. For tests.
+    pub fn with_repo_transport(
+        mut self,
+        transport: Arc<dyn crate::resolve_repo::RepoTransport>,
+    ) -> Self {
+        self.repo_transport = transport;
+        self
+    }
+
+    /// The transport wired with [`Self::with_repo_transport`].
+    pub fn repo_transport(&self) -> &Arc<dyn crate::resolve_repo::RepoTransport> {
+        &self.repo_transport
+    }
+
     /// Attach the CPU pool used by [`cognee_core::TaskContext`].
     pub fn with_thread_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
         self.thread_pool = Some(pool);
@@ -2724,6 +2798,64 @@ impl AddPipeline {
         .await
     }
 
+    /// Store a resolved code repository as its one code-repo `Data` row,
+    /// without cognifying it. Python's `add_code_repository`.
+    ///
+    /// `remember(content_type="code")` builds the graph itself and needs the
+    /// row only for its id and its dataset listing. It is the same manifest
+    /// item `add(<repo>)` ingests ([`crate::code_repo::resolve_code_repository`]),
+    /// without the repository's documents (`include_documents = false`).
+    /// `dataset_id` targets an existing dataset by id, as
+    /// [`AddParams::dataset_id`] does (a shared dataset); `None` resolves
+    /// `dataset_name` for the owner. `source_url` (credential-free) records a
+    /// cloned repository's remote as `system_metadata["repo_url"]`.
+    ///
+    /// # Errors
+    ///
+    /// The manifest cannot be built (an unreadable directory), what
+    /// [`add`](Self::add) raises, and [`IngestionError::CodeRepositoryMissing`]
+    /// when the add stored no row.
+    pub async fn add_code_repository(
+        &self,
+        repo_path: &std::path::Path,
+        dataset_name: &str,
+        owner_id: Uuid,
+        tenant_id: Option<Uuid>,
+        dataset_id: Option<Uuid>,
+        source_url: Option<&str>,
+    ) -> Result<Data, Box<dyn std::error::Error>> {
+        let directory = repo_path.to_path_buf();
+        let source_url = source_url.map(str::to_string);
+        let resolved = tokio::task::spawn_blocking(move || {
+            crate::code_repo::resolve_code_repository(
+                &directory,
+                false,
+                true,
+                source_url.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
+        let params = AddParams {
+            dataset_id,
+            ..AddParams::default()
+        };
+        let rows = self
+            .add_with_params(
+                vec![resolved.manifest_item],
+                dataset_name,
+                owner_id,
+                tenant_id,
+                &params,
+            )
+            .await?;
+        rows.into_iter().next().ok_or_else(|| {
+            Box::new(IngestionError::CodeRepositoryMissing {
+                repo_path: repo_path.display().to_string(),
+            }) as Box<dyn std::error::Error>
+        })
+    }
+
     /// Like [`add`](Self::add), but accepts additional optional parameters.
     #[instrument(
         name = "ingestion.add_with_params",
@@ -2766,6 +2898,17 @@ impl AddPipeline {
         // entry point of its own, and the repeat is one metadata parse per
         // item.)
         validate_add_inputs(&inputs, params.node_set.as_deref())?;
+        // Python `add()` checks the branch before anything is written, and
+        // before the name can reach git.
+        if let Some(branch) = params.branch.as_deref() {
+            crate::resolve_repo::check_branch_name(branch)?;
+        }
+        // ── Repository URLs (Python `resolve_code_repository_url`) ───────
+        // A GitHub/GitLab repository URL is a code project, not a web page:
+        // it is shallow-cloned and resolved like a local project directory.
+        let inputs = self
+            .resolve_repository_urls(inputs, params.branch.as_deref())
+            .await?;
         // ── Directories (Python `resolve_data_directories`) ──────────────
         // A code project becomes one repo manifest item plus its documents;
         // any other directory its files. Walks and hashes files, so it runs
@@ -2882,6 +3025,69 @@ impl AddPipeline {
     }
 }
 
+impl AddPipeline {
+    /// Replace every GitHub/GitLab repository URL among `inputs`
+    /// ([`crate::resolve_repo::code_repo_clone_url`]) with its clone's one
+    /// repo manifest item plus its documents, in place (Python
+    /// `resolve_data_directories` → `resolve_code_repository_url`). The
+    /// manifest records the credential-free URL as `repo_url`; its data id
+    /// is keyed on the default branch's clone
+    /// ([`crate::code_repo::code_repo_stamp_identity`]). Other inputs pass
+    /// through unchanged.
+    async fn resolve_repository_urls(
+        &self,
+        inputs: Vec<DataInput>,
+        branch: Option<&str>,
+    ) -> Result<Vec<DataInput>, Box<dyn std::error::Error>> {
+        let is_repository_url = |input: &DataInput| {
+            matches!(input, DataInput::Url(url)
+                if crate::resolve_repo::code_repo_clone_url(url).is_some())
+        };
+        if !inputs.iter().any(is_repository_url) {
+            return Ok(inputs);
+        }
+        let mut resolved = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let DataInput::Url(url) = &input else {
+                resolved.push(input);
+                continue;
+            };
+            let Some(clone_url) = crate::resolve_repo::code_repo_clone_url(url) else {
+                resolved.push(input);
+                continue;
+            };
+            let repo_path = crate::resolve_repo::resolve_repo_source(
+                &clone_url,
+                &self.repo_sources,
+                None,
+                branch,
+                self.repo_transport.as_ref(),
+            )
+            .await?;
+            let source_url = crate::resolve_repo::redact_repo_spec(&clone_url);
+            let llm_available = self.llm_available;
+            let repository = tokio::task::spawn_blocking(move || {
+                crate::code_repo::resolve_code_repository(
+                    &repo_path,
+                    true,
+                    llm_available,
+                    Some(&source_url),
+                )
+            })
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??;
+            resolved.push(repository.manifest_item);
+            resolved.extend(
+                repository
+                    .document_paths
+                    .iter()
+                    .map(|document| DataInput::FilePath(document.to_string_lossy().into_owned())),
+            );
+        }
+        Ok(resolved)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Output extraction (Decision 9)
 // ---------------------------------------------------------------------------
@@ -2983,6 +3189,10 @@ pub enum IngestionError {
     /// which dataset holds the id.
     #[error("Data id {data_id} is not available in dataset {dataset_id}.")]
     PinnedIdNotInDataset { data_id: Uuid, dataset_id: Uuid },
+    /// [`AddPipeline::add_code_repository`] stored no row for the repository
+    /// (Python's "was added but its data record ... is missing").
+    #[error("Code repository '{repo_path}' was added but its data record is missing.")]
+    CodeRepositoryMissing { repo_path: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -3469,6 +3679,191 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
+    }
+
+    // -- code loader (SDK-1053 O9a) ---------------------------------------------
+
+    /// A CRLF / lone-CR `.PY` file with a non-ASCII character. The expected
+    /// values are what Python's `CodeLoader.load` and `get_file_metadata`
+    /// produce for the same bytes at a59433e6b.
+    const CODE_FIXTURE: &[u8] =
+        b"import os\r\n\r\ndef pay(amount):\r\n    return amount * 2\rprint(\"caf\xc3\xa9\")\n";
+
+    #[tokio::test]
+    async fn a_code_file_is_stored_by_the_code_loader_as_python_stores_it() {
+        let (pipeline, _db) = make_pipeline().await;
+        let dir = tempfile::tempdir().unwrap();
+        let pipeline = AddPipeline {
+            storage: Arc::new(cognee_storage::LocalStorage::new(dir.path().join("data"))),
+            ..pipeline
+        };
+        let path = dir.path().join("Payments.PY");
+        std::fs::write(&path, CODE_FIXTURE).unwrap();
+
+        let data = pipeline
+            .add(
+                vec![DataInput::FilePath(path.to_str().unwrap().to_string())],
+                "code",
+                Uuid::new_v4(),
+                None,
+            )
+            .await
+            .unwrap();
+        let row = &data[0];
+        assert_eq!(row.name, "Payments");
+        assert_eq!(row.content_hash, "0f2b9b6fe2566aa1cac1a576fe123ffb");
+        assert_eq!(
+            row.raw_content_hash.as_deref(),
+            Some("4f4aee5d38e96ea1a8acfdd2bf2fde65")
+        );
+        assert_eq!(row.loader_engine.as_deref(), Some("code_loader"));
+        assert_eq!(
+            (row.extension.as_str(), row.mime_type.as_str()),
+            ("txt", "text/plain")
+        );
+        assert_eq!(
+            (
+                row.original_extension.as_deref(),
+                row.original_mime_type.as_deref()
+            ),
+            (Some("txt"), Some("text/plain"))
+        );
+        assert_eq!(row.data_size, 68);
+        assert!(
+            row.raw_data_location
+                .ends_with("code_0f2b9b6fe2566aa1cac1a576fe123ffb.py"),
+            "{}",
+            row.raw_data_location
+        );
+        let stamp: serde_json::Value =
+            serde_json::from_str(row.system_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(stamp, serde_json::json!({"source": "code"}));
+
+        let stored = pipeline
+            .storage
+            .retrieve("code_0f2b9b6fe2566aa1cac1a576fe123ffb.py")
+            .await
+            .unwrap();
+        assert_eq!(
+            stored,
+            b"import os\n\ndef pay(amount):\n    return amount * 2\nprint(\"caf\xc3\xa9\")\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_uploaded_code_file_is_claimed_by_its_name_and_an_item_stamp_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let loaders = LoaderRegistry::default_registry();
+        let upload = |name: &str| DataInput::Binary {
+            name: name.to_string(),
+            data: b"export const x = 1;\n".to_vec(),
+        };
+
+        let processed = process_input_with_loaders(
+            &upload("widget.ts"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "code_loader");
+        assert_eq!(
+            processed.storage_location,
+            format!("code_{}.ts", processed.content_hash)
+        );
+        assert_eq!(
+            processed.system_metadata.as_deref(),
+            Some(crate::loaders::code::CODE_SYSTEM_METADATA)
+        );
+
+        // The item's own stamp is kept (Python: the loader's stamp applies
+        // only when the item carries none).
+        let item = DataInput::DataItem {
+            data: Box::new(upload("widget.ts")),
+            label: None,
+            external_metadata: None,
+            system_metadata: Some(r#"{"source": "mine"}"#.to_string()),
+        };
+        let processed = process_input_with_loaders(
+            &item,
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            processed.system_metadata.as_deref(),
+            Some(r#"{"source": "mine"}"#)
+        );
+
+        // A document type stays a document, unstamped.
+        let processed = process_input_with_loaders(
+            &upload("notes.md"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    #[tokio::test]
+    async fn preferring_the_text_loader_reads_a_code_file_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let processed = process_input_preferring(
+            &DataInput::Binary {
+                name: "a.py".to_string(),
+                data: b"x = 1\r\n".to_vec(),
+            },
+            &storage,
+            &LoaderRegistry::default_registry(),
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+            &["text_loader".to_string()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(
+            processed.storage_location,
+            format!("text_{}.txt", processed.content_hash)
+        );
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    #[tokio::test]
+    async fn a_code_file_that_is_not_utf8_fails_the_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let result = process_input_with_loaders(
+            &DataInput::Binary {
+                name: "bad.rs".to_string(),
+                data: vec![0xFF, 0xFE, b'x'],
+            },
+            &storage,
+            &LoaderRegistry::default_registry(),
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("non-UTF-8 code must fail");
+        };
+        assert!(error.to_string().contains("UTF-8"), "{error}");
     }
 
     #[tokio::test]

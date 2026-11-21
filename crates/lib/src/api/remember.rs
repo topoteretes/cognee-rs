@@ -150,7 +150,14 @@ impl From<cognee_core::pipeline::PipelineRunStatus> for RememberStatus {
 }
 
 /// Per-item information in the remember result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Two shapes, as Python's `RememberResult.items` dicts: a stored data item
+/// (`id`, `name`, `content_hash`, `token_count`, `data_size`, `mime_type`,
+/// every key present), and a code repository of
+/// `remember(content_type="code")` ([`Self::kind`] is
+/// `"code_repository"`), which serializes only `kind`, `source`, `path`,
+/// `id`, `pipeline_run_id`, `status` and `error`, each when set.
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct RememberItemInfo {
     pub id: Option<Uuid>,
     pub name: Option<String>,
@@ -160,6 +167,65 @@ pub struct RememberItemInfo {
     /// Size of the raw data in bytes (None when unknown).
     pub data_size: Option<i64>,
     pub mime_type: Option<String>,
+    /// `"code_repository"` for a repository of
+    /// `remember(content_type="code")`; `None` for a data item.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Code repository: the spec as given, with any URL credentials removed.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Code repository: the resolved local directory.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Code repository: the `code_graph_pipeline` run that built it.
+    #[serde(default)]
+    pub pipeline_run_id: Option<Uuid>,
+    /// Code repository: `"errored"` when it failed (unset otherwise).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Code repository: why it failed.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// The `kind` of a code repository item ([`RememberItemInfo::kind`]).
+pub const CODE_REPOSITORY_ITEM_KIND: &str = "code_repository";
+
+impl Serialize for RememberItemInfo {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(kind) = &self.kind {
+            // Python's code item dict, in its insertion order.
+            map.serialize_entry("kind", kind)?;
+            if let Some(source) = &self.source {
+                map.serialize_entry("source", source)?;
+            }
+            if let Some(path) = &self.path {
+                map.serialize_entry("path", path)?;
+            }
+            if let Some(id) = &self.id {
+                map.serialize_entry("id", id)?;
+            }
+            if let Some(run_id) = &self.pipeline_run_id {
+                map.serialize_entry("pipeline_run_id", run_id)?;
+            }
+            if let Some(status) = &self.status {
+                map.serialize_entry("status", status)?;
+            }
+            if let Some(error) = &self.error {
+                map.serialize_entry("error", error)?;
+            }
+        } else {
+            map.serialize_entry("id", &self.id)?;
+            map.serialize_entry("name", &self.name)?;
+            map.serialize_entry("content_hash", &self.content_hash)?;
+            map.serialize_entry("token_count", &self.token_count)?;
+            map.serialize_entry("data_size", &self.data_size)?;
+            map.serialize_entry("mime_type", &self.mime_type)?;
+        }
+        map.end()
+    }
 }
 
 /// Result of a `remember()` call.
@@ -534,6 +600,7 @@ async fn run_permanent_inner(
             token_count: (d.token_count >= 0).then_some(d.token_count),
             data_size: (d.data_size >= 0).then_some(d.data_size),
             mime_type: Some(d.mime_type.clone()),
+            ..RememberItemInfo::default()
         })
         .collect();
 

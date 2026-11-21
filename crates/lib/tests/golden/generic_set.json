@@ -59,6 +59,68 @@
     "err": "TypeMismatch",
     "key": "allow_cypher_query"
   },
+  "allow_http_requests <- \"\"": {
+    "ok": {}
+  },
+  "allow_http_requests <- \"1\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "1"
+    }
+  },
+  "allow_http_requests <- \"s\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "s"
+    }
+  },
+  "allow_http_requests <- \"true\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "true"
+    }
+  },
+  "allow_http_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- 0": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- 1": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- 70000": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- false": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- true": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
+  "allow_http_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "allow_http_requests"
+  },
   "anthropic_base_url <- \"\"": {
     "ok": {
       "llm.anthropic.base_url": ""
@@ -2317,6 +2379,130 @@
   "classification_model <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "classification_model"
+  },
+  "code_graph.allow_http_requests <- \"\"": {
+    "ok": {}
+  },
+  "code_graph.allow_http_requests <- \"1\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "1"
+    }
+  },
+  "code_graph.allow_http_requests <- \"s\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "s"
+    }
+  },
+  "code_graph.allow_http_requests <- \"true\"": {
+    "ok": {
+      "code_graph.allow_http_requests": "true"
+    }
+  },
+  "code_graph.allow_http_requests <- -1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- 0": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- 1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- 70000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.allow_http_requests <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.allow_http_requests"
+  },
+  "code_graph.clones_dir <- \"\"": {
+    "ok": {}
+  },
+  "code_graph.clones_dir <- \"1\"": {
+    "ok": {
+      "code_graph.clones_dir": "1"
+    }
+  },
+  "code_graph.clones_dir <- \"s\"": {
+    "ok": {
+      "code_graph.clones_dir": "s"
+    }
+  },
+  "code_graph.clones_dir <- \"true\"": {
+    "ok": {
+      "code_graph.clones_dir": "true"
+    }
+  },
+  "code_graph.clones_dir <- -1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- 0": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- 1": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- 70000": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- [1]": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- false": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- null": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- true": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
+  },
+  "code_graph.clones_dir <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "code_graph.clones_dir"
   },
   "code_graph.enola_path <- \"\"": {
     "ok": {}
@@ -15493,6 +15679,68 @@
   "relational_db_url <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "relational_db_url"
+  },
+  "repos_root_directory <- \"\"": {
+    "ok": {}
+  },
+  "repos_root_directory <- \"1\"": {
+    "ok": {
+      "code_graph.clones_dir": "1"
+    }
+  },
+  "repos_root_directory <- \"s\"": {
+    "ok": {
+      "code_graph.clones_dir": "s"
+    }
+  },
+  "repos_root_directory <- \"true\"": {
+    "ok": {
+      "code_graph.clones_dir": "true"
+    }
+  },
+  "repos_root_directory <- -1": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- 0": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- 1": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- 70000": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- [1]": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- false": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- null": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- true": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
+  },
+  "repos_root_directory <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "repos_root_directory"
   },
   "search.allow_cypher_query <- \"\"": {
     "err": "TypeMismatch",

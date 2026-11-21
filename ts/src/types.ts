@@ -580,6 +580,19 @@ export interface CogneeRememberOptions {
    * together with `sessionId`.
    */
   extractor?: string;
+  /**
+   * `"code"` indexes each input, a local code repository path, as a code
+   * graph with no LLM (Python `remember(content_type="code")`). Not with
+   * `sessionId`.
+   */
+  contentType?: "code";
+  /** Accepted and ignored with `contentType: "code"`, as in Python. */
+  nodeSet?: string[];
+  /**
+   * With `contentType: "code"`: `false` records a failed repository on its
+   * item (`status: "errored"`) instead of rejecting (default `true`).
+   */
+  raiseOnError?: boolean;
 }
 
 /**
@@ -600,6 +613,8 @@ export type CogneeRememberStatus =
  * Per-item information in a `CogneeRememberResult`.
  *
  * Mirrors the Rust `RememberItemInfo` struct (Serialize, snake_case fields).
+ * A `contentType: "code"` remember returns {@link CogneeRememberCodeItem}s
+ * instead.
  */
 export interface CogneeRememberItemInfo {
   id: string | null;
@@ -610,6 +625,25 @@ export interface CogneeRememberItemInfo {
   /** Size of the raw data in bytes (`null` when unknown). */
   data_size: number | null;
   mime_type: string | null;
+}
+
+/**
+ * One repository of a `contentType: "code"` remember (Python's item dict):
+ * each key is present only when set.
+ */
+export interface CogneeRememberCodeItem {
+  kind: "code_repository";
+  /** The repository as given, without URL credentials. */
+  source: string;
+  /** The resolved local directory. */
+  path?: string;
+  /** The repository's data id. */
+  id?: string;
+  /** The `code_graph_pipeline` run that built it. */
+  pipeline_run_id?: string;
+  /** `"errored"` for a failed repository. */
+  status?: "errored";
+  error?: string;
 }
 
 /**
@@ -641,7 +675,7 @@ export interface CogneeRememberResult {
   /** Content hash of the first item (`null` on the session path). */
   content_hash: string | null;
   items_processed: number;
-  items: CogneeRememberItemInfo[];
+  items: (CogneeRememberItemInfo | CogneeRememberCodeItem)[];
   error: string | null;
   /** `"qa"` / `"trace"` / `"feedback"` on the typed-entry path; `null` otherwise. */
   entry_type: string | null;

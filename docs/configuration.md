@@ -1694,6 +1694,8 @@ a repository and loads its snapshot as code nodes and typed edges.
 |---|---|---|
 | `ENOLA_PATH` | `code_graph.enola_path` (`enola_path`) | _(empty)_ |
 | — | `code_graph.enola_timeout_secs` | `600` |
+| `COGNEE_REPOS_DIR` | `code_graph.clones_dir` (`repos_root_directory`) | _(empty: `~/.cognee/repos`)_ |
+| `ALLOW_HTTP_REQUESTS` | `code_graph.allow_http_requests` (`allow_http_requests`) | _(empty)_ |
 
 `code_graph.enola_path` names the enola binary. When it is set, the file must
 exist, or the load fails with `EnolaNotInstalledError`. When it is empty,
@@ -1704,9 +1706,27 @@ directory, so install the wheel (`pip install enola-cli==0.5.1`) or the binary
 and put it on `PATH` or in `ENOLA_PATH`.
 
 `code_graph.enola_timeout_secs` bounds one `enola --generate` run. A run that
-takes longer is killed and fails with `EnolaSnapshotError`. Python has no
+takes longer is killed and fails with `EnolaSnapshotError`. One run over a
+dataset's repositories (an enola cluster) gets this budget per repository,
+capped at 3600 seconds but never below one repository's budget, as in Python. Python has no
 setting for it: its callers pass `timeout` (default 600 seconds). It must be a
 positive number.
+
+`code_graph.clones_dir` is where remote git repositories are shallow-cloned:
+the git URLs of `remember(content_type="code")` and the GitHub/GitLab
+repository URLs `add` takes (Python's `BaseConfig.repos_root_directory`). It is
+always a local directory, even with S3 storage. Clones are reused across calls
+and refreshed best-effort; each branch gets a directory of its own.
+
+`code_graph.allow_http_requests` is Python's `ALLOW_HTTP_REQUESTS` for those
+clones. Only `true`, `1`, `yes` or `on` (any case) allow them; any other set
+value refuses them, a misspelling included. Unset or blank, SDK, CLI and
+binding calls may clone, and an HTTP server refuses remote repositories, as
+Python's API does. A refusal is a `CodeRepositoryError` (HTTP 403). An http(s)
+clone also has to pass the outbound-address check: a host that is, or resolves
+to, a private, loopback, link-local or reserved address is refused. Python's
+setting also gates the web pages `add` fetches; in Rust it gates repository
+clones only.
 
 ## System paths, users & datasets
 

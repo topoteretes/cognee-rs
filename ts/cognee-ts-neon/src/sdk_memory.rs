@@ -27,7 +27,8 @@ use crate::sdk::CogneeHandle;
 
 /// `cogneeRemember(handle, dataInput, datasetName, opts?) -> Promise<RememberResult>`
 ///
-/// opts: `{ sessionId?, selfImprovement? (default true), tenant? }`
+/// opts: `{ sessionId?, selfImprovement? (default true), tenant?, extractor?,
+/// contentType? ("code"), nodeSet?, raiseOnError? }`
 ///
 /// `RememberResult` derives `Serialize` — result is passed through
 /// `serde_json::to_value` directly (`cognify_result` is `#[serde(skip)]`, so
