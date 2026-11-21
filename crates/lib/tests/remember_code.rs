@@ -1203,3 +1203,190 @@ mod remote {
         assert!(remote.transport.argv.lock().unwrap().is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------
+// A dataset's repositories as one enola cluster (SDK-1053 O8)
+// ---------------------------------------------------------------------------
+
+/// The `pipeline_status` of a row.
+async fn pipeline_status(stack: &Stack, data_id: Uuid) -> Value {
+    get_data(&stack.db, data_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .pipeline_status
+        .map_or(Value::Null, |text| serde_json::from_str(&text).unwrap())
+}
+
+fn built(status: &Value, dataset_id: Uuid) -> bool {
+    ["cognify_pipeline", "code_graph_pipeline"]
+        .iter()
+        .all(|name| {
+            status[*name][dataset_id.to_string()] == json!("DATA_ITEM_PROCESSING_COMPLETED")
+        })
+}
+
+/// The distinct `code_graph_pipeline` runs of the stack's dataset.
+async fn code_graph_run_ids(stack: &Stack) -> BTreeSet<Uuid> {
+    stack
+        .run_rows()
+        .await
+        .into_iter()
+        .filter(|(name, _, _)| name == "code_graph_pipeline")
+        .map(|(_, _, run_id)| run_id)
+        .collect()
+}
+
+fn reaches_route() -> (String, String, String) {
+    (
+        cognee_code_graph::fact_node_id("ui", "route", "/api/rounds").to_string(),
+        cognee_code_graph::fact_node_id("golf", "route", "/api/rounds").to_string(),
+        "reaches_route".to_string(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_repositories_are_remembered_as_one_cluster_with_edges_between_them() {
+    let root = TempDir::new().unwrap();
+    let golf = project(root.path(), "golf", "cluster:cluster");
+    let ui = project(root.path(), "ui", "cluster:cluster");
+    let stack = Stack::new().await;
+
+    let result = stack
+        .remember(stack.params(vec![path_input(&golf), path_input(&ui)], true))
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RememberStatus::Completed, "{result}");
+    assert_eq!(result.items_processed, 2);
+    let dataset_id = stack.dataset_id().await;
+    let output_dir = cognee_code_graph::cluster_output_dir(dataset_id);
+    // One enola run, over both, into the dataset's own directory.
+    assert!(golf.join(&output_dir).join("cluster-config.yaml").is_file());
+    assert!(!ui.join(&output_dir).join("cluster-config.yaml").exists());
+    assert!(!golf.join(".enola").exists() && !ui.join(".enola").exists());
+    assert!(graph_shape(&stack).await.1.contains(&reaches_route()));
+    // One code_graph_pipeline run per repository, each over its own row.
+    let run_ids: BTreeSet<Uuid> = result
+        .items
+        .iter()
+        .map(|item| item.pipeline_run_id.unwrap())
+        .collect();
+    assert_eq!(run_ids.len(), 2);
+    for item in &result.items {
+        assert!(built(
+            &pipeline_status(&stack, item.id.unwrap()).await,
+            dataset_id
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_repository_is_built_together_with_the_ones_already_in_the_dataset() {
+    let root = TempDir::new().unwrap();
+    let golf = project(root.path(), "golf", "cluster:cluster");
+    let ui = project(root.path(), "ui", "cluster:cluster");
+    let stack = Stack::new().await;
+    let first = stack
+        .remember(stack.params(vec![path_input(&golf)], true))
+        .await
+        .unwrap();
+    let golf_id = first.items[0].id.unwrap();
+    // Alone in its dataset: the per-repository run.
+    assert!(golf.join(".enola").is_dir());
+
+    let second = stack
+        .remember(stack.params(vec![path_input(&ui)], true))
+        .await
+        .unwrap();
+
+    assert_eq!(second.status, RememberStatus::Completed, "{second}");
+    // Only this call's repository is in its result, but golf was rebuilt in
+    // the cluster too: the edge between them is there, and golf's own run
+    // ran under golf's row.
+    assert_eq!(second.items.len(), 1);
+    assert!(graph_shape(&stack).await.1.contains(&reaches_route()));
+    assert_eq!(
+        code_graph_run_ids(&stack).await.len(),
+        3,
+        "golf, then golf and ui"
+    );
+    let dataset_id = stack.dataset_id().await;
+    assert!(built(&pipeline_status(&stack, golf_id).await, dataset_id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rebuilt_repository_that_fails_is_reported_not_raised() {
+    let root = TempDir::new().unwrap();
+    // Both carry the label `acme/shop`: not a cluster, each runs on its own.
+    let shop = project(root.path(), "shop", "snapshot:basic");
+    let stack = Stack::new().await;
+    stack
+        .remember(stack.params(vec![path_input(&shop)], true))
+        .await
+        .unwrap();
+    std::fs::write(shop.join(".fake-enola"), "fail-single:basic").unwrap();
+    let store = project(root.path(), "store", "snapshot:basic");
+
+    let result = stack
+        .remember(stack.params(vec![path_input(&store)], true))
+        .await
+        .expect("another repository's failure is never raised");
+
+    assert_eq!(result.status, RememberStatus::Errored, "{result}");
+    assert_eq!(result.items_processed, 1);
+    assert_eq!(result.items[0].status, None);
+    assert!(result.items[0].pipeline_run_id.is_some());
+    let error = result.error.unwrap();
+    assert!(error.starts_with("shop: "), "{error}");
+    assert!(error.contains("exited with code 3"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn past_the_inline_limit_the_other_repositories_are_left_to_the_next_cognify() {
+    let root = TempDir::new().unwrap();
+    let stack = Stack::new().await;
+    // Six repositories that are no cluster (one shared label): each run on
+    // its own.
+    let mut existing = Vec::new();
+    for index in 0..=cognee_code_graph::CLUSTER_INLINE_REBUILD_LIMIT {
+        let repo = project(root.path(), &format!("svc{index}"), "snapshot:basic");
+        let result = stack
+            .remember(stack.params(vec![path_input(&repo)], true))
+            .await
+            .unwrap();
+        existing.push(result.items[0].id.unwrap());
+    }
+    let runs_before = code_graph_run_ids(&stack).await.len();
+    let fresh = project(root.path(), "fresh", "snapshot:basic");
+
+    let result = stack
+        .remember(stack.params(vec![path_input(&fresh)], true))
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, RememberStatus::Completed, "{result}");
+    let dataset_id = stack.dataset_id().await;
+    assert!(built(
+        &pipeline_status(&stack, result.items[0].id.unwrap()).await,
+        dataset_id
+    ));
+    // The others were not rebuilt, only marked: no stamps left.
+    for id in existing {
+        let status = pipeline_status(&stack, id).await;
+        assert!(
+            status["cognify_pipeline"]
+                .get(dataset_id.to_string())
+                .is_none()
+                && status["code_graph_pipeline"]
+                    .get(dataset_id.to_string())
+                    .is_none(),
+            "{status}"
+        );
+    }
+    assert_eq!(
+        code_graph_run_ids(&stack).await.len(),
+        runs_before + 1,
+        "one more run, for the new repository only"
+    );
+}

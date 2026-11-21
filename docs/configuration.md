@@ -1706,7 +1706,9 @@ directory, so install the wheel (`pip install enola-cli==0.5.1`) or the binary
 and put it on `PATH` or in `ENOLA_PATH`.
 
 `code_graph.enola_timeout_secs` bounds one `enola --generate` run. A run that
-takes longer is killed and fails with `EnolaSnapshotError`. Python has no
+takes longer is killed and fails with `EnolaSnapshotError`. One run over a
+dataset's repositories (an enola cluster) gets this budget per repository,
+capped at 3600 seconds but never below one repository's budget, as in Python. Python has no
 setting for it: its callers pass `timeout` (default 600 seconds). It must be a
 positive number.
 

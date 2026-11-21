@@ -26,6 +26,9 @@ does all four for one local repository.
 | Read the stamp | `stored_repository_state` | `extract_code_graph._stored_repository_state` |
 | The whole load | `load_code_graph` | `extract_code_graph.get_code_graph_tasks` |
 | The CODE_REPO cognify route | `extract_code_repo_graph` | `code_repo.extract_code_repo_graph` |
+| Run enola over a cluster | `render_cluster_config`, `run_enola_cluster` | `enola.render_cluster_config`, `enola.run_enola_cluster` |
+| Snapshot a dataset's repositories | `snapshot_dataset_code_repos`, `resolve_member_labels`, `cluster_output_dir` | `cluster.snapshot_dataset_code_repos`, `cluster.resolve_member_labels`, `cluster.cluster_output_dir` |
+| Load one member of a cluster | `load_cluster_member` | `get_code_graph_tasks(..., repo_scope=label, snapshot=...)` |
 
 `parse_enola_snapshot` reads `facts.jsonl`. It also turns `insights.json`
 findings into `insight` facts and `flows.json` entry points into `flow` facts.
@@ -127,14 +130,51 @@ document naming the repository (`repo_path`) and its source files, stamped
 calls `extract_code_repo_graph`: the repository directory must still exist
 (`CodeGraphError::InvalidRepoItem` otherwise, Python's `ValueError`), and the
 item's `external_metadata["node_set"]` tags every code node. The load runs in
-the cognify run, so its ledger rows carry that run's id. One repository per
-item for now; Python loads a dataset's repositories as one enola cluster
-(SDK-1053 O8).
+the cognify run, so its ledger rows carry that run's id. A dataset holding
+several repositories is loaded as one enola cluster instead (next section).
 
-Python drops a deleted repository's survivors' completion stamps so the next
-`cognify()` re-extracts them as a cluster (`mark_dataset_code_repos_for_rebuild`);
-that comes with the clusters (SDK-1053 O8). Python also invalidates its CODE
-retriever's snapshot cache after every write; Rust has no such cache yet.
+Python also invalidates its CODE retriever's snapshot cache after every
+write; Rust has no such cache yet.
+
+## Datasets of several repositories: one enola cluster
+
+A repository extracted on its own cannot see the others: a frontend's HTTP
+call names a path, and only a snapshot that also covers the backend can say
+which route serves it. A dataset is therefore one enola cluster (Python's
+`cluster.py`):
+
+- **One run.** `snapshot_dataset_code_repos` runs `enola --generate` once
+  over the dataset's repositories (`run_enola_cluster`). The cluster config
+  (`render_cluster_config`: the members' absolute paths as JSON strings, the
+  output directory, history off) is piped on stdin (`/dev/stdin`; a temporary
+  file on Windows), from the system temporary directory as working directory.
+  enola writes the linked snapshot into every member's
+  `.enola-<dataset_id>` (`cluster_output_dir`), so datasets sharing a clone
+  never overwrite each other's snapshot. The budget is the per-repository
+  timeout times the members, capped at one hour, never below one
+  repository's (`cluster_enola_timeout`).
+- **Labels.** Each member is loaded by the repository label its facts carry
+  (`resolve_member_labels`): the one enola wrote into the member's
+  `snapshot.meta.json` for this snapshot, else derived from its git remote or
+  directory name. Members that cannot be told apart, or fewer than two
+  existing directories, are no cluster: each repository then runs on its own.
+- **Member loads.** `load_cluster_member` loads one member from the snapshot
+  parsed once (edges resolved once) under its own `Data` row: only its facts
+  are mapped, its own repository node is read for the unchanged-snapshot skip
+  and stamped, and only the edges touching it whose other end is already in
+  the graph are written, so the edge between two members is written by
+  whichever loads second. The stale sweep covers the whole snapshot; the
+  detag only the member's nodes.
+
+Who forms the cluster lives in `cognee_cognify::code_cluster`: cognify's
+CODE_REPO route loads every member from the run's first repo item
+(`load_dataset_cluster`); `remember(content_type="code")` rebuilds the
+dataset's other repositories with the new ones (`plan_dataset_refresh`,
+`refresh_dataset_code_graph`), past five of them only marking the rest for
+the next `cognify()`. A delete of a repository leaves its survivors without
+completion stamps, so the next `cognify()` re-extracts the cluster (Python's
+`mark_dataset_code_repos_for_rebuild`; this SDK's data-item delete already
+clears every row's stamps in the dataset).
 
 ## Nodes
 

@@ -665,6 +665,7 @@ struct RepositoryScope {
 }
 
 impl RepositoryScope {
+    /// The whole snapshot: every repository it covers.
     fn new(facts: &[Fact], fallback_repo: &str) -> Self {
         let repos = snapshot_repos(facts, fallback_repo);
         let mut current_ids: HashSet<String> = facts
@@ -684,6 +685,28 @@ impl RepositoryScope {
         Self {
             fallback_repo: fallback_repo.to_string(),
             repos,
+            current_ids,
+        }
+    }
+
+    /// One member of a multi-repo snapshot: the repository `scope` and the
+    /// nodes of the facts labelled with it (`fallback_repo` labels the
+    /// unlabelled ones). Python's `_current_code_node_ids` over the facts
+    /// whose `_fact_repo` is `repo_scope`.
+    fn scoped(facts: &[Fact], fallback_repo: &str, scope: &str) -> Self {
+        let mut current_ids: HashSet<String> = facts
+            .iter()
+            .filter(|fact| is_mappable_fact(fact) && fact_repo(fact, fallback_repo) == scope)
+            .filter_map(|fact| {
+                let kind = fact.get("kind").and_then(Value::as_str)?;
+                let name = fact.get("name").and_then(Value::as_str)?;
+                Some(fact_node_id(scope, kind, name).to_string())
+            })
+            .collect();
+        current_ids.insert(fact_node_id(scope, "repository", scope).to_string());
+        Self {
+            fallback_repo: scope.to_string(),
+            repos: BTreeSet::from([scope.to_string()]),
             current_ids,
         }
     }
@@ -735,6 +758,53 @@ async fn read_repository_graph(
         .map(|(source, target, relationship, _)| (source, target, relationship))
         .collect();
     Ok(StoredRepositoryGraph { nodes, edge_keys })
+}
+
+/// The typed edges one member of a multi-repo snapshot writes: those
+/// touching the member's nodes (`scope_ids`) whose other endpoint is the
+/// member's own or already in the graph. An edge into a member not loaded yet
+/// is written by that member's load, so members load in any order, one at a
+/// time. Python's `repo_scope` filter in `add_code_graph_edges`, with the
+/// other endpoints looked up (`get_nodes`) instead of read from the whole
+/// graph.
+///
+/// # Errors
+///
+/// The graph read failed.
+pub(crate) async fn member_edges<'e>(
+    graph: &dyn GraphDBTrait,
+    edges: &'e [CodeGraphEdge],
+    scope_ids: &HashSet<String>,
+) -> CodeGraphResult<Vec<&'e CodeGraphEdge>> {
+    let candidates: Vec<(&CodeGraphEdge, String, String)> = edges
+        .iter()
+        .map(|edge| (edge, edge.source_id.to_string(), edge.target_id.to_string()))
+        .filter(|(_, source, target)| scope_ids.contains(source) || scope_ids.contains(target))
+        .collect();
+    let foreign: Vec<String> = candidates
+        .iter()
+        .flat_map(|(_, source, target)| [source, target])
+        .filter(|id| !scope_ids.contains(*id))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut known: HashSet<String> = HashSet::new();
+    for chunk in foreign.chunks(SWEEP_CHUNK_SIZE) {
+        known.extend(
+            graph
+                .get_nodes(chunk)
+                .await?
+                .into_iter()
+                .filter_map(|node| node.get("id").and_then(Value::as_str).map(str::to_string)),
+        );
+    }
+    let is_known = |id: &String| scope_ids.contains(id) || known.contains(id);
+    Ok(candidates
+        .into_iter()
+        .filter(|(_, source, target)| is_known(source) && is_known(target))
+        .map(|(edge, _, _)| edge)
+        .collect())
 }
 
 /// What the stale sweep removed.
@@ -1039,9 +1109,14 @@ pub fn receipt_projection(receipt: Option<&Receipt>) -> Option<Map<String, Value
 /// Record the loaded snapshot's identity, delta, receipt and tag on every
 /// repository node of the snapshot. Python's `_stamp_snapshot_identity`.
 ///
+/// With `repo_scope` (one member of a multi-repo snapshot) only that member
+/// is stamped: the other members have not loaded yet, and a stamp would make
+/// their load skip.
+///
 /// The nodes are rewritten whole (as Python's `add_nodes` does), so they
 /// carry the node-set tag themselves, as names: leaving it out would erase
 /// it on adapters that overwrite node properties.
+#[allow(clippy::too_many_arguments)]
 async fn stamp_snapshot_identity(
     graph: &dyn GraphDBTrait,
     facts: &[Fact],
@@ -1049,12 +1124,22 @@ async fn stamp_snapshot_identity(
     snapshot_id: &str,
     delta: &Map<String, Value>,
     receipt: Option<&Receipt>,
+    repo_scope: Option<&str>,
     node_set: Option<&[String]>,
 ) -> CodeGraphResult<()> {
-    let fallback_repo = resolve_fallback_repo(facts, repo_path);
+    // Python's `repo_scope or ...`: an empty scope counts as none.
+    let repo_scope = repo_scope.filter(|scope| !scope.is_empty());
+    let fallback_repo = match repo_scope {
+        Some(scope) => scope.to_string(),
+        None => resolve_fallback_repo(facts, repo_path),
+    };
+    let repos = match repo_scope {
+        Some(scope) => BTreeSet::from([scope.to_string()]),
+        None => snapshot_repos(facts, &fallback_repo),
+    };
     let node_set = node_set.filter(|names| !names.is_empty());
     let last_receipt = receipt_projection(receipt).map(Value::Object);
-    let repositories: Vec<Value> = snapshot_repos(facts, &fallback_repo)
+    let repositories: Vec<Value> = repos
         .into_iter()
         .map(|repo| {
             let mut base = DataPoint::with_metadata(
@@ -1121,6 +1206,27 @@ pub async fn add_code_graph_edges(
     repo_path: Option<&str>,
     node_set: Option<&[String]>,
 ) -> CodeGraphResult<Option<Map<String, Value>>> {
+    write_code_graph_edges(graph, ledger, state, snapshot, repo_path, None, node_set).await
+}
+
+/// [`add_code_graph_edges`], optionally for one member of a multi-repo
+/// snapshot. Python's `add_code_graph_edges(..., repo_scope=...)`.
+///
+/// With `repo_scope` only the member's edges are written and recorded
+/// ([`member_edges`]), only the member's stale tags are stripped (the other
+/// members carry their own rows' tags), and only the member is stamped. The
+/// stale sweep still covers the whole snapshot, as Python's does: every
+/// member's current nodes and edges are in it, so nothing another member
+/// still derives is removed.
+pub(crate) async fn write_code_graph_edges(
+    graph: &dyn GraphDBTrait,
+    ledger: Option<&CodeGraphLedger<'_>>,
+    state: &CodeGraphLoadState,
+    snapshot: &ParsedSnapshot,
+    repo_path: Option<&str>,
+    repo_scope: Option<&str>,
+    node_set: Option<&[String]>,
+) -> CodeGraphResult<Option<Map<String, Value>>> {
     if state.data_points.is_empty() {
         return Ok(None);
     }
@@ -1141,9 +1247,17 @@ pub async fn add_code_graph_edges(
         }
     };
 
-    let typed_edges: Vec<EdgeData> = edges.iter().map(typed_edge).collect();
-    // Every typed relation of the snapshot is this owner's, written now or
-    // already present (see the node write).
+    let fallback_repo = resolve_fallback_repo(&snapshot.facts, repo_path);
+    let member = repo_scope
+        .filter(|scope| !scope.is_empty())
+        .map(|scope| RepositoryScope::scoped(&snapshot.facts, &fallback_repo, scope));
+    let writable: Vec<&CodeGraphEdge> = match &member {
+        Some(member) => member_edges(graph, edges, &member.current_ids).await?,
+        None => edges.iter().collect(),
+    };
+    let typed_edges: Vec<EdgeData> = writable.into_iter().map(typed_edge).collect();
+    // Every typed relation of the snapshot (of the member, for a member load)
+    // is this owner's, written now or already present (see the node write).
     record_in_ledger(ledger, &[], &typed_edges).await?;
     let present: HashSet<EdgeKey> = if typed_edges.is_empty() {
         HashSet::new()
@@ -1174,15 +1288,20 @@ pub async fn add_code_graph_edges(
     // Insert-then-sweep: with the snapshot fully merged, remove what earlier
     // loads derived that this snapshot no longer does. Runs even with zero
     // edges: a shrunken repository still needs its sweep.
-    let fallback_repo = resolve_fallback_repo(&snapshot.facts, repo_path);
     let scope = RepositoryScope::new(&snapshot.facts, &fallback_repo);
     let stored = read_repository_graph(graph, &scope.repos).await?;
     let swept = sweep_stale_code_graph(graph, &snapshot.facts, edges, &scope, &stored).await?;
     // Retag: strip node-set names the repository's nodes carried before but
     // not any more. No graph write when nothing is stale, the untagged case
-    // included.
-    let detagged =
-        detag_stale_code_graph(graph, &scope, &state.existing_nodes, &stored, node_set).await?;
+    // included. A member load only looks at the member's own nodes.
+    let detagged = detag_stale_code_graph(
+        graph,
+        member.as_ref().unwrap_or(&scope),
+        &state.existing_nodes,
+        &stored,
+        node_set,
+    )
+    .await?;
 
     let Some(snapshot_id) = snapshot.identity() else {
         return Ok(None);
@@ -1209,6 +1328,7 @@ pub async fn add_code_graph_edges(
         &snapshot_id,
         &delta,
         snapshot.receipt.as_ref(),
+        member.as_ref().map(|member| member.fallback_repo.as_str()),
         node_set,
     )
     .await?;

@@ -22,7 +22,8 @@ use crate::runner::run_enola_generate;
 use crate::snapshot::ParsedSnapshot;
 use crate::writer::{
     CodeGraphLedger, CodeGraphLoadState, StoredRepositoryState, add_code_graph_data_points,
-    add_code_graph_edges, record_snapshot_in_ledger, stored_repository_state,
+    add_code_graph_edges, member_edges, record_snapshot_in_ledger, stored_repository_state,
+    write_code_graph_edges,
 };
 
 /// One async lock per repository directory, so two loads of the same
@@ -115,30 +116,13 @@ pub async fn extract_code_graph(
     drop(guard);
 
     let repo_path_text = repo_path.to_string_lossy().into_owned();
-    if let Some(snapshot_id) = snapshot.identity() {
-        let fallback_repo = resolve_fallback_repo(&snapshot.facts, Some(&repo_path_text));
-        let stored = match stored_repository_state(graph, &fallback_repo).await {
-            Ok(stored) => stored,
-            Err(error) => {
-                tracing::warn!("Could not read the stored snapshot id ({error}); loading fully.");
-                StoredRepositoryState::default()
-            }
-        };
-        let tagged_call = node_set.is_some_and(|names| !names.is_empty());
-        if stored.snapshot_id.as_deref() == Some(snapshot_id.as_str())
-            && stored.mapping_version == Some(CODE_GRAPH_MAPPING_VERSION)
-            && !tagged_call
-            && !stored.tagged
-        {
-            tracing::info!(
-                "Code graph for '{fallback_repo}' already matches snapshot {snapshot_id}; skipping load."
-            );
-            return Ok(ExtractedCodeGraph {
-                snapshot,
-                data_points: Vec::new(),
-                skipped: true,
-            });
-        }
+    let fallback_repo = resolve_fallback_repo(&snapshot.facts, Some(&repo_path_text));
+    if already_loaded(graph, &snapshot, &fallback_repo, node_set).await {
+        return Ok(ExtractedCodeGraph {
+            snapshot,
+            data_points: Vec::new(),
+            skipped: true,
+        });
     }
 
     // Mapping and edge resolution are CPU work: off the async runtime.
@@ -155,6 +139,40 @@ pub async fn extract_code_graph(
         data_points,
         skipped: false,
     })
+}
+
+/// Whether the graph already holds this snapshot for `repo`: its repository
+/// node carries the snapshot's id and the current mapping version, and
+/// neither the call nor the node is tagged. Python's skip check in
+/// `extract_code_graph`. A failed read of the stamp is logged and answers no:
+/// the skip is an optimisation.
+async fn already_loaded(
+    graph: &dyn GraphDBTrait,
+    snapshot: &ParsedSnapshot,
+    repo: &str,
+    node_set: Option<&[String]>,
+) -> bool {
+    let Some(snapshot_id) = snapshot.identity() else {
+        return false;
+    };
+    let stored = match stored_repository_state(graph, repo).await {
+        Ok(stored) => stored,
+        Err(error) => {
+            tracing::warn!("Could not read the stored snapshot id ({error}); loading fully.");
+            StoredRepositoryState::default()
+        }
+    };
+    let tagged_call = node_set.is_some_and(|names| !names.is_empty());
+    let skip = stored.snapshot_id.as_deref() == Some(snapshot_id.as_str())
+        && stored.mapping_version == Some(CODE_GRAPH_MAPPING_VERSION)
+        && !tagged_call
+        && !stored.tagged;
+    if skip {
+        tracing::info!(
+            "Code graph for '{repo}' already matches snapshot {snapshot_id}; skipping load."
+        );
+    }
+    skip
 }
 
 /// Run `work` on the blocking pool.
@@ -275,6 +293,113 @@ pub async fn load_code_graph(
         &state,
         &snapshot,
         Some(&repo_path_text),
+        node_set,
+    )
+    .await?;
+    Ok(CodeGraphLoad {
+        state,
+        delta,
+        skipped: false,
+    })
+}
+
+/// Load one member of a multi-repo snapshot (a dataset's enola cluster,
+/// [`crate::snapshot_dataset_code_repos`]) into `graph`, under its own
+/// `ledger` owner. Python's `get_code_graph_tasks(repo_path, snapshot=...,
+/// repo_scope=label)` run as a pipeline, graph-only.
+///
+/// `snapshot` is the cluster's, parsed once for every member (its
+/// [`edges`](ParsedSnapshot::edges) resolved once too); `repo_path` is the
+/// member's directory and `repo_scope` the label its facts carry. Only the
+/// member's facts are mapped, its repository node read for the
+/// unchanged-snapshot skip and stamped, and only the edges touching it whose
+/// other end is already in the graph are written (an edge into a member that
+/// loads later is written by that member's load). The stale sweep covers the
+/// whole snapshot, as Python's does. Members load one at a time.
+///
+/// A skipped member records its nodes and edges in the ledger without
+/// writing the graph, as [`load_code_graph`] does.
+///
+/// # Errors
+///
+/// A graph read or write, or the ledger write, failed.
+pub async fn load_cluster_member(
+    graph: &dyn GraphDBTrait,
+    ledger: Option<&CodeGraphLedger<'_>>,
+    snapshot: &Arc<ParsedSnapshot>,
+    repo_path: &Path,
+    repo_scope: &str,
+    node_set: Option<&[String]>,
+) -> CodeGraphResult<CodeGraphLoad> {
+    let repo_path_text = repo_path.to_string_lossy().into_owned();
+    let skipped = already_loaded(graph, snapshot, repo_scope, node_set).await;
+    if skipped && ledger.is_none() {
+        return Ok(CodeGraphLoad {
+            state: CodeGraphLoadState::default(),
+            delta: None,
+            skipped: true,
+        });
+    }
+
+    // Mapping is CPU work: off the async runtime.
+    let data_points = {
+        let snapshot = Arc::clone(snapshot);
+        let path = repo_path_text.clone();
+        let scope = repo_scope.to_string();
+        let node_set = node_set.map(<[String]>::to_vec);
+        blocking(move || {
+            let data_points = map_facts_to_data_points(
+                &snapshot.facts,
+                Some(&path),
+                Some(&scope),
+                node_set.as_deref(),
+            );
+            tracing::info!(
+                "Mapped {} enola fact(s) to {} data point(s) for '{scope}'.",
+                snapshot.facts.len(),
+                data_points.len()
+            );
+            Ok(data_points)
+        })
+        .await?
+    };
+
+    if skipped {
+        if let Some(ledger) = ledger {
+            let resolved;
+            let edges: &[CodeGraphEdge] = match snapshot.edges.as_deref() {
+                Some(edges) => edges,
+                None => {
+                    resolved = build_code_graph_edges(&snapshot.facts, Some(&repo_path_text)).0;
+                    &resolved
+                }
+            };
+            let scope_ids: std::collections::HashSet<String> = data_points
+                .iter()
+                .map(|point| point.id().to_string())
+                .collect();
+            let edges: Vec<CodeGraphEdge> = member_edges(graph, edges, &scope_ids)
+                .await?
+                .into_iter()
+                .cloned()
+                .collect();
+            record_snapshot_in_ledger(ledger, &data_points, &edges).await?;
+        }
+        return Ok(CodeGraphLoad {
+            state: CodeGraphLoadState::default(),
+            delta: None,
+            skipped: true,
+        });
+    }
+
+    let state = add_code_graph_data_points(graph, ledger, data_points).await?;
+    let delta = write_code_graph_edges(
+        graph,
+        ledger,
+        &state,
+        snapshot,
+        Some(&repo_path_text),
+        Some(repo_scope),
         node_set,
     )
     .await?;

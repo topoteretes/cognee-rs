@@ -11,8 +11,12 @@
 //! ([`cognee_cognify::run_code_graph_pipeline`], the CODE_REPO adapter the
 //! cognify route uses). No LLM is built, called or validated on this path.
 //!
-//! Not yet ported (later SDK-1053 stages): several repositories of a dataset
-//! extracted as one enola cluster (O8), and `index_vectors` (O10), which is
+//! A dataset's repositories are extracted together as one enola cluster
+//! ([`cognee_cognify::code_cluster`]): the ones already in the dataset are
+//! rebuilt with the new ones, which is where the edges between repositories
+//! come from.
+//!
+//! Not yet ported (a later SDK-1053 stage): `index_vectors` (O10), which is
 //! refused with a clear error rather than ignored.
 
 use std::path::PathBuf;
@@ -20,11 +24,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cognee_cognify::CognifyConfig;
+use cognee_cognify::code_cluster::{
+    CodeGraphRunTarget, plan_dataset_refresh, refresh_dataset_code_graph,
+};
 use cognee_database::{PipelineRunRepository, RelationalDb};
 use cognee_graph::GraphDBTrait;
 use cognee_ingestion::AddPipeline;
 use cognee_ingestion::resolve_repo::{CodeRepositoryError, RepoSourceSettings};
-use cognee_models::DataInput;
+use cognee_models::{Data, DataInput};
 use cognee_storage::StorageTrait;
 use cognee_vector::VectorDB;
 use serde::{Deserialize, Serialize};
@@ -223,15 +230,19 @@ fn repo_spec(input: &DataInput) -> Option<String> {
 /// Index code repositories (local paths or remote git URLs) as a code
 /// graph, keyless.
 ///
-/// For each repository, in order: its spec is resolved to a local directory
-/// (a remote one shallow-cloned into the clones directory, outside the
-/// dataset lock),
-/// its one code-repo `Data` row is stored in the dataset without its
-/// documents ([`AddPipeline::add_code_repository`]), and its code graph is
-/// built by a `code_graph_pipeline` run over that row
-/// ([`cognee_cognify::run_code_graph_pipeline`]), which also stamps the row
-/// complete for `cognify_pipeline`. The rows are stored and built under the
-/// dataset's lock, as in Python.
+/// Every spec is first resolved to a local directory (a remote one
+/// shallow-cloned into the clones directory, outside the dataset lock).
+/// Then, under the dataset's lock as in Python: the dataset's refresh is
+/// planned ([`cognee_cognify::code_cluster::plan_dataset_refresh`]: with the
+/// dataset's other repositories, one enola cluster run), each repository's
+/// one code-repo `Data` row is stored without its documents
+/// ([`AddPipeline::add_code_repository`]), and every repository of the
+/// refresh is built by its own `code_graph_pipeline` run over its row
+/// ([`cognee_cognify::code_cluster::refresh_dataset_code_graph`]), which
+/// also stamps the row complete for `cognify_pipeline`. A failure of a
+/// repository already in the dataset is reported in
+/// [`RememberResult::error`], never raised: this call's rows are built by
+/// then.
 ///
 /// The result has one item per repository: `{kind: "code_repository",
 /// source, path, id, pipeline_run_id}`, plus `status: "errored"` and `error`
@@ -361,13 +372,51 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
     );
     let pipeline_run_repo: Arc<dyn PipelineRunRepository> = Arc::clone(&db).pipeline_runs();
     let total = specs.len();
+    let target = CodeGraphRunTarget {
+        dataset_id,
+        user_id: Some(owner_id),
+        user_email: None,
+        tenant_id,
+        storage: Arc::clone(&storage),
+        graph_db: Arc::clone(&graph_db),
+        vector_db: Arc::clone(&vector_db),
+        database: Arc::clone(&db),
+        pipeline_run_repo,
+        thread_pool,
+        config: Arc::clone(&cognify_config),
+    };
+    // Failures of repositories already in the dataset, rebuilt with this batch.
+    let mut other_errors: Vec<String> = Vec::new();
 
-    // The rows are stored and built under the dataset's lock (re-entrant for
-    // the add and the run inside it), so a concurrent add or cognify of the
-    // dataset cannot interleave with them.
+    // The rows' stamps are read-modify-written as a whole: holding the
+    // dataset's lock (re-entrant for the add and the runs inside it) from the
+    // plan to the last stamp keeps a concurrent add or cognify of the dataset
+    // from interleaving.
     let outcome: Result<(), ApiError> = cognee_core::DatasetLocks::global()
         .hold([dataset_id], async {
-            let mut stored = Vec::with_capacity(resolved.len());
+            // The dataset's repositories are extracted together, so the ones
+            // already in it are rebuilt with the new ones. The enola run
+            // writes the dataset's snapshot directory, so it runs under the
+            // lock. A failure is recorded once the rows exist, so the caller
+            // still gets their ids.
+            let mut plan = None;
+            let mut plan_error = None;
+            if !resolved.is_empty() {
+                let paths: Vec<PathBuf> = resolved.iter().map(|(_, path)| path.clone()).collect();
+                match plan_dataset_refresh(&*db, &cognify_config.code_graph, dataset_id, &paths)
+                    .await
+                {
+                    Ok(planned) => plan = Some(planned),
+                    Err(e) => {
+                        if isolate_failures {
+                            error!("remember: code-graph extraction failed for the dataset: {e}");
+                        }
+                        plan_error = Some(ApiError::Cognify(e.to_string()));
+                    }
+                }
+            }
+
+            let mut stored: Vec<(usize, Data, PathBuf)> = Vec::with_capacity(resolved.len());
             for (index, path) in &resolved {
                 // The credential-free spec of a remote repository is its
                 // `repo_url` (Python `source_url=item["source"]`).
@@ -387,7 +436,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                 {
                     Ok(row) => {
                         items[*index].id = Some(row.id);
-                        stored.push((*index, row));
+                        stored.push((*index, row, path.clone()));
                     }
                     Err(e) => {
                         let e = ApiError::Ingestion(e.to_string());
@@ -398,23 +447,57 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                     }
                 }
             }
-            for (index, row) in stored {
-                let run = Box::pin(cognee_cognify::run_code_graph_pipeline(
-                    vec![row],
-                    dataset_id,
-                    Some(owner_id),
-                    None,
-                    tenant_id,
-                    Arc::clone(&storage),
-                    Arc::clone(&graph_db),
-                    Arc::clone(&vector_db),
-                    Arc::clone(&db),
-                    Arc::clone(&pipeline_run_repo),
-                    Arc::clone(&thread_pool),
-                    &cognify_config,
-                ))
-                .await;
-                match run {
+
+            if let Some(e) = plan_error {
+                if !isolate_failures {
+                    return Err(e);
+                }
+                for (index, _, _) in &stored {
+                    fail(&mut items[*index], &e, *index, total);
+                }
+                return Ok(());
+            }
+            if stored.is_empty() {
+                return Ok(());
+            }
+
+            let known: Vec<(Data, PathBuf)> = stored
+                .iter()
+                .map(|(_, row, path)| (row.clone(), path.clone()))
+                .collect();
+            let runs = match refresh_dataset_code_graph(&target, known, plan).await {
+                Ok(runs) => runs,
+                Err(e) => {
+                    let e = ApiError::Cognify(e.to_string());
+                    if !isolate_failures {
+                        return Err(e);
+                    }
+                    for (index, _, _) in &stored {
+                        fail(&mut items[*index], &e, *index, total);
+                    }
+                    return Ok(());
+                }
+            };
+
+            let mut pending = stored;
+            for run in runs {
+                let position = pending
+                    .iter()
+                    .position(|(_, row, path)| row.id == run.data.id && *path == run.repo_path);
+                let Some(position) = position else {
+                    // A repository already in the dataset, rebuilt with this
+                    // batch: its failure is reported, never raised.
+                    if let Err(e) = &run.result {
+                        let name = run
+                            .repo_path
+                            .file_name()
+                            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                        other_errors.push(format!("{name}: {e}"));
+                    }
+                    continue;
+                };
+                let (index, _, _) = pending.remove(position);
+                match run.result {
                     Ok(run_id) => {
                         items[index].pipeline_run_id = Some(run_id);
                         last_run_id = Some(run_id);
@@ -434,6 +517,21 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                     }
                 }
             }
+
+            // A stored row no run built (its directory was gone by the time
+            // the graph was loaded) has no graph: never a success.
+            for (index, _, path) in pending {
+                if items[index].status.as_deref() != Some("errored") {
+                    let name = path
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                    let e = ApiError::Cognify(format!("code graph not built for '{name}'"));
+                    if !isolate_failures {
+                        return Err(e);
+                    }
+                    fail(&mut items[index], &e, index, total);
+                }
+            }
             Ok(())
         })
         .await;
@@ -443,7 +541,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
         .iter()
         .filter(|item| item.status.as_deref() == Some("errored"))
         .collect();
-    let error = (!errored.is_empty()).then(|| {
+    let error = (!errored.is_empty() || !other_errors.is_empty()).then(|| {
         errored
             .iter()
             .map(|item| {
@@ -453,6 +551,7 @@ pub async fn remember_code(params: RememberCodeParams) -> Result<RememberResult,
                     item.error.as_deref().unwrap_or_default()
                 )
             })
+            .chain(other_errors)
             .collect::<Vec<_>>()
             .join("; ")
     });

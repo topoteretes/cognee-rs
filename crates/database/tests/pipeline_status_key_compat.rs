@@ -26,8 +26,9 @@
 
 use cognee_database::ops::data::{
     DATA_ITEM_PROCESSING_COMPLETED, clear_cognify_pipeline_status_for_data,
-    clear_pipeline_status_for_dataset, create_data, get_cognify_completed_data_ids, get_data,
-    mark_cognify_pipeline_status_complete, pipeline_status_dataset_key, update_data,
+    clear_pipeline_status_for_data, clear_pipeline_status_for_dataset, create_data,
+    get_cognify_completed_data_ids, get_data, mark_cognify_pipeline_status_complete,
+    pipeline_status_dataset_key, update_data,
 };
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
 use cognee_database::{DatabaseConnection, connect, initialize, uuid_hex};
@@ -247,6 +248,53 @@ async fn clear_cognify_pipeline_status_for_data_clears_both_forms_in_one_pass() 
         pipeline_status(&db, data_id).await.is_none(),
         "a row carrying both encodings is fully cleared in one pass",
     );
+}
+
+#[tokio::test]
+async fn clear_pipeline_status_for_data_clears_only_the_named_pipelines() {
+    let (db, dataset_id, data_id) = fixture().await;
+    let other_dataset = Uuid::new_v4();
+    set_pipeline_status(
+        &db,
+        data_id,
+        serde_json::json!({
+            "cognify_pipeline": {
+                dataset_id.to_string(): "DATA_ITEM_PROCESSING_COMPLETED",
+                other_dataset.to_string(): "DATA_ITEM_PROCESSING_COMPLETED",
+            },
+            "code_graph_pipeline": {
+                uuid_hex::to_hex(dataset_id): "DATA_ITEM_PROCESSING_COMPLETED"
+            },
+            "add_pipeline": {
+                dataset_id.to_string(): "DATA_ITEM_PROCESSING_COMPLETED"
+            }
+        }),
+    )
+    .await;
+
+    clear_pipeline_status_for_data(
+        &db,
+        data_id,
+        dataset_id,
+        &["cognify_pipeline", "code_graph_pipeline"],
+    )
+    .await
+    .unwrap();
+
+    // Python `reset_data_pipeline_status(..., pipeline_names=(...))`: the
+    // named pipelines lose this dataset's marker (either encoding); another
+    // dataset's marker and other pipelines stay.
+    assert_eq!(
+        pipeline_status(&db, data_id).await.unwrap(),
+        serde_json::json!({
+            "cognify_pipeline": {other_dataset.to_string(): "DATA_ITEM_PROCESSING_COMPLETED"},
+            "add_pipeline": {dataset_id.to_string(): "DATA_ITEM_PROCESSING_COMPLETED"},
+        })
+    );
+    // A missing row is a no-op.
+    clear_pipeline_status_for_data(&db, Uuid::new_v4(), dataset_id, &["cognify_pipeline"])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

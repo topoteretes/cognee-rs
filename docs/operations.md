@@ -65,10 +65,16 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   environment only, and a token in the URL is redacted from the item, the
   clone's directory and remote, logs and errors. Remote repositories follow
   `ALLOW_HTTP_REQUESTS` (`code_graph.allow_http_requests`; allowed when unset
-  outside an HTTP server) and an http(s) host must not be internal. Not ported
-  yet, and refused: `content_type = "skills"`, `index_vectors = true`; several
-  repositories of one dataset are built one run each, not as one enola
-  cluster. rustdoc: `api::remember_code`.
+  outside an HTTP server) and an http(s) host must not be internal. A
+  dataset's repositories are extracted together as one enola cluster, which
+  gives the edges between them (a frontend call to the backend route that
+  serves it): the dataset's other repositories, up to five, are rebuilt with
+  the new ones by one enola run, each still under its own item and run;
+  beyond five only the new ones are built and the rest are marked for the
+  next `cognify`. A failure of a repository already in the dataset is reported
+  in the result's `error`, never raised. Not ported yet, and refused:
+  `content_type = "skills"`, `index_vectors = true`. rustdoc:
+  `api::remember_code`, `cognee_cognify::code_cluster`.
 
   `add` of a GitHub/GitLab repository URL (a repository root, or any http(s)
   URL ending in `.git`) clones it the same way and resolves it like a local
@@ -415,7 +421,11 @@ tagged with the item's node set, recorded in the ownership ledger, with no LLM
 and no embedding call. The load is incremental: an unchanged snapshot of an
 untagged repository is skipped, and a changed one writes only changed facts,
 sweeps the nodes and edges that left it and strips node-set tags the call no
-longer passes. Forgetting the item removes its code graph and leaves other
+longer passes. A dataset holding several code repositories is one enola
+cluster: the run's first repo item runs enola once over all of them (into
+each one's `.enola-<dataset_id>`) and loads every repository from that
+snapshot, each under its own item, with the edges between them; the run's
+other repo items have nothing left to do. Forgetting the item removes its code graph and leaves other
 repositories' alone. Every other item runs the stages above. Both kinds share
 one pipeline run and its completion markers. A per-file code item
 (`source: "code"`) is not supported yet and fails the run. A run whose items

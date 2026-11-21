@@ -4,19 +4,100 @@
 # Called as `enola --generate <repo>`. The repository's `.fake-enola` file
 # says what to do:
 #   snapshot:<name>  copy tests/fixtures/snapshots/<name>/ into <repo>/.enola/
+#   cluster:<name>   the same (and a cluster member, see below)
 #   slow:<name>      the same, slowly, failing if another run on <repo> is
 #                    in progress (a `<repo>/.fake-enola-running` marker)
 #   fail             write to stderr and exit 3
+#   fail-single:<name>  fail like `fail`, but take part in a cluster run as
+#                    `snapshot:<name>`
 #   hang             sleep longer than any test timeout
 #   empty            exit 0 without writing a snapshot
 #
 # A successful run also records the environment overrides cognee sets and
 # its working directory in <repo>/.enola/fake-run.txt (`set -u` fails the
 # run if an override is missing).
+#
+# Called as `enola --generate /dev/stdin` (or `<file>.yaml`) with a cluster
+# config, the FIRST member's `.fake-enola` says what to do:
+#   cluster:<name>  copy tests/fixtures/snapshots/<name>/ into every member's
+#                   output dir, with a snapshot.meta.json naming the member's
+#                   label (its `.fake-enola-label` file, else its directory
+#                   name); the config read is kept as cluster-config.yaml and
+#                   the run's overrides and cwd as fake-run.txt in the first
+#                   member's output dir
+#   snapshot:<name> every member's `.fake-enola` names a snapshot
+#                   (`snapshot:<name>` or `fail-single:<name>`): the
+#                   members' facts together become the cluster snapshot, each
+#                   member labelled with the repo its own facts carry
+#   fail            write to stderr and exit 3
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 [ "$1" = "--generate" ] || { echo "unexpected arguments: $*" >&2; exit 64; }
 repo=$2
+case "$repo" in
+  /dev/stdin|*.yaml)
+    config=$(cat "$repo")
+    out=$(printf '%s\n' "$config" | sed -n 's/^  dir: "\(.*\)"$/\1/p')
+    members=$(printf '%s\n' "$config" | sed -n 's/^  - "\(.*\)"$/\1/p')
+    first=$(printf '%s\n' "$members" | head -n 1)
+    mode=$(cat "$first/.fake-enola")
+    case "$mode" in
+      cluster:*)
+        name=${mode#cluster:}
+        snapshot_id=$(sed -n 's/.*"snapshot_id": *"\([^"]*\)".*/\1/p' "$here/../snapshots/$name/receipt.json")
+        printf '%s\n' "$members" | while IFS= read -r member; do
+          mkdir -p "$member/$out"
+          cp "$here/../snapshots/$name/"* "$member/$out/"
+          if [ -f "$member/.fake-enola-label" ]; then
+            label=$(cat "$member/.fake-enola-label")
+          else
+            label=$(basename "$member")
+          fi
+          printf '{"repo_label": "%s", "snapshot_id": "%s"}\n' "$label" "$snapshot_id" \
+            > "$member/$out/snapshot.meta.json"
+        done
+        printf '%s\n' "$config" > "$first/$out/cluster-config.yaml"
+        printf '%s\n%s\n%s\n' "$ENOLA_NO_UPDATE_CHECK" "$ENOLA_NO_PROMPTS" "$(pwd -P)" \
+          > "$first/$out/fake-run.txt"
+        exit 0
+        ;;
+      snapshot:*|fail-single:*)
+        # Every member names its own snapshot: the cluster snapshot is all of
+        # their facts, each member labelled as its facts are.
+        combined=$(mktemp)
+        names=""
+        printf '%s\n' "$members" | while IFS= read -r member; do
+          name=$(sed -n -e 's/^snapshot:\(.*\)$/\1/p' -e 's/^fail-single:\(.*\)$/\1/p' "$member/.fake-enola")
+          [ -n "$name" ] || { echo "member $member is no snapshot" >&2; exit 64; }
+          cat "$here/../snapshots/$name/facts.jsonl" >> "$combined"
+        done
+        names=$(printf '%s\n' "$members" | while IFS= read -r member; do
+          sed -n -e 's/^snapshot:\(.*\)$/\1/p' -e 's/^fail-single:\(.*\)$/\1/p' "$member/.fake-enola"; done | tr '\n' '+')
+        printf '%s\n' "$members" | while IFS= read -r member; do
+          name=$(sed -n -e 's/^snapshot:\(.*\)$/\1/p' -e 's/^fail-single:\(.*\)$/\1/p' "$member/.fake-enola")
+          label=$(sed -n 's/.*"repo": *"\([^"]*\)".*/\1/p' "$here/../snapshots/$name/facts.jsonl" | head -n 1)
+          mkdir -p "$member/$out"
+          cp "$combined" "$member/$out/facts.jsonl"
+          printf '{"format_version": 1, "snapshot_id": "sha256:cluster-%s"}\n' "$names" \
+            > "$member/$out/receipt.json"
+          printf '{"repo_label": "%s", "snapshot_id": "sha256:cluster-%s"}\n' "$label" "$names" \
+            > "$member/$out/snapshot.meta.json"
+        done
+        rm -f "$combined"
+        printf '%s\n' "$config" > "$first/$out/cluster-config.yaml"
+        exit 0
+        ;;
+      fail)
+        echo "boom: cluster extractor crashed" >&2
+        exit 3
+        ;;
+      *)
+        echo "unknown fake-enola cluster mode: $mode" >&2
+        exit 64
+        ;;
+    esac
+    ;;
+esac
 mode=$(cat "$repo/.fake-enola")
 case "$mode" in
   slow:*)
@@ -31,15 +112,15 @@ case "$mode" in
     cp "$here/../snapshots/$name/"* "$repo/.enola/"
     rmdir "$marker"
     ;;
-  snapshot:*)
-    name=${mode#snapshot:}
+  snapshot:*|cluster:*)
+    name=${mode#*:}
     mkdir -p "$repo/.enola"
     cp "$here/../snapshots/$name/"* "$repo/.enola/"
     printf '%s\n%s\n%s\n' "$ENOLA_NO_UPDATE_CHECK" "$ENOLA_NO_PROMPTS" "$(pwd -P)" \
       > "$repo/.enola/fake-run.txt"
     echo "enola: no mcp-arch.yaml in $repo, using built-in defaults" >&2
     ;;
-  fail)
+  fail|fail-single:*)
     echo "boom: extractor crashed" >&2
     exit 3
     ;;

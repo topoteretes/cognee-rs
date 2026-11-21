@@ -10,12 +10,15 @@
 //! ([`add_code_graph_data_points`], [`add_code_graph_edges`]);
 //! [`load_code_graph`] does all of it for one repository, and
 //! [`extract_code_repo_graph`] for the repo item cognify's CODE_REPO route
-//! hands it. Node ids,
+//! hands it. A dataset's repositories are extracted together as one enola
+//! cluster ([`snapshot_dataset_code_repos`], [`load_cluster_member`]), which
+//! gives the edges between them. Node ids,
 //! `fact_hash` values, properties and edges match Python's byte for byte,
 //! which the golden tests under `tests/` check against output Python
 //! produced (`scripts/generate_code_graph_goldens.py`). Settings are the
 //! `code_graph.*` section ([`CodeGraphConfig`]).
 
+mod cluster;
 mod code_repo;
 mod config;
 mod edges;
@@ -28,6 +31,11 @@ mod runner;
 mod snapshot;
 mod writer;
 
+pub use cluster::{
+    CLUSTER_ENOLA_TIMEOUT_CAP_SECS, CLUSTER_INLINE_REBUILD_LIMIT, ClusterMember,
+    DatasetCodeSnapshot, cluster_enola_timeout, cluster_output_dir, resolve_member_labels,
+    snapshot_dataset_code_repos,
+};
 pub use code_repo::{CODE_REPO_MANIFEST_KIND, extract_code_repo_graph, manifest_repo_path};
 pub use config::{CodeGraphConfig, DEFAULT_ENOLA_TIMEOUT_SECS};
 pub use edges::{CodeGraphEdge, build_code_graph_edges};
@@ -36,8 +44,13 @@ pub use mapping::{CODE_GRAPH_MAPPING_VERSION, fact_node_id, map_facts_to_data_po
 pub use models::{
     CODE_INDEX_FIELDS, CodeGraphEntity, CodeNode, CodeNodeType, CodeRepository, FACT_KINDS,
 };
-pub use pipeline::{CodeGraphLoad, ExtractedCodeGraph, extract_code_graph, load_code_graph};
-pub use runner::{INSTALL_HINT, SUBPROCESS_ENV_OVERRIDES, find_enola_binary, run_enola_generate};
+pub use pipeline::{
+    CodeGraphLoad, ExtractedCodeGraph, extract_code_graph, load_cluster_member, load_code_graph,
+};
+pub use runner::{
+    INSTALL_HINT, SUBPROCESS_ENV_OVERRIDES, find_enola_binary, render_cluster_config,
+    run_enola_cluster, run_enola_generate,
+};
 pub use snapshot::{
     Fact, ParsedSnapshot, Receipt, SUPPORTED_FORMAT_VERSIONS, is_enola_id, is_enola_id_str,
     normalize_relation, parse_enola_snapshot, receipt_vouches_for_flows, relation_target_id,

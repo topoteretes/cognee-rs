@@ -727,6 +727,7 @@ async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
                 &code_graph,
                 None,
                 failure_policy,
+                &cognee_cognify::CodeRepoLoadMode::Dataset,
             )
             .await
         }
@@ -770,4 +771,148 @@ async fn a_malformed_node_set_fails_its_repo_item_in_run_code_routes() {
         "{error:?}"
     );
     assert!(stack.code_node_ids().await.is_empty(), "nothing was loaded");
+}
+
+/// A Python project named `name` under `root` whose fake enola cluster run
+/// copies the `cluster` snapshot (a frontend `ui` reaching a backend `golf`).
+fn cluster_project(root: &Path, name: &str) -> PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("pyproject.toml"),
+        format!("[project]\nname = \"{name}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(repo.join("main.py"), "def main():\n    pass\n").unwrap();
+    // Whichever row comes first leads the cluster run.
+    std::fs::write(repo.join(".fake-enola"), "cluster:cluster").unwrap();
+    repo.canonicalize().unwrap()
+}
+
+#[tokio::test]
+async fn a_dataset_of_two_repositories_cognifies_as_one_enola_cluster() {
+    let root = tempfile::tempdir().unwrap();
+    let golf = cluster_project(root.path(), "golf");
+    let ui = cluster_project(root.path(), "ui");
+    let stack = Stack::new().await;
+    let mut items = stack.add(&golf, false, None).await;
+    items.extend(stack.add(&ui, false, None).await);
+    assert_eq!(items.len(), 2, "one manifest per repository: {items:?}");
+    let dataset_id = stack.dataset_id().await;
+
+    stack
+        .cognify(items.clone(), &config(false))
+        .await
+        .expect("cognify completes");
+
+    // One cluster run into the dataset's own directory of every member; no
+    // per-repository run.
+    let output_dir = cognee_code_graph::cluster_output_dir(dataset_id);
+    for repo in [&golf, &ui] {
+        assert!(repo.join(&output_dir).join("facts.jsonl").is_file());
+        assert!(!repo.join(".enola").exists(), "no single run on {repo:?}");
+    }
+    let config_seen = [&golf, &ui]
+        .iter()
+        .filter(|repo| repo.join(&output_dir).join("cluster-config.yaml").is_file())
+        .count();
+    assert_eq!(config_seen, 1, "enola ran once");
+
+    // The edge between the repositories.
+    let id = |repo: &str, kind: &str, name: &str| {
+        cognee_code_graph::fact_node_id(repo, kind, name).to_string()
+    };
+    let (_, edges) = stack.graph_db.get_graph_data().await.unwrap();
+    assert!(edges.iter().any(|(source, target, relationship, _)| {
+        *source == id("ui", "route", "/api/rounds")
+            && *target == id("golf", "route", "/api/rounds")
+            && relationship == "reaches_route"
+    }));
+
+    // Each repository's nodes are owned by its own row.
+    let row_of = |repo: &Path| {
+        items
+            .iter()
+            .find(|item| {
+                cognee_cognify::code_cluster::code_repo_path(item).as_deref() == Some(repo)
+            })
+            .unwrap()
+            .id
+    };
+    let ledger = cognee_database::ops::graph_storage::get_nodes_by_dataset(&stack.db, dataset_id)
+        .await
+        .unwrap();
+    let owner = |node_id: &str| -> BTreeSet<Uuid> {
+        ledger
+            .iter()
+            .filter(|row| row.slug.to_string() == node_id)
+            .map(|row| row.data_id)
+            .collect()
+    };
+    assert_eq!(
+        owner(&id("golf", "repository", "golf")),
+        BTreeSet::from([row_of(&golf)])
+    );
+    assert_eq!(
+        owner(&id("ui", "symbol", "api.fetchRounds")),
+        BTreeSet::from([row_of(&ui)])
+    );
+
+    // Both repo items are complete.
+    let ids: Vec<Uuid> = items.iter().map(|item| item.id).collect();
+    let completed = get_cognify_completed_data_ids(&stack.db, dataset_id, &ids)
+        .await
+        .unwrap();
+    assert_eq!(completed.len(), 2);
+}
+
+#[tokio::test]
+async fn a_failed_cluster_run_fails_every_repo_item_of_the_run() {
+    let root = tempfile::tempdir().unwrap();
+    let golf = cluster_project(root.path(), "golf");
+    let ui = cluster_project(root.path(), "ui");
+    std::fs::write(golf.join(".fake-enola"), "fail").unwrap();
+    std::fs::write(ui.join(".fake-enola"), "fail").unwrap();
+    let stack = Stack::new().await;
+    let mut items = stack.add(&golf, false, None).await;
+    items.extend(stack.add(&ui, false, None).await);
+    let dataset_id = stack.dataset_id().await;
+
+    let input = CognifyInput {
+        data_items: items.clone(),
+        dataset_id,
+        user_id: Some(stack.owner_id),
+        tenant_id: None,
+    };
+    let routed = run_code_routes(
+        &input,
+        &*stack.storage,
+        &*stack.graph_db,
+        &*stack.db,
+        &config(false).code_graph,
+        None,
+        FailurePolicy {
+            stop: FailureStop::RunToEnd,
+            ..FailurePolicy::default()
+        },
+        &cognee_cognify::CodeRepoLoadMode::Dataset,
+    )
+    .await
+    .unwrap();
+
+    // Both items fail with enola's error; enola ran once (the second item
+    // replays the verdict instead of running it again).
+    let failures: Vec<_> = routed
+        .failures
+        .entries()
+        .iter()
+        .filter(|failure| failure.stage == FailureStage::CodeGraph)
+        .collect();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures
+            .iter()
+            .all(|failure| failure.error.contains("exited with code 3")),
+        "{failures:?}"
+    );
 }

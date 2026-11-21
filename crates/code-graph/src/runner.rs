@@ -1,9 +1,12 @@
 //! Run the enola binary on a repository.
 //!
 //! Port of the runner half of Python's `cognee/tasks/code_graph/enola.py`
-//! (`find_enola_binary`, `_run_enola`, `run_enola_generate`). enola is an
-//! external Go CLI; `enola --generate <repo>` writes the snapshot into
-//! `<repo>/.enola/`, which [`crate::parse_enola_snapshot`] reads.
+//! (`find_enola_binary`, `_run_enola`, `run_enola_generate`,
+//! `render_cluster_config`, `run_enola_cluster`). enola is an external Go
+//! CLI; `enola --generate <repo>` writes the snapshot into `<repo>/.enola/`,
+//! which [`crate::parse_enola_snapshot`] reads, and `enola --generate
+//! <cluster config>` writes one linked snapshot of several repositories into
+//! each of them.
 //!
 //! This is a production subprocess: the child is spawned with
 //! `kill_on_drop`, so a run whose future is dropped (a timeout, a cancelled
@@ -12,11 +15,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::config::CodeGraphConfig;
 use crate::error::{CodeGraphError, CodeGraphResult};
-use crate::pyjson::float_repr;
+use crate::pyjson::{dumps_str, float_repr};
+
+/// Where enola reads a cluster config piped to it. Python's
+/// `_STDIN_CONFIG_PATH`.
+const STDIN_CONFIG_PATH: &str = "/dev/stdin";
 
 /// The message of an [`CodeGraphError::EnolaNotInstalled`] error. Python's
 /// `INSTALL_HINT`.
@@ -102,12 +110,15 @@ fn return_code(status: std::process::ExitStatus) -> i32 {
 ///
 /// `subject` names what was run in error messages. Lines enola writes to
 /// stderr starting with `enola:` (the configuration it resolved) are logged.
+/// `stdin_data` is written to the process's standard input (a cluster config
+/// read as `/dev/stdin`); without it stdin is not connected.
 async fn run_enola(
     binary: &Path,
     args: &[&std::ffi::OsStr],
     cwd: &Path,
     timeout: std::time::Duration,
     subject: &str,
+    stdin_data: Option<&[u8]>,
 ) -> CodeGraphResult<()> {
     tracing::info!(
         "Running enola: {} {} (cwd={})",
@@ -124,12 +135,16 @@ async fn run_enola(
         .args(args)
         .current_dir(cwd)
         .envs(SUBPROCESS_ENV_OVERRIDES.iter().copied())
-        .stdin(Stdio::null())
+        .stdin(if stdin_data.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let child = command.spawn().map_err(|error| {
+    let mut child = command.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CodeGraphError::EnolaNotInstalled(INSTALL_HINT.to_string())
         } else {
@@ -140,9 +155,25 @@ async fn run_enola(
         }
     })?;
 
+    // The config is written, then stdin closed, while the output is read:
+    // enola reads the whole config at start, before it writes anything.
+    let stdin = child.stdin.take();
+    let feed = async move {
+        if let (Some(mut stdin), Some(data)) = (stdin, stdin_data) {
+            // A child that exits without reading its input closes the pipe;
+            // its exit status then tells what went wrong, not this write.
+            if let Err(error) = stdin.write_all(data).await {
+                tracing::debug!("writing enola's standard input failed: {error}");
+            }
+        }
+    };
     // Dropping the `wait_with_output` future on timeout drops the child, and
     // `kill_on_drop` kills it; tokio reaps it in the background.
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+    let run = async {
+        let ((), output) = tokio::join!(feed, child.wait_with_output());
+        output
+    };
+    let output = match tokio::time::timeout(timeout, run).await {
         Ok(result) => result.map_err(|error| {
             CodeGraphError::EnolaSnapshot(format!("enola failed on {subject}: {error}"))
         })?,
@@ -215,9 +246,150 @@ pub async fn run_enola_generate(
         repo_path,
         timeout,
         &format!("'{}'", repo_path.display()),
+        None,
     )
     .await?;
 
+    if !snapshot_dir.join("facts.jsonl").is_file() {
+        return Err(CodeGraphError::EnolaSnapshot(format!(
+            "enola completed but no facts.jsonl was found in '{}'.",
+            snapshot_dir.display()
+        )));
+    }
+    Ok(snapshot_dir)
+}
+
+/// The enola cluster config for these repositories, as YAML text. Python's
+/// `render_cluster_config`.
+///
+/// enola accepts a cluster only as a `repos:` config whose entries are plain
+/// path strings. They are written as JSON strings (valid YAML scalars that
+/// quote any path safely), in cluster order. `output_dir` replaces `.enola`
+/// as the snapshot directory; enola joins it to each repository and refuses
+/// an absolute one. enola's own per-repository architecture history is
+/// switched off: cognee keeps its own record of the snapshot it loaded.
+pub fn render_cluster_config(repo_paths: &[PathBuf], output_dir: &str) -> String {
+    let mut lines = vec![
+        "output:".to_string(),
+        format!("  dir: {}", dumps_str(output_dir)),
+        "repos:".to_string(),
+    ];
+    lines.extend(
+        repo_paths
+            .iter()
+            .map(|path| format!("  - {}", dumps_str(&path.to_string_lossy()))),
+    );
+    lines.extend(["history:".to_string(), "  enabled: false".to_string()]);
+    lines.join("\n") + "\n"
+}
+
+/// Whether enola can read the cluster config from `/dev/stdin` here.
+/// Windows has none, so the config goes through a temporary file there.
+/// Python's `_config_via_stdin`.
+fn config_via_stdin() -> bool {
+    !cfg!(windows)
+}
+
+/// Run `enola --generate` over a cluster of repositories and return one
+/// snapshot directory. Python's `run_enola_cluster`.
+///
+/// enola links the repositories of a cluster config into one graph and
+/// writes that whole graph to every member's `output_dir`, so any member's
+/// directory is the cluster's snapshot: the first member's is returned. The
+/// config ([`render_cluster_config`], over the members' absolute paths) is
+/// piped to enola on its standard input (`--generate /dev/stdin`), so nothing
+/// is written to disk for it; on Windows it is a temporary file removed as
+/// soon as enola exits. The working directory is the system temporary
+/// directory, so no member's own `mcp-arch.yaml` narrows a run covering all
+/// of them. `timeout` is the whole run's budget.
+///
+/// # Errors
+///
+/// * [`CodeGraphError::EnolaNotInstalled`] when no binary is found.
+/// * [`CodeGraphError::EnolaSnapshot`] when there is no member, a member is
+///   not a directory (before anything runs), enola times out or exits
+///   non-zero, or it leaves no `facts.jsonl` in the first member's
+///   `output_dir`.
+pub async fn run_enola_cluster(
+    config: &CodeGraphConfig,
+    repo_paths: &[PathBuf],
+    output_dir: &str,
+    timeout: std::time::Duration,
+) -> CodeGraphResult<PathBuf> {
+    let binary = find_enola_binary(config)?;
+    let repo_paths: Vec<PathBuf> = repo_paths
+        .iter()
+        .map(|path| std::path::absolute(path).unwrap_or_else(|_| path.clone()))
+        .collect();
+    let Some(first) = repo_paths.first() else {
+        return Err(CodeGraphError::EnolaSnapshot(
+            "An enola cluster needs at least one repository.".to_string(),
+        ));
+    };
+    for repo_path in &repo_paths {
+        if !repo_path.is_dir() {
+            return Err(CodeGraphError::EnolaSnapshot(format!(
+                "Repository path '{}' is not a directory.",
+                repo_path.display()
+            )));
+        }
+    }
+
+    let config_text = render_cluster_config(&repo_paths, output_dir);
+    let names: Vec<String> = repo_paths
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    let subject = format!(
+        "the {}-repository cluster [{}]",
+        repo_paths.len(),
+        names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let cwd = std::env::temp_dir();
+
+    if config_via_stdin() {
+        run_enola(
+            &binary,
+            &["--generate".as_ref(), STDIN_CONFIG_PATH.as_ref()],
+            &cwd,
+            timeout,
+            &subject,
+            Some(config_text.as_bytes()),
+        )
+        .await?;
+    } else {
+        let config_path = cwd.join(format!(
+            "cognee-enola-cluster-{}.yaml",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&config_path, &config_text).map_err(|error| {
+            CodeGraphError::EnolaSnapshot(format!(
+                "Could not write the enola cluster config '{}': {error}",
+                config_path.display()
+            ))
+        })?;
+        let ran = run_enola(
+            &binary,
+            &["--generate".as_ref(), config_path.as_os_str()],
+            &cwd,
+            timeout,
+            &subject,
+            None,
+        )
+        .await;
+        // Removed whatever the run did; a leftover file is only clutter.
+        let _ = std::fs::remove_file(&config_path);
+        ran?;
+    }
+
+    let snapshot_dir = first.join(output_dir);
     if !snapshot_dir.join("facts.jsonl").is_file() {
         return Err(CodeGraphError::EnolaSnapshot(format!(
             "enola completed but no facts.jsonl was found in '{}'.",

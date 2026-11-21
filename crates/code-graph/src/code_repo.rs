@@ -47,8 +47,9 @@ pub fn manifest_repo_path(manifest_text: &str) -> CodeGraphResult<PathBuf> {
 /// the repository included. `ledger` records what is written under the
 /// manifest's `Data` row.
 ///
-/// One repository per data item: loading a dataset's repositories as one
-/// enola cluster comes with SDK-1053 O8.
+/// One repository, on its own enola run. A dataset of several repositories
+/// is loaded as one enola cluster instead ([`crate::snapshot_dataset_code_repos`],
+/// [`crate::load_cluster_member`]), which cognify's route decides.
 ///
 /// # Errors
 ///

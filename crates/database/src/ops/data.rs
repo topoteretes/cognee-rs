@@ -923,6 +923,85 @@ pub async fn clear_pipeline_status_for_dataset(
     Ok(updated_count)
 }
 
+/// Clear the named pipelines' entries for `dataset_id` from a single Data
+/// record's `pipeline_status` JSON; every other entry is kept. Python's
+/// `reset_data_pipeline_status(data_id, dataset_id, pipeline_names=...)`,
+/// which the code graph uses to mark a repository for re-extraction by the
+/// next cognify (`cognify_pipeline` and `code_graph_pipeline`).
+///
+/// Tolerates both key encodings (see
+/// [`pipeline_status_dataset_key_variants`]); a pipeline entry left empty is
+/// removed, and a `pipeline_status` left empty becomes `NULL`, as the other
+/// clearers do. A missing row is a no-op.
+#[instrument(
+    name = "cognee.db.relational.data.clear_pipeline_status_for_data",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn clear_pipeline_status_for_data(
+    db: &DatabaseConnection,
+    data_id: Uuid,
+    dataset_id: Uuid,
+    pipeline_names: &[&str],
+) -> Result<(), DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let model = data::Entity::find_by_id(uuid_hex::to_hex(data_id))
+        .one(db)
+        .await
+        .map_err(map_sea_err)?;
+    let Some(model) = model else {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    };
+    let Some(ref status_json) = model.pipeline_status else {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    };
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(status_json).unwrap_or(serde_json::Value::Object(Default::default()));
+    let serde_json::Value::Object(ref mut top_map) = parsed else {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    };
+
+    let dataset_keys = pipeline_status_dataset_key_variants(dataset_id);
+    let mut modified = false;
+    for name in pipeline_names {
+        if let Some(serde_json::Value::Object(inner_map)) = top_map.get_mut(*name) {
+            for key in &dataset_keys {
+                modified |= inner_map.remove(key).is_some();
+            }
+        }
+    }
+    if !modified {
+        Span::current().record(COGNEE_DB_ROW_COUNT, 0i64);
+        return Ok(());
+    }
+    top_map.retain(|name, value| {
+        !pipeline_names.contains(&name.as_str())
+            || !matches!(value, serde_json::Value::Object(map) if map.is_empty())
+    });
+
+    let new_status = if top_map.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&parsed).map_err(|e| {
+            DatabaseError::QueryError(format!("Failed to serialize pipeline_status: {e}"))
+        })?)
+    };
+    let mut active = model.into_active_model();
+    active.pipeline_status = Set(new_status);
+    active.updated_at = Set(Some(Utc::now()));
+    active.update(db).await.map_err(map_sea_err)?;
+    Span::current().record(COGNEE_DB_ROW_COUNT, 1i64);
+    Ok(())
+}
+
 /// Clear only the `cognify_pipeline` entry for `dataset_id` from a single
 /// Data record's `pipeline_status` JSON. All other entries are preserved.
 ///
