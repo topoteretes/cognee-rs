@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::dynamic_graph::{DynamicGraphError, DynamicGraphSchema};
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
 use crate::graph_backend::ChunkGraphExtractor;
+pub use crate::graph_integration::EndpointScope;
 
 /// Chunks handed to the graph-extraction stage in one batch.
 ///
@@ -247,6 +248,19 @@ pub struct CognifyConfig {
     /// reaches the extraction stage as a single batch with no barrier in the
     /// middle. We match that literal.
     pub chunks_per_batch: usize,
+
+    /// Which chunks an extracted edge's endpoints may match when the graph is
+    /// built.
+    ///
+    /// The graph is built per unit — one data item, or one block of
+    /// [`Self::chunks_per_batch`] chunks of it — as Python builds it, so an
+    /// endpoint never matches a node only another document declared. Within a
+    /// unit, the default [`EndpointScope::Unit`] lets it match a node an
+    /// earlier chunk declared, which keeps edges Python drops;
+    /// [`EndpointScope::Chunk`] resolves only within the edge's own chunk, as
+    /// Python does. Set from `cognify.cross_chunk_endpoints`.
+    #[serde(default)]
+    pub endpoint_scope: EndpointScope,
 
     /// Maximum number of parallel extraction calls in flight within a batch.
     ///
@@ -653,6 +667,7 @@ impl Default for CognifyConfig {
             chunk_overlap_ratio: 0.0,
 
             chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
+            endpoint_scope: EndpointScope::default(),
             max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
             custom_extraction_prompt: None,
             extraction_strategy: ExtractionStrategy::default(),
@@ -758,6 +773,13 @@ impl CognifyConfig {
     /// Set number of chunks per batch during graph extraction.
     pub fn with_chunks_per_batch(mut self, batch_size: usize) -> Self {
         self.chunks_per_batch = batch_size;
+        self
+    }
+
+    /// Set which chunks an extracted edge's endpoints may match (see
+    /// [`Self::endpoint_scope`]).
+    pub fn with_endpoint_scope(mut self, scope: EndpointScope) -> Self {
+        self.endpoint_scope = scope;
         self
     }
 

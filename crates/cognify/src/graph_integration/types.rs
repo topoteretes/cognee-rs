@@ -22,6 +22,67 @@ pub struct GraphNodePair {
     /// Python's `_get_or_create_entity_type` returns `None` there rather than
     /// storing an EntityType named "", so the entity has no `is_a` edge.
     pub entity_type: Option<EntityType>,
+
+    /// Every further type, in first-seen order, never repeating
+    /// [`Self::entity_type`]. An entity that several documents (or blocks of
+    /// one document) typed differently keeps each of their types, as Python
+    /// does; see [`Self::merge_types_from`]. Kept in step with
+    /// `entity.extra_types`, which is what becomes the extra `is_a` edges.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_entity_types: Vec<EntityType>,
+}
+
+impl GraphNodePair {
+    /// A node with at most one type.
+    pub fn new(entity: Entity, entity_type: Option<EntityType>) -> Self {
+        Self {
+            entity,
+            entity_type,
+            extra_entity_types: Vec::new(),
+        }
+    }
+
+    /// Every type of this node: the primary one first, then the extra ones.
+    pub fn entity_types(&self) -> impl Iterator<Item = &EntityType> {
+        self.entity_type
+            .iter()
+            .chain(self.extra_entity_types.iter())
+    }
+
+    /// Every type of this node, mutably, in [`Self::entity_types`] order.
+    pub fn entity_types_mut(&mut self) -> impl Iterator<Item = &mut EntityType> {
+        self.entity_type
+            .iter_mut()
+            .chain(self.extra_entity_types.iter_mut())
+    }
+
+    /// Add the types of `other` to this node — the one rule that decides
+    /// which types an entity declared in several units keeps.
+    ///
+    /// Python's rule: within one unit (a data item, or a block of
+    /// `chunks_per_batch` chunks of it) the first type declared wins, and
+    /// the types of every unit are combined. Callers have already applied
+    /// the first half; this is the second: a type this node does not have yet
+    /// is appended, in first-seen order, and this node's first type stays
+    /// primary. An untyped node takes `other`'s first type as its primary.
+    ///
+    /// Switching to "every declared type, with counts" means counting here
+    /// instead of keeping first-seen order.
+    pub fn merge_types_from(&mut self, other: &GraphNodePair) {
+        for entity_type in other.entity_types() {
+            let id = entity_type.base.id;
+            if self.entity_types().any(|known| known.base.id == id) {
+                continue;
+            }
+            if self.entity_type.is_none() {
+                self.entity_type = Some(entity_type.clone());
+                self.entity.is_a = Some(id);
+            } else {
+                self.extra_entity_types.push(entity_type.clone());
+                self.entity.extra_types.push(id);
+            }
+        }
+    }
 }
 
 /// A `Timestamp` node built from an extracted node the LLM typed "Timestamp".
@@ -107,9 +168,10 @@ impl GraphEdgePair {
 
 /// Which source chunks produced each merged artifact.
 ///
-/// Entity and edge merging is run-wide: the first chunk to yield an artifact
-/// creates it and every later chunk reuses it, so the artifact itself
-/// remembers only its first producer. Ownership rows are keyed per
+/// Entity and edge merging spans the run: within a unit (a data item, or a
+/// `chunks_per_batch` block of one) the first chunk to yield an artifact
+/// creates it and every later chunk reuses it, and the units are then merged,
+/// so the artifact itself remembers only its first producer. Ownership rows are keyed per
 /// (artifact, data item) — Python's `upsert_nodes.py:41` puts `data_id` in the
 /// row id, and Rust's edge rows fold it in too — so the *set* of producing
 /// chunks is what the provenance upsert needs to write one row per producing
@@ -153,6 +215,20 @@ impl ArtifactProducers {
         let producers = self.edges.entry(key).or_default();
         if !producers.contains(&chunk_id) {
             producers.push(chunk_id);
+        }
+    }
+
+    /// Add every producer `other` recorded, after the ones already here.
+    pub fn merge(&mut self, other: ArtifactProducers) {
+        for (entity_id, chunks) in other.entities {
+            for chunk_id in chunks {
+                self.record_entity(entity_id, chunk_id);
+            }
+        }
+        for (key, chunks) in other.edges {
+            for chunk_id in chunks {
+                self.record_edge(key.clone(), chunk_id);
+            }
         }
     }
 
@@ -262,10 +338,7 @@ mod tests {
         let entity = Entity::new("TechCorp", None, "A technology company", None);
         let entity_type = EntityType::new("Organization", "", None);
 
-        let node_pair = GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        };
+        let node_pair = GraphNodePair::new(entity, Some(entity_type));
 
         assert_eq!(node_pair.entity.name, "TechCorp");
         assert_eq!(node_pair.entity_type.as_ref().unwrap().name, "Organization");

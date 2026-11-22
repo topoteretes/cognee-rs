@@ -116,17 +116,15 @@ impl GraphExtractable for Entity {
     }
 
     fn relationships(&self) -> Vec<Relationship> {
-        let mut rels = Vec::new();
-
-        // is_a: Entity → EntityType
-        if let Some(type_id) = self.is_a {
-            rels.push(Relationship {
+        // is_a: Entity → EntityType, one edge per type. An entity mentioned by
+        // several documents keeps the type each document gave it (Python runs
+        // one graph per document), so it can have several.
+        self.type_ids()
+            .map(|type_id| Relationship {
                 field_name: "is_a".to_string(),
                 target_id: type_id,
-            });
-        }
-
-        rels
+            })
+            .collect()
     }
 }
 
@@ -290,6 +288,24 @@ mod tests {
         assert_eq!(rels.len(), 1);
         assert_eq!(rels[0].field_name, "is_a");
         assert_eq!(rels[0].target_id, type_id);
+    }
+
+    #[test]
+    fn an_entity_with_several_types_has_one_is_a_edge_per_type() {
+        let (company, fruit) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut entity = Entity::new("Apple", Some(company), "", None);
+        entity.extra_types.push(fruit);
+
+        let rels = entity.relationships();
+        assert_eq!(
+            rels.iter()
+                .map(|r| (r.field_name.as_str(), r.target_id))
+                .collect::<Vec<_>>(),
+            [("is_a", company), ("is_a", fruit)]
+        );
+        // Both survive `get_graph_from_model`'s (source, target, label) dedup.
+        let edges = get_graph_from_model(&[&entity]);
+        assert_eq!(edges.len(), 2);
     }
 
     #[test]

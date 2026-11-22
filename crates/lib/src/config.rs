@@ -552,6 +552,11 @@ impl Settings {
         if cognify.chunks_per_batch > 0 {
             cfg = cfg.with_chunks_per_batch(cognify.chunks_per_batch as usize);
         }
+        cfg = cfg.with_endpoint_scope(if cognify.cross_chunk_endpoints {
+            cognee_cognify::EndpointScope::Unit
+        } else {
+            cognee_cognify::EndpointScope::Chunk
+        });
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
@@ -3208,9 +3213,13 @@ mod tests {
         )
         .unwrap();
 
+        cm.set("cognify.cross_chunk_endpoints", serde_json::json!(false))
+            .unwrap();
+
         let settings = cm.read();
         let cognify = settings.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 64);
+        assert_eq!(cognify.endpoint_scope, cognee_cognify::EndpointScope::Chunk);
         assert_eq!(
             cognify.custom_extraction_prompt.as_deref(),
             Some("extract a graph, custom edition")
@@ -3237,6 +3246,7 @@ mod tests {
         let s = Settings::default();
         let cognify = s.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 2000);
+        assert_eq!(cognify.endpoint_scope, cognee_cognify::EndpointScope::Unit);
         assert!(cognify.custom_extraction_prompt.is_none());
         assert!(cognify.summary_schema.is_none());
         let tuning = s.search_tuning();

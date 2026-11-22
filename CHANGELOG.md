@@ -223,6 +223,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **cognify builds the graph per data item, and entities keep several types
+  (SDK-1694, stage O1).** Python builds the graph of each data item (or each
+  block of `chunks_per_batch` chunks of one) with fresh maps, so within it the
+  first type declared for an entity wins and across data items the types are
+  combined. Rust built one graph for the whole run, so the first type in the
+  run won and every other was dropped. cognify now groups the extracted chunk
+  graphs into the same units (`extraction_units`, shared with the custom-schema
+  path), expands each with fresh maps (`expand_extracted_graphs_by_unit`) and
+  merges them (`merge_expansions`): an entity's description and fields come
+  from the first unit, its types are the union in first-seen order, edges are
+  combined by (source, target, label) and every producing chunk keeps its
+  ownership row. An entity can therefore have several `is_a` edges, each
+  EntityType is written, indexed and recorded in the ledger. An edge endpoint
+  no longer matches a node of another document. Within one unit it may still
+  match a node an earlier chunk declared; the new key
+  `cognify.cross_chunk_endpoints` (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`,
+  default `true`) turns that off, which resolves endpoints only within their
+  own chunk, as Python does. Existing graphs keep one type per entity until
+  their data is cognified again. The visualization payload still names one
+  type per entity: the last `is_a` link, as Python's does. COGX export writes
+  every `is_a` edge as its own fact.
+
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
   `response_format: json_schema` request first, as Python's default
@@ -354,6 +376,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `FeedbackError::InvalidSessionIds`, as Python does.
 
 ### Breaking changes
+
+- **Several types per entity (SDK-1694).** `cognee_models::Entity` gains
+  `extra_types: Vec<Uuid>` (the types after `is_a`; left out of the
+  serialised form when empty) and `GraphNodePair` gains
+  `extra_entity_types: Vec<EntityType>`. A struct literal of either must add
+  the field; `GraphNodePair::new(entity, entity_type)` builds a single-typed
+  one. `GraphNodePair::entity_types()` iterates every type. `CognifyConfig`
+  gains `endpoint_scope` (`EndpointScope::Unit` by default). A reader that
+  assumes one `is_a` edge per entity should read all of them.
 
 - **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file
   with one of enola's extensions (`loaders::code::SUPPORTED_CODE_EXTENSIONS`,

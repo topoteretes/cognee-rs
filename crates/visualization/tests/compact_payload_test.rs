@@ -417,3 +417,59 @@ fn a_late_is_a_link_is_corrected_in_the_summary() {
     assert_eq!(summary["nodes"]["alice"]["entity_type"], json!("Person"));
     assert!(summary["nodes"]["person"].get("entity_type").is_none());
 }
+
+#[test]
+fn an_entity_with_several_is_a_links_gets_the_last_type_like_python() {
+    // SDK-1694: an entity several documents typed differently has one `is_a`
+    // edge per type. The payload names one type per node; Python's
+    // `resolve_semantic_types` and `CompactGraphAccumulator` both fill a dict
+    // from the links, so the last `is_a` link in read order wins. Every link
+    // still reaches the payload.
+    let nodes = vec![
+        (
+            "apple".to_string(),
+            props(json!({"type": "Entity", "name": "apple"})),
+        ),
+        (
+            "company".to_string(),
+            props(json!({"type": "EntityType", "name": "company"})),
+        ),
+        (
+            "fruit".to_string(),
+            props(json!({"type": "EntityType", "name": "fruit"})),
+        ),
+    ];
+    let is_a = |target: &str| -> EdgeData {
+        (
+            "apple".to_string(),
+            target.to_string(),
+            "is_a".to_string(),
+            HashMap::new(),
+        )
+    };
+    let edges = vec![is_a("company"), is_a("fruit")];
+
+    let (json_types, stream_types) = json_and_stream_types(nodes.clone(), edges.clone());
+    assert_eq!(json_types, stream_types);
+    assert_eq!(json_types["apple"], json!("fruit"));
+
+    let (_, links) = compact_chunk(&nodes, &edges);
+    let targets: Vec<&str> = links
+        .iter()
+        .filter(|link| link["source"] == json!("apple"))
+        .filter_map(|link| link["target"].as_str())
+        .collect();
+    assert_eq!(targets, ["company", "fruit"]);
+
+    // Split across two chunks, the summary corrects the untyped entity the
+    // same way.
+    let mut accumulator = CompactGraphAccumulator::new();
+    let (compact_nodes, links) = compact_chunk(&nodes[..1], &[]);
+    accumulator.add(&compact_nodes, &links);
+    let (compact_nodes, links) = compact_chunk(&nodes[1..], &edges);
+    accumulator.add(&compact_nodes, &links);
+    assert_eq!(
+        accumulator.summary()["nodes"]["apple"]["entity_type"],
+        json!("fruit")
+    );
+}

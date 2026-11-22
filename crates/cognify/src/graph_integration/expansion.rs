@@ -30,8 +30,9 @@ const UNRESOLVED_SAMPLE_LIMIT: usize = 10;
 /// number that can be attributed and tracked between runs.
 ///
 /// The `_cross_chunk` counters split the two resolved tallies by *where the
-/// matched key came from*: the chunk that referenced it, or an earlier chunk in
-/// the same pass. That split exists to price SDK-507 tier 2 — see
+/// matched key came from*: the chunk that referenced it, or an earlier chunk of
+/// the same unit (one data item, or one block of it). That split prices
+/// resolving within the edge's own chunk only, as Python does — see
 /// [`EdgeResolutionStats::resolved_cross_chunk`].
 ///
 /// Counting note, inherited: `attempted` is per **edge**, while every
@@ -80,27 +81,36 @@ impl EdgeResolutionStats {
         self.dropped_source_missing + self.dropped_target_missing + self.dropped_ambiguous_name
     }
 
-    /// Endpoints that resolved only because the registry spans the whole run.
+    /// Endpoints that resolved only because the registry spans the whole unit.
     ///
-    /// This is the population at risk from per-wave flushing (SDK-507 tier 2),
-    /// which would reset the registry at each wave boundary and so resolve an
-    /// endpoint only against nodes from its own wave.
+    /// Endpoints never resolve across units, so this is the population that
+    /// [`EndpointScope::Chunk`] — Python's rule, an edge resolves only against
+    /// its own chunk's nodes — would drop.
     ///
     /// Attribution follows the **most recent** declaration of a key at or
-    /// before the referencing chunk, because that is the one a wave would still
-    /// hold. Extraction re-declares a recurring entity in every chunk that
-    /// mentions it, so attributing to the *first* declaration would count a
-    /// resolution the referencing chunk could satisfy on its own.
-    ///
-    /// It is an **upper bound** on what a given wave size would actually lose,
-    /// not a prediction: flushing every `N` chunks breaks a resolution only
-    /// when the declaring and referencing chunks land in *different* waves,
-    /// so a pass whose [`Self::max_cross_chunk_distance`] sits far below `N`
-    /// keeps most of these and only loses the ones straddling a boundary.
-    /// Read the two together — the count says how much is at stake, the
-    /// distance says how large a wave has to be to protect it.
+    /// before the referencing chunk. Extraction re-declares a recurring entity
+    /// in every chunk that mentions it, so attributing to the *first*
+    /// declaration would count a resolution the referencing chunk could satisfy
+    /// on its own. [`Self::max_cross_chunk_distance`] says how far back, within
+    /// a unit, the furthest such match reached.
     pub fn resolved_cross_chunk(&self) -> usize {
         self.resolved_by_id_cross_chunk + self.resolved_by_name_cross_chunk
+    }
+
+    /// Add `other`'s counters to these: every count is summed, the distance is
+    /// the larger of the two.
+    pub(crate) fn absorb(&mut self, other: &EdgeResolutionStats) {
+        self.attempted += other.attempted;
+        self.resolved_by_id += other.resolved_by_id;
+        self.resolved_by_name += other.resolved_by_name;
+        self.resolved_by_id_cross_chunk += other.resolved_by_id_cross_chunk;
+        self.resolved_by_name_cross_chunk += other.resolved_by_name_cross_chunk;
+        self.max_cross_chunk_distance = self
+            .max_cross_chunk_distance
+            .max(other.max_cross_chunk_distance);
+        self.dropped_source_missing += other.dropped_source_missing;
+        self.dropped_target_missing += other.dropped_target_missing;
+        self.dropped_ambiguous_name += other.dropped_ambiguous_name;
     }
 
     /// Record one endpoint that matched the id registry.
@@ -132,11 +142,10 @@ impl EdgeResolutionStats {
     }
 }
 
-/// Zero-based position of a chunk in this pass's `graphs` sequence.
+/// Zero-based position of a chunk in its unit's `graphs` sequence.
 ///
 /// Used to attribute a resolved endpoint to the chunk that most recently
-/// declared its key. It is a position within the pass, not a chunk id:
-/// per-wave flushing would cut the registry on these boundaries, so the
+/// declared its key. It is a position within the unit, not a chunk id: the
 /// comparison that matters is ordinal.
 type ChunkPosition = usize;
 
@@ -188,7 +197,7 @@ fn register_name_alias(
         .and_modify(|slot| match slot {
             // The same entity re-registering from a later chunk must not poison
             // its own alias — and it *does* move the origin forward, because the
-            // alias is now available to the re-declaring chunk's wave.
+            // re-declaring chunk could now resolve it on its own.
             Some((id, origin)) if *id == entity_id => *origin = position,
             // A different entity claiming the same name: unresolvable, and it
             // stays that way.
@@ -205,7 +214,7 @@ fn register_name_alias(
 /// that by `get_mut`-ing an existing entry — never by inserting one. Extraction
 /// re-declares a recurring entity in every chunk that mentions it, and without
 /// this the cross-chunk counters would attribute such a resolution to the first
-/// declaration and over-report the population at risk from a per-wave flush.
+/// declaration and over-report what chunk-local resolution would drop.
 ///
 /// Narrower than [`register_name_alias`] in exactly two ways, both deliberate:
 /// an unknown name is left unknown rather than created, and a name owned by a
@@ -558,8 +567,31 @@ fn is_timestamp_type(node_type: &str) -> bool {
     generate_node_name(node_type) == "timestamp"
 }
 
+/// Which chunks of a unit an edge endpoint may resolve against.
+///
+/// A unit is what one graph is built from: one data item, or one block of
+/// `chunks_per_batch` chunks of it (see
+/// [`crate::graph_integration::extraction_units`]). Endpoints never resolve
+/// across units, so an edge of one document never reaches a node only
+/// another document declared.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EndpointScope {
+    /// Any chunk of the unit, up to and including the edge's own: an edge can
+    /// reach a node an earlier chunk of the same block declared. Rust's
+    /// default; it keeps edges Python drops.
+    #[default]
+    Unit,
+    /// Only the edge's own chunk, as Python's `_add_extracted_edges` resolves
+    /// them (`expand_with_nodes_and_edges.py`).
+    Chunk,
+}
+
 /// [`expand_with_nodes_and_edges_with_stats`], additionally returning the
-/// Timestamp nodes. This is the form the cognify pipeline uses.
+/// Timestamp nodes. All of `graphs` is treated as one unit, so an endpoint
+/// may resolve against any earlier chunk of it. The cognify pipeline uses
+/// [`expand_extracted_graphs_by_unit`].
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_extracted_graphs(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
@@ -571,6 +603,161 @@ pub async fn expand_extracted_graphs(
     user_label: Option<&str>,
     task_rank: Option<i32>,
 ) -> Expansion {
+    let (expansion, unresolved_sample) = expand_unit(
+        graphs,
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        existing_edges_set,
+        ontology_resolver,
+        user_label,
+        task_rank,
+        EndpointScope::Unit,
+    );
+    log_resolution_summary(&expansion.stats, &unresolved_sample);
+    expansion
+}
+
+/// Build one graph per unit, as Python does, and merge them.
+///
+/// Python runs one pipeline per data item and builds the graph of each block
+/// of `chunks_per_batch` chunks with fresh maps
+/// (`construct_data_points_and_edges`), so within a unit the first
+/// declaration of an entity decides its description and type, and across
+/// units the types are combined. Each of `units` (from
+/// [`crate::graph_integration::extraction_units`]) is expanded with fresh
+/// maps and the results merged by [`merge_expansions`].
+///
+/// `endpoint_scope` says which chunks of a unit an edge endpoint may match;
+/// endpoints never match across units.
+#[allow(clippy::too_many_arguments)]
+pub async fn expand_extracted_graphs_by_unit(
+    units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+    endpoint_scope: EndpointScope,
+) -> Expansion {
+    let mut merged = ExpansionMerger::default();
+    let mut unresolved_sample: Vec<String> = Vec::new();
+    for graphs in units {
+        let (expansion, sample) = expand_unit(
+            graphs,
+            dataset_id,
+            chunk_node_sets,
+            chunk_importance_weights,
+            existing_edges_set,
+            ontology_resolver,
+            user_label,
+            task_rank,
+            endpoint_scope,
+        );
+        let room = UNRESOLVED_SAMPLE_LIMIT.saturating_sub(unresolved_sample.len());
+        unresolved_sample.extend(sample.into_iter().take(room));
+        merged.push(expansion);
+    }
+    let expansion = merged.finish();
+    log_resolution_summary(&expansion.stats, &unresolved_sample);
+    expansion
+}
+
+/// Merge the expansions of several units into one, in input order.
+///
+/// - An entity's description and other fields come from the first unit that
+///   declared it; its types are combined by
+///   [`GraphNodePair::merge_types_from`].
+/// - Edges and claimed edges are combined by (source, target, label), the
+///   first unit's edge kept.
+/// - Producers are combined, so every chunk that declared an artifact still
+///   gets an ownership row.
+/// - A Timestamp node comes from its first declaration.
+/// - Endpoint-resolution counters are summed; the cross-chunk distance is the
+///   largest of any unit.
+pub fn merge_expansions(expansions: impl IntoIterator<Item = Expansion>) -> Expansion {
+    let mut merged = ExpansionMerger::default();
+    for expansion in expansions {
+        merged.push(expansion);
+    }
+    merged.finish()
+}
+
+/// The accumulator behind [`merge_expansions`]: everything is kept in
+/// first-seen order, so the merged output does not depend on hash order.
+#[derive(Default)]
+struct ExpansionMerger {
+    nodes: Vec<GraphNodePair>,
+    node_index: HashMap<Uuid, usize>,
+    edges: Vec<GraphEdgePair>,
+    edge_keys: HashSet<(Uuid, Uuid, String)>,
+    claimed_existing_edges: Vec<GraphEdgePair>,
+    claimed_keys: HashSet<(Uuid, Uuid, String)>,
+    producers: ArtifactProducers,
+    stats: EdgeResolutionStats,
+    timestamps: Vec<TimestampNode>,
+    timestamp_ids: HashSet<Uuid>,
+}
+
+impl ExpansionMerger {
+    fn push(&mut self, expansion: Expansion) {
+        for node in expansion.nodes {
+            match self.node_index.get(&node.entity.base.id) {
+                Some(&index) => self.nodes[index].merge_types_from(&node),
+                None => {
+                    self.node_index
+                        .insert(node.entity.base.id, self.nodes.len());
+                    self.nodes.push(node);
+                }
+            }
+        }
+        for edge in expansion.edges {
+            if self.edge_keys.insert(edge.dedup_key()) {
+                self.edges.push(edge);
+            }
+        }
+        for edge in expansion.claimed_existing_edges {
+            if self.claimed_keys.insert(edge.dedup_key()) {
+                self.claimed_existing_edges.push(edge);
+            }
+        }
+        for node in expansion.timestamps {
+            if self.timestamp_ids.insert(node.timestamp.base.id) {
+                self.timestamps.push(node);
+            }
+        }
+        self.producers.merge(expansion.producers);
+        self.stats.absorb(&expansion.stats);
+    }
+
+    fn finish(self) -> Expansion {
+        Expansion {
+            nodes: self.nodes,
+            edges: self.edges,
+            claimed_existing_edges: self.claimed_existing_edges,
+            producers: self.producers,
+            stats: self.stats,
+            timestamps: self.timestamps,
+        }
+    }
+}
+
+/// One unit's expansion, plus a bounded sample of the endpoint references it
+/// could not resolve (for the summary line, logged once by the caller).
+#[allow(clippy::too_many_arguments)]
+fn expand_unit(
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+    dataset_id: Uuid,
+    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &HashMap<Uuid, f64>,
+    existing_edges_set: &HashSet<String>,
+    ontology_resolver: &dyn OntologyResolver,
+    user_label: Option<&str>,
+    task_rank: Option<i32>,
+    endpoint_scope: EndpointScope,
+) -> (Expansion, Vec<String>) {
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -597,10 +784,11 @@ pub async fn expand_extracted_graphs(
     // Map from node_id to entity_id for edge resolution. The second element is
     // the position of the chunk that **most recently** declared the key, at or
     // before the chunk currently being read — refreshed on every re-declaration,
-    // not just the first, because that is the declaration a wave would still
-    // hold. It is carried here rather than in a parallel map so attribution
-    // costs 8 bytes an entry instead of a second copy of every key (SDK-507 is
-    // an allocation ticket).
+    // not just the first, because that is the declaration the referencing
+    // chunk could see on its own. It is carried here rather than in a parallel
+    // map so attribution costs 8 bytes an entry instead of a second copy of
+    // every key (SDK-507 is an allocation ticket). Under
+    // `EndpointScope::Chunk` both registries are cleared at every chunk.
     let mut node_id_to_entity_id: HashMap<String, (Uuid, ChunkPosition)> = HashMap::new();
 
     // Fallback map from a node's human-readable *name* to its entity id, used
@@ -625,11 +813,20 @@ pub async fn expand_extracted_graphs(
     let mut ontology_edges_out: Vec<GraphEdgePair> = Vec::new();
 
     // Process all graphs — each graph carries its source chunk_id
-    // `position` is the chunk's ordinal in this pass. Registry entries record
+    // `position` is the chunk's ordinal in this unit. Registry entries record
     // the position that created them so a resolved endpoint can be attributed
-    // to its own chunk or to an earlier one — the split that prices per-wave
-    // flushing, which would cut the registry on these boundaries.
+    // to its own chunk or to an earlier one — the split that prices
+    // chunk-local resolution (`EndpointScope::Chunk`).
     for (position, (chunk_id, graph)) in graphs.into_iter().enumerate() {
+        // Python resolves an edge's endpoints only against its own chunk's
+        // nodes. Forgetting the earlier chunks' registrations gives the same
+        // scope; the entities themselves stay merged, so a re-declaring chunk
+        // registers its node ids again below.
+        if endpoint_scope == EndpointScope::Chunk {
+            node_id_to_entity_id.clear();
+            name_to_entity_id.clear();
+        }
+
         // The importance_weight every EntityType / Entity / ontology node
         // extracted from this chunk inherits, mirroring Python's
         // `importance_weight=data_chunk.importance_weight`
@@ -1218,10 +1415,7 @@ pub async fn expand_extracted_graphs(
             et.base.id,
             Some(dataset_id),
         );
-        graph_nodes.push(GraphNodePair {
-            entity,
-            entity_type: Some(et),
-        });
+        graph_nodes.push(GraphNodePair::new(entity, Some(et)));
     }
 
     // Add ontology-derived individual nodes
@@ -1234,6 +1428,30 @@ pub async fn expand_extracted_graphs(
     let claimed_existing_edges: Vec<GraphEdgePair> =
         claimed_existing_edge_map.into_values().collect();
 
+    // Ontology-derived nodes and edges appended above have no producing chunk
+    // and therefore no producer entry; callers fall back to today's behavior
+    // for them.
+    let timestamps = timestamp_order
+        .into_iter()
+        .filter_map(|id| timestamp_map.remove(&id))
+        .collect();
+
+    (
+        Expansion {
+            nodes: graph_nodes,
+            edges: graph_edges,
+            claimed_existing_edges,
+            producers,
+            stats,
+            timestamps,
+        },
+        unresolved_sample,
+    )
+}
+
+/// Log, once per expansion, how many edges endpoint resolution dropped and
+/// how many endpoints matched a node from an earlier chunk of their unit.
+fn log_resolution_summary(stats: &EdgeResolutionStats, unresolved_sample: &[String]) {
     if stats.dropped() > 0 {
         // The sample lists unmatched references only; an ambiguous endpoint did
         // match, just not to a single entity, so naming it would not help.
@@ -1267,11 +1485,9 @@ pub async fn expand_extracted_graphs(
     }
 
     // Report the cross-chunk share separately from the drop rate: it is not a
-    // loss today, it is what per-wave flushing would turn into one (SDK-507
-    // tier 2). `max_distance` is the number that decides the wave size — a
-    // wave comfortably wider than it keeps all but the boundary-straddling
-    // resolutions, while a distance in the thousands means run-global
-    // resolution is doing real work that a small wave would throw away.
+    // loss, it is what resolving only within the edge's own chunk (Python's
+    // rule, `EndpointScope::Chunk`) would drop. Resolution never crosses a
+    // unit (one data item or block of it), so these all stay inside one.
     if stats.resolved_cross_chunk() > 0 {
         debug!(
             cross_chunk = stats.resolved_cross_chunk(),
@@ -1280,28 +1496,11 @@ pub async fn expand_extracted_graphs(
             resolved_by_id = stats.resolved_by_id,
             resolved_by_name = stats.resolved_by_name,
             max_distance = stats.max_cross_chunk_distance,
-            "{} endpoint(s) resolved against a node from an earlier chunk \
-             (max {} chunks back); per-wave flushing would risk these",
+            "{} endpoint(s) resolved against a node from an earlier chunk of the same unit \
+             (max {} chunks back); chunk-local resolution would drop these",
             stats.resolved_cross_chunk(),
             stats.max_cross_chunk_distance
         );
-    }
-
-    // Ontology-derived nodes and edges appended above have no producing chunk
-    // and therefore no producer entry; callers fall back to today's behavior
-    // for them.
-    let timestamps = timestamp_order
-        .into_iter()
-        .filter_map(|id| timestamp_map.remove(&id))
-        .collect();
-
-    Expansion {
-        nodes: graph_nodes,
-        edges: graph_edges,
-        claimed_existing_edges,
-        producers,
-        stats,
-        timestamps,
     }
 }
 
@@ -1377,10 +1576,7 @@ fn create_entity_node(
         }
     }
 
-    GraphNodePair {
-        entity: entity_with_chunk,
-        entity_type,
-    }
+    GraphNodePair::new(entity_with_chunk, entity_type)
 }
 
 /// Convert ontology subgraph nodes into graph integration types.
@@ -1474,10 +1670,7 @@ fn process_ontology_nodes(
                 placeholder_et.base.id = EntityType::id_for("OntologyIndividual");
                 pre_stamp_extraction(&mut placeholder_et, user_label, task_rank, visited);
 
-                let pair = GraphNodePair {
-                    entity,
-                    entity_type: Some(placeholder_et),
-                };
+                let pair = GraphNodePair::new(entity, Some(placeholder_et));
                 ontology_entities_map.insert(dedup_key, pair);
             }
         }
@@ -1558,6 +1751,7 @@ mod tests {
     use super::*;
     use crate::fact_extraction::Edge;
     use cognee_ontology::{NoOpOntologyResolver, OntologyResult, traits::OntologySubgraph};
+    use std::collections::BTreeSet;
 
     /// Helper to get the default no-op resolver used by most tests.
     fn noop() -> NoOpOntologyResolver {
@@ -2170,6 +2364,339 @@ mod tests {
         }
     }
 
+    // ----- Graph building per unit (SDK-1694) -----
+
+    async fn expand_units(
+        units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+        scope: EndpointScope,
+    ) -> Expansion {
+        expand_extracted_graphs_by_unit(
+            units,
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &noop(),
+            None,
+            None,
+            scope,
+        )
+        .await
+    }
+
+    fn graph(nodes: Vec<Node>, edges: Vec<Edge>) -> KnowledgeGraph {
+        KnowledgeGraph { nodes, edges }
+    }
+
+    /// Every (entity name, type name) pair.
+    fn entity_type_pairs(expansion: &Expansion) -> BTreeSet<(String, String)> {
+        expansion
+            .nodes
+            .iter()
+            .flat_map(|pair| {
+                pair.entity_types()
+                    .map(|t| (pair.entity.name.clone(), t.name.clone()))
+            })
+            .collect()
+    }
+
+    /// The type names of the entity named `name`, primary first.
+    fn types_of(expansion: &Expansion, name: &str) -> Vec<String> {
+        let pair = expansion
+            .nodes
+            .iter()
+            .find(|pair| pair.entity.name == name)
+            .unwrap();
+        // The entity's own type ids — what becomes the `is_a` edges — agree
+        // with the EntityTypes the node carries.
+        assert_eq!(
+            pair.entity.type_ids().collect::<Vec<_>>(),
+            pair.entity_types().map(|t| t.base.id).collect::<Vec<_>>()
+        );
+        pair.entity_types().map(|t| t.name.clone()).collect()
+    }
+
+    fn edge_keys(expansion: &Expansion) -> BTreeSet<(Uuid, Uuid, String)> {
+        expansion
+            .edges
+            .iter()
+            .map(GraphEdgePair::dedup_key)
+            .collect()
+    }
+
+    /// Ticket test 1: the first type per unit wins inside it, the types of
+    /// every unit are combined, and the description is the first unit's.
+    #[tokio::test]
+    async fn an_entity_keeps_the_first_type_of_each_unit() {
+        let (a1, a2, b1) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let doc_a = vec![
+            (
+                a1,
+                graph(
+                    vec![node("apple", "Apple", "Company", "from A chunk 1")],
+                    vec![],
+                ),
+            ),
+            (
+                a2,
+                graph(
+                    vec![node("apple", "Apple", "Organization", "from A chunk 2")],
+                    vec![],
+                ),
+            ),
+        ];
+        let doc_b = vec![(
+            b1,
+            graph(vec![node("apple", "Apple", "Fruit", "from B")], vec![]),
+        )];
+
+        let out = expand_units(vec![doc_a, doc_b], EndpointScope::Unit).await;
+
+        assert_eq!(out.nodes.len(), 1);
+        assert_eq!(types_of(&out, "apple"), ["company", "fruit"]);
+        assert!(
+            !out.nodes
+                .iter()
+                .flat_map(GraphNodePair::entity_types)
+                .any(|t| t.name == "organization"),
+            "a type that lost inside its unit must not be written"
+        );
+        assert_eq!(out.nodes[0].entity.description, "from A chunk 1");
+        // Every chunk still produced the entity.
+        let apple = out.nodes[0].entity.base.id;
+        assert_eq!(out.producers.entity_chunks(apple), [a1, a2, b1]);
+    }
+
+    /// Ticket test 2: a `chunks_per_batch` boundary inside one document
+    /// starts a new unit, so both blocks' types are kept.
+    #[tokio::test]
+    async fn a_block_boundary_inside_a_document_keeps_both_types() {
+        let doc = Uuid::new_v4();
+        let chunks: Vec<cognee_models::DocumentChunk> = (0..2)
+            .map(|index| {
+                cognee_models::DocumentChunk::new(
+                    Uuid::new_v4(),
+                    format!("chunk {index}"),
+                    1,
+                    index,
+                    "sentence_end".to_string(),
+                    doc,
+                )
+            })
+            .collect();
+        let graphs = [
+            (
+                chunks[0].base.id,
+                graph(vec![node("apple", "Apple", "Company", "")], vec![]),
+            ),
+            (
+                chunks[1].base.id,
+                graph(vec![node("apple", "Apple", "Fruit", "")], vec![]),
+            ),
+        ];
+        let unit = |per_batch: usize| {
+            crate::graph_integration::extraction_units(
+                &chunks,
+                per_batch,
+                graphs
+                    .iter()
+                    .map(|(chunk, g)| (doc, *chunk, (*chunk, g.clone()))),
+            )
+        };
+
+        let split = expand_units(unit(1), EndpointScope::Unit).await;
+        assert_eq!(types_of(&split, "apple"), ["company", "fruit"]);
+
+        let whole = expand_units(unit(2000), EndpointScope::Unit).await;
+        assert_eq!(types_of(&whole, "apple"), ["company"]);
+    }
+
+    fn three_documents() -> Vec<Vec<(Uuid, KnowledgeGraph)>> {
+        vec![
+            vec![(
+                Uuid::new_v4(),
+                graph(
+                    vec![
+                        node("apple", "Apple", "Company", ""),
+                        node("jobs", "Steve Jobs", "Person", ""),
+                    ],
+                    vec![edge("jobs", "apple", "founded")],
+                ),
+            )],
+            vec![(
+                Uuid::new_v4(),
+                graph(
+                    vec![
+                        node("apple", "Apple", "Fruit", ""),
+                        node("tree", "Apple tree", "Plant", ""),
+                    ],
+                    vec![edge("tree", "apple", "bears")],
+                ),
+            )],
+            vec![(
+                Uuid::new_v4(),
+                graph(
+                    vec![
+                        node("apple", "Apple", "Brand", ""),
+                        node("jobs", "Steve Jobs", "Founder", ""),
+                    ],
+                    vec![edge("jobs", "apple", "founded")],
+                ),
+            )],
+        ]
+    }
+
+    /// Ticket test 3: the order the units are merged in changes which type
+    /// is primary, never the set of types, edges or producers.
+    #[tokio::test]
+    async fn the_merged_graph_does_not_depend_on_unit_order() {
+        let units = three_documents();
+        let forward = expand_units(units.clone(), EndpointScope::Unit).await;
+        let mut reversed = units;
+        reversed.reverse();
+        let backward = expand_units(reversed, EndpointScope::Unit).await;
+
+        assert_eq!(entity_type_pairs(&forward), entity_type_pairs(&backward));
+        assert_eq!(edge_keys(&forward), edge_keys(&backward));
+        for pair in &forward.nodes {
+            let id = pair.entity.base.id;
+            let mut ahead = forward.producers.entity_chunks(id).to_vec();
+            let mut behind = backward.producers.entity_chunks(id).to_vec();
+            ahead.sort_unstable();
+            behind.sort_unstable();
+            assert_eq!(ahead, behind);
+        }
+        for key in edge_keys(&forward) {
+            let mut ahead = forward.producers.edge_chunks(&key).to_vec();
+            let mut behind = backward.producers.edge_chunks(&key).to_vec();
+            ahead.sort_unstable();
+            behind.sort_unstable();
+            assert_eq!(ahead, behind);
+        }
+        assert_eq!(forward.stats, backward.stats);
+    }
+
+    /// Ticket test 4: documents cognified together get the same
+    /// (entity, type) pairs as the same documents cognified one by one.
+    #[tokio::test]
+    async fn the_types_do_not_depend_on_how_documents_are_split_across_runs() {
+        let units = three_documents();
+        let together = expand_units(units.clone(), EndpointScope::Unit).await;
+
+        let mut one_by_one = BTreeSet::new();
+        for unit in units {
+            let alone = expand_units(vec![unit], EndpointScope::Unit).await;
+            one_by_one.extend(entity_type_pairs(&alone));
+        }
+
+        assert_eq!(entity_type_pairs(&together), one_by_one);
+        assert_eq!(
+            types_of(&together, "apple"),
+            ["company", "fruit", "brand"],
+            "every document's type, in first-seen order"
+        );
+    }
+
+    /// Ticket test 5: an edge endpoint never resolves against a node only
+    /// another document declared.
+    #[tokio::test]
+    async fn an_endpoint_never_resolves_in_another_document() {
+        let doc_a = vec![(
+            Uuid::new_v4(),
+            graph(vec![node("alice", "Alice", "Person", "")], vec![]),
+        )];
+        let doc_b = vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![node("bob", "Bob", "Person", "")],
+                // `alice` is declared only by document A, by id and by name.
+                vec![edge("bob", "alice", "knows"), edge("Alice", "bob", "knows")],
+            ),
+        )];
+
+        let out = expand_units(vec![doc_a, doc_b], EndpointScope::Unit).await;
+
+        assert!(out.edges.is_empty(), "{:?}", out.edges);
+        assert_eq!(out.stats.attempted, 2);
+        assert_eq!(out.stats.dropped_target_missing, 1);
+        assert_eq!(out.stats.dropped_source_missing, 1);
+    }
+
+    /// D2: within one unit, `EndpointScope::Unit` lets an edge reach a node an
+    /// earlier chunk declared; `EndpointScope::Chunk` (Python's rule) does
+    /// not.
+    #[tokio::test]
+    async fn the_endpoint_scope_decides_whether_an_edge_reaches_an_earlier_chunk() {
+        let unit = vec![
+            (
+                Uuid::new_v4(),
+                graph(vec![node("alice", "Alice", "Person", "")], vec![]),
+            ),
+            (
+                Uuid::new_v4(),
+                graph(
+                    vec![node("bob", "Bob", "Person", "")],
+                    // `alice` is declared only by the first chunk.
+                    vec![edge("bob", "alice", "knows")],
+                ),
+            ),
+        ];
+
+        let unit_scope = expand_units(vec![unit.clone()], EndpointScope::Unit).await;
+        assert_eq!(unit_scope.edges.len(), 1);
+        assert_eq!(unit_scope.stats.resolved_cross_chunk(), 1);
+
+        let chunk_scope = expand_units(vec![unit], EndpointScope::Chunk).await;
+        assert!(chunk_scope.edges.is_empty());
+        assert_eq!(chunk_scope.stats.dropped_target_missing, 1);
+        assert_eq!(chunk_scope.stats.resolved_cross_chunk(), 0);
+        // The entities themselves are unaffected by the scope.
+        assert_eq!(chunk_scope.nodes.len(), 2);
+    }
+
+    /// `merge_expansions` keeps the first unit's edge and claim, sums the
+    /// counters and keeps the largest distance.
+    #[tokio::test]
+    async fn merge_expansions_combines_edges_claims_and_counters() {
+        let first = expand(vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![node("a", "A", "T", ""), node("b", "B", "T", "")],
+                vec![Edge {
+                    description: Some("first".to_string()),
+                    ..edge("a", "b", "rel")
+                }],
+            ),
+        )])
+        .await;
+        let second = expand(vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![node("a", "A", "T", ""), node("b", "B", "T", "")],
+                vec![Edge {
+                    description: Some("second".to_string()),
+                    ..edge("a", "b", "rel")
+                }],
+            ),
+        )])
+        .await;
+        let attempted = first.stats.attempted + second.stats.attempted;
+
+        let merged = merge_expansions([first, second]);
+
+        assert_eq!(merged.nodes.len(), 2);
+        assert_eq!(merged.edges.len(), 1);
+        assert_eq!(merged.edges[0].properties["edge_text"], "first");
+        assert_eq!(merged.stats.attempted, attempted);
+        assert_eq!(
+            merged
+                .producers
+                .edge_chunks(&merged.edges[0].dedup_key())
+                .len(),
+            2
+        );
+    }
+
     #[tokio::test]
     async fn test_expand_stores_chunk_reference() {
         let graph = create_test_graph();
@@ -2721,15 +3248,15 @@ mod tests {
         (edges, stats)
     }
 
-    /// A node re-declared by a later chunk is available to that chunk's own
-    /// wave, so an edge referencing it loses nothing to a flush — no matter how
-    /// far back the *first* declaration was.
+    /// A node re-declared by a later chunk is available to that chunk on its
+    /// own, so an edge referencing it loses nothing to chunk-local resolution —
+    /// no matter how far back the *first* declaration was.
     ///
     /// This is the case that makes the counter worth trusting. LLM extraction
     /// re-declares a recurring entity in every chunk that mentions it, so
     /// attributing to the earliest declaration would drive
-    /// `max_cross_chunk_distance` toward the corpus length and argue against a
-    /// per-wave flush that would in fact be free.
+    /// `max_cross_chunk_distance` toward the unit length and over-count what
+    /// chunk-local resolution would drop.
     #[tokio::test]
     async fn test_edge_resolution_stats_ignores_redeclared_node() {
         let (edges, stats) = expand_ordered_chunks(vec![
@@ -2767,7 +3294,7 @@ mod tests {
     }
 
     /// The same, through the name-alias fallback: a re-declared node's alias is
-    /// equally available to the re-declaring chunk's wave.
+    /// equally available to the re-declaring chunk.
     #[tokio::test]
     async fn test_edge_resolution_stats_ignores_redeclared_name_alias() {
         let (edges, stats) = expand_ordered_chunks(vec![
@@ -2864,7 +3391,7 @@ mod tests {
     }
 
     /// An edge referencing only its own chunk's nodes is chunk-local, so
-    /// per-wave flushing would not touch it. Guards the counter against firing
+    /// `EndpointScope::Chunk` would not touch it. Guards the counter against firing
     /// on every resolution — the pair with the three tests below is what makes
     /// the discriminator load-bearing.
     #[tokio::test]
@@ -2889,7 +3416,7 @@ mod tests {
     }
 
     /// An id-keyed endpoint that matches a node declared by an *earlier* chunk
-    /// is exactly what a wave boundary would cut off.
+    /// is exactly what `EndpointScope::Chunk` would cut off.
     #[tokio::test]
     async fn test_edge_resolution_stats_counts_cross_chunk_id_resolution() {
         let (edges, stats) = expand_ordered_chunks(vec![
@@ -2917,7 +3444,7 @@ mod tests {
     }
 
     /// The name-alias fallback is the population the cross-chunk split exists
-    /// for: it is the recovery mechanism per-wave flushing would silently undo.
+    /// for: it is the recovery mechanism chunk-local resolution would undo.
     #[tokio::test]
     async fn test_edge_resolution_stats_counts_cross_chunk_name_resolution() {
         let (edges, stats) = expand_ordered_chunks(vec![
@@ -2947,7 +3474,7 @@ mod tests {
     }
 
     /// `max_cross_chunk_distance` reports the widest gap, not the last one —
-    /// it is the number that says how wide a wave would have to be.
+    /// it is how far back, within a unit, resolution reached.
     #[tokio::test]
     async fn test_edge_resolution_stats_reports_widest_cross_chunk_distance() {
         let (edges, stats) = expand_ordered_chunks(vec![

@@ -69,7 +69,8 @@ use crate::failure::{
 use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
     ArtifactProducers, Expansion, GraphEdgePair, GraphNodePair, TimestampNode,
-    deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
+    deduplicate_nodes_and_edges, expand_extracted_graphs_by_unit, extraction_units,
+    retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::rollback;
@@ -1367,6 +1368,22 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
+    // One graph per unit — a data item, or a block of `chunks_per_batch`
+    // chunks of it — with fresh maps, as Python builds them; merged after.
+    // Within a unit the first declaration of an entity decides its description
+    // and type; across units its types are combined and endpoints never match.
+    let document_of: HashMap<Uuid, Uuid> = chunks_for_extraction
+        .iter()
+        .map(|chunk| (chunk.base.id, chunk.document_id))
+        .collect();
+    let units = extraction_units(
+        &chunks_for_extraction,
+        config.chunks_per_batch,
+        all_graphs.into_iter().map(|(chunk_id, graph)| {
+            let data_id = document_of.get(&chunk_id).copied().unwrap_or_default();
+            (data_id, chunk_id, (chunk_id, graph))
+        }),
+    );
     let Expansion {
         nodes,
         edges,
@@ -1375,8 +1392,8 @@ pub async fn extract_graph_from_data(
         stats: edge_resolution,
         timestamps,
         ..
-    } = expand_extracted_graphs(
-        all_graphs,
+    } = expand_extracted_graphs_by_unit(
+        units,
         input.dataset_id,
         &chunk_node_sets,
         &chunk_importance_weights,
@@ -1384,6 +1401,7 @@ pub async fn extract_graph_from_data(
         ontology_resolver.as_ref(),
         user_label_owned.as_deref(),
         task_rank,
+        config.endpoint_scope,
     )
     .await;
 
@@ -1395,13 +1413,13 @@ pub async fn extract_graph_from_data(
     // be filtered out downstream for already existing in the database, so the
     // resolved figure is an upper bound on what this pass goes on to emit.
     //
-    // The cross-chunk fields are not a loss report. They price SDK-507 tier 2:
-    // resolution is run-global today, so an endpoint can match a node declared
-    // by any earlier chunk, and flushing per wave would only see its own wave.
-    // `cross_chunk` is the upper bound on what that would cost and
-    // `max_cross_chunk_distance` is how wide a wave has to be to avoid most of
-    // it. Logged here, once per run, because the expansion pass cannot see the
-    // configured batch size and should not be given it for a diagnostic.
+    // The cross-chunk fields are not a loss report. Resolution is scoped to a
+    // unit (one data item, or a block of `chunks_per_batch` chunks of it), so
+    // an endpoint never matches a node of another document; within a unit it
+    // can match a node an earlier chunk declared, unless
+    // `cognify.cross_chunk_endpoints` is off. `cross_chunk` counts those
+    // matches — what Python's chunk-local rule would drop — and
+    // `max_cross_chunk_distance` how far back, within a unit, they reached.
     info!(
         attempted = edge_resolution.attempted,
         dropped = edge_resolution.dropped(),
@@ -1411,7 +1429,8 @@ pub async fn extract_graph_from_data(
         cross_chunk_by_name = edge_resolution.resolved_by_name_cross_chunk,
         max_cross_chunk_distance = edge_resolution.max_cross_chunk_distance,
         "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges; \
-         {} endpoint(s) matched a node from an earlier chunk (max {} chunks back)",
+         {} endpoint(s) matched a node from an earlier chunk of the same unit \
+         (max {} chunks back)",
         edge_resolution.attempted - edge_resolution.dropped(),
         edge_resolution.attempted,
         edge_resolution.resolved_cross_chunk(),
@@ -2350,7 +2369,7 @@ pub async fn add_data_points(
     }
     for pair in &input.entities {
         extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
-        if let Some(entity_type) = &pair.entity_type {
+        for entity_type in pair.entity_types() {
             extractable_items.push(entity_type as &dyn crate::graph_extraction::GraphExtractable);
         }
     }
@@ -2453,7 +2472,7 @@ pub async fn add_data_points(
         let entity_type_refs: Vec<&cognee_models::EntityType> = input
             .entities
             .iter()
-            .filter_map(|pair| pair.entity_type.as_ref())
+            .flat_map(|pair| pair.entity_types())
             .collect();
         graph_db
             .add_nodes(&entity_type_refs)
@@ -2846,7 +2865,7 @@ fn stamp_extracted_edge_text(
     }
     for pair in &dedup_result.unique_nodes {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        if let Some(entity_type) = &pair.entity_type {
+        for entity_type in pair.entity_types() {
             labels.insert(entity_type.base.id, &entity_type.name);
         }
     }
@@ -2897,7 +2916,7 @@ fn stamp_structural_edge_text(
     let mut mentions: HashMap<String, String> = HashMap::new();
     for pair in &input.entities {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        if let Some(entity_type) = &pair.entity_type {
+        for entity_type in pair.entity_types() {
             labels.insert(entity_type.base.id, &entity_type.name);
         }
         if let Some(text) = chunk_mentions_text(&pair.entity.name, &pair.entity.description) {
@@ -5404,30 +5423,14 @@ fn store_dynamic_graphs(
     chunks: &[DocumentChunk],
     config: &CognifyConfig,
 ) -> Vec<StoredDynamicGraph> {
-    let chunks_per_batch = config.chunks_per_batch.max(1);
-    let mut positions: HashMap<Uuid, usize> = HashMap::new();
-    let chunk_batch: HashMap<Uuid, usize> = chunks
-        .iter()
-        .map(|chunk| {
-            let position = positions.entry(chunk.document_id).or_default();
-            let batch = *position / chunks_per_batch;
-            *position += 1;
-            (chunk.base.id, batch)
-        })
-        .collect();
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut group_of: HashMap<(Uuid, usize), usize> = HashMap::new();
-    for (index, attributed) in graphs.iter().enumerate() {
-        let key = (
-            attributed.data_id,
-            chunk_batch.get(&attributed.chunk_id).copied().unwrap_or(0),
-        );
-        let group = *group_of.entry(key).or_insert_with(|| {
-            groups.push(Vec::new());
-            groups.len() - 1
-        });
-        groups[group].push(index);
-    }
+    let groups = extraction_units(
+        chunks,
+        config.chunks_per_batch,
+        graphs
+            .iter()
+            .enumerate()
+            .map(|(index, attributed)| (attributed.data_id, attributed.chunk_id, index)),
+    );
     let attachment = config.chunk_attachment.unwrap_or(ChunkAttachment::Direct);
     let mut stored = vec![
         StoredDynamicGraph {
@@ -5760,7 +5763,7 @@ async fn upsert_provenance(
     }
 
     // EntityTypes
-    for et in entities.iter().filter_map(|pair| pair.entity_type.as_ref()) {
+    for et in entities.iter().flat_map(|pair| pair.entity_types()) {
         // EntityType rows carry a nil `data_id`: one type is shared by every
         // entity of that type, so there is no single producing file. Note this
         // is *not* Python's shape — `upsert_nodes` stamps the ctx `data_id` on
@@ -6296,7 +6299,7 @@ async fn index_data_points_windowed(
         let mut seen_ids = std::collections::HashSet::new();
         let unique_entity_types: Vec<&cognee_models::EntityType> = entities
             .iter()
-            .filter_map(|pair| pair.entity_type.as_ref())
+            .flat_map(|pair| pair.entity_types())
             .filter(|et| seen_ids.insert(et.base.id))
             .collect();
 
@@ -6918,7 +6921,7 @@ pub fn make_extract_graph_task_with_rank(
                     user_label.as_deref(),
                     rank,
                 );
-                if let Some(entity_type) = pair.entity_type.as_mut() {
+                for entity_type in pair.entity_types_mut() {
                     stamp_provenance(
                         &mut entity_type.base,
                         COGNIFY_PIPELINE_STAMP_NAME,
@@ -7313,7 +7316,7 @@ pub fn make_add_data_points_task_with_rank(
                     user_label.as_deref(),
                     rank,
                 );
-                if let Some(entity_type) = pair.entity_type.as_mut() {
+                for entity_type in pair.entity_types_mut() {
                     stamp_provenance(
                         &mut entity_type.base,
                         COGNIFY_PIPELINE_STAMP_NAME,
@@ -8468,10 +8471,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_a.to_string()));
         let entity_id = entity.base.id;
-        let nodes = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let nodes = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_a);
@@ -8505,10 +8505,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_id.to_string()));
         let entity_id = entity.base.id;
-        let nodes = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let nodes = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let links = chunk_entity_links(&nodes, &[], &ArtifactProducers::default());
 
@@ -8571,10 +8568,7 @@ mod tests {
         let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
         let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_a);
@@ -8637,10 +8631,7 @@ mod tests {
         let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
         let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_1);
@@ -8689,10 +8680,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_a.to_string()));
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         upsert_provenance(
             &db,
@@ -8753,14 +8741,8 @@ mod tests {
             .set_metadata("chunk_id", json!(chunk_b.to_string()));
         let (alice_id, bob_id) = (alice.base.id, bob.base.id);
         let entities = vec![
-            GraphNodePair {
-                entity: alice,
-                entity_type: Some(entity_type.clone()),
-            },
-            GraphNodePair {
-                entity: bob,
-                entity_type: Some(entity_type),
-            },
+            GraphNodePair::new(alice, Some(entity_type.clone())),
+            GraphNodePair::new(bob, Some(entity_type)),
         ];
 
         let mut edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -8846,14 +8828,8 @@ mod tests {
         let bob = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
         let (alice_id, bob_id) = (alice.base.id, bob.base.id);
         let entities = vec![
-            GraphNodePair {
-                entity: alice,
-                entity_type: Some(entity_type.clone()),
-            },
-            GraphNodePair {
-                entity: bob,
-                entity_type: Some(entity_type),
-            },
+            GraphNodePair::new(alice, Some(entity_type.clone())),
+            GraphNodePair::new(bob, Some(entity_type)),
         ];
 
         let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -8915,14 +8891,8 @@ mod tests {
                 .set_metadata("chunk_id", json!(target_chunk.to_string()));
             let (alice_id, bob_id) = (alice.base.id, bob.base.id);
             let entities = vec![
-                GraphNodePair {
-                    entity: alice,
-                    entity_type: Some(entity_type.clone()),
-                },
-                GraphNodePair {
-                    entity: bob,
-                    entity_type: Some(entity_type),
-                },
+                GraphNodePair::new(alice, Some(entity_type.clone())),
+                GraphNodePair::new(bob, Some(entity_type)),
             ];
 
             let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -9520,6 +9490,7 @@ mod tests {
             base: entity_base,
             name: name.to_string(),
             is_a: None,
+            extra_types: Vec::new(),
             description: format!("description of {name}"),
         };
 
@@ -9531,10 +9502,7 @@ mod tests {
             description: "Generic type".to_string(),
         };
 
-        GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }
+        GraphNodePair::new(entity, Some(entity_type))
     }
 
     // index_data_points reuses the vectors produced by generate_embeddings, so
@@ -13081,10 +13049,7 @@ mod tests {
         let input = SummarizedData {
             chunks: vec![chunk],
             documents: vec![test_document_with_metadata(doc_id, None)],
-            entities: vec![GraphNodePair {
-                entity,
-                entity_type: Some(entity_type),
-            }],
+            entities: vec![GraphNodePair::new(entity, Some(entity_type))],
             timestamps: vec![],
             edges: vec![],
             producers: ArtifactProducers::default(),

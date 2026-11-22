@@ -1,0 +1,122 @@
+{
+  "generated_by": "generate_expected.py",
+  "entity_ids": [
+    "0ef5f65a-4d90-5b31-b090-8e807de27ae9",
+    "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
+    "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
+    "2c3c9f85-7df6-5212-b56f-9a901b6a638f",
+    "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+    "93da58cd-a94a-5b00-ac7f-e87ad03f61d9",
+    "9976a779-8dfe-512e-9cbd-28d76e50ef60",
+    "bbf6eadb-b5d7-56a0-b4ad-3c00a58a82a6",
+    "eb1d50ce-bcad-5543-8da7-eec8f14166d9"
+  ],
+  "entity_types": [
+    [
+      "0ef5f65a-4d90-5b31-b090-8e807de27ae9",
+      "99a82eec-bb35-5bb5-9ed2-e73fc7a756de"
+    ],
+    [
+      "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
+      "2df43048-b175-54c2-b72b-0ff24f41e4f1"
+    ],
+    [
+      "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
+      "4f155b46-e814-58f6-97cf-55d2ac3a572d"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "31d368fa-7630-5642-a1c1-e579050f9ac3"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "66f4c27c-1a16-5cb3-a7df-db1caf2fcf07"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "82bfc922-4fcd-56b0-b353-7b550b51389d"
+    ],
+    [
+      "93da58cd-a94a-5b00-ac7f-e87ad03f61d9",
+      "c7b168f7-a2c1-5609-907a-22b69be3b923"
+    ],
+    [
+      "9976a779-8dfe-512e-9cbd-28d76e50ef60",
+      "99a82eec-bb35-5bb5-9ed2-e73fc7a756de"
+    ],
+    [
+      "bbf6eadb-b5d7-56a0-b4ad-3c00a58a82a6",
+      "2c93f6c2-db47-5911-b0ba-16e9799a74b0"
+    ],
+    [
+      "eb1d50ce-bcad-5543-8da7-eec8f14166d9",
+      "5197ee43-3e2b-55b5-ae0f-37144e7a1aab"
+    ]
+  ],
+  "type_names": {
+    "2c93f6c2-db47-5911-b0ba-16e9799a74b0": "element",
+    "2df43048-b175-54c2-b72b-0ff24f41e4f1": "plant",
+    "31d368fa-7630-5642-a1c1-e579050f9ac3": "brand",
+    "4f155b46-e814-58f6-97cf-55d2ac3a572d": "city",
+    "5197ee43-3e2b-55b5-ae0f-37144e7a1aab": "star",
+    "66f4c27c-1a16-5cb3-a7df-db1caf2fcf07": "fruit",
+    "82bfc922-4fcd-56b0-b353-7b550b51389d": "company",
+    "99a82eec-bb35-5bb5-9ed2-e73fc7a756de": "person",
+    "c7b168f7-a2c1-5609-907a-22b69be3b923": "planet"
+  },
+  "timestamp_ids": [
+    "bb81dccc-8180-558c-bcbf-0fd9f5f05a8a"
+  ],
+  "semantic_edges": [
+    [
+      "0ef5f65a-4d90-5b31-b090-8e807de27ae9",
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "leads"
+    ],
+    [
+      "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "bears"
+    ],
+    [
+      "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
+      "bb81dccc-8180-558c-bcbf-0fd9f5f05a8a",
+      "planted_at"
+    ],
+    [
+      "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
+      "bb81dccc-8180-558c-bcbf-0fd9f5f05a8a",
+      "located_in"
+    ],
+    [
+      "2c3c9f85-7df6-5212-b56f-9a901b6a638f",
+      "eb1d50ce-bcad-5543-8da7-eec8f14166d9",
+      "near"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
+      "headquartered_in"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "2c3c9f85-7df6-5212-b56f-9a901b6a638f",
+      "owns"
+    ],
+    [
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "bb81dccc-8180-558c-bcbf-0fd9f5f05a8a",
+      "founded_at"
+    ],
+    [
+      "93da58cd-a94a-5b00-ac7f-e87ad03f61d9",
+      "eb1d50ce-bcad-5543-8da7-eec8f14166d9",
+      "orbits"
+    ],
+    [
+      "9976a779-8dfe-512e-9cbd-28d76e50ef60",
+      "7d3f5b41-6f69-5496-bb38-27a82b60d766",
+      "founded"
+    ]
+  ]
+}

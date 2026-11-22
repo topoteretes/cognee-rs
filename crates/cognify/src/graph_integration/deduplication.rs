@@ -33,10 +33,19 @@ pub fn deduplicate_nodes_and_edges(
     edges: Vec<GraphEdgePair>,
 ) -> DeduplicationResult {
     // Deduplicate nodes by entity ID
-    let mut node_map = HashMap::new();
-    for node in nodes {
+    let mut node_map: HashMap<_, GraphNodePair> = HashMap::new();
+    for mut node in nodes {
         let key = node.entity.base.id;
-        // Later entries with same ID will overwrite earlier ones
+        // Later entries with same ID overwrite earlier ones, but keep every
+        // type either declared: the earlier node's types first, so its primary
+        // type stays primary.
+        if let Some(mut earlier) = node_map.remove(&key) {
+            earlier.merge_types_from(&node);
+            node.entity.is_a = earlier.entity.is_a;
+            node.entity.extra_types = earlier.entity.extra_types;
+            node.entity_type = earlier.entity_type;
+            node.extra_entity_types = earlier.extra_entity_types;
+        }
         node_map.insert(key, node);
     }
 
@@ -61,12 +70,14 @@ mod tests {
     use uuid::Uuid;
 
     fn create_test_node(name: &str, type_name: &str) -> GraphNodePair {
-        let entity = Entity::new(name, None, format!("{name} description"), None);
         let entity_type = EntityType::from_node_type(type_name, None);
-        GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }
+        let entity = Entity::new(
+            name,
+            Some(entity_type.base.id),
+            format!("{name} description"),
+            None,
+        );
+        GraphNodePair::new(entity, Some(entity_type))
     }
 
     fn create_test_edge(source_id: Uuid, target_id: Uuid, relationship: &str) -> GraphEdgePair {
@@ -212,5 +223,24 @@ mod tests {
 
         // Should have 2 unique nodes (TechCorp and Alice)
         assert_eq!(result.unique_nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_deduplicate_keeps_every_type_of_a_merged_node() {
+        let company = create_test_node("Apple", "Company");
+        let fruit = create_test_node("Apple", "Fruit");
+        let company_again = create_test_node("Apple", "Company");
+
+        let result = deduplicate_nodes_and_edges(vec![company, fruit, company_again], vec![]);
+
+        assert_eq!(result.unique_nodes.len(), 1);
+        let node = &result.unique_nodes[0];
+        let types: Vec<&str> = node.entity_types().map(|t| t.name.as_str()).collect();
+        assert_eq!(types, ["Company", "Fruit"]);
+        // The entity's own type ids, which become the `is_a` edges, agree.
+        assert_eq!(
+            node.entity.type_ids().collect::<Vec<_>>(),
+            node.entity_types().map(|t| t.base.id).collect::<Vec<_>>()
+        );
     }
 }

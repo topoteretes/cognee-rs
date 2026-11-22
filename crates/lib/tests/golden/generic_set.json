@@ -2818,6 +2818,66 @@
     "err": "TypeMismatch",
     "key": "cognify.chunks_per_batch"
   },
+  "cognify.cross_chunk_endpoints <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- 0": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- 1": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- 70000": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- false": {
+    "ok": {
+      "cognify.cross_chunk_endpoints": false
+    }
+  },
+  "cognify.cross_chunk_endpoints <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
+  "cognify.cross_chunk_endpoints <- true": {
+    "ok": {}
+  },
+  "cognify.cross_chunk_endpoints <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.cross_chunk_endpoints"
+  },
   "cognify.edge_evidence_enabled <- \"\"": {
     "err": "TypeMismatch",
     "key": "cognify.edge_evidence_enabled"
