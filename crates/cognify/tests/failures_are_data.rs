@@ -309,9 +309,7 @@ async fn run_to_end_collects_every_failure_before_failing() {
 async fn summarization_failure_is_fatal_by_default_but_never_abandons_the_stream() {
     let llm = Arc::new(SummarizationFailingLlm::new(vec![FAIL_MARKER.to_string()]));
     let outcome = run_cognify_with_llm(
-        CognifyConfig::default()
-            .with_chunk_size(1500)
-            .with_chunks_per_batch(1),
+        CognifyConfig::default().with_chunk_size(1500),
         llm.clone(),
         &["Alice works at Acme.", "Bob FAILMARKER.", "Carol at Acme."],
     )
@@ -341,7 +339,6 @@ async fn summarization_failure_is_tolerated_when_the_flag_is_set() {
     let outcome = run_cognify_with_llm(
         CognifyConfig::default()
             .with_chunk_size(1500)
-            .with_chunks_per_batch(1)
             .with_summarization_failure_tolerance(true),
         llm.clone(),
         &["Alice works at Acme.", "Bob FAILMARKER.", "Carol at Acme."],

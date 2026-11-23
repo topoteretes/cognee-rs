@@ -1056,7 +1056,7 @@ prompt and the summary schema:
 
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
-| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks of one data item per block the graph is built from (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default. It does not batch the LLM extraction calls: every chunk of the run goes through one stream capped by `max_parallel_extractions`. A graph backend is still handed one block per call | `2000` |
+| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks of one data item per block the graph is built from (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default. It does not batch or limit the LLM extraction calls: every chunk of the run goes through one stream capped by `max_parallel_extractions` (`LLM_MAX_PARALLEL_REQUESTS`), which is the setting to lower to limit LLM load. A graph backend is still handed one block per call | `2000` |
 | `EDGE_EVIDENCE_ENABLED` | `cognify.edge_evidence_enabled` | record which chunk supports which graph edge (`provenance_edge_evidence`) during cognify, so `include_references` can cite edge sources (Python's `EDGE_EVIDENCE_ENABLED`); off only stops new capture | `true` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
@@ -1182,7 +1182,17 @@ every one of its chunks was dispatched and none failed. Calls already in flight
 are never cancelled and their results are collected, failures included, so a
 run with fewer chunks than `max_parallel_extractions` saves nothing. A graph
 backend (`CognifyConfig::graph_backend`) is still handed `chunks_per_batch`
-chunks per call, one call at a time, and stops after the call that failed. A summarization failure that
+chunks per call, one call at a time, and stops after the call that failed.
+
+Under `FailFast` + `FailedItems` that window decides how much survives: a file
+is kept only if every one of its chunks was dispatched, so every file with a
+chunk beyond the window is unreached and the calls it did finish are discarded
+with it. With 32 calls in flight, a failure at chunk 40 of a 1,500-chunk run
+keeps only the few files whose chunks were all sent by then; a failure in the
+first file keeps none, which makes the run fatal and rolls it back whole. This
+matches Python, which cancels the items still running at the first failure.
+Until each file is saved as it completes (SDK-1694 stage O5b), use `RunToEnd` +
+`FailedItems` to keep every file that succeeded. A summarization failure that
 `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` makes non-fatal does not close
 the gate at all: it fails no item, so there is nothing to stop for.
 

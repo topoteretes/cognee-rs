@@ -248,10 +248,13 @@ pub struct CognifyConfig {
     /// `cognee/modules/cognify/config.py:12`). We match that literal.
     ///
     /// It decides only where a document's graph is cut into blocks, each built
-    /// with fresh maps as Python builds it (see [`Self::endpoint_scope`]), and
-    /// how often extraction logs its progress. It does not limit dispatch: the
-    /// LLM paths send every chunk of the run through one stream bounded by
-    /// [`Self::max_parallel_extractions`], with no barrier between blocks. A
+    /// with fresh maps as Python builds it (see [`Self::endpoint_scope`]). It
+    /// does not limit dispatch or concurrency: the LLM paths send every chunk
+    /// of the run through one stream bounded by
+    /// [`Self::max_parallel_extractions`], with no barrier between blocks.
+    /// Lowering it no longer lowers LLM load (it used to cap concurrency at
+    /// min(`chunks_per_batch`, `max_parallel_extractions`)); lower
+    /// `max_parallel_extractions` (`LLM_MAX_PARALLEL_REQUESTS`) instead. A
     /// [`Self::graph_backend`] is the exception, and is still handed one block
     /// of `chunks_per_batch` chunks at a time.
     pub chunks_per_batch: usize,

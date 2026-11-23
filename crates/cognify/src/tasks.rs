@@ -1125,7 +1125,6 @@ pub async fn extract_graph_from_data(
             chunks_for_extraction.len(),
             max_parallel,
             fail_fast,
-            config.chunks_per_batch,
             "graph extraction",
             |index| {
                 let chunk = &chunks_for_extraction[index];
@@ -1152,7 +1151,7 @@ pub async fn extract_graph_from_data(
                     }
                 }
             },
-            |error| CognifyError::FactExtractionError(error.to_string()),
+            CognifyError::FactExtractionError,
         )
         .await;
 
@@ -1878,7 +1877,6 @@ pub async fn extract_dynamic_graphs_from_data(
         extractable.len(),
         max_parallel,
         fail_fast,
-        config.chunks_per_batch,
         "custom graph extraction",
         |index| {
             let chunk = extractable[index];
@@ -1929,9 +1927,9 @@ pub async fn extract_dynamic_graphs_from_data(
         // Each call is spawned like the other extractors': CPU-bound
         // validation spreads across the runtime, and a panicking chunk becomes
         // that chunk's failure under the policy instead of unwinding the stage.
-        |error| {
+        |message| {
             CognifyError::GraphExtractionError(format!(
-                "dynamic graph extraction task failed: {error}"
+                "dynamic graph extraction task failed: {message}"
             ))
         },
     )

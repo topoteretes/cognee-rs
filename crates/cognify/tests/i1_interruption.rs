@@ -755,7 +755,6 @@ impl Fixture {
 fn full_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)
-        .with_chunks_per_batch(1)
         .with_summarization(true)
 }
 

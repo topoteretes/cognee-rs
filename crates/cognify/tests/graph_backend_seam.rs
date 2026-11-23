@@ -542,6 +542,9 @@ async fn aborted_files_lose_their_backend_summaries() {
     .await
     .expect("seed dataset");
 
+    // A graph backend is still handed one `chunks_per_batch` block per call
+    // (the LLM paths no longer batch), so this keeps one backend call per
+    // chunk and the FailFast stop between files.
     let config = config()
         .with_chunks_per_batch(1)
         .with_failure_stop(FailureStop::FailFast)
