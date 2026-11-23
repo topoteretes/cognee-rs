@@ -1003,6 +1003,23 @@ fn has_real_type(node: &GraphNodePair) -> bool {
         .any(|entity_type| !is_ontology_individual_placeholder(entity_type))
 }
 
+/// `nodes` with one node per entity id: the first, with the NodeSet entries
+/// of the later ones added.
+fn first_node_per_id(nodes: Vec<GraphNodePair>) -> Vec<GraphNodePair> {
+    let mut kept: Vec<GraphNodePair> = Vec::with_capacity(nodes.len());
+    let mut index: HashMap<Uuid, usize> = HashMap::new();
+    for node in nodes {
+        match index.get(&node.entity.base.id) {
+            Some(&at) => union_node_sets(&mut kept[at].entity, &node.entity),
+            None => {
+                index.insert(node.entity.base.id, kept.len());
+                kept.push(node);
+            }
+        }
+    }
+    kept
+}
+
 /// Add the NodeSet entries of `other` that `entity` does not have yet.
 fn union_node_sets(entity: &mut Entity, other: &Entity) {
     let Some(other_sets) = other.base.belongs_to_set.as_ref() else {
@@ -1704,6 +1721,15 @@ fn expand_unit(
 
     // Add ontology-derived individual nodes
     graph_nodes.extend(ontology_entities_map.into_values());
+
+    // Two names can end on one entity: `node_map` is keyed on the name-based
+    // id, and an ontology individual match then rewrites the entity's id to
+    // the canonical one ("Alice" and "alice_canonical" both become
+    // `alice_canonical`). Python's `_get_or_create_entity` returns the entity
+    // already made for that id, so here too the first one wins — its type and
+    // fields — and only NodeSet membership is combined. Producers are already
+    // keyed on the final id. The merger then only combines across units.
+    let graph_nodes = first_node_per_id(graph_nodes);
 
     // Merge LLM-extracted edges with ontology-derived edges
     let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
@@ -3497,6 +3523,45 @@ mod tests {
             assert_eq!(alice.entity.description, "Alice, a person");
             assert_eq!(types_of(&out, "alice"), ["person"]);
         }
+    }
+
+    /// Within one unit, two names an ontology resolves to one individual are
+    /// one entity, and the first declaration's type wins, as in Python: the
+    /// merger must not see two copies and combine their types.
+    #[tokio::test]
+    async fn an_ontology_canonicalised_entity_keeps_its_first_type_within_a_unit() {
+        let unit = vec![
+            (
+                Uuid::new_v4(),
+                graph(vec![node("alice", "Alice", "Person", "first")], vec![]),
+            ),
+            (
+                Uuid::new_v4(),
+                graph(
+                    vec![node("ac", "alice_canonical", "Robot", "second")],
+                    vec![],
+                ),
+            ),
+        ];
+
+        let out = expand_units_with(
+            vec![unit],
+            EndpointScope::Unit,
+            Arc::new(MockOntologyResolver),
+            &HashMap::new(),
+        )
+        .await;
+
+        let canonical = Entity::id_for("alice_canonical");
+        let copies: Vec<&GraphNodePair> = out
+            .nodes
+            .iter()
+            .filter(|pair| pair.entity.base.id == canonical)
+            .collect();
+        assert_eq!(copies.len(), 1);
+        let types: Vec<&str> = copies[0].entity_types().map(|t| t.name.as_str()).collect();
+        assert_eq!(types, ["person"]);
+        assert_eq!(copies[0].entity.description, "first");
     }
 
     /// `merge_expansions` keeps the first unit's edge and claim, sums the

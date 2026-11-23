@@ -235,7 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first-seen order, edges are combined by (source, target, label) and every
   producing chunk keeps its ownership row. An entity can therefore have
   several `is_a` edges, and each EntityType is written, indexed and recorded
-  in the ledger.
+  in the ledger. The rule lives in two places: graph building keeps the first
+  type per unit, and `GraphNodePair::merge_types_from` combines the units, so
+  switching to "every declared type, with counts" means keeping every type
+  with a count inside a unit as well as summing counts in the merge.
+
+  Deletes do not catch up until SDK-1694 stage O6: deleting a document does
+  not remove by ownership the extra `is_a` edges or EntityTypes it
+  contributed. Like the primary type's today, their ledger rows carry a nil
+  `data_id`, so a data item's delete never selects them (only hard delete's
+  sweep of entity types left with a single edge can), which can leave behind
+  an `is_a` edge that did not exist before this change.
 
   Across data items the first one in input order decides an entity's
   description, importance weight and metadata (an ontology individual known

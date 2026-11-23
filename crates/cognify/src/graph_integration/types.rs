@@ -72,8 +72,13 @@ impl GraphNodePair {
     /// edge. It never joins a node that has a real type, and a real type
     /// replaces it as primary.
     ///
-    /// Switching to "every declared type, with counts" means counting here
-    /// instead of keeping first-seen order.
+    /// This function only combines units. Switching to "every declared type,
+    /// with counts" is not local to it: inside a unit `expand_unit` keeps
+    /// only the first declaration's type (a later chunk's type for the same
+    /// entity never reaches a [`GraphNodePair`]), so the switch would need
+    /// `expand_unit` to keep every declared type of an entity with a count,
+    /// a count per type on [`GraphNodePair`], and this function to sum the
+    /// counts and pick the most frequent type as primary.
     pub fn merge_types_from(&mut self, other: &GraphNodePair) {
         for entity_type in other.entity_types() {
             let id = entity_type.base.id;

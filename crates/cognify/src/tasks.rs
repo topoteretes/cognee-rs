@@ -3871,6 +3871,35 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
     }
 }
 
+/// [`stamp_provenance`] on every entity and every one of its types — an
+/// entity several documents typed carries several EntityTypes, and each is a
+/// node of its own.
+fn stamp_entity_provenance(
+    entities: &mut [GraphNodePair],
+    task: &str,
+    user: Option<&str>,
+    rank: i32,
+) {
+    for pair in entities {
+        stamp_provenance(
+            &mut pair.entity.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            task,
+            user,
+            rank,
+        );
+        for entity_type in pair.entity_types_mut() {
+            stamp_provenance(
+                &mut entity_type.base,
+                COGNIFY_PIPELINE_STAMP_NAME,
+                task,
+                user,
+                rank,
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cognify routes (SDK-1053): the CODE_REPO route ahead of the standard tasks
 // ---------------------------------------------------------------------------
@@ -6949,24 +6978,12 @@ pub fn make_extract_graph_task_with_rank(
                 )
                 .await?;
             }
-            for pair in &mut graph_data.entities {
-                stamp_provenance(
-                    &mut pair.entity.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    EXTRACT_GRAPH_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-                for entity_type in pair.entity_types_mut() {
-                    stamp_provenance(
-                        &mut entity_type.base,
-                        COGNIFY_PIPELINE_STAMP_NAME,
-                        EXTRACT_GRAPH_TASK_NAME,
-                        user_label.as_deref(),
-                        rank,
-                    );
-                }
-            }
+            stamp_entity_provenance(
+                &mut graph_data.entities,
+                EXTRACT_GRAPH_TASK_NAME,
+                user_label.as_deref(),
+                rank,
+            );
             for attributed in &mut graph_data.dynamic_graphs {
                 for node in &mut attributed.graph.nodes {
                     stamp_provenance(
@@ -7344,24 +7361,12 @@ pub fn make_add_data_points_task_with_rank(
                     rank,
                 );
             }
-            for pair in &mut result.entities {
-                stamp_provenance(
-                    &mut pair.entity.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-                for entity_type in pair.entity_types_mut() {
-                    stamp_provenance(
-                        &mut entity_type.base,
-                        COGNIFY_PIPELINE_STAMP_NAME,
-                        ADD_DATA_POINTS_TASK_NAME,
-                        user_label.as_deref(),
-                        rank,
-                    );
-                }
-            }
+            stamp_entity_provenance(
+                &mut result.entities,
+                ADD_DATA_POINTS_TASK_NAME,
+                user_label.as_deref(),
+                rank,
+            );
             for summary in &mut result.summaries {
                 stamp_provenance(
                     &mut summary.base,
@@ -7609,6 +7614,62 @@ mod tests {
         let text_only: Vec<DocumentChunk> =
             chunks.iter().filter(|c| !c.is_dlt_row()).cloned().collect();
         assert_eq!(graph_units(&text_only, 2, graphs).len(), 1);
+    }
+
+    /// SDK-1694: the extraction stage's output order is the same from run to
+    /// run, not hash order.
+    #[tokio::test]
+    async fn extraction_output_order_is_stable_across_runs() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        let names: Vec<String> = (0..40).map(|i| format!("Entity {i}")).collect();
+        let canned = json!({
+            "nodes": names.iter().map(|name| json!({
+                "id": name, "name": name, "type": "Thing", "description": ""
+            })).collect::<Vec<_>>(),
+            "edges": names.windows(2).map(|pair| json!({
+                "source_node_id": pair[0], "target_node_id": pair[1],
+                "relationship_name": "next"
+            })).collect::<Vec<_>>()
+        })
+        .to_string();
+        let dataset_id = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc, "Forty things in a row.")],
+            documents: vec![test_document_with_metadata(doc, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let db = ledger_db(dataset_id).await;
+            let result = extract_graph_from_data(
+                &input,
+                Arc::new(MockLlm::new(vec![canned.clone()])),
+                Arc::new(cognee_graph::MockGraphDB::new()),
+                Arc::new(NoOpOntologyResolver::new()),
+                &db,
+                Some(Uuid::new_v4()),
+                &CognifyConfig::default(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let nodes: Vec<Uuid> = result.entities.iter().map(|p| p.entity.base.id).collect();
+            let edges: Vec<(Uuid, Uuid, String)> =
+                result.edges.iter().map(GraphEdgePair::dedup_key).collect();
+            runs.push((nodes, edges));
+        }
+
+        assert_eq!(runs[0], runs[1]);
+        let declared: Vec<Uuid> = names.iter().map(|name| Entity::id_for(name)).collect();
+        assert_eq!(runs[0].0, declared, "entities in declaration order");
     }
 
     /// The same through `extract_graph_from_data`: one document whose DLT
@@ -10555,6 +10616,171 @@ mod tests {
 
     fn url_metadata(source_uri: &str) -> String {
         json!({"_cognee": {"source_uri": source_uri}}).to_string()
+    }
+
+    /// SDK-1694: the task wrappers' provenance stamp reaches every type of an
+    /// entity, not only the first.
+    #[test]
+    fn stamp_entity_provenance_stamps_every_type() {
+        let company = EntityType::from_node_type("company", None);
+        let fruit = EntityType::from_node_type("fruit", None);
+        let mut pair = GraphNodePair::new(
+            Entity::new("apple", Some(company.base.id), "", None),
+            Some(company),
+        );
+        pair.extra_entity_types.push(fruit);
+        let mut entities = vec![pair];
+
+        stamp_entity_provenance(&mut entities, ADD_DATA_POINTS_TASK_NAME, Some("user"), 4);
+
+        for entity_type in entities[0].entity_types() {
+            assert_eq!(
+                entity_type.base.source_task.as_deref(),
+                Some(ADD_DATA_POINTS_TASK_NAME),
+                "{}",
+                entity_type.name
+            );
+            assert_eq!(entity_type.base.topological_rank, Some(4));
+        }
+    }
+
+    /// SDK-1694: an extracted edge that ends at an entity's second type is
+    /// labelled with that type's name, like one ending at the first.
+    #[test]
+    fn extracted_edge_text_knows_every_type_name() {
+        let company = EntityType::from_node_type("company", None);
+        let fruit = EntityType::from_node_type("fruit", None);
+        let mut pair = GraphNodePair::new(
+            Entity::new("apple", Some(company.base.id), "", None),
+            Some(company.clone()),
+        );
+        pair.extra_entity_types.push(fruit.clone());
+        let source = Uuid::new_v4();
+        let edge = |target: Uuid| {
+            let mut edge = GraphEdgePair::new(source, target, "subclass_of");
+            edge.add_property("edge_text", "");
+            edge
+        };
+        let mut other = GraphNodePair::new(Entity::new("produce", None, "", None), None);
+        other.entity.base.id = source;
+        let mut dedup = crate::graph_integration::DeduplicationResult {
+            unique_nodes: vec![pair, other],
+            unique_edges: vec![edge(company.base.id), edge(fruit.base.id)],
+        };
+
+        stamp_extracted_edge_text(&mut dedup, &[]);
+
+        for (edge, name) in dedup.unique_edges.iter().zip(["company", "fruit"]) {
+            let text = edge
+                .properties
+                .get("edge_text")
+                .cloned()
+                .unwrap_or_default();
+            assert!(text.contains(name), "{text:?}");
+        }
+    }
+
+    /// SDK-1694: an entity with two types keeps both through
+    /// `add_data_points` — both EntityType nodes and `is_a` edges in the
+    /// graph, both types indexed, both in the ledger, and the second type's
+    /// `is_a` edge labelled like the first's.
+    #[tokio::test]
+    async fn add_data_points_persists_every_type_of_an_entity() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let company = EntityType::from_node_type("company", Some(dataset_id));
+        let fruit = EntityType::from_node_type("fruit", Some(dataset_id));
+        let mut apple = Entity::new("apple", Some(company.base.id), "", Some(dataset_id));
+        apple.extra_types.push(fruit.base.id);
+        let apple_id = apple.base.id;
+        let mut pair = GraphNodePair::new(apple, Some(company.clone()));
+        pair.extra_entity_types.push(fruit.clone());
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_entity(apple_id, chunk_id);
+        let mut chunk = test_chunk(chunk_id, document_id, "Apple is a company and a fruit.");
+        chunk.contains = vec![json!(apple_id.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![pair],
+            timestamps: vec![],
+            edges: vec![],
+            producers,
+            dynamic_graphs: vec![],
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let graph_db = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+        let db = ledger_db(dataset_id).await;
+
+        add_data_points(
+            &input,
+            graph_db.clone(),
+            vector_db.clone(),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("the entity persists");
+
+        let (_, graph_edges) = graph_db.get_graph_data().await.expect("graph data");
+        for entity_type in [&company, &fruit] {
+            let id = entity_type.base.id;
+            assert!(
+                graph_db.has_node(&id.to_string()).await.expect("lookup"),
+                "{} is a graph node",
+                entity_type.name
+            );
+            let is_a = graph_edges
+                .iter()
+                .find(|edge| {
+                    edge.0 == apple_id.to_string() && edge.1 == id.to_string() && edge.2 == "is_a"
+                })
+                .unwrap_or_else(|| panic!("apple is_a {}", entity_type.name));
+            // The edge-text pass knows the type's name, so the edge reads as
+            // a sentence about it rather than about a bare id.
+            let text = is_a
+                .3
+                .get("edge_text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            assert!(text.contains(&entity_type.name), "{text:?}");
+            assert!(
+                vector_db.get_payload("EntityType", "name", id).is_some(),
+                "{} is indexed",
+                entity_type.name
+            );
+        }
+
+        let ledger_nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("nodes");
+        for entity_type in [&company, &fruit] {
+            assert!(
+                ledger_nodes
+                    .iter()
+                    .any(|row| row.slug == entity_type.base.id),
+                "{} has a ledger row",
+                entity_type.name
+            );
+        }
+        let is_a_rows = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .expect("edges")
+            .into_iter()
+            .filter(|row| row.relationship_name == "is_a")
+            .count();
+        assert_eq!(is_a_rows, 2, "one ledger row per is_a edge");
     }
 
     #[tokio::test]

@@ -1,9 +1,10 @@
 //! Graph deduplication utilities.
 //!
 //! Mirrors Python's `cognee/modules/graph/utils/deduplicate_nodes_and_edges.py`
-//! Provides in-memory deduplication of nodes and edges using HashMaps.
+//! Provides in-memory deduplication of nodes and edges, keeping first-seen
+//! order so the output is the same from run to run.
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use crate::graph_integration::types::{GraphEdgePair, GraphNodePair};
 
@@ -27,30 +28,39 @@ pub struct DeduplicationResult {
 /// * `edges` - Vector of GraphEdgePair to deduplicate
 ///
 /// # Returns
-/// DeduplicationResult with unique nodes and edges.
+/// DeduplicationResult with unique nodes and edges, each in the order its key
+/// was first seen (the later duplicate's value, as before, at the earlier
+/// position). The cognify pipeline hands it the merged expansion, which is
+/// already unique, so there it only preserves the merge's order; it stays
+/// for callers that pass duplicates.
 pub fn deduplicate_nodes_and_edges(
     nodes: Vec<GraphNodePair>,
     edges: Vec<GraphEdgePair>,
 ) -> DeduplicationResult {
     // Deduplicate nodes by entity ID
-    let mut node_map: HashMap<_, GraphNodePair> = HashMap::new();
+    let mut node_map: IndexMap<_, GraphNodePair> = IndexMap::new();
     for mut node in nodes {
         let key = node.entity.base.id;
         // Later entries with same ID overwrite earlier ones, but keep every
         // type either declared: the earlier node's types first, so its primary
         // type stays primary.
-        if let Some(mut earlier) = node_map.remove(&key) {
-            earlier.merge_types_from(&node);
-            node.entity.is_a = earlier.entity.is_a;
-            node.entity.extra_types = earlier.entity.extra_types;
-            node.entity_type = earlier.entity_type;
-            node.extra_entity_types = earlier.extra_entity_types;
+        match node_map.get_mut(&key) {
+            Some(earlier) => {
+                earlier.merge_types_from(&node);
+                node.entity.is_a = earlier.entity.is_a;
+                node.entity.extra_types = std::mem::take(&mut earlier.entity.extra_types);
+                node.entity_type = earlier.entity_type.take();
+                node.extra_entity_types = std::mem::take(&mut earlier.extra_entity_types);
+                *earlier = node;
+            }
+            None => {
+                node_map.insert(key, node);
+            }
         }
-        node_map.insert(key, node);
     }
 
     // Deduplicate edges by (source, target, relationship) tuple
-    let mut edge_map = HashMap::new();
+    let mut edge_map = IndexMap::new();
     for edge in edges {
         let key = edge.dedup_key();
         // Later entries with same key will overwrite earlier ones
@@ -241,6 +251,41 @@ mod tests {
         assert_eq!(
             node.entity.type_ids().collect::<Vec<_>>(),
             node.entity_types().map(|t| t.base.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_deduplicate_keeps_first_seen_order() {
+        let names: Vec<String> = (0..50).map(|i| format!("Entity {i}")).collect();
+        let nodes: Vec<GraphNodePair> = names
+            .iter()
+            .map(|name| create_test_node(name, "Thing"))
+            .collect();
+        let edges: Vec<GraphEdgePair> = nodes
+            .windows(2)
+            .map(|pair| create_test_edge(pair[0].entity.base.id, pair[1].entity.base.id, "next"))
+            .collect();
+        let mut with_duplicates = nodes.clone();
+        with_duplicates.push(create_test_node("Entity 0", "Thing"));
+
+        let result = deduplicate_nodes_and_edges(with_duplicates, edges.clone());
+
+        let got: Vec<&str> = result
+            .unique_nodes
+            .iter()
+            .map(|n| n.entity.name.as_str())
+            .collect();
+        assert_eq!(got, names.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(
+            result
+                .unique_edges
+                .iter()
+                .map(GraphEdgePair::dedup_key)
+                .collect::<Vec<_>>(),
+            edges
+                .iter()
+                .map(GraphEdgePair::dedup_key)
+                .collect::<Vec<_>>()
         );
     }
 }
