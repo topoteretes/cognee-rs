@@ -15,17 +15,39 @@
 //!   It is removed once no `Data` row in any dataset names its `repo_path`.
 //!   A stamp without `repo_url` is the user's own directory and is never
 //!   removed.
+//! - **The URL's other branch clones** (SDK-1709). Every branch of a URL
+//!   pins to one row, keyed on the default-branch clone, so a re-add on
+//!   another branch moves the row's `repo_path` to that branch's clone and
+//!   no row names the clone it moved off. A delete that removes a clone
+//!   (no row names it any more) therefore also removes the clones beside it
+//!   of the same repository (`<slug>` and `<slug>@<branch>-<hash>`, see
+//!   `cognee_ingestion::resolve_repo::default_branch_clone_dir`) that no row
+//!   names; one another row still names keeps everything but the deleting
+//!   datasets' `.enola-<dataset_id>` snapshots. A clone that stays referenced
+//!   sweeps nothing. A re-add never removes a clone itself: a cognify or
+//!   another add may still be reading the one the row moved off, so it stays
+//!   until a delete releases the repository.
 //!
 //! Everything here is best effort and runs after the relational delete has
 //! committed: a failure is logged and never fails the delete.
 //!
 //! Known limitation: the "no row references the clone" check and the removal
-//! are not atomic with ingestion. An add of the same URL by the same caller,
-//! running concurrently in another dataset, may find the clone on disk
+//! are not atomic with ingestion. An add of the same URL by the same caller
+//! (any branch), running concurrently with the delete, may find the clone on disk
 //! before this removes it: its git or file reads then fail (the add errors),
 //! or, when it had already read the files, the add succeeds and leaves a
 //! row whose `repo_path` no longer exists. Re-adding the URL re-clones it.
-//! A per-clone lock shared with ingestion would close this window.
+//! A per-clone lock shared with ingestion would close this window. The
+//! branch-clone sweep widens it slightly: a cognify of another dataset,
+//! started before that dataset's row moved off a branch clone, may still be
+//! reading the clone the sweep removes.
+//!
+//! The reference check compares stamped `repo_path` text exactly, and a
+//! swept branch clone is spelled from the released clone's parent. A row
+//! that names the same directory under another spelling (the clones
+//! directory configured as a symlink, a relative path or with a `..`) is
+//! not seen as a reference. Within one configuration every add spells the
+//! clones directory the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -181,6 +203,39 @@ fn apply_plan(plan: &PathPlan) {
     }
 }
 
+/// The other clone directories of `clone`'s repository beside it: its
+/// default-branch clone `<slug>` and every branch clone `<slug>@…`, as the
+/// paths a stamp would name (`clone`'s parent joined with the entry name).
+/// `clone` itself is not listed. Neither clone-name form puts an `@` in the
+/// slug (`cognee_ingestion::resolve_repo::default_branch_clone_dir`,
+/// restated because this crate does not depend on ingestion). A listing
+/// failure yields none.
+fn sibling_clones(clone: &Path) -> Vec<String> {
+    let (Some(parent), Some(name)) = (clone.parent(), clone.file_name().and_then(|n| n.to_str()))
+    else {
+        return Vec::new();
+    };
+    let Some(slug) = name.split('@').next().filter(|slug| !slug.is_empty()) else {
+        return Vec::new();
+    };
+    let branch_prefix = format!("{slug}@");
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                warn!(parent = %parent.display(), %error, "could not list the clones directory");
+            }
+            return Vec::new();
+        }
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|entry| entry != name && (entry == slug || entry.starts_with(&branch_prefix)))
+        .map(|entry| parent.join(entry).to_string_lossy().into_owned())
+        .collect()
+}
+
 impl DeleteService {
     /// The code-repository rows among `links` (`(dataset_id, data_id)`), read
     /// before the relational delete removes them. Best effort: a read failure
@@ -237,6 +292,52 @@ impl DeleteService {
         out
     }
 
+    /// The plan for `repo_path` once rows of `datasets` stopped naming it:
+    /// each dataset's snapshot when no row of that dataset names it any
+    /// more, and the clone (`cloned`) when no row of any dataset does.
+    /// `None` when nothing is to be removed or the references could not be
+    /// read (logged; the path is left on disk).
+    async fn plan_path(
+        &self,
+        repo_path: &str,
+        datasets: &BTreeSet<Uuid>,
+        cloned: bool,
+    ) -> Option<PathPlan> {
+        let references = match self
+            .database
+            .list_code_repo_path_references(repo_path)
+            .await
+        {
+            Ok(references) => references,
+            Err(error) => {
+                warn!(
+                    %repo_path,
+                    %error,
+                    "could not count the rows still naming a code repository; leaving it on disk"
+                );
+                return None;
+            }
+        };
+        let still_in: BTreeSet<Uuid> = references.iter().flatten().copied().collect();
+        let enola_datasets: Vec<Uuid> = datasets
+            .iter()
+            .filter(|dataset_id| !still_in.contains(dataset_id))
+            .copied()
+            .collect();
+        // Only a stamp with `repo_url` marks a cognee clone; a user's own
+        // directory is never removed, whatever references it.
+        let remove_clone = cloned && references.is_empty();
+        if !remove_clone && enola_datasets.is_empty() {
+            debug!(%repo_path, "code repository still referenced; nothing to remove");
+            return None;
+        }
+        Some(PathPlan {
+            repo_path: repo_path.to_string(),
+            enola_datasets,
+            remove_clone,
+        })
+    }
+
     /// After the relational delete committed: remove each detached pair's
     /// `.enola-<dataset_id>` once no row of that dataset names the
     /// repository, and each cognee clone no row of any dataset names (see
@@ -252,39 +353,51 @@ impl DeleteService {
             entry.1 |= link.cloned;
         }
         let mut plans = Vec::new();
-        for (repo_path, (datasets, cloned)) in by_path {
-            let references = match self
-                .database
-                .list_code_repo_path_references(&repo_path)
-                .await
-            {
-                Ok(references) => references,
+        // The clones this delete releases, with the datasets that released
+        // them: their other branch clones are swept below (SDK-1709).
+        let mut released: Vec<(String, BTreeSet<Uuid>)> = Vec::new();
+        for (repo_path, (datasets, cloned)) in &by_path {
+            if let Some(plan) = self.plan_path(repo_path, datasets, *cloned).await {
+                if plan.remove_clone {
+                    released.push((repo_path.clone(), datasets.clone()));
+                }
+                plans.push(plan);
+            }
+        }
+        // Only once a clone itself goes: a clone another row still names
+        // keeps its repository's branch clones too, as a cognify of that row
+        // may still read the one it moved off.
+        if !released.is_empty() {
+            let listed = tokio::task::spawn_blocking(move || {
+                released
+                    .into_iter()
+                    .map(|(repo_path, datasets)| (sibling_clones(Path::new(&repo_path)), datasets))
+                    .collect::<Vec<_>>()
+            })
+            .await;
+            let listed = match listed {
+                Ok(listed) => listed,
                 Err(error) => {
-                    warn!(
-                        %repo_path,
-                        %error,
-                        "could not count the rows still naming a code repository; leaving it on disk"
-                    );
-                    continue;
+                    warn!(%error, "could not list the repository's other branch clones");
+                    Vec::new()
                 }
             };
-            let still_in: BTreeSet<Uuid> = references.iter().flatten().copied().collect();
-            let enola_datasets: Vec<Uuid> = datasets
-                .into_iter()
-                .filter(|dataset_id| !still_in.contains(dataset_id))
-                .collect();
-            // Only a stamp with `repo_url` marks a cognee clone; a user's own
-            // directory is never removed, whatever references it.
-            let remove_clone = cloned && references.is_empty();
-            if !remove_clone && enola_datasets.is_empty() {
-                debug!(%repo_path, "code repository still referenced; nothing to remove");
-                continue;
+            // Each sibling is planned like a path the same datasets
+            // released: removed when no row names it, and otherwise loses
+            // only the snapshots of those datasets that no longer name it.
+            let mut siblings: BTreeMap<String, BTreeSet<Uuid>> = BTreeMap::new();
+            for (paths, datasets) in listed {
+                for path in paths {
+                    if !by_path.contains_key(&path) {
+                        siblings.entry(path).or_default().extend(&datasets);
+                    }
+                }
             }
-            plans.push(PathPlan {
-                repo_path,
-                enola_datasets,
-                remove_clone,
-            });
+            for (repo_path, datasets) in &siblings {
+                if let Some(plan) = self.plan_path(repo_path, datasets, true).await {
+                    plans.push(plan);
+                }
+            }
         }
         if plans.is_empty() {
             return;
