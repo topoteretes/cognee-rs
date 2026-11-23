@@ -101,6 +101,34 @@ pub enum LoaderOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+/// Translate line endings as Python's text mode does (universal newlines):
+/// `\r\n` and a lone `\r` both become `\n`.
+///
+/// Python's `text_loader` and `code_loader` read with `open(path,
+/// encoding=...)`, and cognify reads stored text the same way.
+pub fn universal_newlines(text: &str) -> String {
+    if !text.contains('\r') {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 

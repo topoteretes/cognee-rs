@@ -223,6 +223,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The text loader translates line endings as Python does (SDK-1379,
+  behaviour change).** `text_loader` now turns `\r\n` and a lone `\r` into
+  `\n`, as Python's text-mode read does (a BOM is still kept). A CRLF text
+  file keeps its `content_hash`, which hashes the original bytes, so re-adding
+  it reuses its row; its stored `text_<hash>.txt`, its `raw_content_hash` and
+  its chunk text and ids now match Python. Stored text is never overwritten,
+  so text a previous version stored with CRLF stays as it is (with its old
+  `raw_content_hash`) until it is deleted; cognify chunks it with LF anyway.
+  The CSV and HTML loaders are unchanged, as in Python.
+  `loaders::code::universal_newlines` moved to `loaders::universal_newlines`.
+
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
   `response_format: json_schema` request first, as Python's default

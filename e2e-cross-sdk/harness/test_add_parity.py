@@ -415,6 +415,37 @@ def test_add_png_named_txt_fails_in_both(tmp_path):
     assert _data_rows(rust_ws, rust_db_path) == []
 
 
+# A BOM, CRLF line ends and a lone CR.
+_CRLF_TEXT_BYTES = b"\xef\xbb\xbffirst line\r\nsecond line\rthird line\r\n"
+
+
+def test_add_crlf_text_file_stores_lf_text_in_both(tmp_path):
+    """A CRLF text file is stored with LF line ends in both SDKs (SDK-1379).
+
+    Python's ``text_loader`` reads in text mode (``text_loader.py:82``), so
+    the stored ``text_<hash>.txt`` and its ``raw_content_hash`` have LF, while
+    ``content_hash`` hashes the original bytes (``ingest_data.py``). The BOM
+    is kept: the encoding is ``utf-8``, not ``utf-8-sig``.
+    """
+    py_ws, rust_ws, py_result, rust_result = _file_add_both(
+        tmp_path, "notes.txt", _CRLF_TEXT_BYTES, "crlf_text"
+    )
+    assert py_result.returncode == 0, f"Python add failed:\n{py_result.stderr}"
+    assert rust_result.returncode == 0, f"Rust add failed:\n{rust_result.stderr}"
+    py_row = _data_rows(py_ws, python_db_path)[0]
+    rust_row = _data_rows(rust_ws, rust_db_path)[0]
+    for field in ("content_hash", "raw_content_hash", "loader_engine"):
+        assert py_row.get(field) == rust_row.get(field), (
+            f"{field} mismatch:\n  Python: {py_row.get(field)!r}\n  Rust:   {rust_row.get(field)!r}"
+        )
+
+    expected = b"\xef\xbb\xbffirst line\nsecond line\nthird line\n"
+    py_stored = read_stored_file(py_ws / ".data_storage", py_row["raw_data_location"])
+    rust_stored = read_stored_file(rust_ws / ".data_storage", rust_row["raw_data_location"])
+    assert py_stored == expected, f"Python stored {py_stored!r}"
+    assert rust_stored == expected, f"Rust stored {rust_stored!r}"
+
+
 _PUBLIC_URL = "https://example.com/"
 
 
