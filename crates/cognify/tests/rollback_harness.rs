@@ -60,15 +60,15 @@ pub fn canned_graph_response() -> String {
     .to_string()
 }
 
-/// One chunk per file and one chunk per batch, so the abort boundary falls
-/// exactly between files.
+/// One chunk per file and one extraction call in flight at a time, so the
+/// calls run in file order and a `FailFast` stop falls exactly between files.
 ///
 /// Summarization is off: both stages read the same chunk text, so leaving it on
 /// would double every count and say nothing extra.
 pub fn extraction_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)
-        .with_chunks_per_batch(1)
+        .with_max_parallel_extractions(1)
         .with_summarization(false)
 }
 
@@ -385,14 +385,14 @@ impl cognee_llm::Llm for SummarizationFailingLlm {
 }
 
 /// The same extraction fixture as [`extraction_config`], but leaving
-/// `chunks_per_batch` at the shipped
-/// [`DEFAULT_CHUNKS_PER_BATCH`](cognee_cognify::config::DEFAULT_CHUNKS_PER_BATCH)
-/// — the batch size every production run actually uses.
+/// `max_parallel_extractions` at the shipped
+/// [`DEFAULT_MAX_PARALLEL_EXTRACTIONS`](cognee_cognify::config::DEFAULT_MAX_PARALLEL_EXTRACTIONS)
+/// — the in-flight cap every production run actually uses.
 ///
-/// A dataset of a handful of files is then a *single* batch, which is what
-/// makes the abort-time partition look qualitatively different from the
-/// one-chunk-per-batch fixtures: every extraction call is dispatched before
-/// the failure is noticed, so nothing is ever left unreached.
+/// A dataset of a handful of files then fits in one in-flight window, which is
+/// what makes the abort-time partition look qualitatively different from the
+/// one-call-at-a-time fixtures: every extraction call is dispatched before the
+/// failure is noticed, so nothing is ever left unreached.
 pub fn default_batch_extraction_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)

@@ -58,6 +58,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `expand_with_nodes_and_edges`, `expand_with_nodes_and_edges_with_stats` and
   `expand_extracted_graphs` keep the argument, now a `&HashSet<(Uuid, Uuid,
   String)>`, and split their result with it.
+- **Graph extraction no longer waits at `chunks_per_batch` boundaries
+  (SDK-1694, stage O3).** Both LLM extraction paths (the default graph and a
+  runtime `graph_schema`) send every chunk of the run through one stream with
+  at most `max_parallel_extractions` calls in flight, so one slow chunk holds
+  only its own slot instead of stalling every chunk after its 2000-chunk batch.
+  A chunk's text is copied only when its call starts. Results are put back in
+  chunk order before the graph is built, so the first type an entity is given
+  in a block still wins. `chunks_per_batch` (`CHUNKS_PER_BATCH`) now only sets
+  the blocks the graph is built from (Python's unit); a graph backend
+  (`CognifyConfig::graph_backend`) is still handed one block per call.
+  - **`chunks_per_batch` no longer limits LLM concurrency.** Extraction ran at
+    most min(`chunks_per_batch`, `max_parallel_extractions`) calls at once; it
+    now runs `max_parallel_extractions` alone. Anyone who set a small
+    `chunks_per_batch` (by env, or per request in a downstream server) to limit
+    LLM load must set `LLM_MAX_PARALLEL_REQUESTS` / `max_parallel_extractions`
+    instead.
+  - **`FailFast` stops at the in-flight window, not at a batch boundary.**
+    After the first failed call nothing new is dispatched, the calls in flight
+    finish and their failures are reported, and every file with a chunk that
+    was never sent is unreached, as summarization already did. Which chunks
+    were sent before the stop depends on timing, so on the same failing input
+    a different set of files can end up unreached.
+  - **Under `FailFast` + `FailedItems` this keeps far fewer files.** Before, a
+    run under 2000 chunks dispatched everything, so one failed chunk cost one
+    file. Now every file with a chunk beyond the in-flight window is
+    unreached, and the calls it did finish are discarded with it. For example,
+    with `LLM_MAX_PARALLEL_REQUESTS=32`, 82 files and 1,500 chunks, a failure
+    at chunk 40 used to keep 81 files and now keeps a handful; a failure in the
+    first file keeps none, so the run is fatal (`is_fatal`'s no-survivor rule)
+    and is rolled back whole. This is Python's behaviour too (the first failure
+    cancels the items still running and starts no more), and the plan for
+    SDK-1694. Until per-document saving lands (stage O5b), a server that wants
+    to keep finished files should run `RunToEnd` + `FailedItems`
+    (`cognify.raise_incremental_loading_errors=false`,
+    `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items`).
+  - **Log lines.** The per-batch `Processed graph extraction batch i/n` line is
+    gone. Extraction logs `graph extraction: N of M chunks returned` at most
+    every 30 seconds, and one `Extracted graphs from N of M chunks (K never
+    dispatched)` line at the end.
 
 ### Added
 

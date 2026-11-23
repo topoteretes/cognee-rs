@@ -442,7 +442,6 @@ fn config_for(name: &str) -> CognifyConfig {
     let stop = FailureStop::from_raise_errors(raise);
     CognifyConfig::default()
         .with_chunk_size(1500)
-        .with_chunks_per_batch(1)
         .with_summarization(true)
         .with_failure_stop(stop)
         // Python has no second axis: it always sweeps the whole run.

@@ -1,5 +1,7 @@
 //! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
+/// One bounded stream of per-chunk LLM calls, with a fail-fast stop.
+mod chunk_dispatch;
 pub mod code_cluster;
 /// Configuration module for the cognify pipeline.
 pub mod config;

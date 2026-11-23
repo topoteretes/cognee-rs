@@ -1056,7 +1056,7 @@ prompt and the summary schema:
 
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
-| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
+| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks of one data item per block the graph is built from (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default. It does not batch or limit the LLM extraction calls: every chunk of the run goes through one stream capped by `max_parallel_extractions` (`LLM_MAX_PARALLEL_REQUESTS`), which is the setting to lower to limit LLM load. A graph backend is still handed one block per call | `2000` |
 | `EDGE_EVIDENCE_ENABLED` | `cognify.edge_evidence_enabled` | record which chunk supports which graph edge (`provenance_edge_evidence`) during cognify, so `include_references` can cite edge sources (Python's `EDGE_EVIDENCE_ENABLED`); off only stops new capture | `true` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
@@ -1168,25 +1168,31 @@ boundary its own loop offers, and only one of them is the first failed file:
 | Stage | Stops after | Set by | Default |
 |---|---|---|---|
 | Chunking | the file that failed | — | one file |
-| Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
+| Graph extraction (standard and custom-graph), LLM | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
+| Graph extraction, graph backend | the backend call that contained the failure | `chunks_per_batch` | **2000 chunks** |
 | Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
 
-The extraction row is the one to read twice. 2000 is Python's own default
-(`cognify.py:367-370`) and is deliberately large — the stage awaits each batch
-before starting the next, so small batches serialise a run into waves. The
-consequence is that any dataset under 2000 chunks *is* one batch: `FailFast`
-dispatches every extraction call, learns about the failure when the batch is
-collected, and only then stops. On such a dataset it saves nothing; what it
-saves is every batch after the one that failed. Lowering `chunks_per_batch`
-tightens the boundary at the cost of that serialisation.
+Graph extraction and summarization each send every chunk of the run through
+one stream, with at most `max_parallel_extractions` calls in flight and no
+barrier between `chunks_per_batch` blocks, so they stop at the granularity of
+that concurrency window. The first chunk to fail closes the gate; every chunk
+not yet dispatched is skipped and its file is recorded as unreached, so it is
+neither marked complete nor left half-processed — a file is complete only when
+every one of its chunks was dispatched and none failed. Calls already in flight
+are never cancelled and their results are collected, failures included, so a
+run with fewer chunks than `max_parallel_extractions` saves nothing. A graph
+backend (`CognifyConfig::graph_backend`) is still handed `chunks_per_batch`
+chunks per call, one call at a time, and stops after the call that failed.
 
-Summarization has no batch loop at all — one bounded stream covers the whole
-run — so it stops at the granularity of the concurrency window instead. The
-first chunk to fail closes the gate; every chunk not yet dispatched is skipped
-and its file is recorded as unreached, so it is neither marked complete nor
-left half-summarized. Calls already in flight are never cancelled and their
-summaries are never discarded, so a run with fewer chunks than
-`max_parallel_extractions` again saves nothing. A summarization failure that
+Under `FailFast` + `FailedItems` that window decides how much survives: a file
+is kept only if every one of its chunks was dispatched, so every file with a
+chunk beyond the window is unreached and the calls it did finish are discarded
+with it. With 32 calls in flight, a failure at chunk 40 of a 1,500-chunk run
+keeps only the few files whose chunks were all sent by then; a failure in the
+first file keeps none, which makes the run fatal and rolls it back whole. This
+matches Python, which cancels the items still running at the first failure.
+Until each file is saved as it completes (SDK-1694 stage O5b), use `RunToEnd` +
+`FailedItems` to keep every file that succeeded. A summarization failure that
 `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` makes non-fatal does not close
 the gate at all: it fails no item, so there is nothing to stop for.
 
@@ -1229,8 +1235,8 @@ artifacts first; `Nothing` is the only scope that cannot.
 
 | Combination | End state |
 |---|---|
-| `FailFast` + `WholeRun` *(default)* | Stops at the first failed batch, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
-| `FailFast` + `FailedItems` | *Below the ratio:* stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
+| `FailFast` + `WholeRun` *(default)* | Stops dispatching at the first failure, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
+| `FailFast` + `FailedItems` | *Below the ratio:* stops dispatching at the first failure; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
 | `RunToEnd` + `FailedItems` | *Below the ratio:* every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report. *Above it:* the same escalation — the good files are removed too and the call returns `Err` |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |

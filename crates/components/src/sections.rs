@@ -819,8 +819,9 @@ config_section! {
         pub failure_report_cap: u32 = 100 => {
             env: ["COGNEE_COGNIFY_FAILURE_REPORT_CAP"], alias: [], secret: false,
         },
-        /// Chunks per graph-extraction batch (Python's
-        /// `CognifyConfig.chunks_per_batch`); 0 uses the default, 2000.
+        /// Chunks of one data item per graph-building block (Python's
+        /// `CognifyConfig.chunks_per_batch`); 0 uses the default, 2000. LLM
+        /// extraction calls are not batched by it.
         pub chunks_per_batch: u32 = 2000 => {
             env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
         },

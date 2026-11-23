@@ -49,13 +49,13 @@ use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_utils::sanitize::{sanitize_str, sanitize_string};
 use cognee_vector::{BulkLoadGuard, VectorDB, VectorPoint};
-use futures::StreamExt;
 use serde::Serialize;
 use serde_json::json;
 use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
+use crate::chunk_dispatch::{ChunkCall, dispatch_chunk_calls};
 use crate::config::{ChunkAttachment, CognifyConfig, ExtractionStrategy};
 use crate::dynamic_graph::{
     DynamicDataPoint, DynamicGraph, DynamicGraphSchema, StoredDynamicGraph,
@@ -774,13 +774,19 @@ struct BackendExtraction {
     /// unless the backend reports `summarizes_chunks()`.
     summaries: Vec<TextSummary>,
     /// `Some(n)` once a FailFast abort fired, naming the first chunk index
-    /// (into `chunks`) that was never dispatched — same meaning as the LLM
-    /// loop's `aborted_at`.
+    /// (into `chunks`) that was never dispatched. The caller marks every
+    /// chunk from there on unreached, as the LLM stream marks the chunks it
+    /// skipped.
     aborted_at: Option<usize>,
 }
 
-/// Drive a [`ChunkGraphExtractor`] over `chunks`, mirroring the LLM loop's
-/// batching, ordering, failure recording and FailFast semantics.
+/// Drive a [`ChunkGraphExtractor`] over `chunks`, in `batch_size` batches,
+/// with the LLM stream's ordering, failure recording and FailFast semantics.
+///
+/// The LLM paths no longer batch: they send every chunk through one stream
+/// (`dispatch_chunk_calls`). This path keeps its batches until extraction is
+/// assembled per document (SDK-1694 O4b), because a backend is handed a whole
+/// batch per call.
 ///
 /// Ordering needs no stream machinery here — the backend returns a `Vec` that
 /// is zipped positionally onto the batch — which is exactly why the arity check
@@ -802,7 +808,7 @@ struct BackendExtraction {
 /// * A [`crate::graph_backend::ChunkExtractionError`] in one chunk's result
 ///   slot becomes one [`StageFailure`] with `fails_item: true` against that
 ///   chunk and its document. Its siblings in the same batch keep their graphs
-///   and are persisted — the LLM loop loses exactly one chunk in the same
+///   and are persisted — the LLM stream loses exactly one chunk in the same
 ///   situation, and so does this.
 /// * An outer [`GraphBackendError`] is a whole-batch failure and is charged to
 ///   every chunk in the batch. That is the right shape for "the model will not
@@ -847,9 +853,9 @@ async fn extract_graphs_via_backend(
             .collect();
 
         // Set by either granularity of failure, and read once after the batch
-        // is fully accounted for — the same "collect the whole batch, then
-        // decide" shape the LLM loop uses, so a FailFast abort reports every
-        // failure in the batch that tripped it rather than only the first.
+        // is fully accounted for, so a FailFast abort reports every failure in
+        // the batch that tripped it rather than only the first — as the LLM
+        // stream collects every call already in flight.
         let mut batch_failed = false;
 
         match backend.extract_graphs(&refs, &ctx).await {
@@ -891,7 +897,7 @@ async fn extract_graphs_via_backend(
                         Err(err) => {
                             // Per-chunk failure: exactly one `StageFailure`,
                             // charged to this chunk's file. Everything else in
-                            // the batch carries on, which is what the LLM loop
+                            // the batch carries on, which is what the LLM stream
                             // does with a single failed extraction call.
                             warn!(
                                 data_id = %chunk.document_id,
@@ -962,9 +968,11 @@ async fn extract_graphs_via_backend(
 
 /// Extract knowledge graphs from chunks via LLM, then integrate (Task 3).
 ///
-/// For each chunk batch, calls the LLM to extract entities and relationships.
-/// Then integrates: expands to storage-layer types, deduplicates against
-/// existing DB entries and in-memory, and stores nodes/edges in graph DB.
+/// Calls the LLM once per chunk to extract entities and relationships, every
+/// chunk of the run through one stream bounded by
+/// [`CognifyConfig::max_parallel_extractions`]. Then integrates: expands to
+/// storage-layer types, deduplicates against existing DB entries and
+/// in-memory, and stores nodes/edges in graph DB.
 ///
 /// Ownership of the entities and semantic edges is recorded in `db` *before*
 /// they reach the graph — see [`record_extraction_ownership`].
@@ -1052,7 +1060,6 @@ pub async fn extract_graph_from_data(
     // Collect non-DLT chunks for LLM processing
     let chunks_for_extraction: Vec<DocumentChunk> = non_dlt_chunks.into_iter().cloned().collect();
 
-    let batch_size = config.chunks_per_batch;
     let failure_policy = config.failure_policy();
     let mut failures = input.failures.clone();
     let max_parallel = config.max_parallel_extractions.max(1);
@@ -1062,22 +1069,23 @@ pub async fn extract_graph_from_data(
     // `ExtractedGraphData::backend_summaries`. Empty unless a graph backend
     // reports `summarizes_chunks()`.
     let mut backend_summaries: Vec<TextSummary> = Vec::new();
-    // `Some(n)` once a FailFast abort has fired, naming the first chunk index
-    // (into `chunks_for_extraction`) that was never dispatched.
-    let mut aborted_at: Option<usize> = None;
+    // Set once a FailFast abort has fired. The chunks it left undispatched
+    // have already been marked unreached by then.
+    let mut aborted = false;
 
     if let Some(backend) = config.graph_backend.as_ref() {
-        // LLM-free path. Same batching, the same ordering guarantee, the same
-        // per-chunk failure records and the same FailFast abort as the LLM
-        // loop below, so the abort-time partition and everything from graph
-        // building down is reused unchanged.
+        // LLM-free path. Same ordering guarantee, the same per-chunk failure
+        // records and the same FailFast abort as the LLM stream below, so the
+        // abort-time partition and everything from graph building down is
+        // reused unchanged. It still runs in `chunks_per_batch` batches, one
+        // `extract_graphs` call at a time — see `extract_graphs_via_backend`.
         let outcome = extract_graphs_via_backend(
             backend.0.as_ref(),
             &chunks_for_extraction,
             &input.documents,
             ontology_resolver.as_ref(),
             input.dataset_id,
-            batch_size,
+            config.chunks_per_batch,
             config.enable_summarization,
             &failure_policy,
             &mut failures,
@@ -1085,11 +1093,16 @@ pub async fn extract_graph_from_data(
         .await?;
         all_graphs = outcome.graphs;
         backend_summaries = outcome.summaries;
-        aborted_at = outcome.aborted_at;
+        if let Some(first_unreached) = outcome.aborted_at {
+            aborted = true;
+            for chunk in chunks_for_extraction.iter().skip(first_unreached) {
+                failures.mark_unreached(chunk.document_id);
+            }
+        }
     } else {
         // Date hints for the default prompt, computed per document over the
-        // whole extraction set before batching, so a chunk's hints do not
-        // depend on where a batch boundary falls (Python
+        // whole extraction set before any call is dispatched, so a chunk's
+        // hints do not depend on which chunks it is sent alongside (Python
         // `_temporal_hints_for`). A custom prompt receives none, and neither
         // does the cascade, whose stages have their own prompts.
         let mut temporal_hints = if config.custom_extraction_prompt.is_none()
@@ -1100,145 +1113,101 @@ pub async fn extract_graph_from_data(
             HashMap::new()
         };
 
-        for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
-            let fact_extractor = FactExtractor::new(Arc::clone(&llm));
-
-            // Pre-extract owned per-chunk inputs so the stream yields owned items.
-            // Mapping a stream over borrowed `&chunk` references trips a
-            // higher-ranked-lifetime inference bug when the surrounding future is
-            // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
-            let inputs: Vec<(Uuid, String, Vec<String>)> = batch
-                .iter()
-                .map(|chunk| {
-                    (
-                        chunk.base.id,
-                        chunk.text.clone(),
-                        temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
-                    )
-                })
-                .collect();
-            let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _, _)| *id).collect();
-            // Parallel to `chunk_ids`: a failure is attributed to its file, and the
-            // stream items carry only the chunk id and text.
-            let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
-
-            // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
-            // are in flight at once. `buffer_unordered`, not `buffered`: the latter's
-            // `FuturesOrdered` counts completed-but-undrained outputs against its
-            // limit, so a chunk stuck in the retry cascade pins its slot *and* every
-            // slot filled behind it until it returns — head-of-line blocking that
-            // stops the batch dead above `max_parallel` chunks. The `tokio::spawn`
-            // inside the mapped future keeps calls on the multi-threaded runtime,
-            // and `buffer_unordered` only polls up to `max_parallel` futures, so at
-            // most that many extraction tasks exist at once.
-            //
-            // Completion order is not input order, so each future carries its index
-            // and the batch is re-sorted below. Order still matters downstream:
-            // graph building keeps the first declaration of an entity in `all_graphs`,
-            // and the failure records below must be deterministic for a given input.
-            // Same shape as `SummaryExtractor::summarize_chunks`.
-            //
-            // Peak duplicated text is still O(`chunks_per_batch`), not
-            // O(`max_parallel`): `inputs` above clones every chunk's text up front.
-            // Making that lazy would mean borrowing `&chunk` across the stream, which
-            // is the higher-ranked-lifetime case the comment there describes.
-            let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-                .map(|(index, (_, text, hints))| {
-                    let extractor = fact_extractor.clone();
-                    let prompt = config.custom_extraction_prompt.clone();
-                    let strategy = config.extraction_strategy;
-                    async move {
-                        let result = tokio::spawn(async move {
-                            match strategy {
-                                ExtractionStrategy::SinglePass => {
-                                    extractor
-                                        .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
-                                        .await
-                                }
-                                ExtractionStrategy::Cascade { rounds } => {
-                                    crate::fact_extraction::cascade::cascade_extract(
-                                        extractor.llm(),
-                                        &text,
-                                        rounds,
-                                    )
-                                    .await
-                                }
-                            }
-                        })
-                        .await;
-                        (index, result)
-                    }
-                })
-                .buffer_unordered(max_parallel)
-                .collect()
-                .await;
-            indexed_results.sort_by_key(|(index, _)| *index);
-            let batch_results: Vec<_> = indexed_results
-                .into_iter()
-                .map(|(_, result)| result)
-                .collect();
-
-            // The whole batch is collected before any result is inspected, so a
-            // FailFast abort reports every failure in the batch that tripped it —
-            // not only the first one to come back.
-            let mut batch_failed = false;
-            for ((result, chunk_id), document_id) in batch_results
-                .into_iter()
-                .zip(chunk_ids)
-                .zip(chunk_documents)
-            {
-                let outcome = result
-                    .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
-                    .and_then(|inner| inner);
-                match outcome {
-                    Ok(graph) => all_graphs.push((chunk_id, graph)),
-                    Err(e) => {
-                        warn!(
-                            data_id = %document_id,
-                            chunk_id = %chunk_id,
-                            "graph extraction failed for chunk: {e}"
-                        );
-                        failures.record_error(
-                            StageFailure {
-                                stage: FailureStage::GraphExtraction,
-                                data_id: document_id,
-                                chunk_id: Some(chunk_id),
-                                error: e.to_string(),
-                                fails_item: true,
-                            },
-                            &e,
-                        );
-                        batch_failed = true;
+        // One stream over every chunk of the run, at most `max_parallel` calls
+        // in flight and no batch boundary: a slow chunk holds only its own
+        // slot. A chunk's text is cloned when its call is about to start, so
+        // peak duplicated text is O(`max_parallel`). The outcomes come back in
+        // chunk order, which graph building depends on: within a unit, the
+        // first declaration of an entity decides its type and description.
+        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
+        let fail_fast = failure_policy.stop == FailureStop::FailFast;
+        let outcomes = dispatch_chunk_calls(
+            chunks_for_extraction.len(),
+            max_parallel,
+            fail_fast,
+            "graph extraction",
+            |index| {
+                let chunk = &chunks_for_extraction[index];
+                let text = chunk.text.clone();
+                let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
+                let extractor = fact_extractor.clone();
+                let prompt = config.custom_extraction_prompt.clone();
+                let strategy = config.extraction_strategy;
+                async move {
+                    match strategy {
+                        ExtractionStrategy::SinglePass => {
+                            extractor
+                                .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
+                                .await
+                        }
+                        ExtractionStrategy::Cascade { rounds } => {
+                            crate::fact_extraction::cascade::cascade_extract(
+                                extractor.llm(),
+                                &text,
+                                rounds,
+                            )
+                            .await
+                        }
                     }
                 }
-            }
+            },
+            CognifyError::FactExtractionError,
+        )
+        .await;
 
-            info!(
-                "Processed graph extraction batch {}/{} ({} chunks)",
-                batch_idx + 1,
-                chunks_for_extraction.len().div_ceil(batch_size),
-                batch.len()
-            );
-
-            if batch_failed && failure_policy.stop == FailureStop::FailFast {
-                aborted_at = Some((batch_idx + 1) * batch_size);
-                break;
+        // Every failure that came back is recorded, in chunk order, before
+        // the undispatched chunks are marked unreached: `mark_unreached` is a
+        // no-op for a file already failed, so a file with a failed chunk stays
+        // a failure whichever order its chunks were reached in.
+        let mut skipped: Vec<Uuid> = Vec::new();
+        for (chunk, outcome) in chunks_for_extraction.iter().zip(outcomes) {
+            match outcome {
+                ChunkCall::Done(Ok(graph)) => all_graphs.push((chunk.base.id, graph)),
+                ChunkCall::Done(Err(e)) => {
+                    warn!(
+                        data_id = %chunk.document_id,
+                        chunk_id = %chunk.base.id,
+                        "graph extraction failed for chunk: {e}"
+                    );
+                    failures.record_error(
+                        StageFailure {
+                            stage: FailureStage::GraphExtraction,
+                            data_id: chunk.document_id,
+                            chunk_id: Some(chunk.base.id),
+                            error: e.to_string(),
+                            fails_item: true,
+                        },
+                        &e,
+                    );
+                    aborted |= fail_fast;
+                }
+                ChunkCall::Skipped => skipped.push(chunk.document_id),
             }
         }
+        for document_id in &skipped {
+            failures.mark_unreached(*document_id);
+        }
+        info!(
+            "Extracted graphs from {} of {} chunks ({} never dispatched)",
+            all_graphs.len(),
+            chunks_for_extraction.len(),
+            skipped.len()
+        );
     }
 
     // ── The abort-time partition ────────────────────────────────────────────
-    // At the moment of a FailFast abort nothing has been persisted — the loop
+    // At the moment of a FailFast abort nothing has been persisted — the stream
     // above accumulates every chunk's graph in memory and the first write of
     // any kind happens below. So "keep the results for the other files" is not
     // a matter of not-deleting; it takes deliberately persisting the finished
     // work before stopping. Files partition three ways:
     //
-    //   complete  — every one of its non-DLT chunks was attempted and none
+    //   complete  — every one of its non-DLT chunks was dispatched and none
     //               failed. Persisted below, and marked complete when the
     //               run ends.
     //   failed    — at least one chunk failed. Not persisted, left unmarked.
-    //   unreached — chunks never dispatched. Not persisted, left unmarked.
+    //   unreached — a chunk was never dispatched. Not persisted, left
+    //               unmarked.
     //
     // Only complete files are persisted, which is what keeps items
     // all-or-nothing. Failed and unreached files are indistinguishable to the
@@ -1248,11 +1217,7 @@ pub async fn extract_graph_from_data(
     // normally and the item-scoped sweep removes the failed files'
     // contributions afterwards, so one deletion path serves both cases.
     let mut complete_documents: Option<HashSet<Uuid>> = None;
-    if let Some(first_unreached) = aborted_at {
-        for chunk in chunks_for_extraction.iter().skip(first_unreached) {
-            failures.mark_unreached(chunk.document_id);
-        }
-
+    if aborted {
         if failure_policy.scope != RollbackScope::FailedItems {
             return Err(CognifyError::RunFailed {
                 report: Box::new(failures),
@@ -1888,18 +1853,7 @@ pub async fn extract_dynamic_graphs_from_data(
     } else {
         HashMap::new()
     };
-    let chunks: Vec<(String, Uuid, Uuid, Vec<String>)> = extractable
-        .into_iter()
-        .map(|chunk| {
-            (
-                chunk.text.clone(),
-                chunk.base.id,
-                chunk.document_id,
-                temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
-            )
-        })
-        .collect();
-    if chunks.is_empty() {
+    if extractable.is_empty() {
         return Ok(DynamicExtractionData {
             graphs: Vec::new(),
             failures: input.failures.clone(),
@@ -1908,6 +1862,7 @@ pub async fn extract_dynamic_graphs_from_data(
     }
 
     let failure_policy = config.failure_policy();
+    let fail_fast = failure_policy.stop == FailureStop::FailFast;
     let max_parallel = config.max_parallel_extractions.max(1);
     let custom_prompt = config.custom_extraction_prompt.clone();
     let dataset_id = input.dataset_id;
@@ -1915,106 +1870,100 @@ pub async fn extract_dynamic_graphs_from_data(
     let mut graphs = Vec::new();
     let mut aborted = false;
 
-    for (batch_index, batch) in chunks.chunks(config.chunks_per_batch).enumerate() {
-        let owned_batch: Vec<_> = batch.to_vec();
-        let mut results: Vec<_> = futures::stream::iter(owned_batch.into_iter().enumerate())
-            .map(|(position, (text, chunk_id, data_id, hints))| {
-                let llm = Arc::clone(&llm);
-                let schema = Arc::clone(&schema);
-                let prompt = match &custom_prompt {
-                    Some(prompt) => prompt.clone(),
-                    None => default_graph_prompt_with_hints(&hints)
-                        .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+    // One stream over every chunk, as on the default path: at most
+    // `max_parallel` calls in flight, no batch boundary, inputs built when a
+    // call is about to start, outcomes returned in chunk order.
+    let outcomes = dispatch_chunk_calls(
+        extractable.len(),
+        max_parallel,
+        fail_fast,
+        "custom graph extraction",
+        |index| {
+            let chunk = extractable[index];
+            let text = chunk.text.clone();
+            let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
+            let llm = Arc::clone(&llm);
+            let schema = Arc::clone(&schema);
+            let prompt = match &custom_prompt {
+                Some(prompt) => prompt.clone(),
+                None => default_graph_prompt_with_hints(&hints)
+                    .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+            };
+            async move {
+                let messages = vec![
+                    Message {
+                        role: MessageRole::System,
+                        content: prompt,
+                    },
+                    Message {
+                        role: MessageRole::User,
+                        content: text,
+                    },
+                ];
+                let validator = |answer: &serde_json::Value| {
+                    schema
+                        .materialize(answer, dataset_id)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 };
-                async move {
-                    // Spawned like the other extractors: CPU-bound validation
-                    // spreads across the runtime, and a panicking chunk becomes
-                    // that chunk's failure under the policy instead of
-                    // unwinding the whole stage.
-                    let result = tokio::spawn(async move {
-                        let messages = vec![
-                            Message {
-                                role: MessageRole::System,
-                                content: prompt,
-                            },
-                            Message {
-                                role: MessageRole::User,
-                                content: text,
-                            },
-                        ];
-                        let validator = |answer: &serde_json::Value| {
-                            schema
-                                .materialize(answer, dataset_id)
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        };
-                        let answer = llm
-                            .create_structured_output_with_messages_raw_validated(
-                                messages,
-                                schema.llm_schema(),
-                                Some(GenerationOptions {
-                                    temperature: None,
-                                    max_tokens: None,
-                                    ..Default::default()
-                                }),
-                                &validator,
-                            )
-                            .await
-                            .map_err(CognifyError::from_llm)?;
-                        schema
-                            .materialize(&answer, dataset_id)
-                            .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
-                    })
+                let answer = llm
+                    .create_structured_output_with_messages_raw_validated(
+                        messages,
+                        schema.llm_schema(),
+                        Some(GenerationOptions {
+                            temperature: None,
+                            max_tokens: None,
+                            ..Default::default()
+                        }),
+                        &validator,
+                    )
                     .await
-                    .map_err(|error| {
-                        CognifyError::GraphExtractionError(format!(
-                            "dynamic graph extraction task failed: {error}"
-                        ))
-                    })
-                    .and_then(|result| result);
-                    (position, chunk_id, data_id, result)
-                }
-            })
-            .buffer_unordered(max_parallel)
-            .collect()
-            .await;
-        results.sort_by_key(|(position, _, _, _)| *position);
-
-        let mut batch_failed = false;
-        for (_, chunk_id, data_id, result) in results {
-            match result {
-                Ok(graph) => graphs.push(AttributedDynamicGraph {
-                    graph,
-                    chunk_id,
-                    data_id,
-                }),
-                Err(error) => {
-                    warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
-                    failures.record_error(
-                        StageFailure {
-                            stage: FailureStage::GraphExtraction,
-                            data_id,
-                            chunk_id: Some(chunk_id),
-                            error: error.to_string(),
-                            fails_item: true,
-                        },
-                        &error,
-                    );
-                    batch_failed = true;
-                }
+                    .map_err(CognifyError::from_llm)?;
+                schema
+                    .materialize(&answer, dataset_id)
+                    .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
             }
-        }
+        },
+        // Each call is spawned like the other extractors': CPU-bound
+        // validation spreads across the runtime, and a panicking chunk becomes
+        // that chunk's failure under the policy instead of unwinding the stage.
+        |message| {
+            CognifyError::GraphExtractionError(format!(
+                "dynamic graph extraction task failed: {message}"
+            ))
+        },
+    )
+    .await;
 
-        if batch_failed && failure_policy.stop == FailureStop::FailFast {
-            aborted = true;
-            for chunk in chunks
-                .iter()
-                .skip((batch_index + 1) * config.chunks_per_batch)
-            {
-                failures.mark_unreached(chunk.2);
+    // Failures first, then the undispatched chunks, as on the default path.
+    let mut skipped: Vec<Uuid> = Vec::new();
+    for (chunk, outcome) in extractable.iter().zip(outcomes) {
+        let (chunk_id, data_id) = (chunk.base.id, chunk.document_id);
+        match outcome {
+            ChunkCall::Done(Ok(graph)) => graphs.push(AttributedDynamicGraph {
+                graph,
+                chunk_id,
+                data_id,
+            }),
+            ChunkCall::Done(Err(error)) => {
+                warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
+                failures.record_error(
+                    StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id,
+                        chunk_id: Some(chunk_id),
+                        error: error.to_string(),
+                        fails_item: true,
+                    },
+                    &error,
+                );
+                aborted |= fail_fast;
             }
-            break;
+            ChunkCall::Skipped => skipped.push(data_id),
         }
+    }
+    for data_id in skipped {
+        failures.mark_unreached(data_id);
     }
 
     if aborted && failure_policy.scope != RollbackScope::FailedItems {
@@ -13709,10 +13658,10 @@ mod tests {
         )
     }
 
-    /// One chunk per batch, so the batches run in file order and the abort
-    /// boundary is exactly between files.
-    fn one_chunk_per_batch(config: CognifyConfig) -> CognifyConfig {
-        config.with_chunks_per_batch(1)
+    /// One extraction call in flight at a time, so the calls run in file
+    /// order and a FailFast stop falls exactly between files.
+    fn one_call_at_a_time(config: CognifyConfig) -> CognifyConfig {
+        config.with_max_parallel_extractions(1)
     }
 
     async fn run_extraction_with_config(
@@ -13750,7 +13699,7 @@ mod tests {
         let (input, _a, b, _c) = three_chunk_files(dataset_id);
 
         let config =
-            one_chunk_per_batch(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
+            one_call_at_a_time(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
         let result = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect("RunToEnd collects rather than propagates");
@@ -13778,33 +13727,28 @@ mod tests {
         );
     }
 
-    /// The headline test for the abort-time partition: at the moment of the
-    /// first failure *nothing* has been persisted, so keeping the other files'
-    /// results is not a matter of not-deleting — the stage has to deliberately
-    /// persist the finished work before it stops. Only the complete file's
-    /// artifacts and ownership rows exist afterwards.
     /// `FailFast` must stop *scheduling* work, not merely stop reporting it.
     ///
-    /// The abort partition is computed from an index set before the loop
-    /// breaks, so deleting the `break` changes no other assertion in the
-    /// suite — the axis's whole promise (stop spending) would go unpinned.
-    /// This counts LLM calls instead of outcomes.
+    /// The abort partition reads which chunks were skipped, so a stop flag
+    /// that is never checked changes no other assertion in the suite — the
+    /// axis's whole promise (stop spending) would go unpinned. This counts LLM
+    /// calls instead of outcomes.
     #[tokio::test]
-    async fn failfast_stops_dispatching_after_the_failing_batch() {
+    async fn failfast_stops_dispatching_after_the_failing_call() {
         use cognee_ontology::NoOpOntologyResolver;
         use cognee_test_utils::MockLlm;
 
         let dataset_id = Uuid::new_v4();
         let db = ledger_db(dataset_id).await;
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
-        // Three one-chunk files, one batch each; the SECOND one poisons.
+        // Three one-chunk files, one call at a time; the SECOND one poisons.
         let (input, _a, _b, _c) = three_chunk_files(dataset_id);
 
         let llm = Arc::new(
             MockLlm::new(vec![ownership_canned_graph(); 8])
                 .with_failing_markers(vec!["FAILMARKER".to_string()]),
         );
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
         );
 
@@ -13824,12 +13768,17 @@ mod tests {
         assert_eq!(
             llm.structured_calls(),
             2,
-            "FailFast must dispatch the failing batch and then stop: file C's \
-             chunk should never reach the LLM. Seeing 3 means the loop ran on \
-             and only the bookkeeping stopped."
+            "FailFast must dispatch the failing call and then stop: file C's \
+             chunk should never reach the LLM. Seeing 3 means the stream ran \
+             on and only the bookkeeping stopped."
         );
     }
 
+    /// The headline test for the abort-time partition: at the moment of the
+    /// first failure *nothing* has been persisted, so keeping the other files'
+    /// results is not a matter of not-deleting — the stage has to deliberately
+    /// persist the finished work before it stops. Only the complete file's
+    /// artifacts and ownership rows exist afterwards.
     #[tokio::test]
     async fn extraction_abort_persists_only_complete_files() {
         use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
@@ -13839,7 +13788,7 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
         );
         let result = run_extraction_with_config(&input, graph.clone(), &db, &config)
@@ -13903,7 +13852,7 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(CognifyConfig::default());
+        let config = one_call_at_a_time(CognifyConfig::default());
         let err = run_extraction_with_config(&input, graph.clone(), &db, &config)
             .await
             .expect_err("the default scope still aborts the run");
@@ -13925,10 +13874,11 @@ mod tests {
         assert!(nodes.is_empty(), "and no ownership row was written");
     }
 
-    /// A whole batch is dispatched before any result is inspected, so a
-    /// FailFast abort reports every failure in the batch that tripped it.
+    /// A FailFast stop cancels nothing in flight: every call already
+    /// dispatched is collected, so the abort reports every failure among them,
+    /// not only the first to come back.
     #[tokio::test]
-    async fn extraction_reports_every_failure_in_the_batch_that_tripped_it() {
+    async fn extraction_reports_every_failure_already_in_flight() {
         let dataset_id = Uuid::new_v4();
         let db = ledger_db(dataset_id).await;
         let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
@@ -13956,8 +13906,8 @@ mod tests {
             failures: FailureReport::default(),
         };
 
-        // All four chunks in one batch.
-        let config = CognifyConfig::default().with_chunks_per_batch(4);
+        // All four chunks in flight at once (the default cap is far above 4).
+        let config = CognifyConfig::default();
         let err = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect_err("default scope aborts");
@@ -13967,9 +13917,471 @@ mod tests {
         assert_eq!(
             report.entries().len(),
             2,
-            "both failing chunks in the batch are reported, not just the first"
+            "both failing chunks in flight are reported, not just the first"
         );
         assert_eq!(report.failed_items().len(), 2);
+    }
+
+    // ── One continuous extraction stream (SDK-1694 O3) ───────────────────
+
+    /// An LLM for the dispatch tests. Its answer, failure and timing are picked
+    /// by markers in the chunk text, so the outcome does not depend on which
+    /// call happens to be served first:
+    ///
+    /// * a call whose text contains `HOLDMARKER` waits until a call containing
+    ///   `RELEASEMARKER` or `FAILMARKER` has returned, then a little longer.
+    ///   It gives up after [`GatedLlm::HOLD_LIMIT`], so a stage that never
+    ///   dispatches the releasing call fails its test instead of hanging;
+    /// * a call containing `FAILMARKER` fails;
+    /// * the answer is the first of `answers` whose marker the text contains,
+    ///   else `default_answer`.
+    ///
+    /// It logs when each call starts and returns, and the peak number of calls
+    /// in flight.
+    struct GatedLlm {
+        answers: Vec<(&'static str, String)>,
+        default_answer: String,
+        released: tokio::sync::Semaphore,
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        events: std::sync::Mutex<Vec<(&'static str, String)>>,
+    }
+
+    impl GatedLlm {
+        const HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        fn new(default_answer: String) -> Self {
+            Self {
+                answers: Vec::new(),
+                default_answer,
+                released: tokio::sync::Semaphore::new(0),
+                in_flight: std::sync::atomic::AtomicUsize::new(0),
+                peak: std::sync::atomic::AtomicUsize::new(0),
+                events: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_answer(mut self, marker: &'static str, answer: String) -> Self {
+            self.answers.push((marker, answer));
+            self
+        }
+
+        /// Where in the log the first `kind` ("start" or "end") event of a
+        /// call whose text contains `marker` sits.
+        fn event(&self, kind: &str, marker: &str) -> Option<usize> {
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .iter()
+                .position(|(k, text)| *k == kind && text.contains(marker))
+        }
+
+        fn started(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .iter()
+                .filter(|(kind, _)| *kind == "start")
+                .map(|(_, text)| text.clone())
+                .collect()
+        }
+
+        fn peak(&self) -> usize {
+            self.peak.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for GatedLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("graph extraction uses structured output")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            use std::sync::atomic::Ordering;
+
+            // The chunk text is the user message; the prompt carries no marker.
+            let text = messages
+                .iter()
+                .rfind(|message| message.role == MessageRole::User)
+                .map(|message| message.content.clone())
+                .unwrap_or_default();
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .push(("start", text.clone()));
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+
+            if text.contains("HOLDMARKER") {
+                if let Ok(Ok(permit)) =
+                    tokio::time::timeout(Self::HOLD_LIMIT, self.released.acquire()).await
+                {
+                    permit.forget();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            } else {
+                // Long enough for the calls dispatched together to overlap.
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+
+            let outcome = if text.contains("FAILMARKER") {
+                Err(cognee_llm::LlmError::ApiError(
+                    "GatedLlm: simulated failure".to_string(),
+                ))
+            } else {
+                let answer = self
+                    .answers
+                    .iter()
+                    .find(|(marker, _)| text.contains(marker))
+                    .map_or(&self.default_answer, |(_, answer)| answer);
+                Ok(serde_json::from_str(answer).expect("canned answers are JSON"))
+            };
+
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .push(("end", text.clone()));
+            if text.contains("RELEASEMARKER") || text.contains("FAILMARKER") {
+                self.released.add_permits(1_000);
+            }
+            outcome
+        }
+
+        fn model(&self) -> &str {
+            "gated-llm"
+        }
+    }
+
+    /// `(document, text)` pairs as one extraction input, chunks in that order.
+    fn gated_input(dataset_id: Uuid, chunks: &[(Uuid, &str)]) -> ExtractedChunks {
+        let mut documents: Vec<Uuid> = Vec::new();
+        for (doc_id, _) in chunks {
+            if !documents.contains(doc_id) {
+                documents.push(*doc_id);
+            }
+        }
+        ExtractedChunks {
+            chunks: chunks
+                .iter()
+                .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
+                .collect(),
+            documents: documents
+                .iter()
+                .map(|doc_id| test_document_with_metadata(*doc_id, None))
+                .collect(),
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        }
+    }
+
+    /// Six chunks of one document, the first one slow and the last one, past
+    /// two `chunks_per_batch` boundaries, the one that lets it return.
+    fn six_chunks_held_by_the_last(dataset_id: Uuid) -> ExtractedChunks {
+        let doc = Uuid::new_v4();
+        gated_input(
+            dataset_id,
+            &[
+                (doc, "Chunk zero HOLDMARKER."),
+                (doc, "Chunk one."),
+                (doc, "Chunk two."),
+                (doc, "Chunk three."),
+                (doc, "Chunk four."),
+                (doc, "Chunk five RELEASEMARKER."),
+            ],
+        )
+    }
+
+    /// Two calls in flight, two chunks per block: the old batch loop could not
+    /// start chunk 5 until chunk 0 had returned.
+    fn no_barrier_config(config: CognifyConfig) -> CognifyConfig {
+        config
+            .with_chunks_per_batch(2)
+            .with_max_parallel_extractions(2)
+    }
+
+    async fn extract_with(
+        input: &ExtractedChunks,
+        llm: Arc<dyn Llm>,
+        db: &dyn RelationalDb,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedGraphData, CognifyError> {
+        use cognee_ontology::NoOpOntologyResolver;
+
+        extract_graph_from_data(
+            input,
+            llm,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(NoOpOntologyResolver::new()),
+            db,
+            Some(Uuid::new_v4()),
+            config,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Ticket test 8: a chunk past a `chunks_per_batch` boundary is dispatched
+    /// while a slow chunk before the boundary is still in flight, and the
+    /// in-flight cap still holds.
+    #[tokio::test]
+    async fn a_slow_chunk_does_not_hold_back_chunks_past_the_batch_boundary() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = six_chunks_held_by_the_last(dataset_id);
+        let llm = Arc::new(GatedLlm::new(ownership_canned_graph()));
+
+        let result = extract_with(
+            &input,
+            llm.clone(),
+            &db,
+            &no_barrier_config(CognifyConfig::default()),
+        )
+        .await
+        .expect("nothing fails");
+
+        let release_started = llm.event("start", "RELEASEMARKER").expect("chunk 5 ran");
+        let hold_returned = llm.event("end", "HOLDMARKER").expect("chunk 0 ran");
+        assert!(
+            release_started < hold_returned,
+            "chunk 5 must be dispatched before slow chunk 0 returns"
+        );
+        assert_eq!(llm.started().len(), 6);
+        assert_eq!(llm.peak(), 2, "two calls in flight, never more");
+        assert_eq!(result.failures.total(), 0);
+        assert!(!result.entities.is_empty());
+    }
+
+    /// Ticket test 8 on the runtime custom-schema path.
+    #[tokio::test]
+    async fn custom_extraction_does_not_hold_back_chunks_past_the_batch_boundary() {
+        let input = six_chunks_held_by_the_last(Uuid::new_v4());
+        let llm = Arc::new(GatedLlm::new(custom_person_answer()));
+        let config =
+            no_barrier_config(CognifyConfig::default().with_graph_schema(custom_person_schema()));
+
+        let extracted = extract_dynamic_graphs_from_data(&input, llm.clone(), &config)
+            .await
+            .expect("nothing fails");
+
+        let release_started = llm.event("start", "RELEASEMARKER").expect("chunk 5 ran");
+        let hold_returned = llm.event("end", "HOLDMARKER").expect("chunk 0 ran");
+        assert!(
+            release_started < hold_returned,
+            "chunk 5 must be dispatched before slow chunk 0 returns"
+        );
+        assert_eq!(llm.started().len(), 6);
+        assert_eq!(llm.peak(), 2, "two calls in flight, never more");
+        assert_eq!(
+            extracted
+                .graphs
+                .iter()
+                .map(|graph| graph.chunk_id)
+                .collect::<Vec<_>>(),
+            input
+                .chunks
+                .iter()
+                .map(|chunk| chunk.base.id)
+                .collect::<Vec<_>>(),
+            "the graphs come back in chunk order"
+        );
+    }
+
+    /// Five chunks, three calls in flight. C's chunk and A's first chunk are
+    /// slow; B's fails while they are in flight. A's second chunk and D's are
+    /// never dispatched.
+    fn failure_while_others_are_in_flight(dataset_id: Uuid) -> (ExtractedChunks, [Uuid; 4]) {
+        let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
+        let input = gated_input(
+            dataset_id,
+            &[
+                (c, "Carol works at Acme. HOLDMARKER"),
+                (a, "Alice works at Acme. HOLDMARKER"),
+                (b, "Bob FAILMARKER."),
+                (a, "Alice again."),
+                (d, "Dave works at Acme."),
+            ],
+        );
+        (input, [a, b, c, d])
+    }
+
+    /// Fail-fast on the stream: nothing is dispatched after the failure, the
+    /// calls already in flight are collected, the documents of undispatched
+    /// chunks are unreached — A among them, although its first chunk
+    /// succeeded — and under `FailedItems` the complete document is persisted.
+    #[tokio::test]
+    async fn failfast_stops_the_stream_and_keeps_the_complete_documents() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let (input, [a, b, c, d]) = failure_while_others_are_in_flight(dataset_id);
+        let llm = Arc::new(GatedLlm::new(ownership_canned_graph()));
+        let config = CognifyConfig::default()
+            .with_max_parallel_extractions(3)
+            .with_rollback_scope(RollbackScope::FailedItems);
+
+        let result = extract_with(&input, llm.clone(), &db, &config)
+            .await
+            .expect("FailedItems keeps the complete documents");
+
+        assert_eq!(
+            llm.started(),
+            [
+                "Carol works at Acme. HOLDMARKER",
+                "Alice works at Acme. HOLDMARKER",
+                "Bob FAILMARKER."
+            ],
+            "nothing is dispatched after the failure"
+        );
+        assert!(
+            llm.event("end", "Carol").is_some() && llm.event("end", "Alice").is_some(),
+            "the calls in flight at the failure finish and are collected"
+        );
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            result.failures.unreached_items(),
+            &[a, d].into_iter().collect(),
+            "A's second chunk and D's chunk were never dispatched"
+        );
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|document| document.base.id)
+                .collect::<Vec<_>>(),
+            [c],
+            "only C is complete"
+        );
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty(), "C's artifacts were persisted");
+        assert!(
+            nodes.iter().all(|row| row.data_id == c),
+            "nothing of A, B or D was persisted"
+        );
+    }
+
+    /// The same stop on the runtime custom-schema path.
+    #[tokio::test]
+    async fn custom_extraction_failfast_stops_the_stream() {
+        let (input, [a, b, c, d]) = failure_while_others_are_in_flight(Uuid::new_v4());
+        let llm = Arc::new(GatedLlm::new(custom_person_answer()));
+        let config = CognifyConfig::default()
+            .with_graph_schema(custom_person_schema())
+            .with_max_parallel_extractions(3)
+            .with_rollback_scope(RollbackScope::FailedItems);
+
+        let extracted = extract_dynamic_graphs_from_data(&input, llm.clone(), &config)
+            .await
+            .expect("FailedItems keeps the complete documents");
+
+        assert_eq!(
+            llm.started().len(),
+            3,
+            "nothing is dispatched after the failure"
+        );
+        assert!(llm.event("start", "Dave").is_none());
+        assert_eq!(
+            extracted
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            extracted.failures.unreached_items(),
+            &[a, d].into_iter().collect()
+        );
+        assert_eq!(
+            extracted
+                .graphs
+                .iter()
+                .map(|graph| graph.data_id)
+                .collect::<Vec<_>>(),
+            [c],
+            "only the complete document's graph survives"
+        );
+    }
+
+    /// Graph building sees the results in chunk order, not completion order:
+    /// chunk 1 returns before chunk 0, both type `Apple` differently, and the
+    /// block keeps chunk 0's type and description.
+    #[tokio::test]
+    async fn the_first_type_in_chunk_order_wins_whatever_returns_first() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let doc = Uuid::new_v4();
+        let input = gated_input(
+            dataset_id,
+            &[
+                (doc, "Apple the company. HOLDMARKER"),
+                (doc, "Apple the fruit. RELEASEMARKER"),
+            ],
+        );
+        let apple = |kind: &str, description: &str| {
+            json!({
+                "nodes": [{"id": "apple", "name": "Apple", "type": kind, "description": description}],
+                "edges": []
+            })
+            .to_string()
+        };
+        let llm = Arc::new(
+            GatedLlm::new(String::new())
+                .with_answer("company", apple("Company", "The company."))
+                .with_answer("fruit", apple("Fruit", "The fruit.")),
+        );
+
+        let result = extract_with(
+            &input,
+            llm.clone(),
+            &db,
+            &CognifyConfig::default().with_max_parallel_extractions(2),
+        )
+        .await
+        .expect("nothing fails");
+
+        assert!(
+            llm.event("end", "RELEASEMARKER") < llm.event("end", "HOLDMARKER"),
+            "chunk 1 returned first"
+        );
+        let [pair] = result.entities.as_slice() else {
+            panic!("one Apple entity, got {}", result.entities.len());
+        };
+        assert_eq!(
+            pair.entity_type
+                .as_ref()
+                .map(|entity_type| entity_type.name.to_lowercase()),
+            Some("company".to_string()),
+            "chunk 0 declared Apple first"
+        );
+        assert!(
+            pair.extra_entity_types.is_empty(),
+            "within one block the later type is dropped"
+        );
+        assert_eq!(pair.entity.description, "The company.");
     }
 
     /// The documented step-pending state: under `RunToEnd` the extraction
@@ -13983,7 +14395,7 @@ mod tests {
         let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_failure_stop(FailureStop::RunToEnd)
                 .with_rollback_scope(RollbackScope::FailedItems),
@@ -14125,7 +14537,7 @@ mod tests {
     #[tokio::test]
     async fn custom_extraction_collects_failures_under_run_to_end() {
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_graph_schema(custom_person_schema())
                 .with_failure_stop(FailureStop::RunToEnd),
@@ -14172,7 +14584,7 @@ mod tests {
     #[tokio::test]
     async fn custom_extraction_abort_drops_failed_and_unreached_files() {
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_graph_schema(custom_person_schema())
                 .with_rollback_scope(RollbackScope::FailedItems),
