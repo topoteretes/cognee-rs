@@ -339,12 +339,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cognify.cross_chunk_endpoints=false` an endpoint now matches only the
   verbatim node id, as in Python: node ids `A` and `a` are two nodes.
 
+  Labels such as `Is A` or `Contains` now become `is_a` and `contains`, the
+  names of the structural edges, as in Python. Between two entities they stay
+  extracted edges: their ledger rows carry the producing document, a
+  `contains` row is keyed on its edge text (as Python's `upsert_edges` keys
+  every `contains` edge). The graph stores' type lookup
+  (`get_entity_type_names`) only follows an `is_a` edge to an EntityType; the
+  visualization, like Python's, takes any `is_a` link's target name as the
+  entity's type.
+
+  Ontology edges go through the same check. Before, it never matched them,
+  so every run wrote each ontology edge again and added a ledger row for it
+  (with a nil `data_id`) under its own user and dataset. Now an ontology edge
+  the graph already holds is skipped and gets no new row, as on Python's
+  ledger path. So when two datasets share one graph store and ontology, the
+  second records no row for an ontology edge the first one wrote, and the
+  edge survives deleting the first dataset's data, because a nil-`data_id`
+  row is only retired through an endpoint exclusive to the deleted item.
+  Ownership of ontology and structural edges per document comes with
+  SDK-1694 stage O5a.
+
   Graphs built before this change are not migrated. Their edges, ledger rows
   and `EdgeType` points keep the raw label and stay consistent with each
   other. Cognifying the same data again adds a normalised copy of every edge
   whose label was not already normalised (`works at` gains `works_at`), with
-  its own ownership row and `EdgeType` point; the raw copy stays until the
-  data that produced it is deleted.
+  its own ownership row; the raw copy stays until the data that produced it
+  is deleted. Only a copy with no description gets a new `EdgeType` point
+  (its default edge text, "{source} {label} {target}.", names the new label);
+  one with a description shares the point keyed on that text.
 
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict

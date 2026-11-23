@@ -540,12 +540,23 @@ impl Expansion {
     ///
     /// An existing edge some chunk produced moves to
     /// [`Self::claimed_existing_edges`]: it is not written again, but this
-    /// run owns it (see [`expand_with_nodes_and_edges`]). Python records the
-    /// same chunk ownership before its check (`_produced_edge_identities`).
+    /// run gets an ownership row for it (see [`expand_with_nodes_and_edges`]).
+    /// That is a deliberate superset of Python on a ledger graph, which
+    /// records nothing for any existing edge: its chunk ownership
+    /// (`_produced_edge_identities`, read by `collect_chunk_ownership`) is
+    /// only used when the graph stores its provenance in the graph
+    /// (`add_data_points.py:255-258`). Without the claim, deleting the data
+    /// item that first wrote the edge would take it from under every later
+    /// one that also produced it.
+    ///
     /// An existing edge no chunk produced, which is an ontology edge, is
-    /// dropped: Python's ledger records nothing for it either, and only
-    /// attaches a document-scoped source ref on a graph that stores its
-    /// provenance in the graph, which Rust has no counterpart for.
+    /// dropped, as on Python's ledger path. Python's in-graph provenance
+    /// attaches a document-scoped source ref to it instead, and Rust has no
+    /// in-graph provenance. The edge keeps the ledger row its first write
+    /// recorded, which usually has a nil `data_id` (no chunk produced it) and
+    /// which a delete retires through its endpoints
+    /// (`structural_edges_owned_by`). Per-document rows for ontology and
+    /// structural edges are a later stage (SDK-1694 O5a).
     ///
     /// Run once the units are merged: the check needs the final ids, and the
     /// writer may run it per document.

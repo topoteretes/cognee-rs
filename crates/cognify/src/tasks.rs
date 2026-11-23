@@ -14901,6 +14901,151 @@ mod tests {
             (Entity::id_for("Rostov"), Entity::id_for("Moscow")),
         );
     }
+
+    /// An ontology whose class `Person` is an `Agent`: matching the type
+    /// brings the edge `person -is_a-> agent` along.
+    struct PersonIsAnAgent;
+
+    impl cognee_ontology::OntologyResolver for PersonIsAnAgent {
+        fn find_closest_match(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            if (node_name, node_type) != ("Person", "classes") {
+                return Ok((vec![], vec![], None));
+            }
+            let class = |name: &str| cognee_ontology::AttachedOntologyNode {
+                uri: format!("http://test.org#{name}"),
+                name: name.to_string(),
+                category: cognee_ontology::NodeCategory::Classes,
+            };
+            Ok((
+                vec![class("agent")],
+                vec![(
+                    "person".to_string(),
+                    "is_a".to_string(),
+                    "agent".to_string(),
+                )],
+                Some(class("person")),
+            ))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// An ontology edge the graph already holds is not written again (on
+    /// `main` its existence check never matched, so every run rewrote it and
+    /// added a ledger row), and the second run records nothing for it, as on
+    /// Python's ledger path.
+    #[tokio::test]
+    async fn an_existing_ontology_edge_is_not_written_again() {
+        let graph = json!({
+            "nodes": [{"id": "ada", "name": "Ada Lovelace", "type": "Person", "description": ""}],
+            "edges": []
+        });
+        let (second, rows, _documents) =
+            extract_twice(graph.clone(), graph, Arc::new(PersonIsAnAgent), "is_a").await;
+
+        assert!(second.edges.is_empty(), "rewritten: {:?}", second.edges);
+        assert_eq!(rows.len(), 1, "only the first run's row: {rows:?}");
+        assert_eq!(
+            (rows[0].source_node_id, rows[0].destination_node_id),
+            (EntityType::id_for("person"), EntityType::id_for("agent"))
+        );
+    }
+
+    /// Extracted labels `Is A` and `Contains` normalise to the structural
+    /// names, as in Python. Between two entities they are still extracted
+    /// edges: owned by their document, and a `contains` row keyed on its
+    /// edge text, as Python's `upsert_edges` keys every `contains` edge.
+    #[tokio::test]
+    async fn extracted_is_a_and_contains_edges_are_ordinary_extracted_edges() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_test_utils::MockLlm;
+
+        let graph = json!({
+            "nodes": [
+                {"id": "apple", "name": "Apple", "type": "Company", "description": ""},
+                {"id": "beats", "name": "Beats", "type": "Company", "description": ""}
+            ],
+            "edges": [
+                {"source_node_id": "beats", "target_node_id": "apple", "relationship_name": "Is A",
+                 "description": "Beats is an Apple subsidiary."},
+                {"source_node_id": "apple", "target_node_id": "beats", "relationship_name": "Contains"}
+            ]
+        });
+        let dataset_id = Uuid::new_v4();
+        let document = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), document, "Apple owns Beats.")],
+            documents: vec![test_document_with_metadata(document, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let result = extract_graph_from_data(
+            &input,
+            Arc::new(MockLlm::new(vec![graph.to_string()])),
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (apple, beats) = (Entity::id_for("Apple"), Entity::id_for("Beats"));
+        let edge = |label: &str| {
+            result
+                .edges
+                .iter()
+                .find(|edge| edge.relationship_name == label)
+                .unwrap_or_else(|| panic!("no {label} edge in {:?}", result.edges))
+        };
+        let is_a = edge("is_a");
+        assert_eq!(
+            (is_a.source_entity_id, is_a.target_entity_id),
+            (beats, apple)
+        );
+        let contains = edge("contains");
+        assert_eq!(
+            (contains.source_entity_id, contains.target_entity_id),
+            (apple, beats)
+        );
+        let contains_text = contains.properties.get("edge_text").unwrap();
+        assert!(!contains_text.is_empty(), "stamped before the ledger write");
+
+        let rows = get_edges_by_dataset(&db, dataset_id).await.unwrap();
+        let row = |source: Uuid, target: Uuid| {
+            rows.iter()
+                .find(|row| (row.source_node_id, row.destination_node_id) == (source, target))
+                .unwrap_or_else(|| panic!("no row {source} -> {target} in {rows:?}"))
+        };
+        let is_a_row = row(beats, apple);
+        assert_eq!(is_a_row.relationship_name, "is_a");
+        assert_eq!(is_a_row.data_id, document);
+        let contains_row = row(apple, beats);
+        assert_eq!(&contains_row.relationship_name, contains_text);
+        assert_eq!(contains_row.label.as_deref(), Some("contains"));
+        assert_eq!(contains_row.data_id, document);
+    }
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use cognee_graph::{EdgeData, GraphDBTrait};
-use tracing::debug;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::error::CognifyError;
@@ -73,20 +73,34 @@ pub async fn retrieve_existing_edges<'a>(
         .await
         .map_err(|e| CognifyError::GraphDatabaseError(e.to_string()))?;
 
-    let mut existing_edge_keys = HashSet::with_capacity(existing_edges.len());
-    for (source_id, target_id, relationship_name, _) in existing_edges {
-        // Every candidate id is a UUID; a backend answers with the ids it
-        // was asked about.
-        match (Uuid::parse_str(&source_id), Uuid::parse_str(&target_id)) {
-            (Ok(source), Ok(target)) => {
-                existing_edge_keys.insert((source, target, relationship_name));
-            }
-            _ => debug!(
-                "has_edges returned an edge with a non-UUID endpoint: {source_id} -> {target_id}"
-            ),
-        }
+    let (existing_edge_keys, unparsable) = edge_keys_of(existing_edges);
+    if unparsable > 0 {
+        // Every candidate id is a UUID, so a backend that answers in another
+        // form makes every such edge look new: it is written and embedded
+        // again on every run. Once per call, not per edge.
+        warn!(
+            unparsable,
+            "has_edges returned {unparsable} edge(s) whose endpoint ids are not UUIDs; \
+             they are treated as not in the graph and will be written again"
+        );
     }
     Ok(existing_edge_keys)
+}
+
+/// The [`GraphEdgePair::dedup_key`] of every edge `has_edges` returned, and
+/// how many it skipped because an endpoint id does not parse as a UUID.
+fn edge_keys_of(edges: Vec<EdgeData>) -> (HashSet<(Uuid, Uuid, String)>, usize) {
+    let mut keys = HashSet::with_capacity(edges.len());
+    let mut unparsable = 0;
+    for (source_id, target_id, relationship_name, _) in edges {
+        match (Uuid::parse_str(&source_id), Uuid::parse_str(&target_id)) {
+            (Ok(source), Ok(target)) => {
+                keys.insert((source, target, relationship_name));
+            }
+            _ => unparsable += 1,
+        }
+    }
+    (keys, unparsable)
 }
 
 #[cfg(test)]
@@ -258,5 +272,41 @@ mod tests {
     #[test]
     fn collect_distinct_candidate_edges_handles_no_edges() {
         assert!(collect_distinct_candidate_edges(&[]).is_empty());
+    }
+
+    /// An answer whose endpoint ids are not UUIDs is counted for the warning
+    /// and left out, never a panic; the parsable edges are still keys, in
+    /// any UUID spelling.
+    #[test]
+    fn edge_keys_of_counts_endpoints_that_are_not_uuids() {
+        let (source, target) = (Uuid::new_v4(), Uuid::new_v4());
+        let answer: Vec<EdgeData> = vec![
+            (
+                source.to_string().to_uppercase(),
+                target.simple().to_string(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+            (
+                "alice".to_string(),
+                target.to_string(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+            (
+                source.to_string(),
+                String::new(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+        ];
+
+        let (keys, unparsable) = edge_keys_of(answer);
+
+        assert_eq!(
+            keys,
+            HashSet::from([(source, target, "works_at".to_string())])
+        );
+        assert_eq!(unparsable, 2);
     }
 }
