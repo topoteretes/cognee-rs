@@ -168,6 +168,7 @@ pggraph_test!(test_get_top_degree_node_ids_matches_default);
 pggraph_test!(test_get_bounded_neighborhood_matches_default);
 pggraph_test!(test_get_entity_type_names_matches_default);
 pggraph_test!(test_entity_with_several_is_a_edges);
+pggraph_test!(test_has_edges_matches_labels_exactly);
 
 /// The same shared cases through [`PgGraphAdapter::from_connection`] — the
 /// constructor the single-shared-Postgres layout actually uses, and the one

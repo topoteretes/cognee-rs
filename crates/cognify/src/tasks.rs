@@ -1069,8 +1069,8 @@ pub async fn extract_graph_from_data(
     if let Some(backend) = config.graph_backend.as_ref() {
         // LLM-free path. Same batching, the same ordering guarantee, the same
         // per-chunk failure records and the same FailFast abort as the LLM
-        // loop below, so the abort-time partition and everything from
-        // `retrieve_existing_edges` down is reused unchanged.
+        // loop below, so the abort-time partition and everything from graph
+        // building down is reused unchanged.
         let outcome = extract_graphs_via_backend(
             backend.0.as_ref(),
             &chunks_for_extraction,
@@ -1134,9 +1134,9 @@ pub async fn extract_graph_from_data(
             //
             // Completion order is not input order, so each future carries its index
             // and the batch is re-sorted below. Order still matters downstream:
-            // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
-            // records below must be deterministic for a given input. Same shape as
-            // `SummaryExtractor::summarize_chunks`.
+            // graph building keeps the first declaration of an entity in `all_graphs`,
+            // and the failure records below must be deterministic for a given input.
+            // Same shape as `SummaryExtractor::summarize_chunks`.
             //
             // Peak duplicated text is still O(`chunks_per_batch`), not
             // O(`max_parallel`): `inputs` above clones every chunk's text up front.
@@ -1322,15 +1322,7 @@ pub async fn extract_graph_from_data(
             }
         };
 
-    // Database deduplication — query for existing edges.
-    //
-    // Borrow the graphs out of `all_graphs` rather than deep-cloning every one
-    // of them (SDK-507): the callee only reads three `&str` fields per edge, so
-    // a second full copy of every extracted graph bought nothing.
-    let existing_edges_set =
-        retrieve_existing_edges(graph_db.as_ref(), all_graphs.iter().map(|(_, g)| g)).await?;
-
-    // Merge and deduplicate graphs (with DB awareness).
+    // Build the graph (the existing-edge check follows, on the result).
     //
     // The string-form `user_id` is the best label we have at this
     // point in the pipeline-driven path — `ExtractedChunks` does not
@@ -1375,20 +1367,11 @@ pub async fn extract_graph_from_data(
     // Within a unit the first declaration of an entity decides its description
     // and type; across units its types are combined and endpoints never match.
     let units = graph_units(&surviving_chunks, config.chunks_per_batch, all_graphs);
-    let Expansion {
-        nodes,
-        edges,
-        claimed_existing_edges,
-        producers,
-        stats: edge_resolution,
-        timestamps,
-        ..
-    } = expand_extracted_graphs_by_unit(
+    let mut expansion = expand_extracted_graphs_by_unit(
         units,
         input.dataset_id,
         &chunk_node_sets,
         &chunk_importance_weights,
-        &existing_edges_set,
         Arc::clone(&ontology_resolver),
         user_label_owned.as_deref(),
         task_rank,
@@ -1398,13 +1381,32 @@ pub async fn extract_graph_from_data(
     .await
     .map_err(|error| CognifyError::Execute(format!("building the extracted graph: {error}")))?;
 
+    // Which of the built edges the graph already holds, looked up on their
+    // final ids and normalised labels, as Python's
+    // `find_existing_edge_identities` does: those are claimed, not written
+    // again. Keys built from the LLM's node ids missed every edge whose
+    // entity id comes from a name that differs from the node id, every edge
+    // to a Timestamp and every edge to an ontology-canonicalised entity.
+    let existing_edges = retrieve_existing_edges(graph_db.as_ref(), &expansion.edges).await?;
+    expansion.split_existing_edges(&existing_edges);
+    let Expansion {
+        nodes,
+        edges,
+        claimed_existing_edges,
+        producers,
+        stats: edge_resolution,
+        timestamps,
+        ..
+    } = expansion;
+
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
     // leaving one log line per dropped edge as the only evidence.
     //
-    // This counts endpoint resolution only. An edge that resolves here can still
-    // be filtered out downstream for already existing in the database, so the
-    // resolved figure is an upper bound on what this pass goes on to emit.
+    // This counts endpoint resolution only. An edge that resolves here may
+    // already be in the database, and was then claimed above rather than
+    // written, so the resolved figure is an upper bound on what this pass
+    // writes.
     //
     // The cross-chunk fields are not a loss report. Resolution is scoped to a
     // unit (one data item, or a block of `chunks_per_batch` chunks of it), so
@@ -14685,6 +14687,364 @@ mod tests {
         assert_eq!(dlt_cell_text(&json!(false)).as_deref(), Some("False"));
         assert_eq!(dlt_cell_text(&json!(12)).as_deref(), Some("12"));
         assert_eq!(dlt_cell_text(&json!("")), None);
+    }
+
+    // ----- The existing-edge check on resolved ids (SDK-1694 O2) -----
+
+    /// An ontology that canonicalises the individual "Rostov" to
+    /// `nikolai_rostov`, and knows nothing else.
+    struct CanonicalRostov;
+
+    impl cognee_ontology::OntologyResolver for CanonicalRostov {
+        fn find_closest_match(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            if (node_name, node_type) != ("Rostov", "individuals") {
+                return Ok((vec![], vec![], None));
+            }
+            let root = cognee_ontology::AttachedOntologyNode {
+                uri: "http://test.org#nikolai_rostov".to_string(),
+                name: "nikolai_rostov".to_string(),
+                category: cognee_ontology::NodeCategory::Individuals,
+            };
+            Ok((vec![], vec![], Some(root)))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Run the extraction stage twice against one graph database: first a
+    /// document whose chunk the LLM answers with `first`, then another whose
+    /// chunk it answers with `second`. Returns the second run's result, the
+    /// ledger rows labelled `label` and the two document ids.
+    async fn extract_twice(
+        first: serde_json::Value,
+        second: serde_json::Value,
+        resolver: Arc<dyn OntologyResolver>,
+        label: &str,
+    ) -> (
+        ExtractedGraphData,
+        Vec<cognee_database::GraphEdge>,
+        [Uuid; 2],
+    ) {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_test_utils::MockLlm;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let documents = [Uuid::new_v4(), Uuid::new_v4()];
+        let mut second_result = None;
+        for (document, answer) in documents.iter().zip([first, second]) {
+            let input = ExtractedChunks {
+                chunks: vec![test_chunk(Uuid::new_v4(), *document, "Some text.")],
+                documents: vec![test_document_with_metadata(*document, None)],
+                dataset_id,
+                user_id: Some(Uuid::new_v4()),
+                tenant_id: None,
+                failures: FailureReport::default(),
+            };
+            second_result = Some(
+                extract_graph_from_data(
+                    &input,
+                    Arc::new(MockLlm::new(vec![answer.to_string()])),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&resolver),
+                    &db,
+                    Some(Uuid::new_v4()),
+                    &CognifyConfig::default(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let rows = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.relationship_name == label)
+            .collect();
+        (second_result.unwrap(), rows, documents)
+    }
+
+    /// The second run wrote no edge, and both documents own
+    /// the one edge the first run wrote: the second through its claim.
+    fn assert_claimed_not_written(
+        second: &ExtractedGraphData,
+        rows: &[cognee_database::GraphEdge],
+        documents: [Uuid; 2],
+        label: &str,
+        expected: (Uuid, Uuid),
+    ) {
+        assert!(
+            second.edges.is_empty(),
+            "the second run writes the existing {label} edge again: {:?}",
+            second.edges
+        );
+        let owners: BTreeSet<Uuid> = rows.iter().map(|row| row.data_id).collect();
+        assert_eq!(owners, BTreeSet::from(documents), "one claim per document");
+        assert!(
+            rows.iter()
+                .all(|row| { (row.source_node_id, row.destination_node_id) == expected })
+        );
+    }
+
+    fn rostov_lives_in_moscow(id: &str, name: &str, label: &str) -> serde_json::Value {
+        json!({
+            "nodes": [
+                {"id": id, "name": name, "type": "Person", "description": ""},
+                {"id": "moscow", "name": "Moscow", "type": "City", "description": ""}
+            ],
+            "edges": [{"source_node_id": id, "target_node_id": "moscow", "relationship_name": label}]
+        })
+    }
+
+    /// Ticket test 12: node id `Rostov`, name "Nicholas Rostov". The entity's
+    /// id comes from the name, so a check keyed on the node id missed the
+    /// edge and the second run wrote it again.
+    #[tokio::test]
+    async fn the_existing_edge_check_uses_the_name_based_entity_id() {
+        let graph = rostov_lives_in_moscow("Rostov", "Nicholas Rostov", "lives_in");
+        let (second, rows, documents) = extract_twice(
+            graph.clone(),
+            graph,
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "lives_in",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "lives_in",
+            (Entity::id_for("Nicholas Rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// Ticket test 12, an ontology-canonicalised entity: the edge is stored on
+    /// the canonical id, which no node id names.
+    #[tokio::test]
+    async fn the_existing_edge_check_uses_the_ontology_canonical_id() {
+        let graph = rostov_lives_in_moscow("rostov", "Rostov", "lives_in");
+        let (second, rows, documents) =
+            extract_twice(graph.clone(), graph, Arc::new(CanonicalRostov), "lives_in").await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "lives_in",
+            (Entity::id_for("nikolai_rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// Ticket test 12, a timestamp edge, drawn from the timestamp so it is
+    /// also reversed: the edge is stored on the Timestamp's id.
+    #[tokio::test]
+    async fn the_existing_edge_check_finds_a_timestamp_edge() {
+        let graph = json!({
+            "nodes": [
+                {"id": "marie", "name": "Marie Curie", "type": "Person", "description": ""},
+                {"id": "birth", "name": "1867", "type": "Timestamp", "description": ""}
+            ],
+            "edges": [{"source_node_id": "birth", "target_node_id": "marie", "relationship_name": "birth_year_of"}]
+        });
+        let (second, rows, documents) = extract_twice(
+            graph.clone(),
+            graph,
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "birth_year_of",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "birth_year_of",
+            (
+                Entity::id_for("Marie Curie"),
+                cognee_models::Timestamp::id_for("1867"),
+            ),
+        );
+    }
+
+    /// Ticket test 6, the database half: a run that says `Born In` finds the
+    /// `born_in` edge an earlier run wrote.
+    #[tokio::test]
+    async fn the_existing_edge_check_finds_an_edge_under_its_normalised_label() {
+        let (second, rows, documents) = extract_twice(
+            rostov_lives_in_moscow("rostov", "Rostov", "born_in"),
+            rostov_lives_in_moscow("rostov", "Rostov", "Born In"),
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "born_in",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "born_in",
+            (Entity::id_for("Rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// An ontology whose class `Person` is an `Agent`: matching the type
+    /// brings the edge `person -is_a-> agent` along.
+    struct PersonIsAnAgent;
+
+    impl cognee_ontology::OntologyResolver for PersonIsAnAgent {
+        fn find_closest_match(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            if (node_name, node_type) != ("Person", "classes") {
+                return Ok((vec![], vec![], None));
+            }
+            let class = |name: &str| cognee_ontology::AttachedOntologyNode {
+                uri: format!("http://test.org#{name}"),
+                name: name.to_string(),
+                category: cognee_ontology::NodeCategory::Classes,
+            };
+            Ok((
+                vec![class("agent")],
+                vec![(
+                    "person".to_string(),
+                    "is_a".to_string(),
+                    "agent".to_string(),
+                )],
+                Some(class("person")),
+            ))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// An ontology edge the graph already holds is not written again (on
+    /// `main` its existence check never matched, so every run rewrote it and
+    /// added a ledger row), and the second run records nothing for it, as on
+    /// Python's ledger path.
+    #[tokio::test]
+    async fn an_existing_ontology_edge_is_not_written_again() {
+        let graph = json!({
+            "nodes": [{"id": "ada", "name": "Ada Lovelace", "type": "Person", "description": ""}],
+            "edges": []
+        });
+        let (second, rows, _documents) =
+            extract_twice(graph.clone(), graph, Arc::new(PersonIsAnAgent), "is_a").await;
+
+        assert!(second.edges.is_empty(), "rewritten: {:?}", second.edges);
+        assert_eq!(rows.len(), 1, "only the first run's row: {rows:?}");
+        assert_eq!(
+            (rows[0].source_node_id, rows[0].destination_node_id),
+            (EntityType::id_for("person"), EntityType::id_for("agent"))
+        );
+    }
+
+    /// Extracted labels `Is A` and `Contains` normalise to the structural
+    /// names, as in Python. Between two entities they are still extracted
+    /// edges: owned by their document, and a `contains` row keyed on its
+    /// edge text, as Python's `upsert_edges` keys every `contains` edge.
+    #[tokio::test]
+    async fn extracted_is_a_and_contains_edges_are_ordinary_extracted_edges() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_test_utils::MockLlm;
+
+        let graph = json!({
+            "nodes": [
+                {"id": "apple", "name": "Apple", "type": "Company", "description": ""},
+                {"id": "beats", "name": "Beats", "type": "Company", "description": ""}
+            ],
+            "edges": [
+                {"source_node_id": "beats", "target_node_id": "apple", "relationship_name": "Is A",
+                 "description": "Beats is an Apple subsidiary."},
+                {"source_node_id": "apple", "target_node_id": "beats", "relationship_name": "Contains"}
+            ]
+        });
+        let dataset_id = Uuid::new_v4();
+        let document = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), document, "Apple owns Beats.")],
+            documents: vec![test_document_with_metadata(document, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let result = extract_graph_from_data(
+            &input,
+            Arc::new(MockLlm::new(vec![graph.to_string()])),
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (apple, beats) = (Entity::id_for("Apple"), Entity::id_for("Beats"));
+        let edge = |label: &str| {
+            result
+                .edges
+                .iter()
+                .find(|edge| edge.relationship_name == label)
+                .unwrap_or_else(|| panic!("no {label} edge in {:?}", result.edges))
+        };
+        let is_a = edge("is_a");
+        assert_eq!(
+            (is_a.source_entity_id, is_a.target_entity_id),
+            (beats, apple)
+        );
+        let contains = edge("contains");
+        assert_eq!(
+            (contains.source_entity_id, contains.target_entity_id),
+            (apple, beats)
+        );
+        let contains_text = contains.properties.get("edge_text").unwrap();
+        assert!(!contains_text.is_empty(), "stamped before the ledger write");
+
+        let rows = get_edges_by_dataset(&db, dataset_id).await.unwrap();
+        let row = |source: Uuid, target: Uuid| {
+            rows.iter()
+                .find(|row| (row.source_node_id, row.destination_node_id) == (source, target))
+                .unwrap_or_else(|| panic!("no row {source} -> {target} in {rows:?}"))
+        };
+        let is_a_row = row(beats, apple);
+        assert_eq!(is_a_row.relationship_name, "is_a");
+        assert_eq!(is_a_row.data_id, document);
+        let contains_row = row(apple, beats);
+        assert_eq!(&contains_row.relationship_name, contains_text);
+        assert_eq!(contains_row.label.as_deref(), Some("contains"));
+        assert_eq!(contains_row.data_id, document);
     }
 }
 

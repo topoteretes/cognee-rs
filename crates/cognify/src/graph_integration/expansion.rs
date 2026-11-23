@@ -238,25 +238,39 @@ fn refresh_name_alias_origin(
     }
 }
 
-/// Resolve one edge endpoint, preferring an exact node-id match and falling
-/// back to the node-name alias only when the id map misses — and only when
-/// `by_name_too` is set: Python matches by node id alone.
+/// The id-registry key of a node id, or of an edge endpoint naming one.
+///
+/// Under [`EndpointScope::Unit`] it is normalised (case and spacing), so an
+/// edge that spells an id differently still resolves. Under
+/// [`EndpointScope::Chunk`] it is the id verbatim, as Python's
+/// `_add_extracted_edges` looks endpoints up: `A` and `a` are two nodes, and
+/// an endpoint `Steve Jobs` does not reach the id `steve_jobs`.
+fn registry_key(node_id: &str, scope: EndpointScope) -> String {
+    match scope {
+        EndpointScope::Unit => normalize_identifier(node_id),
+        EndpointScope::Chunk => node_id.to_string(),
+    }
+}
+
+/// Resolve one edge endpoint, preferring a node-id match and falling back to
+/// the node-name alias only when the id map misses — and only under
+/// [`EndpointScope::Unit`]: Python matches by node id alone.
 fn resolve_endpoint(
     by_id: &HashMap<String, (Uuid, ChunkPosition)>,
     by_name: &HashMap<String, Option<(Uuid, ChunkPosition)>>,
     raw: &str,
-    by_name_too: bool,
+    scope: EndpointScope,
 ) -> EndpointResolution {
-    let key = normalize_identifier(raw);
-    if let Some((entity, origin)) = by_id.get(&key) {
+    if let Some((entity, origin)) = by_id.get(&registry_key(raw, scope)) {
         return EndpointResolution::ById {
             entity: *entity,
             origin: *origin,
         };
     }
-    if !by_name_too {
+    if scope == EndpointScope::Chunk {
         return EndpointResolution::Missing;
     }
+    let key = normalize_identifier(raw);
     match by_name.get(&key) {
         Some(Some((entity, origin))) => EndpointResolution::ByName {
             entity: *entity,
@@ -354,7 +368,10 @@ pub(crate) fn pre_stamp_extraction(
 ///   type node, entity node, and ontology nodes in
 ///   `expand_with_nodes_and_edges.py:66,79,163,229`. Chunks absent from the map
 ///   default to `0.5` (Python's `DataPoint.importance_weight` default).
-/// * `existing_edges_set` - Set of edges that already exist in the database
+/// * `existing_edges` - The (source, target, label) keys, on the resolved
+///   entity ids, of the edges already in the graph database: what
+///   [`crate::graph_integration::retrieve_existing_edges`] returns for this
+///   expansion's edges. See [`Expansion::split_existing_edges`].
 /// * `ontology_resolver` - Ontology resolver for entity validation and enrichment.
 ///   When loaded, validates entity types against "classes" and entities against
 ///   "individuals". A [`NoOpOntologyResolver`] leaves everything unvalidated.
@@ -372,7 +389,7 @@ pub(crate) fn pre_stamp_extraction(
 /// only the first, and one ownership row per producing file needs all of them.
 ///
 /// `claimed_existing_edges` holds the edges this run produced that
-/// `existing_edges_set` says are already in the graph. They must NOT be written
+/// `existing_edges` says are already in the graph. They must NOT be written
 /// to the graph again — that is what the filter is for — but they do need
 /// ownership rows, because otherwise the only claim on such an edge belongs to
 /// the run that first created it, and deleting *that* run's data item finds the
@@ -391,7 +408,7 @@ pub async fn expand_with_nodes_and_edges(
     dataset_id: Uuid,
     chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &HashMap<Uuid, f64>,
-    existing_edges_set: &HashSet<String>,
+    existing_edges: &HashSet<(Uuid, Uuid, String)>,
     ontology_resolver: &dyn OntologyResolver,
     user_label: Option<&str>,
     task_rank: Option<i32>,
@@ -407,7 +424,7 @@ pub async fn expand_with_nodes_and_edges(
             dataset_id,
             chunk_node_sets,
             chunk_importance_weights,
-            existing_edges_set,
+            existing_edges,
             ontology_resolver,
             user_label,
             task_rank,
@@ -441,7 +458,7 @@ pub async fn expand_with_nodes_and_edges_with_stats(
     dataset_id: Uuid,
     chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &HashMap<Uuid, f64>,
-    existing_edges_set: &HashSet<String>,
+    existing_edges: &HashSet<(Uuid, Uuid, String)>,
     ontology_resolver: &dyn OntologyResolver,
     user_label: Option<&str>,
     task_rank: Option<i32>,
@@ -457,7 +474,7 @@ pub async fn expand_with_nodes_and_edges_with_stats(
         dataset_id,
         chunk_node_sets,
         chunk_importance_weights,
-        existing_edges_set,
+        existing_edges,
         ontology_resolver,
         user_label,
         task_rank,
@@ -491,7 +508,13 @@ pub async fn expand_with_nodes_and_edges_with_stats(
 #[non_exhaustive]
 pub struct Expansion {
     pub nodes: Vec<GraphNodePair>,
+    /// The edges to write. Straight out of [`expand_extracted_graphs_by_unit`]
+    /// this is every edge the units built, extracted and ontology alike;
+    /// [`Self::split_existing_edges`] then moves out the ones the graph
+    /// already holds.
     pub edges: Vec<GraphEdgePair>,
+    /// Edges this run produced that the graph already holds: ownership rows
+    /// only, no graph write. Filled by [`Self::split_existing_edges`].
     pub claimed_existing_edges: Vec<GraphEdgePair>,
     /// Every chunk that produced each entity, Timestamp and edge.
     pub producers: ArtifactProducers,
@@ -502,6 +525,65 @@ pub struct Expansion {
     /// `*_at` edges pointing at them anchor facts to real times. A
     /// "Timestamp" whose name does not parse stays an ordinary entity.
     pub timestamps: Vec<TimestampNode>,
+}
+
+impl Expansion {
+    /// Move the edges the graph already holds out of [`Self::edges`].
+    ///
+    /// `existing` is the set of (source, target, label) keys, on the resolved
+    /// ids, that the graph database already has: what
+    /// [`crate::graph_integration::retrieve_existing_edges`] returns for
+    /// [`Self::edges`]. This is the second half of Python's existing-edge
+    /// check (`find_existing_edge_identities`, then
+    /// `attach_new_edges_to_data_points`, which leaves every existing edge
+    /// out of the write).
+    ///
+    /// An existing edge some chunk produced moves to
+    /// [`Self::claimed_existing_edges`]: it is not written again, but this
+    /// run gets an ownership row for it (see [`expand_with_nodes_and_edges`]).
+    /// That is a deliberate superset of Python on a ledger graph, which
+    /// records nothing for any existing edge: its chunk ownership
+    /// (`_produced_edge_identities`, read by `collect_chunk_ownership`) is
+    /// only used when the graph stores its provenance in the graph
+    /// (`add_data_points.py:255-258`). Without the claim, deleting the data
+    /// item that first wrote the edge would take it from under every later
+    /// one that also produced it.
+    ///
+    /// An existing edge no chunk produced, which is an ontology edge, is
+    /// dropped, as on Python's ledger path. Python's in-graph provenance
+    /// attaches a document-scoped source ref to it instead, and Rust has no
+    /// in-graph provenance. The edge keeps the ledger row its first write
+    /// recorded, which usually has a nil `data_id` (no chunk produced it) and
+    /// which a delete retires through its endpoints
+    /// (`structural_edges_owned_by`). Per-document rows for ontology and
+    /// structural edges are a later stage (SDK-1694 O5a).
+    ///
+    /// Run once the units are merged: the check needs the final ids, and the
+    /// writer may run it per document.
+    pub fn split_existing_edges(&mut self, existing: &HashSet<(Uuid, Uuid, String)>) {
+        if existing.is_empty() {
+            return;
+        }
+        let mut claimed_keys: HashSet<(Uuid, Uuid, String)> = self
+            .claimed_existing_edges
+            .iter()
+            .map(GraphEdgePair::dedup_key)
+            .collect();
+        let edges = std::mem::take(&mut self.edges);
+        for edge in edges {
+            let key = edge.dedup_key();
+            if !existing.contains(&key) {
+                self.edges.push(edge);
+            } else if !self.producers.edge_chunks(&key).is_empty() {
+                // One claim per key: an extracted edge and an ontology edge
+                // can share one, and both are on the list until the in-memory
+                // deduplication.
+                if claimed_keys.insert(key) {
+                    self.claimed_existing_edges.push(edge);
+                }
+            }
+        }
+    }
 }
 
 /// The extracted graph with only the first node for each graph-local id.
@@ -593,10 +675,10 @@ pub enum EndpointScope {
     /// default; it keeps edges Python drops.
     #[default]
     Unit,
-    /// Only the edge's own chunk, and only by node id, as Python's
-    /// `_add_extracted_edges` resolves them (`expand_with_nodes_and_edges.py`):
-    /// the node-name fallback is off too. Rust still compares node ids
-    /// normalised (case and spacing), where Python compares them verbatim.
+    /// Only the edge's own chunk, and only by the verbatim node id, as
+    /// Python's `_add_extracted_edges` resolves them
+    /// (`expand_with_nodes_and_edges.py`): the node-name fallback is off too,
+    /// and ids that differ only in case or spacing are different nodes.
     Chunk,
 }
 
@@ -610,7 +692,7 @@ pub async fn expand_extracted_graphs(
     dataset_id: Uuid,
     chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &HashMap<Uuid, f64>,
-    existing_edges_set: &HashSet<String>,
+    existing_edges: &HashSet<(Uuid, Uuid, String)>,
     ontology_resolver: &dyn OntologyResolver,
     user_label: Option<&str>,
     task_rank: Option<i32>,
@@ -620,14 +702,14 @@ pub async fn expand_extracted_graphs(
         dataset_id,
         chunk_node_sets,
         chunk_importance_weights,
-        existing_edges_set,
         ontology: &ontology,
         user_label,
         task_rank,
         endpoint_scope: EndpointScope::Unit,
     };
-    let (expansion, unresolved_sample) = expand_unit(graphs, &inputs);
+    let (mut expansion, unresolved_sample) = expand_unit(graphs, &inputs);
     log_resolution_summary(&expansion.stats, &unresolved_sample);
+    expansion.split_existing_edges(existing_edges);
     expansion
 }
 
@@ -653,6 +735,12 @@ pub async fn expand_extracted_graphs(
 /// `endpoint_scope` says which chunks of a unit an edge endpoint may match;
 /// endpoints never match across units.
 ///
+/// The result's `edges` are every edge built, whether or not the graph
+/// already holds it, and `claimed_existing_edges` is empty: look the edges up
+/// with [`crate::graph_integration::retrieve_existing_edges`] and split them
+/// with [`Expansion::split_existing_edges`], as Python checks the final
+/// edges (`find_existing_edge_identities`).
+///
 /// # Errors
 ///
 /// [`CoreError::TaskAborted`] when a unit's expansion panicked, or the pool
@@ -663,21 +751,18 @@ pub async fn expand_extracted_graphs_by_unit(
     dataset_id: Uuid,
     chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &HashMap<Uuid, f64>,
-    existing_edges_set: &HashSet<String>,
     ontology_resolver: Arc<dyn OntologyResolver>,
     user_label: Option<&str>,
     task_rank: Option<i32>,
     endpoint_scope: EndpointScope,
     cpu_pool: Option<Arc<dyn CpuPool>>,
 ) -> Result<Expansion, CoreError> {
-    // The workers need owned inputs. These are per-chunk lookups and the
-    // edges already in the graph, small next to the extracted graphs, which
-    // are moved rather than copied.
+    // The workers need owned inputs. These are per-chunk lookups, small next
+    // to the extracted graphs, which are moved rather than copied.
     let shared = Arc::new(SharedUnitInputs {
         dataset_id,
         chunk_node_sets: chunk_node_sets.clone(),
         chunk_importance_weights: chunk_importance_weights.clone(),
-        existing_edges_set: existing_edges_set.clone(),
         ontology: OntologyLookups::shared(ontology_resolver),
         user_label: user_label.map(str::to_owned),
         task_rank,
@@ -737,7 +822,6 @@ struct UnitInputs<'a> {
     dataset_id: Uuid,
     chunk_node_sets: &'a HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &'a HashMap<Uuid, f64>,
-    existing_edges_set: &'a HashSet<String>,
     ontology: &'a OntologyLookups<'a>,
     user_label: Option<&'a str>,
     task_rank: Option<i32>,
@@ -749,7 +833,6 @@ struct SharedUnitInputs {
     dataset_id: Uuid,
     chunk_node_sets: HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: HashMap<Uuid, f64>,
-    existing_edges_set: HashSet<String>,
     ontology: OntologyLookups<'static>,
     user_label: Option<String>,
     task_rank: Option<i32>,
@@ -762,7 +845,6 @@ impl SharedUnitInputs {
             dataset_id: self.dataset_id,
             chunk_node_sets: &self.chunk_node_sets,
             chunk_importance_weights: &self.chunk_importance_weights,
-            existing_edges_set: &self.existing_edges_set,
             ontology: &self.ontology,
             user_label: self.user_label.as_deref(),
             task_rank: self.task_rank,
@@ -1043,16 +1125,11 @@ fn expand_unit(
         dataset_id,
         chunk_node_sets,
         chunk_importance_weights,
-        existing_edges_set,
         ontology,
         user_label,
         task_rank,
         endpoint_scope,
     } = *inputs;
-    // Python matches an endpoint by node id alone; the name fallback is a
-    // Rust addition, off under `EndpointScope::Chunk`.
-    let name_fallback = endpoint_scope == EndpointScope::Unit;
-
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -1067,13 +1144,6 @@ fn expand_unit(
     let mut node_map: IndexMap<String, GraphNodePair> = IndexMap::new();
     let mut edge_map: IndexMap<(Uuid, Uuid, String), GraphEdgePair> = IndexMap::new();
     let mut type_map = HashMap::new();
-
-    // Edges this run produced that the database dedup filter kept out of
-    // `edge_map` because an earlier run already wrote them to the graph. They
-    // are returned separately so the caller can claim ownership of them
-    // without writing them to the graph a second time.
-    let mut claimed_existing_edge_map: IndexMap<(Uuid, Uuid, String), GraphEdgePair> =
-        IndexMap::new();
 
     // Every chunk that produced each merged artifact, not only the one that
     // created it (see the `# Returns` note above).
@@ -1166,7 +1236,7 @@ fn expand_unit(
                     // Register the node id (and its names) for edge resolution
                     // the way an entity's first declaration does, or move the
                     // origin forward on a re-declaration.
-                    let id_key = normalize_identifier(&node.id);
+                    let id_key = registry_key(&node.id, endpoint_scope);
                     match node_id_to_entity_id.get_mut(&id_key) {
                         Some((entity, origin)) if *entity == timestamp_id => {
                             *origin = position;
@@ -1293,7 +1363,6 @@ fn expand_unit(
                                 process_ontology_edges(
                                     &edge_category_nodes,
                                     onto_edges,
-                                    existing_edges_set,
                                     &mut ontology_edge_keys,
                                     &mut ontology_edges_out,
                                 );
@@ -1411,7 +1480,7 @@ fn expand_unit(
                 // way Python's `Entity.id_for` hashing is normalization-insensitive
                 // (expand_with_nodes_and_edges.py:300-304).
                 let entity_id = entity_pair.entity.base.id;
-                let id_key = normalize_identifier(&node.id);
+                let id_key = registry_key(&node.id, endpoint_scope);
 
                 // Alias the name the LLM gave this node, and — when the ontology
                 // canonicalised it — the canonical name too, so an edge that
@@ -1461,7 +1530,6 @@ fn expand_unit(
                 process_ontology_edges(
                     ont_nodes,
                     ont_edges,
-                    existing_edges_set,
                     &mut ontology_edge_keys,
                     &mut ontology_edges_out,
                 );
@@ -1494,7 +1562,7 @@ fn expand_unit(
                 .get(&entity_key)
                 .map(|pair| pair.entity.base.id)
                 .expect("node_map holds this node's entity after the vacant check");
-            let id_key = normalize_identifier(&node.id);
+            let id_key = registry_key(&node.id, endpoint_scope);
             match node_id_to_entity_id.get_mut(&id_key) {
                 Some((entity, origin)) if *entity == entity_id => *origin = position,
                 _ => {
@@ -1531,7 +1599,8 @@ fn expand_unit(
             producers.record_entity(entity_id, chunk_id);
         }
 
-        // Step 3: Create Edges (skip if already in database)
+        // Step 3: Create Edges. Whether the graph already holds one is decided
+        // after the merge (`Expansion::split_existing_edges`).
         for edge in graph.edges {
             // Look up entity IDs from node IDs; skip edges the LLM produced with
             // node IDs that don't match any extracted node (common with local models).
@@ -1541,7 +1610,7 @@ fn expand_unit(
                 &node_id_to_entity_id,
                 &name_to_entity_id,
                 &edge.source_node_id,
-                name_fallback,
+                endpoint_scope,
             ) {
                 EndpointResolution::ById { entity, origin } => {
                     stats.record_resolved_by_id(origin, position);
@@ -1576,7 +1645,7 @@ fn expand_unit(
                 &node_id_to_entity_id,
                 &name_to_entity_id,
                 &edge.target_node_id,
-                name_fallback,
+                endpoint_scope,
             ) {
                 EndpointResolution::ById { entity, origin } => {
                     stats.record_resolved_by_id(origin, position);
@@ -1636,43 +1705,23 @@ fn expand_unit(
                 _ => (source_entity_id, target_entity_id),
             };
 
-            // Whether the edge is already in the graph database. It is still
-            // built and its producer still recorded below — the flag only
-            // decides which bucket it lands in.
-            let edge_db_key = format!(
-                "{}_{}_{}",
-                source_entity_id, target_entity_id, edge.relationship_name
-            );
-            let already_in_graph = existing_edges_set.contains(&edge_db_key);
-
-            let edge_key = (
-                source_entity_id,
-                target_entity_id,
-                edge.relationship_name.clone(),
-            );
+            // The stored label is normalised as Python's `_add_extracted_edges`
+            // does (`generate_edge_name`: lowercase, spaces to underscores,
+            // apostrophes dropped) before the edge key is built, so `Born In`
+            // and `born_in` are one edge. The reversal above keeps the label,
+            // so the order of the two does not matter.
+            let relationship_name = generate_edge_name(&edge.relationship_name);
+            let edge_key = (source_entity_id, target_entity_id, relationship_name);
 
             // Same reasoning as for entities: every chunk that yielded this
             // edge is a producer, not only the one that created it — and that
             // includes a chunk whose edge an earlier run already put in the
             // graph. Such an edge is not written again, but this run produced
             // it and must own it (see `claimed_existing_edges`), so it is
-            // recorded here rather than dropped.
+            // recorded whether or not the graph holds it.
             producers.record_edge(edge_key.clone(), chunk_id);
 
-            // An edge an earlier run already created is routed into the
-            // claim-only bucket instead of the write bucket: same pair, same
-            // ownership row, no second graph write. Skipping it outright left
-            // the earlier run's data item as its *only* claimant, so deleting
-            // that item found the edge exclusively owned and deleted it from
-            // the graph and the vectors — out from under this file, which
-            // still references it.
-            let edge_bucket = if already_in_graph {
-                &mut claimed_existing_edge_map
-            } else {
-                &mut edge_map
-            };
-
-            if let indexmap::map::Entry::Vacant(e) = edge_bucket.entry(edge_key) {
+            if let indexmap::map::Entry::Vacant(e) = edge_map.entry(edge_key) {
                 // Mirror Python's `_process_graph_edges` edge property map
                 // (expand_with_nodes_and_edges.py:296-309): persist
                 // relationship_name / source_node_id / target_node_id /
@@ -1688,12 +1737,10 @@ fn expand_unit(
                     .unwrap_or("")
                     .to_string();
 
-                let mut edge_pair = GraphEdgePair::new(
-                    source_entity_id,
-                    target_entity_id,
-                    edge.relationship_name.clone(),
-                );
-                edge_pair.add_property("relationship_name", edge.relationship_name);
+                let relationship_name = e.key().2.clone();
+                let mut edge_pair =
+                    GraphEdgePair::new(source_entity_id, target_entity_id, &relationship_name);
+                edge_pair.add_property("relationship_name", relationship_name);
                 edge_pair.add_property("source_node_id", source_entity_id.to_string());
                 edge_pair.add_property("target_node_id", target_entity_id.to_string());
                 edge_pair.add_property("ontology_valid", "false");
@@ -1735,9 +1782,6 @@ fn expand_unit(
     let mut graph_edges: Vec<GraphEdgePair> = edge_map.into_values().collect();
     graph_edges.extend(ontology_edges_out);
 
-    let claimed_existing_edges: Vec<GraphEdgePair> =
-        claimed_existing_edge_map.into_values().collect();
-
     // Ontology-derived nodes and edges appended above have no producing chunk
     // and therefore no producer entry; callers fall back to today's behavior
     // for them.
@@ -1750,7 +1794,7 @@ fn expand_unit(
         Expansion {
             nodes: graph_nodes,
             edges: graph_edges,
-            claimed_existing_edges,
+            claimed_existing_edges: Vec::new(),
             producers,
             stats,
             timestamps,
@@ -1990,12 +2034,13 @@ fn process_ontology_nodes(
 /// Convert ontology edge tuples into [`GraphEdgePair`] objects.
 ///
 /// Each `(source, relation, target)` tuple is mapped to a [`GraphEdgePair`] with
-/// deterministic UUID5 source/target IDs and normalized relationship names. Edges
-/// that already exist (in `existing_edge_keys` or `ontology_edge_keys`) are skipped.
+/// deterministic UUID5 source/target IDs and normalized relationship names. An
+/// edge already emitted for this unit (in `ontology_edge_keys`) is skipped;
+/// whether the graph already holds one is decided after the merge
+/// ([`Expansion::split_existing_edges`]).
 fn process_ontology_edges(
     ontology_nodes: &[AttachedOntologyNode],
     ontology_edges: &[OntologyEdge],
-    existing_edge_keys: &HashSet<String>,
     ontology_edge_keys: &mut HashSet<String>,
     ontology_edges_out: &mut Vec<GraphEdgePair>,
 ) {
@@ -2036,7 +2081,7 @@ fn process_ontology_edges(
         let rel_name = generate_edge_name(relation);
         let edge_key = format!("{source_id}_{target_id}_{rel_name}");
 
-        if existing_edge_keys.contains(&edge_key) || ontology_edge_keys.contains(&edge_key) {
+        if ontology_edge_keys.contains(&edge_key) {
             continue;
         }
 
@@ -2548,7 +2593,7 @@ mod tests {
 
         let alice_id = Entity::id_for("Alice");
         let techcorp_id = Entity::id_for("TechCorp");
-        let existing = HashSet::from([format!("{alice_id}_{techcorp_id}_works_at")]);
+        let existing = HashSet::from([(alice_id, techcorp_id, "works_at".to_string())]);
 
         let (_nodes, edges, claimed_edges, producers) = expand_with_nodes_and_edges(
             vec![(chunk_id, create_test_graph())],
@@ -2706,7 +2751,6 @@ mod tests {
             Uuid::new_v4(),
             chunk_node_sets,
             &HashMap::new(),
-            &HashSet::new(),
             resolver,
             None,
             None,
@@ -4922,7 +4966,6 @@ mod tests {
             ),
         ];
 
-        let existing_edge_keys = HashSet::new();
         let mut ontology_edge_keys = HashSet::new();
         let mut ontology_edges_out = Vec::new();
 
@@ -4931,7 +4974,6 @@ mod tests {
         process_ontology_edges(
             &[],
             &edges,
-            &existing_edge_keys,
             &mut ontology_edge_keys,
             &mut ontology_edges_out,
         );
@@ -4967,38 +5009,27 @@ mod tests {
         assert_eq!(edge1.relationship_name, "has_part");
     }
 
+    /// A unit emits an ontology edge once, however many lookups bring it.
     #[test]
-    fn test_process_ontology_edges_skips_existing() {
-        let car_id = Entity::id_for("Car");
-        let vehicle_id = Entity::id_for("Vehicle");
-        let existing_key = format!("{}_{}_{}", car_id, vehicle_id, "is_a");
-
-        let mut existing_edge_keys = HashSet::new();
-        existing_edge_keys.insert(existing_key);
-
+    fn test_process_ontology_edges_skips_repeats() {
         let edges: Vec<OntologyEdge> = vec![
             ("Car".to_string(), "is a".to_string(), "Vehicle".to_string()),
-            (
-                "Vehicle".to_string(),
-                "has part".to_string(),
-                "Engine".to_string(),
-            ),
+            ("Car".to_string(), "Is A".to_string(), "Vehicle".to_string()),
         ];
-
         let mut ontology_edge_keys = HashSet::new();
         let mut ontology_edges_out = Vec::new();
 
-        process_ontology_edges(
-            &[],
-            &edges,
-            &existing_edge_keys,
-            &mut ontology_edge_keys,
-            &mut ontology_edges_out,
-        );
+        for _ in 0..2 {
+            process_ontology_edges(
+                &[],
+                &edges,
+                &mut ontology_edge_keys,
+                &mut ontology_edges_out,
+            );
+        }
 
-        // Only the second edge should be present; the first is in existing_edge_keys
         assert_eq!(ontology_edges_out.len(), 1);
-        assert_eq!(ontology_edges_out[0].relationship_name, "has_part");
+        assert_eq!(ontology_edges_out[0].relationship_name, "is_a");
     }
 
     // -----------------------------------------------------------------------
@@ -5384,5 +5415,227 @@ mod tests {
                 pair.entity.name
             );
         }
+    }
+
+    // ----- Relationship labels and the existing-edge check (SDK-1694 O2) -----
+
+    /// Ticket test 6: labels are normalised as Python's `generate_edge_name`
+    /// before the edge key is built, so `Born In`, `born_in` and `BORN IN`
+    /// are one `born_in` edge.
+    #[tokio::test]
+    async fn relationship_labels_are_normalised_before_the_edge_key() {
+        let chunk = KnowledgeGraph {
+            nodes: vec![
+                node("ada", "Ada Lovelace", "Person", ""),
+                node("london", "London", "City", ""),
+            ],
+            edges: vec![
+                edge("ada", "london", "Born In"),
+                edge("ada", "london", "born_in"),
+                edge("ada", "london", "BORN IN"),
+                edge("ada", "london", "Ada's Home"),
+            ],
+        };
+        let chunk_id = Uuid::new_v4();
+        let out = expand(vec![(chunk_id, chunk)]).await;
+
+        let labels: Vec<&str> = out
+            .edges
+            .iter()
+            .map(|edge| edge.relationship_name.as_str())
+            .collect();
+        assert_eq!(labels, ["born_in", "adas_home"]);
+        assert_eq!(
+            out.edges[0].properties.get("relationship_name").unwrap(),
+            "born_in"
+        );
+        // The producer is keyed on the normalised label too, so the claim
+        // and the edge evidence find it.
+        assert_eq!(
+            out.producers.edge_chunks(&out.edges[0].dedup_key()),
+            [chunk_id]
+        );
+    }
+
+    /// An edge drawn from a timestamp is reversed and keeps its label, which
+    /// is normalised too: the order of the two steps does not matter.
+    #[tokio::test]
+    async fn a_reversed_timestamp_edge_gets_the_normalised_label() {
+        let chunk = KnowledgeGraph {
+            nodes: vec![
+                node("marie", "Marie Curie", "Person", ""),
+                node("birth", "1867", "Timestamp", ""),
+            ],
+            edges: vec![edge("birth", "marie", "Birth Year Of")],
+        };
+        let out = expand(vec![(Uuid::new_v4(), chunk)]).await;
+
+        assert_eq!(
+            out.edges
+                .iter()
+                .map(GraphEdgePair::dedup_key)
+                .collect::<Vec<_>>(),
+            [(
+                Entity::id_for("Marie Curie"),
+                Timestamp::id_for("1867"),
+                "birth_year_of".to_string()
+            )]
+        );
+    }
+
+    /// Under `EndpointScope::Chunk` the id registry is keyed on the verbatim
+    /// node id, as Python's: `A` and `a` are two nodes, so `A -> a` is
+    /// Alpha -> Beta, not a self-edge on whichever was declared last.
+    #[tokio::test]
+    async fn chunk_scope_tells_node_ids_apart_by_case() {
+        let unit = vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![
+                    node("A", "Alpha", "Letter", ""),
+                    node("a", "Beta", "Letter", ""),
+                ],
+                vec![edge("A", "a", "precedes")],
+            ),
+        )];
+
+        let out = expand_units(vec![unit], EndpointScope::Chunk).await;
+
+        assert_eq!(
+            out.edges
+                .iter()
+                .map(GraphEdgePair::dedup_key)
+                .collect::<Vec<_>>(),
+            [(
+                Entity::id_for("Alpha"),
+                Entity::id_for("Beta"),
+                "precedes".to_string()
+            )]
+        );
+    }
+
+    /// Under `EndpointScope::Chunk` an endpoint that spells a node id
+    /// differently does not resolve, as in Python, which drops the edge;
+    /// under `EndpointScope::Unit` the normalised id still finds it.
+    #[tokio::test]
+    async fn chunk_scope_matches_endpoints_on_the_verbatim_id() {
+        let unit = vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![
+                    node("steve_jobs", "Steve Jobs", "Person", ""),
+                    node("apple", "Apple", "Company", ""),
+                ],
+                vec![edge("Steve Jobs", "apple", "founded")],
+            ),
+        )];
+
+        let chunk_scope = expand_units(vec![unit.clone()], EndpointScope::Chunk).await;
+        assert!(chunk_scope.edges.is_empty());
+        assert_eq!(chunk_scope.stats.dropped_source_missing, 1);
+
+        let unit_scope = expand_units(vec![unit], EndpointScope::Unit).await;
+        assert_eq!(unit_scope.edges.len(), 1);
+        assert_eq!(unit_scope.stats.resolved_by_id, 2);
+    }
+
+    /// Expansion builds every edge; the split after it moves the ones the
+    /// graph holds to the claims, once per key across units.
+    #[tokio::test]
+    async fn split_existing_edges_claims_what_the_graph_already_holds() {
+        let unit = |chunk: Uuid| {
+            vec![(
+                chunk,
+                graph(
+                    vec![
+                        node("alice", "Alice Smith", "Person", ""),
+                        node("acme", "Acme", "Company", ""),
+                        node("bob", "Bob", "Person", ""),
+                    ],
+                    vec![
+                        edge("alice", "acme", "Works At"),
+                        edge("bob", "acme", "works_at"),
+                    ],
+                ),
+            )]
+        };
+        let (chunk_a, chunk_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut out = expand_units(vec![unit(chunk_a), unit(chunk_b)], EndpointScope::Unit).await;
+        assert_eq!(out.edges.len(), 2);
+        assert!(out.claimed_existing_edges.is_empty());
+
+        // The graph has Alice's edge, under the name-based id and the
+        // normalised label.
+        let alice_works_at = (
+            Entity::id_for("Alice Smith"),
+            Entity::id_for("Acme"),
+            "works_at".to_string(),
+        );
+        out.split_existing_edges(&HashSet::from([alice_works_at.clone()]));
+
+        assert_eq!(
+            out.edges
+                .iter()
+                .map(|edge| edge.source_entity_id)
+                .collect::<Vec<_>>(),
+            [Entity::id_for("Bob")]
+        );
+        assert_eq!(
+            out.producers.edge_chunks(&alice_works_at),
+            [chunk_a, chunk_b]
+        );
+        assert_eq!(
+            out.claimed_existing_edges
+                .iter()
+                .map(GraphEdgePair::dedup_key)
+                .collect::<Vec<_>>(),
+            [alice_works_at]
+        );
+    }
+
+    /// Item 8 of SDK-1694 O2: an ontology edge the graph already holds is
+    /// neither written nor claimed. No chunk produced it, and Python's ledger
+    /// records nothing for an existing edge outside
+    /// `_produced_edge_identities` either.
+    #[tokio::test]
+    async fn an_existing_ontology_edge_is_not_claimed() {
+        let chunk = KnowledgeGraph {
+            nodes: vec![node("techcorp", "TechCorp", "Organization", "")],
+            edges: vec![],
+        };
+        let organisation_is_a_legal_entity = (
+            EntityType::id_for("organisation"),
+            EntityType::id_for("legalentity"),
+            "is_a".to_string(),
+        );
+        let expand_against = |existing: HashSet<(Uuid, Uuid, String)>| {
+            let chunk = chunk.clone();
+            async move {
+                expand_extracted_graphs(
+                    vec![(Uuid::new_v4(), chunk)],
+                    Uuid::new_v4(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &existing,
+                    &MockOntologyResolver,
+                    None,
+                    None,
+                )
+                .await
+            }
+        };
+        let keys = |edges: &[GraphEdgePair]| -> Vec<(Uuid, Uuid, String)> {
+            edges.iter().map(GraphEdgePair::dedup_key).collect()
+        };
+
+        let fresh = expand_against(HashSet::new()).await;
+        assert!(
+            keys(&fresh.edges).contains(&organisation_is_a_legal_entity),
+            "a fresh graph gets the ontology edge"
+        );
+
+        let again = expand_against(HashSet::from([organisation_is_a_legal_entity.clone()])).await;
+        assert!(!keys(&again.edges).contains(&organisation_is_a_legal_entity));
+        assert!(again.claimed_existing_edges.is_empty());
     }
 }

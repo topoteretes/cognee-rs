@@ -5,7 +5,10 @@ pipeline order: three data items, the first with two chunks. It covers one
 entity typed differently in every data item and in two chunks of one, an edge
 to a node only an earlier chunk declares, an edge to a node only another data
 item declares, a timestamp (and an edge drawn from one), two nodes sharing a
-name in one chunk, and a node with a blank type.
+name in one chunk, a node with a blank type, relationship labels with spaces,
+capitals and an apostrophe (one of them naming, in another spelling, an edge
+an earlier chunk declared), two node ids that differ only in case, and an edge
+whose endpoint spells a node id differently.
 
 `expected.json` is what Python cognee's `construct_data_points_and_edges`
 builds from it, called once per data item with fresh maps, as the pipeline
@@ -24,16 +27,14 @@ calls it when every data item fits in one `chunks_per_batch` batch:
 `expand_extracted_graphs_by_unit` with `EndpointScope::Chunk` (Python's rule,
 `cognify.cross_chunk_endpoints=false`) and asserts the entities, pairs, type
 names, timestamps and semantic edges are equal. Under that scope Rust matches
-endpoints by node id only, as Python does (it still compares ids normalised
-for case and spacing, which this input does not exercise).
-
-Relationship names in the input are already snake_case: Python normalises them
-(`generate_edge_name`) and Rust does not yet (SDK-1694 stage O2).
+endpoints by the verbatim node id only, as Python does. Both normalise
+relationship labels (`generate_edge_name`, SDK-1694 stage O2).
 
 ## Regenerating
 
-Generated once from Python cognee `e27c7903` (`origin/dev`, 2026-11-20) with an
-environment that has cognee's dependencies installed:
+Generated from Python cognee `e27c7903` (`origin/dev`, 2026-11-20; regenerated
+for SDK-1694 stage O2 from the same commit) with an environment that has
+cognee's dependencies installed:
 
 ```bash
 git -C /path/to/cognee checkout e27c7903

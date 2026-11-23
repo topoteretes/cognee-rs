@@ -3,6 +3,7 @@
   "entity_ids": [
     "0ef5f65a-4d90-5b31-b090-8e807de27ae9",
     "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
+    "18f8df57-d663-50b2-9b65-967f8f0a209c",
     "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
     "2c3c9f85-7df6-5212-b56f-9a901b6a638f",
     "7d3f5b41-6f69-5496-bb38-27a82b60d766",
@@ -19,6 +20,10 @@
     [
       "18a72d23-611c-5930-a3aa-77bd63ce0c3a",
       "2df43048-b175-54c2-b72b-0ff24f41e4f1"
+    ],
+    [
+      "18f8df57-d663-50b2-9b65-967f8f0a209c",
+      "57eac1b1-4d94-539a-9c9b-b2eb08c28ecd"
     ],
     [
       "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
@@ -59,6 +64,7 @@
     "31d368fa-7630-5642-a1c1-e579050f9ac3": "brand",
     "4f155b46-e814-58f6-97cf-55d2ac3a572d": "city",
     "5197ee43-3e2b-55b5-ae0f-37144e7a1aab": "star",
+    "57eac1b1-4d94-539a-9c9b-b2eb08c28ecd": "deity",
     "66f4c27c-1a16-5cb3-a7df-db1caf2fcf07": "fruit",
     "82bfc922-4fcd-56b0-b353-7b550b51389d": "company",
     "99a82eec-bb35-5bb5-9ed2-e73fc7a756de": "person",
@@ -84,6 +90,11 @@
       "planted_at"
     ],
     [
+      "18f8df57-d663-50b2-9b65-967f8f0a209c",
+      "eb1d50ce-bcad-5543-8da7-eec8f14166d9",
+      "personifies"
+    ],
+    [
       "2a1c96b9-cc88-5947-a17c-7f5a215a378a",
       "bb81dccc-8180-558c-bcbf-0fd9f5f05a8a",
       "located_in"
@@ -101,7 +112,7 @@
     [
       "7d3f5b41-6f69-5496-bb38-27a82b60d766",
       "2c3c9f85-7df6-5212-b56f-9a901b6a638f",
-      "owns"
+      "brands_owner_of"
     ],
     [
       "7d3f5b41-6f69-5496-bb38-27a82b60d766",
