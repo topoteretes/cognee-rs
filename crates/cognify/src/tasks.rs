@@ -1372,18 +1372,7 @@ pub async fn extract_graph_from_data(
     // chunks of it — with fresh maps, as Python builds them; merged after.
     // Within a unit the first declaration of an entity decides its description
     // and type; across units its types are combined and endpoints never match.
-    let document_of: HashMap<Uuid, Uuid> = chunks_for_extraction
-        .iter()
-        .map(|chunk| (chunk.base.id, chunk.document_id))
-        .collect();
-    let units = extraction_units(
-        &chunks_for_extraction,
-        config.chunks_per_batch,
-        all_graphs.into_iter().map(|(chunk_id, graph)| {
-            let data_id = document_of.get(&chunk_id).copied().unwrap_or_default();
-            (data_id, chunk_id, (chunk_id, graph))
-        }),
-    );
+    let units = graph_units(&surviving_chunks, config.chunks_per_batch, all_graphs);
     let Expansion {
         nodes,
         edges,
@@ -1398,7 +1387,7 @@ pub async fn extract_graph_from_data(
         &chunk_node_sets,
         &chunk_importance_weights,
         &existing_edges_set,
-        ontology_resolver.as_ref(),
+        Arc::clone(&ontology_resolver),
         user_label_owned.as_deref(),
         task_rank,
         config.endpoint_scope,
@@ -2469,10 +2458,13 @@ pub async fn add_data_points(
 
     // Store EntityTypes as graph nodes (extract from GraphNodePairs)
     if !input.entities.is_empty() {
+        // One write per type id: many entities share a type.
+        let mut seen_types = HashSet::new();
         let entity_type_refs: Vec<&cognee_models::EntityType> = input
             .entities
             .iter()
             .flat_map(|pair| pair.entity_types())
+            .filter(|entity_type| seen_types.insert(entity_type.base.id))
             .collect();
         graph_db
             .add_nodes(&entity_type_refs)
@@ -5411,6 +5403,34 @@ fn semantic_edge_provenance_rows(
     rows
 }
 
+/// The extracted chunk graphs grouped into Python's units, in input order.
+///
+/// `chunks` is every chunk of the data items being built, DLT rows included:
+/// Python cuts a data item's chunks into `chunks_per_batch` blocks before the
+/// extraction task sees them, so a block boundary falls where it does among
+/// all of them, not among the ones extraction keeps. The custom-schema walk
+/// ([`store_dynamic_graphs`]) counts the same way.
+fn graph_units(
+    chunks: &[DocumentChunk],
+    chunks_per_batch: usize,
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+) -> Vec<Vec<(Uuid, KnowledgeGraph)>> {
+    let document_of: HashMap<Uuid, Uuid> = chunks
+        .iter()
+        .map(|chunk| (chunk.base.id, chunk.document_id))
+        .collect();
+    extraction_units(
+        chunks,
+        chunks_per_batch,
+        graphs.into_iter().map(|(chunk_id, graph)| {
+            // Every graph comes from one of `chunks`; an unknown one would
+            // group under the nil data item, alone.
+            let data_id = document_of.get(&chunk_id).copied().unwrap_or_default();
+            (data_id, chunk_id, (chunk_id, graph))
+        }),
+    )
+}
+
 /// The storage walk of every runtime custom graph, in `graphs` order.
 ///
 /// Python runs the pipeline once per data item and calls `add_data_points`
@@ -5762,8 +5782,13 @@ async fn upsert_provenance(
         });
     }
 
-    // EntityTypes
-    for et in entities.iter().flat_map(|pair| pair.entity_types()) {
+    // EntityTypes, one row per type id: many entities share a type.
+    let mut seen_types = HashSet::new();
+    for et in entities
+        .iter()
+        .flat_map(|pair| pair.entity_types())
+        .filter(|et| seen_types.insert(et.base.id))
+    {
         // EntityType rows carry a nil `data_id`: one type is shared by every
         // entity of that type, so there is no single producing file. Note this
         // is *not* Python's shape — `upsert_nodes` stamps the ctx `data_id` on
@@ -7525,6 +7550,55 @@ mod tests {
     use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
+
+    /// SDK-1694 review: a block boundary is counted over all of a data item's
+    /// chunks, DLT rows included, as Python batches them before extraction
+    /// drops the rows.
+    #[test]
+    fn graph_units_count_blocks_over_every_chunk_of_a_data_item() {
+        let doc = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..4)
+            .map(|index| {
+                let mut chunk = DocumentChunk::new(
+                    Uuid::new_v4(),
+                    format!("chunk {index}"),
+                    1,
+                    index,
+                    "sentence_end".to_string(),
+                    doc,
+                );
+                if index % 2 == 0 {
+                    chunk.base.data_type = cognee_models::DLT_ROW_TYPE.to_string();
+                }
+                chunk
+            })
+            .collect();
+        // Only the text chunks (positions 1 and 3) have graphs.
+        let graphs: Vec<(Uuid, KnowledgeGraph)> = [1, 3]
+            .iter()
+            .map(|&i| {
+                (
+                    chunks[i].base.id,
+                    KnowledgeGraph {
+                        nodes: vec![],
+                        edges: vec![],
+                    },
+                )
+            })
+            .collect();
+
+        let units = graph_units(&chunks, 2, graphs.clone());
+        let ids: Vec<Vec<Uuid>> = units
+            .iter()
+            .map(|unit| unit.iter().map(|(chunk, _)| *chunk).collect())
+            .collect();
+        assert_eq!(ids, [vec![chunks[1].base.id], vec![chunks[3].base.id]]);
+
+        // Counting over the text chunks alone would put both in one block.
+        let text_only: Vec<DocumentChunk> =
+            chunks.iter().filter(|c| !c.is_dlt_row()).cloned().collect();
+        assert_eq!(graph_units(&text_only, 2, graphs).len(), 1);
+    }
 
     struct ValidatingDynamicLlm;
 

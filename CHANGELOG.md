@@ -234,13 +234,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merges them (`merge_expansions`): an entity's description and fields come
   from the first unit, its types are the union in first-seen order, edges are
   combined by (source, target, label) and every producing chunk keeps its
-  ownership row. An entity can therefore have several `is_a` edges, each
+  ownership row. Across data items the first one in input order decides an
+  entity's description, importance weight and metadata: a deliberate
+  divergence from Python, where the last data item to write wins, which with
+  data items running concurrently depends on timing. NodeSet membership
+  (`belongs_to_set`) is combined across data items. The units are expanded
+  concurrently off the async runtime (rayon inside one `spawn_blocking`) and
+  merged in input order; ontology lookups are cached for the run. An entity can therefore have several `is_a` edges, each
   EntityType is written, indexed and recorded in the ledger. An edge endpoint
   no longer matches a node of another document. Within one unit it may still
-  match a node an earlier chunk declared; the new key
+  match a node an earlier chunk declared, or a node by its name; the new key
   `cognify.cross_chunk_endpoints` (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`,
   default `true`) turns that off, which resolves endpoints only within their
-  own chunk, as Python does. Existing graphs keep one type per entity until
+  own chunk and only by node id, as Python does. Existing graphs keep one type per entity until
   their data is cognified again. The visualization payload still names one
   type per entity: the last `is_a` link, as Python's does. COGX export writes
   every `is_a` edge as its own fact.

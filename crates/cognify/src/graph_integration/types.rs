@@ -66,6 +66,12 @@ impl GraphNodePair {
     /// is appended, in first-seen order, and this node's first type stays
     /// primary. An untyped node takes `other`'s first type as its primary.
     ///
+    /// The [`ONTOLOGY_INDIVIDUAL_TYPE`] placeholder is not a type anybody
+    /// declared — Rust gives it to an ontology individual no extraction typed
+    /// (Python leaves such an entity untyped), and it never becomes an `is_a`
+    /// edge. It never joins a node that has a real type, and a real type
+    /// replaces it as primary.
+    ///
     /// Switching to "every declared type, with counts" means counting here
     /// instead of keeping first-seen order.
     pub fn merge_types_from(&mut self, other: &GraphNodePair) {
@@ -74,15 +80,35 @@ impl GraphNodePair {
             if self.entity_types().any(|known| known.base.id == id) {
                 continue;
             }
-            if self.entity_type.is_none() {
+            let placeholder = is_ontology_individual_placeholder(entity_type);
+            if placeholder && self.entity_types().next().is_some() {
+                continue;
+            }
+            let replaces_placeholder = self
+                .entity_type
+                .as_ref()
+                .is_some_and(is_ontology_individual_placeholder);
+            if self.entity_type.is_none() || replaces_placeholder {
                 self.entity_type = Some(entity_type.clone());
-                self.entity.is_a = Some(id);
+                // The placeholder is never an `is_a` edge: an ontology
+                // individual's entity has no `is_a` of its own.
+                self.entity.is_a = (!placeholder).then_some(id);
             } else {
                 self.extra_entity_types.push(entity_type.clone());
                 self.entity.extra_types.push(id);
             }
         }
     }
+}
+
+/// Name of the placeholder EntityType an ontology individual gets when no
+/// extraction typed it. Rust-only: Python's `Entity.is_a` is optional and
+/// such an entity has none.
+pub const ONTOLOGY_INDIVIDUAL_TYPE: &str = "OntologyIndividual";
+
+/// Whether `entity_type` is the [`ONTOLOGY_INDIVIDUAL_TYPE`] placeholder.
+pub fn is_ontology_individual_placeholder(entity_type: &EntityType) -> bool {
+    entity_type.base.id == EntityType::id_for(ONTOLOGY_INDIVIDUAL_TYPE)
 }
 
 /// A `Timestamp` node built from an extracted node the LLM typed "Timestamp".

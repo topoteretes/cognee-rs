@@ -23,9 +23,9 @@ calls it when every data item fits in one `chunks_per_batch` batch:
 `tests/graph_per_unit_parity.rs` runs the same input through
 `expand_extracted_graphs_by_unit` with `EndpointScope::Chunk` (Python's rule,
 `cognify.cross_chunk_endpoints=false`) and asserts the entities, pairs, type
-names and timestamps are equal and Python's semantic edges are a subset of
-Rust's. Rust's node-name fallback may resolve endpoints Python drops, never the
-reverse; on this input the edge sets are equal, and the test asserts that too.
+names, timestamps and semantic edges are equal. Under that scope Rust matches
+endpoints by node id only, as Python does (it still compares ids normalised
+for case and spacing, which this input does not exercise).
 
 Relationship names in the input are already snake_case: Python normalises them
 (`generate_edge_name`) and Rust does not yet (SDK-1694 stage O2).

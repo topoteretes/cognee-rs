@@ -4,18 +4,22 @@
 //! Converts LLM-layer KnowledgeGraph objects to storage-layer Entity/EntityType pairs.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use indexmap::IndexMap;
+use rayon::prelude::*;
 use uuid::Uuid;
 
 use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
 use cognee_models::{Entity, EntityType, Timestamp};
-use cognee_ontology::traits::OntologyEdge;
+use cognee_ontology::traits::{OntologyEdge, OntologySubgraph};
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
 use cognee_utils::{generate_edge_name, generate_node_name, normalize_identifier};
 use tracing::{debug, warn};
 
 use crate::fact_extraction::{KnowledgeGraph, Node};
 use crate::graph_integration::types::{
-    ArtifactProducers, GraphEdgePair, GraphNodePair, TimestampNode,
+    ArtifactProducers, GraphEdgePair, GraphNodePair, ONTOLOGY_INDIVIDUAL_TYPE, TimestampNode,
 };
 
 /// How many distinct unresolved endpoint references to name in the summary log.
@@ -235,11 +239,13 @@ fn refresh_name_alias_origin(
 }
 
 /// Resolve one edge endpoint, preferring an exact node-id match and falling
-/// back to the node-name alias only when the id map misses.
+/// back to the node-name alias only when the id map misses — and only when
+/// `by_name_too` is set: Python matches by node id alone.
 fn resolve_endpoint(
     by_id: &HashMap<String, (Uuid, ChunkPosition)>,
     by_name: &HashMap<String, Option<(Uuid, ChunkPosition)>>,
     raw: &str,
+    by_name_too: bool,
 ) -> EndpointResolution {
     let key = normalize_identifier(raw);
     if let Some((entity, origin)) = by_id.get(&key) {
@@ -247,6 +253,9 @@ fn resolve_endpoint(
             entity: *entity,
             origin: *origin,
         };
+    }
+    if !by_name_too {
+        return EndpointResolution::Missing;
     }
     match by_name.get(&key) {
         Some(Some((entity, origin))) => EndpointResolution::ByName {
@@ -579,12 +588,15 @@ fn is_timestamp_type(node_type: &str) -> bool {
 #[non_exhaustive]
 pub enum EndpointScope {
     /// Any chunk of the unit, up to and including the edge's own: an edge can
-    /// reach a node an earlier chunk of the same block declared. Rust's
+    /// reach a node an earlier chunk of the same block declared, by node id
+    /// or, failing that, by the node's name. Rust's
     /// default; it keeps edges Python drops.
     #[default]
     Unit,
-    /// Only the edge's own chunk, as Python's `_add_extracted_edges` resolves
-    /// them (`expand_with_nodes_and_edges.py`).
+    /// Only the edge's own chunk, and only by node id, as Python's
+    /// `_add_extracted_edges` resolves them (`expand_with_nodes_and_edges.py`):
+    /// the node-name fallback is off too. Rust still compares node ids
+    /// normalised (case and spacing), where Python compares them verbatim.
     Chunk,
 }
 
@@ -603,17 +615,18 @@ pub async fn expand_extracted_graphs(
     user_label: Option<&str>,
     task_rank: Option<i32>,
 ) -> Expansion {
-    let (expansion, unresolved_sample) = expand_unit(
-        graphs,
+    let ontology = OntologyLookups::new(ontology_resolver);
+    let inputs = UnitInputs {
         dataset_id,
         chunk_node_sets,
         chunk_importance_weights,
         existing_edges_set,
-        ontology_resolver,
+        ontology: &ontology,
         user_label,
         task_rank,
-        EndpointScope::Unit,
-    );
+        endpoint_scope: EndpointScope::Unit,
+    };
+    let (expansion, unresolved_sample) = expand_unit(graphs, &inputs);
     log_resolution_summary(&expansion.stats, &unresolved_sample);
     expansion
 }
@@ -626,7 +639,12 @@ pub async fn expand_extracted_graphs(
 /// declaration of an entity decides its description and type, and across
 /// units the types are combined. Each of `units` (from
 /// [`crate::graph_integration::extraction_units`]) is expanded with fresh
-/// maps and the results merged by [`merge_expansions`].
+/// maps and the results merged by [`merge_expansions`] in input order.
+///
+/// The units are expanded concurrently, on rayon's pool inside one
+/// `spawn_blocking`, so the CPU work stays off the async runtime. The merge
+/// runs in input order afterwards, so the result equals expanding the units
+/// one after another. Ontology lookups are cached for the whole run.
 ///
 /// `endpoint_scope` says which chunks of a unit an edge endpoint may match;
 /// endpoints never match across units.
@@ -637,25 +655,49 @@ pub async fn expand_extracted_graphs_by_unit(
     chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
     chunk_importance_weights: &HashMap<Uuid, f64>,
     existing_edges_set: &HashSet<String>,
-    ontology_resolver: &dyn OntologyResolver,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     user_label: Option<&str>,
     task_rank: Option<i32>,
     endpoint_scope: EndpointScope,
 ) -> Expansion {
-    let mut merged = ExpansionMerger::default();
-    let mut unresolved_sample: Vec<String> = Vec::new();
-    for graphs in units {
-        let (expansion, sample) = expand_unit(
-            graphs,
+    // `spawn_blocking` needs owned inputs. These are per-chunk lookups and the
+    // edges already in the graph, small next to the extracted graphs, which
+    // are moved rather than copied.
+    let chunk_node_sets = chunk_node_sets.clone();
+    let chunk_importance_weights = chunk_importance_weights.clone();
+    let existing_edges_set = existing_edges_set.clone();
+    let user_label = user_label.map(str::to_owned);
+    let expanded = tokio::task::spawn_blocking(move || {
+        let ontology = OntologyLookups::new(ontology_resolver.as_ref());
+        let inputs = UnitInputs {
             dataset_id,
-            chunk_node_sets,
-            chunk_importance_weights,
-            existing_edges_set,
-            ontology_resolver,
-            user_label,
+            chunk_node_sets: &chunk_node_sets,
+            chunk_importance_weights: &chunk_importance_weights,
+            existing_edges_set: &existing_edges_set,
+            ontology: &ontology,
+            user_label: user_label.as_deref(),
             task_rank,
             endpoint_scope,
-        );
+        };
+        // An indexed parallel iterator collects in input order.
+        units
+            .into_par_iter()
+            .map(|graphs| expand_unit(graphs, &inputs))
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let expanded = match expanded {
+        Ok(expanded) => expanded,
+        // A panic inside a unit is re-raised here, as it would have been had
+        // the unit run on this task. `into_panic` itself panics on the only
+        // other outcome, cancellation, which a blocking task suffers only when
+        // the runtime shuts down.
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    };
+
+    let mut merged = ExpansionMerger::default();
+    let mut unresolved_sample: Vec<String> = Vec::new();
+    for (expansion, sample) in expanded {
         let room = UNRESOLVED_SAMPLE_LIMIT.saturating_sub(unresolved_sample.len());
         unresolved_sample.extend(sample.into_iter().take(room));
         merged.push(expansion);
@@ -665,11 +707,85 @@ pub async fn expand_extracted_graphs_by_unit(
     expansion
 }
 
+/// What every unit's expansion reads, besides its own graphs.
+#[derive(Clone, Copy)]
+struct UnitInputs<'a> {
+    dataset_id: Uuid,
+    chunk_node_sets: &'a HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: &'a HashMap<Uuid, f64>,
+    existing_edges_set: &'a HashSet<String>,
+    ontology: &'a OntologyLookups<'a>,
+    user_label: Option<&'a str>,
+    task_rank: Option<i32>,
+    endpoint_scope: EndpointScope,
+}
+
+/// The ontology resolver with its `get_subgraph` answers cached for a run.
+///
+/// Every unit starts from fresh maps, so without the cache a type or an
+/// individual named in many documents is looked up once per document. The
+/// resolver answers from the loaded ontology alone, so a cached answer is the
+/// one a repeat call would give.
+struct OntologyLookups<'a> {
+    resolver: &'a dyn OntologyResolver,
+    loaded: bool,
+    /// One cell per (name, category): concurrent units asking for the same
+    /// name wait for the one lookup instead of repeating it.
+    cache: Mutex<HashMap<(String, &'static str), SubgraphCell>>,
+}
+
+/// The shared slot one (name, category) lookup is answered into.
+type SubgraphCell = Arc<OnceLock<SubgraphAnswer>>;
+
+/// A cached `get_subgraph` answer; an error is kept as its message, which is
+/// all the caller logs.
+type SubgraphAnswer = Result<OntologySubgraph, String>;
+
+impl<'a> OntologyLookups<'a> {
+    fn new(resolver: &'a dyn OntologyResolver) -> Self {
+        Self {
+            loaded: resolver.is_loaded(),
+            resolver,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    /// `resolver.get_subgraph(name, category, directed = true)`, once per run.
+    fn get_subgraph(&self, name: &str, category: &'static str) -> SubgraphAnswer {
+        let cell = Arc::clone(
+            self.cache
+                .lock()
+                // A poisoned lock only means another unit panicked; the map
+                // is still a valid cache.
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry((name.to_string(), category))
+                .or_default(),
+        );
+        cell.get_or_init(|| {
+            self.resolver
+                .get_subgraph(name, category, true)
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+    }
+}
+
 /// Merge the expansions of several units into one, in input order.
 ///
-/// - An entity's description and other fields come from the first unit that
-///   declared it; its types are combined by
-///   [`GraphNodePair::merge_types_from`].
+/// - An entity's name, description, importance weight, metadata and other
+///   fields come from the **first unit in input order** that declared it.
+///   This is a deliberate divergence from Python, where every data item
+///   writes its own copy of the entity and the last write wins — with data
+///   items running concurrently, whichever finishes last. Only
+///   `belongs_to_set` is combined: the entity keeps the NodeSet membership of
+///   every unit, as Python keeps a `belongs_to_set` edge per NodeSet.
+/// - Its types are combined by [`GraphNodePair::merge_types_from`].
+/// - Every EntityType id ends up as one copy, the first in input order, so the
+///   graph write, the index and the ledger all see the same node.
 /// - Edges and claimed edges are combined by (source, target, label), the
 ///   first unit's edge kept.
 /// - Producers are combined, so every chunk that declared an artifact still
@@ -685,8 +801,9 @@ pub fn merge_expansions(expansions: impl IntoIterator<Item = Expansion>) -> Expa
     merged.finish()
 }
 
-/// The accumulator behind [`merge_expansions`]: everything is kept in
-/// first-seen order, so the merged output does not depend on hash order.
+/// The accumulator behind [`merge_expansions`]. It keeps everything in the
+/// order first seen, and each unit's output is in declaration order, so the
+/// merged output is deterministic for a given input.
 #[derive(Default)]
 struct ExpansionMerger {
     nodes: Vec<GraphNodePair>,
@@ -705,7 +822,11 @@ impl ExpansionMerger {
     fn push(&mut self, expansion: Expansion) {
         for node in expansion.nodes {
             match self.node_index.get(&node.entity.base.id) {
-                Some(&index) => self.nodes[index].merge_types_from(&node),
+                Some(&index) => {
+                    let merged = &mut self.nodes[index];
+                    merged.merge_types_from(&node);
+                    union_node_sets(&mut merged.entity, &node.entity);
+                }
                 None => {
                     self.node_index
                         .insert(node.entity.base.id, self.nodes.len());
@@ -732,7 +853,20 @@ impl ExpansionMerger {
         self.stats.absorb(&expansion.stats);
     }
 
-    fn finish(self) -> Expansion {
+    fn finish(mut self) -> Expansion {
+        // Each unit built its own copy of a shared EntityType, stamped with
+        // that unit's chunk importance weight. Keep the first copy of each id.
+        let mut first_copy: HashMap<Uuid, EntityType> = HashMap::new();
+        for node in &mut self.nodes {
+            for entity_type in node.entity_types_mut() {
+                match first_copy.get(&entity_type.base.id) {
+                    Some(first) => *entity_type = first.clone(),
+                    None => {
+                        first_copy.insert(entity_type.base.id, entity_type.clone());
+                    }
+                }
+            }
+        }
         Expansion {
             nodes: self.nodes,
             edges: self.edges,
@@ -744,20 +878,39 @@ impl ExpansionMerger {
     }
 }
 
+/// Add the NodeSet entries of `other` that `entity` does not have yet.
+fn union_node_sets(entity: &mut Entity, other: &Entity) {
+    let Some(other_sets) = other.base.belongs_to_set.as_ref() else {
+        return;
+    };
+    let sets = entity.base.belongs_to_set.get_or_insert_with(Vec::new);
+    for node_set in other_sets {
+        if !sets.contains(node_set) {
+            sets.push(node_set.clone());
+        }
+    }
+}
+
 /// One unit's expansion, plus a bounded sample of the endpoint references it
 /// could not resolve (for the summary line, logged once by the caller).
-#[allow(clippy::too_many_arguments)]
 fn expand_unit(
     graphs: Vec<(Uuid, KnowledgeGraph)>,
-    dataset_id: Uuid,
-    chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
-    chunk_importance_weights: &HashMap<Uuid, f64>,
-    existing_edges_set: &HashSet<String>,
-    ontology_resolver: &dyn OntologyResolver,
-    user_label: Option<&str>,
-    task_rank: Option<i32>,
-    endpoint_scope: EndpointScope,
+    inputs: &UnitInputs<'_>,
 ) -> (Expansion, Vec<String>) {
+    let UnitInputs {
+        dataset_id,
+        chunk_node_sets,
+        chunk_importance_weights,
+        existing_edges_set,
+        ontology,
+        user_label,
+        task_rank,
+        endpoint_scope,
+    } = *inputs;
+    // Python matches an endpoint by node id alone; the name fallback is a
+    // Rust addition, off under `EndpointScope::Chunk`.
+    let name_fallback = endpoint_scope == EndpointScope::Unit;
+
     // Function-local visited set for the pre-stamp pass. The executor's
     // per-run set sees the same DataPoints during its own walk and
     // short-circuits via the `if dp.source_pipeline.is_none()` guard
@@ -766,16 +919,19 @@ fn expand_unit(
     let mut local_visited: HashSet<Uuid> = HashSet::new();
 
     // Maps for deduplication
-    let mut node_map = HashMap::new();
-    let mut edge_map: HashMap<(Uuid, Uuid, String), GraphEdgePair> = HashMap::new();
+    //
+    // `IndexMap`s, so a unit's output is in declaration order rather than
+    // hash order and a run is reproducible.
+    let mut node_map: IndexMap<String, GraphNodePair> = IndexMap::new();
+    let mut edge_map: IndexMap<(Uuid, Uuid, String), GraphEdgePair> = IndexMap::new();
     let mut type_map = HashMap::new();
 
     // Edges this run produced that the database dedup filter kept out of
     // `edge_map` because an earlier run already wrote them to the graph. They
     // are returned separately so the caller can claim ownership of them
     // without writing them to the graph a second time.
-    let mut claimed_existing_edge_map: HashMap<(Uuid, Uuid, String), GraphEdgePair> =
-        HashMap::new();
+    let mut claimed_existing_edge_map: IndexMap<(Uuid, Uuid, String), GraphEdgePair> =
+        IndexMap::new();
 
     // Every chunk that produced each merged artifact, not only the one that
     // created it (see the `# Returns` note above).
@@ -807,8 +963,8 @@ fn expand_unit(
 
     // Ontology-specific collections (populated by get_subgraph expansion)
     let mut key_mapping: HashMap<String, String> = HashMap::new();
-    let mut ontology_types_map: HashMap<String, EntityType> = HashMap::new();
-    let mut ontology_entities_map: HashMap<String, GraphNodePair> = HashMap::new();
+    let mut ontology_types_map: IndexMap<String, EntityType> = IndexMap::new();
+    let mut ontology_entities_map: IndexMap<String, GraphNodePair> = IndexMap::new();
     let mut ontology_edge_keys: HashSet<String> = HashSet::new();
     let mut ontology_edges_out: Vec<GraphEdgePair> = Vec::new();
 
@@ -949,8 +1105,8 @@ fn expand_unit(
                     et.base.importance_weight = Some(chunk_importance_weight);
                     pre_stamp_extraction(&mut et, user_label, task_rank, &mut local_visited);
 
-                    if ontology_resolver.is_loaded() {
-                        match ontology_resolver.get_subgraph(&node.node_type, "classes", true) {
+                    if ontology.is_loaded() {
+                        match ontology.get_subgraph(&node.node_type, "classes") {
                             Ok((onto_nodes, onto_edges, Some(root_node))) => {
                                 // Python normalizes the ontology-supplied name too
                                 // before storing it
@@ -1057,8 +1213,7 @@ fn expand_unit(
             // Collect subgraph data for deferred processing (after insert releases borrow).
             let mut deferred_individual_data = None;
 
-            if let std::collections::hash_map::Entry::Vacant(e) = node_map.entry(entity_key.clone())
-            {
+            if let indexmap::map::Entry::Vacant(e) = node_map.entry(entity_key.clone()) {
                 let mut entity_pair = create_entity_node(
                     &node,
                     entity_id,
@@ -1075,8 +1230,8 @@ fn expand_unit(
                     &mut local_visited,
                 );
 
-                if ontology_resolver.is_loaded() {
-                    match ontology_resolver.get_subgraph(&node.name, "individuals", true) {
+                if ontology.is_loaded() {
+                    match ontology.get_subgraph(&node.name, "individuals") {
                         Ok((ont_nodes, ont_edges, Some(root_individual))) => {
                             // Normalized for the same reason as the class
                             // canonical name above
@@ -1242,6 +1397,7 @@ fn expand_unit(
                 &node_id_to_entity_id,
                 &name_to_entity_id,
                 &edge.source_node_id,
+                name_fallback,
             ) {
                 EndpointResolution::ById { entity, origin } => {
                     stats.record_resolved_by_id(origin, position);
@@ -1276,6 +1432,7 @@ fn expand_unit(
                 &node_id_to_entity_id,
                 &name_to_entity_id,
                 &edge.target_node_id,
+                name_fallback,
             ) {
                 EndpointResolution::ById { entity, origin } => {
                     stats.record_resolved_by_id(origin, position);
@@ -1371,7 +1528,7 @@ fn expand_unit(
                 &mut edge_map
             };
 
-            if let std::collections::hash_map::Entry::Vacant(e) = edge_bucket.entry(edge_key) {
+            if let indexmap::map::Entry::Vacant(e) = edge_bucket.entry(edge_key) {
                 // Mirror Python's `_process_graph_edges` edge property map
                 // (expand_with_nodes_and_edges.py:296-309): persist
                 // relationship_name / source_node_id / target_node_id /
@@ -1593,10 +1750,10 @@ fn process_ontology_nodes(
     ontology_nodes: &[AttachedOntologyNode],
     dataset_id: Uuid,
     importance_weight: f64,
-    node_map: &HashMap<String, GraphNodePair>,
+    node_map: &IndexMap<String, GraphNodePair>,
     type_map: &HashMap<String, EntityType>,
-    ontology_types_map: &mut HashMap<String, EntityType>,
-    ontology_entities_map: &mut HashMap<String, GraphNodePair>,
+    ontology_types_map: &mut IndexMap<String, EntityType>,
+    ontology_entities_map: &mut IndexMap<String, GraphNodePair>,
     user_label: Option<&str>,
     task_rank: Option<i32>,
     visited: &mut HashSet<Uuid>,
@@ -1666,8 +1823,8 @@ fn process_ontology_nodes(
                 // Python `Entity(is_a=...)` field is optional). Its id is stable
                 // but has no Python counterpart.
                 let mut placeholder_et =
-                    EntityType::new("OntologyIndividual", "", Some(dataset_id));
-                placeholder_et.base.id = EntityType::id_for("OntologyIndividual");
+                    EntityType::new(ONTOLOGY_INDIVIDUAL_TYPE, "", Some(dataset_id));
+                placeholder_et.base.id = EntityType::id_for(ONTOLOGY_INDIVIDUAL_TYPE);
                 pre_stamp_extraction(&mut placeholder_et, user_label, task_rank, visited);
 
                 let pair = GraphNodePair::new(entity, Some(placeholder_et));
@@ -2370,13 +2527,22 @@ mod tests {
         units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
         scope: EndpointScope,
     ) -> Expansion {
+        expand_units_with(units, scope, Arc::new(noop()), &HashMap::new()).await
+    }
+
+    async fn expand_units_with(
+        units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+        scope: EndpointScope,
+        resolver: Arc<dyn OntologyResolver>,
+        chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    ) -> Expansion {
         expand_extracted_graphs_by_unit(
             units,
             Uuid::new_v4(),
-            &HashMap::new(),
+            chunk_node_sets,
             &HashMap::new(),
             &HashSet::new(),
-            &noop(),
+            resolver,
             None,
             None,
             scope,
@@ -2652,6 +2818,302 @@ mod tests {
         assert_eq!(chunk_scope.stats.resolved_cross_chunk(), 0);
         // The entities themselves are unaffected by the scope.
         assert_eq!(chunk_scope.nodes.len(), 2);
+    }
+
+    // ----- Review fixes on the per-unit merge (SDK-1694) -----
+
+    /// An ontology whose class `Company` brings the individual `Alice` along.
+    struct CompanyKnowsAlice {
+        lookups: std::sync::atomic::AtomicUsize,
+    }
+
+    impl OntologyResolver for CompanyKnowsAlice {
+        fn find_closest_match(&self, _: &str, _: &str) -> OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> OntologyResult<OntologySubgraph> {
+            self.lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if (node_name, node_type) != ("Company", "classes") {
+                return Ok((vec![], vec![], None));
+            }
+            let alice = AttachedOntologyNode {
+                uri: "http://test.org#Alice".to_string(),
+                name: "Alice".to_string(),
+                category: NodeCategory::Individuals,
+            };
+            let root = AttachedOntologyNode {
+                uri: "http://test.org#Company".to_string(),
+                name: "company".to_string(),
+                category: NodeCategory::Classes,
+            };
+            Ok((vec![alice], vec![], Some(root)))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Finding 1: the `OntologyIndividual` placeholder another unit gives an
+    /// entity never joins a real type, whichever unit comes first.
+    #[tokio::test]
+    async fn the_ontology_individual_placeholder_never_joins_a_real_type() {
+        let with_placeholder = vec![(
+            Uuid::new_v4(),
+            graph(vec![node("acme", "Acme", "Company", "")], vec![]),
+        )];
+        let typed = vec![(
+            Uuid::new_v4(),
+            graph(vec![node("alice", "Alice", "Person", "")], vec![]),
+        )];
+
+        for units in [
+            vec![with_placeholder.clone(), typed.clone()],
+            vec![typed.clone(), with_placeholder.clone()],
+        ] {
+            let resolver = Arc::new(CompanyKnowsAlice {
+                lookups: Default::default(),
+            });
+            let out =
+                expand_units_with(units, EndpointScope::Unit, resolver, &HashMap::new()).await;
+            assert_eq!(types_of(&out, "alice"), ["person"]);
+        }
+
+        // Alone, the placeholder is still what an untyped individual gets.
+        let alone = expand_units_with(
+            vec![with_placeholder],
+            EndpointScope::Unit,
+            Arc::new(CompanyKnowsAlice {
+                lookups: Default::default(),
+            }),
+            &HashMap::new(),
+        )
+        .await;
+        let alice = alone
+            .nodes
+            .iter()
+            .find(|pair| pair.entity.name == "alice")
+            .unwrap();
+        assert_eq!(
+            alice.entity_type.as_ref().map(|t| t.name.as_str()),
+            Some(ONTOLOGY_INDIVIDUAL_TYPE)
+        );
+        assert_eq!(alice.entity.is_a, None, "the placeholder is no is_a edge");
+    }
+
+    /// Finding 8: an ontology lookup is made once per run, not once per unit.
+    #[tokio::test]
+    async fn ontology_lookups_are_cached_across_units() {
+        let unit = || {
+            vec![(
+                Uuid::new_v4(),
+                graph(vec![node("acme", "Acme", "Company", "")], vec![]),
+            )]
+        };
+        let resolver = Arc::new(CompanyKnowsAlice {
+            lookups: Default::default(),
+        });
+        expand_units_with(
+            vec![unit(), unit(), unit(), unit()],
+            EndpointScope::Unit,
+            resolver.clone(),
+            &HashMap::new(),
+        )
+        .await;
+        // One `classes` lookup for Company, one `individuals` lookup for Acme.
+        assert_eq!(
+            resolver.lookups.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    /// Finding 2: an entity keeps the NodeSet membership of every unit.
+    #[tokio::test]
+    async fn an_entity_keeps_the_node_sets_of_every_unit() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let node_sets = HashMap::from([
+            (a, vec![serde_json::json!("X")]),
+            (b, vec![serde_json::json!("Y")]),
+        ]);
+        let units = vec![
+            vec![(
+                a,
+                graph(vec![node("apple", "Apple", "Company", "")], vec![]),
+            )],
+            vec![(b, graph(vec![node("apple", "Apple", "Fruit", "")], vec![]))],
+        ];
+
+        let out = expand_units_with(units, EndpointScope::Unit, Arc::new(noop()), &node_sets).await;
+
+        let sets = out.nodes[0].entity.base.belongs_to_set.as_ref().unwrap();
+        assert!(sets.contains(&serde_json::json!("X")), "{sets:?}");
+        assert!(sets.contains(&serde_json::json!("Y")), "{sets:?}");
+        assert_eq!(
+            sets.iter()
+                .filter(|set| **set == serde_json::json!("X"))
+                .count(),
+            1
+        );
+    }
+
+    /// Finding 3: one EntityType id is one copy, the first unit's, wherever it
+    /// appears.
+    #[tokio::test]
+    async fn a_shared_entity_type_keeps_the_first_units_copy() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let unit = |chunk: Uuid, weight: f64, key: &str, name: &str| {
+            let weights = HashMap::from([(chunk, weight)]);
+            let graphs = vec![(chunk, graph(vec![node(key, name, "Company", "")], vec![]))];
+            async move {
+                expand_extracted_graphs(
+                    graphs,
+                    Uuid::new_v4(),
+                    &HashMap::new(),
+                    &weights,
+                    &HashSet::new(),
+                    &noop(),
+                    None,
+                    None,
+                )
+                .await
+            }
+        };
+        let merged = merge_expansions([
+            unit(a, 0.2, "acme", "Acme").await,
+            unit(b, 0.9, "globex", "Globex").await,
+        ]);
+
+        let weights: Vec<Option<f64>> = merged
+            .nodes
+            .iter()
+            .flat_map(GraphNodePair::entity_types)
+            .map(|t| t.base.importance_weight)
+            .collect();
+        assert_eq!(weights, [Some(0.2), Some(0.2)]);
+    }
+
+    /// Finding 7: across units the first unit's fields win — a deliberate
+    /// divergence from Python's last-writer-wins.
+    #[tokio::test]
+    async fn the_first_unit_decides_an_entitys_fields() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let units = vec![
+            vec![(
+                a,
+                graph(vec![node("apple", "Apple", "Company", "first")], vec![]),
+            )],
+            vec![(
+                b,
+                graph(vec![node("apple", "Apple", "Fruit", "second")], vec![]),
+            )],
+        ];
+        let out = expand_units(units, EndpointScope::Unit).await;
+        let apple = &out.nodes[0].entity;
+        assert_eq!(apple.description, "first");
+        assert_eq!(
+            apple.base.get_metadata("chunk_id"),
+            Some(&serde_json::json!(a.to_string()))
+        );
+    }
+
+    /// Finding 5: under `EndpointScope::Chunk` an endpoint matches by node id
+    /// only, as in Python; the name fallback stays on for `Unit`.
+    #[tokio::test]
+    async fn chunk_scope_matches_endpoints_by_node_id_only() {
+        let unit = vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![
+                    node("einstein", "Albert Einstein", "Person", ""),
+                    node("ulm", "Ulm", "City", ""),
+                ],
+                vec![edge("Albert Einstein", "ulm", "born_in")],
+            ),
+        )];
+        let by_name = expand_units(vec![unit.clone()], EndpointScope::Unit).await;
+        assert_eq!(by_name.edges.len(), 1);
+        assert_eq!(by_name.stats.resolved_by_name, 1);
+
+        let by_id = expand_units(vec![unit], EndpointScope::Chunk).await;
+        assert!(by_id.edges.is_empty());
+        assert_eq!(by_id.stats.dropped_source_missing, 1);
+    }
+
+    /// Finding 6: a unit's output is in declaration order, not hash order.
+    #[tokio::test]
+    async fn a_units_output_follows_declaration_order() {
+        let names: Vec<String> = (0..40).map(|i| format!("Entity {i}")).collect();
+        let nodes: Vec<Node> = names
+            .iter()
+            .map(|name| node(name, name, "Thing", ""))
+            .collect();
+        let edges: Vec<Edge> = names
+            .windows(2)
+            .map(|pair| edge(&pair[0], &pair[1], "next"))
+            .collect();
+        let out = expand(vec![(Uuid::new_v4(), graph(nodes, edges))]).await;
+
+        let got: Vec<&str> = out.nodes.iter().map(|n| n.entity.name.as_str()).collect();
+        let want: Vec<String> = names.iter().map(|n| generate_node_name(n)).collect();
+        assert_eq!(got, want.iter().map(String::as_str).collect::<Vec<_>>());
+        let sources: Vec<Uuid> = out.edges.iter().map(|e| e.source_entity_id).collect();
+        let want_sources: Vec<Uuid> = names[..39].iter().map(|n| Entity::id_for(n)).collect();
+        assert_eq!(sources, want_sources);
+    }
+
+    /// Finding 8: expanding the units concurrently gives what expanding them
+    /// one after another and merging in order gives.
+    #[tokio::test]
+    async fn concurrent_expansion_equals_sequential() {
+        let mut units = Vec::new();
+        for i in 0..24 {
+            units.extend(three_documents().into_iter().map(|unit| {
+                unit.into_iter()
+                    .map(|(chunk, mut g)| {
+                        // Vary the descriptions so first-unit-wins is visible.
+                        for n in &mut g.nodes {
+                            n.description = format!("unit {i}");
+                        }
+                        (chunk, g)
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        let concurrent = expand_units(units.clone(), EndpointScope::Unit).await;
+        let mut sequential = Vec::new();
+        for unit in units {
+            sequential.push(expand(unit).await);
+        }
+        let sequential = merge_expansions(sequential);
+
+        type NodeView = (Uuid, String, Vec<Uuid>, Vec<Uuid>);
+        let view = |out: &Expansion| -> (Vec<NodeView>, Vec<(Uuid, Uuid, String)>) {
+            let nodes = out
+                .nodes
+                .iter()
+                .map(|n| {
+                    let id = n.entity.base.id;
+                    (
+                        id,
+                        n.entity.description.clone(),
+                        n.entity_types().map(|t| t.base.id).collect(),
+                        out.producers.entity_chunks(id).to_vec(),
+                    )
+                })
+                .collect();
+            let edges = out.edges.iter().map(GraphEdgePair::dedup_key).collect();
+            (nodes, edges)
+        };
+        assert_eq!(view(&concurrent), view(&sequential));
+        assert_eq!(concurrent.stats, sequential.stats);
     }
 
     /// `merge_expansions` keeps the first unit's edge and claim, sums the
@@ -3879,10 +4341,10 @@ mod tests {
             },
         ];
 
-        let node_map = HashMap::new();
+        let node_map = IndexMap::new();
         let type_map = HashMap::new();
-        let mut ontology_types_map = HashMap::new();
-        let mut ontology_entities_map = HashMap::new();
+        let mut ontology_types_map = IndexMap::new();
+        let mut ontology_entities_map = IndexMap::new();
 
         process_ontology_nodes(
             &nodes,
@@ -3925,7 +4387,7 @@ mod tests {
             category: NodeCategory::Classes,
         }];
 
-        let node_map = HashMap::new();
+        let node_map = IndexMap::new();
         // Pre-populate type_map with an "Organization" entry (as if LLM already extracted it)
         let mut type_map = HashMap::new();
         // `type_map` is keyed on the *normalized* type name, matching how the
@@ -3935,8 +4397,8 @@ mod tests {
             EntityType::new("organization", "A type", Some(dataset_id)),
         );
 
-        let mut ontology_types_map = HashMap::new();
-        let mut ontology_entities_map = HashMap::new();
+        let mut ontology_types_map = IndexMap::new();
+        let mut ontology_entities_map = IndexMap::new();
 
         process_ontology_nodes(
             &nodes,
@@ -3964,10 +4426,10 @@ mod tests {
             category: NodeCategory::Individuals,
         }];
 
-        let node_map = HashMap::new();
+        let node_map = IndexMap::new();
         let type_map = HashMap::new();
-        let mut ontology_types_map = HashMap::new();
-        let mut ontology_entities_map = HashMap::new();
+        let mut ontology_types_map = IndexMap::new();
+        let mut ontology_entities_map = IndexMap::new();
 
         process_ontology_nodes(
             &nodes,

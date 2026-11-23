@@ -256,9 +256,10 @@ pub struct CognifyConfig {
     /// [`Self::chunks_per_batch`] chunks of it — as Python builds it, so an
     /// endpoint never matches a node only another document declared. Within a
     /// unit, the default [`EndpointScope::Unit`] lets it match a node an
-    /// earlier chunk declared, which keeps edges Python drops;
-    /// [`EndpointScope::Chunk`] resolves only within the edge's own chunk, as
-    /// Python does. Set from `cognify.cross_chunk_endpoints`.
+    /// earlier chunk declared, or match a node by its name, which keeps edges
+    /// Python drops; [`EndpointScope::Chunk`] resolves only within the edge's
+    /// own chunk and only by node id, as Python does. Set from
+    /// `cognify.cross_chunk_endpoints`.
     #[serde(default)]
     pub endpoint_scope: EndpointScope,
 

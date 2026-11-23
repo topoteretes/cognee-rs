@@ -92,7 +92,7 @@ async fn the_graph_built_per_data_item_matches_python() {
         &HashMap::new(),
         &HashMap::new(),
         &HashSet::new(),
-        &NoOpOntologyResolver::new(),
+        std::sync::Arc::new(NoOpOntologyResolver::new()),
         None,
         None,
         EndpointScope::Chunk,
@@ -136,9 +136,8 @@ async fn the_graph_built_per_data_item_matches_python() {
         .iter()
         .map(|edge| edge.dedup_key())
         .collect();
-    // Rust's node-name fallback could resolve an endpoint Python drops, so in
-    // general Python's edges are a subset of Rust's; on this input, with
-    // chunk-local resolution, the two are equal.
+    // Chunk-local, id-only resolution is Python's rule, so the edge sets are
+    // equal; the subset check first names what is missing, if anything.
     assert!(
         expected.semantic_edges.is_subset(&edges),
         "Python edges Rust lacks: {:?}",
