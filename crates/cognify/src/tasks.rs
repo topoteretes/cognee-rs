@@ -1017,7 +1017,9 @@ pub async fn extract_graph_from_data(
 
     // Filter out DLT chunks — their graph is built deterministically by
     // extract_dlt_fk_edges from schema metadata, not by LLM extraction.
-    // Mirrors Python: cognee/tasks/graph/extract_graph_from_data.py:148-155
+    // Python keeps them out of this task altogether: a DLT manifest takes its
+    // own route (`cognify.py:599`, `get_dlt_tasks`), and
+    // `extract_graph_from_data.py` filters nothing.
     let (dlt_chunks, non_dlt_chunks): (Vec<&DocumentChunk>, Vec<&DocumentChunk>) =
         input.chunks.iter().partition(|c| c.is_dlt_row());
 
@@ -1391,8 +1393,10 @@ pub async fn extract_graph_from_data(
         user_label_owned.as_deref(),
         task_rank,
         config.endpoint_scope,
+        config.cpu_pool.as_ref().map(|pool| Arc::clone(&pool.0)),
     )
-    .await;
+    .await
+    .map_err(|error| CognifyError::Execute(format!("building the extracted graph: {error}")))?;
 
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
@@ -5405,11 +5409,13 @@ fn semantic_edge_provenance_rows(
 
 /// The extracted chunk graphs grouped into Python's units, in input order.
 ///
-/// `chunks` is every chunk of the data items being built, DLT rows included:
-/// Python cuts a data item's chunks into `chunks_per_batch` blocks before the
-/// extraction task sees them, so a block boundary falls where it does among
-/// all of them, not among the ones extraction keeps. The custom-schema walk
-/// ([`store_dynamic_graphs`]) counts the same way.
+/// `chunks` is every chunk of the data items being built, DLT rows included,
+/// and a chunk's block is its position among all of them divided by
+/// `chunks_per_batch`. That is how the custom-schema walk
+/// ([`store_dynamic_graphs`]) counts, so both paths cut a data item in the
+/// same places. It only matters for a data item that mixes DLT rows and text
+/// chunks, which Python never builds into one graph: there a DLT manifest
+/// takes its own route (`cognify.py:599`, `get_dlt_tasks`).
 fn graph_units(
     chunks: &[DocumentChunk],
     chunks_per_batch: usize,
@@ -6902,7 +6908,12 @@ pub fn make_extract_graph_task_with_rank(
         let graph_db = Arc::clone(&graph_db);
         let ontology_resolver = Arc::clone(&ontology_resolver);
         let db = Arc::clone(&db);
-        let config = config.clone();
+        let mut config = config.clone();
+        // Build the graph on the pool the host sized for this run, unless the
+        // caller pinned one.
+        if config.cpu_pool.is_none() {
+            config.cpu_pool = Some(crate::config::CpuPoolHandle(Arc::clone(&ctx.thread_pool)));
+        }
         let user_label = user_label_from_ctx(&ctx);
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
@@ -7598,6 +7609,72 @@ mod tests {
         let text_only: Vec<DocumentChunk> =
             chunks.iter().filter(|c| !c.is_dlt_row()).cloned().collect();
         assert_eq!(graph_units(&text_only, 2, graphs).len(), 1);
+    }
+
+    /// The same through `extract_graph_from_data`: one document whose DLT
+    /// rows and text chunks interleave past `chunks_per_batch`. Its two text
+    /// chunks fall in different blocks, so each block's type for the entity
+    /// is kept; counting blocks over the text chunks alone would merge them
+    /// and keep only the first.
+    #[tokio::test]
+    async fn extraction_counts_blocks_over_dlt_rows_too() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        let dataset_id = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..4)
+            .map(|index| {
+                let mut chunk = test_chunk(Uuid::new_v4(), doc, &format!("Apple, chunk {index}."));
+                chunk.chunk_index = index;
+                if index % 2 == 0 {
+                    chunk.base.data_type = cognee_models::DLT_ROW_TYPE.to_string();
+                }
+                chunk
+            })
+            .collect();
+        let apple = |kind: &str| {
+            json!({
+                "nodes": [{"id": "apple", "name": "Apple", "type": kind, "description": ""}],
+                "edges": []
+            })
+            .to_string()
+        };
+        let input = ExtractedChunks {
+            chunks,
+            documents: vec![test_document_with_metadata(doc, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let db = ledger_db(dataset_id).await;
+        let config = CognifyConfig::default()
+            .with_chunks_per_batch(2)
+            // One call at a time, so the canned answers go out in chunk order.
+            .with_max_parallel_extractions(1);
+
+        let result = extract_graph_from_data(
+            &input,
+            Arc::new(MockLlm::new(vec![apple("Company"), apple("Fruit")])),
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &config,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let pair = result
+            .entities
+            .iter()
+            .find(|pair| pair.entity.name == "apple")
+            .unwrap();
+        let types: Vec<&str> = pair.entity_types().map(|t| t.name.as_str()).collect();
+        assert_eq!(types, ["company", "fruit"]);
     }
 
     struct ValidatingDynamicLlm;

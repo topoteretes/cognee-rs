@@ -4,13 +4,12 @@
 //! Converts LLM-layer KnowledgeGraph objects to storage-layer Entity/EntityType pairs.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
-use rayon::prelude::*;
 use uuid::Uuid;
 
-use cognee_core::{HasDataPoint, ProvenanceContext, stamp_tree};
+use cognee_core::{CoreError, CpuPool, CpuPoolExt, HasDataPoint, ProvenanceContext, stamp_tree};
 use cognee_models::{Entity, EntityType, Timestamp};
 use cognee_ontology::traits::{OntologyEdge, OntologySubgraph};
 use cognee_ontology::{AttachedOntologyNode, NodeCategory, OntologyResolver};
@@ -20,6 +19,7 @@ use tracing::{debug, warn};
 use crate::fact_extraction::{KnowledgeGraph, Node};
 use crate::graph_integration::types::{
     ArtifactProducers, GraphEdgePair, GraphNodePair, ONTOLOGY_INDIVIDUAL_TYPE, TimestampNode,
+    is_ontology_individual_placeholder,
 };
 
 /// How many distinct unresolved endpoint references to name in the summary log.
@@ -641,13 +641,22 @@ pub async fn expand_extracted_graphs(
 /// [`crate::graph_integration::extraction_units`]) is expanded with fresh
 /// maps and the results merged by [`merge_expansions`] in input order.
 ///
-/// The units are expanded concurrently, on rayon's pool inside one
-/// `spawn_blocking`, so the CPU work stays off the async runtime. The merge
-/// runs in input order afterwards, so the result equals expanding the units
-/// one after another. Ontology lookups are cached for the whole run.
+/// The units are expanded off the async runtime. With `cpu_pool` — the
+/// pipeline passes the run's [`cognee_core::TaskContext::thread_pool`], the
+/// pool the host sized — each unit is one task on that pool, so they run
+/// concurrently on its threads and no other pool is started. Without one,
+/// they run one after another on a single `spawn_blocking` thread. Either
+/// way the merge then runs in input order, so the result equals expanding
+/// the units one after another. Ontology lookups are cached for the whole
+/// run.
 ///
 /// `endpoint_scope` says which chunks of a unit an edge endpoint may match;
 /// endpoints never match across units.
+///
+/// # Errors
+///
+/// [`CoreError::TaskAborted`] when a unit's expansion panicked, or the pool
+/// shut down before it finished.
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_extracted_graphs_by_unit(
     units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
@@ -659,40 +668,55 @@ pub async fn expand_extracted_graphs_by_unit(
     user_label: Option<&str>,
     task_rank: Option<i32>,
     endpoint_scope: EndpointScope,
-) -> Expansion {
-    // `spawn_blocking` needs owned inputs. These are per-chunk lookups and the
+    cpu_pool: Option<Arc<dyn CpuPool>>,
+) -> Result<Expansion, CoreError> {
+    // The workers need owned inputs. These are per-chunk lookups and the
     // edges already in the graph, small next to the extracted graphs, which
     // are moved rather than copied.
-    let chunk_node_sets = chunk_node_sets.clone();
-    let chunk_importance_weights = chunk_importance_weights.clone();
-    let existing_edges_set = existing_edges_set.clone();
-    let user_label = user_label.map(str::to_owned);
-    let expanded = tokio::task::spawn_blocking(move || {
-        let ontology = OntologyLookups::new(ontology_resolver.as_ref());
-        let inputs = UnitInputs {
-            dataset_id,
-            chunk_node_sets: &chunk_node_sets,
-            chunk_importance_weights: &chunk_importance_weights,
-            existing_edges_set: &existing_edges_set,
-            ontology: &ontology,
-            user_label: user_label.as_deref(),
-            task_rank,
-            endpoint_scope,
-        };
-        // An indexed parallel iterator collects in input order.
-        units
-            .into_par_iter()
-            .map(|graphs| expand_unit(graphs, &inputs))
-            .collect::<Vec<_>>()
-    })
-    .await;
-    let expanded = match expanded {
-        Ok(expanded) => expanded,
-        // A panic inside a unit is re-raised here, as it would have been had
-        // the unit run on this task. `into_panic` itself panics on the only
-        // other outcome, cancellation, which a blocking task suffers only when
-        // the runtime shuts down.
-        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    let shared = Arc::new(SharedUnitInputs {
+        dataset_id,
+        chunk_node_sets: chunk_node_sets.clone(),
+        chunk_importance_weights: chunk_importance_weights.clone(),
+        existing_edges_set: existing_edges_set.clone(),
+        ontology: OntologyLookups::shared(ontology_resolver),
+        user_label: user_label.map(str::to_owned),
+        task_rank,
+        endpoint_scope,
+    });
+    // Each unit enters the caller's span, so its logs stay under cognify's.
+    let span = tracing::Span::current();
+
+    // None of this work is cancellable: dropping the returned future stops
+    // the wait, not the expansion already handed to a worker, which runs to
+    // completion and is then discarded.
+    let expanded: Vec<(Expansion, Vec<String>)> = match cpu_pool {
+        Some(pool) => {
+            let tasks: Vec<_> = units
+                .into_iter()
+                .map(|graphs| {
+                    let shared = Arc::clone(&shared);
+                    let span = span.clone();
+                    pool.spawn(move || {
+                        let _entered = span.enter();
+                        expand_unit(graphs, &shared.inputs())
+                    })
+                })
+                .collect();
+            // `try_join_all` keeps the input order.
+            futures::future::try_join_all(tasks).await?
+        }
+        None => tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            let inputs = shared.inputs();
+            units
+                .into_iter()
+                .map(|graphs| expand_unit(graphs, &inputs))
+                .collect()
+        })
+        .await
+        .map_err(|error| CoreError::TaskAborted {
+            reason: format!("graph expansion did not finish: {error}"),
+        })?,
     };
 
     let mut merged = ExpansionMerger::default();
@@ -704,7 +728,7 @@ pub async fn expand_extracted_graphs_by_unit(
     }
     let expansion = merged.finish();
     log_resolution_summary(&expansion.stats, &unresolved_sample);
-    expansion
+    Ok(expansion)
 }
 
 /// What every unit's expansion reads, besides its own graphs.
@@ -720,31 +744,82 @@ struct UnitInputs<'a> {
     endpoint_scope: EndpointScope,
 }
 
-/// The ontology resolver with its `get_subgraph` answers cached for a run.
-///
-/// Every unit starts from fresh maps, so without the cache a type or an
-/// individual named in many documents is looked up once per document. The
-/// resolver answers from the loaded ontology alone, so a cached answer is the
-/// one a repeat call would give.
-struct OntologyLookups<'a> {
-    resolver: &'a dyn OntologyResolver,
-    loaded: bool,
-    /// One cell per (name, category): concurrent units asking for the same
-    /// name wait for the one lookup instead of repeating it.
-    cache: Mutex<HashMap<(String, &'static str), SubgraphCell>>,
+/// [`UnitInputs`], owned, for workers that outlive the caller's borrows.
+struct SharedUnitInputs {
+    dataset_id: Uuid,
+    chunk_node_sets: HashMap<Uuid, Vec<serde_json::Value>>,
+    chunk_importance_weights: HashMap<Uuid, f64>,
+    existing_edges_set: HashSet<String>,
+    ontology: OntologyLookups<'static>,
+    user_label: Option<String>,
+    task_rank: Option<i32>,
+    endpoint_scope: EndpointScope,
 }
 
-/// The shared slot one (name, category) lookup is answered into.
-type SubgraphCell = Arc<OnceLock<SubgraphAnswer>>;
+impl SharedUnitInputs {
+    fn inputs(&self) -> UnitInputs<'_> {
+        UnitInputs {
+            dataset_id: self.dataset_id,
+            chunk_node_sets: &self.chunk_node_sets,
+            chunk_importance_weights: &self.chunk_importance_weights,
+            existing_edges_set: &self.existing_edges_set,
+            ontology: &self.ontology,
+            user_label: self.user_label.as_deref(),
+            task_rank: self.task_rank,
+            endpoint_scope: self.endpoint_scope,
+        }
+    }
+}
 
-/// A cached `get_subgraph` answer; an error is kept as its message, which is
-/// all the caller logs.
-type SubgraphAnswer = Result<OntologySubgraph, String>;
+/// The resolver behind [`OntologyLookups`]: borrowed by a caller that runs
+/// on its own stack, shared by one that hands units to worker threads.
+enum ResolverRef<'a> {
+    Borrowed(&'a dyn OntologyResolver),
+    Shared(Arc<dyn OntologyResolver>),
+}
+
+impl ResolverRef<'_> {
+    fn get(&self) -> &dyn OntologyResolver {
+        match self {
+            Self::Borrowed(resolver) => *resolver,
+            Self::Shared(resolver) => resolver.as_ref(),
+        }
+    }
+}
+
+/// The ontology resolver with its successful `get_subgraph` answers cached
+/// for a run.
+///
+/// Every unit starts from fresh maps, so without the cache a type or an
+/// individual named in many documents is looked up once per document.
+///
+/// The cache assumes `get_subgraph` is pure for the duration of a run: the
+/// answer depends only on its arguments and the ontology loaded when the run
+/// started. Every resolver in this repository answers from the loaded
+/// ontology alone. An error is not cached; the next lookup of that name asks
+/// the resolver again.
+struct OntologyLookups<'a> {
+    resolver: ResolverRef<'a>,
+    loaded: bool,
+    /// One slot per (name, category). A unit holds the slot's lock while it
+    /// asks the resolver, so concurrent units naming the same thing wait for
+    /// that one lookup instead of repeating it; different names do not wait
+    /// for each other.
+    cache: Mutex<HashMap<(String, &'static str), SubgraphSlot>>,
+}
+
+/// One (name, category) entry of the ontology cache: empty until a lookup
+/// succeeds.
+type SubgraphSlot = Arc<Mutex<Option<Arc<OntologySubgraph>>>>;
 
 impl<'a> OntologyLookups<'a> {
     fn new(resolver: &'a dyn OntologyResolver) -> Self {
+        Self::with(ResolverRef::Borrowed(resolver))
+    }
+
+    fn with(resolver: ResolverRef<'a>) -> Self {
         Self {
-            loaded: resolver.is_loaded(),
+            loaded: resolver.get().is_loaded(),
             resolver,
             cache: Mutex::new(HashMap::new()),
         }
@@ -754,38 +829,62 @@ impl<'a> OntologyLookups<'a> {
         self.loaded
     }
 
-    /// `resolver.get_subgraph(name, category, directed = true)`, once per run.
-    fn get_subgraph(&self, name: &str, category: &'static str) -> SubgraphAnswer {
-        let cell = Arc::clone(
+    /// `resolver.get_subgraph(name, category, directed = true)`, from the
+    /// cache when an earlier lookup succeeded. An error is returned as its
+    /// message, which is all the caller logs.
+    fn get_subgraph(
+        &self,
+        name: &str,
+        category: &'static str,
+    ) -> Result<Arc<OntologySubgraph>, String> {
+        // A poisoned lock only means another unit panicked; what the map and
+        // the slots hold is still valid.
+        let slot = Arc::clone(
             self.cache
                 .lock()
-                // A poisoned lock only means another unit panicked; the map
-                // is still a valid cache.
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entry((name.to_string(), category))
                 .or_default(),
         );
-        cell.get_or_init(|| {
+        let mut answer = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(subgraph) = answer.as_ref() {
+            return Ok(Arc::clone(subgraph));
+        }
+        let subgraph = Arc::new(
             self.resolver
+                .get()
                 .get_subgraph(name, category, true)
-                .map_err(|error| error.to_string())
-        })
-        .clone()
+                .map_err(|error| error.to_string())?,
+        );
+        *answer = Some(Arc::clone(&subgraph));
+        Ok(subgraph)
+    }
+}
+
+impl OntologyLookups<'static> {
+    fn shared(resolver: Arc<dyn OntologyResolver>) -> Self {
+        Self::with(ResolverRef::Shared(resolver))
     }
 }
 
 /// Merge the expansions of several units into one, in input order.
 ///
 /// - An entity's name, description, importance weight, metadata and other
-///   fields come from the **first unit in input order** that declared it.
-///   This is a deliberate divergence from Python, where every data item
-///   writes its own copy of the entity and the last write wins — with data
-///   items running concurrently, whichever finishes last. Only
-///   `belongs_to_set` is combined: the entity keeps the NodeSet membership of
-///   every unit, as Python keeps a `belongs_to_set` edge per NodeSet.
+///   fields come from the **first unit in input order** that declared it
+///   with a real type — or, when none did, the first unit that declared it.
+///   An ontology individual that only another document's ontology lookup
+///   brought in (typed with the [`ONTOLOGY_INDIVIDUAL_TYPE`] placeholder)
+///   gives way to the first real extraction of it. First-unit-wins is a
+///   deliberate divergence from Python, where every data item writes its own
+///   copy of the entity and the last write wins — with data items running
+///   concurrently, whichever finishes last. Only `belongs_to_set` is
+///   combined: the entity keeps the NodeSet membership of every unit, as
+///   Python keeps a `belongs_to_set` edge per NodeSet.
 /// - Its types are combined by [`GraphNodePair::merge_types_from`].
-/// - Every EntityType id ends up as one copy, the first in input order, so the
-///   graph write, the index and the ledger all see the same node.
+/// - Every EntityType id ends up as one copy, the first one in input order,
+///   so the graph write, the index and the ledger all see the same node.
 /// - Edges and claimed edges are combined by (source, target, label), the
 ///   first unit's edge kept.
 /// - Producers are combined, so every chunk that declared an artifact still
@@ -808,6 +907,10 @@ pub fn merge_expansions(expansions: impl IntoIterator<Item = Expansion>) -> Expa
 struct ExpansionMerger {
     nodes: Vec<GraphNodePair>,
     node_index: HashMap<Uuid, usize>,
+    /// The first copy of each EntityType id, in input order: recorded as the
+    /// units arrive, not read off the merged nodes, whose order is the order
+    /// the *entities* were first seen.
+    first_entity_types: HashMap<Uuid, EntityType>,
     edges: Vec<GraphEdgePair>,
     edge_keys: HashSet<(Uuid, Uuid, String)>,
     claimed_existing_edges: Vec<GraphEdgePair>,
@@ -821,11 +924,23 @@ struct ExpansionMerger {
 impl ExpansionMerger {
     fn push(&mut self, expansion: Expansion) {
         for node in expansion.nodes {
+            for entity_type in node.entity_types() {
+                self.first_entity_types
+                    .entry(entity_type.base.id)
+                    .or_insert_with(|| entity_type.clone());
+            }
             match self.node_index.get(&node.entity.base.id) {
                 Some(&index) => {
                     let merged = &mut self.nodes[index];
-                    merged.merge_types_from(&node);
-                    union_node_sets(&mut merged.entity, &node.entity);
+                    if is_placeholder_only(merged) && has_real_type(&node) {
+                        // The first real extraction supplies the fields; the
+                        // placeholder copy keeps only its NodeSet membership.
+                        let placeholder = std::mem::replace(merged, node);
+                        union_node_sets(&mut merged.entity, &placeholder.entity);
+                    } else {
+                        merged.merge_types_from(&node);
+                        union_node_sets(&mut merged.entity, &node.entity);
+                    }
                 }
                 None => {
                     self.node_index
@@ -855,15 +970,11 @@ impl ExpansionMerger {
 
     fn finish(mut self) -> Expansion {
         // Each unit built its own copy of a shared EntityType, stamped with
-        // that unit's chunk importance weight. Keep the first copy of each id.
-        let mut first_copy: HashMap<Uuid, EntityType> = HashMap::new();
+        // that unit's chunk importance weight. Every node gets the first one.
         for node in &mut self.nodes {
             for entity_type in node.entity_types_mut() {
-                match first_copy.get(&entity_type.base.id) {
-                    Some(first) => *entity_type = first.clone(),
-                    None => {
-                        first_copy.insert(entity_type.base.id, entity_type.clone());
-                    }
+                if let Some(first) = self.first_entity_types.get(&entity_type.base.id) {
+                    *entity_type = first.clone();
                 }
             }
         }
@@ -876,6 +987,20 @@ impl ExpansionMerger {
             timestamps: self.timestamps,
         }
     }
+}
+
+/// Whether `node`'s only type is the ontology-individual placeholder.
+fn is_placeholder_only(node: &GraphNodePair) -> bool {
+    node.entity_type
+        .as_ref()
+        .is_some_and(is_ontology_individual_placeholder)
+        && node.extra_entity_types.is_empty()
+}
+
+/// Whether `node` has a type somebody declared.
+fn has_real_type(node: &GraphNodePair) -> bool {
+    node.entity_types()
+        .any(|entity_type| !is_ontology_individual_placeholder(entity_type))
 }
 
 /// Add the NodeSet entries of `other` that `entity` does not have yet.
@@ -1106,7 +1231,7 @@ fn expand_unit(
                     pre_stamp_extraction(&mut et, user_label, task_rank, &mut local_visited);
 
                     if ontology.is_loaded() {
-                        match ontology.get_subgraph(&node.node_type, "classes") {
+                        match ontology.get_subgraph(&node.node_type, "classes").as_deref() {
                             Ok((onto_nodes, onto_edges, Some(root_node))) => {
                                 // Python normalizes the ontology-supplied name too
                                 // before storing it
@@ -1127,7 +1252,7 @@ fn expand_unit(
 
                                 // Process ontology subgraph nodes and edges
                                 process_ontology_nodes(
-                                    &onto_nodes,
+                                    onto_nodes,
                                     dataset_id,
                                     chunk_importance_weight,
                                     &node_map,
@@ -1150,7 +1275,7 @@ fn expand_unit(
                                 edge_category_nodes.push(root_node.clone());
                                 process_ontology_edges(
                                     &edge_category_nodes,
-                                    &onto_edges,
+                                    onto_edges,
                                     existing_edges_set,
                                     &mut ontology_edge_keys,
                                     &mut ontology_edges_out,
@@ -1231,8 +1356,9 @@ fn expand_unit(
                 );
 
                 if ontology.is_loaded() {
-                    match ontology.get_subgraph(&node.name, "individuals") {
-                        Ok((ont_nodes, ont_edges, Some(root_individual))) => {
+                    let individual = ontology.get_subgraph(&node.name, "individuals");
+                    match individual.as_deref() {
+                        Ok((_, _, Some(root_individual))) => {
                             // Normalized for the same reason as the class
                             // canonical name above
                             // (`construct_data_points_and_edges_with_ontology.py:223`).
@@ -1250,7 +1376,7 @@ fn expand_unit(
                             entity_pair.entity.base.set_ontology_valid(true);
 
                             // Defer subgraph processing until after insert
-                            deferred_individual_data = Some((ont_nodes, ont_edges));
+                            deferred_individual_data = individual.as_ref().ok().cloned();
                         }
                         Ok((_, _, None)) => {}
                         Err(err) => {
@@ -1301,9 +1427,10 @@ fn expand_unit(
             }
 
             // Process deferred ontology individual subgraph (outside the Vacant borrow)
-            if let Some((ont_nodes, ont_edges)) = deferred_individual_data {
+            if let Some(subgraph) = deferred_individual_data {
+                let (ont_nodes, ont_edges, _) = &*subgraph;
                 process_ontology_nodes(
-                    &ont_nodes,
+                    ont_nodes,
                     dataset_id,
                     chunk_importance_weight,
                     &node_map,
@@ -1315,8 +1442,8 @@ fn expand_unit(
                     &mut local_visited,
                 );
                 process_ontology_edges(
-                    &ont_nodes,
-                    &ont_edges,
+                    ont_nodes,
+                    ont_edges,
                     existing_edges_set,
                     &mut ontology_edge_keys,
                     &mut ontology_edges_out,
@@ -2530,11 +2657,23 @@ mod tests {
         expand_units_with(units, scope, Arc::new(noop()), &HashMap::new()).await
     }
 
+    /// Expansion on an injected 2-thread pool, as the pipeline runs it.
     async fn expand_units_with(
         units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
         scope: EndpointScope,
         resolver: Arc<dyn OntologyResolver>,
         chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+    ) -> Expansion {
+        let pool: Arc<dyn CpuPool> = Arc::new(cognee_core::RayonThreadPool::new(2).unwrap());
+        expand_units_on(units, scope, resolver, chunk_node_sets, Some(pool)).await
+    }
+
+    async fn expand_units_on(
+        units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+        scope: EndpointScope,
+        resolver: Arc<dyn OntologyResolver>,
+        chunk_node_sets: &HashMap<Uuid, Vec<serde_json::Value>>,
+        pool: Option<Arc<dyn CpuPool>>,
     ) -> Expansion {
         expand_extracted_graphs_by_unit(
             units,
@@ -2546,8 +2685,10 @@ mod tests {
             None,
             None,
             scope,
+            pool,
         )
         .await
+        .unwrap()
     }
 
     fn graph(nodes: Vec<Node>, edges: Vec<Edge>) -> KnowledgeGraph {
@@ -3088,6 +3229,14 @@ mod tests {
         }
 
         let concurrent = expand_units(units.clone(), EndpointScope::Unit).await;
+        let without_pool = expand_units_on(
+            units.clone(),
+            EndpointScope::Unit,
+            Arc::new(noop()),
+            &HashMap::new(),
+            None,
+        )
+        .await;
         let mut sequential = Vec::new();
         for unit in units {
             sequential.push(expand(unit).await);
@@ -3113,7 +3262,241 @@ mod tests {
             (nodes, edges)
         };
         assert_eq!(view(&concurrent), view(&sequential));
+        assert_eq!(view(&without_pool), view(&sequential));
         assert_eq!(concurrent.stats, sequential.stats);
+    }
+
+    // ----- Second review round (SDK-1694) -----
+
+    /// A `CpuPool` that runs each task on a fresh thread named
+    /// `injected-pool`, and counts them.
+    struct NamedThreadPool {
+        spawned: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CpuPool for NamedThreadPool {
+        fn spawn_raw(
+            &self,
+            task: Box<dyn FnOnce() + Send + 'static>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), CoreError>> + Send>>
+        {
+            self.spawned
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            std::thread::Builder::new()
+                .name("injected-pool".to_string())
+                .spawn(move || {
+                    task();
+                    let _ = tx.send(());
+                })
+                .unwrap();
+            Box::pin(async move {
+                rx.await.map_err(|_| CoreError::TaskAborted {
+                    reason: "worker dropped".to_string(),
+                })
+            })
+        }
+    }
+
+    /// Records the thread every ontology lookup runs on.
+    #[derive(Default)]
+    struct ThreadRecordingResolver {
+        threads: Mutex<Vec<Option<String>>>,
+    }
+
+    impl OntologyResolver for ThreadRecordingResolver {
+        fn find_closest_match(&self, _: &str, _: &str) -> OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(&self, _: &str, _: &str, _: bool) -> OntologyResult<OntologySubgraph> {
+            self.threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().name().map(str::to_string));
+            Ok((vec![], vec![], None))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Finding 1: the units are expanded on the injected pool, one task each,
+    /// not on a pool of the expansion's own.
+    #[tokio::test]
+    async fn units_are_expanded_on_the_injected_pool() {
+        let units: Vec<Vec<(Uuid, KnowledgeGraph)>> = (0..3)
+            .map(|i| {
+                vec![(
+                    Uuid::new_v4(),
+                    graph(
+                        vec![node(
+                            &format!("n{i}"),
+                            &format!("Name {i}"),
+                            &format!("Type{i}"),
+                            "",
+                        )],
+                        vec![],
+                    ),
+                )]
+            })
+            .collect();
+        let pool = Arc::new(NamedThreadPool {
+            spawned: Default::default(),
+        });
+        let resolver = Arc::new(ThreadRecordingResolver::default());
+
+        expand_units_on(
+            units,
+            EndpointScope::Unit,
+            resolver.clone(),
+            &HashMap::new(),
+            Some(pool.clone()),
+        )
+        .await;
+
+        assert_eq!(pool.spawned.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let threads = resolver.threads.lock().unwrap();
+        assert!(!threads.is_empty());
+        assert!(
+            threads
+                .iter()
+                .all(|name| name.as_deref() == Some("injected-pool")),
+            "{threads:?}"
+        );
+    }
+
+    /// Finding 2: a type id keeps the copy of the first unit, in input order,
+    /// that declared it — not of the first merged node that has it.
+    #[tokio::test]
+    async fn a_shared_entity_type_keeps_the_first_copy_in_input_order() {
+        let unit = |weight: f64, key: &str, name: &str, kind: &str| {
+            let chunk = Uuid::new_v4();
+            let weights = HashMap::from([(chunk, weight)]);
+            let graphs = vec![(chunk, graph(vec![node(key, name, kind, "")], vec![]))];
+            async move {
+                expand_extracted_graphs(
+                    graphs,
+                    Uuid::new_v4(),
+                    &HashMap::new(),
+                    &weights,
+                    &HashSet::new(),
+                    &noop(),
+                    None,
+                    None,
+                )
+                .await
+            }
+        };
+        let merged = merge_expansions([
+            unit(0.5, "apple", "Apple", "Company").await,
+            unit(0.9, "banana", "Banana", "Fruit").await,
+            unit(0.2, "apple", "Apple", "Fruit").await,
+        ]);
+
+        for pair in &merged.nodes {
+            for entity_type in pair.entity_types().filter(|t| t.name == "fruit") {
+                assert_eq!(
+                    entity_type.base.importance_weight,
+                    Some(0.9),
+                    "{}",
+                    pair.entity.name
+                );
+            }
+        }
+        assert_eq!(types_of(&merged, "apple"), ["company", "fruit"]);
+    }
+
+    /// An ontology that errors on its first lookup of each name, then answers.
+    #[derive(Default)]
+    struct FlakyResolver {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl OntologyResolver for FlakyResolver {
+        fn find_closest_match(&self, _: &str, _: &str) -> OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _: bool,
+        ) -> OntologyResult<OntologySubgraph> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                return Err(cognee_ontology::OntologyError::MatchingError(
+                    "not yet".to_string(),
+                ));
+            }
+            CompanyKnowsAlice {
+                lookups: Default::default(),
+            }
+            .get_subgraph(node_name, node_type, true)
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Finding 4: a failed lookup is not cached, a successful one is.
+    #[test]
+    fn the_ontology_cache_retries_errors_and_shares_answers() {
+        let resolver = FlakyResolver::default();
+        let lookups = OntologyLookups::new(&resolver);
+
+        assert!(lookups.get_subgraph("Company", "classes").is_err());
+        let first = lookups.get_subgraph("Company", "classes").unwrap();
+        let again = lookups.get_subgraph("Company", "classes").unwrap();
+
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "a hit shares the cached answer"
+        );
+        assert_eq!(resolver.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Finding 5: an entity known in one unit only through the ontology
+    /// placeholder takes its fields from the unit that extracted it, in
+    /// either order.
+    #[tokio::test]
+    async fn a_real_extraction_supplies_the_fields_over_a_placeholder() {
+        let with_placeholder = vec![(
+            Uuid::new_v4(),
+            graph(vec![node("acme", "Acme", "Company", "")], vec![]),
+        )];
+        let typed = vec![(
+            Uuid::new_v4(),
+            graph(
+                vec![node("alice", "Alice", "Person", "Alice, a person")],
+                vec![],
+            ),
+        )];
+
+        for units in [
+            vec![with_placeholder.clone(), typed.clone()],
+            vec![typed.clone(), with_placeholder.clone()],
+        ] {
+            let out = expand_units_with(
+                units,
+                EndpointScope::Unit,
+                Arc::new(CompanyKnowsAlice {
+                    lookups: Default::default(),
+                }),
+                &HashMap::new(),
+            )
+            .await;
+            let alice = out
+                .nodes
+                .iter()
+                .find(|pair| pair.entity.name == "alice")
+                .unwrap();
+            assert_eq!(alice.entity.description, "Alice, a person");
+            assert_eq!(types_of(&out, "alice"), ["person"]);
+        }
     }
 
     /// `merge_expansions` keeps the first unit's edge and claim, sums the

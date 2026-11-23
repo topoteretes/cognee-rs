@@ -231,23 +231,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run won and every other was dropped. cognify now groups the extracted chunk
   graphs into the same units (`extraction_units`, shared with the custom-schema
   path), expands each with fresh maps (`expand_extracted_graphs_by_unit`) and
-  merges them (`merge_expansions`): an entity's description and fields come
-  from the first unit, its types are the union in first-seen order, edges are
-  combined by (source, target, label) and every producing chunk keeps its
-  ownership row. Across data items the first one in input order decides an
-  entity's description, importance weight and metadata: a deliberate
-  divergence from Python, where the last data item to write wins, which with
-  data items running concurrently depends on timing. NodeSet membership
-  (`belongs_to_set`) is combined across data items. The units are expanded
-  concurrently off the async runtime (rayon inside one `spawn_blocking`) and
-  merged in input order; ontology lookups are cached for the run. An entity can therefore have several `is_a` edges, each
-  EntityType is written, indexed and recorded in the ledger. An edge endpoint
-  no longer matches a node of another document. Within one unit it may still
-  match a node an earlier chunk declared, or a node by its name; the new key
-  `cognify.cross_chunk_endpoints` (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`,
-  default `true`) turns that off, which resolves endpoints only within their
-  own chunk and only by node id, as Python does. Existing graphs keep one type per entity until
-  their data is cognified again. The visualization payload still names one
+  merges them (`merge_expansions`): an entity's types are the union in
+  first-seen order, edges are combined by (source, target, label) and every
+  producing chunk keeps its ownership row. An entity can therefore have
+  several `is_a` edges, and each EntityType is written, indexed and recorded
+  in the ledger.
+
+  Across data items the first one in input order decides an entity's
+  description, importance weight and metadata (an ontology individual known
+  in one only through the `OntologyIndividual` placeholder gives way to the
+  first real extraction of it). This is a deliberate divergence from Python,
+  where the last data item to write wins, which with data items running
+  concurrently depends on timing. NodeSet membership (`belongs_to_set`) is
+  combined across data items. The units are expanded off the async runtime on
+  the run's CPU pool (`TaskContext::thread_pool`, or `CognifyConfig::cpu_pool`)
+  and merged in input order; ontology lookups are cached for the run.
+
+  An edge endpoint no longer matches a node of another document. Within one
+  unit it may still match a node an earlier chunk declared, or a node by its
+  name; the new key `cognify.cross_chunk_endpoints`
+  (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`, default `true`) turns that off,
+  which resolves endpoints only within their own chunk and only by node id,
+  as Python does. Existing graphs keep one type per entity until their data is
+  cognified again. The visualization payload still names one
   type per entity: the last `is_a` link, as Python's does. COGX export writes
   every `is_a` edge as its own fact.
 
@@ -389,7 +395,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `extra_entity_types: Vec<EntityType>`. A struct literal of either must add
   the field; `GraphNodePair::new(entity, entity_type)` builds a single-typed
   one. `GraphNodePair::entity_types()` iterates every type. `CognifyConfig`
-  gains `endpoint_scope` (`EndpointScope::Unit` by default). A reader that
+  gains `endpoint_scope` (`EndpointScope::Unit` by default) and `cpu_pool`
+  (`None` by default; the pipeline fills it from the task context). A reader that
   assumes one `is_a` edge per entity should read all of them.
 
 - **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file

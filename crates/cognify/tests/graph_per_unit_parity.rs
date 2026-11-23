@@ -96,8 +96,12 @@ async fn the_graph_built_per_data_item_matches_python() {
         None,
         None,
         EndpointScope::Chunk,
+        Some(std::sync::Arc::new(
+            cognee_core::RayonThreadPool::new(2).unwrap(),
+        )),
     )
-    .await;
+    .await
+    .unwrap();
 
     let entity_ids: BTreeSet<Uuid> = expansion
         .nodes

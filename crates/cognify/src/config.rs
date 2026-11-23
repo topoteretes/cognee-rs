@@ -21,6 +21,7 @@ use crate::dynamic_graph::{DynamicGraphError, DynamicGraphSchema};
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
 use crate::graph_backend::ChunkGraphExtractor;
 pub use crate::graph_integration::EndpointScope;
+use cognee_core::CpuPool;
 
 /// Chunks handed to the graph-extraction stage in one batch.
 ///
@@ -507,6 +508,17 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub graph_backend: Option<GraphBackendHandle>,
 
+    /// The CPU pool graph building runs on: the per-unit expansion of
+    /// [`crate::tasks::extract_graph_from_data`] is spread over it.
+    ///
+    /// The cognify pipeline fills it from the task's
+    /// [`cognee_core::TaskContext::thread_pool`], the pool the host sized (the
+    /// bindings, the CLI, an edge or Android host), so a caller rarely sets it.
+    /// `None` — a direct call without a pipeline — runs the units one after
+    /// another on a single blocking thread instead of starting a pool.
+    #[serde(skip)]
+    pub cpu_pool: Option<CpuPoolHandle>,
+
     /// The code graph settings (`code_graph.*`) the CODE_REPO route runs
     /// enola with. Not serialized: it is lowered from `Settings` like the
     /// handles above.
@@ -537,6 +549,19 @@ pub struct TranscriberHandle(pub Arc<dyn Transcriber>);
 impl std::fmt::Debug for TranscriberHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("TranscriberHandle(…)")
+    }
+}
+
+/// Opaque wrapper around a [`CpuPool`].
+///
+/// Implements [`Debug`] (prints `"CpuPoolHandle(…)"`) and [`Clone`] (cheap
+/// `Arc` clone), keeping [`CognifyConfig`] derivable.
+#[derive(Clone)]
+pub struct CpuPoolHandle(pub Arc<dyn CpuPool>);
+
+impl std::fmt::Debug for CpuPoolHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CpuPoolHandle(…)")
     }
 }
 
@@ -702,6 +727,7 @@ impl Default for CognifyConfig {
             custom_chunker: None,
             transcriber: None,
             graph_backend: None,
+            cpu_pool: None,
             code_graph: cognee_code_graph::CodeGraphConfig::default(),
         }
     }
@@ -924,6 +950,12 @@ impl CognifyConfig {
     /// Set an LLM-free graph backend (see [`ChunkGraphExtractor`]).
     pub fn with_graph_backend(mut self, backend: Arc<dyn ChunkGraphExtractor>) -> Self {
         self.graph_backend = Some(GraphBackendHandle(backend));
+        self
+    }
+
+    /// Set the CPU pool graph building runs on (see [`Self::cpu_pool`]).
+    pub fn with_cpu_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
+        self.cpu_pool = Some(CpuPoolHandle(pool));
         self
     }
 
