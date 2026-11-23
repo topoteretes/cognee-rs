@@ -1060,7 +1060,7 @@ prompt and the summary schema:
 | `EDGE_EVIDENCE_ENABLED` | `cognify.edge_evidence_enabled` | record which chunk supports which graph edge (`provenance_edge_evidence`) during cognify, so `include_references` can cite edge sources (Python's `EDGE_EVIDENCE_ENABLED`); off only stops new capture | `true` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
-| `COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS` | `cognify.cross_chunk_endpoints` | the graph is built per data item (or per `chunks_per_batch` block of one), as in Python, so an extracted edge's endpoint never matches a node of another data item. `true` lets it match a node an earlier chunk of the same block declared, and fall back to a node's name; `false` resolves it only within its own chunk and only by node id, as Python does. Rust-only knob | `true` |
+| `COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS` | `cognify.cross_chunk_endpoints` | the graph is built per data item (or per `chunks_per_batch` block of one), as in Python, so an extracted edge's endpoint never matches a node of another data item. `true` lets it match a node an earlier chunk of the same block declared, and fall back to a node's name; `false` resolves it only within its own chunk and only by the verbatim node id, as Python does. Rust-only knob | `true` |
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
 | — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
 
@@ -1212,14 +1212,16 @@ configuration**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
 rejected like any other unknown value and leaves the default in place; the
 variant is reachable only in code, via
 `CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
-configuration surface because what it leaves behind is permanent. A run that
-wrote graph edges and then died before the vector stage leaves those edges in
-the graph with no `EdgeType_relationship_name` point. The
-retry does not repair them: the completion marker is unset, so the item is
-processed again, but `retrieve_existing_edges` finds the orphaned edges and
-expansion skips every edge already in the graph — so no row and no vector is
-ever written for them again. Setting `incremental_loading = false` does not
-help; that dedup filter is not the incremental one. `WholeRun` and
+configuration surface because a retry does not repair what it leaves behind.
+A run that wrote graph edges and then died before the vector stage leaves
+those edges in the graph with no `EdgeType_relationship_name` point. The
+completion marker is unset, so a retry processes the item again, but
+`retrieve_existing_edges` finds the orphaned edges and the retry only claims
+them: it records its ownership and writes neither the edge nor its vector
+again. Setting `incremental_loading = false` does not help; that dedup filter
+is not the incremental one. Only `cognee-cli edge-reindex`
+(`reindex_edge_types`) writes the missing points, or a later run that writes
+a new edge with the same text. `WholeRun` and
 `FailedItems` both converge on a retry, because both remove the half-written
 artifacts first; `Nothing` is the only scope that cannot.
 

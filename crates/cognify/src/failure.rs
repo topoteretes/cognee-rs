@@ -118,17 +118,21 @@ pub enum RollbackScope {
     ///
     /// A library-level escape hatch, and deliberately **not selectable from
     /// configuration** — the config parser has no spelling for it — because
-    /// what it leaves behind is permanent. A run that wrote graph edges and
-    /// died before the vector stage leaves those edges with no
-    /// `EdgeType_relationship_name` point. The retry does not repair
-    /// them: the completion marker is unset, so the item is processed again,
-    /// but [`crate::graph_integration::retrieve_existing_edges`] finds the
-    /// orphaned edges and `expansion.rs` skips every edge already in the
-    /// graph, so no row and no vector is ever written for them again. Setting
+    /// what it leaves behind is not repaired by a retry. A run that wrote
+    /// graph edges and died before the vector stage leaves those edges with
+    /// no `EdgeType_relationship_name` point. The completion marker is unset,
+    /// so a retry processes the item again, but
+    /// [`crate::graph_integration::retrieve_existing_edges`] finds the
+    /// orphaned edges and [`crate::graph_integration::Expansion::split_existing_edges`]
+    /// turns them into claims: the retry records its ownership of them and
+    /// writes neither the edge nor its vector again. Setting
     /// `incremental_loading = false` does not help either — that dedup filter
-    /// is not the incremental one. [`Self::WholeRun`] and
-    /// [`Self::FailedItems`] both converge on a retry, because both remove the
-    /// half-written artifacts first; this is the only scope that cannot.
+    /// is not the incremental one. Only the whole-graph repair,
+    /// [`crate::reindex_edge_types`] (`cognee-cli edge-reindex`), writes the
+    /// missing points, or a later run that writes a new edge with the same
+    /// text. [`Self::WholeRun`] and [`Self::FailedItems`] both converge on a
+    /// retry, because both remove the half-written artifacts first; this is
+    /// the only scope that cannot.
     Nothing,
 }
 

@@ -12,7 +12,7 @@
 //! within their own chunk here (`EndpointScope::Chunk`, i.e.
 //! `cognify.cross_chunk_endpoints=false`), as in Python.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use cognee_cognify::{
@@ -91,7 +91,6 @@ async fn the_graph_built_per_data_item_matches_python() {
         Uuid::new_v4(),
         &HashMap::new(),
         &HashMap::new(),
-        &HashSet::new(),
         std::sync::Arc::new(NoOpOntologyResolver::new()),
         None,
         None,

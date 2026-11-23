@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The outbound-address check blocks all of `192.0.0.0/24` (SDK-1701)**, as
   CPython >= 3.12.4 does, and web-page fetches use the same address table as
   repository clones (it was narrower).
+- **The existing-edge check takes the built edges (SDK-1694, stage O2).**
+  `retrieve_existing_edges` (re-exported from `cognee_cognify::graph_integration`)
+  now takes the edges expansion built, `impl IntoIterator<Item =
+  &GraphEdgePair>`, instead of the extracted `KnowledgeGraph`s, and returns
+  their keys as `HashSet<(Uuid, Uuid, String)>` (`GraphEdgePair::dedup_key`)
+  instead of `"{source}_{target}_{label}"` strings.
+  `expand_extracted_graphs_by_unit` loses its `existing_edges_set` argument:
+  its `Expansion` holds every edge it built, and the new
+  `Expansion::split_existing_edges(&existing)` moves the ones the graph holds
+  into `claimed_existing_edges` (an existing edge no chunk produced, an
+  ontology edge, is dropped instead). The pipeline calls
+  `retrieve_existing_edges(graph_db, &expansion.edges)` and then the split.
+  `expand_with_nodes_and_edges`, `expand_with_nodes_and_edges_with_stats` and
+  `expand_extracted_graphs` keep the argument, now a `&HashSet<(Uuid, Uuid,
+  String)>`, and split their result with it.
 
 ### Added
 
@@ -306,6 +321,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cognified again. The visualization payload still names one
   type per entity: the last `is_a` link, as Python's does. COGX export writes
   every `is_a` edge as its own fact.
+
+- **Relationship labels are normalised, and existing edges are found by
+  their final ids (SDK-1694, stage O2).** cognify stores an extracted edge's
+  label the way Python does (`generate_edge_name`: lowercase, spaces to
+  underscores, apostrophes dropped), so `Born In` and `born_in` are one
+  `born_in` edge. It used to store the model's label as given. Before
+  writing, cognify asks the graph which of the edges it built are already
+  there, on the edges' final ids and labels, as Python's
+  `find_existing_edge_identities` does; those are claimed (an ownership row,
+  no graph write). The check used to derive the ids from the model's node ids,
+  so it missed every edge whose entity is named differently from its node id
+  (node `Rostov` named "Nicholas Rostov"), every edge to a Timestamp and every
+  edge to an entity the ontology renamed. Those edges were written again on
+  every run: no duplicate (the write is an upsert), but a second write, the
+  stored edge text overwritten and the edge re-embedded. With
+  `cognify.cross_chunk_endpoints=false` an endpoint now matches only the
+  verbatim node id, as in Python: node ids `A` and `a` are two nodes.
+
+  Graphs built before this change are not migrated. Their edges, ledger rows
+  and `EdgeType` points keep the raw label and stay consistent with each
+  other. Cognifying the same data again adds a normalised copy of every edge
+  whose label was not already normalised (`works at` gains `works_at`), with
+  its own ownership row and `EdgeType` point; the raw copy stays until the
+  data that produced it is deleted.
 
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
