@@ -15,13 +15,23 @@
 //!   It is removed once no `Data` row in any dataset names its `repo_path`.
 //!   A stamp without `repo_url` is the user's own directory and is never
 //!   removed.
+//! - **The URL's other branch clones** (SDK-1709). Every branch of a URL
+//!   pins to one row, keyed on the default-branch clone, so a re-add on
+//!   another branch moves the row's `repo_path` to that branch's clone and
+//!   no row names the clone it moved off. A delete that releases a clone
+//!   therefore also removes the clones beside it of the same repository
+//!   (`<slug>` and `<slug>@<branch>-<hash>`, see
+//!   `cognee_ingestion::resolve_repo::default_branch_clone_dir`) that no row
+//!   names. A re-add never removes a clone itself: a cognify or another add
+//!   may still be reading the one the row moved off, so it stays until a
+//!   delete releases the repository.
 //!
 //! Everything here is best effort and runs after the relational delete has
 //! committed: a failure is logged and never fails the delete.
 //!
 //! Known limitation: the "no row references the clone" check and the removal
-//! are not atomic with ingestion. An add of the same URL by the same caller,
-//! running concurrently in another dataset, may find the clone on disk
+//! are not atomic with ingestion. An add of the same URL by the same caller
+//! (any branch), running concurrently with the delete, may find the clone on disk
 //! before this removes it: its git or file reads then fail (the add errors),
 //! or, when it had already read the files, the add succeeds and leaves a
 //! row whose `repo_path` no longer exists. Re-adding the URL re-clones it.
@@ -181,6 +191,39 @@ fn apply_plan(plan: &PathPlan) {
     }
 }
 
+/// The other clone directories of `clone`'s repository beside it: its
+/// default-branch clone `<slug>` and every branch clone `<slug>@…`, as the
+/// paths a stamp would name (`clone`'s parent joined with the entry name).
+/// `clone` itself is not listed. Neither clone-name form puts an `@` in the
+/// slug (`cognee_ingestion::resolve_repo::default_branch_clone_dir`,
+/// restated because this crate does not depend on ingestion). A listing
+/// failure yields none.
+fn sibling_clones(clone: &Path) -> Vec<String> {
+    let (Some(parent), Some(name)) = (clone.parent(), clone.file_name().and_then(|n| n.to_str()))
+    else {
+        return Vec::new();
+    };
+    let Some(slug) = name.split('@').next().filter(|slug| !slug.is_empty()) else {
+        return Vec::new();
+    };
+    let branch_prefix = format!("{slug}@");
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                warn!(parent = %parent.display(), %error, "could not list the clones directory");
+            }
+            return Vec::new();
+        }
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|entry| entry != name && (entry == slug || entry.starts_with(&branch_prefix)))
+        .map(|entry| parent.join(entry).to_string_lossy().into_owned())
+        .collect()
+}
+
 impl DeleteService {
     /// The code-repository rows among `links` (`(dataset_id, data_id)`), read
     /// before the relational delete removes them. Best effort: a read failure
@@ -250,6 +293,34 @@ impl DeleteService {
             let entry = by_path.entry(link.repo_path).or_default();
             entry.0.insert(link.dataset_id);
             entry.1 |= link.cloned;
+        }
+        // The other branch clones of each released clone (SDK-1709), listed
+        // before the loop below consumes `by_path`. Each is planned like a
+        // released path of no dataset: removed only when no row names it.
+        let released: Vec<String> = by_path
+            .iter()
+            .filter(|(_, (_, cloned))| *cloned)
+            .map(|(repo_path, _)| repo_path.clone())
+            .collect();
+        let siblings = match tokio::task::spawn_blocking(move || {
+            let mut siblings = BTreeSet::new();
+            for repo_path in &released {
+                siblings.extend(sibling_clones(Path::new(repo_path)));
+            }
+            siblings
+        })
+        .await
+        {
+            Ok(siblings) => siblings,
+            Err(error) => {
+                warn!(%error, "could not list the repository's other branch clones");
+                BTreeSet::new()
+            }
+        };
+        for sibling in siblings {
+            by_path
+                .entry(sibling)
+                .or_insert_with(|| (BTreeSet::new(), true));
         }
         let mut plans = Vec::new();
         for (repo_path, (datasets, cloned)) in by_path {

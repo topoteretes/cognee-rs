@@ -57,7 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Code repository folders are cleaned up (SDK-1701).** Forgetting a code
   repository row, or deleting its dataset, removes the dataset's
   `.enola-<dataset_id>` snapshot from the repository, and removes a clone no
-  remaining row points at. Rust-only.
+  remaining row points at. Rust-only. It also removes the repository's other
+  branch clones beside it that no row names (SDK-1709): a re-add on another
+  branch moves the URL's one row to that branch's clone, and the clone it
+  moved off used to stay on disk for good. A re-add itself never removes a
+  clone.
 - **Keyless `remember(content_type="code")` (SDK-1053).** A port of the
   `content_type == "code"` branch of Python's `_remember_inner`:
   `cognee::api::remember_code` (`RememberCodeParams`) stores each repository

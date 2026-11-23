@@ -1145,6 +1145,116 @@ mod remote {
         assert_eq!(stamp["repo_path"], default_clone.to_string_lossy().as_ref());
     }
 
+    /// The repository row of `rows` (the manifest).
+    fn manifest_of(rows: &[cognee_models::Data]) -> &cognee_models::Data {
+        rows.iter()
+            .find(|row| cognify_route_for(row) == Ok(CognifyRoute::CodeRepo))
+            .expect("a code-repository row")
+    }
+
+    /// `add` of the URL on `branch` into `dataset`.
+    async fn add_branch(
+        pipeline: &AddPipeline,
+        stack: &Stack,
+        dataset: &str,
+        branch: Option<&str>,
+    ) -> Vec<cognee_models::Data> {
+        let params = AddParams {
+            branch: branch.map(str::to_string),
+            ..AddParams::default()
+        };
+        pipeline
+            .add_with_params(
+                vec![DataInput::Url(URL.to_string())],
+                dataset,
+                stack.owner_id,
+                None,
+                &params,
+            )
+            .await
+            .unwrap()
+    }
+
+    /// Forget the row `data_id` of `dataset_id`, as `cognee.forget` does.
+    async fn forget_row(stack: &Stack, dataset_id: Uuid, data_id: Uuid) {
+        use cognee::api::forget::{DatasetRef, ForgetTarget, forget};
+        use cognee::delete::DeleteService;
+        use cognee_database::DeleteDb;
+
+        let service = DeleteService::new(
+            Arc::clone(&stack.storage),
+            Arc::clone(&stack.db) as Arc<dyn DeleteDb>,
+        )
+        .with_graph_db(Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>)
+        .with_vector_db(Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>);
+        forget(
+            ForgetTarget::Item {
+                data_id,
+                dataset: DatasetRef::Id(dataset_id),
+            },
+            stack.owner_id,
+            None,
+            &service,
+            Some(stack.db.as_ref() as &dyn IngestDb),
+        )
+        .await
+        .expect("forget the repository row");
+    }
+
+    /// SDK-1709: a re-add on another branch moves the URL's one row to that
+    /// branch's clone and leaves the clone it moved off in place (a cognify
+    /// may still read it); forgetting the row removes both, so no clone of
+    /// the URL is left behind.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forgetting_a_row_removes_the_clones_of_every_branch_it_used() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let pipeline = add_pipeline(&stack, &remote);
+        let default_clone = clone_dir(URL, None, &remote.clones);
+        let dev_clone = clone_dir(URL, Some("dev"), &remote.clones);
+
+        let dev = manifest_of(&add_branch(&pipeline, &stack, DATASET, Some("dev")).await).clone();
+        let main = manifest_of(&add_branch(&pipeline, &stack, DATASET, None).await).clone();
+        assert_eq!(main.id, dev.id);
+        assert!(default_clone.join("main.py").is_file());
+        assert!(
+            dev_clone.join("dev.py").is_file(),
+            "a re-add never removes the clone the row moved off"
+        );
+
+        forget_row(&stack, stack.dataset_id().await, main.id).await;
+        assert!(
+            !default_clone.exists(),
+            "the clone the row names is removed"
+        );
+        assert!(
+            !dev_clone.exists(),
+            "the clone the row moved off is removed"
+        );
+    }
+
+    /// SDK-1709: a branch clone another row still names survives the forget
+    /// — here a second dataset's row on that branch.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forgetting_a_row_keeps_a_branch_clone_another_row_names() {
+        let Some(remote) = Remote::new() else { return };
+        let stack = Stack::new().await;
+        let pipeline = add_pipeline(&stack, &remote);
+        let default_clone = clone_dir(URL, None, &remote.clones);
+        let dev_clone = clone_dir(URL, Some("dev"), &remote.clones);
+
+        add_branch(&pipeline, &stack, "other", Some("dev")).await;
+        add_branch(&pipeline, &stack, DATASET, Some("dev")).await;
+        let row = manifest_of(&add_branch(&pipeline, &stack, DATASET, None).await).clone();
+
+        forget_row(&stack, stack.dataset_id().await, row.id).await;
+        assert!(!default_clone.exists());
+        assert!(
+            dev_clone.join("dev.py").is_file(),
+            "the other dataset's row still names the dev clone"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn add_refuses_a_bad_branch_before_anything_is_stored() {
         let Some(remote) = Remote::new() else { return };

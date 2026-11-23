@@ -163,6 +163,56 @@ async fn the_default_reference_scan_keeps_the_shared_clone() {
     assert_shared_clone_survives(&svc, &db).await;
 }
 
+/// SDK-1709: the row moved here from the `dev` branch clone, which no row
+/// names any more. Forgetting it removes that clone too, keeps a branch
+/// clone another row names, and leaves other repositories' clones alone —
+/// a longer slug, a slug that only shares a prefix, a directory without
+/// `.git`.
+#[tokio::test]
+async fn forgetting_a_clone_removes_its_unreferenced_branch_clones() {
+    let (db, svc) = setup().await;
+    let root = tempfile::tempdir().unwrap();
+    let owner = Uuid::new_v4();
+    let ds = dataset(&db, owner, "code").await;
+    let other_ds = dataset(&db, owner, "other").await;
+    let default = make_repo(root.path(), "acme_widget", &[ds]);
+    let moved_off = make_repo(root.path(), "acme_widget@dev-1a2b3c4d", &[ds]);
+    let named = make_repo(root.path(), "acme_widget@qa-5e6f7a8b", &[]);
+    repo_row(&db, owner, other_ds, &named, Some(URL)).await;
+    let longer = make_repo(root.path(), "acme_widget-extra", &[]);
+    let prefix_only = make_repo(root.path(), "acme_widgetx@dev-1a2b3c4d", &[]);
+    let not_a_clone = root.path().join("acme_widget@old-00000000");
+    std::fs::create_dir_all(&not_a_clone).unwrap();
+    let data_id = repo_row(&db, owner, ds, &default, Some(URL)).await;
+
+    svc.execute(&forget_item(ds, data_id)).await.unwrap();
+
+    assert!(!default.exists(), "the clone the row named");
+    assert!(!moved_off.exists(), "the branch clone the row moved off");
+    assert!(named.join(".git").exists(), "another row names it");
+    assert!(longer.join(".git").exists(), "another repository");
+    assert!(prefix_only.join(".git").exists(), "another repository");
+    assert!(not_a_clone.exists(), "no .git inside");
+}
+
+/// SDK-1709: forgetting a row that names a user's own directory never
+/// looks at the directories beside it.
+#[tokio::test]
+async fn a_local_repository_has_no_branch_clones() {
+    let (db, svc) = setup().await;
+    let root = tempfile::tempdir().unwrap();
+    let owner = Uuid::new_v4();
+    let ds = dataset(&db, owner, "local").await;
+    let repo = make_repo(root.path(), "my-project", &[ds]);
+    let beside = make_repo(root.path(), "my-project@dev-1a2b3c4d", &[]);
+    let data_id = repo_row(&db, owner, ds, &repo, None).await;
+
+    svc.execute(&forget_item(ds, data_id)).await.unwrap();
+
+    assert!(repo.join(".git").exists());
+    assert!(beside.join(".git").exists());
+}
+
 #[tokio::test]
 async fn a_local_repository_is_never_removed() {
     let (db, svc) = setup().await;
