@@ -180,6 +180,13 @@ This is one data point on a corpus of 50 unrelated memories, which is the case
 exactly where the number would be non-zero. Re-measure on the large corpus once
 its cassette is re-recorded.
 
+**Since SDK-1694** endpoint resolution is no longer run-global: the graph is
+built per data item (or per `chunks_per_batch` block of one), as Python builds
+it, so an endpoint never matches a node of another document and the registry
+is reset at every unit. `cross_chunk` now counts matches to an earlier chunk of
+the same unit — what `cognify.cross_chunk_endpoints=false` (Python's
+chunk-local rule) would drop — and a per-unit flush loses nothing.
+
 ## Attribution: where the bytes are
 
 Peak RSS cannot say *what* holds the memory, so the measurement above was

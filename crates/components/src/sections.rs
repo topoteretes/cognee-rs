@@ -824,6 +824,14 @@ config_section! {
         pub chunks_per_batch: u32 = 2000 => {
             env: ["CHUNKS_PER_BATCH"], alias: ["chunks_per_batch"], secret: false,
         },
+        /// Let an extracted edge's endpoint match a node an earlier chunk of
+        /// the same data item (or `chunks_per_batch` block of it) declared
+        /// (`true`, the default), or the node's name. `false` matches Python:
+        /// an endpoint resolves only within its own chunk and only by node id.
+        /// Endpoints never match across data items.
+        pub cross_chunk_endpoints: bool = true => {
+            env: ["COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS"], alias: [], secret: false,
+        },
         /// Startup recovery's age floor in seconds (Python's
         /// `STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, `cognify/recovery.py:34`): a
         /// `STARTED` run younger than this is treated as live and never

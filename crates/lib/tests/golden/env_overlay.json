@@ -1417,6 +1417,60 @@
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"  \"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"-1\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"0\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"1\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"1.5\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"42\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"5000000000\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"70000\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"TRUE\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"[1]\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"abc\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"false\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"no\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"on\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"require\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"true\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"v\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"yes\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"a\\\":1}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"ssl\\\":true}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
   "COGNEE_COGNIFY_EXTRACTION_STRATEGY=\"  \"": {
     "cognify.extraction_strategy": "  "
   },

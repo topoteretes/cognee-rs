@@ -223,6 +223,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **cognify builds the graph per data item, and entities keep several types
+  (SDK-1694, stage O1).** Python builds the graph of each data item (or each
+  block of `chunks_per_batch` chunks of one) with fresh maps, so within it the
+  first type declared for an entity wins and across data items the types are
+  combined. Rust built one graph for the whole run, so the first type in the
+  run won and every other was dropped. cognify now groups the extracted chunk
+  graphs into the same units (`extraction_units`, shared with the custom-schema
+  path), expands each with fresh maps (`expand_extracted_graphs_by_unit`) and
+  merges them (`merge_expansions`): an entity's types are the union in
+  first-seen order, edges are combined by (source, target, label) and every
+  producing chunk keeps its ownership row. An entity can therefore have
+  several `is_a` edges, and each EntityType is written, indexed and recorded
+  in the ledger. The rule lives in two places: graph building keeps the first
+  type per unit, and `GraphNodePair::merge_types_from` combines the units, so
+  switching to "every declared type, with counts" means keeping every type
+  with a count inside a unit as well as summing counts in the merge.
+
+  Deletes do not catch up until SDK-1694 stage O6: deleting a document does
+  not remove by ownership the extra `is_a` edges or EntityTypes it
+  contributed. Like the primary type's today, their ledger rows carry a nil
+  `data_id`, so a data item's delete never selects them (only hard delete's
+  sweep of entity types left with a single edge can), which can leave behind
+  an `is_a` edge that did not exist before this change.
+
+  Across data items the first one in input order decides an entity's
+  description, importance weight and metadata (an ontology individual known
+  in one only through the `OntologyIndividual` placeholder gives way to the
+  first real extraction of it). This is a deliberate divergence from Python,
+  where the last data item to write wins, which with data items running
+  concurrently depends on timing. NodeSet membership (`belongs_to_set`) is
+  combined across data items. The units are expanded off the async runtime on
+  the run's CPU pool (`TaskContext::thread_pool`, or `CognifyConfig::cpu_pool`)
+  and merged in input order; ontology lookups are cached for the run.
+
+  An edge endpoint no longer matches a node of another document. Within one
+  unit it may still match a node an earlier chunk declared, or a node by its
+  name; the new key `cognify.cross_chunk_endpoints`
+  (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`, default `true`) turns that off,
+  which resolves endpoints only within their own chunk and only by node id,
+  as Python does. Existing graphs keep one type per entity until their data is
+  cognified again. The visualization payload still names one
+  type per entity: the last `is_a` link, as Python's does. COGX export writes
+  every `is_a` edge as its own fact.
+
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
   `response_format: json_schema` request first, as Python's default
@@ -354,6 +398,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `FeedbackError::InvalidSessionIds`, as Python does.
 
 ### Breaking changes
+
+- **Several types per entity (SDK-1694).** `cognee_models::Entity` gains
+  `extra_types: Vec<Uuid>` (the types after `is_a`; left out of the
+  serialised form when empty) and `GraphNodePair` gains
+  `extra_entity_types: Vec<EntityType>`. A struct literal of either must add
+  the field; `GraphNodePair::new(entity, entity_type)` builds a single-typed
+  one. `GraphNodePair::entity_types()` iterates every type. `CognifyConfig`
+  gains `endpoint_scope` (`EndpointScope::Unit` by default) and `cpu_pool`
+  (`None` by default; the pipeline fills it from the task context). A reader that
+  assumes one `is_a` edge per entity should read all of them.
 
 - **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file
   with one of enola's extensions (`loaders::code::SUPPORTED_CODE_EXTENSIONS`,

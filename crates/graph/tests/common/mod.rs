@@ -2214,3 +2214,57 @@ pub async fn test_get_entity_type_names_matches_default(db: &dyn GraphDBTrait) {
     assert_eq!(names, default);
     assert!(db.get_entity_type_names(&[]).await.unwrap().is_empty());
 }
+
+/// An entity several documents typed differently keeps one `is_a` edge per
+/// type (SDK-1694): the edges are keyed on (source, target, label), so two
+/// `is_a` edges from one entity are two edges, and writing them again — the
+/// next cognify run — neither duplicates nor drops either.
+pub async fn test_entity_with_several_is_a_edges(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+    db.add_nodes_raw(vec![
+        view_node("apple", "Entity"),
+        json!({"id": "t-company", "name": "company", "type": "EntityType"}),
+        json!({"id": "t-fruit", "name": "fruit", "type": "EntityType"}),
+    ])
+    .await
+    .unwrap();
+    let is_a = |target: &str| -> EdgeData {
+        (
+            "apple".to_string(),
+            target.to_string(),
+            "is_a".to_string(),
+            HashMap::new(),
+        )
+    };
+    let edges = vec![is_a("t-company"), is_a("t-fruit")];
+    db.add_edges(&edges).await.unwrap();
+    db.add_edges(&edges).await.unwrap();
+
+    let mut targets: Vec<String> = db
+        .get_edges("apple")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(source, _, label, _)| source == "apple" && label == "is_a")
+        .map(|(_, target, _, _)| target)
+        .collect();
+    targets.sort_unstable();
+    assert_eq!(targets, ["t-company", "t-fruit"]);
+
+    let mut found: Vec<String> = db
+        .has_edges(&edges)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, target, _, _)| target)
+        .collect();
+    found.sort_unstable();
+    assert_eq!(found, ["t-company", "t-fruit"]);
+
+    // The one-name lookup picks one of them, the same way on every backend.
+    let names = db
+        .get_entity_type_names(&strings(&["apple"]))
+        .await
+        .unwrap();
+    assert_eq!(names.get("apple").map(String::as_str), Some("company"));
+}

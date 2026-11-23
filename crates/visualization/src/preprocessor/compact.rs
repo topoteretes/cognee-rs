@@ -235,6 +235,9 @@ impl CompactGraphAccumulator {
             *self.degree.entry(source.to_string()).or_insert(0) += 1;
             *self.degree.entry(target.to_string()).or_insert(0) += 1;
             if str_field(link, "relation") == Some(ENTITY_TYPE_RELATION) {
+                // An entity can have several `is_a` links, one per type
+                // (SDK-1694). The payload names one: the last link wins, as
+                // in Python's `self._is_a[source] = target`.
                 self.is_a.insert(source.to_string(), target.to_string());
             }
         }

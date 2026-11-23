@@ -133,6 +133,10 @@ pub fn write_cogx(
                     updated_at: parse_timestamp(properties.get("updated_at")),
                     metadata: serde_json::Map::new(),
                     name: name.to_string(),
+                    // Left empty on purpose: an entity can have several types
+                    // (one `is_a` edge per type, SDK-1694) and this slot holds
+                    // one. Every type travels as its own `is_a` fact plus the
+                    // EntityType's raw node, which the importer re-links.
                     entity_type: None,
                     description: non_empty_str(properties.get("description")).map(str::to_string),
                     aliases: Vec::new(),
@@ -419,6 +423,68 @@ mod tests {
         assert_eq!(raw[0]["type"], json!("NodeSet"));
         assert_eq!(raw[0]["created_at"], json!(1_768_164_683_000_i64));
         assert_eq!(raw[0]["metadata"]["index_fields"], json!(["name"]));
+    }
+
+    #[test]
+    fn an_entity_with_several_types_exports_every_type() {
+        // SDK-1694: an entity several documents typed differently has one
+        // `is_a` edge per type. Each must come out as its own fact whose ends
+        // are both in the archive, or Python's importer drops that type.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("archive");
+        let nodes = vec![
+            node(
+                "apple",
+                &[
+                    ("type", json!("Entity")),
+                    ("name", json!("apple")),
+                    ("is_a", json!("t-company")),
+                    ("extra_types", json!(["t-fruit"])),
+                ],
+            ),
+            node(
+                "t-company",
+                &[("type", json!("EntityType")), ("name", json!("company"))],
+            ),
+            node(
+                "t-fruit",
+                &[("type", json!("EntityType")), ("name", json!("fruit"))],
+            ),
+        ];
+        let is_a = |target: &str| -> EdgeData {
+            (
+                "apple".to_string(),
+                target.to_string(),
+                "is_a".to_string(),
+                HashMap::new(),
+            )
+        };
+        let edges = vec![is_a("t-company"), is_a("t-fruit")];
+
+        write_cogx(&nodes, &edges, &out, &ExportOptions::default()).unwrap();
+
+        let raw = read_lines(&out, RAW_NODES_FILE);
+        let exported: std::collections::HashSet<&str> =
+            raw.iter().filter_map(|node| node["id"].as_str()).collect();
+        let mut types: Vec<&str> = Vec::new();
+        let facts = read_lines(&out, "facts.jsonl");
+        for fact in &facts {
+            assert_eq!(fact["predicate"], json!("is_a"));
+            assert_eq!(fact["subject_ref"], json!("apple"));
+            let object = fact["object_ref"].as_str().unwrap();
+            assert!(exported.contains(object), "{object} is not in the archive");
+            types.push(object);
+        }
+        types.sort_unstable();
+        assert_eq!(types, ["t-company", "t-fruit"]);
+
+        // The entity's raw node keeps its type list verbatim.
+        let apple = raw
+            .iter()
+            .find(|node| node["id"] == json!("apple"))
+            .unwrap();
+        assert_eq!(apple["is_a"], json!("t-company"));
+        assert_eq!(apple["extra_types"], json!(["t-fruit"]));
     }
 
     #[test]

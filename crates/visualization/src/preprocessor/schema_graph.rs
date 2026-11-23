@@ -658,6 +658,8 @@ pub fn resolve_semantic_types(nodes: &[Value], links: &[Value]) -> BTreeMap<Stri
     }
 
     // Collect the EntityType target name for each Entity source via the is_a edge.
+    // An entity with several types (one `is_a` edge each, SDK-1694) gets the
+    // last one in link order, as Python's dict assignment does.
     let mut entity_type_name: HashMap<String, Option<Value>> = HashMap::new();
     for link in links {
         let target = link_endpoint(link, "target");

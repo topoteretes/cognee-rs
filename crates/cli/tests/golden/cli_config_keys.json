@@ -26,6 +26,7 @@
     "cognee_tracing_enabled",
     "cognify.cascade_rounds",
     "cognify.chunks_per_batch",
+    "cognify.cross_chunk_endpoints",
     "cognify.edge_evidence_enabled",
     "cognify.extraction_strategy",
     "cognify.failure_report_cap",
@@ -317,6 +318,7 @@
     "cognify.max_chunk_failure_ratio",
     "cognify.failure_report_cap",
     "cognify.chunks_per_batch",
+    "cognify.cross_chunk_endpoints",
     "cognify.stale_run_recovery_min_age_seconds",
     "cognify.extraction_strategy",
     "cognify.cascade_rounds",
@@ -2710,6 +2712,53 @@
     "err": true
   },
   "set cognify.chunks_per_batch <- {\"a\":1}": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- \"\"": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- \"1\"": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- \"s\"": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- \"true\"": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- -1": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- 0": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- 1": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- 1.5": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- 5000000000": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- 70000": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- [1]": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- false": {
+    "ok": {
+      "cognify.cross_chunk_endpoints": false
+    }
+  },
+  "set cognify.cross_chunk_endpoints <- null": {
+    "err": true
+  },
+  "set cognify.cross_chunk_endpoints <- true": {
+    "ok": {}
+  },
+  "set cognify.cross_chunk_endpoints <- {\"a\":1}": {
     "err": true
   },
   "set cognify.edge_evidence_enabled <- \"\"": {
@@ -16084,6 +16133,13 @@
     }
   },
   "unset cognify.chunks_per_batch": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
+  "unset cognify.cross_chunk_endpoints": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

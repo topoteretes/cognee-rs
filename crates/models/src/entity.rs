@@ -23,8 +23,18 @@ pub struct Entity {
     /// Entity name (e.g., "TechCorp")
     pub name: String,
 
-    /// Reference to EntityType UUID (e.g., UUID of "Organization" type)
+    /// Reference to EntityType UUID (e.g., UUID of "Organization" type).
+    /// The primary type: the first one declared for this entity.
     pub is_a: Option<Uuid>,
+
+    /// Further EntityType UUIDs, in the order they were first declared, never
+    /// repeating [`Self::is_a`]. Python keeps the first type per document and
+    /// combines the types of every document that mentions an entity, so one
+    /// entity can carry several `is_a` edges; this holds every type after the
+    /// first. Empty for an entity with one type, and then left out of the
+    /// serialised form, so a single-typed entity serialises as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_types: Vec<Uuid>,
 
     /// Entity description from LLM extraction
     pub description: String,
@@ -76,6 +86,7 @@ impl Entity {
             base,
             name,
             is_a: entity_type_id,
+            extra_types: Vec::new(),
             description: description.into(),
         }
     }
@@ -135,7 +146,16 @@ impl Entity {
     /// Update entity type reference.
     pub fn set_entity_type(&mut self, entity_type_id: Uuid) {
         self.is_a = Some(entity_type_id);
+        self.extra_types.retain(|id| *id != entity_type_id);
         self.base.touch();
+    }
+
+    /// Every type of this entity: [`Self::is_a`] first, then
+    /// [`Self::extra_types`].
+    pub fn type_ids(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.is_a
+            .into_iter()
+            .chain(self.extra_types.iter().copied())
     }
 }
 
@@ -152,6 +172,10 @@ impl HasDataPoint for Entity {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test code — panics are acceptable failures"
+)]
 mod tests {
     use super::*;
 
@@ -269,6 +293,29 @@ mod tests {
 
         entity.set_entity_type(type_id);
         assert_eq!(entity.is_a, Some(type_id));
+    }
+
+    #[test]
+    fn extra_types_are_left_out_of_the_serialised_form_when_empty() {
+        let entity = Entity::new("TechCorp", Some(Uuid::new_v4()), "A company", None);
+        let value = serde_json::to_value(&entity).expect("an entity serialises");
+        assert!(value.get("extra_types").is_none(), "{value}");
+
+        // A payload written before the field existed still deserialises.
+        let back: Entity = serde_json::from_value(value).expect("and deserialises");
+        assert!(back.extra_types.is_empty());
+    }
+
+    #[test]
+    fn extra_types_round_trip_after_the_primary_type() {
+        let (company, fruit) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut entity = Entity::new("Apple", Some(company), "", None);
+        entity.extra_types.push(fruit);
+
+        let value = serde_json::to_value(&entity).expect("an entity serialises");
+        assert_eq!(value["extra_types"], serde_json::json!([fruit]));
+        let back: Entity = serde_json::from_value(value).expect("and deserialises");
+        assert_eq!(back.type_ids().collect::<Vec<_>>(), [company, fruit]);
     }
 
     #[test]

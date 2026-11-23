@@ -1,0 +1,73 @@
+{
+  "comment": "SDK-1694 test 10 input: (data_id, chunk_id, KnowledgeGraph) per chunk, in pipeline order. See README.md.",
+  "chunks": [
+    {
+      "data_id": "0e5c1f6a-0000-4000-8000-00000000000a",
+      "chunk_id": "0e5c1f6a-0000-4000-8000-0000000000a1",
+      "graph": {
+        "nodes": [
+          {"id": "apple", "name": "Apple", "type": "Company", "description": "Apple Inc., the technology company"},
+          {"id": "steve_jobs", "name": "Steve Jobs", "type": "Person", "description": "Co-founder of Apple"},
+          {"id": "1976", "name": "1976-04-01", "type": "Timestamp", "description": "Founding date of Apple"},
+          {"id": "cupertino", "name": "Cupertino", "type": "City", "description": "City in California"}
+        ],
+        "edges": [
+          {"source_node_id": "steve_jobs", "target_node_id": "apple", "relationship_name": "founded", "description": "Steve Jobs founded Apple."},
+          {"source_node_id": "apple", "target_node_id": "1976", "relationship_name": "founded_at", "description": "Apple was founded on 1976-04-01."},
+          {"source_node_id": "1976", "target_node_id": "cupertino", "relationship_name": "located_in"},
+          {"source_node_id": "apple", "target_node_id": "cupertino", "relationship_name": "headquartered_in"}
+        ]
+      }
+    },
+    {
+      "data_id": "0e5c1f6a-0000-4000-8000-00000000000a",
+      "chunk_id": "0e5c1f6a-0000-4000-8000-0000000000a2",
+      "graph": {
+        "nodes": [
+          {"id": "apple_inc", "name": "Apple", "type": "Organization", "description": "The company again, typed differently"},
+          {"id": "tim_cook", "name": "Tim Cook", "type": "Person", "description": "CEO of Apple"},
+          {"id": "cupertino", "name": "Cupertino", "type": "Town", "description": "Where Apple is based"}
+        ],
+        "edges": [
+          {"source_node_id": "tim_cook", "target_node_id": "apple_inc", "relationship_name": "leads"},
+          {"source_node_id": "tim_cook", "target_node_id": "steve_jobs", "relationship_name": "succeeded", "description": "Steve Jobs is declared only by the previous chunk."},
+          {"source_node_id": "apple_inc", "target_node_id": "cupertino", "relationship_name": "headquartered_in"}
+        ]
+      }
+    },
+    {
+      "data_id": "0e5c1f6a-0000-4000-8000-00000000000b",
+      "chunk_id": "0e5c1f6a-0000-4000-8000-0000000000b1",
+      "graph": {
+        "nodes": [
+          {"id": "apple", "name": "Apple", "type": "Fruit", "description": "The fruit of the apple tree"},
+          {"id": "apple_tree", "name": "Apple tree", "type": "Plant", "description": "Malus domestica"},
+          {"id": "1976_b", "name": "1976-04-01", "type": "Timestamp", "description": "A date"}
+        ],
+        "edges": [
+          {"source_node_id": "apple_tree", "target_node_id": "apple", "relationship_name": "bears"},
+          {"source_node_id": "apple_tree", "target_node_id": "steve_jobs", "relationship_name": "inspired", "description": "Steve Jobs is declared only by another document."},
+          {"source_node_id": "1976_b", "target_node_id": "apple_tree", "relationship_name": "planted_at"}
+        ]
+      }
+    },
+    {
+      "data_id": "0e5c1f6a-0000-4000-8000-00000000000c",
+      "chunk_id": "0e5c1f6a-0000-4000-8000-0000000000c1",
+      "graph": {
+        "nodes": [
+          {"id": "mercury_planet", "name": "Mercury", "type": "Planet", "description": "Closest planet to the Sun"},
+          {"id": "mercury_element", "name": "Mercury", "type": "Element", "description": "Chemical element Hg"},
+          {"id": "sun", "name": "Sun", "type": "Star", "description": "The star at the centre of the Solar System"},
+          {"id": "thing", "name": "Unnamed thing", "type": "", "description": "A node with a blank type"},
+          {"id": "apple", "name": "Apple", "type": "Brand", "description": "Apple as a brand"}
+        ],
+        "edges": [
+          {"source_node_id": "mercury_planet", "target_node_id": "sun", "relationship_name": "orbits"},
+          {"source_node_id": "thing", "target_node_id": "sun", "relationship_name": "near"},
+          {"source_node_id": "apple", "target_node_id": "thing", "relationship_name": "owns"}
+        ]
+      }
+    }
+  ]
+}
