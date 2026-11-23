@@ -1774,7 +1774,10 @@ its clone directory, so these names give server rows ids of their own.
 When a code repository row is forgotten, or its dataset deleted, the
 dataset's cluster snapshot (`<repo>/.enola-<dataset_id>`) is removed from the
 repository, and a clone no remaining row points at is removed (Rust-only;
-Python keeps both).
+Python keeps both). Removing a clone also removes the repository's other
+branch clones beside it that no row points at: a re-add on another branch
+moves the URL's one row to that branch's clone and leaves the old clone in
+place until then.
 
 ## System paths, users & datasets
 

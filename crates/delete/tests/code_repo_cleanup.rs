@@ -195,6 +195,49 @@ async fn forgetting_a_clone_removes_its_unreferenced_branch_clones() {
     assert!(not_a_clone.exists(), "no .git inside");
 }
 
+/// SDK-1709: a clone another row still names is not released, so its
+/// branch clones are not swept either (a cognify of that row may still read
+/// the one it moved off).
+#[tokio::test]
+async fn a_still_named_clone_sweeps_no_branch_clones() {
+    let (db, svc) = setup().await;
+    let root = tempfile::tempdir().unwrap();
+    let owner = Uuid::new_v4();
+    let ds_a = dataset(&db, owner, "a").await;
+    let ds_b = dataset(&db, owner, "b").await;
+    let default = make_repo(root.path(), "acme_widget", &[]);
+    let moved_off = make_repo(root.path(), "acme_widget@dev-1a2b3c4d", &[]);
+    let row_a = repo_row(&db, owner, ds_a, &default, Some(URL)).await;
+    repo_row(&db, owner, ds_b, &default, Some(URL)).await;
+
+    svc.execute(&forget_item(ds_a, row_a)).await.unwrap();
+
+    assert!(default.join(".git").exists(), "dataset b still names it");
+    assert!(moved_off.join(".git").exists(), "nothing was released");
+}
+
+/// SDK-1709: a branch clone another dataset's row names is kept, but the
+/// deleting dataset's snapshot inside it goes with the release.
+#[tokio::test]
+async fn a_kept_branch_clone_loses_the_deleting_datasets_snapshot() {
+    let (db, svc) = setup().await;
+    let root = tempfile::tempdir().unwrap();
+    let owner = Uuid::new_v4();
+    let ds_a = dataset(&db, owner, "a").await;
+    let ds_b = dataset(&db, owner, "b").await;
+    let default = make_repo(root.path(), "acme_widget", &[ds_a]);
+    let dev = make_repo(root.path(), "acme_widget@dev-1a2b3c4d", &[ds_a, ds_b]);
+    let row_a = repo_row(&db, owner, ds_a, &default, Some(URL)).await;
+    repo_row(&db, owner, ds_b, &dev, Some(URL)).await;
+
+    svc.execute(&forget_item(ds_a, row_a)).await.unwrap();
+
+    assert!(!default.exists());
+    assert!(dev.join(".git").exists(), "dataset b names it");
+    assert!(!enola(&dev, ds_a).exists(), "dataset a's snapshot goes");
+    assert!(enola(&dev, ds_b).exists(), "dataset b's stays");
+}
+
 /// SDK-1709: forgetting a row that names a user's own directory never
 /// looks at the directories beside it.
 #[tokio::test]
