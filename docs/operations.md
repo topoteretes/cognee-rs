@@ -498,13 +498,15 @@ one chunk failed) and *unreached* (never attempted). Only complete files are
 persisted, which is what keeps a data item all-or-nothing; failed and unreached
 files are indistinguishable to the next run and are simply redone.
 
-The abort point is a *batch* boundary, not a file boundary, and how much work
-`FailFast` actually saves depends on how big that batch is. Graph extraction
-stops after the batch that contained the failure — `chunks_per_batch`, default
-2000, so a dataset under 2000 chunks is one batch and every extraction call is
-dispatched before the failure is noticed. Summarization has no batch loop: it stops
-dispatching as soon as a fatal failure comes back, but the calls already in
-flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
+The abort point is not a file boundary, and how much work `FailFast` actually
+saves depends on how many calls are in flight. Graph extraction and
+summarization each run every chunk of the run through one stream, with no
+barrier between `chunks_per_batch` blocks: they stop dispatching as soon as a
+failure comes back, but the calls already in flight (up to
+`max_parallel_extractions`) are neither cancelled nor discarded. A file with a
+chunk that was never dispatched is unreached, even if its other chunks
+succeeded. A graph backend is the exception: it is handed `chunks_per_batch`
+chunks per call and stops after the call that failed.
 `FailFast` is an upper bound on wasted spend, not a promise of none — see
 [Cognify failure handling](configuration.md#cognify-failure-handling).
 

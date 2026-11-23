@@ -58,6 +58,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `expand_with_nodes_and_edges`, `expand_with_nodes_and_edges_with_stats` and
   `expand_extracted_graphs` keep the argument, now a `&HashSet<(Uuid, Uuid,
   String)>`, and split their result with it.
+- **Graph extraction no longer waits at `chunks_per_batch` boundaries
+  (SDK-1694, stage O3).** Both LLM extraction paths (the default graph and a
+  runtime `graph_schema`) send every chunk of the run through one stream with
+  at most `max_parallel_extractions` calls in flight, so one slow chunk holds
+  only its own slot instead of stalling every chunk after its 2000-chunk batch.
+  A chunk's text is copied only when its call starts. Results are put back in
+  chunk order before the graph is built, so the first type an entity is given
+  in a block still wins. `chunks_per_batch` (`CHUNKS_PER_BATCH`) now only sets
+  the blocks the graph is built from (Python's unit); a graph backend
+  (`CognifyConfig::graph_backend`) is still handed one block per call.
+  **`FailFast` stops sooner and at a different point:** after the first failed
+  call nothing new is dispatched, the calls in flight finish and their
+  failures are reported, and every file with a chunk that was never sent is
+  unreached, as summarization already did. Before, the whole failing batch
+  was dispatched and the stop fell on a batch boundary, so lowering
+  `chunks_per_batch` to stop sooner now has no effect on dispatch; lower
+  `max_parallel_extractions` instead. Which chunks were sent before the stop
+  now depends on timing, so on the same failing input a different set of
+  files can end up unreached.
 
 ### Added
 

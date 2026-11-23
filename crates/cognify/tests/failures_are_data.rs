@@ -180,8 +180,8 @@ async fn run_cognify(config: CognifyConfig, texts: &[&str]) -> RunOutcome {
     run_cognify_with_llm(config, llm, texts).await
 }
 
-/// One chunk per file and one chunk per batch, so the abort boundary falls
-/// exactly between files.
+/// One chunk per file and one extraction call in flight at a time, so the
+/// calls run in file order and a `FailFast` stop falls exactly between files.
 ///
 /// Summarization is off here so a marker in the fixture text is purely a
 /// graph-extraction failure — both stages read the same chunk text, so leaving
@@ -191,7 +191,7 @@ async fn run_cognify(config: CognifyConfig, texts: &[&str]) -> RunOutcome {
 fn extraction_config() -> CognifyConfig {
     CognifyConfig::default()
         .with_chunk_size(1500)
-        .with_chunks_per_batch(1)
+        .with_max_parallel_extractions(1)
         .with_summarization(false)
 }
 
