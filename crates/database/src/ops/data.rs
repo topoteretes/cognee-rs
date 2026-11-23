@@ -5,7 +5,7 @@ use cognee_models::{Data, Dataset};
 use cognee_utils::tracing_keys::{COGNEE_DB_ROW_COUNT, COGNEE_DB_SYSTEM};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, sea_query::Expr,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use tracing::{Span, instrument, warn};
 use uuid::Uuid;
@@ -178,6 +178,71 @@ pub async fn count_data_location_references(
         .map_err(map_sea_err)?;
     Span::current().record(COGNEE_DB_ROW_COUNT, count as i64);
     Ok(count as usize)
+}
+
+/// Whether `system_metadata` is a code-repository route stamp
+/// (`source == "code_repo"`) whose `repo_path` is exactly `repo_path`.
+pub fn is_code_repo_stamp_for(system_metadata: Option<&str>, repo_path: &str) -> bool {
+    let Some(text) = system_metadata else {
+        return false;
+    };
+    let Ok(serde_json::Value::Object(stamp)) = serde_json::from_str::<serde_json::Value>(text)
+    else {
+        return false;
+    };
+    stamp.get("source").and_then(serde_json::Value::as_str)
+        == Some(cognee_models::code_repo::SOURCE_CODE_REPO)
+        && stamp.get("repo_path").and_then(serde_json::Value::as_str) == Some(repo_path)
+}
+
+/// The `dataset_id` of every `Data` row whose `system_metadata` is a
+/// code-repository stamp naming exactly `repo_path` (one entry per row,
+/// `None` for a detached row). The delete path removes a cognee clone, or a
+/// dataset's `.enola-<dataset_id>` snapshot in a repository, only once no
+/// row references it any more.
+///
+/// A `LIKE` on the stamp's `source` value narrows the scan in SQL (the
+/// column is JSON text on both SQLite and Postgres); the exact `source` and
+/// `repo_path` comparison is done on the parsed JSON.
+#[instrument(
+    name = "cognee.db.relational.data.list_code_repo_path_references",
+    level = "info",
+    skip_all,
+    fields(
+        cognee.db.system = tracing::field::Empty,
+        cognee.db.row_count = tracing::field::Empty,
+    ),
+    err,
+)]
+pub async fn list_code_repo_path_references(
+    db: &DatabaseConnection,
+    repo_path: &str,
+) -> Result<Vec<Option<Uuid>>, DatabaseError> {
+    Span::current().record(COGNEE_DB_SYSTEM, database_system_label(db));
+    let rows: Vec<(Option<String>, Option<String>)> = data::Entity::find()
+        .select_only()
+        .column(data::Column::DatasetId)
+        .column(data::Column::SystemMetadata)
+        .filter(
+            data::Column::SystemMetadata
+                .like(format!("%{}%", cognee_models::code_repo::SOURCE_CODE_REPO)),
+        )
+        .into_tuple()
+        .all(db)
+        .await
+        .map_err(map_sea_err)?;
+    let mut references = Vec::new();
+    for (dataset_id, system_metadata) in rows {
+        if is_code_repo_stamp_for(system_metadata.as_deref(), repo_path) {
+            references.push(
+                uuid_hex::from_hex_opt(dataset_id.as_deref()).map_err(|error| {
+                    DatabaseError::QueryError(format!("invalid data.dataset_id: {error}"))
+                })?,
+            );
+        }
+    }
+    Span::current().record(COGNEE_DB_ROW_COUNT, references.len() as i64);
+    Ok(references)
 }
 
 #[instrument(

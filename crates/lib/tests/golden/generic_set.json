@@ -64,17 +64,17 @@
   },
   "allow_http_requests <- \"1\"": {
     "ok": {
-      "code_graph.allow_http_requests": "1"
+      "allow_http_requests": "1"
     }
   },
   "allow_http_requests <- \"s\"": {
     "ok": {
-      "code_graph.allow_http_requests": "s"
+      "allow_http_requests": "s"
     }
   },
   "allow_http_requests <- \"true\"": {
     "ok": {
-      "code_graph.allow_http_requests": "true"
+      "allow_http_requests": "true"
     }
   },
   "allow_http_requests <- -1": {
@@ -120,6 +120,68 @@
   "allow_http_requests <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "allow_http_requests"
+  },
+  "allowed_local_file_roots <- \"\"": {
+    "ok": {}
+  },
+  "allowed_local_file_roots <- \"1\"": {
+    "ok": {
+      "allowed_local_file_roots": "1"
+    }
+  },
+  "allowed_local_file_roots <- \"s\"": {
+    "ok": {
+      "allowed_local_file_roots": "s"
+    }
+  },
+  "allowed_local_file_roots <- \"true\"": {
+    "ok": {
+      "allowed_local_file_roots": "true"
+    }
+  },
+  "allowed_local_file_roots <- -1": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- 0": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- 1": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- 70000": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- [1]": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- false": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- null": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- true": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
+  },
+  "allowed_local_file_roots <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "allowed_local_file_roots"
   },
   "anthropic_base_url <- \"\"": {
     "ok": {
@@ -2379,68 +2441,6 @@
   "classification_model <- {\"a\":1}": {
     "err": "TypeMismatch",
     "key": "classification_model"
-  },
-  "code_graph.allow_http_requests <- \"\"": {
-    "ok": {}
-  },
-  "code_graph.allow_http_requests <- \"1\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "1"
-    }
-  },
-  "code_graph.allow_http_requests <- \"s\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "s"
-    }
-  },
-  "code_graph.allow_http_requests <- \"true\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "true"
-    }
-  },
-  "code_graph.allow_http_requests <- -1": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- 0": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- 1": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- 1.5": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- 5000000000": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- 70000": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- [1]": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- false": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- null": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- true": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
-  },
-  "code_graph.allow_http_requests <- {\"a\":1}": {
-    "err": "TypeMismatch",
-    "key": "code_graph.allow_http_requests"
   },
   "code_graph.clones_dir <- \"\"": {
     "ok": {}

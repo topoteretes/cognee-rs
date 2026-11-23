@@ -1,5 +1,7 @@
 {
   "<config get keys>": [
+    "allow_http_requests",
+    "allowed_local_file_roots",
     "auto_feedback",
     "aws.access_key_id",
     "aws.bearer_token",
@@ -19,7 +21,6 @@
     "chunk_size",
     "chunk_strategy",
     "classification_model",
-    "code_graph.allow_http_requests",
     "code_graph.clones_dir",
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
@@ -217,6 +218,8 @@
     "default_user_password",
     "enable_access_control",
     "log_search_history",
+    "allow_http_requests",
+    "allowed_local_file_roots",
     "log_level",
     "cognee_tracing_enabled",
     "otel_service_name",
@@ -349,7 +352,6 @@
     "code_graph.enola_path",
     "code_graph.enola_timeout_secs",
     "code_graph.clones_dir",
-    "code_graph.allow_http_requests",
     "vector.pgvector.hnsw_m",
     "vector.pgvector.hnsw_ef_construction",
     "vector.pgvector.maintenance_workers",
@@ -427,17 +429,17 @@
   },
   "set allow_http_requests <- \"1\"": {
     "ok": {
-      "code_graph.allow_http_requests": "1"
+      "allow_http_requests": "1"
     }
   },
   "set allow_http_requests <- \"s\"": {
     "ok": {
-      "code_graph.allow_http_requests": "s"
+      "allow_http_requests": "s"
     }
   },
   "set allow_http_requests <- \"true\"": {
     "ok": {
-      "code_graph.allow_http_requests": "true"
+      "allow_http_requests": "true"
     }
   },
   "set allow_http_requests <- -1": {
@@ -471,6 +473,57 @@
     "err": true
   },
   "set allow_http_requests <- {\"a\":1}": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- \"\"": {
+    "ok": {}
+  },
+  "set allowed_local_file_roots <- \"1\"": {
+    "ok": {
+      "allowed_local_file_roots": "1"
+    }
+  },
+  "set allowed_local_file_roots <- \"s\"": {
+    "ok": {
+      "allowed_local_file_roots": "s"
+    }
+  },
+  "set allowed_local_file_roots <- \"true\"": {
+    "ok": {
+      "allowed_local_file_roots": "true"
+    }
+  },
+  "set allowed_local_file_roots <- -1": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- 0": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- 1": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- 1.5": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- 5000000000": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- 70000": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- [1]": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- false": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- null": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- true": {
+    "err": true
+  },
+  "set allowed_local_file_roots <- {\"a\":1}": {
     "err": true
   },
   "set anthropic_base_url <- \"\"": {
@@ -2351,57 +2404,6 @@
     "err": true
   },
   "set classification_model <- {\"a\":1}": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- \"\"": {
-    "ok": {}
-  },
-  "set code_graph.allow_http_requests <- \"1\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "1"
-    }
-  },
-  "set code_graph.allow_http_requests <- \"s\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "s"
-    }
-  },
-  "set code_graph.allow_http_requests <- \"true\"": {
-    "ok": {
-      "code_graph.allow_http_requests": "true"
-    }
-  },
-  "set code_graph.allow_http_requests <- -1": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- 0": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- 1": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- 1.5": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- 5000000000": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- 70000": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- [1]": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- false": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- null": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- true": {
-    "err": true
-  },
-  "set code_graph.allow_http_requests <- {\"a\":1}": {
     "err": true
   },
   "set code_graph.clones_dir <- \"\"": {
@@ -15790,6 +15792,13 @@
       "relational.port": 1
     }
   },
+  "unset allowed_local_file_roots": {
+    "ok": {
+      "chunk_size": 7,
+      "llm.model": "changed",
+      "relational.port": 1
+    }
+  },
   "unset anthropic_base_url": {
     "ok": {
       "chunk_size": 7,
@@ -16035,13 +16044,6 @@
     }
   },
   "unset classification_model": {
-    "ok": {
-      "chunk_size": 7,
-      "llm.model": "changed",
-      "relational.port": 1
-    }
-  },
-  "unset code_graph.allow_http_requests": {
     "ok": {
       "chunk_size": 7,
       "llm.model": "changed",

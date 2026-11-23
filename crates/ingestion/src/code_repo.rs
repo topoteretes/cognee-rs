@@ -476,13 +476,19 @@ pub fn code_repo_stamp_path(system_metadata: Option<&str>) -> Option<String> {
 pub fn code_repo_stamp_identity(system_metadata: Option<&str>) -> Option<String> {
     let repo_path = code_repo_stamp_path(system_metadata)?;
     let stamp: serde_json::Value = serde_json::from_str(system_metadata?).ok()?;
-    let Some(repo_url) = stamp.get("repo_url").and_then(serde_json::Value::as_str) else {
+    if stamp
+        .get("repo_url")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
         return Some(repo_path);
-    };
-    let clones_dir = Path::new(&repo_path).parent()?;
-    Some(path_text(&crate::resolve_repo::clone_dir(
-        repo_url, None, clones_dir,
-    )))
+    }
+    // Read off the clone's own name rather than recomputed from the URL, so
+    // it holds for both clone name forms (an SDK call's Python slug and an
+    // API request's hashed one, `RepoSourceSettings::clone_dir`).
+    Some(path_text(&crate::resolve_repo::default_branch_clone_dir(
+        Path::new(&repo_path),
+    )?))
 }
 
 /// What [`resolve_code_repository`] makes of a project directory.
@@ -1016,6 +1022,24 @@ mod tests {
             code_repo_stamp_identity(Some(r#"{"source": "code"}"#)),
             None
         );
+    }
+
+    // An API request's hashed clone names (SDK-1701) pin every branch of a
+    // URL to its hashed default-branch clone, not to Python's slug.
+    #[test]
+    fn a_hashed_clone_is_pinned_to_its_hashed_default_clone() {
+        let url = "https://github.com/o/r";
+        let api = crate::resolve_repo::RepoSourceSettings::new("/c", "true", true);
+        let default_clone = api.clone_dir(url, None);
+        let branch_clone = api.clone_dir(url, Some("dev"));
+        for clone in [&default_clone, &branch_clone] {
+            let stamp = code_repo_system_metadata(clone, 1, Some(url));
+            assert_eq!(
+                code_repo_stamp_identity(Some(&stamp)).as_deref(),
+                Some(path_text(&default_clone).as_str())
+            );
+        }
+        assert_ne!(default_clone, Path::new("/c/github.com-o-r"));
     }
 
     // Python: test_directory_with_project_resolves_to_repo_item_plus_documents

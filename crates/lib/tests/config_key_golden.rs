@@ -131,6 +131,9 @@ const ENV_VARS: &[&str] = &[
     "DEFAULT_USER_PASSWORD",
     "ENABLE_BACKEND_ACCESS_CONTROL",
     "COGNEE_LOG_SEARCH_HISTORY",
+    // Outbound requests & local paths (SDK-1701).
+    "ALLOW_HTTP_REQUESTS",
+    "COGNEE_ALLOWED_LOCAL_FILE_ROOTS",
     "LOG_LEVEL",
     "COGNEE_LOGS_DIR",
     "CACHE_ROOT_DIRECTORY",
@@ -200,7 +203,6 @@ const ENV_VARS: &[&str] = &[
     // `code_graph.*` (cognee-code-graph, SDK-1053).
     "ENOLA_PATH",
     "COGNEE_REPOS_DIR",
-    "ALLOW_HTTP_REQUESTS",
     "COGNEE_DEBUG_LLM_REQUEST",
     "LLM_VISION_MODEL",
     "TRANSCRIPTION_MODEL",

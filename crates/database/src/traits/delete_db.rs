@@ -29,6 +29,30 @@ pub trait DeleteDb: Send + Sync {
     /// references it (Python `remove_data_file_if_unreferenced`).
     async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError>;
 
+    /// The `dataset_id` of every `Data` row whose `system_metadata` is a
+    /// code-repository stamp (`source == "code_repo"`) naming exactly
+    /// `repo_path` — one entry per row. The delete path removes a cognee
+    /// clone, and a dataset's `.enola-<dataset_id>` snapshot inside a
+    /// repository, only once no row references them.
+    ///
+    /// The default scans every dataset's rows through
+    /// [`Self::list_datasets`] and [`Self::get_dataset_data`] (so it never
+    /// sees a detached row); the `DatabaseConnection` impl runs one query.
+    async fn list_code_repo_path_references(
+        &self,
+        repo_path: &str,
+    ) -> Result<Vec<Option<Uuid>>, DatabaseError> {
+        let mut references = Vec::new();
+        for dataset in self.list_datasets().await? {
+            for row in self.get_dataset_data(dataset.id).await? {
+                if data::is_code_repo_stamp_for(row.system_metadata.as_deref(), repo_path) {
+                    references.push(row.dataset_id.or(Some(dataset.id)));
+                }
+            }
+        }
+        Ok(references)
+    }
+
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError>;
     /// Count the number of data items linked to a dataset without loading them.
     async fn count_dataset_data(&self, dataset_id: Uuid) -> Result<usize, DatabaseError>;
@@ -316,6 +340,13 @@ impl DeleteDb for DatabaseConnection {
 
     async fn count_data_location_references(&self, location: &str) -> Result<usize, DatabaseError> {
         data::count_data_location_references(self, location).await
+    }
+
+    async fn list_code_repo_path_references(
+        &self,
+        repo_path: &str,
+    ) -> Result<Vec<Option<Uuid>>, DatabaseError> {
+        data::list_code_repo_path_references(self, repo_path).await
     }
 
     async fn get_dataset_data(&self, dataset_id: Uuid) -> Result<Vec<Data>, DatabaseError> {

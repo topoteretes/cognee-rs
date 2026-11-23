@@ -519,6 +519,9 @@ static KEYS: &[KeySpec] = &[
     },
     // -- Search history -----------------------------------------------------
     row!(log_search_history: bool, env ["COGNEE_LOG_SEARCH_HISTORY"]),
+    // -- Outbound requests & local paths --------------------------------------
+    row!(allow_http_requests: str, env ["ALLOW_HTTP_REQUESTS"] aliases ["code_graph.allow_http_requests"]),
+    row!(allowed_local_file_roots: str, env ["COGNEE_ALLOWED_LOCAL_FILE_ROOTS"]),
     // -- Logging ------------------------------------------------------------
     row!(log_level: str, env ["LOG_LEVEL"]),
     // -- Observability ------------------------------------------------------
@@ -599,7 +602,12 @@ impl Settings {
     /// is a warning, or [`ConfigError::UnknownKey`] when `strict_config` is on.
     pub fn set_key(&mut self, key: &str, value: Value) -> Result<(), ConfigError> {
         if let Some(spec) = key_spec(key) {
-            return (spec.set)(self, key, value);
+            (spec.set)(self, key, value)?;
+            // A section entry of the same name (an alias that used to be a
+            // section key, e.g. `code_graph.allow_http_requests`) would
+            // otherwise be applied over this value on the next load.
+            self.sections.remove(key);
+            return Ok(());
         }
         let schema = builtin_schema();
         if schema.key_def(key).is_some() {
@@ -641,6 +649,9 @@ impl Settings {
     pub fn reset_key(&mut self, key: &str) -> Result<(), ConfigError> {
         if let Some(spec) = key_spec(key) {
             (spec.reset)(self, &Settings::default());
+            // Also a stale section entry of the same name (see `set_key`), so
+            // `config unset` repairs a file that holds one.
+            self.sections.remove(key);
             return Ok(());
         }
         if builtin_schema().remove(&mut self.sections, key).is_some() {

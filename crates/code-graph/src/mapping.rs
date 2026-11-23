@@ -53,8 +53,7 @@ pub(crate) fn fact_repo<'a>(fact: &'a Fact, fallback_repo: &'a str) -> &'a str {
 /// `pathlib.Path(path).name`: the last component, `""` for a root or `.`.
 fn path_name(path: &str) -> String {
     path.split(std::path::is_separator)
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .next_back()
+        .rfind(|segment| !segment.is_empty() && *segment != ".")
         .unwrap_or_default()
         .to_string()
 }

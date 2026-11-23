@@ -65,12 +65,12 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   `session_id`, `branch`, an unknown content type, and `index_vectors` or
   `repo_credentials` without code are refused as in Python. A remote git URL
   (`https://`, `http://`, `git@`, `ssh://`) is shallow-cloned under
-  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed
-  best-effort, on later calls; `repo_credentials` (bindings `repoCredentials`)
+  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed,
+  on later calls (an HTTP API request refuses a clone it could not refresh); `repo_credentials` (bindings `repoCredentials`)
   is a token for private https remotes that reaches git through its
   environment only, and a token in the URL is redacted from the item, the
   clone's directory and remote, logs and errors. Remote repositories follow
-  `ALLOW_HTTP_REQUESTS` (`code_graph.allow_http_requests`; allowed when unset
+  `ALLOW_HTTP_REQUESTS` (`allow_http_requests`; allowed when unset
   outside an HTTP server) and an http(s) host must not be internal. A
   dataset's repositories are extracted together as one enola cluster, which
   gives the edges between them (a frontend call to the backend route that

@@ -16,8 +16,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Breaking changes
+
+- **Repository cloning is hardened for API requests (SDK-1701).** For an HTTP
+  API request (`RepoSourceSettings` with `api_request = true`,
+  `Settings::api_repo_sources`) a clone's directory name now carries an 8-hex
+  hash of the credential-free URL (`github.com-org-repo-1a2b3c4d`), so URLs
+  Python's name merges no longer share a clone. **A code repository's data id
+  is keyed on its clone directory, so a server's URL rows get new ids**: a
+  repository re-added after upgrading is a new row, and the old row and old
+  clone directory are left in place (forget the old row to remove both). SDK,
+  CLI and binding calls keep Python's names and ids. An API request also
+  refuses a clone whose refresh failed (an SDK call still reuses it), and pins
+  git to the addresses the outbound check passed (`http.curloptResolve`, which
+  needs git >= 2.37: with an older git such a clone is refused).
+- **`ALLOW_HTTP_REQUESTS` is a cognee-wide setting (SDK-1701).** It moved from
+  the `code_graph` section to `Settings::allow_http_requests`;
+  `code_graph.allow_http_requests` stays an alias. The CLI config file moves
+  to version 7, which hoists a saved `code_graph.allow_http_requests` entry
+  into the setting. It now also gates the web
+  pages `add` fetches, as in Python (`require_http_requests_allowed_for`): an
+  `AddPipeline` that was never given `with_repo_sources` (fail-closed) refuses
+  URL inputs, and an HTTP server needs `ALLOW_HTTP_REQUESTS=true` to fetch
+  them. `RepoTransport::check_outbound_url` and `validate_outbound_url` now
+  return the checked addresses (`Vec<IpAddr>`).
+- **The outbound-address check blocks all of `192.0.0.0/24` (SDK-1701)**, as
+  CPython >= 3.12.4 does, and web-page fetches use the same address table as
+  repository clones (it was narrower).
+
 ### Added
 
+- **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
+  Python's opt-in allowlist for local repository paths: empty is no
+  restriction; set (even to `:`), a local repository must resolve under one
+  of the roots, cognee's own storage roots or the clones directory. An HTTP
+  API request (`Settings::api_repo_sources`) does not allow the storage roots,
+  and allows only the clones directory its settings carry (a server's
+  per-caller one). A refusal is a `CodeRepositoryError` with status 403
+  (Python's is 500), also for a path that does not exist.
+- **Code repository folders are cleaned up (SDK-1701).** Forgetting a code
+  repository row, or deleting its dataset, removes the dataset's
+  `.enola-<dataset_id>` snapshot from the repository, and removes a clone no
+  remaining row points at. Rust-only.
 - **Keyless `remember(content_type="code")` (SDK-1053).** A port of the
   `content_type == "code"` branch of Python's `_remember_inner`:
   `cognee::api::remember_code` (`RememberCodeParams`) stores each repository

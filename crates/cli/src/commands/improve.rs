@@ -82,6 +82,9 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 .map_err(|e| CliError::Runtime(format!("Failed to build thread pool: {e}")))?,
         );
 
+        // Read before the builder chain: the settings guard must not live
+        // across its awaits.
+        let repo_sources = cm.settings().repo_sources();
         let add_pipeline = AddPipeline::new(
             Arc::clone(&storage),
             Arc::clone(&database) as Arc<dyn cognee::database::IngestDb>,
@@ -90,6 +93,9 @@ pub fn run(args: ImproveArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         .with_graph_db(Arc::clone(&graph_db))
         .with_vector_db(Arc::clone(&vector_db))
         .with_database(Arc::clone(&database))
+        // The SDK's outbound-request gate and clone settings, not the
+        // fail-closed API default.
+        .with_repo_sources(repo_sources)
         // Python runs its image and audio loaders at `add`.
         .with_loader_registry(cm.add_loader_registry().await);
 
