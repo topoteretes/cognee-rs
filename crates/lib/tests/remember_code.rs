@@ -928,8 +928,8 @@ mod remote {
             SystemGit.run_git(&args, cwd, &env).await
         }
 
-        async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
-            Ok(())
+        async fn check_outbound_url(&self, _url: &str) -> Result<Vec<std::net::IpAddr>, String> {
+            Ok(Vec::new())
         }
     }
 

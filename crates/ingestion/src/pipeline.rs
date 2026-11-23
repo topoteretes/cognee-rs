@@ -2704,12 +2704,14 @@ impl AddPipeline {
         self
     }
 
-    /// Where remote repositories are cloned and whether they may be
-    /// (`code_graph.clones_dir`, `ALLOW_HTTP_REQUESTS`). Read by `add` for a
-    /// GitHub/GitLab repository URL and by `remember(content_type="code")`.
+    /// Where remote repositories are cloned, whether outbound requests may
+    /// be made (`code_graph.clones_dir`, `ALLOW_HTTP_REQUESTS`) and which
+    /// local repository paths may be read. Read by `add` for every URL input
+    /// (a web page to fetch or a GitHub/GitLab repository to clone) and by
+    /// `remember(content_type="code")`.
     ///
-    /// The default is fail-closed: the default clones directory, with remote
-    /// repositories refused (Python's API default). SDK, CLI and binding
+    /// The default is fail-closed: the default clones directory, with URL
+    /// inputs refused (Python's API default). SDK, CLI and binding
     /// hosts pass [`RepoSourceSettings::new`] with `api_request = false`.
     ///
     /// [`RepoSourceSettings::new`]: crate::resolve_repo::RepoSourceSettings::new
@@ -2903,6 +2905,14 @@ impl AddPipeline {
         if let Some(branch) = params.branch.as_deref() {
             crate::resolve_repo::check_branch_name(branch)?;
         }
+        // ── Outbound requests (Python `require_http_requests_allowed_for`)
+        // Before anything is written or fetched: a URL among the inputs
+        // (a web page to fetch or a repository to clone) needs the
+        // `ALLOW_HTTP_REQUESTS` gate open, so a refused call leaves nothing
+        // behind and a background run's refusal reaches the caller.
+        if inputs.iter().any(names_a_url) {
+            self.repo_sources.http_requests.require_allowed()?;
+        }
         // ── Repository URLs (Python `resolve_code_repository_url`) ───────
         // A GitHub/GitLab repository URL is a code project, not a web page:
         // it is shallow-cloned and resolved like a local project directory.
@@ -3022,6 +3032,17 @@ impl AddPipeline {
         let outputs = executed.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
         extract_data_outputs(outputs)
+    }
+}
+
+/// Whether `add` would fetch `input` as a web page or clone it as a
+/// repository (Python `_names_a_url`): a URL input, bare or inside a
+/// `DataItem`.
+fn names_a_url(input: &DataInput) -> bool {
+    match input {
+        DataInput::Url(_) => true,
+        DataInput::DataItem { data, .. } => names_a_url(data),
+        _ => false,
     }
 }
 

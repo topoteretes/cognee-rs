@@ -707,7 +707,9 @@ async fn phase_add(
 
     // Run-ownership markers for startup recovery, as every Python run holds.
     let run_ownership_dir = cm.settings().run_ownership_dir();
+    let repo_sources = cm.settings().repo_sources();
     let pipeline = AddPipeline::new(storage, Arc::clone(&database) as Arc<dyn IngestDb>)
+        .with_repo_sources(repo_sources)
         .with_thread_pool(thread_pool)
         .with_graph_db(graph_db)
         .with_vector_db(vector_db)

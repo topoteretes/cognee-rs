@@ -1486,6 +1486,42 @@ degrades to the ordinary hybrid context rather than failing the search.
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
 
+## Outbound requests & local paths
+
+| Env var | `Settings` field (alias) | Default |
+|---|---|---|
+| `ALLOW_HTTP_REQUESTS` | `allow_http_requests` (`code_graph.allow_http_requests`) | _(empty)_ |
+| `COGNEE_ALLOWED_LOCAL_FILE_ROOTS` | `allowed_local_file_roots` | _(empty: no restriction)_ |
+
+`allow_http_requests` is Python's `ALLOW_HTTP_REQUESTS`: whether cognee may
+make outbound requests for the URLs callers give it, both the web pages `add`
+fetches and the remote git repositories `add` and
+`remember(content_type="code")` clone. Only `true`, `1`, `yes` or `on` (any
+case) allow them; any other set value refuses them, a misspelling included.
+Unset or blank, SDK, CLI and binding calls may, and an HTTP server refuses
+them, as Python's API does. `add` checks it before anything is written
+(Python's `require_http_requests_allowed_for`), so a refused call leaves
+nothing behind. A refusal is HTTP 403. An http(s) URL also has to pass the
+outbound-address check: a host that is, or resolves to, a private, loopback,
+link-local, reserved or shared address is refused. Until SDK-1701 this was the
+`code_graph.allow_http_requests` section key, which stays an alias, and it
+gated repository clones only.
+
+`allowed_local_file_roots` is Python's `COGNEE_ALLOWED_LOCAL_FILE_ROOTS`: the
+directories a local repository path (`remember(content_type="code")`) must
+lie under, separated by `:` (`;` on Windows). Empty is no restriction. When it
+is set, `~` is expanded, the path is resolved to its real path (so a symlink
+cannot lead out) and it must be one of the roots or lie under one; cognee's
+own data, system, cache and log directories and the clones directory are
+always allowed too; an HTTP API request allows neither cognee's storage
+directories (they hold every tenant's state) nor any clones directory but the
+caller's own. A value with no usable entry (`:`) still restricts, as in
+Python. A path outside them is a `CodeRepositoryError` with HTTP 403
+(deliberately stricter than Python, whose class default is 500), also when
+the path does not exist, so a refusal never tells whether a path outside the
+roots exists. Python also applies it to the file paths `add` reads; Rust
+applies it to repository paths only.
+
 ## Search — history
 
 | Env var | `Settings` field | Default |
@@ -1696,7 +1732,11 @@ a repository and loads its snapshot as code nodes and typed edges.
 | `ENOLA_PATH` | `code_graph.enola_path` (`enola_path`) | _(empty)_ |
 | — | `code_graph.enola_timeout_secs` | `600` |
 | `COGNEE_REPOS_DIR` | `code_graph.clones_dir` (`repos_root_directory`) | _(empty: `~/.cognee/repos`)_ |
-| `ALLOW_HTTP_REQUESTS` | `code_graph.allow_http_requests` (`allow_http_requests`) | _(empty)_ |
+
+Whether remote repositories may be cloned is the cognee-wide
+`allow_http_requests` setting, and which local repository paths may be read
+is `allowed_local_file_roots`: see
+[Outbound requests & local paths](#outbound-requests--local-paths).
 
 `code_graph.enola_path` names the enola binary. When it is set, the file must
 exist, or the load fails with `EnolaNotInstalledError`. When it is empty,
@@ -1717,17 +1757,24 @@ positive number.
 the git URLs of `remember(content_type="code")` and the GitHub/GitLab
 repository URLs `add` takes (Python's `BaseConfig.repos_root_directory`). It is
 always a local directory, even with S3 storage. Clones are reused across calls
-and refreshed best-effort; each branch gets a directory of its own.
+and refreshed on each; each branch gets a directory of its own. An SDK, CLI or
+binding call reuses a clone whose refresh failed, as Python does.
 
-`code_graph.allow_http_requests` is Python's `ALLOW_HTTP_REQUESTS` for those
-clones. Only `true`, `1`, `yes` or `on` (any case) allow them; any other set
-value refuses them, a misspelling included. Unset or blank, SDK, CLI and
-binding calls may clone, and an HTTP server refuses remote repositories, as
-Python's API does. A refusal is a `CodeRepositoryError` (HTTP 403). An http(s)
-clone also has to pass the outbound-address check: a host that is, or resolves
-to, a private, loopback, link-local or reserved address is refused. Python's
-setting also gates the web pages `add` fetches; in Rust it gates repository
-clones only.
+An HTTP API request is stricter (Rust-only, SDK-1701): a failed refresh is an
+error instead of a stale reuse; the clone directory name carries an 8-hex hash
+of the credential-free URL (`github.com-org-repo-1a2b3c4d`), so URLs Python's
+name merges (`github.com/a/b-c` and `github.com/a-b/c`, or `http://` and
+`https://`) never share a clone; git follows no http redirect; and git is
+pinned (`http.curloptResolve`, git >= 2.37) to the addresses the outbound
+check passed, so a DNS answer that changes after the check cannot send it
+elsewhere. A git older than 2.37 cannot honour that pin, so such a clone is
+refused rather than made unpinned. A code repository's data id is keyed on
+its clone directory, so these names give server rows ids of their own.
+
+When a code repository row is forgotten, or its dataset deleted, the
+dataset's cluster snapshot (`<repo>/.enola-<dataset_id>`) is removed from the
+repository, and a clone no remaining row points at is removed (Rust-only;
+Python keeps both).
 
 ## System paths, users & datasets
 

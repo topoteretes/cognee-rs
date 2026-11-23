@@ -63,9 +63,11 @@ enola is an external binary, and this is a production subprocess:
   The child is spawned with `kill_on_drop`, so dropping the load's future
   kills it.
 - **Remote repositories.** The section also holds `code_graph.clones_dir`
-  (`COGNEE_REPOS_DIR`) and `code_graph.allow_http_requests`
-  (`ALLOW_HTTP_REQUESTS`), which `cognee_ingestion::resolve_repo` reads to
+  (`COGNEE_REPOS_DIR`), which `cognee_ingestion::resolve_repo` reads to
   clone git URLs before they reach this crate (Python's `resolve_repo.py`).
+  Whether it may clone them is the cognee-wide `allow_http_requests` setting
+  (`ALLOW_HTTP_REQUESTS`; `code_graph.allow_http_requests` remains an alias):
+  see `docs/configuration.md` § Outbound requests & local paths.
 
 ## Writing the graph
 

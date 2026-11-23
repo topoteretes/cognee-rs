@@ -32,7 +32,7 @@
 //! repositories as a code graph, keyless (Python
 //! `remember(content_type="code")`): local paths (`{type:"file", path}` or a
 //! path string) and remote git URLs, shallow-cloned under
-//! `code_graph.clones_dir` (refused when `code_graph.allow_http_requests`
+//! `code_graph.clones_dir` (refused when `allow_http_requests`
 //! disables them). One item per repository,
 //! `{kind:"code_repository", source, path, id, pipeline_run_id}`; `source`
 //! never carries URL credentials. `repoCredentials` is a token for private
