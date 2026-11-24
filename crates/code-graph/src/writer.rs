@@ -548,7 +548,9 @@ pub(crate) async fn record_snapshot_in_ledger(
 /// embedded ([`crate::index_code_graph_vectors`]): the `name` of each code
 /// node into `{type}_name` and the edges' retrieval texts into
 /// `EdgeType_relationship_name`. Only what this call writes is embedded, as
-/// in Python: an unchanged node keeps whatever vector it had.
+/// in Python: an unchanged node keeps whatever vector it had. A node whose
+/// structural edge this call restores (an earlier load failed after writing
+/// it) is embedded again, with the restored edges.
 ///
 /// An empty `data_points` (a skipped load) writes and reads nothing.
 ///
@@ -687,10 +689,44 @@ pub async fn add_code_graph_data_points(
         graph.add_edges(&missing_edges).await?;
     }
     // Graph before vectors: a vector never exists without its graph row.
-    if !to_write.is_empty()
-        && let Some(vectors) = vectors
-    {
-        index_code_graph_vectors(vectors, &to_write, &written_edges).await?;
+    // A node whose structural edge was restored was left by a load that
+    // failed before its vectors were written: it is indexed again, with the
+    // restored edges, so a retry leaves no node without its vectors.
+    if let Some(vectors) = vectors {
+        let restored_sources: HashSet<&str> = missing_edges
+            .iter()
+            .map(|(source, _, _, _)| source.as_str())
+            .collect();
+        let to_index: Vec<&CodeNode> = to_write
+            .iter()
+            .copied()
+            .chain(data_points.iter().filter(|point| {
+                !written_ids.contains(&point.id())
+                    && restored_sources.contains(point.id().to_string().as_str())
+            }))
+            .collect();
+        let mut index_edges = written_edges;
+        let written_edge_keys: HashSet<EdgeKey> = index_edges
+            .iter()
+            .map(|(source, target, relationship, _)| {
+                (source.clone(), target.clone(), relationship.clone())
+            })
+            .collect();
+        index_edges.extend(
+            missing_edges
+                .iter()
+                .filter(|(source, target, relationship, _)| {
+                    !written_edge_keys.contains(&(
+                        source.clone(),
+                        target.clone(),
+                        relationship.clone(),
+                    ))
+                })
+                .cloned(),
+        );
+        if !to_index.is_empty() || !index_edges.is_empty() {
+            index_code_graph_vectors(vectors, &to_index, &index_edges).await?;
+        }
     }
 
     Ok(CodeGraphLoadState {

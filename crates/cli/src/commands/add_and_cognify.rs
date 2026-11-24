@@ -74,10 +74,18 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
                 None
             }
             Ok(None) => None,
+            // Deferred only while an input may take a code route: a call
+            // whose every input is a document would need it, so it is refused
+            // before anything is stored.
             Err(error)
                 if cm
                     .resolve_graph_extractor(args.extractor.as_deref(), &|_| false)
-                    .from_auto =>
+                    .from_auto
+                    && args.data.iter().any(|data| {
+                        cognee::add::code_repo::may_need_no_graph_extractor(
+                            &DataInput::from_string(data.clone()),
+                        )
+                    }) =>
             {
                 Some(error)
             }

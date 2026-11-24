@@ -2370,6 +2370,32 @@ fn add_and_cognify_of_a_code_project_is_keyless() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("no-such-extractor-code"));
+
+    // Only a document: the keyless `auto` default is refused before the add,
+    // so nothing is stored for a call that could not cognify it. Without
+    // `MOCK_EMBEDDING`, which keeps the configuration as given (the LLM
+    // extractor) and so is not keyless.
+    let notes = workdir.path().join("notes.txt");
+    std::fs::write(&notes, "Some notes.\n").expect("write");
+    let mut document_only = keyless();
+    document_only.env_remove("MOCK_EMBEDDING");
+    document_only
+        .args([
+            "add-and-cognify",
+            notes.to_str().expect("utf-8 path"),
+            "--dataset-name",
+            "code_ds",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "Graph extractor initialization failed",
+        ));
+    assert_eq!(
+        count_data_rows(&db_file_path),
+        1,
+        "the document was not added"
+    );
 }
 
 /// `remember --content-type code` indexes a local repository as a code graph

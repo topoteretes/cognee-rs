@@ -2183,7 +2183,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     found them unchanged, skipped them, and never wrote their `part_of`
     edges. The node write now restores the missing structural edges
     (`part_of`, `belongs_to_set`) of the whole snapshot, and the node sets
-    they point to.
+    they point to. With `index_vectors`, the nodes whose edges are restored
+    are embedded again with those edges, so a retry leaves no node without
+    its vectors.
+  - Ladybug's `get_filtered_graph_data` no longer inlines every matched node
+    id (twice) into its edge query: it repeats the core-field filter on both
+    endpoints and keeps the edges between matched nodes in Rust. The query
+    stays the size of the filter however large the graph is, which the code
+    graph sweep's read by type relies on.
+  - `cli add-and-cognify` and the bindings' `addAndCognify` refuse a keyless
+    `auto` default that cannot be served before the add when no input may be
+    code (`code_repo::may_need_no_graph_extractor`: only text, existing
+    non-code files or uploads), so such a call stores nothing, as before.
+    With a directory, a code file or a URL among the inputs the add goes
+    ahead, and a document among the added items then fails the cognify half,
+    staying in the dataset for a retry.
+  - `AddPipeline::add_code_repository` canonicalizes every path, absolute
+    ones included, as Python's `realpath` does: a repository first added
+    through a symlink (`/tmp/repo` on macOS) is stored under its resolved
+    path when added again after upgrading, as a new row.
+  - A code project's documents are now exactly the extensions of the
+    registered built-in loaders. Video files, which the removed static list
+    named, and files only a custom loader reads are skipped in a project.
+  - `MockGraphDB::get_filtered_graph_data` applies its filters (it returned
+    the whole graph).
 
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)

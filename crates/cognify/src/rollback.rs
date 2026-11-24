@@ -479,6 +479,12 @@ pub(crate) async fn drop_already_complete(
 /// `routes_need_llm(items)`: a dataset whose standard items are already
 /// cognified and that gains a code repository must not need an LLM.
 ///
+/// The markers are read without the dataset lock `cognify()` takes, so a
+/// marker cleared in between (a concurrent delete and re-add of a completed
+/// standard item) is not seen: that item then runs without the extractor
+/// the caller left unresolved. The window is a concurrent rewrite of the
+/// same item, and the run it affects is the one that races it.
+///
 /// # Errors
 ///
 /// [`CognifyError::DatabaseError`] when the completion markers cannot be read.

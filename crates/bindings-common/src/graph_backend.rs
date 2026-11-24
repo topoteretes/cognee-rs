@@ -44,7 +44,9 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
+use cognee::add::code_repo::may_need_no_graph_extractor;
 use cognee::cognify::ChunkGraphExtractor;
+use cognee::models::DataInput;
 use cognee::{
     AUTO_GRAPH_EXTRACTOR, ComponentManager, GraphExtractorChoice, LLM_GRAPH_EXTRACTOR,
     keyless_extractor_unavailable,
@@ -278,18 +280,28 @@ pub fn check_graph_backend_registered(cm: &ComponentManager, opts: &Value) -> Re
 }
 
 /// [`check_graph_backend_registered`] before an `add_and_cognify` ingests
-/// anything, except that the `auto` default is not checked: whether it can
-/// be served depends on the LLM, which only an added item that takes the
+/// anything, except that the `auto` default is not checked while an input
+/// may take a code route ([`may_need_no_graph_extractor`]): whether it can be
+/// served depends on the LLM, which only an added item that takes the
 /// standard route needs, and a code project needs none (Python's `needs_llm`
 /// union over the routes in play). The cognify half refuses `auto` once an
-/// item needs it. A selection the opts make, or a configured kind other than
-/// `auto`, is still refused before the add.
+/// item needs it. A call whose every input is a document, a selection the
+/// opts make, or a configured kind other than `auto`, is still refused before
+/// the add.
 ///
 /// # Errors
-/// As [`check_graph_backend_registered`], for a non-`auto` selection.
-pub fn check_graph_backend_before_add(cm: &ComponentManager, opts: &Value) -> Result<(), SdkError> {
+/// As [`check_graph_backend_registered`].
+pub fn check_graph_backend_before_add(
+    cm: &ComponentManager,
+    opts: &Value,
+    inputs: &[DataInput],
+) -> Result<(), SdkError> {
     match resolve_graph_backend(cm, opts)? {
-        Some(resolved) if resolved.choice.from_auto => Ok(()),
+        Some(resolved)
+            if resolved.choice.from_auto && inputs.iter().any(may_need_no_graph_extractor) =>
+        {
+            Ok(())
+        }
         _ => check_graph_backend_registered(cm, opts),
     }
 }

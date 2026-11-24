@@ -647,6 +647,48 @@ pub fn resolve_data_directories(
     Ok(resolved)
 }
 
+/// Whether an `add` input may take a route that needs no graph extractor: a
+/// code file, a directory (a code project), a repository URL, or an item
+/// cognee stamped with a route. A caller with no extractor for the standard
+/// route uses it to refuse, before anything is stored, a call whose every
+/// input is a document (SDK-1702).
+///
+/// It answers `false` only when the input is certainly a document: text that
+/// names no existing path, an existing file whose extension no code loader
+/// claims, or an upload with such a name. Anything it cannot tell without
+/// fetching (a URL, an S3 path, a path that does not exist) answers `true`,
+/// so the add goes ahead and the cognify half decides from the stored routes.
+pub fn may_need_no_graph_extractor(input: &DataInput) -> bool {
+    fn has_code_extension(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(crate::loaders::code::is_code_extension)
+    }
+    fn path_may_be_code(path: &Path, missing: bool) -> bool {
+        if path.is_dir() {
+            return true;
+        }
+        if !path.exists() {
+            return missing;
+        }
+        has_code_extension(path)
+    }
+    match input {
+        DataInput::Text(text) => path_may_be_code(Path::new(text.trim()), false),
+        DataInput::FilePath(path) => {
+            let path = path.strip_prefix("file://").unwrap_or(path);
+            path_may_be_code(Path::new(path), true)
+        }
+        DataInput::Url(_) | DataInput::S3Path(_) => true,
+        DataInput::Binary { name, .. } => has_code_extension(Path::new(name)),
+        DataInput::DataItem {
+            data,
+            system_metadata,
+            ..
+        } => system_metadata.is_some() || may_need_no_graph_extractor(data),
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -656,6 +698,51 @@ pub fn resolve_data_directories(
 mod tests {
     use super::*;
     use crate::loaders::LoaderRegistry;
+
+    #[test]
+    fn only_a_certain_document_needs_the_graph_extractor() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = dir.path().join("notes.txt");
+        std::fs::write(&notes, "hello").unwrap();
+        let code = dir.path().join("main.py");
+        std::fs::write(&code, "print(1)").unwrap();
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+
+        assert!(!may_need_no_graph_extractor(&DataInput::Text(
+            "some notes".into()
+        )));
+        assert!(!may_need_no_graph_extractor(&DataInput::FilePath(path(
+            &notes
+        ))));
+        assert!(!may_need_no_graph_extractor(&DataInput::Binary {
+            data: Vec::new(),
+            name: "report.pdf".into(),
+        }));
+
+        assert!(may_need_no_graph_extractor(&DataInput::FilePath(path(
+            &code
+        ))));
+        assert!(may_need_no_graph_extractor(&DataInput::FilePath(path(
+            dir.path()
+        ))));
+        assert!(may_need_no_graph_extractor(&DataInput::Text(path(
+            dir.path()
+        ))));
+        assert!(may_need_no_graph_extractor(&DataInput::FilePath(format!(
+            "file://{}",
+            path(&code)
+        ))));
+        assert!(may_need_no_graph_extractor(&DataInput::FilePath(
+            "/no/such/path".into()
+        )));
+        assert!(may_need_no_graph_extractor(&DataInput::Url(
+            "https://github.com/o/r".into()
+        )));
+        assert!(may_need_no_graph_extractor(&DataInput::Binary {
+            data: Vec::new(),
+            name: "lib.rs".into(),
+        }));
+    }
 
     /// What a registry with a loader for every built-in document type names:
     /// every document extension Rust can read.

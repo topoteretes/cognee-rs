@@ -638,8 +638,9 @@ pub async fn add_and_cognify(
     // Before the add, not after: a caller who named a backend this build cannot
     // serve should not have their documents ingested by a call that was always
     // going to fail at the cognify half. The keyless `auto` default is left to
-    // the cognify half, which needs it only for a document to extract.
-    check_graph_backend_before_add(&state.cm, opts)?;
+    // the cognify half, which needs it only for a document to extract, while
+    // an input may be code.
+    check_graph_backend_before_add(&state.cm, opts, &inputs)?;
 
     let svc = state.services().await?;
     // Likewise for every other cognify option: a misspelled chunk attachment

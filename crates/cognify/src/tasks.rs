@@ -4450,8 +4450,15 @@ async fn cognify_in_scope(
                     })
                     .map(|item| item.id)
                     .collect();
+                // Refused rows are not offered, so its "skipped" log counts
+                // only rows that really are skipped.
+                let offered: Vec<Data> = data_items
+                    .iter()
+                    .filter(|item| !refused.contains(&item.id))
+                    .cloned()
+                    .collect();
                 let pending: HashSet<Uuid> =
-                    rollback::drop_already_complete(&*database, dataset_id, data_items.clone())
+                    rollback::drop_already_complete(&*database, dataset_id, offered)
                         .await?
                         .iter()
                         .map(|item| item.id)

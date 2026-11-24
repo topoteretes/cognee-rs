@@ -627,6 +627,68 @@ async fn a_failed_edge_write_records_no_new_stamp_and_a_retry_writes_the_edges()
     );
 }
 
+/// With vectors on, a retry after a failed edge write embeds the nodes the
+/// failed load wrote: they are unchanged by then, but their structural edges
+/// are restored, and with them their vectors (SDK-1702 review). Every vector
+/// a fresh load of the new snapshot writes is there after the retry.
+#[tokio::test]
+async fn a_retry_after_a_failed_edge_write_writes_the_vectors_of_the_restored_nodes() {
+    let vectors_with = |vector_db: &std::sync::Arc<cognee_vector::MockVectorDB>| {
+        cognee_code_graph::CodeGraphVectors {
+            embedding_engine: std::sync::Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
+            vector_db: vector_db.clone(),
+            dataset_id: None,
+        }
+    };
+    let point_ids = |vector_db: &cognee_vector::MockVectorDB| -> BTreeSet<(String, String)> {
+        vector_db
+            .all_points()
+            .into_iter()
+            .flat_map(|(collection, points)| {
+                points
+                    .into_iter()
+                    .map(move |point| (collection.clone(), point.id.to_string()))
+            })
+            .collect()
+    };
+
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    let vector_db = std::sync::Arc::new(cognee_vector::MockVectorDB::new());
+    let vectors = vectors_with(&vector_db);
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap();
+
+    switch_snapshot(&repo_path, "basic_v2");
+    graph.set_add_edges_error("graph down");
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap_err();
+    graph.clear_add_edges_error();
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap();
+
+    let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
+    let fresh_vector_db = std::sync::Arc::new(cognee_vector::MockVectorDB::new());
+    load_code_graph(
+        &MockGraphDB::new(),
+        None,
+        &config(),
+        &fresh_path,
+        None,
+        Some(&vectors_with(&fresh_vector_db)),
+    )
+    .await
+    .unwrap();
+    let missing: Vec<_> = point_ids(&fresh_vector_db)
+        .difference(&point_ids(&vector_db))
+        .cloned()
+        .collect();
+    assert!(missing.is_empty(), "vectors never written: {missing:?}");
+}
+
 /// Another repository in the same graph is outside the sweep.
 #[tokio::test]
 async fn the_sweep_leaves_other_repositories_alone() {

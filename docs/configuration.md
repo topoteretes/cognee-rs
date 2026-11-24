@@ -1669,8 +1669,12 @@ Python (`keyless_local_defaults_apply`):
   to extract needs the extractor: code repositories and code files take the
   LLM-free code graph route, and items an earlier run completed are skipped
   first, so `cognify` and `add-and-cognify` of a code project succeed without
-  one. A selection nothing is registered under (`--extractor` or
-  `GRAPH_EXTRACTOR`) is still refused up front;
+  one. An `add-and-cognify` whose every input is a document (text, or
+  existing non-code files) is refused before the add, so nothing is stored;
+  one with a directory, a code file or a URL among its inputs adds them, and
+  fails only if an added item is a document. A selection nothing is
+  registered under (`--extractor` or `GRAPH_EXTRACTOR`) is still refused up
+  front;
 * an embedder with no embedding setting configured (provider and model at the
   stock default, no `EMBEDDING_API_KEY`, no `EMBEDDING_ENDPOINT`) runs on the
   local ONNX model (`onnx`, `BGE-Small-v1.5`, 384 dimensions; Python uses
