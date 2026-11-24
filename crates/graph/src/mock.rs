@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -27,6 +27,8 @@ pub struct MockGraphDB {
     nodes: Arc<Mutex<HashMap<String, NodeData>>>,
     edges: Arc<Mutex<Vec<EdgeData>>>,
     call_log: Arc<Mutex<Vec<String>>>,
+    /// Nodes handed to a successful node write, repeats included.
+    node_writes: Arc<AtomicUsize>,
     /// Optional injected error returned from `get_node_truth_state` calls.
     truth_state_error: Arc<Mutex<Option<String>>>,
     /// Optional injected error returned from node writes, before any node is
@@ -61,6 +63,7 @@ impl MockGraphDB {
             nodes: Arc::new(Mutex::new(HashMap::new())),
             edges: Arc::new(Mutex::new(Vec::new())),
             call_log: Arc::new(Mutex::new(Vec::new())),
+            node_writes: Arc::new(AtomicUsize::new(0)),
             truth_state_error: Arc::new(Mutex::new(None)),
             add_nodes_error: Arc::new(Mutex::new(None)),
             add_edges_error: Arc::new(Mutex::new(None)),
@@ -160,6 +163,13 @@ impl MockGraphDB {
         self.nodes.lock().unwrap().len() // lock poison is unrecoverable
     }
 
+    /// How many nodes successful node writes were handed, counting a node
+    /// written twice twice (for testing) — the node map itself keeps one copy
+    /// per id, so this is what shows a repeated write.
+    pub fn node_write_count(&self) -> usize {
+        self.node_writes.load(Ordering::SeqCst)
+    }
+
     /// Get the current edge count (for testing).
     pub fn edge_count(&self) -> usize {
         self.edges.lock().unwrap().len() // lock poison is unrecoverable
@@ -257,6 +267,7 @@ impl GraphDBTrait for MockGraphDB {
             .to_string();
 
         self.nodes.lock().unwrap().insert(id, node_data); // lock poison is unrecoverable
+        self.node_writes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
