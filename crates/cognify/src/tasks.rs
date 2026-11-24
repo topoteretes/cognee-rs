@@ -5025,11 +5025,21 @@ fn entity_provenance_rows(
         let ontology_documents =
             producing_data_ids(producers.ontology_entity_chunks(entity_id), chunk_data_map);
         let mut guarded_by_nil = false;
-        if producers.is_ontology_first(entity_id) {
-            // First seen in the run through the ontology alone: it keeps the
-            // nil row such an entity always had, on whichever path the run is
+        if producers.is_ontology_first(entity_id)
+            && (data_ids.is_empty()
+                || ontology_documents
+                    .iter()
+                    .any(|data_id| !data_ids.contains(data_id)))
+        {
+            // First seen in the run through the ontology alone, and some
+            // document reached it by lookup without extracting it: it keeps
+            // the nil row such an entity had, on whichever path the run is
             // saved — a later document extracting it changes nothing (O4b
-            // wrote it in the first document's group only).
+            // wrote it in the first document's group only). Decided per
+            // document, not per unit: when every looking-up document also
+            // extracts it (a lookup in one block, the extraction in a later
+            // block of the same document), it had no nil row on `main` and
+            // gets none here, so deleting that document still removes it.
             data_ids.push(Uuid::nil());
             guarded_by_nil = true;
         } else if data_ids.is_empty() {
@@ -5162,6 +5172,39 @@ fn timestamp_provenance_rows(
 /// Divergence from Python, deliberate: `upsert_edges.py` omits `data_id` from
 /// the row id and keeps exactly one row per edge, letting the last writer take
 /// ownership. See the note on [`provenance_edge_id`].
+/// Which documents a group's ownership rows give each endpoint an edge can
+/// name: its entities (from their rows) and its EntityTypes, which every
+/// document owns through their nil row.
+struct EndpointOwners {
+    entities: HashMap<Uuid, HashSet<Uuid>>,
+    types: HashSet<Uuid>,
+}
+
+impl EndpointOwners {
+    fn new(entities: &[GraphNodePair], entity_rows: &[cognee_database::GraphNode]) -> Self {
+        let mut owners: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+        for row in entity_rows {
+            owners.entry(row.slug).or_default().insert(row.data_id);
+        }
+        Self {
+            entities: owners,
+            types: entities
+                .iter()
+                .flat_map(|pair| pair.entity_types().map(|t| t.base.id))
+                .collect(),
+        }
+    }
+
+    /// Whether `data_id` has an ownership row for the endpoint `id`.
+    fn owns(&self, id: Uuid, data_id: Uuid) -> bool {
+        self.types.contains(&id)
+            || self
+                .entities
+                .get(&id)
+                .is_some_and(|data_ids| data_ids.contains(&data_id))
+    }
+}
+
 fn semantic_edge_provenance_rows(
     id: LedgerIdentity,
     edges: &[GraphEdgePair],
@@ -5170,6 +5213,7 @@ fn semantic_edge_provenance_rows(
     producers: &ArtifactProducers,
     // `edges` are edges the graph already held, which this run only claims.
     claimed: bool,
+    endpoints: &EndpointOwners,
 ) -> Vec<cognee_database::GraphEdge> {
     let mut rows = Vec::new();
 
@@ -5197,11 +5241,19 @@ fn semantic_edge_provenance_rows(
         // The documents whose ontology lookup brought the edge in (SDK-1694
         // O5a): Python attaches an ontology edge to the data points of the
         // document being processed, so `upsert_edges` stamps that `data_id`.
+        //
+        // Only a document that owns both endpoints gets one: a row of a
+        // document without an ownership row for an endpoint entity would keep
+        // claiming the edge's `EdgeType` text after the endpoint, and with it
+        // the graph edge, left with another document's delete.
         let ontology_documents =
             producing_data_ids(producers.ontology_edge_chunks(&key), chunk_data_map);
         let add_ontology_documents = |data_ids: &mut Vec<Uuid>| {
             for data_id in &ontology_documents {
-                if !data_ids.contains(data_id) {
+                if endpoints.owns(edge_pair.source_entity_id, *data_id)
+                    && endpoints.owns(edge_pair.target_entity_id, *data_id)
+                    && !data_ids.contains(data_id)
+                {
                     data_ids.push(*data_id);
                 }
             }
@@ -5531,6 +5583,7 @@ pub(crate) fn extraction_ownership_rows(
 
     let mut prov_nodes =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
+    let endpoints = EndpointOwners::new(entities, &prov_nodes);
     prov_nodes.extend(timestamp_provenance_rows(
         id,
         timestamps,
@@ -5544,6 +5597,7 @@ pub(crate) fn extraction_ownership_rows(
         &entity_data_map,
         producers,
         false,
+        &endpoints,
     );
     prov_edges.extend(semantic_edge_provenance_rows(
         id,
@@ -5552,6 +5606,7 @@ pub(crate) fn extraction_ownership_rows(
         &entity_data_map,
         producers,
         true,
+        &endpoints,
     ));
     (prov_nodes, prov_edges)
 }
@@ -5646,6 +5701,7 @@ pub(crate) fn provenance_rows(
     // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
+    let endpoints = EndpointOwners::new(entities, &prov_nodes);
 
     // DocumentChunks
     for chunk in chunks {
@@ -5797,6 +5853,7 @@ pub(crate) fn provenance_rows(
         &entity_data_map,
         producers,
         false,
+        &endpoints,
     );
 
     // The documents that produced a structural edge (SDK-1694 O5a), as

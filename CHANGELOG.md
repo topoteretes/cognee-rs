@@ -420,27 +420,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / **`made_from`** edge (its chunk's or summary's document), every
   **ontology-only entity** first seen through an ontology lookup, and every
   **ontology edge** whose existing row is nil (the document whose lookup
-  brought it in). `ArtifactProducers` gains the producers behind them
+  brought it in, when it owns both endpoints). `ArtifactProducers` gains the producers behind them
   (`record_entity_type`, `entity_type_chunks`, `type_chunks`,
   `record_ontology_entity`, `ontology_entity_chunks`, `record_ontology_edge`,
   `ontology_edge_chunks`, `produces_edge`, `mark_ontology_first`,
   `is_ontology_first`); `entity_chunks` / `edge_chunks` still name only
   extracting chunks, so a chunk's `contains` links are unchanged.
-  - **Deletion is unchanged.** Each of those artifacts keeps the nil-`data_id`
-    row it always had, and the per-document rows share its slug, so no
-    data-scoped delete, dataset delete or run sweep selects a different
-    artifact (pinned by `the_per_document_rows_change_no_delete_selection`).
-    Removing types with their last document is per-document delete (O6),
-    which drops the nil rows.
+  - **Deletion is unchanged, with two intended exceptions.** Each of those
+    artifacts keeps the nil-`data_id` row it always had, and the
+    per-document rows share its slug, so data-scoped deletes (both claimant
+    scopes), dataset deletes and run sweeps select the same artifacts
+    (pinned, with and without an ontology, over several runs and two
+    datasets, by `the_per_document_rows_change_no_delete_selection` and
+    `the_ontology_rows_change_no_delete_selection`). Removing types with
+    their last document is per-document delete (O6), which drops the nil
+    rows. The exceptions, both of which keep an artifact main removed while
+    it was still in use:
+    - a whole-run sweep of an earlier run no longer removes an EntityType
+      node a later run's document in the same dataset also declares (both
+      runs wrote one nil row, which kept the earlier run's id);
+    - a document that claims an existing ontology edge (below) keeps its
+      `EdgeType` point when the document that first wrote the edge is
+      deleted or swept; main removed the point while the edge stayed.
   - **Existing ontology edges are claimed.** An ontology edge the graph
     already holds is still not written again, but every document whose
-    ontology lookup produced it now gets an ownership row for it, as an
-    existing extracted edge does (O2 dropped it, as Python's ledger path
-    does; Python's in-graph provenance attaches the document's ref).
+    ontology lookup produced it, and which owns both endpoints, now gets an
+    ownership row for it, as an existing extracted edge does (O2 dropped it,
+    as Python's ledger path does; Python's in-graph provenance attaches the
+    document's ref).
   - An entity only an earlier document's ontology lookup brought in, which a
     later document extracts, now gets the same rows on both save paths (O4b
     wrote its nil row on the per-document path only): the extracting
-    document's, the looking-up document's and the nil row.
+    document's, the looking-up document's and the nil row. On the whole-run
+    `add_data_points` path that is a change: it wrote only the extracting
+    document's row. Whether the nil row is kept is decided per document: an
+    entity one block of a document looks up and a later block of the same
+    document extracts keeps only that document's row, as before.
   - More rows: a structural edge has two ledger rows instead of one, and an
     EntityType one per declaring document plus one. Existing databases keep
     their nil rows; re-cognifying adds the per-document rows beside them.
