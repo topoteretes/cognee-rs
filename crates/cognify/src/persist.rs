@@ -10,15 +10,39 @@
 //!
 //! # A group, and the run-level state
 //!
-//! A [`PersistGroup`] is one batch of artifacts. Today the pipeline persists
-//! the whole run as **one** group ([`crate::tasks::add_data_points`]); the
-//! layer is shaped so a caller can build one group per document and call
-//! [`persist_group`] once per group with one [`PersistState`]. The state
-//! remembers what earlier groups wrote — ledger row ids, graph node ids, graph
-//! edge keys, vector points, edge-evidence ids — so a node shared by several
-//! groups is written and embedded once, and no ledger row is written twice.
-//! Within a group nothing is filtered, so one group writes exactly what the
-//! pre-O4a stages wrote.
+//! A [`PersistGroup`] is one batch of artifacts. The cognify pipeline saves
+//! one group per document, from a single writer, in input order
+//! ([`crate::document_stage`], SDK-1694 O4b); the whole-run
+//! [`crate::tasks::add_data_points`] saves a run as one group. Every group of
+//! a run goes through one [`PersistState`], which remembers what earlier
+//! groups wrote — ledger row ids, graph node ids, graph edge keys, vector
+//! points, edge-evidence ids — so an artifact shared by several groups is
+//! written and embedded once, and no ledger row is written twice. Within a
+//! group nothing is filtered, so one group writes exactly what the pre-O4a
+//! stages wrote.
+//!
+//! # Rewrite on change (per-document state)
+//!
+//! With [`PersistState::per_document`], an artifact a **later** group changes
+//! is written again rather than skipped:
+//!
+//! - an **entity** whose merged form changed — a new type, a new NodeSet
+//!   membership, or the first real extraction replacing an ontology
+//!   placeholder — gets its graph node rewritten, its vector payload rewritten
+//!   when the payload's inputs changed (with the vector it was embedded with:
+//!   the embedded text, its name, does not change, so nothing is embedded
+//!   again), and the ownership rows earlier groups wrote for it rewritten, so
+//!   every row's `attributes` carry the entity as it is now;
+//! - a **WebPage** two documents of one URL share is rewritten with the later
+//!   document's copy, so the last document in input order wins, as it did
+//!   when the run was saved as one group;
+//! - an **EdgeType** point whose id a later group reaches with a
+//!   lexicographically smaller spelling is rewritten with it, so the
+//!   surviving spelling is the run's smallest, as in one group.
+//!
+//! The rest is first-write-wins, as before: EntityTypes, Timestamps, edges and
+//! custom nodes come to every group as the run's first copy already, and
+//! chunks, summaries and documents belong to one group each.
 //!
 //! # Write order within a group
 //!
@@ -26,22 +50,21 @@
 //!    extraction rows (entities, Timestamps, semantic and claimed edges), the
 //!    web-page rows, the custom-graph rows, the provenance rows (chunks,
 //!    entities, semantic edges, summaries, entity types, documents, structural
-//!    edges), then the DLT rows.
+//!    edges), the rewritten rows of changed entities, then the DLT rows.
 //! 2. **Graph nodes, all of them**: entities, Timestamps, WebPage / WebSite,
 //!    chunks, summaries, entity types, documents, custom nodes, DLT schema
 //!    nodes.
 //! 3. **Graph edges, only then**: semantic (extracted and ontology) edges, the
-//!    web edges the graph does not hold yet, custom edges, structural edges,
-//!    DLT edges. Every endpoint a group's edges name is a node of the same
-//!    group (or was written by an earlier group), so it exists by now. This
-//!    matters: Ladybug's `add_edges` is `UNWIND … MATCH … MERGE` and silently
-//!    drops an edge whose endpoint does not exist, and Postgres' `graph_edge`
-//!    has foreign keys to `graph_node`, so the write fails. Before this order,
-//!    the stages wrote the ontology's type→type `is_a` edges before the
-//!    EntityType nodes and a URL document's `SOURCED_FROM` edges before its
-//!    chunks.
+//!    web edges the graph does not hold yet, custom edges, structural edges.
+//!    Every endpoint a group's edges name is a node of the same group (or was
+//!    written by an earlier group), so it exists by now. This matters:
+//!    Ladybug's `add_edges` is `UNWIND … MATCH … MERGE` and silently drops an
+//!    edge whose endpoint does not exist, and Postgres' `graph_edge` has
+//!    foreign keys to `graph_node`, so the write fails. A DLT group indexes
+//!    its schema nodes' vectors before its edges, as the DLT step did before
+//!    O4a.
 //! 4. **Vector points**: chunks, entities, entity types, summaries, edge
-//!    types, documents, then custom nodes and DLT schema nodes.
+//!    types, documents, then custom nodes.
 //! 5. **Edge evidence**, only after the graph and vector writes succeeded.
 //!
 //! # Across groups
@@ -51,19 +74,28 @@
 //! into groups must put every endpoint of a group's edges in that group or an
 //! earlier one. Per-document groups do by construction: an entity, type or
 //! Timestamp is in every group whose document produced it, and a node already
-//! written by an earlier group is skipped, not missing.
+//! written by an earlier group is skipped (or rewritten), not missing.
+//!
+//! # EdgeType counts
+//!
+//! `number_of_edges` counts every edge the run wrote once, whichever group
+//! wrote it: an edge key an earlier group already counted is not counted
+//! again. The run's `EdgeType`s are built from those counts when the state is
+//! turned into its outputs ([`PersistState::into_outputs`]), so they match a
+//! run saved as one group.
 //!
 //! # The first group costs no copy
 //!
 //! A group is filtered against what earlier groups wrote. With no earlier
-//! group (the pipeline's single group) there is nothing to filter, so the
+//! group (a run saved as one group) there is nothing to filter, so the
 //! borrowed slices go to the stores as they are (SDK-507).
 //!
 //! Any failure is returned at once and fails the run, as every persistence
 //! failure did before.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, LazyLock};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use chrono::Utc;
 use cognee_database::{GraphEdge, GraphNode, RelationalDb};
@@ -89,9 +121,9 @@ use crate::tasks::{
 
 /// One batch of artifacts [`persist_group`] writes.
 ///
-/// Borrowed, so the pipeline's single group costs no copy; a caller that
-/// builds one group per document owns that document's artifacts and lends
-/// them. `producers` must name the producing chunks of `entities`, `edges`,
+/// Borrowed, so a run saved as one group costs no copy; a caller that builds
+/// one group per document owns that document's artifacts and lends them.
+/// `producers` must name the producing chunks of `entities`, `edges`,
 /// `timestamps` and `claimed_existing_edges`; `chunks` are what attributes
 /// them to data items, so a group carries the chunks its artifacts came from.
 #[derive(Clone, Copy)]
@@ -112,7 +144,8 @@ pub(crate) struct PersistGroup<'a> {
     pub(crate) dlt: Option<&'a DltArtifacts>,
 }
 
-static NO_PRODUCERS: LazyLock<ArtifactProducers> = LazyLock::new(ArtifactProducers::default);
+static NO_PRODUCERS: std::sync::LazyLock<ArtifactProducers> =
+    std::sync::LazyLock::new(ArtifactProducers::default);
 
 impl PersistGroup<'static> {
     /// A group with nothing in it, to fill with struct-update syntax.
@@ -163,6 +196,13 @@ const DOCUMENT_POINT: &str = "document";
 const DYNAMIC_POINT: &str = "dynamic";
 const DLT_POINT: &str = "dlt";
 
+/// The edge classes counted towards `number_of_edges`, each on its own: one
+/// group counts an `is_a` that is both an ontology and a structural edge once
+/// per class, as the pre-O4a stages did.
+const SEMANTIC_EDGES: usize = 0;
+const STRUCTURAL_EDGES: usize = 1;
+const DYNAMIC_EDGES: usize = 2;
+
 /// What has been written, by identity.
 #[derive(Debug, Default)]
 struct Written {
@@ -196,17 +236,74 @@ impl Written {
     }
 }
 
+/// The version of an entity the stores hold, for rewrite on change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EntityVersion {
+    /// The graph node (and ledger `attributes`): the whole entity.
+    graph: u64,
+    /// The vector payload's inputs: name, NodeSets, importance weight.
+    vector: u64,
+}
+
+impl EntityVersion {
+    fn of(entity: &cognee_models::Entity) -> Self {
+        let graph = fingerprint(&serde_json::to_vec(entity).unwrap_or_default());
+        let mut hasher = std::hash::DefaultHasher::new();
+        entity.name.hash(&mut hasher);
+        serde_json::to_vec(&entity.base.belongs_to_set)
+            .unwrap_or_default()
+            .hash(&mut hasher);
+        entity
+            .base
+            .importance_weight
+            .map(f64::to_bits)
+            .hash(&mut hasher);
+        Self {
+            graph,
+            vector: hasher.finish(),
+        }
+    }
+}
+
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// What a per-document state keeps to rewrite what a later group changes.
+#[derive(Debug, Default)]
+struct Versions {
+    entities: HashMap<Uuid, EntityVersion>,
+    /// The vector each entity was embedded with, reused when only its payload
+    /// is rewritten.
+    entity_vectors: HashMap<Uuid, Vec<f32>>,
+    /// The data items whose ownership row of each entity has been written.
+    entity_rows: HashMap<Uuid, Vec<Uuid>>,
+    /// Raw (WebPage / WebSite) nodes, by id: their JSON's fingerprint.
+    raw_nodes: HashMap<String, u64>,
+    /// The spelling each `EdgeType` point was embedded with.
+    edge_type_names: HashMap<Uuid, String>,
+}
+
 /// What the groups of one run have written so far, and the run-level outputs
 /// they add up to.
 ///
 /// A group filters out only what an **earlier** group wrote; what it writes
 /// itself is folded in once it has been written in full, so one group is
 /// never filtered against itself. A group that fails leaves the state as it
-/// was before it.
+/// was before it, apart from the rewrite bookkeeping of what it did write.
 #[derive(Debug, Default)]
 pub(crate) struct PersistState {
     written: Written,
-    edge_types: Vec<EdgeType>,
+    /// `Some` for [`Self::per_document`]: rewrite what a later group changes.
+    versions: Option<Versions>,
+    /// Edge keys counted towards `number_of_edges`, per edge class.
+    counted_edges: [HashSet<Uuid>; 3],
+    /// Every counted edge's retrieval text, with how often it was counted.
+    edge_texts: BTreeMap<String, usize>,
+    /// The dataset and user label the run's `EdgeType`s are built with.
+    edge_type_owner: Option<(Uuid, Option<String>)>,
     embeddings: Vec<Embedding>,
     embedding_count: usize,
     indexed_fields: IndexedFieldsStats,
@@ -214,7 +311,7 @@ pub(crate) struct PersistState {
 
 /// The run-level outputs of a [`PersistState`], for the `CognifyResult`.
 pub(crate) struct PersistOutputs {
-    /// Every `EdgeType` point embedded, in the order the groups embedded them.
+    /// One `EdgeType` per point id, counting every edge the run wrote once.
     pub(crate) edge_types: Vec<EdgeType>,
     /// The vectors kept when `retain_embeddings` is on.
     pub(crate) embeddings: Vec<Embedding>,
@@ -224,14 +321,60 @@ pub(crate) struct PersistOutputs {
 }
 
 impl PersistState {
+    /// The state of a run saved as one group per document: what a later
+    /// group changes is rewritten (see the module docs).
+    pub(crate) fn per_document() -> Self {
+        Self {
+            versions: Some(Versions::default()),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn into_outputs(self) -> PersistOutputs {
+        let edge_types = match self.edge_type_owner {
+            Some((dataset_id, user_label)) => run_edge_types(
+                self.edge_texts
+                    .into_iter()
+                    .flat_map(|(text, count)| std::iter::repeat_n(text, count)),
+                dataset_id,
+                user_label.as_deref(),
+            ),
+            None => Vec::new(),
+        };
         PersistOutputs {
-            edge_types: self.edge_types,
+            edge_types,
             embeddings: self.embeddings,
             embedding_count: self.embedding_count,
             indexed_fields: self.indexed_fields,
         }
     }
+}
+
+/// One `EdgeType` per derived point id over `texts`, pre-stamped as the run's
+/// `EdgeType`s are.
+fn run_edge_types(
+    texts: impl Iterator<Item = String>,
+    dataset_id: Uuid,
+    user_label: Option<&str>,
+) -> Vec<EdgeType> {
+    let mut edge_types = crate::tasks::build_edge_types(texts, dataset_id);
+    // Pre-stamp the `source_*` provenance keys before they are indexed. The
+    // LLM-derived edge-type names trace back to the entity-extraction task, so
+    // the pipeline / task literals match. `task_rank: None`: Python's
+    // `create_edge_type_datapoints` (`index_graph_edges.py:50`) builds these
+    // objects locally and never returns them from `add_data_points`, so no
+    // stamper ever assigns them a rank; the vector payload carries none either
+    // way (`cognee_models::index_schema_payload`).
+    let mut local_visited: HashSet<Uuid> = HashSet::new();
+    for edge_type in &mut edge_types {
+        crate::graph_integration::expansion::pre_stamp_extraction(
+            edge_type,
+            user_label,
+            None,
+            &mut local_visited,
+        );
+    }
+    edge_types
 }
 
 /// What earlier groups wrote, and what the current one has written so far.
@@ -261,12 +404,20 @@ impl<'s> Tracker<'s> {
     fn first_group(&self) -> bool {
         self.earlier.is_empty()
     }
+
+    fn new_point(&self, class: &'static str, id: Uuid) -> bool {
+        !self.earlier.vectors.contains(&(class, id))
+    }
 }
 
 /// An edge's identity in [`Written::graph_edges`]: a v5 UUID of its exact
 /// `(source, target, relationship)` strings, separated so no two keys meet.
 fn edge_key(edge: &EdgeData) -> Uuid {
-    let key = format!("{}\u{1f}{}\u{1f}{}", edge.0, edge.1, edge.2);
+    edge_key_of(&edge.0, &edge.1, &edge.2)
+}
+
+fn edge_key_of(source: &str, target: &str, relationship: &str) -> Uuid {
+    let key = format!("{source}\u{1f}{target}\u{1f}{relationship}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_bytes())
 }
 
@@ -284,9 +435,60 @@ fn fresh<'a, T: Clone>(
     }
 }
 
-impl Tracker<'_> {
-    fn new_point(&self, class: &'static str, id: Uuid) -> bool {
-        !self.earlier.vectors.contains(&(class, id))
+/// How each of a group's entities is written.
+struct EntityPlan {
+    /// Positions (into the group's entities) whose graph node is written.
+    graph: Vec<usize>,
+    /// Positions whose vector point is written for the first time.
+    new_vectors: Vec<usize>,
+    /// Positions whose vector payload is rewritten with the cached vector.
+    rewritten_vectors: Vec<usize>,
+    /// Positions an earlier group wrote and this one changed: their earlier
+    /// ownership rows are rewritten.
+    changed: Vec<usize>,
+    /// The version each entity is written at, when the state tracks them.
+    versions: Vec<Option<EntityVersion>>,
+}
+
+impl EntityPlan {
+    fn new(entities: &[GraphNodePair], versions: Option<&Versions>, tracker: &Tracker<'_>) -> Self {
+        let mut plan = Self {
+            graph: Vec::new(),
+            new_vectors: Vec::new(),
+            rewritten_vectors: Vec::new(),
+            changed: Vec::new(),
+            versions: Vec::with_capacity(entities.len()),
+        };
+        for (position, pair) in entities.iter().enumerate() {
+            let id = pair.entity.base.id;
+            let new_node = tracker.new_node(&id.to_string());
+            let new_point = tracker.new_point(ENTITY_POINT, id);
+            let Some(versions) = versions else {
+                if new_node {
+                    plan.graph.push(position);
+                }
+                if new_point {
+                    plan.new_vectors.push(position);
+                }
+                plan.versions.push(None);
+                continue;
+            };
+            let now = EntityVersion::of(&pair.entity);
+            let earlier = versions.entities.get(&id);
+            if new_node || earlier.is_none_or(|v| v.graph != now.graph) {
+                plan.graph.push(position);
+                if !new_node {
+                    plan.changed.push(position);
+                }
+            }
+            if new_point {
+                plan.new_vectors.push(position);
+            } else if earlier.is_none_or(|v| v.vector != now.vector) {
+                plan.rewritten_vectors.push(position);
+            }
+            plan.versions.push(Some(now));
+        }
+        plan
     }
 }
 
@@ -297,7 +499,20 @@ pub(crate) async fn persist_group(
     state: &mut PersistState,
     context: &PersistContext<'_>,
 ) -> Result<(), CognifyError> {
-    let mut tracker = Tracker::new(&state.written);
+    // Split the borrow: the tracker reads what earlier groups wrote while the
+    // rewrite bookkeeping is updated as this group writes.
+    let PersistState {
+        written: run_written,
+        versions,
+        counted_edges,
+        edge_texts,
+        edge_type_owner,
+        embeddings: run_embeddings,
+        embedding_count: run_embedding_count,
+        indexed_fields: run_indexed_fields,
+    } = state;
+    let mut tracker = Tracker::new(run_written);
+    let plan = EntityPlan::new(group.entities, versions.as_ref(), &tracker);
 
     // ── Prepare: pure computation over the group, no I/O ────────────────────
     // Discovering the structural edges (`get_graph_from_model`) is what lets
@@ -359,6 +574,16 @@ pub(crate) async fn persist_group(
         group.timestamps,
         group.producers,
     );
+    if let Some(versions) = versions.as_mut() {
+        let entity_ids: HashSet<Uuid> = group.entities.iter().map(|p| p.entity.base.id).collect();
+        for row in nodes.iter().filter(|row| entity_ids.contains(&row.slug)) {
+            let data_ids = versions.entity_rows.entry(row.slug).or_default();
+            if !data_ids.contains(&row.data_id) {
+                data_ids.push(row.data_id);
+            }
+        }
+    }
+    let group_entity_rows: HashSet<Uuid> = nodes.iter().map(|row| row.id).collect();
     let (node_rows, edge_rows) = write_ledger(context.db, &mut tracker, nodes, edges).await?;
     if node_rows + edge_rows > 0 {
         info!(
@@ -394,6 +619,35 @@ pub(crate) async fn persist_group(
     if edge_rows > 0 {
         info!("Upserted {edge_rows} provenance edge records");
     }
+    // An entity this group changed: the rows earlier groups wrote for it
+    // carry its old form in `attributes`, so they are written again.
+    if let Some(versions) = versions.as_ref()
+        && !plan.changed.is_empty()
+    {
+        let rows: Vec<GraphNode> = plan
+            .changed
+            .iter()
+            .map(|position| &group.entities[*position].entity)
+            .flat_map(|entity| {
+                versions
+                    .entity_rows
+                    .get(&entity.base.id)
+                    .into_iter()
+                    .flatten()
+                    .map(|data_id| {
+                        crate::tasks::entity_ledger_row(context.ledger, entity, *data_id)
+                    })
+                    .filter(|row| !group_entity_rows.contains(&row.id))
+            })
+            .collect();
+        if !rows.is_empty() {
+            cognee_database::ProvenanceDb::upsert_provenance_graph(context.db, &rows, &[]).await?;
+            info!(
+                "Rewrote {} ownership rows of entities this document changed",
+                rows.len()
+            );
+        }
+    }
     if let Some(dlt) = group.dlt {
         let (nodes, edges) = crate::tasks::dlt_provenance_rows(
             context.ledger,
@@ -407,9 +661,37 @@ pub(crate) async fn persist_group(
 
     // ── 2. Graph nodes: every node of the group, before any edge ────────────
     let graph_db = context.graph_db.as_ref();
-    write_extraction_nodes(graph_db, &mut tracker, group.entities, group.timestamps).await?;
+    let entity_refs: Vec<&cognee_models::Entity> = plan
+        .graph
+        .iter()
+        .map(|position| &group.entities[*position].entity)
+        .collect();
+    write_typed_nodes_as_given(graph_db, &mut tracker, &entity_refs, |e| e.base.id).await?;
+    if let Some(versions) = versions.as_mut() {
+        for position in &plan.graph {
+            if let Some(version) = plan.versions[*position] {
+                versions
+                    .entities
+                    .entry(group.entities[*position].entity.base.id)
+                    .and_modify(|v| v.graph = version.graph)
+                    .or_insert(version);
+            }
+        }
+    }
+    // Timestamp nodes: not embedded, no EntityType; written before the edges
+    // that point at them.
+    let timestamp_refs: Vec<&cognee_models::Timestamp> = group
+        .timestamps
+        .iter()
+        .map(|node| &node.timestamp)
+        .collect();
+    let written_timestamps =
+        write_typed_nodes(graph_db, &mut tracker, &timestamp_refs, |t| t.base.id).await?;
+    if written_timestamps > 0 {
+        info!("Upserted {written_timestamps} Timestamp nodes");
+    }
     let (web_nodes, web_edges) = crate::tasks::web_page_graph(group.web_pages);
-    write_raw_nodes(graph_db, &mut tracker, web_nodes.into_iter()).await?;
+    write_web_nodes(graph_db, &mut tracker, versions.as_mut(), web_nodes).await?;
 
     // Python stores DocumentChunks, TextSummaries and EntityTypes as graph
     // nodes in `add_data_points`.
@@ -466,6 +748,29 @@ pub(crate) async fn persist_group(
         info!("Upserted {written} structural edges");
     }
     if let Some(dlt) = group.dlt {
+        // The schema nodes' vectors before the FK edges, as the DLT step
+        // wrote them before O4a.
+        let fresh: Vec<serde_json::Value> = dlt
+            .schema_nodes
+            .iter()
+            .filter(|node| schema_node_id(node).is_none_or(|id| tracker.new_point(DLT_POINT, id)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            crate::tasks::index_dlt_schema_nodes(
+                &fresh,
+                context.ledger,
+                context.embedding_engine,
+                context.vector_db,
+            )
+            .await?;
+        }
+        tracker.now.vectors.extend(
+            fresh
+                .iter()
+                .filter_map(schema_node_id)
+                .map(|id| (DLT_POINT, id)),
+        );
         let written = write_edges(graph_db, &mut tracker, &dlt.edges).await?;
         if written > 0 {
             info!("Added {written} DLT FK edges to graph");
@@ -473,16 +778,86 @@ pub(crate) async fn persist_group(
     }
 
     // ── 4. Vector points ────────────────────────────────────────────────────
+    // `number_of_edges`: every edge of the group whose key no earlier group
+    // counted, in its class.
+    let semantic_texts: Vec<(Uuid, String)> = group
+        .edges
+        .iter()
+        .map(|edge| {
+            let data = semantic_edge_data(edge);
+            (edge_key(&data), crate::tasks::edge_retrieval_text(edge))
+        })
+        .collect();
+    let class_texts = |edges: &[EdgeData]| -> Vec<(Uuid, String)> {
+        edges
+            .iter()
+            .map(|edge| {
+                (
+                    edge_key(edge),
+                    EdgeType::retrieval_text(
+                        edge.3.get("edge_text").and_then(serde_json::Value::as_str),
+                        &edge.2,
+                    ),
+                )
+            })
+            .collect()
+    };
+    let classes = [
+        (SEMANTIC_EDGES, semantic_texts),
+        (STRUCTURAL_EDGES, class_texts(&structural_edges)),
+        (DYNAMIC_EDGES, class_texts(&dynamic_edges)),
+    ];
+    let group_texts: Vec<String> = classes
+        .iter()
+        .flat_map(|(_, texts)| texts.iter().map(|(_, text)| text.clone()))
+        .collect();
+    let user_label = context.user_id.as_ref().map(|id| id.to_string());
+    edge_type_owner.get_or_insert_with(|| (context.ledger.dataset_id, user_label.clone()));
+    let mut edge_types = run_edge_types(
+        group_texts.into_iter(),
+        context.ledger.dataset_id,
+        user_label.as_deref(),
+    );
+    edge_types.retain(|edge_type| match versions.as_ref() {
+        // Per document: a point is written when it is new, or when this group
+        // reaches it with a smaller spelling than the one embedded, which is
+        // the spelling one group would have kept.
+        Some(versions) => versions
+            .edge_type_names
+            .get(&edge_type.base.id)
+            .is_none_or(|name| edge_type.relationship_name < *name),
+        None => tracker.new_point(EDGE_TYPE_POINT, edge_type.base.id),
+    });
+
     let outputs = write_vectors(
         group,
         context,
         &mut tracker,
-        &structural_edges,
-        &dynamic_edges,
+        versions.as_mut(),
+        &plan,
+        &edge_types,
         &dynamic_nodes,
         &entity_types,
     )
     .await?;
+    for (class, texts) in classes {
+        let counted = &mut counted_edges[class];
+        let mut keys = Vec::with_capacity(texts.len());
+        for (key, text) in texts {
+            if !counted.contains(&key) {
+                *edge_texts.entry(text).or_insert(0) += 1;
+                keys.push(key);
+            }
+        }
+        counted.extend(keys);
+    }
+    if let Some(versions) = versions.as_mut() {
+        for edge_type in &edge_types {
+            versions
+                .edge_type_names
+                .insert(edge_type.base.id, edge_type.relationship_name.clone());
+        }
+    }
 
     // ── 5. Edge evidence ────────────────────────────────────────────────────
     // Only after the graph and vector writes succeeded (Python captures at the
@@ -509,13 +884,11 @@ pub(crate) async fn persist_group(
     }
 
     let Tracker { now, .. } = tracker;
-    state.written.absorb(now);
-    state.edge_types.extend(outputs.edge_types);
-    state.embeddings.extend(outputs.embeddings);
-    state.embedding_count += outputs.embedding_count;
+    run_written.absorb(now);
+    run_embeddings.extend(outputs.embeddings);
+    *run_embedding_count += outputs.embedding_count;
     for (collection, count) in outputs.indexed_fields.field_counts {
-        *state
-            .indexed_fields
+        *run_indexed_fields
             .field_counts
             .entry(collection)
             .or_insert(0) += count;
@@ -556,7 +929,18 @@ pub(crate) async fn persist_extraction(
              edges before writing them"
         );
     }
-    write_extraction_nodes(graph_db, &mut tracker, &graph.entities, &graph.timestamps).await?;
+    let entity_refs: Vec<&cognee_models::Entity> =
+        graph.entities.iter().map(|pair| &pair.entity).collect();
+    write_typed_nodes(graph_db, &mut tracker, &entity_refs, |e| e.base.id).await?;
+    let timestamp_refs: Vec<&cognee_models::Timestamp> = graph
+        .timestamps
+        .iter()
+        .map(|node| &node.timestamp)
+        .collect();
+    let written = write_typed_nodes(graph_db, &mut tracker, &timestamp_refs, |t| t.base.id).await?;
+    if written > 0 {
+        info!("Upserted {written} Timestamp nodes");
+    }
     write_semantic_edges(graph_db, &mut tracker, &graph.edges).await
 }
 
@@ -603,30 +987,6 @@ async fn write_ledger(
         .ledger_edges
         .extend(edges.iter().map(|row| row.id));
     Ok((nodes.len(), edges.len()))
-}
-
-/// The entity and Timestamp nodes.
-async fn write_extraction_nodes(
-    graph_db: &dyn GraphDBTrait,
-    tracker: &mut Tracker<'_>,
-    entities: &[GraphNodePair],
-    timestamps: &[TimestampNode],
-) -> Result<(), CognifyError> {
-    // Every entity is written as it is, provenance stamp included — the
-    // ontology-derived ones too, as Python stamps every constructed DataPoint
-    // (`extract_graph_from_data.py:213-223`).
-    let entity_refs: Vec<&cognee_models::Entity> =
-        entities.iter().map(|pair| &pair.entity).collect();
-    write_typed_nodes(graph_db, tracker, &entity_refs, |e| e.base.id).await?;
-    // Timestamp nodes: not embedded, no EntityType; written before the edges
-    // that point at them.
-    let timestamp_refs: Vec<&cognee_models::Timestamp> =
-        timestamps.iter().map(|node| &node.timestamp).collect();
-    let written = write_typed_nodes(graph_db, tracker, &timestamp_refs, |t| t.base.id).await?;
-    if written > 0 {
-        info!("Upserted {written} Timestamp nodes");
-    }
-    Ok(())
 }
 
 /// The semantic (extracted and ontology) edges.
@@ -684,18 +1044,28 @@ async fn write_typed_nodes<T: serde::Serialize + Sync>(
         .copied()
         .filter(|node| tracker.new_node(&id(node).to_string()))
         .collect();
-    if fresh.is_empty() {
+    write_typed_nodes_as_given(graph_db, tracker, &fresh, id).await
+}
+
+/// Write `nodes`, whether or not an earlier group wrote them; return how many.
+async fn write_typed_nodes_as_given<T: serde::Serialize + Sync>(
+    graph_db: &dyn GraphDBTrait,
+    tracker: &mut Tracker<'_>,
+    nodes: &[&T],
+    id: impl Fn(&T) -> Uuid,
+) -> Result<usize, CognifyError> {
+    if nodes.is_empty() {
         return Ok(0);
     }
     graph_db
-        .add_nodes(&fresh)
+        .add_nodes(nodes)
         .await
         .map_err(CognifyError::from)?;
     tracker
         .now
         .graph_nodes
-        .extend(fresh.iter().map(|node| id(node).to_string()));
-    Ok(fresh.len())
+        .extend(nodes.iter().map(|node| id(node).to_string()));
+    Ok(nodes.len())
 }
 
 /// Write the raw JSON nodes no earlier group wrote; return how many.
@@ -705,27 +1075,64 @@ async fn write_raw_nodes(
     nodes: impl Iterator<Item = serde_json::Value>,
 ) -> Result<usize, CognifyError> {
     let fresh: Vec<serde_json::Value> = nodes
-        .filter(|node| {
-            node.get("id")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|id| tracker.new_node(id))
-        })
+        .filter(|node| raw_node_id(node).is_none_or(|id| tracker.new_node(id)))
         .collect();
-    if fresh.is_empty() {
+    write_raw_nodes_as_given(graph_db, tracker, fresh).await
+}
+
+/// Write `nodes`, whether or not an earlier group wrote them; return how many.
+async fn write_raw_nodes_as_given(
+    graph_db: &dyn GraphDBTrait,
+    tracker: &mut Tracker<'_>,
+    nodes: Vec<serde_json::Value>,
+) -> Result<usize, CognifyError> {
+    if nodes.is_empty() {
         return Ok(0);
     }
-    let ids: Vec<String> = fresh
+    let ids: Vec<String> = nodes
         .iter()
-        .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
+        .filter_map(raw_node_id)
         .map(str::to_string)
         .collect();
-    let count = fresh.len();
+    let count = nodes.len();
     graph_db
-        .add_nodes_raw(fresh)
+        .add_nodes_raw(nodes)
         .await
         .map_err(CognifyError::from)?;
     tracker.now.graph_nodes.extend(ids);
     Ok(count)
+}
+
+fn raw_node_id(node: &serde_json::Value) -> Option<&str> {
+    node.get("id").and_then(serde_json::Value::as_str)
+}
+
+/// The WebPage / WebSite nodes. Per document, a node an earlier group wrote
+/// is written again when this group's copy differs — two documents of one
+/// URL share a page, and the last one in input order wins, as when the run is
+/// saved as one group ([`crate::tasks::web_page_graph`]).
+async fn write_web_nodes(
+    graph_db: &dyn GraphDBTrait,
+    tracker: &mut Tracker<'_>,
+    versions: Option<&mut Versions>,
+    nodes: Vec<serde_json::Value>,
+) -> Result<usize, CognifyError> {
+    let Some(versions) = versions else {
+        return write_raw_nodes(graph_db, tracker, nodes.into_iter()).await;
+    };
+    let mut changed = Vec::new();
+    for node in nodes {
+        let Some(id) = raw_node_id(&node).map(str::to_string) else {
+            changed.push(node);
+            continue;
+        };
+        let version = fingerprint(node.to_string().as_bytes());
+        if tracker.new_node(&id) || versions.raw_nodes.get(&id) != Some(&version) {
+            versions.raw_nodes.insert(id, version);
+            changed.push(node);
+        }
+    }
+    write_raw_nodes_as_given(graph_db, tracker, changed).await
 }
 
 /// Write the edges no earlier group wrote; return how many.
@@ -771,79 +1178,37 @@ fn unique_entity_types(entities: &[GraphNodePair]) -> Vec<&EntityType> {
         .collect()
 }
 
-/// Embed and index the group's points that no earlier group embedded, and
-/// return the group's share of the run-level outputs.
+/// Embed and index the group's points that no earlier group embedded (and,
+/// per document, rewrite the payloads this group changed), and return the
+/// group's share of the run-level outputs.
 #[allow(clippy::too_many_arguments)]
 async fn write_vectors(
     group: PersistGroup<'_>,
     context: &PersistContext<'_>,
     tracker: &mut Tracker<'_>,
-    structural_edges: &[EdgeData],
-    dynamic_edges: &[EdgeData],
+    versions: Option<&mut Versions>,
+    plan: &EntityPlan,
+    edge_types: &[EdgeType],
     dynamic_nodes: &BTreeMap<Uuid, &DynamicDataPoint>,
     entity_types: &[&EntityType],
-) -> Result<PersistOutputs, CognifyError> {
+) -> Result<GroupOutputs, CognifyError> {
     let dataset_id = context.ledger.dataset_id;
-
-    // Build EdgeTypes keyed on each edge's retrieval text (port of Python's
-    // `create_edge_type_datapoints` + `index_graph_edges`). They are only
-    // vector-indexed, never added to the graph: Python's `index_graph_edges`
-    // touches the vector engine only (`index_graph_edges.py:86-88`), so the
-    // graph node set matches Python's.
-    //
-    // Python keys EdgeType ids and the embedded `relationship_name` on the
-    // edge's retrieval text — `get_edge_retrieval_text(edge_text,
-    // relationship_name)` (`index_graph_edges.py:33-53`): the nonblank
-    // `edge_text`, else the nonblank relationship name, else dropped. It counts
-    // every edge `add_data_points` writes, structural and custom field edges
-    // included (`add_data_points.py:346`), which is what lets a `"Document
-    // chunk mentions …"` edge be query-ranked and surface as a fact.
-    let structural_texts =
-        structural_edges
-            .iter()
-            .chain(dynamic_edges)
-            .map(|(_, _, relationship, props)| {
-                EdgeType::retrieval_text(
-                    props.get("edge_text").and_then(serde_json::Value::as_str),
-                    relationship,
-                )
-            });
-    let mut edge_types = crate::tasks::build_edge_types(
-        group
-            .edges
-            .iter()
-            .map(crate::tasks::edge_retrieval_text)
-            .chain(structural_texts),
-        dataset_id,
-    );
-    // Pre-stamp the `source_*` provenance keys before they are indexed. The
-    // LLM-derived edge-type names trace back to the entity-extraction task, so
-    // the pipeline / task literals match. `task_rank: None`: Python's
-    // `create_edge_type_datapoints` (`index_graph_edges.py:50`) builds these
-    // objects locally and never returns them from `add_data_points`, so no
-    // stamper ever assigns them a rank; the vector payload carries none either
-    // way (`cognee_models::index_schema_payload`).
-    {
-        let user_label = context.user_id.as_ref().map(|id| id.to_string());
-        let mut local_visited: HashSet<Uuid> = HashSet::new();
-        for edge_type in &mut edge_types {
-            crate::graph_integration::expansion::pre_stamp_extraction(
-                edge_type,
-                user_label.as_deref(),
-                None,
-                &mut local_visited,
-            );
-        }
-    }
-    edge_types.retain(|edge_type| tracker.new_point(EDGE_TYPE_POINT, edge_type.base.id));
 
     let first = tracker.first_group();
     let chunks = fresh(group.chunks, first, |chunk| {
         tracker.new_point(CHUNK_POINT, chunk.base.id)
     });
-    let entities = fresh(group.entities, first, |pair| {
-        tracker.new_point(ENTITY_POINT, pair.entity.base.id)
-    });
+    let entities: Cow<'_, [GraphNodePair]> =
+        if first && plan.new_vectors.len() == group.entities.len() {
+            Cow::Borrowed(group.entities)
+        } else {
+            Cow::Owned(
+                plan.new_vectors
+                    .iter()
+                    .map(|position| group.entities[*position].clone())
+                    .collect(),
+            )
+        };
     let summaries = fresh(group.summaries, first, |summary| {
         tracker.new_point(SUMMARY_POINT, summary.base.id)
     });
@@ -887,20 +1252,120 @@ async fn write_vectors(
     } else {
         Vec::new()
     };
+    // Per document, the entities' vectors are kept for the run, so a payload a
+    // later document changes is rewritten without embedding the name again.
+    // Only the entities' (the one class a later document changes).
+    let mut entity_vectors: Vec<Embedding> = Vec::new();
+    if versions.is_some() && !entities.is_empty() {
+        entity_vectors = if context.config.retain_embeddings {
+            embeddings
+                .iter()
+                .filter(|embedding| embedding.data_type == "Entity")
+                .cloned()
+                .collect()
+        } else {
+            crate::tasks::generate_embeddings(
+                &[],
+                &entities,
+                &[],
+                Arc::clone(context.embedding_engine),
+            )
+            .await?
+        };
+    }
+    let precomputed: Cow<'_, [Embedding]> = if context.config.retain_embeddings {
+        Cow::Borrowed(&embeddings)
+    } else {
+        Cow::Borrowed(&entity_vectors)
+    };
 
-    let mut indexed_fields = crate::tasks::index_data_points_except(
-        &chunks,
-        &entities,
-        &summaries,
-        &documents,
-        &edge_types,
-        dataset_id,
-        Arc::clone(context.embedding_engine),
-        Arc::clone(context.vector_db),
-        &embeddings,
-        &embedded_types,
-    )
-    .await?;
+    let anything = !chunks.is_empty()
+        || !entities.is_empty()
+        || !summaries.is_empty()
+        || !documents.is_empty()
+        || !edge_types.is_empty()
+        || !new_types.is_empty();
+    // A group with nothing to index (a DLT group) opens no index pass, and so
+    // no bulk-load scope of its own.
+    // The new types of entities whose own point is not written by this group
+    // (an earlier group wrote it): indexed all the same.
+    let extra_types: Vec<&EntityType> = entity_types
+        .iter()
+        .copied()
+        .filter(|entity_type| !embedded_types.contains(&entity_type.base.id))
+        .collect();
+    let mut indexed_fields = if anything {
+        crate::tasks::index_data_points_except(
+            &chunks,
+            &entities,
+            &summaries,
+            &documents,
+            edge_types,
+            dataset_id,
+            Arc::clone(context.embedding_engine),
+            Arc::clone(context.vector_db),
+            &precomputed,
+            &embedded_types,
+            &extra_types,
+        )
+        .await?
+    } else {
+        IndexedFieldsStats::default()
+    };
+    if let Some(versions) = versions {
+        // The payloads this group changed, with the vectors they were
+        // embedded with. Not counted: one point per entity, as in one group.
+        let rewritten: Vec<GraphNodePair> = plan
+            .rewritten_vectors
+            .iter()
+            .map(|position| group.entities[*position].clone())
+            .collect();
+        if !rewritten.is_empty() {
+            let cached: Vec<Embedding> = rewritten
+                .iter()
+                .filter_map(|pair| {
+                    let id = pair.entity.base.id;
+                    versions
+                        .entity_vectors
+                        .get(&id)
+                        .map(|vector| Embedding::new(id, "Entity", "name", vector.clone()))
+                })
+                .collect();
+            let all_types: HashSet<Uuid> = entity_types.iter().map(|t| t.base.id).collect();
+            crate::tasks::index_data_points_except(
+                &[],
+                &rewritten,
+                &[],
+                &[],
+                &[],
+                dataset_id,
+                Arc::clone(context.embedding_engine),
+                Arc::clone(context.vector_db),
+                &cached,
+                &all_types,
+                &[],
+            )
+            .await?;
+            info!(
+                "Rewrote {} entity vector payloads this document changed",
+                rewritten.len()
+            );
+        }
+        for embedding in entity_vectors {
+            versions
+                .entity_vectors
+                .insert(embedding.data_point_id, embedding.vector);
+        }
+        for position in plan.new_vectors.iter().chain(&plan.rewritten_vectors) {
+            if let Some(version) = plan.versions[*position] {
+                versions
+                    .entities
+                    .entry(group.entities[*position].entity.base.id)
+                    .and_modify(|v| v.vector = version.vector)
+                    .or_insert(version);
+            }
+        }
+    }
     if !dynamic.is_empty() {
         let dynamic_embeddings = crate::tasks::index_dynamic_graph(
             &dynamic,
@@ -913,23 +1378,6 @@ async fn write_vectors(
         .await?;
         embeddings.extend(dynamic_embeddings);
     }
-    let mut dlt_nodes: Vec<Uuid> = Vec::new();
-    if let Some(dlt) = group.dlt {
-        let fresh: Vec<serde_json::Value> = dlt
-            .schema_nodes
-            .iter()
-            .filter(|node| schema_node_id(node).is_none_or(|id| tracker.new_point(DLT_POINT, id)))
-            .cloned()
-            .collect();
-        crate::tasks::index_dlt_schema_nodes(
-            &fresh,
-            context.ledger,
-            context.embedding_engine,
-            context.vector_db,
-        )
-        .await?;
-        dlt_nodes.extend(fresh.iter().filter_map(schema_node_id));
-    }
 
     let vectors = &mut tracker.now.vectors;
     vectors.extend(chunks.iter().map(|c| (CHUNK_POINT, c.base.id)));
@@ -939,14 +1387,19 @@ async fn write_vectors(
     vectors.extend(edge_types.iter().map(|e| (EDGE_TYPE_POINT, e.base.id)));
     vectors.extend(documents.iter().map(|d| (DOCUMENT_POINT, d.base.id)));
     vectors.extend(dynamic.iter().map(|n| (DYNAMIC_POINT, n.base.id)));
-    vectors.extend(dlt_nodes.into_iter().map(|id| (DLT_POINT, id)));
 
-    Ok(PersistOutputs {
-        edge_types,
+    Ok(GroupOutputs {
         embeddings,
         embedding_count,
         indexed_fields,
     })
+}
+
+/// One group's share of the run-level outputs.
+struct GroupOutputs {
+    embeddings: Vec<Embedding>,
+    embedding_count: usize,
+    indexed_fields: IndexedFieldsStats,
 }
 
 /// A DLT schema node's id, as [`crate::tasks::index_dlt_schema_nodes`] reads it.
@@ -962,7 +1415,7 @@ fn schema_node_id(node: &serde_json::Value) -> Option<Uuid> {
     clippy::expect_used,
     reason = "test code — panics are acceptable failures"
 )]
-mod tests {
+pub(crate) mod tests {
     //! Split equivalence (SDK-1694 O4a): persisting a run as one group per
     //! document, with one [`PersistState`], stores the same sets as persisting
     //! it as one group — and writes every node, edge and vector point once.
@@ -1132,8 +1585,8 @@ mod tests {
         )
     }
 
-    const DATASET: Uuid = Uuid::from_u128(0x0a4a_5001);
-    const USER: Uuid = Uuid::from_u128(0x0a4a_5002);
+    pub(crate) const DATASET: Uuid = Uuid::from_u128(0x0a4a_5001);
+    pub(crate) const USER: Uuid = Uuid::from_u128(0x0a4a_5002);
     const DOC_A: Uuid = Uuid::from_u128(0xa);
     const DOC_B: Uuid = Uuid::from_u128(0xb);
     const DOC_C: Uuid = Uuid::from_u128(0xc);
@@ -1376,15 +1829,15 @@ mod tests {
             .collect()
     }
 
-    struct Stores {
-        graph: Arc<MockGraphDB>,
-        vector: Arc<MockVectorDB>,
-        engine: Arc<MockEmbeddingEngine>,
-        db: DatabaseConnection,
+    pub(crate) struct Stores {
+        pub(crate) graph: Arc<MockGraphDB>,
+        pub(crate) vector: Arc<MockVectorDB>,
+        pub(crate) engine: Arc<MockEmbeddingEngine>,
+        pub(crate) db: DatabaseConnection,
     }
 
     impl Stores {
-        async fn new() -> Self {
+        pub(crate) async fn new() -> Self {
             let db = cognee_database::connect("sqlite::memory:").await.unwrap();
             cognee_database::initialize(&db).await.unwrap();
             cognee_database::ops::datasets::create_dataset(
@@ -1432,7 +1885,7 @@ mod tests {
 
         /// What the stores hold, as sets of canonical JSON text, with
         /// wall-clock values blanked.
-        async fn snapshot(&self) -> BTreeMap<String, BTreeSet<String>> {
+        pub(crate) async fn snapshot(&self) -> BTreeMap<String, BTreeSet<String>> {
             fn scrub(value: &mut Value) {
                 match value {
                     Value::Object(map) => {

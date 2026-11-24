@@ -757,63 +757,167 @@ pub async fn expand_extracted_graphs_by_unit(
     endpoint_scope: EndpointScope,
     cpu_pool: Option<Arc<dyn CpuPool>>,
 ) -> Result<Expansion, CoreError> {
-    // The workers need owned inputs. These are per-chunk lookups, small next
-    // to the extracted graphs, which are moved rather than copied.
-    let shared = Arc::new(SharedUnitInputs {
+    let expander = UnitExpander::new(
         dataset_id,
-        chunk_node_sets: chunk_node_sets.clone(),
-        chunk_importance_weights: chunk_importance_weights.clone(),
-        ontology: OntologyLookups::shared(ontology_resolver),
-        user_label: user_label.map(str::to_owned),
+        chunk_node_sets.clone(),
+        chunk_importance_weights.clone(),
+        ontology_resolver,
+        user_label,
         task_rank,
         endpoint_scope,
-    });
-    // Each unit enters the caller's span, so its logs stay under cognify's.
-    let span = tracing::Span::current();
-
-    // None of this work is cancellable: dropping the returned future stops
-    // the wait, not the expansion already handed to a worker, which runs to
-    // completion and is then discarded.
-    let expanded: Vec<(Expansion, Vec<String>)> = match cpu_pool {
-        Some(pool) => {
-            let tasks: Vec<_> = units
-                .into_iter()
-                .map(|graphs| {
-                    let shared = Arc::clone(&shared);
-                    let span = span.clone();
-                    pool.spawn(move || {
-                        let _entered = span.enter();
-                        expand_unit(graphs, &shared.inputs())
-                    })
-                })
-                .collect();
-            // `try_join_all` keeps the input order.
-            futures::future::try_join_all(tasks).await?
-        }
-        None => tokio::task::spawn_blocking(move || {
-            let _entered = span.enter();
-            let inputs = shared.inputs();
-            units
-                .into_iter()
-                .map(|graphs| expand_unit(graphs, &inputs))
-                .collect()
-        })
-        .await
-        .map_err(|error| CoreError::TaskAborted {
-            reason: format!("graph expansion did not finish: {error}"),
-        })?,
-    };
-
+        cpu_pool,
+    );
     let mut merged = ExpansionMerger::default();
-    let mut unresolved_sample: Vec<String> = Vec::new();
-    for (expansion, sample) in expanded {
-        let room = UNRESOLVED_SAMPLE_LIMIT.saturating_sub(unresolved_sample.len());
-        unresolved_sample.extend(sample.into_iter().take(room));
-        merged.push(expansion);
+    let mut log = ResolutionLog::default();
+    expander
+        .expand_each(units, |expansion, sample| {
+            log.add(&expansion.stats, sample);
+            merged.push(expansion);
+        })
+        .await?;
+    log.emit();
+    Ok(merged.finish())
+}
+
+/// Expands units for one run: the per-chunk lookups, the ontology cache, the
+/// stamp and the CPU pool are set up **once** and shared by every call, so a
+/// caller that expands one document at a time (SDK-1694 O4b) clones none of
+/// them per document and asks the ontology about a name once per run.
+///
+/// The units are expanded off the async runtime. With a CPU pool — the
+/// pipeline passes the run's [`cognee_core::TaskContext::thread_pool`], the
+/// pool the host sized — each unit is one task on that pool, so they run
+/// concurrently on its threads and no other pool is started. Without one,
+/// they run one after another on a single `spawn_blocking` thread.
+#[derive(Clone)]
+pub(crate) struct UnitExpander {
+    shared: Arc<SharedUnitInputs>,
+    cpu_pool: Option<Arc<dyn CpuPool>>,
+}
+
+impl UnitExpander {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        dataset_id: Uuid,
+        chunk_node_sets: HashMap<Uuid, Vec<serde_json::Value>>,
+        chunk_importance_weights: HashMap<Uuid, f64>,
+        ontology_resolver: Arc<dyn OntologyResolver>,
+        user_label: Option<&str>,
+        task_rank: Option<i32>,
+        endpoint_scope: EndpointScope,
+        cpu_pool: Option<Arc<dyn CpuPool>>,
+    ) -> Self {
+        Self {
+            shared: Arc::new(SharedUnitInputs {
+                dataset_id,
+                chunk_node_sets,
+                chunk_importance_weights,
+                ontology: OntologyLookups::shared(ontology_resolver),
+                user_label: user_label.map(str::to_owned),
+                task_rank,
+                endpoint_scope,
+            }),
+            cpu_pool,
+        }
     }
-    let expansion = merged.finish();
-    log_resolution_summary(&expansion.stats, &unresolved_sample);
-    Ok(expansion)
+
+    /// Expand each of `units` with fresh maps and hand each result, **in
+    /// input order**, to `each` together with its sample of unresolved
+    /// endpoint references. A unit is handed over as soon as it and every
+    /// unit before it are done, so finished expansions are not all held until
+    /// the last one is.
+    ///
+    /// None of this work is cancellable: dropping the returned future stops
+    /// the wait, not the expansion already handed to a worker, which runs to
+    /// completion and is then discarded.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::TaskAborted`] when a unit's expansion panicked, or the
+    /// pool shut down before it finished.
+    pub(crate) async fn expand_each(
+        &self,
+        units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+        mut each: impl FnMut(Expansion, Vec<String>),
+    ) -> Result<(), CoreError> {
+        use futures::StreamExt;
+
+        // Each unit enters the caller's span, so its logs stay under cognify's.
+        let span = tracing::Span::current();
+        match &self.cpu_pool {
+            Some(pool) => {
+                let mut tasks: futures::stream::FuturesOrdered<_> = units
+                    .into_iter()
+                    .map(|graphs| {
+                        let shared = Arc::clone(&self.shared);
+                        let span = span.clone();
+                        pool.spawn(move || {
+                            let _entered = span.enter();
+                            expand_unit(graphs, &shared.inputs())
+                        })
+                    })
+                    .collect();
+                while let Some(expanded) = tasks.next().await {
+                    let (expansion, sample) = expanded?;
+                    each(expansion, sample);
+                }
+            }
+            None => {
+                let shared = Arc::clone(&self.shared);
+                let expanded: Vec<(Expansion, Vec<String>)> =
+                    tokio::task::spawn_blocking(move || {
+                        let _entered = span.enter();
+                        let inputs = shared.inputs();
+                        units
+                            .into_iter()
+                            .map(|graphs| expand_unit(graphs, &inputs))
+                            .collect()
+                    })
+                    .await
+                    .map_err(|error| CoreError::TaskAborted {
+                        reason: format!("graph expansion did not finish: {error}"),
+                    })?;
+                for (expansion, sample) in expanded {
+                    each(expansion, sample);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Expand `units` and return the expansions in input order.
+    pub(crate) async fn expand(
+        &self,
+        units: Vec<Vec<(Uuid, KnowledgeGraph)>>,
+    ) -> Result<Vec<(Expansion, Vec<String>)>, CoreError> {
+        let mut expanded = Vec::with_capacity(units.len());
+        self.expand_each(units, |expansion, sample| {
+            expanded.push((expansion, sample))
+        })
+        .await?;
+        Ok(expanded)
+    }
+}
+
+/// The endpoint-resolution counters and the unresolved sample of a run,
+/// summed over its units and logged once.
+#[derive(Debug, Default)]
+pub(crate) struct ResolutionLog {
+    stats: EdgeResolutionStats,
+    sample: Vec<String>,
+}
+
+impl ResolutionLog {
+    pub(crate) fn add(&mut self, stats: &EdgeResolutionStats, sample: Vec<String>) {
+        self.stats.absorb(stats);
+        let room = UNRESOLVED_SAMPLE_LIMIT.saturating_sub(self.sample.len());
+        self.sample.extend(sample.into_iter().take(room));
+    }
+
+    /// Log the run's summary (see [`log_resolution_summary`]).
+    pub(crate) fn emit(&self) {
+        log_resolution_summary(&self.stats, &self.sample);
+    }
 }
 
 /// What every unit's expansion reads, besides its own graphs.
@@ -991,25 +1095,39 @@ struct ExpansionMerger {
     node_index: HashMap<Uuid, usize>,
     /// The first copy of each EntityType id, in input order: recorded as the
     /// units arrive, not read off the merged nodes, whose order is the order
-    /// the *entities* were first seen.
+    /// the *entities* were first seen. Every node pushed gets these copies
+    /// before it is merged, so no pass over the merged nodes is needed after.
     first_entity_types: HashMap<Uuid, EntityType>,
     edges: Vec<GraphEdgePair>,
-    edge_keys: HashSet<(Uuid, Uuid, String)>,
+    edge_index: HashMap<(Uuid, Uuid, String), usize>,
     claimed_existing_edges: Vec<GraphEdgePair>,
     claimed_keys: HashSet<(Uuid, Uuid, String)>,
     producers: ArtifactProducers,
     stats: EdgeResolutionStats,
     timestamps: Vec<TimestampNode>,
-    timestamp_ids: HashSet<Uuid>,
+    timestamp_index: HashMap<Uuid, usize>,
 }
 
 impl ExpansionMerger {
     fn push(&mut self, expansion: Expansion) {
-        for node in expansion.nodes {
-            for entity_type in node.entity_types() {
-                self.first_entity_types
+        self.producers.merge(expansion.producers.clone());
+        self.push_without_producers(expansion);
+    }
+
+    /// [`Self::push`], leaving the producers to the caller.
+    fn push_without_producers(&mut self, expansion: Expansion) {
+        for mut node in expansion.nodes {
+            // Each unit built its own copy of a shared EntityType, stamped
+            // with that unit's chunk importance weight. Every node gets the
+            // first one.
+            for entity_type in node.entity_types_mut() {
+                let first = self
+                    .first_entity_types
                     .entry(entity_type.base.id)
                     .or_insert_with(|| entity_type.clone());
+                if *entity_type != *first {
+                    *entity_type = first.clone();
+                }
             }
             match self.node_index.get(&node.entity.base.id) {
                 Some(&index) => {
@@ -1032,7 +1150,9 @@ impl ExpansionMerger {
             }
         }
         for edge in expansion.edges {
-            if self.edge_keys.insert(edge.dedup_key()) {
+            let key = edge.dedup_key();
+            if !self.edge_index.contains_key(&key) {
+                self.edge_index.insert(key, self.edges.len());
                 self.edges.push(edge);
             }
         }
@@ -1042,24 +1162,16 @@ impl ExpansionMerger {
             }
         }
         for node in expansion.timestamps {
-            if self.timestamp_ids.insert(node.timestamp.base.id) {
+            let id = node.timestamp.base.id;
+            if !self.timestamp_index.contains_key(&id) {
+                self.timestamp_index.insert(id, self.timestamps.len());
                 self.timestamps.push(node);
             }
         }
-        self.producers.merge(expansion.producers);
         self.stats.absorb(&expansion.stats);
     }
 
-    fn finish(mut self) -> Expansion {
-        // Each unit built its own copy of a shared EntityType, stamped with
-        // that unit's chunk importance weight. Every node gets the first one.
-        for node in &mut self.nodes {
-            for entity_type in node.entity_types_mut() {
-                if let Some(first) = self.first_entity_types.get(&entity_type.base.id) {
-                    *entity_type = first.clone();
-                }
-            }
-        }
+    fn finish(self) -> Expansion {
         Expansion {
             nodes: self.nodes,
             edges: self.edges,
@@ -2093,6 +2205,116 @@ fn process_ontology_edges(
 
         ontology_edge_keys.insert(edge_key);
         ontology_edges_out.push(edge);
+    }
+}
+
+/// The graph of a run, merged one document at a time (SDK-1694 O4b).
+///
+/// The incremental form of [`merge_expansions`]: each document's units are
+/// pushed in order, so after the last document the merged nodes, edges and
+/// Timestamps are exactly what merging every unit of the run at once gives —
+/// the first block in input order sets an entity's fields, types are
+/// combined, NodeSet memberships are unioned, an EntityType id keeps its first
+/// copy and an edge key its first edge.
+///
+/// [`Self::add_document`] returns the document's **view**: the current merged
+/// copy of every entity, edge and Timestamp the document produced, and the
+/// document's own producers. An entity an earlier document already declared
+/// comes back as merged so far, so it carries this document's new types and
+/// NodeSets as well as the earlier ones, and the earlier document's fields.
+#[derive(Default)]
+pub(crate) struct RunGraph {
+    merged: ExpansionMerger,
+}
+
+/// One document's part of a [`RunGraph`].
+#[derive(Debug, Default)]
+pub(crate) struct DocumentGraph {
+    /// The merged copies of the entities the document produced, in run order.
+    pub(crate) nodes: Vec<GraphNodePair>,
+    /// The first copies of the edges the document produced, in run order.
+    pub(crate) edges: Vec<GraphEdgePair>,
+    /// The Timestamps the document named, in run order.
+    pub(crate) timestamps: Vec<TimestampNode>,
+    /// The document's own producers.
+    pub(crate) producers: ArtifactProducers,
+}
+
+impl RunGraph {
+    /// Merge one document's unit expansions, in unit order, and return its
+    /// view. `prepare` runs on the merged copy of each of the document's
+    /// entities before the view is taken (the extraction stamp), and must be
+    /// idempotent: an entity several documents produced passes through it once
+    /// per document.
+    pub(crate) fn add_document(
+        &mut self,
+        expansions: Vec<Expansion>,
+        mut prepare: impl FnMut(&mut GraphNodePair),
+    ) -> DocumentGraph {
+        let mut node_ids: Vec<Uuid> = Vec::new();
+        let mut edge_keys: Vec<(Uuid, Uuid, String)> = Vec::new();
+        let mut timestamp_ids: Vec<Uuid> = Vec::new();
+        let mut producers = ArtifactProducers::default();
+        for expansion in expansions {
+            node_ids.extend(expansion.nodes.iter().map(|node| node.entity.base.id));
+            edge_keys.extend(expansion.edges.iter().map(GraphEdgePair::dedup_key));
+            timestamp_ids.extend(expansion.timestamps.iter().map(|t| t.timestamp.base.id));
+            producers.merge(expansion.producers.clone());
+            self.merged.push_without_producers(expansion);
+        }
+
+        let merged = &mut self.merged;
+        let mut node_positions: Vec<usize> = node_ids
+            .iter()
+            .filter_map(|id| merged.node_index.get(id).copied())
+            .collect();
+        node_positions.sort_unstable();
+        node_positions.dedup();
+        let mut edge_positions: Vec<usize> = edge_keys
+            .iter()
+            .filter_map(|key| merged.edge_index.get(key).copied())
+            .collect();
+        edge_positions.sort_unstable();
+        edge_positions.dedup();
+        let mut timestamp_positions: Vec<usize> = timestamp_ids
+            .iter()
+            .filter_map(|id| merged.timestamp_index.get(id).copied())
+            .collect();
+        timestamp_positions.sort_unstable();
+        timestamp_positions.dedup();
+
+        let nodes = node_positions
+            .into_iter()
+            .map(|position| {
+                let node = &mut merged.nodes[position];
+                prepare(node);
+                node.clone()
+            })
+            .collect();
+        DocumentGraph {
+            nodes,
+            edges: edge_positions
+                .into_iter()
+                .map(|position| merged.edges[position].clone())
+                .collect(),
+            timestamps: timestamp_positions
+                .into_iter()
+                .map(|position| merged.timestamps[position].clone())
+                .collect(),
+            producers,
+        }
+    }
+
+    /// The merged copy of the edge with `key`, to stamp its `edge_text` once
+    /// it is known to be new.
+    pub(crate) fn edge_mut(&mut self, key: &(Uuid, Uuid, String)) -> Option<&mut GraphEdgePair> {
+        let position = *self.merged.edge_index.get(key)?;
+        self.merged.edges.get_mut(position)
+    }
+
+    /// Every merged entity, in run order.
+    pub(crate) fn into_parts(self) -> (Vec<GraphNodePair>, Vec<GraphEdgePair>) {
+        (self.merged.nodes, self.merged.edges)
     }
 }
 
@@ -5637,5 +5859,76 @@ mod tests {
         let again = expand_against(HashSet::from([organisation_is_a_legal_entity.clone()])).await;
         assert!(!keys(&again.edges).contains(&organisation_is_a_legal_entity));
         assert!(again.claimed_existing_edges.is_empty());
+    }
+
+    /// The run's graph merged one document at a time (SDK-1694 O4b) equals
+    /// merging every unit at once, and each document's view carries only its
+    /// own producers, with the merged copies of its entities.
+    #[tokio::test]
+    async fn merging_document_by_document_equals_the_whole_run() {
+        let units = three_documents();
+        let whole = expand_units(units.clone(), EndpointScope::Unit).await;
+
+        let expander = UnitExpander::new(
+            Uuid::new_v4(),
+            HashMap::new(),
+            HashMap::new(),
+            Arc::new(noop()),
+            None,
+            None,
+            EndpointScope::Unit,
+            None,
+        );
+        let mut run = RunGraph::default();
+        let mut views = Vec::new();
+        for unit in units.clone() {
+            let chunk = unit[0].0;
+            let expansions = expander
+                .expand(vec![unit])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(expansion, _)| expansion)
+                .collect();
+            views.push((chunk, run.add_document(expansions, |_| {})));
+        }
+        for (chunk, view) in &views {
+            for node in &view.nodes {
+                assert_eq!(
+                    view.producers.entity_chunks(node.entity.base.id),
+                    &[*chunk],
+                    "a document's view names only its own chunk"
+                );
+            }
+        }
+        // The third document's Apple is the merged one: all three types.
+        let apple = views[2]
+            .1
+            .nodes
+            .iter()
+            .find(|node| node.entity.name.eq_ignore_ascii_case("apple"))
+            .unwrap();
+        assert_eq!(apple.entity_types().count(), 3);
+
+        // The same merged entities with the same types, in the same order,
+        // and the same edges (the dataset id in a NodeSet differs).
+        let shape = |nodes: &[GraphNodePair]| -> Vec<(Uuid, Vec<Uuid>, String)> {
+            nodes
+                .iter()
+                .map(|node| {
+                    (
+                        node.entity.base.id,
+                        node.entity_types().map(|t| t.base.id).collect(),
+                        node.entity.description.clone(),
+                    )
+                })
+                .collect()
+        };
+        let (nodes, edges) = run.into_parts();
+        assert_eq!(shape(&nodes), shape(&whole.nodes));
+        let keys = |edges: &[GraphEdgePair]| -> Vec<(Uuid, Uuid, String)> {
+            edges.iter().map(GraphEdgePair::dedup_key).collect()
+        };
+        assert_eq!(keys(&edges), keys(&whole.edges));
     }
 }

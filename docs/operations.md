@@ -405,12 +405,16 @@ added file by file. See [`cognee-ingestion`'s `code_repo`](../crates/ingestion/s
 
 ### cognify (knowledge-graph extraction)
 
-Turns stored data into a knowledge graph in five stages: **classify** documents →
-**chunk** text → **extract** entities/relationships (LLM, batched) **and
-summarize** (conditional) — one fused stage running both concurrently over the
-same chunks, matching Python's `extract_graph_and_summarize` → **add data
-points** (six vector collections + provenance to the relational DB) →
-**extract DLT FK edges**. A DLT row (a document whose `external_metadata` has
+Turns stored data into a knowledge graph in four stages: **classify** documents →
+**chunk** text → **extract** entities/relationships (LLM) **and summarize**
+(conditional), then **add data points** (six vector collections + provenance to
+the relational DB) — one streaming stage that saves **each document as soon as
+all its extraction and summary results are in**, as Python's per-data-item
+`extract_graph_and_summarize` → `add_data_points` does: every chunk's calls go
+through one bounded stream (no batch barrier), each finished document's graph is
+built on the CPU pool and saved by a single writer in input order, and at most
+`cognify.max_unsaved_documents` documents are in progress at once (see
+[configuration](configuration.md)) → **extract DLT FK edges**, after the run. A DLT row (a document whose `external_metadata` has
 `source: "dlt"`) is one `DltRow` chunk indexed into `DltRow_text`, not
 `DocumentChunk_text`; the last step adds its `SchemaTable`, `SchemaRelationship`
 and `DltColumn` nodes (vector collections `SchemaTable_*`,

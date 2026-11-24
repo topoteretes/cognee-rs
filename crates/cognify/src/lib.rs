@@ -7,6 +7,8 @@ pub mod code_cluster;
 pub mod config;
 /// Dataset resolver module.
 pub mod dataset_resolver;
+/// Per-document assembly and one ordered writer (SDK-1694 O4b).
+mod document_stage;
 /// Runtime custom graph schemas and DataPoints.
 pub mod dynamic_graph;
 /// Capture of the graph-edge evidence sidecar (`provenance_edge_evidence`).

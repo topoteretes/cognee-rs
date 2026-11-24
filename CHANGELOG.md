@@ -18,6 +18,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **cognify saves each document as soon as it is complete, from one ordered
+  writer (SDK-1694, stage O4b).** Extraction, summarization and
+  `add_data_points` are now **one streaming pipeline stage**,
+  `make_cognify_documents_task` (`COGNIFY_DOCUMENTS_TASK_NAME =
+  "extract_graph_summarize_and_add_data_points"`): every chunk's extraction
+  and summary call go through one bounded stream each, results reach a
+  per-document assembler as they arrive, a finished document's graph is built
+  on the run's CPU pool (its blocks expanded with fresh maps, once per
+  document) and a single writer saves it in input order through the O4a
+  persistence layer. What a run stores is **unchanged as sets** — the
+  `persist_equivalence` snapshots, now also pinning the vector collections
+  and `CognifyResult`, pass unchanged on all three scenarios — with these
+  rules for what several documents share:
+  - **Rewrite on change.** An entity a later document changes (a new type, a
+    new NodeSet, the first real extraction replacing an ontology placeholder)
+    gets its graph node, its vector payload (with the vector it was embedded
+    with: no text is embedded twice) and the ownership rows of the earlier
+    documents rewritten, so it ends up as when the run was saved at once.
+    Description, importance weight and metadata stay the first document's
+    (first block wins, D5); `contains` edge texts use that description too.
+  - **Two documents of one URL** share a WebPage node; the last one in input
+    order wins, as before.
+  - **EdgeType** `number_of_edges` counts each edge the run wrote once, across
+    documents, and an `EdgeType` point keeps the run's lexicographically
+    smallest spelling, as before.
+  - The existing-edge check runs per document, after the earlier documents
+    were saved; an edge an earlier document of the run wrote is that run's,
+    not "existing".
+  - Under `FailFast`, a document with a failed or skipped call is not saved
+    (only complete documents are, as before); a failed extraction **now also
+    stops the summary stream** and vice versa, through one shared stop flag;
+    a failed save stops both and fails the run, and dropping the stage
+    aborts the LLM calls in flight. Under a scope other than `failed_items`
+    a stop fails the run with the whole report (extraction and summaries).
+  - New setting `cognify.max_unsaved_documents`
+    (`COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS`, default `32`): a document's
+    chunks are dispatched only while fewer documents are waiting to be saved.
+  - The graph backend path is driven the same way: blocks of at most
+    `chunks_per_batch` chunks of admitted documents, each chunk's result sent
+    to the assembler as its block returns.
+
+  Completion markers and the rollback decision still happen at the end of the
+  run, and a persistence failure is still run-fatal (SDK-1694 O5b).
+  `SummaryExtractor::summarize_chunks` runs on the same dispatch helper: a
+  chunk's text is cloned when its call starts (not every chunk up front), and
+  each call runs on its own task.
+  **Signature changes:** `build_cognify_pipeline` has three stages, the third
+  named `COGNIFY_DOCUMENTS_TASK_NAME` (the old
+  `make_extract_graph_and_summarize_task*` / `make_add_data_points_task*`
+  factories stay, for custom pipelines, and save the run as one group);
+  `extract_dlt_fk_edges` takes the run's `&CognifyConfig`; `CognifyConfig`
+  gains `max_unsaved_documents`. Also: the DLT step writes its schema nodes'
+  vectors before its FK edges again and opens no empty bulk-load scope after
+  the run.
 - **One persistence layer for every cognify write (SDK-1694, stage O4a).** The
   graph, vector, ownership-ledger and edge-evidence writes of a run — the
   extracted entities, Timestamps and semantic edges, the claimed existing
