@@ -2395,6 +2395,7 @@ pub async fn add_data_points(
         evidence,
         user_id: input.user_id,
         config,
+        run_chunk_documents: None,
     };
     let group = crate::persist::PersistGroup {
         chunks: &input.chunks,
@@ -3276,6 +3277,7 @@ pub async fn extract_dlt_fk_edges(
         evidence: None,
         user_id: None,
         config,
+        run_chunk_documents: None,
     };
     let group = crate::persist::PersistGroup {
         dlt: Some(&artifacts),
@@ -4965,21 +4967,25 @@ fn stamped_chunk(entity: &cognee_models::Entity) -> Option<Uuid> {
         .and_then(|s| Uuid::parse_str(s).ok())
 }
 
-/// Map each entity to the data item of the chunk stamped on its metadata:
-/// `Some(data_id)` when that chunk is one of the group's, `None` when it is
-/// another group's (a per-document group holding an entity an earlier
-/// document's ontology lookup first brought in).
+/// Map each entity to the data item of the chunk stamped on its metadata.
+///
+/// `stamp_documents` is the chunk → data-item map the stamp is looked up in:
+/// the run's when the run is saved one document per group (SDK-1694 O4b), so
+/// an entity an earlier document's ontology lookup brought in resolves to that
+/// document in a later group too, exactly as when the run is saved as one
+/// group.
 ///
 /// Only used as the fallback attribution for edges whose producer set is empty.
 fn entity_document_map(
     entities: &[GraphNodePair],
-    chunk_data_map: &HashMap<Uuid, Uuid>,
-) -> HashMap<Uuid, Option<Uuid>> {
+    stamp_documents: &HashMap<Uuid, Uuid>,
+) -> HashMap<Uuid, Uuid> {
     entities
         .iter()
         .filter_map(|pair| {
             stamped_chunk(&pair.entity)
-                .map(|chunk_id| (pair.entity.base.id, chunk_data_map.get(&chunk_id).copied()))
+                .and_then(|chunk_id| stamp_documents.get(&chunk_id).copied())
+                .map(|data_id| (pair.entity.base.id, data_id))
         })
         .collect()
 }
@@ -4998,6 +5004,9 @@ fn entity_provenance_rows(
     id: LedgerIdentity,
     entities: &[GraphNodePair],
     chunk_data_map: &HashMap<Uuid, Uuid>,
+    // Where an entity's `chunk_id` stamp is looked up (see
+    // `entity_document_map`).
+    stamp_documents: &HashMap<Uuid, Uuid>,
     producers: &ArtifactProducers,
 ) -> Vec<cognee_database::GraphNode> {
     let mut rows = Vec::new();
@@ -5010,18 +5019,14 @@ fn entity_provenance_rows(
         if data_ids.is_empty() {
             // Ontology-derived entities, and callers that hand us a
             // `SummarizedData` they built themselves, carry no producer set:
-            // fall back to the single `chunk_id` stamp, then to nil. A stamp
-            // naming a chunk of another group gets no row here: the group
-            // holding that chunk writes it (per-document groups, SDK-1694 O4b;
-            // a run saved as one group holds every chunk).
-            match stamped_chunk(entity) {
-                Some(chunk_id) => match chunk_data_map.get(&chunk_id) {
-                    Some(data_id) => data_ids.push(*data_id),
-                    None if chunk_data_map.is_empty() => data_ids.push(Uuid::nil()),
-                    None => continue,
-                },
-                None => data_ids.push(Uuid::nil()),
-            }
+            // fall back to the single `chunk_id` stamp, then to nil. The stamp
+            // is looked up run-wide (`stamp_documents`), so a per-document
+            // group gets the row one group would (SDK-1694 O4b).
+            data_ids.push(
+                stamped_chunk(entity)
+                    .and_then(|chunk_id| stamp_documents.get(&chunk_id).copied())
+                    .unwrap_or(Uuid::nil()),
+            );
         }
 
         rows.extend(
@@ -5137,7 +5142,7 @@ fn semantic_edge_provenance_rows(
     id: LedgerIdentity,
     edges: &[GraphEdgePair],
     chunk_data_map: &HashMap<Uuid, Uuid>,
-    entity_data_map: &HashMap<Uuid, Option<Uuid>>,
+    entity_data_map: &HashMap<Uuid, Uuid>,
     producers: &ArtifactProducers,
 ) -> Vec<cognee_database::GraphEdge> {
     let mut rows = Vec::new();
@@ -5172,10 +5177,7 @@ fn semantic_edge_provenance_rows(
             let source_data_id = entity_data_map.get(&edge_pair.source_entity_id).copied();
             let target_data_id = entity_data_map.get(&edge_pair.target_entity_id).copied();
             data_ids.push(match (source_data_id, target_data_id) {
-                // An endpoint stamped with another group's chunk: that group
-                // writes the row (see `entity_provenance_rows`).
-                (Some(None), _) | (_, Some(None)) if !chunk_data_map.is_empty() => continue,
-                (Some(Some(source)), Some(Some(target))) if source == target => source,
+                (Some(source), Some(target)) if source == target => source,
                 _ => Uuid::nil(),
             });
         }
@@ -5465,14 +5467,20 @@ pub(crate) fn extraction_ownership_rows(
     claimed_existing_edges: &[GraphEdgePair],
     timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
+    // The run's chunk → data-item map, when the run is saved one document per
+    // group: where an entity's `chunk_id` stamp is looked up. `None` uses
+    // `chunks`, which then hold the whole run.
+    run_chunk_documents: Option<&HashMap<Uuid, Uuid>>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
 ) {
     let chunk_data_map = chunk_document_map(chunks);
-    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+    let stamp_documents = run_chunk_documents.unwrap_or(&chunk_data_map);
+    let entity_data_map = entity_document_map(entities, stamp_documents);
 
-    let mut prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
+    let mut prov_nodes =
+        entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
     prov_nodes.extend(timestamp_provenance_rows(
         id,
         timestamps,
@@ -5518,6 +5526,7 @@ async fn upsert_provenance(
         documents,
         structural_edges,
         producers,
+        None,
     );
     // Write the node and edge provenance batches atomically: a failure partway
     // through rolls the whole group back (see `upsert_provenance_graph`).
@@ -5553,6 +5562,8 @@ pub(crate) fn provenance_rows(
     documents: &[Document],
     structural_edges: &[EdgeData],
     producers: &ArtifactProducers,
+    // See `extraction_ownership_rows`.
+    run_chunk_documents: Option<&HashMap<Uuid, Uuid>>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
@@ -5569,14 +5580,15 @@ pub(crate) fn provenance_rows(
     // Build chunk_id → document_id map for tracing entity provenance back
     // to the originating Data item.
     let chunk_data_map = chunk_document_map(chunks);
-    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+    let stamp_documents = run_chunk_documents.unwrap_or(&chunk_data_map);
+    let entity_data_map = entity_document_map(entities, stamp_documents);
 
     // ── Provenance nodes ────────────────────────────────────────────────
     // Entities. `extraction_ownership_rows` builds the same rows, with the same
     // ids; both are written, so these rows are upserted twice per group
     // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
-        entity_provenance_rows(id, entities, &chunk_data_map, producers);
+        entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
 
     // DocumentChunks
     for chunk in chunks {

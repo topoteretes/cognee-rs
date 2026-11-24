@@ -181,6 +181,10 @@ pub(crate) struct PersistContext<'a> {
     /// Read for the custom-graph walk (`chunks_per_batch`,
     /// `chunk_attachment`) and `retain_embeddings`.
     pub(crate) config: &'a CognifyConfig,
+    /// The run's chunk → data-item map when the run is saved one document per
+    /// group: where the ownership fallbacks look an entity's `chunk_id` stamp
+    /// up, so a group gets the rows one group would. `None` for one group.
+    pub(crate) run_chunk_documents: Option<&'a HashMap<Uuid, Uuid>>,
 }
 
 /// The vector-point classes [`Written::vectors`] tracks. A point's identity is
@@ -573,6 +577,7 @@ pub(crate) async fn persist_group(
         group.claimed_existing_edges,
         group.timestamps,
         group.producers,
+        context.run_chunk_documents,
     );
     if let Some(versions) = versions.as_mut() {
         let entity_ids: HashSet<Uuid> = group.entities.iter().map(|p| p.entity.base.id).collect();
@@ -583,7 +588,13 @@ pub(crate) async fn persist_group(
             }
         }
     }
-    let group_entity_rows: HashSet<Uuid> = nodes.iter().map(|row| row.id).collect();
+    // The rows this group writes itself, already carrying the entity as it is
+    // now; every other row of a changed entity is rewritten below.
+    let group_entity_rows: HashSet<Uuid> = nodes
+        .iter()
+        .map(|row| row.id)
+        .filter(|id| !tracker.earlier.ledger_nodes.contains(id))
+        .collect();
     let (node_rows, edge_rows) = write_ledger(context.db, &mut tracker, nodes, edges).await?;
     if node_rows + edge_rows > 0 {
         info!(
@@ -611,6 +622,7 @@ pub(crate) async fn persist_group(
         group.documents,
         &structural_edges,
         group.producers,
+        context.run_chunk_documents,
     );
     let (node_rows, edge_rows) = write_ledger(context.db, &mut tracker, nodes, edges).await?;
     if node_rows > 0 {
@@ -921,6 +933,7 @@ pub(crate) async fn persist_extraction(
         &graph.claimed_existing_edges,
         &graph.timestamps,
         &graph.producers,
+        None,
     );
     let (node_rows, edge_rows) = write_ledger(db, &mut tracker, nodes, edges).await?;
     if node_rows + edge_rows > 0 {
@@ -1875,6 +1888,7 @@ pub(crate) mod tests {
                 evidence: Some(ledger),
                 user_id: data.user_id,
                 config,
+                run_chunk_documents: None,
             };
             let mut state = PersistState::default();
             for group in groups {

@@ -965,15 +965,17 @@ async fn build_document(
     // declaration of an entity decides its description and type.
     done.graphs.sort_by_key(|(chunk, _)| *chunk);
     done.summaries.sort_by_key(|(chunk, _)| *chunk);
-    let mut graphs: Vec<(Uuid, KnowledgeGraph)> = Vec::new();
+    // (document, chunk, graph): the chunk's own document, so chunks of several
+    // documents without a `Document` record still form separate units.
+    let mut graphs: Vec<(Uuid, Uuid, KnowledgeGraph)> = Vec::new();
     let mut dynamic: Vec<AttributedDynamicGraph> = Vec::new();
     let mut summaries: Vec<TextSummary> = done.summaries.into_iter().map(|(_, s)| s).collect();
     for (chunk, extracted) in done.graphs {
         let chunk = &input.chunks[chunk];
         match extracted {
-            Extracted::Graph(graph) => graphs.push((chunk.base.id, graph)),
+            Extracted::Graph(graph) => graphs.push((chunk.document_id, chunk.base.id, graph)),
             Extracted::Backend(graph, summary) => {
-                graphs.push((chunk.base.id, graph));
+                graphs.push((chunk.document_id, chunk.base.id, graph));
                 summaries.extend(summary.map(|summary| *summary));
             }
             Extracted::Dynamic(graph) => dynamic.push(AttributedDynamicGraph {
@@ -988,9 +990,9 @@ async fn build_document(
             let units = extraction_units(
                 &chunks,
                 config.chunks_per_batch,
-                graphs
-                    .into_iter()
-                    .map(|(chunk_id, graph)| (Uuid::nil(), chunk_id, (chunk_id, graph))),
+                graphs.into_iter().map(|(document_id, chunk_id, graph)| {
+                    (document_id, chunk_id, (chunk_id, graph))
+                }),
             );
             expander.expand(units).await.map_err(|error| {
                 CognifyError::Execute(format!("building the extracted graph: {error}"))
@@ -1026,6 +1028,8 @@ struct Written {
     graph: RunGraph,
     edge_status: HashMap<(Uuid, Uuid, String), EdgeStatus>,
     resolution: ResolutionLog,
+    /// Every chunk of the run → its document, for the ownership fallbacks.
+    chunk_documents: HashMap<Uuid, Uuid>,
     chunks: Vec<DocumentChunk>,
     documents: Vec<Document>,
     summaries: Vec<TextSummary>,
@@ -1050,6 +1054,11 @@ async fn write_documents(
         graph: RunGraph::default(),
         edge_status: HashMap::new(),
         resolution: ResolutionLog::default(),
+        chunk_documents: input
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.base.id, chunk.document_id))
+            .collect(),
         chunks: Vec::new(),
         documents: Vec::new(),
         summaries: Vec::new(),
@@ -1244,6 +1253,7 @@ async fn write_document(
         evidence: (config.edge_evidence_enabled && input.user_id.is_some()).then_some(evidence),
         user_id: input.user_id,
         config,
+        run_chunk_documents: Some(&written.chunk_documents),
     };
     let group = PersistGroup {
         chunks: &chunks,
@@ -2035,5 +2045,202 @@ mod tests {
         admission.release(2);
         admission.admit(3).await;
         assert_eq!(admission.unsaved.load(Ordering::Acquire), 1);
+    }
+
+    // ── Per-document groups vs one group, with an ontology (review fixes) ──
+
+    /// Alice works for Acme and for X_Y; Acme and X_Y are organisations.
+    const ONTOLOGY: &str = r#"
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <http://test.cognee.ai/ontology#> .
+
+:Person a owl:Class ; rdfs:label "Person" .
+:Organisation a owl:Class ; rdfs:label "Organisation" .
+:worksFor a owl:ObjectProperty .
+:Alice a :Person ; rdfs:label "Alice" ; :worksFor :Acme ; :worksFor :X_Y .
+:Acme a :Organisation ; rdfs:label "Acme" .
+:X_Y a :Organisation ; rdfs:label "X_Y" .
+"#;
+
+    fn ontology() -> Arc<dyn OntologyResolver> {
+        let reader: Box<dyn std::io::Read> = Box::new(ONTOLOGY.as_bytes());
+        Arc::new(
+            cognee_ontology::RdfLibOntologyResolver::new(
+                cognee_ontology::OntologyFileInput::Reader(reader),
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Stamped as classify and chunk stamp them in a pipeline.
+    fn stamped(mut documents: ExtractedChunks) -> ExtractedChunks {
+        for document in &mut documents.documents {
+            stamp_point(&mut document.base, "classify_documents", None, 1);
+        }
+        for chunk in &mut documents.chunks {
+            stamp_point(&mut chunk.base, "extract_chunks_from_documents", None, 2);
+        }
+        documents
+    }
+
+    /// Save `documents` once through the whole-run path (one group) and once
+    /// through the stage (one group per document); return both stores and
+    /// every row only one of them holds, as `section ONLY-WHOLE|ONLY-SPLIT row`.
+    async fn whole_vs_split(
+        documents: &ExtractedChunks,
+        ontology: Arc<dyn OntologyResolver>,
+        config: &CognifyConfig,
+    ) -> (Stores, Stores, Vec<String>) {
+        let whole = Stores::new().await;
+        let llm: Arc<dyn Llm> = Arc::new(TextLlm::default());
+        let graph = crate::tasks::build_extracted_graph(
+            documents,
+            Arc::clone(&llm),
+            whole.graph.clone(),
+            Arc::clone(&ontology),
+            config,
+            None,
+            Some(3),
+        )
+        .await
+        .unwrap();
+        let summaries = crate::tasks::summarize_text(documents, llm, config)
+            .await
+            .unwrap();
+        let mut data = crate::tasks::SummarizedData {
+            chunks: graph.chunks,
+            documents: graph.documents,
+            entities: graph.entities,
+            timestamps: graph.timestamps,
+            edges: graph.edges,
+            claimed_existing_edges: graph.claimed_existing_edges,
+            handoff: graph.handoff,
+            producers: graph.producers,
+            dynamic_graphs: graph.dynamic_graphs,
+            summaries: summaries.summaries,
+            dataset_id: DATASET,
+            user_id: Some(USER),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        crate::tasks::stamp_entity_provenance(&mut data.entities, EXTRACT_GRAPH_TASK_NAME, None, 3);
+        for summary in &mut data.summaries {
+            stamp_point(
+                &mut summary.base,
+                EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
+                None,
+                3,
+            );
+        }
+        crate::tasks::add_data_points(
+            &data,
+            whole.graph.clone(),
+            whole.vector.clone(),
+            whole.engine.clone(),
+            &whole.db,
+            Some(Uuid::from_u128(7)),
+            config,
+        )
+        .await
+        .unwrap();
+
+        let split = Stores::new().await;
+        let stores = StageStores {
+            ontology,
+            ..stores_of(&split, Arc::new(TextLlm::default()))
+        };
+        run_document_stage(documents, &stores, config, &stamp())
+            .await
+            .unwrap();
+
+        let (want, got) = (whole.snapshot().await, split.snapshot().await);
+        let empty = BTreeSet::new();
+        let mut differences = Vec::new();
+        for section in want.keys().chain(got.keys()).collect::<BTreeSet<_>>() {
+            let (w, g) = (
+                want.get(section).unwrap_or(&empty),
+                got.get(section).unwrap_or(&empty),
+            );
+            differences.extend(
+                w.difference(g)
+                    .map(|row| format!("{section} ONLY-WHOLE {row}")),
+            );
+            differences.extend(
+                g.difference(w)
+                    .map(|row| format!("{section} ONLY-SPLIT {row}")),
+            );
+        }
+        (whole, split, differences)
+    }
+
+    /// An ontology edge between an entity of a later document and one an
+    /// earlier document's chunk is stamped on gets the ownership row one group
+    /// gives it: the stamp is looked up run-wide.
+    #[tokio::test]
+    async fn an_ontology_edge_to_another_documents_entity_keeps_its_ownership_row() {
+        let documents = stamped(input(&[
+            (0xa, vec![("Acme:Company", None)]),
+            (0xb, vec![("Alice:Human", None)]),
+        ]));
+        let (_, split, differences) =
+            whole_vs_split(&documents, ontology(), &CognifyConfig::default()).await;
+        assert!(differences.is_empty(), "{differences:#?}");
+        let (alice, acme) = (
+            cognee_models::Entity::id_for("Alice").to_string(),
+            cognee_models::Entity::id_for("Acme").to_string(),
+        );
+        let snapshot = split.snapshot().await;
+        let rows = snapshot["edges"]
+            .iter()
+            .filter(|row| row.contains(&alice) && row.contains(&acme))
+            .count();
+        assert!(rows > 0, "the alice → acme edge has an ownership row");
+    }
+
+    /// An entity only an earlier document's ontology lookup brought in, which
+    /// a later document then extracts: the graph matches one group; the only
+    /// ledger difference is the earlier document's nil-owner row, which the
+    /// first group wrote before the later one knew a producer (as when the
+    /// two documents are cognified in separate runs; O5a replaces nil rows).
+    #[tokio::test]
+    async fn an_ontology_only_entity_extracted_later_matches_one_group() {
+        let documents = stamped(input(&[
+            (0xa, vec![("Alice:Human", None)]),
+            (0xb, vec![("Acme:Company", None)]),
+        ]));
+        let (_, _, differences) =
+            whole_vs_split(&documents, ontology(), &CognifyConfig::default()).await;
+        let acme = cognee_models::Entity::id_for("Acme").to_string();
+        for difference in &differences {
+            assert!(
+                difference.starts_with("nodes ONLY-SPLIT")
+                    && difference.contains(&acme.replace('-', ""))
+                    && difference.contains(&format!("\"data_id\":\"{}\"", Uuid::nil().simple())),
+                "unexpected difference: {difference}"
+            );
+        }
+        assert!(differences.len() <= 1, "{differences:#?}");
+    }
+
+    /// Chunks of two documents without a `Document` record are still built as
+    /// two units: Apple keeps both documents' types.
+    #[tokio::test]
+    async fn chunks_without_a_document_record_keep_their_own_units() {
+        let mut documents = stamped(input(&[
+            (0xa, vec![("Apple:Company", None)]),
+            (0xb, vec![("Apple:Fruit Bob:Person", None)]),
+        ]));
+        documents.documents.clear();
+        let (whole, split, differences) = whole_vs_split(
+            &documents,
+            Arc::new(NoOpOntologyResolver::new()),
+            &CognifyConfig::default(),
+        )
+        .await;
+        assert!(differences.is_empty(), "{differences:#?}");
+        let types = entity_types(&split).await;
+        assert_eq!(types, entity_types(&whole).await);
+        assert!(types.contains(&("apple".into(), "fruit".into())));
     }
 }
