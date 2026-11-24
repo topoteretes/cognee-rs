@@ -45,7 +45,7 @@ use cognee::cognify::cognify as cognee_cognify;
 use cognee::models::{Data, Dataset};
 
 use crate::graph_backend::{
-    check_graph_backend_registered, graph_backend_from_opts, selected_graph_backend,
+    check_graph_backend_before_add, graph_backend_from_opts, selected_graph_backend,
 };
 use crate::wire::{cognify_result_json, data_records_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
@@ -469,7 +469,19 @@ pub async fn run_cognify_on_items(
     // takes a code route nothing needs it, nor the LLM it may need, so it is
     // not resolved: a keyless deployment cognifies a code project (Python's
     // `needs_llm` union over the routes in play).
-    let config = if cognee::cognify::routing::routes_need_llm(&data_items) {
+    // Only what this run processes counts: items an earlier run completed
+    // are skipped by `cognify()` and need no extractor.
+    let incremental_loading =
+        apply_cognify_opts(svc.cognify_config.clone(), opts)?.incremental_loading;
+    let needs_llm = cognee::cognify::rollback::pending_routes_need_llm(
+        &*svc.database,
+        dataset.id,
+        &data_items,
+        incremental_loading,
+    )
+    .await
+    .map_err(|e| SdkError::Runtime(format!("cognify failed: {e}")))?;
+    let config = if needs_llm {
         cognify_config_with_opts(svc, opts).await?
     } else {
         // Nothing is built, but a selection the caller made is still checked
@@ -625,8 +637,10 @@ pub async fn add_and_cognify(
     let tenant_id = opts_tenant(opts)?;
     // Before the add, not after: a caller who named a backend this build cannot
     // serve should not have their documents ingested by a call that was always
-    // going to fail at the cognify half.
-    check_graph_backend_registered(&state.cm, opts)?;
+    // going to fail at the cognify half. The keyless `auto` default is left to
+    // the cognify half, which needs it only for a document to extract, while
+    // an input may be code.
+    check_graph_backend_before_add(&state.cm, opts, &inputs)?;
 
     let svc = state.services().await?;
     // Likewise for every other cognify option: a misspelled chunk attachment

@@ -11,7 +11,8 @@
 #   fail             write to stderr and exit 3
 #   fail-single:<name>  fail like `fail`, but take part in a cluster run as
 #                    `snapshot:<name>`
-#   hang             sleep longer than any test timeout
+#   hang             record its pid in <repo>/.fake-enola-pid, then sleep
+#                    longer than any test timeout
 #   empty            exit 0 without writing a snapshot
 #
 # A successful run also records the environment overrides cognee sets and
@@ -150,6 +151,7 @@ case "$mode" in
     exit 3
     ;;
   hang)
+    echo $$ > "$repo/.fake-enola-pid"
     exec sleep 30
     ;;
   empty)

@@ -1869,48 +1869,43 @@ impl GraphDBTrait for LadybugAdapter {
             return self.get_graph_data().await;
         }
 
-        // Build WHERE clause for core fields (id, name, type)
-        let mut where_clauses = Vec::new();
-
-        for (attr, values) in attribute_filters {
-            if values.is_empty() {
-                continue;
-            }
-
-            // Check if this is a core field
-            let is_core_field = matches!(attr.as_ref(), "id" | "name" | "type");
-
-            if is_core_field {
-                // Direct field match
+        // The WHERE clause on the core fields (id, name, type), for the node
+        // variable `var`. Property fields are filtered in Rust after loading.
+        let where_for = |var: &str| -> Vec<String> {
+            let mut where_clauses = Vec::new();
+            for (attr, values) in attribute_filters {
+                if values.is_empty() || !matches!(attr.as_ref(), "id" | "name" | "type") {
+                    continue;
+                }
                 let value_clauses: Vec<String> = values
                     .iter()
                     .map(|v| {
                         if let Some(s) = v.as_str() {
                             format!(
-                                "n.{} = '{}'",
+                                "{var}.{} = '{}'",
                                 attr,
                                 s.replace('\\', "\\\\").replace('\'', "\\'")
                             )
                         } else {
-                            format!("n.{attr} = {v}")
+                            format!("{var}.{attr} = {v}")
                         }
                     })
                     .collect();
-
                 if value_clauses.len() == 1 {
                     where_clauses.push(value_clauses[0].clone());
                 } else {
                     where_clauses.push(format!("({})", value_clauses.join(" OR ")));
                 }
             }
-            // Property fields are filtered in Rust after loading
-        }
+            where_clauses
+        };
+        let node_clauses = where_for("n");
 
         // Build final query with optional WHERE clause
-        let where_clause = if where_clauses.is_empty() {
+        let where_clause = if node_clauses.is_empty() {
             String::new()
         } else {
-            format!("WHERE {}", where_clauses.join(" AND "))
+            format!("WHERE {}", node_clauses.join(" AND "))
         };
 
         // Get filtered nodes
@@ -1922,7 +1917,7 @@ impl GraphDBTrait for LadybugAdapter {
 
         // Parse nodes and collect IDs
         let mut nodes = Vec::new();
-        let mut node_ids = Vec::new();
+        let mut node_ids: HashSet<String> = HashSet::new();
 
         for row in node_results {
             if row.len() >= Self::NODE_QUERY_COLUMN_COUNT {
@@ -1946,7 +1941,7 @@ impl GraphDBTrait for LadybugAdapter {
                 if self.matches_property_filters(&parsed_node, attribute_filters)
                     && let Some(id_str) = parsed_node.get("id").and_then(|v| v.as_str())
                 {
-                    node_ids.push(id_str.to_string());
+                    node_ids.insert(id_str.to_string());
                     nodes.push((id_str.to_string(), parsed_node));
                 }
             }
@@ -1957,15 +1952,19 @@ impl GraphDBTrait for LadybugAdapter {
             return Ok((nodes, Vec::new()));
         }
 
-        // Build IN clause for edge query
-        let id_list = node_ids
-            .iter()
-            .map(|id| format!("'{}'", id.replace('\\', "\\\\").replace('\'', "\\'")))
-            .collect::<Vec<_>>()
-            .join(", ");
-
+        // The edges between nodes the same core-field clause matches, kept
+        // when both ends are filtered nodes. The clause is repeated on both
+        // ends rather than inlining every matched id: an id list grows the
+        // query (twice) with the graph and makes each membership test a
+        // list scan (SDK-1702 review).
+        let edge_clauses: Vec<String> = where_for("a").into_iter().chain(where_for("b")).collect();
+        let edge_where = if edge_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", edge_clauses.join(" AND "))
+        };
         let edges_query = format!(
-            "MATCH (a:Node)-[r:EDGE]->(b:Node) WHERE a.id IN [{id_list}] AND b.id IN [{id_list}] RETURN a.id, b.id, r.relationship_name, r.properties"
+            "MATCH (a:Node)-[r:EDGE]->(b:Node) {edge_where} RETURN a.id, b.id, r.relationship_name, r.properties"
         );
 
         let edge_results = self.execute_query(&edges_query)?;
@@ -1982,6 +1981,9 @@ impl GraphDBTrait for LadybugAdapter {
                 } else {
                     HashMap::new()
                 };
+                if !node_ids.contains(&source_id) || !node_ids.contains(&target_id) {
+                    continue;
+                }
                 edges.push((source_id, target_id, rel_name, props));
             }
         }

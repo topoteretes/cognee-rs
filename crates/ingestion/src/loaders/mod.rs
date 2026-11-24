@@ -101,6 +101,14 @@ pub enum LoaderOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+/// Python's universal newlines, used by `text_loader` and `code_loader`;
+/// it lives in `cognee-utils` so chunking can share it.
+pub use cognee_utils::universal_newlines;
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -132,6 +140,24 @@ impl LoaderRegistry {
     /// Look up the loader for a document type.
     pub fn get(&self, document_type: &str) -> Option<&Arc<dyn DocumentLoader>> {
         self.loaders.get(document_type)
+    }
+
+    /// Every path extension a registered non-code loader names. Python's
+    /// `_document_extensions()` (`code_repo.py`): a code project's files
+    /// whose extension no registered loader names are skipped, not added, so
+    /// a build or registry without a loader never gets a file it cannot read.
+    /// Keyed on extensions only, lowercase.
+    pub fn document_extensions(&self) -> std::collections::HashSet<&'static str> {
+        let code = code::SUPPORTED_CODE_EXTENSIONS;
+        self.loaders
+            .keys()
+            .flat_map(|doc_type| {
+                crate::file_type::loader_extensions(doc_type)
+                    .iter()
+                    .copied()
+            })
+            .filter(|extension| !code.contains(extension))
+            .collect()
     }
 
     /// Build a registry with all currently-available loaders.

@@ -468,6 +468,51 @@ pub(crate) async fn drop_already_complete(
     Ok(remaining)
 }
 
+/// Whether the items `cognify()` will actually process for `dataset_id` need
+/// the LLM: [`routes_need_llm`](crate::routing::routes_need_llm) over `items`
+/// minus what an earlier run completed (the completion markers `cognify()`
+/// skips by, applied only with `incremental_loading`, as `cognify()` applies
+/// them).
+///
+/// Callers that resolve the graph extractor (and the LLM it may need) only
+/// when a standard item will reach it ask this rather than
+/// `routes_need_llm(items)`: a dataset whose standard items are already
+/// cognified and that gains a code repository must not need an LLM.
+///
+/// The markers are read without the dataset lock `cognify()` takes, so a
+/// marker cleared in between (a concurrent delete and re-add of a completed
+/// standard item) is not seen: that item then runs without the extractor
+/// the caller left unresolved. The window is a concurrent rewrite of the
+/// same item, and the run it affects is the one that races it.
+///
+/// # Errors
+///
+/// [`CognifyError::DatabaseError`] when the completion markers cannot be read.
+pub async fn pending_routes_need_llm(
+    db: &dyn RelationalDb,
+    dataset_id: Uuid,
+    items: &[Data],
+    incremental_loading: bool,
+) -> Result<bool, CognifyError> {
+    if !crate::routing::routes_need_llm(items) {
+        return Ok(false);
+    }
+    if !incremental_loading {
+        return Ok(true);
+    }
+    let ids: Vec<Uuid> = items.iter().map(|item| item.id).collect();
+    let completed =
+        cognee_database::ProvenanceDb::get_cognify_completed_data_ids(db, dataset_id, &ids)
+            .await
+            .map_err(|e| CognifyError::DatabaseError(e.to_string()))?;
+    let pending: Vec<Data> = items
+        .iter()
+        .filter(|item| !completed.contains(&item.id))
+        .cloned()
+        .collect();
+    Ok(crate::routing::routes_need_llm(&pending))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

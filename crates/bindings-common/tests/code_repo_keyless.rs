@@ -291,3 +291,41 @@ async fn a_keyless_handle_cognifies_a_code_file() {
         .expect("second cognify");
     assert_eq!(again["alreadyCompleted"], true);
 }
+
+/// SDK-1702: `addAndCognify` of a code project is keyless too. The `auto`
+/// default is decided after the add, where nothing needs it; a document,
+/// which does, is still refused with the keyless remedy.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keyless_add_and_cognify_of_a_code_project_needs_no_extractor() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = dir.path().join("shop");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("go.mod"), "module shop\n").unwrap();
+    std::fs::write(repo.join("main.go"), "package main\n").unwrap();
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic").unwrap();
+
+    let state = HandleState::from_settings(settings_under(&dir));
+    let result = pipeline::add_and_cognify(
+        &state,
+        json!({ "type": "file", "path": repo.to_string_lossy() }),
+        "code",
+        &Value::Null,
+    )
+    .await
+    .expect("a keyless addAndCognify of a code project");
+    assert_eq!(result["add"]["addedCount"], 1);
+    assert_eq!(result["cognify"]["alreadyCompleted"], false);
+
+    let error = pipeline::add_and_cognify(
+        &state,
+        json!({ "type": "text", "text": "Alice knows Bob." }),
+        "docs",
+        &Value::Null,
+    )
+    .await
+    .expect_err("a document needs the extractor auto cannot serve");
+    assert!(
+        error.to_string().contains("no usable LLM is configured"),
+        "{error}"
+    );
+}

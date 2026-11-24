@@ -614,12 +614,26 @@ async fn process_input_reusing(
             "text".to_string()
         } else {
             let sniffed = crate::file_type::guess_file_type(&collected, &original_extension);
+            // A loader that is not registered is skipped, as Python's
+            // `LoaderEngine.get_loader` does: a registry without the code
+            // loader reads a `.py` file as text. When no registered loader
+            // claims the file, the route an unregistered one would take is
+            // kept, so the add fails naming that loader (or reuses audio
+            // transcribed before) rather than with "no loader found".
             let doc_type = crate::file_type::route_loader_preferring(
                 &original_extension,
                 &sniffed,
                 preferred_loaders,
                 |doc_type| registry.get(doc_type).is_some(),
             )
+            .or_else(|| {
+                crate::file_type::route_loader_preferring(
+                    &original_extension,
+                    &sniffed,
+                    preferred_loaders,
+                    |_| true,
+                )
+            })
             .ok_or_else(|| {
                 Box::new(IngestionError::NoLoaderForFile {
                     extension: sniffed.extension.clone(),
@@ -2812,9 +2826,15 @@ impl AddPipeline {
     /// `dataset_name` for the owner. `source_url` (credential-free) records a
     /// cloned repository's remote as `system_metadata["repo_url"]`.
     ///
+    /// A relative `repo_path` is resolved against the working directory
+    /// (symlinks too, as a directory `add` and Python's `resolve()` do), so the
+    /// stored `repo_path`, and the row id pinned to it, never depend on where
+    /// a later cognify runs.
+    ///
     /// # Errors
     ///
-    /// The manifest cannot be built (an unreadable directory), what
+    /// The path cannot be resolved, the manifest cannot be built (an
+    /// unreadable directory), what
     /// [`add`](Self::add) raises, and [`IngestionError::CodeRepositoryMissing`]
     /// when the add stored no row.
     pub async fn add_code_repository(
@@ -2829,11 +2849,14 @@ impl AddPipeline {
         let directory = repo_path.to_path_buf();
         let source_url = source_url.map(str::to_string);
         let resolved = tokio::task::spawn_blocking(move || {
+            let directory = std::fs::canonicalize(&directory)?;
+            // No documents are resolved, so no loader decides any.
             crate::code_repo::resolve_code_repository(
                 &directory,
                 false,
                 true,
                 source_url.as_deref(),
+                &std::collections::HashSet::new(),
             )
         })
         .await
@@ -2928,8 +2951,13 @@ impl AddPipeline {
             .any(|input| matches!(input, DataInput::FilePath(_)))
         {
             let llm_available = self.llm_available;
+            let document_extensions = self.loaders.document_extensions();
             tokio::task::spawn_blocking(move || {
-                crate::code_repo::resolve_data_directories(inputs, llm_available)
+                crate::code_repo::resolve_data_directories(
+                    inputs,
+                    llm_available,
+                    &document_extensions,
+                )
             })
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??
@@ -3087,12 +3115,14 @@ impl AddPipeline {
             .await?;
             let source_url = crate::resolve_repo::redact_repo_spec(&clone_url);
             let llm_available = self.llm_available;
+            let document_extensions = self.loaders.document_extensions();
             let repository = tokio::task::spawn_blocking(move || {
                 crate::code_repo::resolve_code_repository(
                     &repo_path,
                     true,
                     llm_available,
                     Some(&source_url),
+                    &document_extensions,
                 )
             })
             .await
@@ -3702,6 +3732,33 @@ mod tests {
         assert_eq!(datasets.len(), 1);
     }
 
+    /// A relative repository path is stored resolved, so the row (and its
+    /// pinned id) does not depend on the working directory of a later run.
+    #[tokio::test]
+    async fn add_code_repository_stores_a_relative_path_resolved() {
+        let (pipeline, _db) = make_pipeline().await;
+        // Under the workspace `target/` (tests run in the crate directory), so
+        // it can be named relatively without touching the source tree.
+        let target = std::path::Path::new("../../target");
+        std::fs::create_dir_all(target).unwrap();
+        let dir = tempfile::tempdir_in(target).unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[project]\n").unwrap();
+        std::fs::write(dir.path().join("main.py"), "x = 1\n").unwrap();
+        let relative = target.join(dir.path().file_name().unwrap());
+
+        let row = pipeline
+            .add_code_repository(&relative, "code", Uuid::new_v4(), None, None, None)
+            .await
+            .unwrap();
+        let stamp: serde_json::Value =
+            serde_json::from_str(row.system_metadata.as_deref().unwrap()).unwrap();
+        let stored = stamp["repo_path"].as_str().unwrap();
+        assert_eq!(
+            std::path::Path::new(stored),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+    }
+
     // -- code loader (SDK-1053 O9a) ---------------------------------------------
 
     /// A CRLF / lone-CR `.PY` file with a non-ASCII character. The expected
@@ -3827,6 +3884,32 @@ mod tests {
         // A document type stays a document, unstamped.
         let processed = process_input_with_loaders(
             &upload("notes.md"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    /// Python's `LoaderEngine.get_loader` skips a loader that is not
+    /// registered in its default order too: a registry built without the code
+    /// loader reads a `.py` file with the text loader instead of failing.
+    #[tokio::test]
+    async fn a_registry_without_the_code_loader_reads_a_code_file_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let mut loaders = LoaderRegistry::new();
+        loaders.register("text", Arc::new(crate::loaders::text::TextLoader));
+        let processed = process_input_with_loaders(
+            &DataInput::Binary {
+                name: "a.py".to_string(),
+                data: b"x = 1\n".to_vec(),
+            },
             &storage,
             &loaders,
             HashAlgorithm::Md5,
@@ -4374,8 +4457,10 @@ mod tests {
         );
     }
 
-    /// Text-path no-regression: the stored artifact is byte-identical to the
-    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, the
+    /// Text-path no-regression for LF-only plain text: the stored artifact is
+    /// byte-identical to the input, `raw_content_hash == content_hash`
+    /// (CRLF input differs: see
+    /// `test_crlf_text_stores_lf_text_with_python_hashes`), `extension == "txt"`, the
     /// content hash matches the pinned Python-compatible value, and the new
     /// row's id is a uuid4.
     #[tokio::test]
@@ -4410,18 +4495,59 @@ mod tests {
             "a new row's data_id is a uuid4, as in Python"
         );
 
-        // For plain text the extracted text equals the raw bytes.
+        // For LF-only plain text the extracted text equals the raw bytes.
         assert_eq!(
             processed.raw_content_hash, processed.content_hash,
-            "plain-text raw_content_hash must equal content_hash"
+            "LF-only plain-text raw_content_hash must equal content_hash"
         );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
         assert_eq!(processed.loader_engine, "text_loader");
 
-        // Stored file content is byte-identical to the input.
+        // Stored file content is byte-identical to the (LF-only) input.
         let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
         assert_eq!(stored, HELLO_WORLD.as_bytes());
+    }
+
+    /// CRLF text (SDK-1379): Python's `ingest_data` hashes the original bytes
+    /// into `content_hash`, and its `text_loader` reads them in text mode, so
+    /// the stored text, and its `raw_content_hash`, have LF line endings.
+    #[tokio::test]
+    async fn test_crlf_text_stores_lf_text_with_python_hashes() {
+        use cognee_storage::LocalStorage;
+
+        const CRLF_TEXT: &str = "a\r\nb\rc";
+        const CRLF_TEXT_MD5: &str = "080ea8afd730ce00f5bd226f8d2b1bae"; // md5(b"a\r\nb\rc")
+        const LF_TEXT_MD5: &str = "c32b2057b9bd62caa835386346177935"; // md5(b"a\nb\nc")
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let processed = process_input(
+            &DataInput::Text(CRLF_TEXT.to_string()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            processed.content_hash, CRLF_TEXT_MD5,
+            "hash of the original bytes"
+        );
+        assert_eq!(
+            processed.raw_content_hash, LF_TEXT_MD5,
+            "hash of the stored LF text"
+        );
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert!(
+            processed
+                .storage_location
+                .ends_with(&format!("text_{CRLF_TEXT_MD5}.txt"))
+        );
+        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
+        assert_eq!(stored, b"a\nb\nc");
     }
 
     /// CSV path (feature-gated): the stored artifact is the EXTRACTED text
