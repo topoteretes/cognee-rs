@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_chunking::{TokenCountMode, TokenCounterKind};
 use cognee_cognify::{CognifyConfig, cognify};
 use cognee_database::ops::data::create_data;
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
@@ -145,7 +146,12 @@ pub async fn every_ledger_edge_reaches_the_graph(graph_db: Arc<dyn GraphDBTrait>
         Arc::new(SeaOrmPipelineRunRepository::new(Arc::clone(&db))),
         Arc::new(cognee_core::RayonThreadPool::with_default_threads().expect("pool")),
         Arc::new(ontology),
-        &CognifyConfig::default(),
+        // Pinned, so the chunking does not depend on whether the build has
+        // `cognee-chunking/tiktoken` (see `persist_equivalence.rs`).
+        &CognifyConfig::default()
+            .with_chunk_size(1500)
+            .with_token_counter(TokenCounterKind::Word)
+            .with_token_count_mode(TokenCountMode::Span),
     )
     .await
     .expect("cognify must store a URL document resolved against an ontology");

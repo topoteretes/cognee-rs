@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cognee_chunking::{TokenCountMode, TokenCounterKind};
 use cognee_cognify::{CognifyConfig, CognifyResult, cognify};
 use cognee_database::ops::data::create_data;
 use cognee_database::ops::datasets::{attach_data_to_dataset, create_dataset};
@@ -551,10 +552,21 @@ fn ontology() -> Arc<dyn OntologyResolver> {
     )
 }
 
-fn default_config() -> CognifyConfig {
-    CognifyConfig::default()
+/// The chunker's settings, pinned so the chunk boundaries — and with them
+/// every chunk id, `chunk_size` and `contains` in the snapshots — do not depend
+/// on the build. The default counter is TikToken, which degrades to word
+/// counting unless `cognee-chunking/tiktoken` is compiled in, and that depends
+/// on feature unification: `cargo test -p cognee-cognify` leaves it out, a
+/// workspace build (CI) brings it in through `cognee`'s defaults.
+fn pinned_chunking(config: CognifyConfig) -> CognifyConfig {
+    config
         .with_chunk_size(CHUNK_SIZE)
-        .with_chunks_per_batch(1)
+        .with_token_counter(TokenCounterKind::Word)
+        .with_token_count_mode(TokenCountMode::Span)
+}
+
+fn default_config() -> CognifyConfig {
+    pinned_chunking(CognifyConfig::default()).with_chunks_per_batch(1)
 }
 
 /// The default path: several documents and blocks, an entity with several
@@ -741,7 +753,7 @@ async fn the_backend_and_dlt_path_stores_the_pinned_sets() {
             .expect("attach");
         items.push(item);
     }
-    let config = CognifyConfig::default()
+    let config = pinned_chunking(CognifyConfig::default())
         .with_summarization(false)
         .with_graph_backend(Arc::new(
             cognee_cognify::graph_backend::MockChunkGraphExtractor::new(),
