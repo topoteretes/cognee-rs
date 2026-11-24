@@ -573,6 +573,8 @@ impl Settings {
         } else {
             cognee_cognify::EndpointScope::Chunk
         });
+        // 0 counts as 1: a window of none would admit no document.
+        cfg = cfg.with_max_unsaved_documents((cognify.max_unsaved_documents as usize).max(1));
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());

@@ -833,6 +833,14 @@ config_section! {
         pub cross_chunk_endpoints: bool = true => {
             env: ["COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS"], alias: [], secret: false,
         },
+        /// How many documents may be in progress and not yet saved at once.
+        /// Each document is saved as soon as all its results are in; a
+        /// document's chunks are sent to the LLM only while fewer than this
+        /// many are waiting to be saved, so memory scales with this window,
+        /// not the dataset. 0 counts as 1.
+        pub max_unsaved_documents: u32 = 32 => {
+            env: ["COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS"], alias: [], secret: false,
+        },
         /// Startup recovery's age floor in seconds (Python's
         /// `STALE_RUN_RECOVERY_MIN_AGE_SECONDS`, `cognify/recovery.py:34`): a
         /// `STARTED` run younger than this is treated as live and never
