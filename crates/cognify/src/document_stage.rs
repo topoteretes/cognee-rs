@@ -2430,4 +2430,44 @@ mod tests {
         );
         assert!(!result.failures.unreached_items().is_empty());
     }
+
+    /// Two documents fetched from one URL share a WebPage node: the last one
+    /// in input order wins, as when the run is saved as one group.
+    #[tokio::test]
+    async fn two_documents_of_one_url_leave_the_last_ones_page() {
+        let test = Stores::new().await;
+        let mut documents = input(&[
+            (0xa, vec![("Alice:Person FIRSTPAGE", None)]),
+            (0xb, vec![("Bob:Person SECONDPAGE", None)]),
+        ]);
+        let url = json!({"_cognee": {"source_uri": "https://example.com/page"}}).to_string();
+        for document in &mut documents.documents {
+            document.external_metadata = Some(url.clone());
+        }
+        run(
+            &test,
+            Arc::new(TextLlm::default()),
+            &documents,
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+        let (nodes, _) = test.graph.get_graph_data().await.unwrap();
+        let pages: Vec<String> = nodes
+            .iter()
+            .filter(|(_, props)| props.get("type") == Some(&json!("WebPage")))
+            .map(|(_, props)| {
+                props
+                    .get("content")
+                    .map(Value::to_string)
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(pages.len(), 1, "one page node");
+        assert!(
+            pages[0].contains("SECONDPAGE"),
+            "the last document wins: {}",
+            pages[0]
+        );
+    }
 }

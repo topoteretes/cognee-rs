@@ -100,13 +100,14 @@ pub use cognee_truth_subspace::DEFAULT_K;
 pub use pipeline::{CognifyResult, IndexedFieldsStats};
 pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, TextSummary};
 pub use tasks::{
-    AttributedDynamicGraph, CODE_GRAPH_PIPELINE_NAME, ClassifiedDocuments, CodeRepoLoadMode,
-    CognifyInput, DEFAULT_LEDGER_USER_ID, DynamicExtractionData, ExtractedChunks,
-    ExtractedGraphData, LedgerIdentity, PersistHandoff, SummarizedChunks, SummarizedData,
-    add_data_points, build_cognify_pipeline, classify_documents, cognify, create_web_page_nodes,
-    extract_chunks_from_documents, extract_dlt_fk_edges, extract_dynamic_graphs_from_data,
-    extract_graph_from_data, make_add_data_points_task, make_classify_documents_task,
-    make_extract_chunks_task, make_extract_graph_and_summarize_task,
-    make_extract_graph_and_summarize_task_with_rank, make_extract_graph_task,
-    make_summarize_text_task, run_code_graph_pipeline, summarize_text,
+    AttributedDynamicGraph, CODE_GRAPH_PIPELINE_NAME, COGNIFY_DOCUMENTS_TASK_NAME,
+    ClassifiedDocuments, CodeRepoLoadMode, CognifyInput, DEFAULT_LEDGER_USER_ID,
+    DynamicExtractionData, ExtractedChunks, ExtractedGraphData, LedgerIdentity, PersistHandoff,
+    SummarizedChunks, SummarizedData, add_data_points, build_cognify_pipeline, classify_documents,
+    cognify, create_web_page_nodes, extract_chunks_from_documents, extract_dlt_fk_edges,
+    extract_dynamic_graphs_from_data, extract_graph_from_data, make_add_data_points_task,
+    make_classify_documents_task, make_cognify_documents_task,
+    make_cognify_documents_task_with_ranks, make_extract_chunks_task,
+    make_extract_graph_and_summarize_task, make_extract_graph_and_summarize_task_with_rank,
+    make_extract_graph_task, make_summarize_text_task, run_code_graph_pipeline, summarize_text,
 };

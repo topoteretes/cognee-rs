@@ -2191,4 +2191,60 @@ pub(crate) mod tests {
             .with_graph_schema(schema);
         assert_split_matches_one_group(&config).await;
     }
+
+    /// Two spellings of one `EdgeType` id in two groups of a per-document
+    /// run: the point ends up with the smaller spelling whichever group comes
+    /// first, as one group keeps it, and `number_of_edges` counts both edges.
+    #[tokio::test]
+    async fn the_smaller_edge_type_spelling_wins_across_groups() {
+        for order in [["works at", "Works At"], ["Works At", "works at"]] {
+            let stores = Stores::new().await;
+            let ledger = LedgerIdentity::new(None, Some(USER), DATASET, Some(Uuid::from_u128(7)));
+            let graph_db: Arc<dyn GraphDBTrait> = stores.graph.clone();
+            let vector_db: Arc<dyn VectorDB> = stores.vector.clone();
+            let engine: Arc<dyn EmbeddingEngine> = stores.engine.clone();
+            let config = CognifyConfig::default();
+            let context = PersistContext {
+                graph_db: &graph_db,
+                vector_db: &vector_db,
+                embedding_engine: &engine,
+                db: &stores.db,
+                ledger,
+                evidence: None,
+                user_id: Some(USER),
+                config: &config,
+                run_chunk_documents: None,
+            };
+            let mut state = PersistState::per_document();
+            for (index, text) in order.iter().enumerate() {
+                let edge = GraphEdgePair::with_properties(
+                    Uuid::from_u128(100 + index as u128),
+                    Uuid::from_u128(200 + index as u128),
+                    "works_at",
+                    HashMap::from([("edge_text".to_string(), text.to_string())]),
+                );
+                let edges = [edge];
+                let group = PersistGroup {
+                    edges: &edges,
+                    ..PersistGroup::empty()
+                };
+                persist_group(group, &mut state, &context).await.unwrap();
+            }
+            let id = EdgeType::deterministic_id("works at");
+            let point = stores.vector.all_points()["EdgeType_relationship_name"]
+                .iter()
+                .find(|point| point.id == id)
+                .cloned()
+                .expect("the edge type's point");
+            assert_eq!(point.metadata["text"], json!("Works At"), "order {order:?}");
+            let outputs = state.into_outputs();
+            let edge_type = outputs
+                .edge_types
+                .iter()
+                .find(|edge_type| edge_type.base.id == id)
+                .expect("the edge type");
+            assert_eq!(edge_type.relationship_name, "Works At");
+            assert_eq!(edge_type.number_of_edges, 2);
+        }
+    }
 }
