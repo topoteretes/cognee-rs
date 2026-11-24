@@ -9,7 +9,7 @@
 )]
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -31,6 +31,8 @@ pub struct MockVectorDB {
     /// Log of `index_points` invocations, as `"{data_type}/{field_name}"` strings
     /// (one entry per call — useful for asserting batch counts).
     index_points_calls: Arc<Mutex<Vec<String>>>,
+    /// Points handed to successful `index_points` calls, repeats included.
+    indexed_points: Arc<std::sync::atomic::AtomicUsize>,
     /// Optional injected error returned from the next `index_points` call.
     index_error: Arc<Mutex<Option<String>>>,
     /// Optional injected error returned from `retrieve` calls.
@@ -50,6 +52,7 @@ impl MockVectorDB {
             collections: Arc::new(Mutex::new(HashMap::new())),
             create_collection_calls: Arc::new(Mutex::new(Vec::new())),
             index_points_calls: Arc::new(Mutex::new(Vec::new())),
+            indexed_points: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             index_error: Arc::new(Mutex::new(None)),
             retrieve_error: Arc::new(Mutex::new(None)),
         }
@@ -77,6 +80,23 @@ impl MockVectorDB {
     pub fn index_points_call_count(&self) -> usize {
         let log = self.index_points_calls.lock().unwrap(); // lock poison is unrecoverable
         log.len()
+    }
+
+    /// How many points successful `index_points` calls were handed, counting a
+    /// point written twice twice — the collections keep one copy per id, so
+    /// this is what shows a repeated write.
+    pub fn indexed_point_count(&self) -> usize {
+        self.indexed_points
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Every stored point, keyed by collection name (`{data_type}_{field_name}`).
+    pub fn all_points(&self) -> BTreeMap<String, Vec<VectorPoint>> {
+        let collections = self.collections.lock().unwrap(); // lock poison is unrecoverable
+        collections
+            .iter()
+            .map(|(key, collection)| (key.clone(), collection.points.clone()))
+            .collect()
     }
 
     /// Inject an error that will be returned from subsequent `index_points` calls
@@ -229,6 +249,8 @@ impl VectorDB for MockVectorDB {
         drop(collections);
         let mut log = self.index_points_calls.lock().unwrap(); // lock poison is unrecoverable
         log.push(format!("{data_type}/{field_name}"));
+        self.indexed_points
+            .fetch_add(points.len(), std::sync::atomic::Ordering::SeqCst);
 
         Ok(())
     }
