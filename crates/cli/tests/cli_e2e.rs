@@ -707,8 +707,9 @@ fn cognify_refuses_an_unregistered_graph_extractor() {
 }
 
 /// With no usable LLM the default `auto` extractor asks for GLiNER, which this
-/// build does not register: `add-and-cognify` refuses with the keyless-setup
-/// remedy before ingesting, never extracting with the LLM. `--extractor`
+/// build does not register: `add-and-cognify` of a document refuses with the
+/// keyless-setup remedy once the item is known to take the standard route,
+/// never extracting with the LLM. `--extractor`
 /// overrides `GRAPH_EXTRACTOR`, and is refused together with `--session-id`.
 #[test]
 fn the_extractor_flag_and_the_keyless_auto_default() {
@@ -2288,6 +2289,113 @@ fn cognify_help_lists_graph_schema_flags() {
                 .and(predicate::str::contains("--graph-spec <FILE>"))
                 .and(predicate::str::contains("--chunk-attachment")),
         );
+}
+
+/// `add-and-cognify` takes the keyless path `cognify` has (SDK-1702): a code
+/// project needs neither an LLM nor the graph extractor, so the keyless `auto`
+/// default does not fail it. `cognify --extractor` is still checked up front:
+/// a kind nothing is registered under fails even on a code-only dataset.
+#[cfg(unix)]
+#[test]
+fn add_and_cognify_of_a_code_project_is_keyless() {
+    let config_home = TempDir::new().expect("temp dir should be created");
+    let workdir = TempDir::new().expect("temp dir should be created");
+    let db_file_path = workdir.path().join("cognee.db");
+    std::fs::File::create(&db_file_path).expect("sqlite database file should be created");
+    config_set(
+        &config_home,
+        workdir.path(),
+        "relational_db_url",
+        &format!("\"sqlite://{}\"", db_file_path.display()),
+    );
+    config_set(
+        &config_home,
+        workdir.path(),
+        "data_root_directory",
+        &format!("\"{}\"", workdir.path().join("cognee_data").display()),
+    );
+    let enola =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../code-graph/tests/fixtures/bin/enola");
+    let repo = workdir.path().join("shop");
+    std::fs::create_dir(&repo).expect("repo dir");
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"shop\"\n").expect("write");
+    std::fs::write(repo.join("main.py"), "def main():\n    pass\n").expect("write");
+    std::fs::write(repo.join(".fake-enola"), "snapshot:basic").expect("write");
+
+    let keyless = || {
+        let mut cmd = make_cmd_in(&config_home, workdir.path());
+        for var in [
+            "LLM_API_KEY",
+            "OPENAI_TOKEN",
+            "EMBEDDING_API_KEY",
+            "LLM_PROVIDER",
+            "MOCK_LLM",
+            "COGNEE_SKIP_PREFLIGHT",
+            "COGNEE_SKIP_CONNECTION_TEST",
+            "GRAPH_EXTRACTOR",
+        ] {
+            cmd.env_remove(var);
+        }
+        cmd.env("MOCK_EMBEDDING", "true");
+        cmd.env("ENOLA_PATH", &enola);
+        cmd
+    };
+
+    keyless()
+        .args([
+            "add-and-cognify",
+            repo.to_str().expect("utf-8 path"),
+            "--dataset-name",
+            "code_ds",
+        ])
+        .assert()
+        .success();
+    assert_eq!(count_data_rows(&db_file_path), 1, "the repository only");
+    assert!(repo.join(".enola").join("facts.jsonl").is_file());
+
+    // `cognify` of the same dataset is keyless too.
+    keyless()
+        .args(["cognify", "--datasets", "code_ds"])
+        .assert()
+        .success();
+
+    keyless()
+        .args([
+            "cognify",
+            "--datasets",
+            "code_ds",
+            "--extractor",
+            "no-such-extractor-code",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("no-such-extractor-code"));
+
+    // Only a document: the keyless `auto` default is refused before the add,
+    // so nothing is stored for a call that could not cognify it. Without
+    // `MOCK_EMBEDDING`, which keeps the configuration as given (the LLM
+    // extractor) and so is not keyless.
+    let notes = workdir.path().join("notes.txt");
+    std::fs::write(&notes, "Some notes.\n").expect("write");
+    let mut document_only = keyless();
+    document_only.env_remove("MOCK_EMBEDDING");
+    document_only
+        .args([
+            "add-and-cognify",
+            notes.to_str().expect("utf-8 path"),
+            "--dataset-name",
+            "code_ds",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "Graph extractor initialization failed",
+        ));
+    assert_eq!(
+        count_data_rows(&db_file_path),
+        1,
+        "the document was not added"
+    );
 }
 
 /// `remember --content-type code` indexes a local repository as a code graph

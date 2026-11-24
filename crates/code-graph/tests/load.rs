@@ -362,6 +362,36 @@ async fn an_unchanged_tagged_reload_writes_no_fact_node_and_no_edge() {
     assert_eq!(graph_shape(&graph).await, shape);
 }
 
+/// A tagged reload restores a node set the graph lost, with its
+/// `belongs_to_set` edges, though every code node is unchanged: the node set
+/// is written before the edges that point to it (a Postgres graph refuses an
+/// edge to a missing node).
+#[tokio::test]
+async fn a_tagged_reload_restores_a_lost_node_set_and_its_edges() {
+    let (_root, repo_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
+        .await
+        .unwrap();
+    let shape = graph_shape(&graph).await;
+    let (nodes, _) = graph.get_graph_data().await.unwrap();
+    let node_set = nodes
+        .iter()
+        .find(|(_, node)| node["type"] == "NodeSet" && node["name"] == "team-a")
+        .map(|(id, _)| id.clone())
+        .expect("the team-a node set");
+    // Deleting the node set drops every edge into it too.
+    graph
+        .delete_nodes(std::slice::from_ref(&node_set))
+        .await
+        .unwrap();
+
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
+        .await
+        .unwrap();
+    assert_eq!(graph_shape(&graph).await, shape);
+}
+
 /// A repository whose node still carries a tag is loaded again even by an
 /// untagged call, which then removes the tag.
 #[tokio::test]
@@ -556,6 +586,107 @@ async fn a_failed_sweep_records_no_new_stamp() {
         .unwrap();
     assert!(!retry.skipped);
     assert_eq!(retry.delta.unwrap()["nodes_removed"], json!(2));
+}
+
+/// A load whose edge write fails records no new snapshot id, so the next
+/// load is not skipped and writes the edges: the stamp comes only after the
+/// edges (SDK-1702). Python stamps before its edge write
+/// (`extract_code_graph.py`), so a failed `add_edges` there is never retried.
+#[tokio::test]
+async fn a_failed_edge_write_records_no_new_stamp_and_a_retry_writes_the_edges() {
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap();
+
+    switch_snapshot(&repo_path, "basic_v2");
+    graph.set_add_edges_error("graph down");
+    load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap_err();
+    let repository = repository_node(&graph, &repo_path).await;
+    assert_ne!(repository["last_snapshot_id"], json!("sha256:abc123def789"));
+
+    graph.clear_add_edges_error();
+    let retry = load_code_graph(&graph, None, &config(), &repo_path, None, None)
+        .await
+        .unwrap();
+    assert!(!retry.skipped, "the failed load was not recorded as done");
+
+    // The retry leaves the graph a fresh load of the new snapshot leaves.
+    let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
+    let fresh = MockGraphDB::new();
+    load_code_graph(&fresh, None, &config(), &fresh_path, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        graph_shape(&graph).await.1,
+        graph_shape(&fresh).await.1,
+        "every edge of the new snapshot is written"
+    );
+}
+
+/// With vectors on, a retry after a failed edge write embeds the nodes the
+/// failed load wrote: they are unchanged by then, but their structural edges
+/// are restored, and with them their vectors (SDK-1702 review). Every vector
+/// a fresh load of the new snapshot writes is there after the retry.
+#[tokio::test]
+async fn a_retry_after_a_failed_edge_write_writes_the_vectors_of_the_restored_nodes() {
+    let vectors_with = |vector_db: &std::sync::Arc<cognee_vector::MockVectorDB>| {
+        cognee_code_graph::CodeGraphVectors {
+            embedding_engine: std::sync::Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
+            vector_db: vector_db.clone(),
+            dataset_id: None,
+        }
+    };
+    let point_ids = |vector_db: &cognee_vector::MockVectorDB| -> BTreeSet<(String, String)> {
+        vector_db
+            .all_points()
+            .into_iter()
+            .flat_map(|(collection, points)| {
+                points
+                    .into_iter()
+                    .map(move |point| (collection.clone(), point.id.to_string()))
+            })
+            .collect()
+    };
+
+    let (_root, repo_path) = repo("snapshot:basic");
+    let graph = MockGraphDB::new();
+    let vector_db = std::sync::Arc::new(cognee_vector::MockVectorDB::new());
+    let vectors = vectors_with(&vector_db);
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap();
+
+    switch_snapshot(&repo_path, "basic_v2");
+    graph.set_add_edges_error("graph down");
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap_err();
+    graph.clear_add_edges_error();
+    load_code_graph(&graph, None, &config(), &repo_path, None, Some(&vectors))
+        .await
+        .unwrap();
+
+    let (_fresh_root, fresh_path) = repo("snapshot:basic_v2");
+    let fresh_vector_db = std::sync::Arc::new(cognee_vector::MockVectorDB::new());
+    load_code_graph(
+        &MockGraphDB::new(),
+        None,
+        &config(),
+        &fresh_path,
+        None,
+        Some(&vectors_with(&fresh_vector_db)),
+    )
+    .await
+    .unwrap();
+    let missing: Vec<_> = point_ids(&fresh_vector_db)
+        .difference(&point_ids(&vector_db))
+        .cloned()
+        .collect();
+    assert!(missing.is_empty(), "vectors never written: {missing:?}");
 }
 
 /// Another repository in the same graph is outside the sweep.
@@ -1033,6 +1164,16 @@ async fn a_timeout_kills_enola() {
         )
     );
     assert_eq!(error.name(), "EnolaSnapshotError");
+    // Killed and reaped before the error returns: not even a zombie is left
+    // (`kill -0` succeeds on a zombie), so enola writes nothing afterwards.
+    let pid = std::fs::read_to_string(repo_path.join(".fake-enola-pid")).unwrap();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "enola ({}) is still running", pid.trim());
 }
 
 #[tokio::test]

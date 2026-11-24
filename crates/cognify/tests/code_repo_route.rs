@@ -985,6 +985,133 @@ async fn a_legacy_dlt_row_fails_the_whole_run() {
     assert_eq!(stack.cognify_runs().await, vec![PipelineRunStatus::Errored]);
 }
 
+/// A caller that builds the pipeline itself (`build_cognify_pipeline` +
+/// `cognee_core::execute`) gets the code routes too: a repository manifest
+/// goes down its code graph route, never down the LLM path.
+#[tokio::test]
+async fn the_public_pipeline_routes_a_code_repository() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, false, None).await;
+    assert_eq!(items.len(), 1, "the manifest only: {items:?}");
+    let dataset_id = stack.dataset_id().await;
+
+    let pipeline = cognee_cognify::build_cognify_pipeline(
+        Arc::clone(&stack.storage),
+        Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>,
+        Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>,
+        Arc::new(MockEmbeddingEngine::new(8)),
+        Arc::new(PanickingLlm),
+        stack.db.clone(),
+        Arc::new(NoOpOntologyResolver::new()),
+        config(false),
+    );
+    let pipeline_ctx = cognee_core::PipelineContext {
+        pipeline_id: pipeline.id,
+        pipeline_name: pipeline.name.clone().unwrap_or_default(),
+        user_id: Some(stack.owner_id),
+        tenant_id: None,
+        dataset_id: Some(dataset_id),
+        current_data: None,
+        run_id: None,
+        user_email: None,
+        provenance_visited: Arc::new(std::sync::Mutex::new(HashSet::new())),
+    };
+    let (_cancel, ctx) = cognee_core::TaskContextBuilder::new()
+        .thread_pool(Stack::thread_pool())
+        .database(stack.db.clone())
+        .graph_db(Arc::clone(&stack.graph_db) as Arc<dyn GraphDBTrait>)
+        .vector_db(Arc::clone(&stack.vector_db) as Arc<dyn VectorDB>)
+        .pipeline_context(pipeline_ctx)
+        .build()
+        .unwrap();
+    let input = CognifyInput {
+        data_items: items,
+        dataset_id,
+        user_id: Some(stack.owner_id),
+        tenant_id: None,
+    };
+    cognee_core::execute(
+        &pipeline,
+        vec![Arc::new(input) as Arc<dyn cognee_core::Value>],
+        Arc::new(ctx),
+        &cognee_core::NoopWatcher,
+    )
+    .await
+    .expect("the pipeline runs the code route");
+    assert!(
+        stack.code_node_ids().await.len() > 1,
+        "the repository was loaded as a code graph"
+    );
+}
+
+/// The legacy refusal runs before the completion markers drop anything: a
+/// legacy `dlt` row an earlier run completed is still refused, rather than
+/// skipped as already done.
+#[tokio::test]
+async fn a_completed_legacy_dlt_row_is_still_refused() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, true, None).await;
+    stack.cognify(items.clone(), &config(true)).await.unwrap();
+    assert_eq!(stack.completed(&items).await.len(), 2);
+
+    let items: Vec<Data> = items
+        .into_iter()
+        .map(|mut item| {
+            if cognify_route_for(&item) == Ok(CognifyRoute::Standard) {
+                item.system_metadata = Some(r#"{"source": "dlt"}"#.to_string());
+            }
+            item
+        })
+        .collect();
+    let error = stack
+        .cognify(items, &config(true))
+        .await
+        .expect_err("a legacy row is refused, not skipped");
+    assert!(
+        matches!(
+            error,
+            CognifyError::Route(CognifyRouteError::LegacyDltRecord { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        stack.cognify_runs().await,
+        vec![PipelineRunStatus::Errored, PipelineRunStatus::Completed],
+        "newest first: the refusal ran as its own run"
+    );
+}
+
+/// Only the items a run will process decide whether it needs the LLM: once
+/// the standard items are complete, a dataset of them plus a new code
+/// repository needs none.
+#[tokio::test]
+async fn completed_standard_items_need_no_llm() {
+    let (_root, repo) = project();
+    let stack = Stack::new().await;
+    let items = stack.add(&repo, true, None).await;
+    let dataset_id = stack.dataset_id().await;
+    let pending = |incremental| {
+        let items = items.clone();
+        let db = Arc::clone(&stack.db);
+        async move {
+            cognee_cognify::rollback::pending_routes_need_llm(&*db, dataset_id, &items, incremental)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(pending(true).await, "the README is not cognified yet");
+
+    stack.cognify(items.clone(), &config(true)).await.unwrap();
+    assert!(
+        !pending(true).await,
+        "only completed items take the standard route"
+    );
+    // Without incremental loading every item runs again.
+    assert!(pending(false).await);
+}
+
 /// A row stamped `system_metadata.source == "dlt_source"` is refused rather
 /// than sent down the LLM pipeline: Rust reads DLT stamps from
 /// `external_metadata` only.

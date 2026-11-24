@@ -122,6 +122,13 @@ impl MockGraphDB {
         *slot = Some(msg.into());
     }
 
+    /// Clear an error previously armed by [`MockGraphDB::set_add_edges_error`],
+    /// so a test can assert that re-running a failed write converges.
+    pub fn clear_add_edges_error(&self) {
+        let mut slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = None;
+    }
+
     /// Inject an error returned from every subsequent `delete_nodes` call as
     /// `GraphDBError::NodeError`, before any node is removed.
     pub fn set_delete_nodes_error(&self, msg: impl Into<String>) {
@@ -590,15 +597,38 @@ impl GraphDBTrait for MockGraphDB {
     /// Ignores the filters entirely and returns the whole graph, so a caller
     /// that pushes a predicate down here is NOT narrowed by the mock — the
     /// call is logged under its own name to make that visible.
+    /// The nodes whose every filtered attribute holds one of its values (a
+    /// node without the attribute does not match), and the edges between
+    /// them, as the ladybug adapter filters.
     async fn get_filtered_graph_data(
         &self,
-        _attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
+        attribute_filters: &HashMap<Cow<'static, str>, Vec<serde_json::Value>>,
     ) -> GraphDBResult<(Vec<(String, NodeData)>, Vec<EdgeData>)> {
         self.call_log
             .lock()
             .unwrap() // lock poison is unrecoverable
             .push("get_filtered_graph_data".to_string());
-        self.get_graph_data().await
+        let (nodes, edges) = self.get_graph_data().await?;
+        let nodes: Vec<(String, NodeData)> = nodes
+            .into_iter()
+            .filter(|(_, node)| {
+                attribute_filters.iter().all(|(attr, values)| {
+                    values.is_empty()
+                        || node
+                            .get(attr.as_ref())
+                            .is_some_and(|value| values.contains(value))
+                })
+            })
+            .collect();
+        let ids: std::collections::HashSet<&str> =
+            nodes.iter().map(|(id, _)| id.as_str()).collect();
+        let edges = edges
+            .into_iter()
+            .filter(|(source, target, _, _)| {
+                ids.contains(source.as_str()) && ids.contains(target.as_str())
+            })
+            .collect();
+        Ok((nodes, edges))
     }
 
     async fn get_nodeset_subgraph(

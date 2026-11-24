@@ -106,6 +106,15 @@ fn return_code(status: std::process::ExitStatus) -> i32 {
     -1
 }
 
+/// Everything a child's output pipe yields until it closes.
+async fn read_all(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> std::io::Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    if let Some(mut pipe) = pipe {
+        tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buffer).await?;
+    }
+    Ok(buffer)
+}
+
 /// Run one enola command to completion. Python's `_run_enola`.
 ///
 /// `subject` names what was run in error messages. Lines enola writes to
@@ -145,7 +154,15 @@ async fn run_enola(
         .kill_on_drop(true);
 
     let mut child = command.spawn().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
+        if error.kind() == std::io::ErrorKind::NotFound && !cwd.is_dir() {
+            // The working directory vanished after the caller checked it:
+            // `spawn` reports a missing cwd as `NotFound` too, and it is not
+            // a missing enola.
+            CodeGraphError::EnolaSnapshot(format!(
+                "Could not start enola on {subject}: its working directory '{}' does not exist.",
+                cwd.display()
+            ))
+        } else if error.kind() == std::io::ErrorKind::NotFound {
             CodeGraphError::EnolaNotInstalled(INSTALL_HINT.to_string())
         } else {
             CodeGraphError::EnolaSnapshot(format!(
@@ -167,17 +184,28 @@ async fn run_enola(
             }
         }
     };
-    // Dropping the `wait_with_output` future on timeout drops the child, and
-    // `kill_on_drop` kills it; tokio reaps it in the background.
-    let run = async {
-        let ((), output) = tokio::join!(feed, child.wait_with_output());
-        output
-    };
-    let output = match tokio::time::timeout(timeout, run).await {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let ran = tokio::time::timeout(timeout, async {
+        let ((), status, stdout, stderr) =
+            tokio::join!(feed, child.wait(), read_all(stdout), read_all(stderr));
+        Ok::<_, std::io::Error>(std::process::Output {
+            status: status?,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    })
+    .await;
+    let output = match ran {
         Ok(result) => result.map_err(|error| {
             CodeGraphError::EnolaSnapshot(format!("enola failed on {subject}: {error}"))
         })?,
         Err(_elapsed) => {
+            // Killed and reaped before returning, so enola is no longer
+            // writing `.enola/` when the caller looks at it or retries.
+            if let Err(error) = child.kill().await {
+                tracing::warn!("killing the timed-out enola failed: {error}");
+            }
             return Err(CodeGraphError::EnolaSnapshot(format!(
                 "enola timed out after {} seconds on {subject}.",
                 float_repr(timeout.as_secs_f64())

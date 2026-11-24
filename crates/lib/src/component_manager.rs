@@ -460,6 +460,33 @@ impl ComponentManager {
         GraphExtractorChoice { kind, from_auto }
     }
 
+    /// Check the graph extractor a cognify run would use without building
+    /// it: `selected` (the caller's choice) or, when blank,
+    /// `graph_extraction.backend` must resolve to the LLM extractor, `auto`,
+    /// or a registered kind. Callers that build the extractor only when a
+    /// standard item needs it check the selection up front with this, so a
+    /// typo fails even on a run that ends up extracting nothing. `auto` is
+    /// not checked: whether it can be served depends on the LLM, which only a
+    /// standard item needs.
+    ///
+    /// # Errors
+    /// [`ComponentError::GraphExtractor`] naming the registered kinds, as
+    /// [`Self::graph_extractor`] does.
+    pub fn check_graph_extractor_selection(
+        &self,
+        selected: Option<&str>,
+    ) -> Result<(), ComponentError> {
+        let choice = self.resolve_graph_extractor(selected, &|_| false);
+        if choice.is_llm() || choice.from_auto || self.registry.has_graph_extractor(&choice.kind) {
+            return Ok(());
+        }
+        Err(ComponentError::GraphExtractor(format!(
+            "no graph extractor is registered for kind {:?}; registered: {}",
+            choice.kind,
+            self.registry.graph_extractor_kinds().join(", ")
+        )))
+    }
+
     /// Build the graph-extraction backend for one cognify run.
     ///
     /// `kind` is the caller's selection, or `graph_extraction.backend` when
@@ -550,6 +577,26 @@ impl ComponentManager {
         let new = self.registry.build_transcriber(&ctx).await?;
         *guard = Some((current_ver, new.clone()));
         Ok(new)
+    }
+
+    /// The transcriber a cognify run reads audio documents with:
+    /// [`Self::transcriber`], except that one that cannot be built (no API
+    /// key, say) is replaced by one that fails with the build error, as
+    /// [`Self::add_loader_registry`] does (`None` in a build without the audio
+    /// loader). A run without audio, a keyless code
+    /// project included, then never fails over it.
+    pub async fn cognify_transcriber(&self) -> Option<Arc<dyn Transcriber>> {
+        match self.transcriber().await {
+            Ok(transcriber) => transcriber,
+            #[cfg(feature = "audio-loader")]
+            Err(error) => Some(Arc::new(UnavailableTranscriber(error.to_string()))),
+            // No audio loader is compiled in, so nothing would use one.
+            #[cfg(not(feature = "audio-loader"))]
+            Err(error) => {
+                tracing::debug!(%error, "no transcriber, and no audio loader to use one");
+                None
+            }
+        }
     }
 
     /// The loaders `add` extracts text with: the default text, HTML, PDF, CSV

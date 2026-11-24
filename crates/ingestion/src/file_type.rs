@@ -201,6 +201,31 @@ const AUDIO_MIMES: &[&str] = &[
     "audio/x-wav",
 ];
 
+/// The extensions the unstructured loader claims by name (Python's
+/// `UnstructuredLoader.supported_extensions` plus the BeautifulSoup HTML
+/// pair, which Rust's office loader also takes).
+const UNSTRUCTURED_EXTENSIONS: &[&str] = &[
+    "docx", "doc", "odt", "xlsx", "xls", "ods", "pptx", "ppt", "odp", "rtf", "html", "htm", "eml",
+    "msg", "epub",
+];
+
+/// The path extensions the loader for `doc_type` names, Python's
+/// `get_loader_info(loader)["extensions"]`. A document type Rust has no
+/// built-in loader for names none.
+pub(crate) fn loader_extensions(doc_type: &str) -> &'static [&'static str] {
+    match doc_type {
+        "text" => TEXT_EXTENSIONS,
+        "pdf" => &["pdf"],
+        "image" => IMAGE_EXTENSIONS,
+        "audio" => AUDIO_EXTENSIONS,
+        "csv" => &["csv"],
+        "html" => &["html", "htm"],
+        "unstructured" => UNSTRUCTURED_EXTENSIONS,
+        "code" => crate::loaders::code::SUPPORTED_CODE_EXTENSIONS,
+        _ => &[],
+    }
+}
+
 /// The `can_handle(extension, mime_type)` of a Python core loader: the
 /// extension AND the MIME type must both be in the loader's lists.
 fn accepts(extensions: &[&str], mimes: &[&str], ext: &str, mime: &str) -> bool {
@@ -264,6 +289,10 @@ const PREFERRABLE: [(&str, &str, &str); 7] = [
 /// (`is_registered`, by document type) and whose `can_handle` accepts the file
 /// wins, before the default priority order. A name that is not registered, or
 /// is not one of Rust's loaders, is skipped.
+///
+/// The default priority order skips unregistered loaders too
+/// (`LoaderEngine.py:117-130`): a registry without the code loader reads a
+/// `.py` file with the text loader instead of failing on the missing one.
 pub(crate) fn route_loader_preferring(
     path_ext: &str,
     sniffed: &FileType,
@@ -280,7 +309,10 @@ pub(crate) fn route_loader_preferring(
             return Some(doc_type);
         }
     }
-    if matches!(path_ext.to_lowercase().as_str(), "html" | "htm") && sniffed.mime == "text/plain" {
+    if matches!(path_ext.to_lowercase().as_str(), "html" | "htm")
+        && sniffed.mime == "text/plain"
+        && is_registered("html")
+    {
         return Some("html");
     }
     // `code_loader` is Python's first loader: code files sniff as plain text,
@@ -295,8 +327,9 @@ pub(crate) fn route_loader_preferring(
         ("unstructured", "unstructured"),
     ];
     PRIORITY.iter().find_map(|(python_loader, doc_type)| {
-        (can_handle(python_loader, path_ext, &sniffed.mime)
-            || can_handle(python_loader, &sniffed.extension, &sniffed.mime))
+        (is_registered(doc_type)
+            && (can_handle(python_loader, path_ext, &sniffed.mime)
+                || can_handle(python_loader, &sniffed.extension, &sniffed.mime)))
         .then_some(*doc_type)
     })
 }
@@ -548,23 +581,43 @@ mod tests {
             route_loader_preferring("py", &py, &names(&["text_loader"]), |_| true),
             Some("text")
         );
-        // An unregistered code loader is skipped; the default order then
-        // still names it, and the add fails on the missing loader.
+        // An unregistered code loader is skipped, preferred or not: the
+        // default order skips it too and the text loader reads the file, as
+        // `LoaderEngine.get_loader` does.
         assert_eq!(
             route_loader_preferring("py", &py, &names(&["code_loader"]), |d| d != "code"),
-            Some("code")
+            Some("text")
+        );
+        assert_eq!(
+            route_loader_preferring("py", &py, &[], |d| d != "code"),
+            Some("text")
+        );
+        // Nothing registered claims it: no loader, the add fails.
+        assert_eq!(route_loader_preferring("py", &py, &[], |_| false), None);
+        // An unregistered html loader leaves a local `.html` file to the
+        // default order.
+        let html = guess_file_type(b"<p>hi</p>", "html");
+        assert_ne!(
+            route_loader_preferring("html", &html, &[], |d| d != "html"),
+            Some("html")
         );
         // A preferred loader that does not accept the file is skipped, as is
-        // an unknown name and an unregistered loader; the default order wins.
+        // an unknown name and an unregistered loader; the next one that
+        // accepts the file wins.
         let txt = guess_file_type(b"hi", "txt");
         assert_eq!(
             route_loader_preferring(
                 "txt",
                 &txt,
                 &names(&["image_loader", "nope", "csv_loader", "text_loader"]),
-                |doc_type| doc_type != "text"
+                |doc_type| doc_type != "image"
             ),
             Some("text")
+        );
+        // With the text loader unregistered nothing else claims a `.txt`.
+        assert_eq!(
+            route_loader_preferring("txt", &txt, &names(&["text_loader"]), |d| d != "text"),
+            None
         );
         // The preference changes the route: bytes that sniff as text but are
         // named `.docx` go to `text` by default (its sniffed-extension check

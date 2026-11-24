@@ -43,8 +43,9 @@ use cognee::{
     GraphExtractorFactory,
 };
 use cognee_bindings_common::graph_backend::{
-    GraphBackendFuture, available_graph_backend_kinds, check_graph_backend_registered,
-    graph_backend_from_opts, register_graph_backend, registered_graph_backend_kinds,
+    GraphBackendFuture, available_graph_backend_kinds, check_graph_backend_before_add,
+    check_graph_backend_registered, graph_backend_from_opts, register_graph_backend,
+    registered_graph_backend_kinds,
 };
 use cognee_bindings_common::ops::pipeline::cognify_config_with_opts;
 use cognee_bindings_common::{CogneeServices, HandleState, SdkError};
@@ -445,6 +446,9 @@ async fn an_unregistered_default_is_refused() {
         .expect("known key");
     let err = check_graph_backend_registered(&cm, &json!({})).expect_err("unregistered default");
     assert!(err.to_string().contains("absent-default-xyz"), "{err}");
+    let err = check_graph_backend_before_add(&cm, &json!({}), &[a_code_project()])
+        .expect_err("a configured kind other than auto is checked before the add");
+    assert!(err.to_string().contains("absent-default-xyz"), "{err}");
 }
 
 /// `llm` names the built-in extractor; neither registry can take it.
@@ -639,6 +643,31 @@ async fn auto_without_an_llm_or_gliner_is_refused() {
     check_graph_backend_registered(&cm, &json!({ "extractor": "llm" }))
         .expect("an explicit llm needs no backend");
 
+    // Before an add, `auto` is left to the cognify half while an input may be
+    // code (a code project needs no extractor); an explicit or configured
+    // kind is still refused.
+    let code = [a_code_project()];
+    check_graph_backend_before_add(&cm, &json!({}), &code).expect("auto is decided after the add");
+    check_graph_backend_before_add(&cm, &json!({ "extractor": "auto" }), &code)
+        .expect("an explicit auto is still auto");
+    let err = check_graph_backend_before_add(&cm, &json!({ "extractor": "no-such-kind" }), &code)
+        .expect_err("an unregistered kind");
+    assert!(err.to_string().contains("no-such-kind"), "{err}");
+    // Only documents: nothing is added for a call that cannot cognify them.
+    let err = check_graph_backend_before_add(
+        &cm,
+        &json!({}),
+        &[cognee::models::DataInput::Text("some notes".into())],
+    )
+    .expect_err("every input is a document");
+    assert!(
+        err.to_string().contains("no usable LLM is configured"),
+        "{err}"
+    );
+    let err = check_graph_backend_before_add(&cm, &json!({ "extractor": "no-such-kind" }), &code)
+        .expect_err("an unregistered kind");
+    assert!(err.to_string().contains("no-such-kind"), "{err}");
+
     // Named explicitly, a missing GLiNER is an ordinary unknown kind.
     let err = check_graph_backend_registered(&cm, &json!({ "extractor": "gliner_demo" }))
         .expect_err("no gliner");
@@ -702,4 +731,9 @@ async fn a_graph_schema_under_keyless_auto_names_the_missing_llm() {
         err.to_string().contains("no usable LLM is configured"),
         "{err}"
     );
+}
+
+/// An input that may be a code project: a directory.
+fn a_code_project() -> cognee::models::DataInput {
+    cognee::models::DataInput::FilePath(std::env::temp_dir().to_string_lossy().into_owned())
 }

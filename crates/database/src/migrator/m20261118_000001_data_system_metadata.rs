@@ -27,10 +27,12 @@
 //! `external_metadata.source` is `"dlt"` or `"dlt_source"`: the dict moves
 //! to `system_metadata` and `external_metadata` is set to NULL. So DLT rows Rust wrote lose their
 //! `external_metadata` stamp once Python upgrades the shared file, and the
-//! Rust DLT route no longer finds them there. Routing moved DLT stamps from
-//! `system_metadata` is not implemented yet: cognify refuses a row stamped
-//! `system_metadata.source == "dlt_source"` as an unsupported route rather
-//! than sending it down the standard LLM path.
+//! Rust DLT route no longer finds them there. Rust keeps Python's behaviour
+//! for those rows (SDK-1702): a moved per-row record
+//! (`system_metadata.source == "dlt"`) is refused as a legacy DLT record, as
+//! Python refuses it, and a moved `"dlt_source"` manifest is refused as an
+//! unsupported route; neither is sent down the standard LLM path. Such rows
+//! are deleted and the data re-added.
 use sea_orm_migration::prelude::*;
 
 use super::helpers::{add_column_if_missing, drop_column_if_present};
