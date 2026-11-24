@@ -16,8 +16,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      **[BREAKING]** bullet); migration prose like the entries below is always
      hand-written and always needs this manual reposition. -->
 
+### Breaking changes
+
+- **One persistence layer for every cognify write (SDK-1694, stage O4a).** The
+  graph, vector, ownership-ledger and edge-evidence writes of a run — the
+  extracted entities, Timestamps and semantic edges, the claimed existing
+  edges' ledger rows, the WebPage / WebSite nodes, the chunks, summaries,
+  entity types, documents, custom-schema graphs, structural edges, vectors,
+  edge evidence and the post-run DLT schema nodes and FK edges — now all go
+  through one internal layer that writes the ledger rows first, then every
+  graph node, then every graph edge, then the vectors, then the evidence.
+  **What a run stores is unchanged** on the mock stores, pinned as sets by
+  `tests/persist_equivalence.rs`; on Ladybug and the Postgres graph the
+  node-first order also fixes edges that were dropped or failed (see Fixed).
+  What moved:
+  - The extraction stage (`make_extract_graph_task*`,
+    `make_extract_graph_and_summarize_task*`) **writes nothing any more**; the
+    `add_data_points` stage writes everything. A custom pipeline that runs the
+    extraction task without `make_add_data_points_task` after it no longer
+    stores the extracted graph or the WebPage / WebSite nodes. The factories'
+    `db` argument is unused and kept for their signatures. The standalone
+    `extract_graph_from_data` and `create_web_page_nodes` still store what they
+    always did.
+  - `SummarizedData` gains `claimed_existing_edges: Vec<GraphEdgePair>` (the
+    edges an earlier run already wrote: ledger rows only) and
+    `handoff: PersistHandoff` (opaque: the WebPage / WebSite artifacts and the
+    entities' graph view), so struct literals need both
+    (`claimed_existing_edges: vec![], handoff: PersistHandoff::default()`).
+    `ExtractedGraphData` gains the same two fields; it is `#[non_exhaustive]`,
+    so only readers outside the crate see them.
+  - A run's failure window moved with the writes: an entity or semantic-edge
+    write now fails in the `add_data_points` stage, after summarization,
+    rather than in the extraction stage. Persistence failures stay run-fatal.
+
+- **Repository cloning is hardened for API requests (SDK-1701).** For an HTTP
+  API request (`RepoSourceSettings` with `api_request = true`,
+  `Settings::api_repo_sources`) a clone's directory name now carries an 8-hex
+  hash of the credential-free URL (`github.com-org-repo-1a2b3c4d`), so URLs
+  Python's name merges no longer share a clone. **A code repository's data id
+  is keyed on its clone directory, so a server's URL rows get new ids**: a
+  repository re-added after upgrading is a new row, and the old row and old
+  clone directory are left in place (forget the old row to remove both). SDK,
+  CLI and binding calls keep Python's names and ids. An API request also
+  refuses a clone whose refresh failed (an SDK call still reuses it), and pins
+  git to the addresses the outbound check passed (`http.curloptResolve`, which
+  needs git >= 2.37: with an older git such a clone is refused).
+- **`ALLOW_HTTP_REQUESTS` is a cognee-wide setting (SDK-1701).** It moved from
+  the `code_graph` section to `Settings::allow_http_requests`;
+  `code_graph.allow_http_requests` stays an alias. The CLI config file moves
+  to version 7, which hoists a saved `code_graph.allow_http_requests` entry
+  into the setting. It now also gates the web
+  pages `add` fetches, as in Python (`require_http_requests_allowed_for`): an
+  `AddPipeline` that was never given `with_repo_sources` (fail-closed) refuses
+  URL inputs, and an HTTP server needs `ALLOW_HTTP_REQUESTS=true` to fetch
+  them. `RepoTransport::check_outbound_url` and `validate_outbound_url` now
+  return the checked addresses (`Vec<IpAddr>`).
+- **The outbound-address check blocks all of `192.0.0.0/24` (SDK-1701)**, as
+  CPython >= 3.12.4 does, and web-page fetches use the same address table as
+  repository clones (it was narrower).
+- **The existing-edge check takes the built edges (SDK-1694, stage O2).**
+  `retrieve_existing_edges` (re-exported from `cognee_cognify::graph_integration`)
+  now takes the edges expansion built, `impl IntoIterator<Item =
+  &GraphEdgePair>`, instead of the extracted `KnowledgeGraph`s, and returns
+  their keys as `HashSet<(Uuid, Uuid, String)>` (`GraphEdgePair::dedup_key`)
+  instead of `"{source}_{target}_{label}"` strings.
+  `expand_extracted_graphs_by_unit` loses its `existing_edges_set` argument:
+  its `Expansion` holds every edge it built, and the new
+  `Expansion::split_existing_edges(&existing)` moves the ones the graph holds
+  into `claimed_existing_edges` (an existing edge no chunk produced, an
+  ontology edge, is dropped instead). The pipeline calls
+  `retrieve_existing_edges(graph_db, &expansion.edges)` and then the split.
+  `expand_with_nodes_and_edges`, `expand_with_nodes_and_edges_with_stats` and
+  `expand_extracted_graphs` keep the argument, now a `&HashSet<(Uuid, Uuid,
+  String)>`, and split their result with it.
+- **Graph extraction no longer waits at `chunks_per_batch` boundaries
+  (SDK-1694, stage O3).** Both LLM extraction paths (the default graph and a
+  runtime `graph_schema`) send every chunk of the run through one stream with
+  at most `max_parallel_extractions` calls in flight, so one slow chunk holds
+  only its own slot instead of stalling every chunk after its 2000-chunk batch.
+  A chunk's text is copied only when its call starts. Results are put back in
+  chunk order before the graph is built, so the first type an entity is given
+  in a block still wins. `chunks_per_batch` (`CHUNKS_PER_BATCH`) now only sets
+  the blocks the graph is built from (Python's unit); a graph backend
+  (`CognifyConfig::graph_backend`) is still handed one block per call.
+  - **`chunks_per_batch` no longer limits LLM concurrency.** Extraction ran at
+    most min(`chunks_per_batch`, `max_parallel_extractions`) calls at once; it
+    now runs `max_parallel_extractions` alone. Anyone who set a small
+    `chunks_per_batch` (by env, or per request in a downstream server) to limit
+    LLM load must set `LLM_MAX_PARALLEL_REQUESTS` / `max_parallel_extractions`
+    instead.
+  - **`FailFast` stops at the in-flight window, not at a batch boundary.**
+    After the first failed call nothing new is dispatched, the calls in flight
+    finish and their failures are reported, and every file with a chunk that
+    was never sent is unreached, as summarization already did. Which chunks
+    were sent before the stop depends on timing, so on the same failing input
+    a different set of files can end up unreached.
+  - **Under `FailFast` + `FailedItems` this keeps far fewer files.** Before, a
+    run under 2000 chunks dispatched everything, so one failed chunk cost one
+    file. Now every file with a chunk beyond the in-flight window is
+    unreached, and the calls it did finish are discarded with it. For example,
+    with `LLM_MAX_PARALLEL_REQUESTS=32`, 82 files and 1,500 chunks, a failure
+    at chunk 40 used to keep 81 files and now keeps a handful; a failure in the
+    first file keeps none, so the run is fatal (`is_fatal`'s no-survivor rule)
+    and is rolled back whole. This is Python's behaviour too (the first failure
+    cancels the items still running and starts no more), and the plan for
+    SDK-1694. Until per-document saving lands (stage O5b), a server that wants
+    to keep finished files should run `RunToEnd` + `FailedItems`
+    (`cognify.raise_incremental_loading_errors=false`,
+    `COGNEE_COGNIFY_ROLLBACK_SCOPE=failed_items`).
+  - **Log lines.** The per-batch `Processed graph extraction batch i/n` line is
+    gone. Extraction logs `graph extraction: N of M chunks returned` at most
+    every 30 seconds, and one `Extracted graphs from N of M chunks (K never
+    dispatched)` line at the end.
+
 ### Added
 
+- **`allowed_local_file_roots` (`COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, SDK-1701).**
+  Python's opt-in allowlist for local repository paths: empty is no
+  restriction; set (even to `:`), a local repository must resolve under one
+  of the roots, cognee's own storage roots or the clones directory. An HTTP
+  API request (`Settings::api_repo_sources`) does not allow the storage roots,
+  and allows only the clones directory its settings carry (a server's
+  per-caller one). A refusal is a `CodeRepositoryError` with status 403
+  (Python's is 500), also for a path that does not exist.
+- **Code repository folders are cleaned up (SDK-1701).** Forgetting a code
+  repository row, or deleting its dataset, removes the dataset's
+  `.enola-<dataset_id>` snapshot from the repository, and removes a clone no
+  remaining row points at. Rust-only. Removing a clone also removes the
+  repository's other branch clones beside it that no row names (SDK-1709): a re-add on another
+  branch moves the URL's one row to that branch's clone, and the clone it
+  moved off used to stay on disk for good. A re-add itself never removes a
+  clone.
 - **Keyless `remember(content_type="code")` (SDK-1053).** A port of the
   `content_type == "code"` branch of Python's `_remember_inner`:
   `cognee::api::remember_code` (`RememberCodeParams`) stores each repository
@@ -243,6 +372,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the chunks cognify does. `universal_newlines` now lives in
   `cognee_utils`, still re-exported from `loaders` and `loaders::code`.
 
+- **cognify builds the graph per data item, and entities keep several types
+  (SDK-1694, stage O1).** Python builds the graph of each data item (or each
+  block of `chunks_per_batch` chunks of one) with fresh maps, so within it the
+  first type declared for an entity wins and across data items the types are
+  combined. Rust built one graph for the whole run, so the first type in the
+  run won and every other was dropped. cognify now groups the extracted chunk
+  graphs into the same units (`extraction_units`, shared with the custom-schema
+  path), expands each with fresh maps (`expand_extracted_graphs_by_unit`) and
+  merges them (`merge_expansions`): an entity's types are the union in
+  first-seen order, edges are combined by (source, target, label) and every
+  producing chunk keeps its ownership row. An entity can therefore have
+  several `is_a` edges, and each EntityType is written, indexed and recorded
+  in the ledger. The rule lives in two places: graph building keeps the first
+  type per unit, and `GraphNodePair::merge_types_from` combines the units, so
+  switching to "every declared type, with counts" means keeping every type
+  with a count inside a unit as well as summing counts in the merge.
+
+  Deletes do not catch up until SDK-1694 stage O6: deleting a document does
+  not remove by ownership the extra `is_a` edges or EntityTypes it
+  contributed. Like the primary type's today, their ledger rows carry a nil
+  `data_id`, so a data item's delete never selects them (only hard delete's
+  sweep of entity types left with a single edge can), which can leave behind
+  an `is_a` edge that did not exist before this change.
+
+  Across data items the first one in input order decides an entity's
+  description, importance weight and metadata (an ontology individual known
+  in one only through the `OntologyIndividual` placeholder gives way to the
+  first real extraction of it). This is a deliberate divergence from Python,
+  where the last data item to write wins, which with data items running
+  concurrently depends on timing. NodeSet membership (`belongs_to_set`) is
+  combined across data items. The units are expanded off the async runtime on
+  the run's CPU pool (`TaskContext::thread_pool`, or `CognifyConfig::cpu_pool`)
+  and merged in input order; ontology lookups are cached for the run.
+
+  An edge endpoint no longer matches a node of another document. Within one
+  unit it may still match a node an earlier chunk declared, or a node by its
+  name; the new key `cognify.cross_chunk_endpoints`
+  (`COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS`, default `true`) turns that off,
+  which resolves endpoints only within their own chunk and only by node id,
+  as Python does. Existing graphs keep one type per entity until their data is
+  cognified again. The visualization payload still names one
+  type per entity: the last `is_a` link, as Python's does. COGX export writes
+  every `is_a` edge as its own fact.
+
+- **Relationship labels are normalised, and existing edges are found by
+  their final ids (SDK-1694, stage O2).** cognify stores an extracted edge's
+  label the way Python does (`generate_edge_name`: lowercase, spaces to
+  underscores, apostrophes dropped), so `Born In` and `born_in` are one
+  `born_in` edge. It used to store the model's label as given. Before
+  writing, cognify asks the graph which of the edges it built are already
+  there, on the edges' final ids and labels, as Python's
+  `find_existing_edge_identities` does; those are claimed (an ownership row,
+  no graph write). The check used to derive the ids from the model's node ids,
+  so it missed every edge whose entity is named differently from its node id
+  (node `Rostov` named "Nicholas Rostov"), every edge to a Timestamp and every
+  edge to an entity the ontology renamed. Those edges were written again on
+  every run: no duplicate (the write is an upsert), but a second write, the
+  stored edge text overwritten and the edge re-embedded. With
+  `cognify.cross_chunk_endpoints=false` an endpoint now matches only the
+  verbatim node id, as in Python: node ids `A` and `a` are two nodes.
+
+  Labels such as `Is A` or `Contains` now become `is_a` and `contains`, the
+  names of the structural edges, as in Python. Between two entities they stay
+  extracted edges: their ledger rows carry the producing document, a
+  `contains` row is keyed on its edge text (as Python's `upsert_edges` keys
+  every `contains` edge). The graph stores' type lookup
+  (`get_entity_type_names`) only follows an `is_a` edge to an EntityType; the
+  visualization, like Python's, takes any `is_a` link's target name as the
+  entity's type.
+
+  Ontology edges go through the same check. Before, it never matched them,
+  so every run wrote each ontology edge again and added a ledger row for it
+  (with a nil `data_id`) under its own user and dataset. Now an ontology edge
+  the graph already holds is skipped and gets no new row, as on Python's
+  ledger path. So when two datasets share one graph store and ontology, the
+  second records no row for an ontology edge the first one wrote, and the
+  edge survives deleting the first dataset's data, because a nil-`data_id`
+  row is only retired through an endpoint exclusive to the deleted item.
+  Ownership of ontology and structural edges per document comes with
+  SDK-1694 stage O5a.
+
+  Graphs built before this change are not migrated. Their edges, ledger rows
+  and `EdgeType` points keep the raw label and stay consistent with each
+  other. Cognifying the same data again adds a normalised copy of every edge
+  whose label was not already normalised (`works at` gains `works_at`), with
+  its own ownership row; the raw copy stays until the data that produced it
+  is deleted. Only a copy with no description gets a new `EdgeType` point
+  (its default edge text, "{source} {label} {target}.", names the new label);
+  one with a description shares the point keyed on that text.
+
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict
   `response_format: json_schema` request first, as Python's default
@@ -374,6 +593,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `FeedbackError::InvalidSessionIds`, as Python does.
 
 ### Breaking changes
+
+- **Several types per entity (SDK-1694).** `cognee_models::Entity` gains
+  `extra_types: Vec<Uuid>` (the types after `is_a`; left out of the
+  serialised form when empty) and `GraphNodePair` gains
+  `extra_entity_types: Vec<EntityType>`. A struct literal of either must add
+  the field; `GraphNodePair::new(entity, entity_type)` builds a single-typed
+  one. `GraphNodePair::entity_types()` iterates every type. `CognifyConfig`
+  gains `endpoint_scope` (`EndpointScope::Unit` by default) and `cpu_pool`
+  (`None` by default; the pipeline fills it from the task context). A reader that
+  assumes one `is_a` edge per entity should read all of them.
 
 - **Source files are read by `code_loader` (SDK-1053, SDK-1379).** A file
   with one of enola's extensions (`loaders::code::SUPPORTED_CODE_EXTENSIONS`,
@@ -1908,6 +2137,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **URL documents and ontology class hierarchies store all their edges
+  (SDK-1694, O4a review).** Cognify wrote some edges before their endpoint
+  nodes: a URL document's `SOURCED_FROM` chunk → WebPage edges before the
+  chunks, and an ontology's type → type `is_a` edges (`Algorithm → Technology`)
+  before the EntityType nodes. On Ladybug, whose edge write matches both
+  endpoints first, those edges were silently dropped while their ledger rows
+  were kept; on the Postgres graph, whose `graph_edge` has foreign keys,
+  cognifying such a document failed with `graph_edge_source_id_fkey`. The
+  persistence layer now writes every node of a run before any edge. Regression tests: `nodes_before_edges_ladybug` and, in the Postgres
+  graph CI lane, `nodes_before_edges_pggraph` (new `pggraph` test feature of
+  `cognee-cognify`).
 
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)

@@ -20,22 +20,24 @@ use uuid::Uuid;
 use crate::dynamic_graph::{DynamicGraphError, DynamicGraphSchema};
 use crate::failure::{FailurePolicy, FailureStop, RollbackScope};
 use crate::graph_backend::ChunkGraphExtractor;
+pub use crate::graph_integration::EndpointScope;
+use cognee_core::CpuPool;
 
-/// Chunks handed to the graph-extraction stage in one batch.
-///
-/// Sized so that a batch boundary is rare rather than routine: the stage awaits
-/// each batch before starting the next, so a small batch turns one document into
-/// a series of serialised waves, each paying the latency of its slowest call.
+/// Chunks per block of a document that the graph is built from.
 ///
 /// Matches Python, which resolves its extraction `task_config` batch size to
 /// this same 2000 literal in `cognee/api/v1/cognify/cognify.py:367-370` when
 /// neither the `chunks_per_batch` argument nor `CognifyConfig.chunks_per_batch`
 /// is set (both default to `None` — `cognify.py:60`,
 /// `modules/cognify/config.py:12`). Any document under 2000 chunks therefore
-/// reaches extraction as a single batch, in both SDKs.
+/// builds its graph as one block, in both SDKs.
+///
+/// It no longer paces LLM dispatch: every chunk of the run goes through one
+/// stream capped only by [`DEFAULT_MAX_PARALLEL_EXTRACTIONS`]. Python still
+/// waits for each block of a document before sending the next one's calls.
 pub const DEFAULT_CHUNKS_PER_BATCH: usize = 2000;
 
-/// Default ceiling on LLM calls in flight within one extraction batch.
+/// Default ceiling on graph-extraction LLM calls in flight.
 ///
 /// Matches Python's *effective* ceiling, which is not the absent one its
 /// `asyncio.gather` suggests. `extract_graph_from_data.py:191` and
@@ -51,7 +53,7 @@ pub const DEFAULT_CHUNKS_PER_BATCH: usize = 2000;
 /// | `litellm` | 1000 (`HTTPHandler(concurrent_limit=1000)`) |
 ///
 /// So Python never issues more than ~1000 concurrent LLM requests, whatever the
-/// batch size. Rust has no equivalent transport default — `reqwest`/`hyper` bound
+/// batch size or the number of documents in flight. Rust has no equivalent transport default — `reqwest`/`hyper` bound
 /// idle pooling, not in-flight requests — which is why
 /// [`cognee_llm::in_flight`] exists to reproduce that ceiling, and why this
 /// stage-level semaphore is set to the same number rather than to
@@ -236,24 +238,47 @@ pub struct CognifyConfig {
     #[serde(default)]
     pub chunk_overlap_ratio: f64,
 
-    /// Number of chunks to process in a single batch during graph extraction.
+    /// Number of chunks of one document in each block the graph is built from.
     ///
     /// This is the direct analogue of Python's pipeline batch size — the
     /// `task_config={"batch_size": chunks_per_batch}` attached to the
     /// `extract_graph_and_summarize` task in `cognee/api/v1/cognify/cognify.py:388`.
     /// Python resolves it to **2000** by default (`cognify.py:367-370` falls back
     /// to a 2000 literal because `CognifyConfig.chunks_per_batch` is `None` in
-    /// `cognee/modules/cognify/config.py:12`), so any document under 2000 chunks
-    /// reaches the extraction stage as a single batch with no barrier in the
-    /// middle. We match that literal.
+    /// `cognee/modules/cognify/config.py:12`). We match that literal.
+    ///
+    /// It decides only where a document's graph is cut into blocks, each built
+    /// with fresh maps as Python builds it (see [`Self::endpoint_scope`]). It
+    /// does not limit dispatch or concurrency: the LLM paths send every chunk
+    /// of the run through one stream bounded by
+    /// [`Self::max_parallel_extractions`], with no barrier between blocks.
+    /// Lowering it no longer lowers LLM load (it used to cap concurrency at
+    /// min(`chunks_per_batch`, `max_parallel_extractions`)); lower
+    /// `max_parallel_extractions` (`LLM_MAX_PARALLEL_REQUESTS`) instead. A
+    /// [`Self::graph_backend`] is the exception, and is still handed one block
+    /// of `chunks_per_batch` chunks at a time.
     pub chunks_per_batch: usize,
 
-    /// Maximum number of parallel extraction calls in flight within a batch.
+    /// Which chunks an extracted edge's endpoints may match when the graph is
+    /// built.
     ///
-    /// Independent of [`Self::chunks_per_batch`]: the batch size decides how
-    /// often the stage hits a barrier, this decides how fast one batch drains.
-    /// Setting it *below* the batch size is the supported way to pace a
-    /// rate-limited key or record replay cassettes
+    /// The graph is built per unit — one data item, or one block of
+    /// [`Self::chunks_per_batch`] chunks of it — as Python builds it, so an
+    /// endpoint never matches a node only another document declared. Within a
+    /// unit, the default [`EndpointScope::Unit`] lets it match a node an
+    /// earlier chunk declared, or match a node by its name, which keeps edges
+    /// Python drops; [`EndpointScope::Chunk`] resolves only within the edge's
+    /// own chunk and only by the verbatim node id, as Python does. Set from
+    /// `cognify.cross_chunk_endpoints`.
+    #[serde(default)]
+    pub endpoint_scope: EndpointScope,
+
+    /// Maximum number of graph-extraction LLM calls in flight.
+    ///
+    /// The only limit on dispatch: every chunk of the run goes through one
+    /// stream, and a new call starts whenever one returns, with no barrier at
+    /// [`Self::chunks_per_batch`] boundaries. Setting it low is the supported
+    /// way to pace a rate-limited key or record replay cassettes
     /// (`LLM_MAX_PARALLEL_REQUESTS=1`; see `scripts/perf/README.md`).
     ///
     /// This is the *stage-level* bound and only binds where a caller threads the
@@ -357,10 +382,10 @@ pub struct CognifyConfig {
     /// Axis 1 of failure handling — when a run stops scheduling further work.
     ///
     /// Default [`FailureStop::FailFast`], which with the default
-    /// [`Self::rollback_scope`] is Python's behaviour: stop at the first failed
-    /// batch, error the run. See [`FailureStop::FailFast`] for what "batch"
-    /// means in each stage — it is [`Self::chunks_per_batch`] for graph
-    /// extraction, and not a single file.
+    /// [`Self::rollback_scope`] is Python's behaviour: stop at the first
+    /// failure, error the run. See [`FailureStop::FailFast`] for how soon each
+    /// stage stops — the LLM stages stop dispatching at once and let the calls
+    /// in flight finish; it is never per file.
     #[serde(default)]
     pub failure_stop: FailureStop,
 
@@ -492,6 +517,17 @@ pub struct CognifyConfig {
     #[serde(skip)]
     pub graph_backend: Option<GraphBackendHandle>,
 
+    /// The CPU pool graph building runs on: the per-unit expansion of
+    /// [`crate::tasks::extract_graph_from_data`] is spread over it.
+    ///
+    /// The cognify pipeline fills it from the task's
+    /// [`cognee_core::TaskContext::thread_pool`], the pool the host sized (the
+    /// bindings, the CLI, an edge or Android host), so a caller rarely sets it.
+    /// `None` — a direct call without a pipeline — runs the units one after
+    /// another on a single blocking thread instead of starting a pool.
+    #[serde(skip)]
+    pub cpu_pool: Option<CpuPoolHandle>,
+
     /// The code graph settings (`code_graph.*`) the CODE_REPO route runs
     /// enola with. Not serialized: it is lowered from `Settings` like the
     /// handles above.
@@ -522,6 +558,19 @@ pub struct TranscriberHandle(pub Arc<dyn Transcriber>);
 impl std::fmt::Debug for TranscriberHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("TranscriberHandle(…)")
+    }
+}
+
+/// Opaque wrapper around a [`CpuPool`].
+///
+/// Implements [`Debug`] (prints `"CpuPoolHandle(…)"`) and [`Clone`] (cheap
+/// `Arc` clone), keeping [`CognifyConfig`] derivable.
+#[derive(Clone)]
+pub struct CpuPoolHandle(pub Arc<dyn CpuPool>);
+
+impl std::fmt::Debug for CpuPoolHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CpuPoolHandle(…)")
     }
 }
 
@@ -653,6 +702,7 @@ impl Default for CognifyConfig {
             chunk_overlap_ratio: 0.0,
 
             chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
+            endpoint_scope: EndpointScope::default(),
             max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
             custom_extraction_prompt: None,
             extraction_strategy: ExtractionStrategy::default(),
@@ -686,6 +736,7 @@ impl Default for CognifyConfig {
             custom_chunker: None,
             transcriber: None,
             graph_backend: None,
+            cpu_pool: None,
             code_graph: cognee_code_graph::CodeGraphConfig::default(),
         }
     }
@@ -755,9 +806,16 @@ impl CognifyConfig {
         self
     }
 
-    /// Set number of chunks per batch during graph extraction.
+    /// Set the number of chunks of a document per graph-building block.
     pub fn with_chunks_per_batch(mut self, batch_size: usize) -> Self {
         self.chunks_per_batch = batch_size;
+        self
+    }
+
+    /// Set which chunks an extracted edge's endpoints may match (see
+    /// [`Self::endpoint_scope`]).
+    pub fn with_endpoint_scope(mut self, scope: EndpointScope) -> Self {
+        self.endpoint_scope = scope;
         self
     }
 
@@ -901,6 +959,12 @@ impl CognifyConfig {
     /// Set an LLM-free graph backend (see [`ChunkGraphExtractor`]).
     pub fn with_graph_backend(mut self, backend: Arc<dyn ChunkGraphExtractor>) -> Self {
         self.graph_backend = Some(GraphBackendHandle(backend));
+        self
+    }
+
+    /// Set the CPU pool graph building runs on (see [`Self::cpu_pool`]).
+    pub fn with_cpu_pool(mut self, pool: Arc<dyn CpuPool>) -> Self {
+        self.cpu_pool = Some(CpuPoolHandle(pool));
         self
     }
 

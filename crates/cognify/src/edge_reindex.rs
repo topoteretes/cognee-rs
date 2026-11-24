@@ -3,20 +3,20 @@
 //!
 //! # The hole this fills
 //!
-//! Cognify commits extracted edges to the graph in `extract_graph_from_data`
-//! (`tasks.rs`, `graph_db.add_edges`) but writes their `EdgeType` vector points
-//! a whole pipeline stage later, in `add_data_points` → `index_data_points`. A
+//! Cognify commits extracted edges to the graph in the persistence layer's
+//! graph step (`persist.rs`, `graph_db.add_edges`) and writes their `EdgeType`
+//! vector points in its vector step, after every graph write of the group. A
 //! process **killed** between the two leaves graph edges with no vector row.
 //!
 //! Those orphans are permanent under every reachable configuration, because the
 //! retry does not re-emit them:
 //!
 //! - `retrieve_existing_edges` finds the edge already in the graph, so
-//!   `expand_with_nodes_and_edges` routes it into `claimed_existing_edge_map`
-//!   rather than the write bucket (`graph_integration/expansion.rs:844,867-870`).
-//! - `extract_graph_from_data` returns only `dedup_result.unique_edges`, and
-//!   that is what feeds `edge_type_counts`, `edge_types` and the `index_points`
-//!   call for the `EdgeType` collection. The claimed-existing bucket is written
+//!   `Expansion::split_existing_edges` moves it into `claimed_existing_edges`
+//!   rather than leaving it among the edges to write.
+//! - graph extraction's `edges` are only `dedup_result.unique_edges`, and
+//!   that is what feeds `edge_types` and the `index_points` call for the
+//!   `EdgeType` collection. The claimed-existing bucket is written
 //!   to the ownership ledger and nowhere else.
 //!
 //! The rollback sweeper does not cover it either: `RunSweeper` is reached only

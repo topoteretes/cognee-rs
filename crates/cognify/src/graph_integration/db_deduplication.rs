@@ -1,126 +1,106 @@
 //! Database-backed graph deduplication utilities.
 //!
-//! Provides functions to query the graph database for existing edges before
-//! graph expansion to avoid creating duplicates.
+//! Port of Python's `find_existing_edge_identities`
+//! (`cognee/modules/graph/utils/retrieve_existing_edges.py`): which of the
+//! edges an expansion built the graph database already holds, looked up on
+//! the edges' final ids and normalised labels.
 
 use std::collections::{HashMap, HashSet};
 
 use cognee_graph::{EdgeData, GraphDBTrait};
-use cognee_models::Entity;
+use tracing::warn;
+use uuid::Uuid;
 
 use crate::error::CognifyError;
-use crate::fact_extraction::KnowledgeGraph;
+use crate::graph_integration::types::GraphEdgePair;
 
-/// Collect the distinct `(source_uuid, target_uuid, relationship_name)`
-/// candidates to look up, in first-seen order.
+/// The distinct (source, target, label) keys of `edges`, in first-seen order,
+/// as `has_edges` takes them.
 ///
-/// Chunk-level extraction routinely re-derives the same relation from several
-/// chunks of one document, and on a backend without a set-based existence
-/// check each repeat used to cost its own round-trip. De-duplicating here can
-/// only remove redundant lookups: the caller folds the results into a
-/// `HashSet` of edge keys, so a repeated candidate could never have changed
-/// the outcome.
+/// An expansion's edge list can hold one key twice (an extracted edge and an
+/// ontology edge between the same nodes), and on a backend without a
+/// set-based existence check each repeat would cost its own round-trip.
 fn collect_distinct_candidate_edges<'a>(
-    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
+    edges: impl IntoIterator<Item = &'a GraphEdgePair>,
 ) -> Vec<EdgeData> {
-    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut seen: HashSet<(Uuid, Uuid, &str)> = HashSet::new();
     let mut edges_to_check: Vec<EdgeData> = Vec::new();
-
-    for graph in graphs {
-        for edge in &graph.edges {
-            // Generate deterministic UUIDs for source and target nodes. Must use
-            // the SAME scheme entities are actually persisted with
-            // (`Entity::id_for`) — using the old bare `generate_node_id` here made
-            // these keys never match the stored (deterministic) entity ids, so
-            // edge dedup was a silent no-op (issue #57 corollary). Matches
-            // Python `retrieve_existing_edges.py:75-76` (`Entity.id_for`).
-            let source_uuid = Entity::id_for(&edge.source_node_id).to_string();
-            let target_uuid = Entity::id_for(&edge.target_node_id).to_string();
-
-            // Note: relationship_name is already normalized by LLM or should be
-            let key = (source_uuid, target_uuid, edge.relationship_name.clone());
-            // `insert` reports novelty, so this hashes the three-String tuple
-            // once instead of twice (`contains` then `insert`). The clone is
-            // needed either way, to keep `key` for the push below.
-            if seen.insert(key.clone()) {
-                edges_to_check.push((
-                    key.0,
-                    key.1,
-                    key.2,
-                    HashMap::new(), // Properties not needed for existence check
-                ));
-            }
+    for edge in edges {
+        if seen.insert((
+            edge.source_entity_id,
+            edge.target_entity_id,
+            edge.relationship_name.as_str(),
+        )) {
+            edges_to_check.push((
+                edge.source_entity_id.to_string(),
+                edge.target_entity_id.to_string(),
+                edge.relationship_name.clone(),
+                HashMap::new(), // Properties not needed for existence check
+            ));
         }
     }
-
     edges_to_check
 }
 
-/// Retrieve existing edges from the graph database.
+/// Which of `edges` the graph database already holds.
 ///
-/// This function:
-/// 1. Collects all edges from the knowledge graphs
-/// 2. Generates deterministic UUIDs for entity nodes using `Entity::id_for()`
-/// 3. Batch queries the graph database to check which edges already exist
-/// 4. Returns a set of existing edge keys
+/// Python's `find_existing_edge_identities`: the candidates are the edges
+/// expansion built, so they carry the **resolved** ids — the name-based
+/// entity id, a Timestamp's id, an ontology-canonicalised entity's id, a
+/// same-name node's chunk-scoped id — and the normalised label, exactly as
+/// the graph stores them. Pass the result to
+/// [`crate::graph_integration::Expansion::split_existing_edges`].
 ///
-/// **Edge key format:** `"{source_uuid}_{target_uuid}_{relationship_name}"`
-/// (matches the format used in `expand_with_nodes_and_edges`)
-///
-/// **Deduplication strategy:** the candidate `(source, target, relationship)`
-/// triples are de-duplicated before the query. Chunk-level extraction routinely
-/// yields the same relation from several chunks of one document, and the return
-/// value is a set of edge keys, so a repeated triple can only ever cost an
-/// extra lookup — never change the result.
-///
-/// # Arguments
-/// * `graph_db` - Graph database trait object
-/// * `graphs` - Any iterator of borrowed knowledge graphs extracted from text
-///   chunks. Deliberately not a slice: a caller holding
-///   `Vec<(Uuid, KnowledgeGraph)>` can project the graphs out without
-///   deep-cloning every one of them to change the element type, and only three
-///   `&str` fields per edge are ever read, so nothing here needs ownership.
-///
-/// # Returns
-/// HashSet containing edge identifiers that already exist in the database
+/// Returns the [`GraphEdgePair::dedup_key`] of every existing edge.
 ///
 /// # Example
 /// ```ignore
-/// let graphs = vec![knowledge_graph1, knowledge_graph2];
-/// let existing_edges = retrieve_existing_edges(&graph_db, &graphs).await?;
-///
-/// // Check if edge exists before creating
-/// let edge_key = format!("{}_{}_{}", source_id, target_id, "works_at");
-/// if !existing_edges.contains(&edge_key) {
-///     // Create new edge
-/// }
+/// let mut expansion = expand_extracted_graphs_by_unit(/* … */).await?;
+/// let existing = retrieve_existing_edges(graph_db.as_ref(), &expansion.edges).await?;
+/// expansion.split_existing_edges(&existing);
 /// ```
 pub async fn retrieve_existing_edges<'a>(
     graph_db: &dyn GraphDBTrait,
-    graphs: impl IntoIterator<Item = &'a KnowledgeGraph>,
-) -> Result<HashSet<String>, CognifyError> {
-    let edges_to_check = collect_distinct_candidate_edges(graphs);
-
+    edges: impl IntoIterator<Item = &'a GraphEdgePair>,
+) -> Result<HashSet<(Uuid, Uuid, String)>, CognifyError> {
+    let edges_to_check = collect_distinct_candidate_edges(edges);
     if edges_to_check.is_empty() {
         return Ok(HashSet::new());
     }
 
-    // Batch query graph database for existing edges
     let existing_edges = graph_db
         .has_edges(&edges_to_check)
         .await
         .map_err(|e| CognifyError::GraphDatabaseError(e.to_string()))?;
 
-    // Build edge existence set
-    // Key format: "{source_uuid}_{target_uuid}_{relationship_name}"
-    // This matches the format used in expand_with_nodes_and_edges
-    let mut existing_edges_set = HashSet::new();
-    for (source_id, target_id, relationship_name, _) in existing_edges {
-        let edge_key = format!("{source_id}_{target_id}_{relationship_name}");
-        existing_edges_set.insert(edge_key);
+    let (existing_edge_keys, unparsable) = edge_keys_of(existing_edges);
+    if unparsable > 0 {
+        // Every candidate id is a UUID, so a backend that answers in another
+        // form makes every such edge look new: it is written and embedded
+        // again on every run. Once per call, not per edge.
+        warn!(
+            unparsable,
+            "has_edges returned {unparsable} edge(s) whose endpoint ids are not UUIDs; \
+             they are treated as not in the graph and will be written again"
+        );
     }
+    Ok(existing_edge_keys)
+}
 
-    Ok(existing_edges_set)
+/// The [`GraphEdgePair::dedup_key`] of every edge `has_edges` returned, and
+/// how many it skipped because an endpoint id does not parse as a UUID.
+fn edge_keys_of(edges: Vec<EdgeData>) -> (HashSet<(Uuid, Uuid, String)>, usize) {
+    let mut keys = HashSet::with_capacity(edges.len());
+    let mut unparsable = 0;
+    for (source_id, target_id, relationship_name, _) in edges {
+        match (Uuid::parse_str(&source_id), Uuid::parse_str(&target_id)) {
+            (Ok(source), Ok(target)) => {
+                keys.insert((source, target, relationship_name));
+            }
+            _ => unparsable += 1,
+        }
+    }
+    (keys, unparsable)
 }
 
 #[cfg(test)]
@@ -131,32 +111,61 @@ pub async fn retrieve_existing_edges<'a>(
 )]
 mod tests {
     use super::*;
-    use crate::fact_extraction::{Edge, Node};
+    use crate::fact_extraction::{Edge, KnowledgeGraph, Node};
+    use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_graph::MockGraphDB;
+    use cognee_models::Entity;
+    use cognee_ontology::NoOpOntologyResolver;
 
-    fn create_test_graph() -> KnowledgeGraph {
-        KnowledgeGraph {
-            nodes: vec![
-                Node {
-                    id: "alice".to_string(),
-                    name: "Alice".to_string(),
-                    node_type: "Person".to_string(),
-                    description: "A person".to_string(),
-                },
-                Node {
-                    id: "techcorp".to_string(),
-                    name: "TechCorp".to_string(),
-                    node_type: "Organization".to_string(),
-                    description: "A company".to_string(),
-                },
-            ],
-            edges: vec![Edge {
-                source_node_id: "alice".to_string(),
-                target_node_id: "techcorp".to_string(),
-                relationship_name: "works_at".to_string(),
-                description: None,
-            }],
+    fn node(id: &str, name: &str) -> Node {
+        Node {
+            id: id.to_string(),
+            name: name.to_string(),
+            node_type: "Thing".to_string(),
+            description: String::new(),
         }
+    }
+
+    fn edge(source: &str, target: &str, relationship: &str) -> Edge {
+        Edge {
+            source_node_id: source.to_string(),
+            target_node_id: target.to_string(),
+            relationship_name: relationship.to_string(),
+            description: None,
+        }
+    }
+
+    /// The edges expansion builds from `graph`, on their resolved ids.
+    async fn built_edges(graph: KnowledgeGraph) -> Vec<GraphEdgePair> {
+        let (_nodes, edges, _claimed, _producers) = expand_with_nodes_and_edges(
+            vec![(Uuid::new_v4(), graph)],
+            Uuid::new_v4(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &NoOpOntologyResolver::new(),
+            None,
+            None,
+        )
+        .await;
+        edges
+    }
+
+    /// `alice` named "Alice Smith" works at `techcorp`: the node id is not the
+    /// snake-case form of the name, so the entity id (from the name) and an
+    /// id derived from the node id differ.
+    fn alice_works_at_techcorp() -> KnowledgeGraph {
+        KnowledgeGraph {
+            nodes: vec![node("alice", "Alice Smith"), node("techcorp", "TechCorp")],
+            edges: vec![edge("alice", "techcorp", "works_at")],
+        }
+    }
+
+    async fn seed(graph_db: &MockGraphDB, source: Uuid, target: Uuid, relationship: &str) {
+        graph_db
+            .add_edge(&source.to_string(), &target.to_string(), relationship, None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -169,212 +178,135 @@ mod tests {
     #[tokio::test]
     async fn test_retrieve_existing_edges_no_existing() {
         let graph_db = MockGraphDB::new();
-        let graph = create_test_graph();
+        let edges = built_edges(alice_works_at_techcorp()).await;
 
-        let result = retrieve_existing_edges(&graph_db, &[graph]).await.unwrap();
+        let result = retrieve_existing_edges(&graph_db, &edges).await.unwrap();
 
-        // No edges in DB, so map should be empty
         assert!(result.is_empty());
     }
 
+    /// The database holds the edge under the entity ids cognify stores, which
+    /// come from the node *names*. Seeding it under ids derived from the node
+    /// ids, as this test once did, could not catch a check that built its
+    /// keys from the node ids (SDK-1694 finding 5).
     #[tokio::test]
     async fn test_retrieve_existing_edges_with_existing() {
         let graph_db = MockGraphDB::new();
-        let graph = create_test_graph();
+        let alice = Entity::id_for("Alice Smith");
+        let techcorp = Entity::id_for("TechCorp");
+        seed(&graph_db, alice, techcorp, "works_at").await;
+        // An edge under the node-id-derived id is a different edge.
+        seed(&graph_db, Entity::id_for("alice"), techcorp, "employs").await;
 
-        // Add the edge to the database first
-        let alice_uuid = Entity::id_for("alice");
-        let techcorp_uuid = Entity::id_for("techcorp");
+        let edges = built_edges(alice_works_at_techcorp()).await;
+        let result = retrieve_existing_edges(&graph_db, &edges).await.unwrap();
 
-        let _ = graph_db
-            .add_edge(
-                &alice_uuid.to_string(),
-                &techcorp_uuid.to_string(),
-                "works_at",
-                None,
-            )
-            .await;
-
-        // Now query for existing edges
-        let result = retrieve_existing_edges(&graph_db, &[graph]).await.unwrap();
-
-        // Should find the edge
-        let expected_key = format!("{alice_uuid}_{techcorp_uuid}_works_at");
-        assert!(result.contains(&expected_key));
+        assert_eq!(
+            result,
+            HashSet::from([(alice, techcorp, "works_at".to_string())])
+        );
     }
 
     #[tokio::test]
     async fn test_retrieve_existing_edges_partial_match() {
         let graph_db = MockGraphDB::new();
-
-        // Create two graphs with different edges
-        let graph1 = create_test_graph();
-        let graph2 = KnowledgeGraph {
+        let graph = KnowledgeGraph {
             nodes: vec![
-                Node {
-                    id: "bob".to_string(),
-                    name: "Bob".to_string(),
-                    node_type: "Person".to_string(),
-                    description: "Another person".to_string(),
-                },
-                Node {
-                    id: "acmecorp".to_string(),
-                    name: "AcmeCorp".to_string(),
-                    node_type: "Organization".to_string(),
-                    description: "Another company".to_string(),
-                },
+                node("alice", "Alice Smith"),
+                node("techcorp", "TechCorp"),
+                node("bob", "Bob"),
+                node("acmecorp", "AcmeCorp"),
             ],
-            edges: vec![Edge {
-                source_node_id: "bob".to_string(),
-                target_node_id: "acmecorp".to_string(),
-                relationship_name: "works_at".to_string(),
-                description: None,
-            }],
+            edges: vec![
+                edge("alice", "techcorp", "works_at"),
+                edge("bob", "acmecorp", "works_at"),
+            ],
         };
+        let alice = Entity::id_for("Alice Smith");
+        let techcorp = Entity::id_for("TechCorp");
+        seed(&graph_db, alice, techcorp, "works_at").await;
 
-        // Add only the first edge to the database
-        let alice_uuid = Entity::id_for("alice");
-        let techcorp_uuid = Entity::id_for("techcorp");
+        let edges = built_edges(graph).await;
+        let result = retrieve_existing_edges(&graph_db, &edges).await.unwrap();
 
-        let _ = graph_db
-            .add_edge(
-                &alice_uuid.to_string(),
-                &techcorp_uuid.to_string(),
-                "works_at",
-                None,
-            )
-            .await;
-
-        // Query for both graphs
-        let result = retrieve_existing_edges(&graph_db, &[graph1, graph2])
-            .await
-            .unwrap();
-
-        // Should only find the first edge
-        let alice_edge_key = format!("{alice_uuid}_{techcorp_uuid}_works_at");
-        assert!(result.contains(&alice_edge_key));
-        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result,
+            HashSet::from([(alice, techcorp, "works_at".to_string())])
+        );
     }
 
-    /// A relation re-extracted from several chunks is looked up once. The
-    /// candidate list is what reaches `has_edges`, so this is what bounds the
-    /// query count on backends without a set-based existence check.
+    /// A key on the list twice is looked up once. The candidate list is what
+    /// reaches `has_edges`, so this bounds the query count on backends without
+    /// a set-based existence check.
     #[test]
-    fn collect_distinct_candidate_edges_dedups_repeated_triples() {
-        // The same graph three times: three identical `alice -works_at->
-        // techcorp` edges.
-        let graphs = vec![
-            create_test_graph(),
-            create_test_graph(),
-            create_test_graph(),
+    fn collect_distinct_candidate_edges_dedups_repeated_keys() {
+        let (alice, techcorp) = (Uuid::new_v4(), Uuid::new_v4());
+        let edges = vec![
+            GraphEdgePair::new(alice, techcorp, "works_at"),
+            GraphEdgePair::new(alice, techcorp, "works_at"),
         ];
-        let candidates = collect_distinct_candidate_edges(&graphs);
-        assert_eq!(candidates.len(), 1, "identical triples collapse to one");
-
-        let expected_source = Entity::id_for("alice").to_string();
-        let expected_target = Entity::id_for("techcorp").to_string();
-        assert_eq!(candidates[0].0, expected_source);
-        assert_eq!(candidates[0].1, expected_target);
+        let candidates = collect_distinct_candidate_edges(&edges);
+        assert_eq!(candidates.len(), 1, "identical keys collapse to one");
+        assert_eq!(candidates[0].0, alice.to_string());
+        assert_eq!(candidates[0].1, techcorp.to_string());
         assert_eq!(candidates[0].2, "works_at");
     }
 
     /// Dedup keys on the whole triple, so edges sharing only an endpoint or
-    /// only a relationship name are all kept.
+    /// only a label are all kept, in first-seen order.
     #[test]
-    fn collect_distinct_candidate_edges_keeps_distinct_triples() {
-        let graph = KnowledgeGraph {
-            nodes: vec![],
-            edges: vec![
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "techcorp".to_string(),
-                    relationship_name: "works_at".to_string(),
-                    description: None,
-                },
-                // same endpoints, different relationship
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "techcorp".to_string(),
-                    relationship_name: "founded".to_string(),
-                    description: None,
-                },
-                // same relationship, different target
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "london".to_string(),
-                    relationship_name: "works_at".to_string(),
-                    description: None,
-                },
-                // exact repeat of the first — the only one that drops
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "techcorp".to_string(),
-                    relationship_name: "works_at".to_string(),
-                    description: None,
-                },
-            ],
-        };
-
-        let candidates = collect_distinct_candidate_edges(&[graph]);
-        assert_eq!(candidates.len(), 3);
-        // First-seen order is preserved.
-        assert_eq!(candidates[0].2, "works_at");
-        assert_eq!(candidates[1].2, "founded");
-        assert_eq!(candidates[2].2, "works_at");
-        assert_ne!(candidates[0].1, candidates[2].1);
+    fn collect_distinct_candidate_edges_keeps_distinct_keys() {
+        let (alice, techcorp, london) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let edges = vec![
+            GraphEdgePair::new(alice, techcorp, "works_at"),
+            GraphEdgePair::new(alice, techcorp, "founded"),
+            GraphEdgePair::new(alice, london, "works_at"),
+            GraphEdgePair::new(alice, techcorp, "works_at"),
+        ];
+        let candidates = collect_distinct_candidate_edges(&edges);
+        let labels: Vec<&str> = candidates.iter().map(|c| c.2.as_str()).collect();
+        assert_eq!(labels, ["works_at", "founded", "works_at"]);
+        assert_eq!(candidates[2].1, london.to_string());
     }
 
     #[test]
-    fn collect_distinct_candidate_edges_handles_no_graphs() {
+    fn collect_distinct_candidate_edges_handles_no_edges() {
         assert!(collect_distinct_candidate_edges(&[]).is_empty());
     }
 
-    #[tokio::test]
-    async fn test_shared_node_across_multiple_edges() {
-        let graph_db = MockGraphDB::new();
+    /// An answer whose endpoint ids are not UUIDs is counted for the warning
+    /// and left out, never a panic; the parsable edges are still keys, in
+    /// any UUID spelling.
+    #[test]
+    fn edge_keys_of_counts_endpoints_that_are_not_uuids() {
+        let (source, target) = (Uuid::new_v4(), Uuid::new_v4());
+        let answer: Vec<EdgeData> = vec![
+            (
+                source.to_string().to_uppercase(),
+                target.simple().to_string(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+            (
+                "alice".to_string(),
+                target.to_string(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+            (
+                source.to_string(),
+                String::new(),
+                "works_at".to_string(),
+                HashMap::new(),
+            ),
+        ];
 
-        // Create graph with same node appearing in multiple edges
-        let graph = KnowledgeGraph {
-            nodes: vec![
-                Node {
-                    id: "alice".to_string(),
-                    name: "Alice".to_string(),
-                    node_type: "Person".to_string(),
-                    description: "A person".to_string(),
-                },
-                Node {
-                    id: "techcorp".to_string(),
-                    name: "TechCorp".to_string(),
-                    node_type: "Organization".to_string(),
-                    description: "A company".to_string(),
-                },
-                Node {
-                    id: "london".to_string(),
-                    name: "London".to_string(),
-                    node_type: "Location".to_string(),
-                    description: "A city".to_string(),
-                },
-            ],
-            edges: vec![
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "techcorp".to_string(),
-                    relationship_name: "works_at".to_string(),
-                    description: None,
-                },
-                Edge {
-                    source_node_id: "alice".to_string(),
-                    target_node_id: "london".to_string(),
-                    relationship_name: "lives_in".to_string(),
-                    description: None,
-                },
-            ],
-        };
+        let (keys, unparsable) = edge_keys_of(answer);
 
-        // Should handle duplicate node references correctly
-        let result = retrieve_existing_edges(&graph_db, &[graph]).await.unwrap();
-
-        // No edges in DB yet, so map should be empty
-        assert!(result.is_empty());
+        assert_eq!(
+            keys,
+            HashSet::from([(source, target, "works_at".to_string())])
+        );
+        assert_eq!(unparsable, 2);
     }
 }

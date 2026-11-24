@@ -29,68 +29,68 @@
   "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "ALLOW_CYPHER_QUERY=\"{\\\"ssl\\\":true}\"": {},
   "ALLOW_HTTP_REQUESTS=\"  \"": {
-    "code_graph.allow_http_requests": "  "
+    "allow_http_requests": "  "
   },
   "ALLOW_HTTP_REQUESTS=\"\"": {},
   "ALLOW_HTTP_REQUESTS=\"-1\"": {
-    "code_graph.allow_http_requests": "-1"
+    "allow_http_requests": "-1"
   },
   "ALLOW_HTTP_REQUESTS=\"0\"": {
-    "code_graph.allow_http_requests": "0"
+    "allow_http_requests": "0"
   },
   "ALLOW_HTTP_REQUESTS=\"1\"": {
-    "code_graph.allow_http_requests": "1"
+    "allow_http_requests": "1"
   },
   "ALLOW_HTTP_REQUESTS=\"1.5\"": {
-    "code_graph.allow_http_requests": "1.5"
+    "allow_http_requests": "1.5"
   },
   "ALLOW_HTTP_REQUESTS=\"42\"": {
-    "code_graph.allow_http_requests": "42"
+    "allow_http_requests": "42"
   },
   "ALLOW_HTTP_REQUESTS=\"5000000000\"": {
-    "code_graph.allow_http_requests": "5000000000"
+    "allow_http_requests": "5000000000"
   },
   "ALLOW_HTTP_REQUESTS=\"70000\"": {
-    "code_graph.allow_http_requests": "70000"
+    "allow_http_requests": "70000"
   },
   "ALLOW_HTTP_REQUESTS=\"TRUE\"": {
-    "code_graph.allow_http_requests": "TRUE"
+    "allow_http_requests": "TRUE"
   },
   "ALLOW_HTTP_REQUESTS=\"[1]\"": {
-    "code_graph.allow_http_requests": "[1]"
+    "allow_http_requests": "[1]"
   },
   "ALLOW_HTTP_REQUESTS=\"abc\"": {
-    "code_graph.allow_http_requests": "abc"
+    "allow_http_requests": "abc"
   },
   "ALLOW_HTTP_REQUESTS=\"false\"": {
-    "code_graph.allow_http_requests": "false"
+    "allow_http_requests": "false"
   },
   "ALLOW_HTTP_REQUESTS=\"no\"": {
-    "code_graph.allow_http_requests": "no"
+    "allow_http_requests": "no"
   },
   "ALLOW_HTTP_REQUESTS=\"on\"": {
-    "code_graph.allow_http_requests": "on"
+    "allow_http_requests": "on"
   },
   "ALLOW_HTTP_REQUESTS=\"require\"": {
-    "code_graph.allow_http_requests": "require"
+    "allow_http_requests": "require"
   },
   "ALLOW_HTTP_REQUESTS=\"true\"": {
-    "code_graph.allow_http_requests": "true"
+    "allow_http_requests": "true"
   },
   "ALLOW_HTTP_REQUESTS=\"v\"": {
-    "code_graph.allow_http_requests": "v"
+    "allow_http_requests": "v"
   },
   "ALLOW_HTTP_REQUESTS=\"yes\"": {
-    "code_graph.allow_http_requests": "yes"
+    "allow_http_requests": "yes"
   },
   "ALLOW_HTTP_REQUESTS=\"{\\\"a\\\":1}\"": {
-    "code_graph.allow_http_requests": "{\"a\":1}"
+    "allow_http_requests": "{\"a\":1}"
   },
   "ALLOW_HTTP_REQUESTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
-    "code_graph.allow_http_requests": "{\"ssl\":\"verify-full\"}"
+    "allow_http_requests": "{\"ssl\":\"verify-full\"}"
   },
   "ALLOW_HTTP_REQUESTS=\"{\\\"ssl\\\":true}\"": {
-    "code_graph.allow_http_requests": "{\"ssl\":true}"
+    "allow_http_requests": "{\"ssl\":true}"
   },
   "ANTHROPIC_API_BASE=\"  \"": {
     "llm.anthropic.base_url": "  "
@@ -1313,6 +1313,70 @@
   "CHUNK_SIZE=\"{\\\"a\\\":1}\"": {},
   "CHUNK_SIZE=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "CHUNK_SIZE=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"  \"": {
+    "allowed_local_file_roots": "  "
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"\"": {},
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"-1\"": {
+    "allowed_local_file_roots": "-1"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"0\"": {
+    "allowed_local_file_roots": "0"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"1\"": {
+    "allowed_local_file_roots": "1"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"1.5\"": {
+    "allowed_local_file_roots": "1.5"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"42\"": {
+    "allowed_local_file_roots": "42"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"5000000000\"": {
+    "allowed_local_file_roots": "5000000000"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"70000\"": {
+    "allowed_local_file_roots": "70000"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"TRUE\"": {
+    "allowed_local_file_roots": "TRUE"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"[1]\"": {
+    "allowed_local_file_roots": "[1]"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"abc\"": {
+    "allowed_local_file_roots": "abc"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"false\"": {
+    "allowed_local_file_roots": "false"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"no\"": {
+    "allowed_local_file_roots": "no"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"on\"": {
+    "allowed_local_file_roots": "on"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"require\"": {
+    "allowed_local_file_roots": "require"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"true\"": {
+    "allowed_local_file_roots": "true"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"v\"": {
+    "allowed_local_file_roots": "v"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"yes\"": {
+    "allowed_local_file_roots": "yes"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"{\\\"a\\\":1}\"": {
+    "allowed_local_file_roots": "{\"a\":1}"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "allowed_local_file_roots": "{\"ssl\":\"verify-full\"}"
+  },
+  "COGNEE_ALLOWED_LOCAL_FILE_ROOTS=\"{\\\"ssl\\\":true}\"": {
+    "allowed_local_file_roots": "{\"ssl\":true}"
+  },
   "COGNEE_CHUNK_OVERLAP=\"  \"": {},
   "COGNEE_CHUNK_OVERLAP=\"\"": {},
   "COGNEE_CHUNK_OVERLAP=\"\" + CHUNK_OVERLAP=2": {
@@ -1417,6 +1481,60 @@
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_CASCADE_ROUNDS=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"  \"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"-1\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"0\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"1\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"1.5\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"42\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"5000000000\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"70000\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"TRUE\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"[1]\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"abc\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"false\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"no\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"on\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"require\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"true\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"v\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"yes\"": {},
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"a\\\":1}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
+  "COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS=\"{\\\"ssl\\\":true}\"": {
+    "cognify.cross_chunk_endpoints": false
+  },
   "COGNEE_COGNIFY_EXTRACTION_STRATEGY=\"  \"": {
     "cognify.extraction_strategy": "  "
   },

@@ -575,24 +575,12 @@ fn map_request_error(err: reqwest::Error) -> UrlFetcherError {
     UrlFetcherError::from(err)
 }
 
+/// The one SSRF address table, shared with repository clones
+/// ([`crate::resolve_repo::is_blocked_ip`], Python `_is_blocked_ip`):
+/// private, loopback, link-local, reserved, multicast, unspecified and
+/// shared addresses, IPv4-mapped IPv6 decoded.
 fn is_blocked_address(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_multicast()
-                || v4.is_unspecified()
-                || v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1])
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_multicast()
-                || v6.is_unspecified()
-        }
-    }
+    crate::resolve_repo::is_blocked_ip(ip)
 }
 
 fn normalize_ip(ip: IpAddr) -> IpAddr {

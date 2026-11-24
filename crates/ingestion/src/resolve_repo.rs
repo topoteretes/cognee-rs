@@ -250,6 +250,14 @@ pub struct RepoSourceSettings {
     pub clones_dir: PathBuf,
     /// The `ALLOW_HTTP_REQUESTS` gate.
     pub http_requests: HttpRequestsGate,
+    /// The canonical directories a local repository path must lie under
+    /// (Python's `COGNEE_ALLOWED_LOCAL_FILE_ROOTS`, plus cognee's own
+    /// storage roots on an SDK call); `None` is no restriction, the default.
+    /// The clones directory is allowed too whenever this is set, and is not
+    /// listed here: it is read from [`Self::clones_dir`] when a path is
+    /// checked ([`Self::local_roots`]), so a host that narrows
+    /// `clones_dir` per caller allows that caller's clones only.
+    pub allowed_local_roots: Option<Vec<PathBuf>>,
 }
 
 impl RepoSourceSettings {
@@ -268,7 +276,44 @@ impl RepoSourceSettings {
                 configured: allow_http_requests.to_string(),
                 api_request,
             },
+            allowed_local_roots: None,
         }
+    }
+
+    /// Restrict local repository paths to the roots of `configured` (the
+    /// `allowed_local_file_roots` setting, a platform path list; Python
+    /// `get_allowed_local_file_roots`). Blank (empty or whitespace) leaves
+    /// paths unrestricted. Any other value restricts them, even one with no
+    /// usable entry (`:`), as in Python: then only `storage_roots` and the
+    /// clones directory are allowed. `storage_roots` (cognee's own data,
+    /// system, cache and log directories) are allowed as in Python, so a
+    /// restrictive list does not lock an SDK caller out of its own data; an
+    /// HTTP server passes none, as they hold every tenant's state.
+    #[must_use]
+    pub fn with_allowed_local_roots(mut self, configured: &str, storage_roots: &[PathBuf]) -> Self {
+        if configured.trim().is_empty() {
+            self.allowed_local_roots = None;
+            return self;
+        }
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let mut roots: Vec<PathBuf> = configured
+            .split(separator)
+            .map(str::trim)
+            .filter(|root| !root.is_empty())
+            .map(|root| canonical_root(&expand_home(root)))
+            .collect();
+        roots.extend(storage_roots.iter().map(|root| canonical_root(root)));
+        self.allowed_local_roots = Some(roots);
+        self
+    }
+
+    /// The roots a local repository path is checked against: `None` when
+    /// unrestricted, else [`Self::allowed_local_roots`] plus the current
+    /// [`Self::clones_dir`] (on a server, the caller's own clones).
+    pub fn local_roots(&self) -> Option<Vec<PathBuf>> {
+        let mut roots = self.allowed_local_roots.clone()?;
+        roots.push(canonical_root(&self.clones_dir));
+        Some(roots)
     }
 
     /// The fail-closed default of a host that configured nothing: the
@@ -276,6 +321,19 @@ impl RepoSourceSettings {
     /// gate is opened (an API request with the setting unset).
     pub fn closed() -> Self {
         Self::new("", "", true)
+    }
+
+    /// Where [`resolve_repo_source`] clones the credential-free `url` on
+    /// `branch`: Python's [`clone_dir`] for an SDK call, and a name made
+    /// unique by a hash of the URL ([`unique_clone_slug`]) for an API
+    /// request, where one clones directory serves many URLs of many
+    /// callers.
+    pub fn clone_dir(&self, url: &str, branch: Option<&str>) -> PathBuf {
+        if self.http_requests.api_request {
+            self.clones_dir.join(unique_clone_slug(url, branch))
+        } else {
+            clone_dir(url, branch, &self.clones_dir)
+        }
     }
 }
 
@@ -476,6 +534,30 @@ pub fn clone_slug(url: &str, branch: Option<&str>) -> String {
         .replace_all(tail, "-")
         .trim_matches(['-', '.'])
         .to_string();
+    with_branch(slug, branch)
+}
+
+/// [`clone_slug`] with an 8-hex sha256 of the URL after the readable part,
+/// e.g. `github.com-org-repo-1a2b3c4d`: the clone directory name of an API
+/// request ([`RepoSourceSettings::clone_dir`]).
+///
+/// The readable part alone merges URLs that differ only in replaced
+/// characters (`github.com/a/b-c` and `github.com/a-b/c`) or in scheme
+/// (`http://`, `https://`, `ssh://`), so two of them would share one clone.
+/// The hash is of the URL without a trailing `/` or `.git`, so those
+/// spellings of one repository keep one clone. Rust-only: Python names
+/// every clone by the readable part.
+pub fn unique_clone_slug(url: &str, branch: Option<&str>) -> String {
+    let normalized = url.trim_end_matches('/');
+    let normalized = normalized.strip_suffix(".git").unwrap_or(normalized);
+    let digest = hex::encode(Sha256::digest(normalized.as_bytes()));
+    let slug = format!("{}-{}", clone_slug(url, None), &digest[..8]);
+    with_branch(slug, branch)
+}
+
+/// The clone directory name of a repository slug on `branch`: the slug
+/// itself for the default branch, else `<slug>@<readable branch>-<hash>`.
+fn with_branch(slug: String, branch: Option<&str>) -> String {
     let Some(branch) = branch else {
         return slug;
     };
@@ -493,6 +575,16 @@ pub fn clone_slug(url: &str, branch: Option<&str>) -> String {
 /// (Python `clone_dir`).
 pub fn clone_dir(url: &str, branch: Option<&str>, clones_dir: &Path) -> PathBuf {
     clones_dir.join(clone_slug(url, branch))
+}
+
+/// The default-branch clone directory a clone directory belongs to: the
+/// directory itself, or for a branch clone (`<slug>@<branch>-<hash>`) its
+/// `<slug>` sibling. Neither slug form puts an `@` in the readable part, so
+/// this works for [`clone_slug`] and [`unique_clone_slug`] alike.
+pub fn default_branch_clone_dir(clone: &Path) -> Option<PathBuf> {
+    let name = clone.file_name()?.to_str()?;
+    let base = name.split('@').next()?;
+    Some(clone.parent()?.join(base))
 }
 
 /// Python's `repr()` of a string, for messages that quote a caller's value.
@@ -630,10 +722,16 @@ fn git_config_env(pairs: &[(String, String)]) -> Vec<(String, String)> {
 /// would tell the caller what answered there. Python passes no redirect
 /// setting (a known gap of `resolve_repo.py`); a renamed repository then
 /// needs its new URL. A local SDK caller keeps git's default.
+///
+/// An API request also pins the host to the addresses the outbound check
+/// passed (`http.curloptResolve`, [`pinned_resolve_entry`]), so git
+/// connects to exactly those and a DNS answer that changes between the
+/// check and git's own lookup (DNS rebinding) cannot point it elsewhere.
 fn remote_git_env(
     credentials: Option<&str>,
     clean_url: &str,
     settings: &RepoSourceSettings,
+    checked: &[IpAddr],
 ) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     if let Some(token) = credentials {
@@ -641,8 +739,51 @@ fn remote_git_env(
     }
     if settings.http_requests.api_request {
         pairs.push(("http.followRedirects".to_string(), "false".to_string()));
+        if let Some(entry) = pinned_resolve_entry(clean_url, checked) {
+            pairs.push(("http.curloptResolve".to_string(), entry));
+        }
     }
     git_config_env(&pairs)
+}
+
+/// The curl `--resolve` entry (`<host>:<port>:<addr>[,<addr>...]`, git's
+/// `http.curloptResolve`, git >= 2.37) that pins an http(s) URL's host to
+/// `addresses`: the port is the URL's, else 443 for https and 80 for http;
+/// IPv6 addresses are bracketed. `None` for no addresses, a URL that is not
+/// http(s), or an IP-literal host (nothing to resolve).
+pub fn pinned_resolve_entry(url: &str, addresses: &[IpAddr]) -> Option<String> {
+    if addresses.is_empty() {
+        return None;
+    }
+    let parts = split_url(url);
+    let default_port = match parts.scheme.as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let host = hostname(parts.netloc)?;
+    if host.parse::<IpAddr>().is_ok() {
+        return None;
+    }
+    let host_port = parts
+        .netloc
+        .rsplit_once('@')
+        .map_or(parts.netloc, |(_, host)| host);
+    // The port follows the last `:` outside an IPv6 literal's brackets
+    // (none here: an IP-literal host returned above).
+    let port = host_port
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .unwrap_or(default_port);
+    let addresses = addresses
+        .iter()
+        .map(|ip| match ip {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{v6}]"),
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!("{host}:{port}:{addresses}"))
 }
 
 // ─── Outbound address check ───────────────────────────────────────────────────
@@ -666,12 +807,14 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v4.is_broadcast()
                 || v4.is_documentation()
                 // "This network" (0/8), the reserved 240/4, IETF protocol
-                // assignments (192.0.0.0/29, 192.0.0.170/31) and benchmarking
-                // (198.18/15), all in Python's `is_private`/`is_reserved`.
+                // assignments (192.0.0.0/24) and benchmarking (198.18/15),
+                // all in Python's `is_private`/`is_reserved`. CPython
+                // >= 3.12.4 marks the whole of 192.0.0.0/24 private (older
+                // releases only /29 and .170/31); its two global anycast
+                // exceptions (.9, .10) are blocked too, which is stricter.
                 || a == 0
                 || a >= 240
-                || (a == 192 && b == 0 && v4.octets()[2] == 0
-                    && (v4.octets()[3] < 8 || matches!(v4.octets()[3], 170 | 171)))
+                || (a == 192 && b == 0 && v4.octets()[2] == 0)
                 || (a == 198 && (b & 0xfe) == 18)
                 // Shared address space (100.64/10): stricter than Python,
                 // whose flags leave carrier-grade NAT addresses unblocked.
@@ -703,10 +846,14 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
 /// the URL must have a host, and neither an IP-literal host nor any address
 /// a host name resolves to may be internal or reserved.
 ///
+/// Returns the addresses the host name resolved to, all of them checked, so
+/// the caller can pin its connection to them ([`pinned_resolve_entry`]);
+/// empty for an IP-literal host.
+///
 /// # Errors
 ///
 /// The refusal message (Python's `SSRFProtectionError` text).
-pub async fn validate_outbound_url(url: &str) -> Result<(), String> {
+pub async fn validate_outbound_url(url: &str) -> Result<Vec<IpAddr>, String> {
     let parts = split_url(url);
     if !matches!(parts.scheme.as_str(), "http" | "https") {
         let scheme = if parts.scheme.is_empty() {
@@ -727,7 +874,7 @@ pub async fn validate_outbound_url(url: &str) -> Result<(), String> {
                 "URL host '{host}' points to a non-public address and is blocked."
             ));
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
     let resolved: Vec<IpAddr> = tokio::net::lookup_host((host.as_str(), 0))
         .await
@@ -737,12 +884,18 @@ pub async fn validate_outbound_url(url: &str) -> Result<(), String> {
     if resolved.is_empty() {
         return Err(format!("Could not resolve URL host '{host}'."));
     }
-    if let Some(blocked) = resolved.into_iter().find(|ip| is_blocked_ip(*ip)) {
+    if let Some(blocked) = resolved.iter().find(|ip| is_blocked_ip(**ip)) {
         return Err(format!(
             "URL host '{host}' resolves to a non-public address ({blocked}) and is blocked."
         ));
     }
-    Ok(())
+    let mut unique = Vec::with_capacity(resolved.len());
+    for ip in resolved {
+        if !unique.contains(&ip) {
+            unique.push(ip);
+        }
+    }
+    Ok(unique)
 }
 
 // ─── Git ──────────────────────────────────────────────────────────────────────
@@ -785,12 +938,13 @@ pub trait RepoTransport: Send + Sync {
     ) -> Result<GitOutput, CodeRepositoryError>;
 
     /// The outbound check an http(s) URL clears before it is cloned
-    /// ([`validate_outbound_url`]).
+    /// ([`validate_outbound_url`]): the addresses its host name resolved to,
+    /// all checked, which an API request pins git to; empty pins nothing.
     ///
     /// # Errors
     ///
     /// The refusal message.
-    async fn check_outbound_url(&self, url: &str) -> Result<(), String> {
+    async fn check_outbound_url(&self, url: &str) -> Result<Vec<IpAddr>, String> {
         validate_outbound_url(url).await
     }
 }
@@ -807,6 +961,18 @@ impl RepoTransport for SystemGit {
         cwd: Option<&Path>,
         env: &[(String, String)],
     ) -> Result<GitOutput, CodeRepositoryError> {
+        // git < 2.37 ignores `http.curloptResolve` silently, which would drop
+        // an API request's DNS pin without a trace: refuse instead.
+        if env.iter().any(|(_, value)| value == "http.curloptResolve")
+            && let Some((major, minor)) = system_git_version().await
+            && (major, minor) < MIN_PINNING_GIT
+        {
+            return Err(CodeRepositoryError::Failed(format!(
+                "git {major}.{minor} cannot pin a clone to the checked addresses \
+                 (http.curloptResolve needs git >= {}.{}); upgrade git on the server.",
+                MIN_PINNING_GIT.0, MIN_PINNING_GIT.1
+            )));
+        }
         let mut command = tokio::process::Command::new("git");
         command
             .args(LFS_OFF_ARGS)
@@ -849,6 +1015,37 @@ impl RepoTransport for SystemGit {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
+}
+
+/// The first git that reads `http.curloptResolve` (2.37).
+const MIN_PINNING_GIT: (u32, u32) = (2, 37);
+
+/// The `(major, minor)` of the `git` on `PATH`, read once per process;
+/// `None` when git cannot be run or its version not read (git then fails, or
+/// not, on its own).
+async fn system_git_version() -> Option<(u32, u32)> {
+    static VERSION: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    if let Some(version) = VERSION.get() {
+        return *version;
+    }
+    let output = tokio::process::Command::new("git")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    let version = parse_git_version(&String::from_utf8_lossy(&output.stdout));
+    *VERSION.get_or_init(|| version)
+}
+
+/// `(major, minor)` of `git --version` output (`git version 2.47.3`, `git
+/// version 2.39.5 (Apple Git-154)`).
+fn parse_git_version(text: &str) -> Option<(u32, u32)> {
+    let version = text.trim().strip_prefix("git version ")?;
+    let mut parts = version.split(|c: char| !c.is_ascii_digit());
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 /// The shared [`SystemGit`].
@@ -902,30 +1099,99 @@ fn tail_chars(text: &str, n: usize) -> &str {
         .map_or(text, |(index, _)| &text[index..])
 }
 
+/// Python `os.path.expanduser`: a leading `~` (alone or before `/`) is the
+/// home directory; anything else is returned as a path unchanged.
+fn expand_home(spec: &str) -> PathBuf {
+    match spec.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => dirs::home_dir().map_or_else(
+            || PathBuf::from(spec),
+            |home| home.join(rest.trim_start_matches('/')),
+        ),
+        _ => PathBuf::from(spec),
+    }
+}
+
+/// Python's `realpath` of a path that does not exist (whole): its longest
+/// existing ancestor resolved to its real path (symlinks and `..` included),
+/// then the missing components appended. `None` when no ancestor can be
+/// resolved, or a missing component is `..` (which `file_name` cannot name):
+/// such a path is refused rather than guessed at.
+fn realpath_of_missing(path: &Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    let mut ancestor = absolute.as_path();
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        if let Ok(real) = std::fs::canonicalize(ancestor) {
+            break real;
+        }
+        missing.push(ancestor.file_name()?.to_os_string());
+        ancestor = ancestor.parent()?;
+    };
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Some(resolved)
+}
+
+/// An allowed root as Python's `realpath` gives it: the real path when it
+/// exists, else the absolute path (realpath does not need it to exist).
+fn canonical_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .unwrap_or_else(|_| root.to_path_buf())
+}
+
 /// A local repository spec resolved to its directory: the real path, which
-/// must be a directory.
+/// must be a directory. No root restriction: see
+/// [`resolve_local_repo_within`].
 ///
 /// # Errors
 ///
 /// [`CodeRepositoryError::Failed`] when it is not an existing directory.
 pub fn resolve_local_repo(spec: &str) -> Result<PathBuf, CodeRepositoryError> {
+    resolve_local_repo_within(spec, None)
+}
+
+/// [`resolve_local_repo`], and when `allowed_roots` is set the real path
+/// must be one of them or lie under one (Python `resolve_local_path`, as
+/// `resolve_repo_source` calls it). Real paths are compared, so a symlink
+/// cannot lead out of an allowed root.
+///
+/// # Errors
+///
+/// [`CodeRepositoryError::Failed`] when it is not an existing directory;
+/// [`CodeRepositoryError::Refused`] when it is outside every allowed root.
+pub fn resolve_local_repo_within(
+    spec: &str,
+    allowed_roots: Option<&[PathBuf]>,
+) -> Result<PathBuf, CodeRepositoryError> {
     let not_a_directory = || {
         CodeRepositoryError::Failed(format!(
             "Repository path '{spec}' is not a directory. \
              Pass a local repo path or a remote git URL."
         ))
     };
-    // Python `os.path.realpath(os.path.expanduser(spec))`: a leading `~` is
-    // the home directory; a `file://` string is no local path (it fails as
-    // a missing directory, as in Python).
-    let local = match spec.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => dirs::home_dir().map_or_else(
-            || PathBuf::from(spec),
-            |home| home.join(rest.trim_start_matches('/')),
-        ),
-        _ => PathBuf::from(spec),
-    };
-    let path = std::fs::canonicalize(&local).map_err(|_| not_a_directory())?;
+    // Python `os.path.realpath(os.path.expanduser(spec))`; a `file://`
+    // string is no local path (it fails as a missing directory, as in
+    // Python).
+    let local = expand_home(spec);
+    let real = std::fs::canonicalize(&local).ok();
+    if let Some(roots) = allowed_roots {
+        // Checked before existence, as Python's `resolve_local_path` raises
+        // before the directory check, so a refused path says nothing about
+        // whether it exists. A missing path is compared as Python's
+        // `realpath` resolves it ([`realpath_of_missing`]); `None` (it
+        // cannot be resolved safely) is refused.
+        let candidate = real.clone().or_else(|| realpath_of_missing(&local));
+        if !candidate.is_some_and(|candidate| roots.iter().any(|root| candidate.starts_with(root)))
+        {
+            return Err(CodeRepositoryError::Refused(format!(
+                "Repository path '{spec}' is outside the allowed local roots. \
+                 Add its root to COGNEE_ALLOWED_LOCAL_FILE_ROOTS to index it."
+            )));
+        }
+    }
+    let path = real.ok_or_else(not_a_directory)?;
     if path.is_dir() {
         Ok(path)
     } else {
@@ -959,10 +1225,16 @@ fn clone_target_is_contained(base: &Path, target: &Path) -> bool {
 /// A remote URL needs the `ALLOW_HTTP_REQUESTS` gate open
 /// ([`RepoSourceSettings::http_requests`]) and, for http(s), the outbound
 /// check passed; it is cloned with `--depth 1` into the clones directory,
-/// and an existing clone is reused after a best-effort refresh (`git pull
-/// --ff-only`, or for a branch a fetch and reset, which follows a force
-/// push). A `branch` is cloned into a directory of its own; one the remote
-/// does not have is an error.
+/// and an existing clone is reused after a refresh (`git pull --ff-only`,
+/// or for a branch a fetch and reset, which follows a force push). A
+/// `branch` is cloned into a directory of its own; one the remote does not
+/// have is an error.
+///
+/// An SDK call reuses a clone whose refresh failed, as Python does. An API
+/// request ([`HttpRequestsGate::api_request`]) is stricter (Rust-only): a
+/// failed refresh is an error, clone directories are named uniquely per URL
+/// ([`RepoSourceSettings::clone_dir`]), git follows no http redirect, and
+/// it connects only to the addresses the outbound check passed.
 ///
 /// `credentials` authenticates against a private https remote (e.g. a
 /// GitHub App installation token) through environment-level git config only
@@ -991,7 +1263,7 @@ pub async fn resolve_repo_source(
                  local path. Check the branch out in that directory instead."
             )));
         }
-        return resolve_local_repo(spec);
+        return resolve_local_repo_within(spec, settings.local_roots().as_deref());
     }
 
     settings.http_requests.require_allowed()?;
@@ -1001,14 +1273,18 @@ pub async fn resolve_repo_source(
     // must clear the same outbound check web ingestion's URLs clear. ssh://
     // and git@host: are not routed through it (internal git servers over
     // SSH are a legitimate setup).
-    if url.to_lowercase().starts_with("http://") || url.to_lowercase().starts_with("https://") {
+    let checked = if url.to_lowercase().starts_with("http://")
+        || url.to_lowercase().starts_with("https://")
+    {
         transport.check_outbound_url(url).await.map_err(|message| {
             CodeRepositoryError::Refused(format!(
                 "Refusing to clone '{}': {message}",
                 redact_repo_spec(url)
             ))
-        })?;
-    }
+        })?
+    } else {
+        Vec::new()
+    };
 
     // Directory name, remote, logs and errors all use the credential-free
     // URL: tokens in the userinfo are short-lived, so persisting one would
@@ -1032,10 +1308,10 @@ pub async fn resolve_repo_source(
     // An empty token is no token (Python `if credentials`): a header of
     // `x-access-token:` would turn an anonymous clone into a 401.
     let credentials = credentials.filter(|token| !token.is_empty());
-    let auth_env = remote_git_env(credentials, &clean_url, settings);
+    let auth_env = remote_git_env(credentials, &clean_url, settings, &checked);
 
     let base = settings.clones_dir.as_path();
-    let target = clone_dir(&clean_url, branch, base);
+    let target = settings.clone_dir(&clean_url, branch);
     if !clone_target_is_contained(base, &target) {
         return Err(CodeRepositoryError::Failed(format!(
             "Could not derive a safe clone name for {clean_url}."
@@ -1093,9 +1369,20 @@ pub async fn resolve_repo_source(
             }
         };
         if !refreshed.ok() {
-            // A stale clone is still indexable; the caller asked for the
-            // repository, not for freshness guarantees.
             refreshed.stderr = scrubbed_tail(&refreshed.stderr, 500);
+            // An API request never indexes a clone it could not refresh: on
+            // a server the clone may predate a revoked token, a deleted or
+            // made-private repository, or a remote that now answers from
+            // somewhere else, and the caller cannot see which. Rust-only.
+            if settings.http_requests.api_request {
+                return Err(CodeRepositoryError::Failed(format!(
+                    "Failed to refresh the existing clone of '{clean_url}': {}",
+                    refreshed.stderr
+                )));
+            }
+            // An SDK call keeps Python's behaviour: a stale clone is still
+            // indexable; the caller asked for the repository, not for
+            // freshness guarantees.
             tracing::warn!(
                 "Reusing existing clone at {} (refresh failed: {})",
                 target.display(),
@@ -1497,19 +1784,114 @@ mod tests {
             "2001::1",
             "2002::1",
             "2001:db8::1",
+            // CPython >= 3.12.4 marks all of 192.0.0.0/24 private
+            // (SDK-1701); its anycast exceptions .9 and .10 are blocked too.
+            "192.0.0.8",
+            "192.0.0.9",
+            "192.0.0.10",
+            "192.0.0.100",
+            "192.0.0.255",
+            // IPv6 reserved and special-purpose ranges: discard-only
+            // 100::/64, ORCHIDv2 2001:20::/28, benchmarking 2001:2::/48,
+            // IPv4-compatible ::/96, the deprecated site-local fec0::/10.
+            "100::1",
+            "2001:20::1",
+            "2001:2::1",
+            "::1.2.3.4",
+            "feff::1",
+            "ff02::1",
         ] {
             assert!(is_blocked_ip(ip.parse().unwrap()), "{ip}");
         }
         for ip in [
             "8.8.8.8",
             "140.82.112.3",
-            "192.0.0.9",
+            "192.0.1.1",
+            "191.255.255.255",
             "2606:4700::1111",
             "2001:4860::8888",
             "::ffff:8.8.8.8",
         ] {
             assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip}");
         }
+    }
+
+    #[test]
+    fn git_versions_parse() {
+        assert_eq!(parse_git_version("git version 2.47.3\n"), Some((2, 47)));
+        assert_eq!(
+            parse_git_version("git version 2.39.5 (Apple Git-154)"),
+            Some((2, 39))
+        );
+        assert_eq!(
+            parse_git_version("git version 2.36.0.windows.1"),
+            Some((2, 36))
+        );
+        assert!(parse_git_version("git version 2.36.0").unwrap() < MIN_PINNING_GIT);
+        assert_eq!(parse_git_version("nope"), None);
+    }
+
+    // SDK-1701: an API request pins git to the addresses the outbound check
+    // passed, as a curl `--resolve` entry.
+    #[test]
+    fn resolve_entries_pin_the_checked_addresses() {
+        let v4: IpAddr = "140.82.112.3".parse().unwrap();
+        let v6: IpAddr = "2606:50c0:8000::153".parse().unwrap();
+        assert_eq!(
+            pinned_resolve_entry("https://github.com/o/r", &[v4]).as_deref(),
+            Some("github.com:443:140.82.112.3")
+        );
+        assert_eq!(
+            pinned_resolve_entry("http://GitLab.example.com:8080/o/r.git", &[v4, v6]).as_deref(),
+            Some("gitlab.example.com:8080:140.82.112.3,[2606:50c0:8000::153]")
+        );
+        assert_eq!(
+            pinned_resolve_entry("http://user@example.com/o/r", &[v4]).as_deref(),
+            Some("example.com:80:140.82.112.3")
+        );
+        assert_eq!(pinned_resolve_entry("https://github.com/o/r", &[]), None);
+        assert_eq!(pinned_resolve_entry("https://8.8.8.8/o/r", &[v4]), None);
+        assert_eq!(
+            pinned_resolve_entry("ssh://git@github.com/o/r", &[v4]),
+            None
+        );
+    }
+
+    // SDK-1701: an API request's clone names keep apart URLs Python's slug
+    // merges; an SDK call keeps Python's slug.
+    #[test]
+    fn api_clone_names_are_unique_per_url() {
+        let api = RepoSourceSettings::new("/c", "true", true);
+        let sdk = RepoSourceSettings::new("/c", "", false);
+        for (one, other) in [
+            ("https://github.com/a/b-c", "https://github.com/a-b/c"),
+            ("http://github.com/a/b", "https://github.com/a/b"),
+            ("ssh://git@github.com/a/b", "git@github.com:a/b"),
+        ] {
+            assert_eq!(sdk.clone_dir(one, None), sdk.clone_dir(other, None));
+            assert_ne!(api.clone_dir(one, None), api.clone_dir(other, None));
+            assert_ne!(
+                api.clone_dir(one, Some("dev")),
+                api.clone_dir(other, Some("dev"))
+            );
+        }
+        let name = unique_clone_slug("https://github.com/a/b-c", None);
+        assert!(name.starts_with("github.com-a-b-c-"), "{name}");
+        assert_eq!(name.len(), "github.com-a-b-c-".len() + 8);
+        // Spellings of one repository keep one clone.
+        assert_eq!(
+            unique_clone_slug("https://github.com/a/b.git", None),
+            unique_clone_slug("https://github.com/a/b/", None)
+        );
+        let branch = unique_clone_slug("https://github.com/a/b", Some("dev"));
+        assert!(branch.starts_with(&format!(
+            "{}@dev-",
+            unique_clone_slug("https://github.com/a/b", None)
+        )));
+        assert_eq!(
+            default_branch_clone_dir(&api.clone_dir("https://github.com/a/b", Some("dev"))),
+            Some(api.clone_dir("https://github.com/a/b", None))
+        );
     }
 
     #[tokio::test]
@@ -1545,6 +1927,154 @@ mod tests {
                 .unwrap_err()
                 .contains("non-public address")
         );
+    }
+
+    // SDK-1701, Python `resolve_local_path` under
+    // `COGNEE_ALLOWED_LOCAL_FILE_ROOTS`: unset is unrestricted; set, a local
+    // repository must lie under an allowed root (real paths compared, so a
+    // symlink cannot lead out), and the clones directory and cognee's own
+    // storage roots are always allowed.
+    #[tokio::test]
+    async fn local_repositories_must_lie_under_an_allowed_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("allowed");
+        let inside = root.join("shop");
+        let outside = temp.path().join("elsewhere");
+        let clones = temp.path().join("clones");
+        let storage = temp.path().join("data");
+        for dir in [
+            &inside,
+            &outside,
+            &clones.join("github.com-o-r"),
+            &storage.join("repo"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let base = RepoSourceSettings::new(&clones.to_string_lossy(), "", false);
+        async fn resolve(
+            settings: &RepoSourceSettings,
+            path: &Path,
+        ) -> Result<PathBuf, CodeRepositoryError> {
+            resolve_repo_source(&path.to_string_lossy(), settings, None, None, &SystemGit).await
+        }
+        // Unset (or blank) is no restriction.
+        for configured in ["", "  "] {
+            let settings = base.clone().with_allowed_local_roots(configured, &[]);
+            assert_eq!(settings.allowed_local_roots, None);
+            resolve(&settings, &outside).await.unwrap();
+        }
+        // Set with no usable entry still restricts (Python: any non-empty
+        // value): only the storage roots and the clones directory remain.
+        for configured in [":", " : ", "::"] {
+            let settings = base
+                .clone()
+                .with_allowed_local_roots(configured, std::slice::from_ref(&storage));
+            assert_eq!(
+                resolve(&settings, &outside)
+                    .await
+                    .unwrap_err()
+                    .status_code(),
+                403,
+                "{configured:?}"
+            );
+            resolve(&settings, &storage.join("repo")).await.unwrap();
+            resolve(&settings, &clones.join("github.com-o-r"))
+                .await
+                .unwrap();
+        }
+        let settings = base.clone().with_allowed_local_roots(
+            &format!("{}:/nonexistent-root", root.display()),
+            std::slice::from_ref(&storage),
+        );
+        assert_eq!(
+            resolve(&settings, &inside).await.unwrap(),
+            inside.canonicalize().unwrap()
+        );
+        resolve(&settings, &root).await.unwrap();
+        resolve(&settings, &clones.join("github.com-o-r"))
+            .await
+            .unwrap();
+        resolve(&settings, &storage.join("repo")).await.unwrap();
+        let refused = resolve(&settings, &outside).await.unwrap_err();
+        assert_eq!(refused.status_code(), 403);
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "Repository path '{}' is outside the allowed local roots. \
+                 Add its root to COGNEE_ALLOWED_LOCAL_FILE_ROOTS to index it.",
+                outside.display()
+            )
+        );
+        // A missing path outside every root is refused, not reported missing,
+        // also when it reaches outside through `..` or a symlink: existence
+        // outside the roots is never revealed.
+        for missing in [
+            outside.join("nope"),
+            root.join("..").join("elsewhere").join("nope"),
+            root.join("..").join("no-such-dir").join("nope"),
+        ] {
+            assert_eq!(
+                resolve(&settings, &missing)
+                    .await
+                    .unwrap_err()
+                    .status_code(),
+                403,
+                "{}",
+                missing.display()
+            );
+        }
+        // A missing path inside a root is reported missing.
+        assert_eq!(
+            resolve(&settings, &root.join("nope"))
+                .await
+                .unwrap_err()
+                .status_code(),
+            500
+        );
+        // The clones directory is read when a path is checked, so a host
+        // that narrows it per caller (the HTTP server) allows that caller's
+        // clones only, not the shared root or another caller's.
+        let mut caller = settings.clone();
+        caller.clones_dir = clones.join("tenant-a");
+        std::fs::create_dir_all(caller.clones_dir.join("github.com-o-r")).unwrap();
+        resolve(&caller, &caller.clones_dir.join("github.com-o-r"))
+            .await
+            .unwrap();
+        for other in [clones.clone(), clones.join("github.com-o-r")] {
+            assert_eq!(
+                resolve(&caller, &other).await.unwrap_err().status_code(),
+                403,
+                "{}",
+                other.display()
+            );
+        }
+        // A sibling whose name only starts with the root's is outside it.
+        let sibling = temp.path().join("allowed-not");
+        std::fs::create_dir_all(&sibling).unwrap();
+        assert_eq!(
+            resolve(&settings, &sibling)
+                .await
+                .unwrap_err()
+                .status_code(),
+            403
+        );
+        // A symlink inside the root that points outside it is refused.
+        #[cfg(unix)]
+        {
+            let link = root.join("escape");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert_eq!(
+                resolve(&settings, &link).await.unwrap_err().status_code(),
+                403
+            );
+            assert_eq!(
+                resolve(&settings, &link.join("nope"))
+                    .await
+                    .unwrap_err()
+                    .status_code(),
+                403
+            );
+        }
     }
 
     // Python `resolve_local_path`: `expanduser`, then `realpath`; a

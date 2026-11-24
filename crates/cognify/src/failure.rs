@@ -16,7 +16,7 @@
 //!   environment — [`RollbackScope::Nothing`].
 //!
 //! The default pair is Python's default behaviour in both execution and end
-//! state: stop at the first failed batch, error the run.
+//! state: stop at the first failure, error the run.
 //!
 //! Failure policy is a property of the stage, not a user choice — with one
 //! exception. Summarization failures are fatal by default (Python parity) and
@@ -49,13 +49,15 @@ pub enum FailureStop {
     /// — a later stage never aborts merely because an earlier one recorded a
     /// failure, or the files that did complete could never be persisted at all.
     ///
-    /// The stop is not instantaneous, and it is not per file: each stage stops
-    /// at the boundary its own loop offers — a `chunks_per_batch` batch for
-    /// graph extraction (default 2000 chunks, so a smaller dataset is one
-    /// batch and every call is dispatched before the failure is seen), and
-    /// the in-flight window for summarization, which has no batch loop. This
-    /// is an upper bound on wasted spend, not a promise of none;
-    /// `docs/configuration.md` has the per-stage table.
+    /// The stop is not instantaneous, and it is not per file. The LLM stages —
+    /// graph extraction and summarization — each run every chunk through one
+    /// stream capped by `max_parallel_extractions`: after the first failure
+    /// they dispatch nothing new, and the calls already in flight finish and
+    /// are collected, failures included. So up to `max_parallel_extractions`
+    /// calls can still be paid for after the failure. A graph backend is the
+    /// exception: it is handed `chunks_per_batch` chunks per call and stops at
+    /// the end of the failing call. This is an upper bound on wasted spend, not
+    /// a promise of none; `docs/configuration.md` has the per-stage table.
     #[default]
     FailFast,
 
@@ -118,17 +120,21 @@ pub enum RollbackScope {
     ///
     /// A library-level escape hatch, and deliberately **not selectable from
     /// configuration** — the config parser has no spelling for it — because
-    /// what it leaves behind is permanent. A run that wrote graph edges and
-    /// died before the vector stage leaves those edges with no
-    /// `EdgeType_relationship_name` point. The retry does not repair
-    /// them: the completion marker is unset, so the item is processed again,
-    /// but [`crate::graph_integration::retrieve_existing_edges`] finds the
-    /// orphaned edges and `expansion.rs` skips every edge already in the
-    /// graph, so no row and no vector is ever written for them again. Setting
+    /// what it leaves behind is not repaired by a retry. A run that wrote
+    /// graph edges and died before the vector stage leaves those edges with
+    /// no `EdgeType_relationship_name` point. The completion marker is unset,
+    /// so a retry processes the item again, but
+    /// [`crate::graph_integration::retrieve_existing_edges`] finds the
+    /// orphaned edges and [`crate::graph_integration::Expansion::split_existing_edges`]
+    /// turns them into claims: the retry records its ownership of them and
+    /// writes neither the edge nor its vector again. Setting
     /// `incremental_loading = false` does not help either — that dedup filter
-    /// is not the incremental one. [`Self::WholeRun`] and
-    /// [`Self::FailedItems`] both converge on a retry, because both remove the
-    /// half-written artifacts first; this is the only scope that cannot.
+    /// is not the incremental one. Only the whole-graph repair,
+    /// [`crate::reindex_edge_types`] (`cognee-cli edge-reindex`), writes the
+    /// missing points, or a later run that writes a new edge with the same
+    /// text. [`Self::WholeRun`] and [`Self::FailedItems`] both converge on a
+    /// retry, because both remove the half-written artifacts first; this is
+    /// the only scope that cannot.
     Nothing,
 }
 
@@ -545,8 +551,8 @@ impl FailureReport {
     ///   backstop: if no item survived, the run failed regardless of the ratio.
     ///   Survival subtracts both failed and *unreached* items. That backstop
     ///   matters twice over: a file that fails *at the chunk stage* produced no
-    ///   chunks so it contributes to neither side of the ratio, and a `FailFast`
-    ///   abort in the first batch leaves the rest undispatched — a run that
+    ///   chunks so it contributes to neither side of the ratio, and an early
+    ///   `FailFast` abort leaves the rest undispatched — a run that
     ///   completed nothing would otherwise score a tiny ratio and report `Ok`.
     pub fn is_fatal(&self, policy: &FailurePolicy) -> bool {
         if self.failed_items.is_empty() {
@@ -556,10 +562,10 @@ impl FailureReport {
             RollbackScope::WholeRun | RollbackScope::Nothing => true,
             RollbackScope::FailedItems => {
                 // No item survived — fatal regardless of the ratio. Unreached
-                // items count here: a `FailFast` abort in the first batch
-                // leaves the rest of the dataset undispatched, and a run that
-                // completed *nothing* cannot honestly report success even
-                // though its chunk ratio is tiny. Files that did complete keep
+                // items count here: an early `FailFast` abort leaves the rest
+                // of the dataset undispatched, and a run that completed
+                // *nothing* cannot honestly report success even though its
+                // chunk ratio is tiny. Files that did complete keep
                 // the run truthful, which is what makes FailFast + FailedItems
                 // useful rather than merely quiet.
                 let survived = self
@@ -892,7 +898,7 @@ mod tests {
         }
     }
 
-    /// A `FailFast` abort in the first batch completes nothing, so the run
+    /// An early `FailFast` abort can complete nothing, so the run
     /// must not report success — even though its chunk ratio is tiny.
     #[test]
     fn a_run_that_completed_nothing_is_fatal_even_below_the_ratio() {

@@ -317,6 +317,41 @@ pub async fn test_has_edges(db: &dyn GraphDBTrait) {
     assert_eq!(found[0].2, "rel");
 }
 
+/// `has_edges` matches a relationship label exactly, case and spacing
+/// included (SDK-1694 O2). cognify now normalises labels (`born_in`) before
+/// it asks, and a graph built earlier can still hold a raw label (`Born In`):
+/// the two are different edges, so the normalised check must not claim the
+/// raw edge, and the raw edge stays findable under its own label.
+pub async fn test_has_edges_matches_labels_exactly(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+
+    let a = TestNode::new("la", "A", "T", 0);
+    let b = TestNode::new("lb", "B", "T", 0);
+    db.add_nodes(&[&a, &b]).await.unwrap();
+    db.add_edge("la", "lb", "born_in", None).await.unwrap();
+    db.add_edge("lb", "la", "Works At", None).await.unwrap();
+
+    let probe = |source: &str, target: &str, label: &str| -> EdgeData {
+        (source.into(), target.into(), label.into(), HashMap::new())
+    };
+    let candidates: Vec<EdgeData> = vec![
+        probe("la", "lb", "born_in"),
+        probe("la", "lb", "Born In"),
+        probe("la", "lb", "born in"),
+        probe("lb", "la", "Works At"),
+        probe("lb", "la", "works_at"),
+    ];
+    let mut found: Vec<String> = db
+        .has_edges(&candidates)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, _, label, _)| label)
+        .collect();
+    found.sort_unstable();
+    assert_eq!(found, ["Works At", "born_in"]);
+}
+
 /// `delete_edge_triples` removes exactly the named `(source, target,
 /// relationship)` edges: the endpoints, the same pair under another name, the
 /// reverse direction and unrelated edges all survive, and an unknown key is
@@ -2213,4 +2248,58 @@ pub async fn test_get_entity_type_names_matches_default(db: &dyn GraphDBTrait) {
         .unwrap();
     assert_eq!(names, default);
     assert!(db.get_entity_type_names(&[]).await.unwrap().is_empty());
+}
+
+/// An entity several documents typed differently keeps one `is_a` edge per
+/// type (SDK-1694): the edges are keyed on (source, target, label), so two
+/// `is_a` edges from one entity are two edges, and writing them again — the
+/// next cognify run — neither duplicates nor drops either.
+pub async fn test_entity_with_several_is_a_edges(db: &dyn GraphDBTrait) {
+    db.delete_graph().await.unwrap();
+    db.add_nodes_raw(vec![
+        view_node("apple", "Entity"),
+        json!({"id": "t-company", "name": "company", "type": "EntityType"}),
+        json!({"id": "t-fruit", "name": "fruit", "type": "EntityType"}),
+    ])
+    .await
+    .unwrap();
+    let is_a = |target: &str| -> EdgeData {
+        (
+            "apple".to_string(),
+            target.to_string(),
+            "is_a".to_string(),
+            HashMap::new(),
+        )
+    };
+    let edges = vec![is_a("t-company"), is_a("t-fruit")];
+    db.add_edges(&edges).await.unwrap();
+    db.add_edges(&edges).await.unwrap();
+
+    let mut targets: Vec<String> = db
+        .get_edges("apple")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|(source, _, label, _)| source == "apple" && label == "is_a")
+        .map(|(_, target, _, _)| target)
+        .collect();
+    targets.sort_unstable();
+    assert_eq!(targets, ["t-company", "t-fruit"]);
+
+    let mut found: Vec<String> = db
+        .has_edges(&edges)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, target, _, _)| target)
+        .collect();
+    found.sort_unstable();
+    assert_eq!(found, ["t-company", "t-fruit"]);
+
+    // The one-name lookup picks one of them, the same way on every backend.
+    let names = db
+        .get_entity_type_names(&strings(&["apple"]))
+        .await
+        .unwrap();
+    assert_eq!(names.get("apple").map(String::as_str), Some("company"));
 }

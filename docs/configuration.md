@@ -1056,10 +1056,11 @@ prompt and the summary schema:
 
 | Env var | Key (alias) | Purpose | Default |
 |---|---|---|---|
-| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks per graph-extraction batch (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default | `2000` |
+| `CHUNKS_PER_BATCH` | `cognify.chunks_per_batch` (`chunks_per_batch`) | chunks of one data item per block the graph is built from (Python's `CognifyConfig.chunks_per_batch`); `0` keeps the default. It does not batch or limit the LLM extraction calls: every chunk of the run goes through one stream capped by `max_parallel_extractions` (`LLM_MAX_PARALLEL_REQUESTS`), which is the setting to lower to limit LLM load. A graph backend is still handed one block per call | `2000` |
 | `EDGE_EVIDENCE_ENABLED` | `cognify.edge_evidence_enabled` | record which chunk supports which graph edge (`provenance_edge_evidence`) during cognify, so `include_references` can cite edge sources (Python's `EDGE_EVIDENCE_ENABLED`); off only stops new capture | `true` |
 | `COGNEE_COGNIFY_EXTRACTION_STRATEGY` | `cognify.extraction_strategy` | graph extraction: `single_pass` (one LLM call per chunk) or `cascade` (Python's multi-round `extract_graph_from_data_v2`: nodes → relationship names → edge triplets, `3 × rounds` calls per chunk, no date hints; ignores a custom prompt). Rust-only: Python reaches the cascade only from its eval framework. An unrecognised value keeps the default, with a warning | `single_pass` |
 | `COGNEE_COGNIFY_CASCADE_ROUNDS` | `cognify.cascade_rounds` | rounds per cascade stage (Python's `n_rounds`); `0` keeps the default | `2` |
+| `COGNEE_COGNIFY_CROSS_CHUNK_ENDPOINTS` | `cognify.cross_chunk_endpoints` | the graph is built per data item (or per `chunks_per_batch` block of one), as in Python, so an extracted edge's endpoint never matches a node of another data item. `true` lets it match a node an earlier chunk of the same block declared, and fall back to a node's name; `false` resolves it only within its own chunk and only by the verbatim node id, as Python does. Rust-only knob | `true` |
 | `GRAPH_PROMPT_PATH` | `graph_prompt_path` | graph-extraction system prompt. The default and an empty value use the compiled-in prompt. The names of the other prompts Python ships in its prompts directory — `generate_graph_prompt_strict.txt`, `generate_graph_prompt_simple.txt`, `generate_graph_prompt_guided.txt`, `generate_graph_prompt_oneshot.txt` — select those prompts, compiled in, as Python resolves a relative name against that directory. Any other value is a file read as the prompt text, a relative path against the working directory. An unreadable file keeps the built-in prompt, with a warning. Unlike Python, a file is sent verbatim, not rendered as a template (the built-in prompts contain no template syntax; the default prompt's date-hint block is appended in code, and only to the default prompt). | `generate_graph_prompt.txt` |
 | — | `summarization_schema` (code only: `ConfigManager::set_summarization_schema`, `set`) | JSON schema of the summary output (Python's `summarization_model`); must have a string `summary` | _(unset — the built-in `SummarizedContent` shape)_ |
 
@@ -1167,25 +1168,31 @@ boundary its own loop offers, and only one of them is the first failed file:
 | Stage | Stops after | Set by | Default |
 |---|---|---|---|
 | Chunking | the file that failed | — | one file |
-| Graph extraction (standard and custom-graph) | the batch that contained the failure | `chunks_per_batch` | **2000 chunks** |
+| Graph extraction (standard and custom-graph), LLM | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
+| Graph extraction, graph backend | the backend call that contained the failure | `chunks_per_batch` | **2000 chunks** |
 | Summarization | the calls already in flight when the failure came back | `max_parallel_extractions` | **1000 calls** (128 on Android/iOS) |
 
-The extraction row is the one to read twice. 2000 is Python's own default
-(`cognify.py:367-370`) and is deliberately large — the stage awaits each batch
-before starting the next, so small batches serialise a run into waves. The
-consequence is that any dataset under 2000 chunks *is* one batch: `FailFast`
-dispatches every extraction call, learns about the failure when the batch is
-collected, and only then stops. On such a dataset it saves nothing; what it
-saves is every batch after the one that failed. Lowering `chunks_per_batch`
-tightens the boundary at the cost of that serialisation.
+Graph extraction and summarization each send every chunk of the run through
+one stream, with at most `max_parallel_extractions` calls in flight and no
+barrier between `chunks_per_batch` blocks, so they stop at the granularity of
+that concurrency window. The first chunk to fail closes the gate; every chunk
+not yet dispatched is skipped and its file is recorded as unreached, so it is
+neither marked complete nor left half-processed — a file is complete only when
+every one of its chunks was dispatched and none failed. Calls already in flight
+are never cancelled and their results are collected, failures included, so a
+run with fewer chunks than `max_parallel_extractions` saves nothing. A graph
+backend (`CognifyConfig::graph_backend`) is still handed `chunks_per_batch`
+chunks per call, one call at a time, and stops after the call that failed.
 
-Summarization has no batch loop at all — one bounded stream covers the whole
-run — so it stops at the granularity of the concurrency window instead. The
-first chunk to fail closes the gate; every chunk not yet dispatched is skipped
-and its file is recorded as unreached, so it is neither marked complete nor
-left half-summarized. Calls already in flight are never cancelled and their
-summaries are never discarded, so a run with fewer chunks than
-`max_parallel_extractions` again saves nothing. A summarization failure that
+Under `FailFast` + `FailedItems` that window decides how much survives: a file
+is kept only if every one of its chunks was dispatched, so every file with a
+chunk beyond the window is unreached and the calls it did finish are discarded
+with it. With 32 calls in flight, a failure at chunk 40 of a 1,500-chunk run
+keeps only the few files whose chunks were all sent by then; a failure in the
+first file keeps none, which makes the run fatal and rolls it back whole. This
+matches Python, which cancels the items still running at the first failure.
+Until each file is saved as it completes (SDK-1694 stage O5b), use `RunToEnd` +
+`FailedItems` to keep every file that succeeded. A summarization failure that
 `COGNEE_COGNIFY_TOLERATE_SUMMARIZATION_FAILURES` makes non-fatal does not close
 the gate at all: it fails no item, so there is nothing to stop for.
 
@@ -1211,14 +1218,16 @@ configuration**. `COGNEE_COGNIFY_ROLLBACK_SCOPE=nothing` (or `none`) is
 rejected like any other unknown value and leaves the default in place; the
 variant is reachable only in code, via
 `CognifyConfig::with_rollback_scope(RollbackScope::Nothing)`. It is off the
-configuration surface because what it leaves behind is permanent. A run that
-wrote graph edges and then died before the vector stage leaves those edges in
-the graph with no `EdgeType_relationship_name` point. The
-retry does not repair them: the completion marker is unset, so the item is
-processed again, but `retrieve_existing_edges` finds the orphaned edges and
-expansion skips every edge already in the graph — so no row and no vector is
-ever written for them again. Setting `incremental_loading = false` does not
-help; that dedup filter is not the incremental one. `WholeRun` and
+configuration surface because a retry does not repair what it leaves behind.
+A run that wrote graph edges and then died before the vector stage leaves
+those edges in the graph with no `EdgeType_relationship_name` point. The
+completion marker is unset, so a retry processes the item again, but
+`retrieve_existing_edges` finds the orphaned edges and the retry only claims
+them: it records its ownership and writes neither the edge nor its vector
+again. Setting `incremental_loading = false` does not help; that dedup filter
+is not the incremental one. Only `cognee-cli edge-reindex`
+(`reindex_edge_types`) writes the missing points, or a later run that writes
+a new edge with the same text. `WholeRun` and
 `FailedItems` both converge on a retry, because both remove the half-written
 artifacts first; `Nothing` is the only scope that cannot.
 
@@ -1226,8 +1235,8 @@ artifacts first; `Nothing` is the only scope that cannot.
 
 | Combination | End state |
 |---|---|
-| `FailFast` + `WholeRun` *(default)* | Stops at the first failed batch, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
-| `FailFast` + `FailedItems` | *Below the ratio:* stops at the first failed batch; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
+| `FailFast` + `WholeRun` *(default)* | Stops dispatching at the first failure, removes everything the run created, marks the run `ERRORED`, returns `Err`. Everything earlier runs completed is untouched. Python's default |
+| `FailFast` + `FailedItems` | *Below the ratio:* stops dispatching at the first failure; the files that fully completed are kept, indexed and marked; the failed and never-reached ones are removed and left unmarked. *Above it, or with no survivor:* the run is fatal and escalates — everything it created goes, completed files included |
 | `RunToEnd` + `WholeRun` | Pays for the whole run to produce the complete failure list, then removes everything the run created |
 | `RunToEnd` + `FailedItems` | *Below the ratio:* every good file is cognified and marked; only the failed files are removed, and they come back to the caller in the report. *Above it:* the same escalation — the good files are removed too and the call returns `Err` |
 | _either_ + `Nothing` *(code only)* | Nothing is removed. Knowingly leaves partially-cognified files in place, permanently — see above |
@@ -1485,6 +1494,42 @@ degrades to the ordinary hybrid context rather than failing the search.
 The HTTP-facing degradation notes live with the server's search-router docs,
 which are not part of this repository.
 
+## Outbound requests & local paths
+
+| Env var | `Settings` field (alias) | Default |
+|---|---|---|
+| `ALLOW_HTTP_REQUESTS` | `allow_http_requests` (`code_graph.allow_http_requests`) | _(empty)_ |
+| `COGNEE_ALLOWED_LOCAL_FILE_ROOTS` | `allowed_local_file_roots` | _(empty: no restriction)_ |
+
+`allow_http_requests` is Python's `ALLOW_HTTP_REQUESTS`: whether cognee may
+make outbound requests for the URLs callers give it, both the web pages `add`
+fetches and the remote git repositories `add` and
+`remember(content_type="code")` clone. Only `true`, `1`, `yes` or `on` (any
+case) allow them; any other set value refuses them, a misspelling included.
+Unset or blank, SDK, CLI and binding calls may, and an HTTP server refuses
+them, as Python's API does. `add` checks it before anything is written
+(Python's `require_http_requests_allowed_for`), so a refused call leaves
+nothing behind. A refusal is HTTP 403. An http(s) URL also has to pass the
+outbound-address check: a host that is, or resolves to, a private, loopback,
+link-local, reserved or shared address is refused. Until SDK-1701 this was the
+`code_graph.allow_http_requests` section key, which stays an alias, and it
+gated repository clones only.
+
+`allowed_local_file_roots` is Python's `COGNEE_ALLOWED_LOCAL_FILE_ROOTS`: the
+directories a local repository path (`remember(content_type="code")`) must
+lie under, separated by `:` (`;` on Windows). Empty is no restriction. When it
+is set, `~` is expanded, the path is resolved to its real path (so a symlink
+cannot lead out) and it must be one of the roots or lie under one; cognee's
+own data, system, cache and log directories and the clones directory are
+always allowed too; an HTTP API request allows neither cognee's storage
+directories (they hold every tenant's state) nor any clones directory but the
+caller's own. A value with no usable entry (`:`) still restricts, as in
+Python. A path outside them is a `CodeRepositoryError` with HTTP 403
+(deliberately stricter than Python, whose class default is 500), also when
+the path does not exist, so a refusal never tells whether a path outside the
+roots exists. Python also applies it to the file paths `add` reads; Rust
+applies it to repository paths only.
+
 ## Search — history
 
 | Env var | `Settings` field | Default |
@@ -1695,7 +1740,11 @@ a repository and loads its snapshot as code nodes and typed edges.
 | `ENOLA_PATH` | `code_graph.enola_path` (`enola_path`) | _(empty)_ |
 | — | `code_graph.enola_timeout_secs` | `600` |
 | `COGNEE_REPOS_DIR` | `code_graph.clones_dir` (`repos_root_directory`) | _(empty: `~/.cognee/repos`)_ |
-| `ALLOW_HTTP_REQUESTS` | `code_graph.allow_http_requests` (`allow_http_requests`) | _(empty)_ |
+
+Whether remote repositories may be cloned is the cognee-wide
+`allow_http_requests` setting, and which local repository paths may be read
+is `allowed_local_file_roots`: see
+[Outbound requests & local paths](#outbound-requests--local-paths).
 
 `code_graph.enola_path` names the enola binary. When it is set, the file must
 exist, or the load fails with `EnolaNotInstalledError`. When it is empty,
@@ -1716,17 +1765,27 @@ positive number.
 the git URLs of `remember(content_type="code")` and the GitHub/GitLab
 repository URLs `add` takes (Python's `BaseConfig.repos_root_directory`). It is
 always a local directory, even with S3 storage. Clones are reused across calls
-and refreshed best-effort; each branch gets a directory of its own.
+and refreshed on each; each branch gets a directory of its own. An SDK, CLI or
+binding call reuses a clone whose refresh failed, as Python does.
 
-`code_graph.allow_http_requests` is Python's `ALLOW_HTTP_REQUESTS` for those
-clones. Only `true`, `1`, `yes` or `on` (any case) allow them; any other set
-value refuses them, a misspelling included. Unset or blank, SDK, CLI and
-binding calls may clone, and an HTTP server refuses remote repositories, as
-Python's API does. A refusal is a `CodeRepositoryError` (HTTP 403). An http(s)
-clone also has to pass the outbound-address check: a host that is, or resolves
-to, a private, loopback, link-local or reserved address is refused. Python's
-setting also gates the web pages `add` fetches; in Rust it gates repository
-clones only.
+An HTTP API request is stricter (Rust-only, SDK-1701): a failed refresh is an
+error instead of a stale reuse; the clone directory name carries an 8-hex hash
+of the credential-free URL (`github.com-org-repo-1a2b3c4d`), so URLs Python's
+name merges (`github.com/a/b-c` and `github.com/a-b/c`, or `http://` and
+`https://`) never share a clone; git follows no http redirect; and git is
+pinned (`http.curloptResolve`, git >= 2.37) to the addresses the outbound
+check passed, so a DNS answer that changes after the check cannot send it
+elsewhere. A git older than 2.37 cannot honour that pin, so such a clone is
+refused rather than made unpinned. A code repository's data id is keyed on
+its clone directory, so these names give server rows ids of their own.
+
+When a code repository row is forgotten, or its dataset deleted, the
+dataset's cluster snapshot (`<repo>/.enola-<dataset_id>`) is removed from the
+repository, and a clone no remaining row points at is removed (Rust-only;
+Python keeps both). Removing a clone also removes the repository's other
+branch clones beside it that no row points at: a re-add on another branch
+moves the URL's one row to that branch's clone and leaves the old clone in
+place until then.
 
 ## System paths, users & datasets
 

@@ -65,12 +65,12 @@ Stores input as memory: it runs **add + cognify** and then, by default, the
   `session_id`, `branch`, an unknown content type, and `index_vectors` or
   `repo_credentials` without code are refused as in Python. A remote git URL
   (`https://`, `http://`, `git@`, `ssh://`) is shallow-cloned under
-  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed
-  best-effort, on later calls; `repo_credentials` (bindings `repoCredentials`)
+  `code_graph.clones_dir` (default `~/.cognee/repos`) and reused, refreshed,
+  on later calls (an HTTP API request refuses a clone it could not refresh); `repo_credentials` (bindings `repoCredentials`)
   is a token for private https remotes that reaches git through its
   environment only, and a token in the URL is redacted from the item, the
   clone's directory and remote, logs and errors. Remote repositories follow
-  `ALLOW_HTTP_REQUESTS` (`code_graph.allow_http_requests`; allowed when unset
+  `ALLOW_HTTP_REQUESTS` (`allow_http_requests`; allowed when unset
   outside an HTTP server) and an http(s) host must not be internal. A
   dataset's repositories are extracted together as one enola cluster, which
   gives the edges between them (a frontend call to the backend route that
@@ -498,13 +498,15 @@ one chunk failed) and *unreached* (never attempted). Only complete files are
 persisted, which is what keeps a data item all-or-nothing; failed and unreached
 files are indistinguishable to the next run and are simply redone.
 
-The abort point is a *batch* boundary, not a file boundary, and how much work
-`FailFast` actually saves depends on how big that batch is. Graph extraction
-stops after the batch that contained the failure — `chunks_per_batch`, default
-2000, so a dataset under 2000 chunks is one batch and every extraction call is
-dispatched before the failure is noticed. Summarization has no batch loop: it stops
-dispatching as soon as a fatal failure comes back, but the calls already in
-flight (up to `max_parallel_extractions`) are neither cancelled nor discarded.
+The abort point is not a file boundary, and how much work `FailFast` actually
+saves depends on how many calls are in flight. Graph extraction and
+summarization each run every chunk of the run through one stream, with no
+barrier between `chunks_per_batch` blocks: they stop dispatching as soon as a
+failure comes back, but the calls already in flight (up to
+`max_parallel_extractions`) are neither cancelled nor discarded. A file with a
+chunk that was never dispatched is unreached, even if its other chunks
+succeeded. A graph backend is the exception: it is handed `chunks_per_batch`
+chunks per call and stops after the call that failed.
 `FailFast` is an upper bound on wasted spend, not a promise of none — see
 [Cognify failure handling](configuration.md#cognify-failure-handling).
 

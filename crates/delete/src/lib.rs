@@ -12,6 +12,7 @@
 //! `cognee/modules/cognify/recovery.py`).
 
 mod authorized;
+mod code_repo_cleanup;
 mod startup_recovery;
 mod sweep;
 
@@ -924,6 +925,10 @@ impl DeleteService {
         // Phase 2: Relational cleanup (links, datasets, data, storage)
         // ------------------------------------------------------------------
 
+        // The code-repository rows among the detached pairs, read while they
+        // still exist; their working copies are cleaned up in phase 2b.
+        let code_repo_links = self.collect_code_repo_links(&targets.links_to_detach).await;
+
         for (dataset_id, data_id) in &targets.links_to_detach {
             self.database
                 .detach_data_from_dataset(*dataset_id, *data_id)
@@ -1075,6 +1080,13 @@ impl DeleteService {
             deleted_storage,
             "phase 2: relational cleanup completed"
         );
+
+        // ------------------------------------------------------------------
+        // Phase 2b: code-repository working copies (best effort, logged)
+        // ------------------------------------------------------------------
+        // `.enola-<dataset_id>` snapshots of the detached pairs, and cognee
+        // clones no row references any more (see `code_repo_cleanup`).
+        self.cleanup_code_repos(code_repo_links).await;
 
         // ------------------------------------------------------------------
         // Phase 3: Hard-mode orphan sweep (degree-one Entity/EntityType nodes)

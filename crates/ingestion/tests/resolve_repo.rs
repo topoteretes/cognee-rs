@@ -14,6 +14,7 @@
     reason = "test code — panics are acceptable failures"
 )]
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -37,6 +38,8 @@ struct Recording {
     calls: Mutex<Vec<Call>>,
     answer: fn(&[String]) -> GitOutput,
     outbound_checks: Mutex<Vec<String>>,
+    /// The addresses the outbound check reports it checked.
+    checked: Vec<IpAddr>,
 }
 
 fn ok(_: &[String]) -> GitOutput {
@@ -52,7 +55,13 @@ impl Recording {
             calls: Mutex::new(Vec::new()),
             answer,
             outbound_checks: Mutex::new(Vec::new()),
+            checked: Vec::new(),
         }
+    }
+
+    fn resolving_to(mut self, checked: &[&str]) -> Self {
+        self.checked = checked.iter().map(|ip| ip.parse().unwrap()).collect();
+        self
     }
 
     fn calls(&self) -> Vec<Call> {
@@ -79,9 +88,9 @@ impl RepoTransport for Recording {
         Ok((self.answer)(args))
     }
 
-    async fn check_outbound_url(&self, url: &str) -> Result<(), String> {
+    async fn check_outbound_url(&self, url: &str) -> Result<Vec<IpAddr>, String> {
         self.outbound_checks.lock().unwrap().push(url.to_string());
-        Ok(())
+        Ok(self.checked.clone())
     }
 }
 
@@ -289,6 +298,114 @@ async fn a_failed_pull_still_reuses_the_stale_clone() {
         .await
         .unwrap();
     assert_eq!(resolved, dir);
+}
+
+/// SDK-1701: an API request never indexes a clone it could not refresh;
+/// an SDK call reuses it (above, Python's behaviour).
+#[tokio::test]
+async fn an_api_request_refuses_a_clone_it_could_not_refresh() {
+    let failing = |_: &[String]| {
+        GitOutput {
+        status: 1,
+        stderr: "fatal: Authentication failed for 'https://x-access-token:tok-SECRET@github.com/org/repo/'".to_string(),
+    }
+    };
+    for branch in [None, Some("dev")] {
+        let clones = TempDir::new().unwrap();
+        let api = RepoSourceSettings::new(&clones.path().to_string_lossy(), "true", true);
+        let dir = api.clone_dir(URL, branch);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let git = Recording::new(failing);
+        let error = resolve_repo_source(URL, &api, None, branch, &git)
+            .await
+            .unwrap_err();
+        assert_eq!(error.status_code(), 500, "{error}");
+        assert!(
+            error.to_string().starts_with(
+                "Failed to refresh the existing clone of 'https://github.com/org/repo'"
+            ),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("tok-SECRET"), "{error}");
+        // The same failure on an SDK call reuses the clone.
+        let sdk_dir = clone_dir(URL, branch, clones.path());
+        std::fs::create_dir_all(sdk_dir.join(".git")).unwrap();
+        // (A failed branch fetch asks ls-remote whether the branch is gone;
+        // the fake answers 1, not "missing" (2), so the branch clone is
+        // reused too.)
+        let resolved = resolve_repo_source(
+            URL,
+            &sdk(clones.path()),
+            None,
+            branch,
+            &Recording::new(failing),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved, sdk_dir);
+    }
+}
+
+/// SDK-1701: every git command of an API request that reaches the remote
+/// is pinned to the addresses the outbound check passed; an SDK call is
+/// not.
+#[tokio::test]
+async fn an_api_request_pins_git_to_the_checked_addresses() {
+    let pin = |calls: &[Call]| -> Vec<Option<String>> {
+        calls
+            .iter()
+            .map(|(_, _, env)| {
+                let key = env
+                    .iter()
+                    .find(|(_, value)| value == "http.curloptResolve")
+                    .map(|(key, _)| key.replace("KEY", "VALUE"))?;
+                env.iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| value.clone())
+            })
+            .collect()
+    };
+    let expected = Some("github.com:443:140.82.112.3,[2606:50c0:8000::153]".to_string());
+    // A fresh clone of a branch (ls-remote, then clone), then a refresh of
+    // it (fetch, reset) and of the default branch (pull).
+    let clones = TempDir::new().unwrap();
+    let api = RepoSourceSettings::new(&clones.path().to_string_lossy(), "true", true);
+    let git = Recording::new(ok).resolving_to(&["140.82.112.3", "2606:50c0:8000::153"]);
+    // ls-remote answers 0: the branch exists.
+    resolve_repo_source(URL, &api, None, Some("dev"), &git)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(api.clone_dir(URL, Some("dev")).join(".git")).unwrap();
+    std::fs::create_dir_all(api.clone_dir(URL, None).join(".git")).unwrap();
+    resolve_repo_source(URL, &api, None, None, &git)
+        .await
+        .unwrap();
+    resolve_repo_source(URL, &api, None, Some("dev"), &git)
+        .await
+        .unwrap();
+    let calls = git.calls();
+    let subcommands: Vec<&str> = calls.iter().map(|(args, _, _)| args[0].as_str()).collect();
+    assert_eq!(
+        subcommands,
+        ["ls-remote", "clone", "pull", "fetch", "reset"],
+        "{calls:?}"
+    );
+    let pins = pin(&calls);
+    for (subcommand, pinned) in subcommands.iter().zip(&pins) {
+        if *subcommand == "reset" {
+            // Local only: it reaches no remote and carries no git config.
+            assert_eq!(pinned, &None);
+        } else {
+            assert_eq!(pinned, &expected, "{subcommand}");
+        }
+    }
+    // An SDK call keeps git's own resolution.
+    let clones = TempDir::new().unwrap();
+    let git = Recording::new(ok).resolving_to(&["140.82.112.3"]);
+    resolve_repo_source(URL, &sdk(clones.path()), None, None, &git)
+        .await
+        .unwrap();
+    assert_eq!(pin(&git.calls()), [None]);
 }
 
 #[tokio::test]
@@ -780,8 +897,8 @@ impl RepoTransport for LocalOrigin {
         SystemGit.run_git(&args, cwd, &env).await
     }
 
-    async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
-        Ok(())
+    async fn check_outbound_url(&self, _url: &str) -> Result<Vec<IpAddr>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -1011,8 +1128,8 @@ impl RepoTransport for HalfClone {
         }
     }
 
-    async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
-        Ok(())
+    async fn check_outbound_url(&self, _url: &str) -> Result<Vec<IpAddr>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -1088,8 +1205,8 @@ async fn a_clone_that_lost_the_race_keeps_the_winner() {
             Ok(ok(args))
         }
 
-        async fn check_outbound_url(&self, _url: &str) -> Result<(), String> {
-            Ok(())
+        async fn check_outbound_url(&self, _url: &str) -> Result<Vec<IpAddr>, String> {
+            Ok(Vec::new())
         }
     }
     let clones = TempDir::new().unwrap();
@@ -1153,12 +1270,9 @@ async fn an_empty_token_sends_no_header() {
 async fn api_requests_follow_no_redirects() {
     let clones = TempDir::new().unwrap();
     let api = RepoSourceSettings::new(&clones.path().to_string_lossy(), "true", true);
-    let git = Recording::new(|args| GitOutput {
-        status: i32::from(args[0] == "fetch"),
-        stderr: String::new(),
-    });
-    // A clone (with an ls-remote for the branch), then a fetch and ls-remote
-    // refresh of it.
+    let git = Recording::new(ok);
+    // A clone (with an ls-remote for the branch), then a fetch refresh of
+    // it. (A failed fetch is an error on an API request, SDK-1701.)
     let clone = resolve_repo_source(CLEAN_GIT_URL, &api, Some("tok"), Some("dev"), &git)
         .await
         .unwrap();
@@ -1176,7 +1290,7 @@ async fn api_requests_follow_no_redirects() {
             .iter()
             .map(|(args, _, _)| args[0].as_str())
             .collect::<Vec<_>>(),
-        vec!["ls-remote", "clone", "fetch", "ls-remote"]
+        vec!["ls-remote", "clone", "fetch"]
     );
     for (args, _, env) in &remote_calls {
         assert_eq!(

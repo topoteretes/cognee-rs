@@ -352,7 +352,6 @@ async fn an_untolerated_summarization_failure_is_swept_item_scoped() {
     // policy calls it failed.
     let config = cognee_cognify::CognifyConfig::default()
         .with_chunk_size(1500)
-        .with_chunks_per_batch(1)
         .with_failure_stop(cognee_cognify::FailureStop::RunToEnd)
         .with_rollback_scope(RollbackScope::FailedItems)
         .with_chunk_failure_ratio_threshold(0.5);

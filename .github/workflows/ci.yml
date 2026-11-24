@@ -1290,7 +1290,8 @@ jobs:
           shared-key: workspace-test-v7
           save-if: "false"
 
-      # No ORT cache step here on purpose. `cognee-graph` pulls in no `ort-sys`
+      # No saving ORT cache step here on purpose (the cognify step further down
+      # only *restores* it). `cognee-graph` pulls in no `ort-sys`
       # (checked with `cargo tree -p cognee-graph --features postgres,testing`),
       # so this lane would never populate `target/ort-cache` — but
       # `actions/cache` saves on the post-step whenever the key misses, so it
@@ -1354,15 +1355,54 @@ jobs:
           cargo test -p cognee-graph --features postgres,testing \
             --test pg_graph_close -- --nocapture 2>&1 | tee pggraph-close.log
 
+      # The cognify test below is the one build in this lane that links
+      # `ort-sys` (cognify depends on cognee-embedding's default `onnx`). The
+      # restored target dir carries ort-sys's build-script output, which points
+      # into target/ort-cache, but rust-cache strips the files out of that dir —
+      # so without the binary the link fails with "could not find native static
+      # library `onnxruntime`". Restore the ORT binary (restore-only: this lane
+      # must never save under the shared ORT key, see the note above) and drop
+      # any empty dist dir. On a miss that is not enough: the restored
+      # ort-sys build-script output is still fresh to cargo, so the script would
+      # not rerun and download — hence the `cargo clean -p ort-sys`, which only
+      # runs when no ORT library is present (checked locally: without it the
+      # build fails exactly as above, with it ort-sys downloads and links).
+      - name: Restore ORT binary (restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: target/ort-cache
+          key: ort-v2.0.0-rc.13-cpu-linux-x86_64
+      - name: Ensure the restored ORT cache is usable
+        shell: bash
+        run: |
+          bash ci/ort/ensure-cache-usable.sh target/ort-cache
+          if [ -z "$(find target/ort-cache -type f -name 'libonnxruntime*' -print -quit 2>/dev/null)" ]; then
+            echo "No ONNX Runtime library in target/ort-cache: rebuilding ort-sys so it downloads one."
+            cargo clean -p ort-sys
+          fi
+
+      # Cognify against a Postgres graph (SDK-1694 O4a review): a URL document
+      # and an ontology class hierarchy, whose edges the persistence layer once
+      # wrote before their endpoint nodes, which `graph_edge`'s foreign keys
+      # reject. A cognify-crate target, so this lane must name it or nothing
+      # runs it.
+      - name: Run cognify nodes-before-edges test (Postgres graph)
+        run: |
+          set -o pipefail
+          cargo test -p cognee-cognify --features pggraph \
+            --test nodes_before_edges_pggraph -- --nocapture 2>&1 | tee pggraph-cognify.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgGraph \
             --log pggraph-integration.log --min-tests 31 \
             --log pggraph-lib.log         --min-tests 1 \
             --log pggraph-close.log --min-tests 3 \
+            --log pggraph-cognify.log --min-tests 1 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
             --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
-            --require-test close_releases_the_pool_while_the_adapter_is_still_held
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held \
+            --require-test every_ledger_edge_reaches_a_postgres_graph
 
   # ── Redis session store (service container) ──
   # The only tests that prove `session.ttl_seconds` reaches Redis keys need a

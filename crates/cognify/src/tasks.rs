@@ -34,7 +34,7 @@ use cognee_core::{
 };
 use cognee_database::{PipelineRunRepository, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
+use cognee_graph::{EdgeData, GraphDBTrait};
 #[cfg(feature = "audio-loader")]
 use cognee_ingestion::loaders::audio::AudioLoader;
 #[cfg(feature = "image-loader")]
@@ -49,13 +49,13 @@ use cognee_ontology::OntologyResolver;
 use cognee_storage::StorageTrait;
 use cognee_utils::sanitize::{sanitize_str, sanitize_string};
 use cognee_vector::{BulkLoadGuard, VectorDB, VectorPoint};
-use futures::StreamExt;
 use serde::Serialize;
 use serde_json::json;
 use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
+use crate::chunk_dispatch::{ChunkCall, dispatch_chunk_calls};
 use crate::config::{ChunkAttachment, CognifyConfig, ExtractionStrategy};
 use crate::dynamic_graph::{
     DynamicDataPoint, DynamicGraph, DynamicGraphSchema, StoredDynamicGraph,
@@ -69,7 +69,8 @@ use crate::failure::{
 use crate::graph_backend::{ChunkGraphExtractor, ChunkRef, ExtractionContext, GraphBackendError};
 use crate::graph_integration::{
     ArtifactProducers, Expansion, GraphEdgePair, GraphNodePair, TimestampNode,
-    deduplicate_nodes_and_edges, expand_extracted_graphs, retrieve_existing_edges,
+    deduplicate_nodes_and_edges, expand_extracted_graphs_by_unit, extraction_units,
+    retrieve_existing_edges,
 };
 use crate::pipeline::{CognifyResult, IndexedFieldsStats};
 use crate::rollback;
@@ -125,8 +126,13 @@ pub struct ExtractedChunks {
     pub failures: FailureReport,
 }
 
-/// Output of [`extract_graph_from_data`]: chunks plus extracted entities and edges
-/// (already stored in graph DB).
+/// Output of graph extraction: chunks plus extracted entities and edges.
+///
+/// Inside the cognify pipeline nothing in it has been stored yet: the
+/// extraction stage only builds it, and the persistence step
+/// ([`add_data_points`], through [`crate::persist`]) writes all of it. Only the
+/// standalone [`extract_graph_from_data`] stores the extraction artifacts
+/// itself before returning one.
 ///
 /// # Stability
 ///
@@ -145,13 +151,21 @@ pub struct ExtractedGraphData {
     /// Classified documents — carried forward for DLT FK edge extraction.
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
-    /// Timestamp nodes extracted alongside the entities (already stored in the
-    /// graph DB, with their ownership rows). Each producing chunk's
-    /// `contains` already names them.
+    /// Timestamp nodes extracted alongside the entities. Each producing
+    /// chunk's `contains` already names them.
     pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
+    /// Edges this run produced that an earlier run already wrote to the graph
+    /// (see [`Expansion::split_existing_edges`]). They are ownership-only: they
+    /// get ledger rows, and no graph or vector write.
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
+    /// What the persistence step needs besides the above: the WebPage /
+    /// WebSite artifacts of the URL documents, when
+    /// [`CognifyConfig::create_web_page_nodes`] is on, and the entities' graph
+    /// view. Empty when not built by the pipeline's extraction stage.
+    pub handoff: PersistHandoff,
     /// Every chunk that produced each merged entity and edge. Carried through
-    /// to [`upsert_provenance`], which turns it into one ownership row per
+    /// to [`provenance_rows`], which turns it into one ownership row per
     /// (artifact, data item). Not serialized anywhere — see
     /// [`ArtifactProducers`].
     pub producers: ArtifactProducers,
@@ -228,6 +242,11 @@ pub struct SummarizedData {
     /// Forwarded verbatim from [`ExtractedGraphData::timestamps`].
     pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::claimed_existing_edges`]:
+    /// ownership rows only.
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::handoff`].
+    pub handoff: PersistHandoff,
     /// Forwarded verbatim from [`ExtractedGraphData::producers`].
     pub producers: ArtifactProducers,
     /// Runtime custom graphs forwarded from extraction.
@@ -292,14 +311,14 @@ pub const DEFAULT_LEDGER_USER_ID: Uuid = Uuid::nil();
 /// [`extract_dlt_fk_edges`].
 #[derive(Debug, Clone, Copy)]
 pub struct LedgerIdentity {
-    tenant_id: Option<Uuid>,
-    user_id: Uuid,
-    dataset_id: Uuid,
+    pub(crate) tenant_id: Option<Uuid>,
+    pub(crate) user_id: Uuid,
+    pub(crate) dataset_id: Uuid,
     /// The run that created the artifacts these rows name. `None` only when the
     /// task is driven outside a pipeline executor — a NULL run id means
     /// "predates ownership tracking, permanently exempt from sweeping", which
     /// is the honest value for an artifact no run created.
-    pipeline_run_id: Option<Uuid>,
+    pub(crate) pipeline_run_id: Option<Uuid>,
 }
 
 impl LedgerIdentity {
@@ -773,13 +792,19 @@ struct BackendExtraction {
     /// unless the backend reports `summarizes_chunks()`.
     summaries: Vec<TextSummary>,
     /// `Some(n)` once a FailFast abort fired, naming the first chunk index
-    /// (into `chunks`) that was never dispatched — same meaning as the LLM
-    /// loop's `aborted_at`.
+    /// (into `chunks`) that was never dispatched. The caller marks every
+    /// chunk from there on unreached, as the LLM stream marks the chunks it
+    /// skipped.
     aborted_at: Option<usize>,
 }
 
-/// Drive a [`ChunkGraphExtractor`] over `chunks`, mirroring the LLM loop's
-/// batching, ordering, failure recording and FailFast semantics.
+/// Drive a [`ChunkGraphExtractor`] over `chunks`, in `batch_size` batches,
+/// with the LLM stream's ordering, failure recording and FailFast semantics.
+///
+/// The LLM paths no longer batch: they send every chunk through one stream
+/// (`dispatch_chunk_calls`). This path keeps its batches until extraction is
+/// assembled per document (SDK-1694 O4b), because a backend is handed a whole
+/// batch per call.
 ///
 /// Ordering needs no stream machinery here — the backend returns a `Vec` that
 /// is zipped positionally onto the batch — which is exactly why the arity check
@@ -801,7 +826,7 @@ struct BackendExtraction {
 /// * A [`crate::graph_backend::ChunkExtractionError`] in one chunk's result
 ///   slot becomes one [`StageFailure`] with `fails_item: true` against that
 ///   chunk and its document. Its siblings in the same batch keep their graphs
-///   and are persisted — the LLM loop loses exactly one chunk in the same
+///   and are persisted — the LLM stream loses exactly one chunk in the same
 ///   situation, and so does this.
 /// * An outer [`GraphBackendError`] is a whole-batch failure and is charged to
 ///   every chunk in the batch. That is the right shape for "the model will not
@@ -846,9 +871,9 @@ async fn extract_graphs_via_backend(
             .collect();
 
         // Set by either granularity of failure, and read once after the batch
-        // is fully accounted for — the same "collect the whole batch, then
-        // decide" shape the LLM loop uses, so a FailFast abort reports every
-        // failure in the batch that tripped it rather than only the first.
+        // is fully accounted for, so a FailFast abort reports every failure in
+        // the batch that tripped it rather than only the first — as the LLM
+        // stream collects every call already in flight.
         let mut batch_failed = false;
 
         match backend.extract_graphs(&refs, &ctx).await {
@@ -890,7 +915,7 @@ async fn extract_graphs_via_backend(
                         Err(err) => {
                             // Per-chunk failure: exactly one `StageFailure`,
                             // charged to this chunk's file. Everything else in
-                            // the batch carries on, which is what the LLM loop
+                            // the batch carries on, which is what the LLM stream
                             // does with a single failed extraction call.
                             warn!(
                                 data_id = %chunk.document_id,
@@ -959,14 +984,20 @@ async fn extract_graphs_via_backend(
     Ok(out)
 }
 
-/// Extract knowledge graphs from chunks via LLM, then integrate (Task 3).
+/// Extract knowledge graphs from chunks via LLM, integrate them, and store the
+/// extraction artifacts (Task 3, standalone).
 ///
-/// For each chunk batch, calls the LLM to extract entities and relationships.
-/// Then integrates: expands to storage-layer types, deduplicates against
-/// existing DB entries and in-memory, and stores nodes/edges in graph DB.
+/// [`build_extracted_graph`] followed by the extraction part of the
+/// persistence layer: the ownership rows of the entities, Timestamps, semantic
+/// edges and claimed existing edges, then the entity and Timestamp nodes and
+/// the semantic edges. Ownership is recorded in `db` *before* anything reaches
+/// the graph.
 ///
-/// Ownership of the entities and semantic edges is recorded in `db` *before*
-/// they reach the graph — see [`record_extraction_ownership`].
+/// This is for a caller driving the stage by hand. The cognify pipeline does
+/// not call it: its extraction stage only builds the graph, and the
+/// persistence step writes it together with everything else
+/// ([`crate::persist`]). Handing the result to [`add_data_points`] writes the
+/// same artifacts a second time, which is an idempotent upsert.
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_graph_from_data(
     input: &ExtractedChunks,
@@ -977,6 +1008,52 @@ pub async fn extract_graph_from_data(
     // The run whose ownership rows these artifacts get. `None` when the stage
     // is driven outside a pipeline executor.
     pipeline_run_id: Option<Uuid>,
+    config: &CognifyConfig,
+    // See `build_extracted_graph`.
+    user_label_override: Option<&str>,
+    // See `build_extracted_graph`.
+    task_rank: Option<i32>,
+) -> Result<ExtractedGraphData, CognifyError> {
+    let graph = build_extracted_graph(
+        input,
+        llm,
+        Arc::clone(&graph_db),
+        ontology_resolver,
+        config,
+        user_label_override,
+        task_rank,
+    )
+    .await?;
+    crate::persist::persist_extraction(
+        db,
+        graph_db.as_ref(),
+        LedgerIdentity::new(
+            input.tenant_id,
+            input.user_id,
+            input.dataset_id,
+            pipeline_run_id,
+        ),
+        &graph,
+    )
+    .await?;
+    Ok(graph)
+}
+
+/// Extract knowledge graphs from chunks via LLM and integrate them, without
+/// writing anything.
+///
+/// Calls the LLM once per chunk to extract entities and relationships, every
+/// chunk of the run through one stream bounded by
+/// [`CognifyConfig::max_parallel_extractions`]. Then integrates: expands to
+/// storage-layer types, splits off the edges the graph already holds (a read
+/// of `graph_db`, the only I/O here besides the LLM), and deduplicates
+/// in-memory. Every write is left to the persistence layer.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn build_extracted_graph(
+    input: &ExtractedChunks,
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
     // Optional caller-supplied provenance user label. When `Some`, used
     // verbatim for the entity / EntityType / EdgeType pre-stamps inside
@@ -990,11 +1067,10 @@ pub async fn extract_graph_from_data(
     // `docs/telemetry/05-datapoint-provenance.md`).
     user_label_override: Option<&str>,
     // 1-based pipeline position written to `topological_rank` on every
-    // Entity / EntityType created below. Must be supplied here rather than
-    // stamped by the caller afterwards: the nodes are persisted to the graph
-    // DB before this function returns. `None` leaves the rank at its `0`
-    // sentinel. The default pipeline passes
-    // `Some(EXTRACT_GRAPH_TASK_RANK)` via `make_extract_graph_task`.
+    // Entity / EntityType created below, at construction, so every later
+    // write of them carries it. `None` leaves the rank at its `0` sentinel.
+    // The default pipeline passes `Some(EXTRACT_GRAPH_TASK_RANK)` via
+    // `make_extract_graph_task`.
     task_rank: Option<i32>,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
@@ -1004,6 +1080,8 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -1016,7 +1094,9 @@ pub async fn extract_graph_from_data(
 
     // Filter out DLT chunks — their graph is built deterministically by
     // extract_dlt_fk_edges from schema metadata, not by LLM extraction.
-    // Mirrors Python: cognee/tasks/graph/extract_graph_from_data.py:148-155
+    // Python keeps them out of this task altogether: a DLT manifest takes its
+    // own route (`cognify.py:599`, `get_dlt_tasks`), and
+    // `extract_graph_from_data.py` filters nothing.
     let (dlt_chunks, non_dlt_chunks): (Vec<&DocumentChunk>, Vec<&DocumentChunk>) =
         input.chunks.iter().partition(|c| c.is_dlt_row());
 
@@ -1036,6 +1116,8 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -1049,7 +1131,6 @@ pub async fn extract_graph_from_data(
     // Collect non-DLT chunks for LLM processing
     let chunks_for_extraction: Vec<DocumentChunk> = non_dlt_chunks.into_iter().cloned().collect();
 
-    let batch_size = config.chunks_per_batch;
     let failure_policy = config.failure_policy();
     let mut failures = input.failures.clone();
     let max_parallel = config.max_parallel_extractions.max(1);
@@ -1059,22 +1140,23 @@ pub async fn extract_graph_from_data(
     // `ExtractedGraphData::backend_summaries`. Empty unless a graph backend
     // reports `summarizes_chunks()`.
     let mut backend_summaries: Vec<TextSummary> = Vec::new();
-    // `Some(n)` once a FailFast abort has fired, naming the first chunk index
-    // (into `chunks_for_extraction`) that was never dispatched.
-    let mut aborted_at: Option<usize> = None;
+    // Set once a FailFast abort has fired. The chunks it left undispatched
+    // have already been marked unreached by then.
+    let mut aborted = false;
 
     if let Some(backend) = config.graph_backend.as_ref() {
-        // LLM-free path. Same batching, the same ordering guarantee, the same
-        // per-chunk failure records and the same FailFast abort as the LLM
-        // loop below, so the abort-time partition and everything from
-        // `retrieve_existing_edges` down is reused unchanged.
+        // LLM-free path. Same ordering guarantee, the same per-chunk failure
+        // records and the same FailFast abort as the LLM stream below, so the
+        // abort-time partition and everything from graph building down is
+        // reused unchanged. It still runs in `chunks_per_batch` batches, one
+        // `extract_graphs` call at a time — see `extract_graphs_via_backend`.
         let outcome = extract_graphs_via_backend(
             backend.0.as_ref(),
             &chunks_for_extraction,
             &input.documents,
             ontology_resolver.as_ref(),
             input.dataset_id,
-            batch_size,
+            config.chunks_per_batch,
             config.enable_summarization,
             &failure_policy,
             &mut failures,
@@ -1082,11 +1164,16 @@ pub async fn extract_graph_from_data(
         .await?;
         all_graphs = outcome.graphs;
         backend_summaries = outcome.summaries;
-        aborted_at = outcome.aborted_at;
+        if let Some(first_unreached) = outcome.aborted_at {
+            aborted = true;
+            for chunk in chunks_for_extraction.iter().skip(first_unreached) {
+                failures.mark_unreached(chunk.document_id);
+            }
+        }
     } else {
         // Date hints for the default prompt, computed per document over the
-        // whole extraction set before batching, so a chunk's hints do not
-        // depend on where a batch boundary falls (Python
+        // whole extraction set before any call is dispatched, so a chunk's
+        // hints do not depend on which chunks it is sent alongside (Python
         // `_temporal_hints_for`). A custom prompt receives none, and neither
         // does the cascade, whose stages have their own prompts.
         let mut temporal_hints = if config.custom_extraction_prompt.is_none()
@@ -1097,145 +1184,101 @@ pub async fn extract_graph_from_data(
             HashMap::new()
         };
 
-        for (batch_idx, batch) in chunks_for_extraction.chunks(batch_size).enumerate() {
-            let fact_extractor = FactExtractor::new(Arc::clone(&llm));
-
-            // Pre-extract owned per-chunk inputs so the stream yields owned items.
-            // Mapping a stream over borrowed `&chunk` references trips a
-            // higher-ranked-lifetime inference bug when the surrounding future is
-            // boxed (same workaround as `SummaryExtractor::summarize_chunks`).
-            let inputs: Vec<(Uuid, String, Vec<String>)> = batch
-                .iter()
-                .map(|chunk| {
-                    (
-                        chunk.base.id,
-                        chunk.text.clone(),
-                        temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
-                    )
-                })
-                .collect();
-            let chunk_ids: Vec<Uuid> = inputs.iter().map(|(id, _, _)| *id).collect();
-            // Parallel to `chunk_ids`: a failure is attributed to its file, and the
-            // stream items carry only the chunk id and text.
-            let chunk_documents: Vec<Uuid> = batch.iter().map(|chunk| chunk.document_id).collect();
-
-            // Bounded-concurrency pipeline: at most `max_parallel` extraction calls
-            // are in flight at once. `buffer_unordered`, not `buffered`: the latter's
-            // `FuturesOrdered` counts completed-but-undrained outputs against its
-            // limit, so a chunk stuck in the retry cascade pins its slot *and* every
-            // slot filled behind it until it returns — head-of-line blocking that
-            // stops the batch dead above `max_parallel` chunks. The `tokio::spawn`
-            // inside the mapped future keeps calls on the multi-threaded runtime,
-            // and `buffer_unordered` only polls up to `max_parallel` futures, so at
-            // most that many extraction tasks exist at once.
-            //
-            // Completion order is not input order, so each future carries its index
-            // and the batch is re-sorted below. Order still matters downstream:
-            // `all_graphs` feeds dedup in `retrieve_existing_edges`, and the failure
-            // records below must be deterministic for a given input. Same shape as
-            // `SummaryExtractor::summarize_chunks`.
-            //
-            // Peak duplicated text is still O(`chunks_per_batch`), not
-            // O(`max_parallel`): `inputs` above clones every chunk's text up front.
-            // Making that lazy would mean borrowing `&chunk` across the stream, which
-            // is the higher-ranked-lifetime case the comment there describes.
-            let mut indexed_results: Vec<_> = futures::stream::iter(inputs.into_iter().enumerate())
-                .map(|(index, (_, text, hints))| {
-                    let extractor = fact_extractor.clone();
-                    let prompt = config.custom_extraction_prompt.clone();
-                    let strategy = config.extraction_strategy;
-                    async move {
-                        let result = tokio::spawn(async move {
-                            match strategy {
-                                ExtractionStrategy::SinglePass => {
-                                    extractor
-                                        .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
-                                        .await
-                                }
-                                ExtractionStrategy::Cascade { rounds } => {
-                                    crate::fact_extraction::cascade::cascade_extract(
-                                        extractor.llm(),
-                                        &text,
-                                        rounds,
-                                    )
-                                    .await
-                                }
-                            }
-                        })
-                        .await;
-                        (index, result)
-                    }
-                })
-                .buffer_unordered(max_parallel)
-                .collect()
-                .await;
-            indexed_results.sort_by_key(|(index, _)| *index);
-            let batch_results: Vec<_> = indexed_results
-                .into_iter()
-                .map(|(_, result)| result)
-                .collect();
-
-            // The whole batch is collected before any result is inspected, so a
-            // FailFast abort reports every failure in the batch that tripped it —
-            // not only the first one to come back.
-            let mut batch_failed = false;
-            for ((result, chunk_id), document_id) in batch_results
-                .into_iter()
-                .zip(chunk_ids)
-                .zip(chunk_documents)
-            {
-                let outcome = result
-                    .map_err(|e| CognifyError::FactExtractionError(e.to_string()))
-                    .and_then(|inner| inner);
-                match outcome {
-                    Ok(graph) => all_graphs.push((chunk_id, graph)),
-                    Err(e) => {
-                        warn!(
-                            data_id = %document_id,
-                            chunk_id = %chunk_id,
-                            "graph extraction failed for chunk: {e}"
-                        );
-                        failures.record_error(
-                            StageFailure {
-                                stage: FailureStage::GraphExtraction,
-                                data_id: document_id,
-                                chunk_id: Some(chunk_id),
-                                error: e.to_string(),
-                                fails_item: true,
-                            },
-                            &e,
-                        );
-                        batch_failed = true;
+        // One stream over every chunk of the run, at most `max_parallel` calls
+        // in flight and no batch boundary: a slow chunk holds only its own
+        // slot. A chunk's text is cloned when its call is about to start, so
+        // peak duplicated text is O(`max_parallel`). The outcomes come back in
+        // chunk order, which graph building depends on: within a unit, the
+        // first declaration of an entity decides its type and description.
+        let fact_extractor = FactExtractor::new(Arc::clone(&llm));
+        let fail_fast = failure_policy.stop == FailureStop::FailFast;
+        let outcomes = dispatch_chunk_calls(
+            chunks_for_extraction.len(),
+            max_parallel,
+            fail_fast,
+            "graph extraction",
+            |index| {
+                let chunk = &chunks_for_extraction[index];
+                let text = chunk.text.clone();
+                let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
+                let extractor = fact_extractor.clone();
+                let prompt = config.custom_extraction_prompt.clone();
+                let strategy = config.extraction_strategy;
+                async move {
+                    match strategy {
+                        ExtractionStrategy::SinglePass => {
+                            extractor
+                                .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
+                                .await
+                        }
+                        ExtractionStrategy::Cascade { rounds } => {
+                            crate::fact_extraction::cascade::cascade_extract(
+                                extractor.llm(),
+                                &text,
+                                rounds,
+                            )
+                            .await
+                        }
                     }
                 }
-            }
+            },
+            CognifyError::FactExtractionError,
+        )
+        .await;
 
-            info!(
-                "Processed graph extraction batch {}/{} ({} chunks)",
-                batch_idx + 1,
-                chunks_for_extraction.len().div_ceil(batch_size),
-                batch.len()
-            );
-
-            if batch_failed && failure_policy.stop == FailureStop::FailFast {
-                aborted_at = Some((batch_idx + 1) * batch_size);
-                break;
+        // Every failure that came back is recorded, in chunk order, before
+        // the undispatched chunks are marked unreached: `mark_unreached` is a
+        // no-op for a file already failed, so a file with a failed chunk stays
+        // a failure whichever order its chunks were reached in.
+        let mut skipped: Vec<Uuid> = Vec::new();
+        for (chunk, outcome) in chunks_for_extraction.iter().zip(outcomes) {
+            match outcome {
+                ChunkCall::Done(Ok(graph)) => all_graphs.push((chunk.base.id, graph)),
+                ChunkCall::Done(Err(e)) => {
+                    warn!(
+                        data_id = %chunk.document_id,
+                        chunk_id = %chunk.base.id,
+                        "graph extraction failed for chunk: {e}"
+                    );
+                    failures.record_error(
+                        StageFailure {
+                            stage: FailureStage::GraphExtraction,
+                            data_id: chunk.document_id,
+                            chunk_id: Some(chunk.base.id),
+                            error: e.to_string(),
+                            fails_item: true,
+                        },
+                        &e,
+                    );
+                    aborted |= fail_fast;
+                }
+                ChunkCall::Skipped => skipped.push(chunk.document_id),
             }
         }
+        for document_id in &skipped {
+            failures.mark_unreached(*document_id);
+        }
+        info!(
+            "Extracted graphs from {} of {} chunks ({} never dispatched)",
+            all_graphs.len(),
+            chunks_for_extraction.len(),
+            skipped.len()
+        );
     }
 
     // ── The abort-time partition ────────────────────────────────────────────
-    // At the moment of a FailFast abort nothing has been persisted — the loop
+    // At the moment of a FailFast abort nothing has been persisted — the stream
     // above accumulates every chunk's graph in memory and the first write of
     // any kind happens below. So "keep the results for the other files" is not
     // a matter of not-deleting; it takes deliberately persisting the finished
     // work before stopping. Files partition three ways:
     //
-    //   complete  — every one of its non-DLT chunks was attempted and none
+    //   complete  — every one of its non-DLT chunks was dispatched and none
     //               failed. Persisted below, and marked complete when the
     //               run ends.
     //   failed    — at least one chunk failed. Not persisted, left unmarked.
-    //   unreached — chunks never dispatched. Not persisted, left unmarked.
+    //   unreached — a chunk was never dispatched. Not persisted, left
+    //               unmarked.
     //
     // Only complete files are persisted, which is what keeps items
     // all-or-nothing. Failed and unreached files are indistinguishable to the
@@ -1245,11 +1288,7 @@ pub async fn extract_graph_from_data(
     // normally and the item-scoped sweep removes the failed files'
     // contributions afterwards, so one deletion path serves both cases.
     let mut complete_documents: Option<HashSet<Uuid>> = None;
-    if let Some(first_unreached) = aborted_at {
-        for chunk in chunks_for_extraction.iter().skip(first_unreached) {
-            failures.mark_unreached(chunk.document_id);
-        }
-
+    if aborted {
         if failure_policy.scope != RollbackScope::FailedItems {
             return Err(CognifyError::RunFailed {
                 report: Box::new(failures),
@@ -1319,15 +1358,7 @@ pub async fn extract_graph_from_data(
             }
         };
 
-    // Database deduplication — query for existing edges.
-    //
-    // Borrow the graphs out of `all_graphs` rather than deep-cloning every one
-    // of them (SDK-507): the callee only reads three `&str` fields per edge, so
-    // a second full copy of every extracted graph bought nothing.
-    let existing_edges_set =
-        retrieve_existing_edges(graph_db.as_ref(), all_graphs.iter().map(|(_, g)| g)).await?;
-
-    // Merge and deduplicate graphs (with DB awareness).
+    // Build the graph (the existing-edge check follows, on the result).
     //
     // The string-form `user_id` is the best label we have at this
     // point in the pipeline-driven path — `ExtractedChunks` does not
@@ -1367,6 +1398,33 @@ pub async fn extract_graph_from_data(
         .map(|chunk| (chunk.base.id, chunk.base.importance_weight.unwrap_or(0.5)))
         .collect();
 
+    // One graph per unit — a data item, or a block of `chunks_per_batch`
+    // chunks of it — with fresh maps, as Python builds them; merged after.
+    // Within a unit the first declaration of an entity decides its description
+    // and type; across units its types are combined and endpoints never match.
+    let units = graph_units(&surviving_chunks, config.chunks_per_batch, all_graphs);
+    let mut expansion = expand_extracted_graphs_by_unit(
+        units,
+        input.dataset_id,
+        &chunk_node_sets,
+        &chunk_importance_weights,
+        Arc::clone(&ontology_resolver),
+        user_label_owned.as_deref(),
+        task_rank,
+        config.endpoint_scope,
+        config.cpu_pool.as_ref().map(|pool| Arc::clone(&pool.0)),
+    )
+    .await
+    .map_err(|error| CognifyError::Execute(format!("building the extracted graph: {error}")))?;
+
+    // Which of the built edges the graph already holds, looked up on their
+    // final ids and normalised labels, as Python's
+    // `find_existing_edge_identities` does: those are claimed, not written
+    // again. Keys built from the LLM's node ids missed every edge whose
+    // entity id comes from a name that differs from the node id, every edge
+    // to a Timestamp and every edge to an ontology-canonicalised entity.
+    let existing_edges = retrieve_existing_edges(graph_db.as_ref(), &expansion.edges).await?;
+    expansion.split_existing_edges(&existing_edges);
     let Expansion {
         nodes,
         edges,
@@ -1375,33 +1433,24 @@ pub async fn extract_graph_from_data(
         stats: edge_resolution,
         timestamps,
         ..
-    } = expand_extracted_graphs(
-        all_graphs,
-        input.dataset_id,
-        &chunk_node_sets,
-        &chunk_importance_weights,
-        &existing_edges_set,
-        ontology_resolver.as_ref(),
-        user_label_owned.as_deref(),
-        task_rank,
-    )
-    .await;
+    } = expansion;
 
     // Endpoint resolution is lossy: the model routinely emits edges referencing
     // node ids it never declared. Report the rate once per run rather than
     // leaving one log line per dropped edge as the only evidence.
     //
-    // This counts endpoint resolution only. An edge that resolves here can still
-    // be filtered out downstream for already existing in the database, so the
-    // resolved figure is an upper bound on what this pass goes on to emit.
+    // This counts endpoint resolution only. An edge that resolves here may
+    // already be in the database, and was then claimed above rather than
+    // written, so the resolved figure is an upper bound on what this pass
+    // writes.
     //
-    // The cross-chunk fields are not a loss report. They price SDK-507 tier 2:
-    // resolution is run-global today, so an endpoint can match a node declared
-    // by any earlier chunk, and flushing per wave would only see its own wave.
-    // `cross_chunk` is the upper bound on what that would cost and
-    // `max_cross_chunk_distance` is how wide a wave has to be to avoid most of
-    // it. Logged here, once per run, because the expansion pass cannot see the
-    // configured batch size and should not be given it for a diagnostic.
+    // The cross-chunk fields are not a loss report. Resolution is scoped to a
+    // unit (one data item, or a block of `chunks_per_batch` chunks of it), so
+    // an endpoint never matches a node of another document; within a unit it
+    // can match a node an earlier chunk declared, unless
+    // `cognify.cross_chunk_endpoints` is off. `cross_chunk` counts those
+    // matches — what Python's chunk-local rule would drop — and
+    // `max_cross_chunk_distance` how far back, within a unit, they reached.
     info!(
         attempted = edge_resolution.attempted,
         dropped = edge_resolution.dropped(),
@@ -1411,7 +1460,8 @@ pub async fn extract_graph_from_data(
         cross_chunk_by_name = edge_resolution.resolved_by_name_cross_chunk,
         max_cross_chunk_distance = edge_resolution.max_cross_chunk_distance,
         "Edge endpoint resolution: both endpoints resolved for {} of {} extracted edges; \
-         {} endpoint(s) matched a node from an earlier chunk (max {} chunks back)",
+         {} endpoint(s) matched a node from an earlier chunk of the same unit \
+         (max {} chunks back)",
         edge_resolution.attempted - edge_resolution.dropped(),
         edge_resolution.attempted,
         edge_resolution.resolved_cross_chunk(),
@@ -1420,11 +1470,11 @@ pub async fn extract_graph_from_data(
 
     // Final deduplication pass (in-memory only after DB filtering)
     let mut dedup_result = deduplicate_nodes_and_edges(nodes, edges);
-    // Python fills a blank `edge_text` in `add_data_points`; Rust writes these
-    // edges here, so it stamps them here — before the ledger and graph writes
-    // below, which must both see the text the `EdgeType` row is keyed on.
-    // Edges an earlier run already wrote (`claimed_existing_edges`) keep the
-    // text they were written with.
+    // Python fills a blank `edge_text` in `add_data_points`; Rust stamps these
+    // edges here, before the persistence layer's ledger and graph writes, which
+    // must both see the text the `EdgeType` row is keyed on. Edges an earlier
+    // run already wrote (`claimed_existing_edges`) keep the text they were
+    // written with.
     stamp_extracted_edge_text(&mut dedup_result, &timestamps);
 
     // Build chunk_id → entity and Timestamp IDs mapping from the deduplicated
@@ -1439,98 +1489,20 @@ pub async fn extract_graph_from_data(
         }
     }
 
-    // I1 — the ledger row must exist before the artifact does. Rust persists
-    // entities and edges here, two stages before `add_data_points`; Python does
-    // not (its `extract_graph_from_data` returns chunks and lets
-    // `add_data_points` do every write), so this ledger write has no Python
-    // counterpart. Without it a run that dies between here and
-    // `add_data_points` leaves entities and edges in the graph that nothing can
-    // find, and the extraction dedup filter then hides them from every retry.
-    record_extraction_ownership(
-        db,
-        LedgerIdentity::new(
-            input.tenant_id,
-            input.user_id,
-            input.dataset_id,
-            pipeline_run_id,
-        ),
-        &updated_chunks,
-        &dedup_result.unique_nodes,
-        &dedup_result.unique_edges,
-        // Edges an earlier run already put in the graph, which this run
-        // produced too. They get ownership rows and nothing else — see the
-        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
-        // row is what makes `get_unique_edges_for_data` stop calling the edge
-        // exclusive to the earlier file, so deleting that file no longer takes
-        // the edge away from this one.
-        &claimed_existing_edges,
-        &timestamps,
-        &producers,
-    )
-    .await?;
-
-    // Store graph data (nodes and edges) in graph database
-    let entity_refs: Vec<&cognee_models::Entity> = dedup_result
-        .unique_nodes
-        .iter()
-        .map(|n| &n.entity)
-        .collect();
-    graph_db
-        .add_nodes(&entity_refs)
-        .await
-        .map_err(CognifyError::from)?;
-    // Timestamp nodes: not embedded, no EntityType; written before the edges
-    // that point at them.
-    if !timestamps.is_empty() {
-        let timestamp_refs: Vec<&cognee_models::Timestamp> =
-            timestamps.iter().map(|node| &node.timestamp).collect();
-        graph_db
-            .add_nodes(&timestamp_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} Timestamp nodes", timestamp_refs.len());
-    }
-
-    let edge_data: Vec<_> = dedup_result
-        .unique_edges
-        .iter()
-        .map(|edge_pair| {
-            let properties: HashMap<std::borrow::Cow<'static, str>, serde_json::Value> = edge_pair
-                .properties
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        std::borrow::Cow::Owned(k.clone()),
-                        serde_json::Value::String(v.clone()),
-                    )
-                })
-                .collect();
-            (
-                edge_pair.source_entity_id.to_string(),
-                edge_pair.target_entity_id.to_string(),
-                edge_pair.relationship_name.clone(),
-                properties,
-            )
-        })
-        .collect();
-
-    graph_db
-        .add_edges(&edge_data)
-        .await
-        .map_err(CognifyError::from)?;
-    if !edge_data.is_empty() {
-        info!(
-            "Upserted {} extracted graph edges (LLM and ontology)",
-            edge_data.len()
-        );
-    }
-
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
         documents: surviving_documents,
         entities: dedup_result.unique_nodes,
         timestamps,
         edges: dedup_result.unique_edges,
+        // Edges an earlier run already put in the graph, which this run
+        // produced too. They get ownership rows and nothing else — see the
+        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
+        // row is what makes `get_unique_edges_for_data` stop calling the edge
+        // exclusive to the earlier file, so deleting that file no longer takes
+        // the edge away from this one.
+        claimed_existing_edges,
+        handoff: PersistHandoff::default(),
         producers,
         dynamic_graphs: vec![],
         backend_summaries,
@@ -1606,17 +1578,221 @@ fn empty_edge_props() -> HashMap<Cow<'static, str>, serde_json::Value> {
     HashMap::new()
 }
 
-/// Create deterministic WebPage/WebSite graph provenance for URL-sourced documents.
+/// What the extraction stage hands the persistence step beyond the graph data
+/// itself, carried on [`ExtractedGraphData::handoff`] and
+/// [`SummarizedData::handoff`]. Opaque outside this crate; empty by default.
+#[derive(Debug, Clone, Default)]
+pub struct PersistHandoff {
+    /// The WebPage / WebSite artifacts of the URL documents, built by
+    /// [`web_page_artifacts`] when [`CognifyConfig::create_web_page_nodes`] is
+    /// on.
+    pub(crate) web_pages: Vec<WebPage>,
+    /// The provenance stamp each entity carried **before** the extraction
+    /// stage's own stamp, for the entities that stamp changed — the
+    /// ontology-derived ones, which graph building does not pre-stamp.
+    ///
+    /// Before O4a the extraction stage wrote the entity nodes to the graph and
+    /// only then stamped them, so their graph nodes kept these values while
+    /// their ledger rows (whose `attributes` serialize the entity), written
+    /// later, carried the stamp. Vector payloads carry no provenance stamp at
+    /// all (`index_schema_payload`). The persistence layer writes the graph nodes with these values
+    /// to store exactly what it stored then. Making the graph agree with the
+    /// ledger is a change of stored output, left to a later stage.
+    pub(crate) entity_graph_stamps: HashMap<Uuid, ProvenanceStamp>,
+}
+
+impl PersistHandoff {
+    /// Whether there is nothing in it.
+    pub fn is_empty(&self) -> bool {
+        self.web_pages.is_empty() && self.entity_graph_stamps.is_empty()
+    }
+}
+
+/// The four provenance fields a task's stamp fills in on a `DataPoint`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProvenanceStamp {
+    pub(crate) source_pipeline: Option<String>,
+    pub(crate) source_task: Option<String>,
+    pub(crate) source_user: Option<String>,
+    pub(crate) topological_rank: Option<i32>,
+}
+
+impl ProvenanceStamp {
+    pub(crate) fn of(base: &DataPoint) -> Self {
+        Self {
+            source_pipeline: base.source_pipeline.clone(),
+            source_task: base.source_task.clone(),
+            source_user: base.source_user.clone(),
+            topological_rank: base.topological_rank,
+        }
+    }
+
+    pub(crate) fn apply_to(&self, base: &mut DataPoint) {
+        base.source_pipeline = self.source_pipeline.clone();
+        base.source_task = self.source_task.clone();
+        base.source_user = self.source_user.clone();
+        base.topological_rank = self.topological_rank;
+    }
+}
+
+/// One URL document's WebPage, its WebSite, and the chunks sourced from it.
+#[derive(Debug, Clone)]
+pub(crate) struct WebPage {
+    /// The document (data item) the page was fetched for.
+    pub(crate) data_id: Uuid,
+    pub(crate) page_id: Uuid,
+    pub(crate) site_id: Uuid,
+    pub(crate) url: String,
+    pub(crate) domain: String,
+    pub(crate) page_node: serde_json::Value,
+    pub(crate) site_node: serde_json::Value,
+    /// The document's chunks, in chunk order: each is `SOURCED_FROM` the page.
+    pub(crate) chunk_ids: Vec<Uuid>,
+}
+
+/// Build the deterministic WebPage/WebSite artifacts of URL-sourced documents.
 ///
 /// Uses only URL metadata carried on [`Document::external_metadata`], produced
 /// by ingestion for URL inputs. Invalid JSON, non-URL metadata, unparsable URLs,
-/// and non-HTTP(S) URLs are skipped.
+/// and non-HTTP(S) URLs are skipped. Pure: nothing is written.
+pub(crate) fn web_page_artifacts(documents: &[Document], chunks: &[DocumentChunk]) -> Vec<WebPage> {
+    if documents.is_empty() || chunks.is_empty() {
+        return Vec::new();
+    }
+    documents
+        .iter()
+        .filter_map(|document| {
+            let metadata = parse_web_page_metadata(document)?;
+            let page_id = web_page_id(&metadata.url);
+            let site_id = web_site_id(&metadata.domain);
+            let page_node = json!({
+                "id": page_id.to_string(),
+                "type": "WebPage",
+                "url": metadata.url,
+                "content": document_content_preview(document.base.id, chunks),
+            });
+            let site_node = json!({
+                "id": site_id.to_string(),
+                "type": "WebSite",
+                "domain": metadata.domain,
+            });
+            Some(WebPage {
+                data_id: document.base.id,
+                page_id,
+                site_id,
+                url: metadata.url,
+                domain: metadata.domain,
+                page_node,
+                site_node,
+                chunk_ids: chunks
+                    .iter()
+                    .filter(|chunk| chunk.document_id == document.base.id)
+                    .map(|chunk| chunk.base.id)
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// The ownership rows of `pages`' nodes and edges.
 ///
-/// Ownership of the nodes and edges is recorded in `db` before any of them
-/// reaches the graph (I1). These artifacts had no ownership row at all before —
-/// they are `add_nodes_raw` JSON blobs rather than DataPoints, so
-/// [`upsert_provenance`] never saw them — which also made them survive every
-/// delete.
+/// One row per producing document, for the WebSite node as much as for the
+/// WebPage: two URL documents on one domain share a single physical WebSite
+/// node, so a single row would let deleting the first take a node the second
+/// still references — the merged-entity rule applied to a second artifact
+/// class. Every candidate edge is claimed, including the ones the `has_edges`
+/// filter keeps the graph write from re-issuing: an edge an earlier run
+/// already created is still produced by this document, and a surplus claimant
+/// only ever *prevents* a deletion.
+///
+/// These artifacts had no ownership row at all once — they are
+/// `add_nodes_raw` JSON blobs rather than DataPoints, so [`provenance_rows`]
+/// never saw them — which also made them survive every delete.
+pub(crate) fn web_page_ownership_rows(
+    id: LedgerIdentity,
+    pages: &[WebPage],
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    for page in pages {
+        nodes.push(web_page_provenance_row(
+            id,
+            page.data_id,
+            page.page_id,
+            "WebPage",
+            page.url.clone(),
+            &page.page_node,
+        ));
+        nodes.push(web_page_provenance_row(
+            id,
+            page.data_id,
+            page.site_id,
+            "WebSite",
+            page.domain.clone(),
+            &page.site_node,
+        ));
+        edges.push(web_page_provenance_edge_row(
+            id,
+            page.data_id,
+            page.page_id,
+            "PART_OF",
+            page.site_id,
+        ));
+        for chunk_id in &page.chunk_ids {
+            edges.push(web_page_provenance_edge_row(
+                id,
+                page.data_id,
+                *chunk_id,
+                "SOURCED_FROM",
+                page.page_id,
+            ));
+        }
+    }
+    (nodes, edges)
+}
+
+/// The graph nodes and candidate edges of `pages`: one node per id (the last
+/// document's copy wins, as two documents of one URL or one domain share it)
+/// and one edge per `(source, target, relationship)`, first seen first.
+pub(crate) fn web_page_graph(pages: &[WebPage]) -> (Vec<serde_json::Value>, Vec<EdgeData>) {
+    let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut candidate_edges: Vec<EdgeData> = Vec::new();
+    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+    for page in pages {
+        let page_id = page.page_id.to_string();
+        nodes_by_id.insert(page_id.clone(), page.page_node.clone());
+        nodes_by_id.insert(page.site_id.to_string(), page.site_node.clone());
+        push_unique_edge(
+            &mut candidate_edges,
+            &mut seen_edges,
+            page_id.clone(),
+            page.site_id.to_string(),
+            "PART_OF",
+        );
+        for chunk_id in &page.chunk_ids {
+            push_unique_edge(
+                &mut candidate_edges,
+                &mut seen_edges,
+                chunk_id.to_string(),
+                page_id.clone(),
+                "SOURCED_FROM",
+            );
+        }
+    }
+    (nodes_by_id.into_values().collect(), candidate_edges)
+}
+
+/// Create deterministic WebPage/WebSite graph provenance for URL-sourced
+/// documents (standalone).
+///
+/// [`web_page_artifacts`] followed by the web-page part of the persistence
+/// layer: ownership of the nodes and edges is recorded in `db` before any of
+/// them reaches the graph (I1), and an edge the graph already holds is not
+/// written again. The cognify pipeline does not call this: its extraction
+/// stage carries the artifacts to the persistence step instead.
 pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
@@ -1624,140 +1800,8 @@ pub async fn create_web_page_nodes(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
-    if documents.is_empty() || chunks.is_empty() {
-        return Ok(());
-    }
-
-    let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut candidate_edges: Vec<EdgeData> = Vec::new();
-    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
-    let mut prov_nodes: Vec<cognee_database::GraphNode> = Vec::new();
-    let mut prov_edges: Vec<cognee_database::GraphEdge> = Vec::new();
-
-    for document in documents {
-        let Some(metadata) = parse_web_page_metadata(document) else {
-            continue;
-        };
-
-        let page_id = web_page_id(&metadata.url);
-        let site_id = web_site_id(&metadata.domain);
-        let page_id_str = page_id.to_string();
-        let site_id_str = site_id.to_string();
-
-        let page_node = json!({
-            "id": page_id_str,
-            "type": "WebPage",
-            "url": metadata.url,
-            "content": document_content_preview(document.base.id, chunks),
-        });
-        let site_node = json!({
-            "id": site_id_str,
-            "type": "WebSite",
-            "domain": metadata.domain,
-        });
-
-        // One row per producing document, for the WebSite node as much as for
-        // the WebPage: two URL documents on one domain share a single physical
-        // WebSite node, so a single row would let deleting the first take a
-        // node the second still references — the merged-entity rule applied to
-        // a second artifact class.
-        prov_nodes.push(web_page_provenance_row(
-            id,
-            document.base.id,
-            page_id,
-            "WebPage",
-            metadata.url.clone(),
-            &page_node,
-        ));
-        prov_nodes.push(web_page_provenance_row(
-            id,
-            document.base.id,
-            site_id,
-            "WebSite",
-            metadata.domain.clone(),
-            &site_node,
-        ));
-
-        nodes_by_id.insert(page_id_str.clone(), page_node);
-        nodes_by_id.insert(site_id_str.clone(), site_node);
-
-        push_unique_edge(
-            &mut candidate_edges,
-            &mut seen_edges,
-            page_id_str.clone(),
-            site_id_str,
-            "PART_OF",
-        );
-        prov_edges.push(web_page_provenance_edge_row(
-            id,
-            document.base.id,
-            page_id,
-            "PART_OF",
-            site_id,
-        ));
-
-        for chunk in chunks
-            .iter()
-            .filter(|chunk| chunk.document_id == document.base.id)
-        {
-            push_unique_edge(
-                &mut candidate_edges,
-                &mut seen_edges,
-                chunk.base.id.to_string(),
-                page_id_str.clone(),
-                "SOURCED_FROM",
-            );
-            prov_edges.push(web_page_provenance_edge_row(
-                id,
-                document.base.id,
-                chunk.base.id,
-                "SOURCED_FROM",
-                page_id,
-            ));
-        }
-    }
-
-    // Every candidate edge is claimed, including the ones the `has_edges`
-    // filter below stops the graph write from re-issuing: an edge an earlier
-    // run already created is still produced by this document, and a surplus
-    // claimant only ever *prevents* a deletion.
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
-
-    if !nodes_by_id.is_empty() {
-        graph_db
-            .add_nodes_raw(nodes_by_id.into_values().collect())
-            .await
-            .map_err(CognifyError::from)?;
-    }
-
-    if candidate_edges.is_empty() {
-        return Ok(());
-    }
-
-    let existing_edges = graph_db
-        .has_edges(&candidate_edges)
-        .await
-        .map_err(CognifyError::from)?;
-    let existing_keys: HashSet<(String, String, String)> = existing_edges
-        .into_iter()
-        .map(|(source, target, relationship, _)| (source, target, relationship))
-        .collect();
-    let missing_edges: Vec<EdgeData> = candidate_edges
-        .into_iter()
-        .filter(|(source, target, relationship, _)| {
-            !existing_keys.contains(&(source.clone(), target.clone(), relationship.clone()))
-        })
-        .collect();
-
-    if !missing_edges.is_empty() {
-        graph_db
-            .add_edges(&missing_edges)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} web page edges", missing_edges.len());
-    }
-
-    Ok(())
+    let artifacts = web_page_artifacts(documents, chunks);
+    crate::persist::persist_web_pages(db, graph_db.as_ref(), id, &artifacts).await
 }
 
 fn push_unique_edge(
@@ -1874,18 +1918,7 @@ pub async fn extract_dynamic_graphs_from_data(
     } else {
         HashMap::new()
     };
-    let chunks: Vec<(String, Uuid, Uuid, Vec<String>)> = extractable
-        .into_iter()
-        .map(|chunk| {
-            (
-                chunk.text.clone(),
-                chunk.base.id,
-                chunk.document_id,
-                temporal_hints.remove(&chunk.base.id).unwrap_or_default(),
-            )
-        })
-        .collect();
-    if chunks.is_empty() {
+    if extractable.is_empty() {
         return Ok(DynamicExtractionData {
             graphs: Vec::new(),
             failures: input.failures.clone(),
@@ -1894,6 +1927,7 @@ pub async fn extract_dynamic_graphs_from_data(
     }
 
     let failure_policy = config.failure_policy();
+    let fail_fast = failure_policy.stop == FailureStop::FailFast;
     let max_parallel = config.max_parallel_extractions.max(1);
     let custom_prompt = config.custom_extraction_prompt.clone();
     let dataset_id = input.dataset_id;
@@ -1901,106 +1935,100 @@ pub async fn extract_dynamic_graphs_from_data(
     let mut graphs = Vec::new();
     let mut aborted = false;
 
-    for (batch_index, batch) in chunks.chunks(config.chunks_per_batch).enumerate() {
-        let owned_batch: Vec<_> = batch.to_vec();
-        let mut results: Vec<_> = futures::stream::iter(owned_batch.into_iter().enumerate())
-            .map(|(position, (text, chunk_id, data_id, hints))| {
-                let llm = Arc::clone(&llm);
-                let schema = Arc::clone(&schema);
-                let prompt = match &custom_prompt {
-                    Some(prompt) => prompt.clone(),
-                    None => default_graph_prompt_with_hints(&hints)
-                        .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+    // One stream over every chunk, as on the default path: at most
+    // `max_parallel` calls in flight, no batch boundary, inputs built when a
+    // call is about to start, outcomes returned in chunk order.
+    let outcomes = dispatch_chunk_calls(
+        extractable.len(),
+        max_parallel,
+        fail_fast,
+        "custom graph extraction",
+        |index| {
+            let chunk = extractable[index];
+            let text = chunk.text.clone();
+            let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
+            let llm = Arc::clone(&llm);
+            let schema = Arc::clone(&schema);
+            let prompt = match &custom_prompt {
+                Some(prompt) => prompt.clone(),
+                None => default_graph_prompt_with_hints(&hints)
+                    .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+            };
+            async move {
+                let messages = vec![
+                    Message {
+                        role: MessageRole::System,
+                        content: prompt,
+                    },
+                    Message {
+                        role: MessageRole::User,
+                        content: text,
+                    },
+                ];
+                let validator = |answer: &serde_json::Value| {
+                    schema
+                        .materialize(answer, dataset_id)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 };
-                async move {
-                    // Spawned like the other extractors: CPU-bound validation
-                    // spreads across the runtime, and a panicking chunk becomes
-                    // that chunk's failure under the policy instead of
-                    // unwinding the whole stage.
-                    let result = tokio::spawn(async move {
-                        let messages = vec![
-                            Message {
-                                role: MessageRole::System,
-                                content: prompt,
-                            },
-                            Message {
-                                role: MessageRole::User,
-                                content: text,
-                            },
-                        ];
-                        let validator = |answer: &serde_json::Value| {
-                            schema
-                                .materialize(answer, dataset_id)
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        };
-                        let answer = llm
-                            .create_structured_output_with_messages_raw_validated(
-                                messages,
-                                schema.llm_schema(),
-                                Some(GenerationOptions {
-                                    temperature: None,
-                                    max_tokens: None,
-                                    ..Default::default()
-                                }),
-                                &validator,
-                            )
-                            .await
-                            .map_err(CognifyError::from_llm)?;
-                        schema
-                            .materialize(&answer, dataset_id)
-                            .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
-                    })
+                let answer = llm
+                    .create_structured_output_with_messages_raw_validated(
+                        messages,
+                        schema.llm_schema(),
+                        Some(GenerationOptions {
+                            temperature: None,
+                            max_tokens: None,
+                            ..Default::default()
+                        }),
+                        &validator,
+                    )
                     .await
-                    .map_err(|error| {
-                        CognifyError::GraphExtractionError(format!(
-                            "dynamic graph extraction task failed: {error}"
-                        ))
-                    })
-                    .and_then(|result| result);
-                    (position, chunk_id, data_id, result)
-                }
-            })
-            .buffer_unordered(max_parallel)
-            .collect()
-            .await;
-        results.sort_by_key(|(position, _, _, _)| *position);
-
-        let mut batch_failed = false;
-        for (_, chunk_id, data_id, result) in results {
-            match result {
-                Ok(graph) => graphs.push(AttributedDynamicGraph {
-                    graph,
-                    chunk_id,
-                    data_id,
-                }),
-                Err(error) => {
-                    warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
-                    failures.record_error(
-                        StageFailure {
-                            stage: FailureStage::GraphExtraction,
-                            data_id,
-                            chunk_id: Some(chunk_id),
-                            error: error.to_string(),
-                            fails_item: true,
-                        },
-                        &error,
-                    );
-                    batch_failed = true;
-                }
+                    .map_err(CognifyError::from_llm)?;
+                schema
+                    .materialize(&answer, dataset_id)
+                    .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
             }
-        }
+        },
+        // Each call is spawned like the other extractors': CPU-bound
+        // validation spreads across the runtime, and a panicking chunk becomes
+        // that chunk's failure under the policy instead of unwinding the stage.
+        |message| {
+            CognifyError::GraphExtractionError(format!(
+                "dynamic graph extraction task failed: {message}"
+            ))
+        },
+    )
+    .await;
 
-        if batch_failed && failure_policy.stop == FailureStop::FailFast {
-            aborted = true;
-            for chunk in chunks
-                .iter()
-                .skip((batch_index + 1) * config.chunks_per_batch)
-            {
-                failures.mark_unreached(chunk.2);
+    // Failures first, then the undispatched chunks, as on the default path.
+    let mut skipped: Vec<Uuid> = Vec::new();
+    for (chunk, outcome) in extractable.iter().zip(outcomes) {
+        let (chunk_id, data_id) = (chunk.base.id, chunk.document_id);
+        match outcome {
+            ChunkCall::Done(Ok(graph)) => graphs.push(AttributedDynamicGraph {
+                graph,
+                chunk_id,
+                data_id,
+            }),
+            ChunkCall::Done(Err(error)) => {
+                warn!(%data_id, %chunk_id, "dynamic graph extraction failed: {error}");
+                failures.record_error(
+                    StageFailure {
+                        stage: FailureStage::GraphExtraction,
+                        data_id,
+                        chunk_id: Some(chunk_id),
+                        error: error.to_string(),
+                        fails_item: true,
+                    },
+                    &error,
+                );
+                aborted |= fail_fast;
             }
-            break;
+            ChunkCall::Skipped => skipped.push(data_id),
         }
+    }
+    for data_id in skipped {
+        failures.mark_unreached(data_id);
     }
 
     if aborted && failure_policy.scope != RollbackScope::FailedItems {
@@ -2032,7 +2060,7 @@ pub async fn extract_dynamic_graphs_from_data(
 /// the same all-or-nothing partition the other extraction paths apply, and
 /// point each chunk's `contains` at its graph per `attachment` (omitted is
 /// [`ChunkAttachment::Direct`], as in Python).
-fn attach_dynamic_graphs(
+pub(crate) fn attach_dynamic_graphs(
     input: &ExtractedChunks,
     extracted: DynamicExtractionData,
     attachment: Option<ChunkAttachment>,
@@ -2071,6 +2099,8 @@ fn attach_dynamic_graphs(
         entities: vec![],
         timestamps: vec![],
         edges: vec![],
+        claimed_existing_edges: vec![],
+        handoff: PersistHandoff::default(),
         producers: ArtifactProducers::default(),
         dynamic_graphs: extracted.graphs,
         backend_summaries: vec![],
@@ -2311,15 +2341,18 @@ pub async fn summarize_text(
 // Task 5: add_data_points
 // ---------------------------------------------------------------------------
 
-/// Generate embeddings and index all data points in vector DB (Task 5).
+/// Write everything the run produced: the persistence step (Task 5).
 ///
-/// Generates embeddings for chunks, entities (name + description), summaries,
-/// entity types, edge types and documents, then creates the vector collections
-/// and indexes the points. No triplets: Python stopped embedding them in
-/// SDK-1115, and so did Rust (SDK-1039).
+/// Every graph, vector, ledger and edge-evidence write of the cognify run
+/// happens here, through the persistence layer ([`crate::persist`]): the
+/// extracted entities, Timestamps and semantic edges, the claimed existing
+/// edges' ownership rows, the WebPage / WebSite artifacts, the chunks,
+/// summaries, entity types and documents, the runtime custom graphs, the
+/// structural edges, the vector points (no triplets: Python stopped embedding
+/// them in SDK-1115, and so did Rust, SDK-1039) and the edge evidence.
 ///
-/// Writes the provenance records (nodes/edges) to the relational database
-/// *before* the first graph or vector write, mirroring Python's
+/// The run is persisted as **one group** today. The layer writes the ledger
+/// rows *before* the first graph or vector write, mirroring Python's
 /// `add_data_points.py:138-141` ("the rollback ledger is written BEFORE the
 /// graph/vector writes so a failed write can always be swept"). Python's
 /// `if user and dataset and data:` guard has no Rust counterpart any more: the
@@ -2336,344 +2369,61 @@ pub async fn add_data_points(
     pipeline_run_id: Option<Uuid>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
-    // ── Ownership before artifacts (I1) ─────────────────────────────────────
-    // Discovering the structural edges is pure computation over the input
-    // (`get_graph_from_model`, no I/O), so it can happen up here and let the
-    // ledger name every artifact this stage is about to write before the first
-    // of them exists.
-    let mut extractable_items: Vec<&dyn crate::graph_extraction::GraphExtractable> = Vec::new();
-    for chunk in &input.chunks {
-        extractable_items.push(chunk as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for summary in &input.summaries {
-        extractable_items.push(summary as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for pair in &input.entities {
-        extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
-        if let Some(entity_type) = &pair.entity_type {
-            extractable_items.push(entity_type as &dyn crate::graph_extraction::GraphExtractable);
-        }
-    }
-
-    let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
-
-    // Runtime custom graphs: one storage walk per Python `add_data_points`
-    // batch, shared by the ledger, the graph writes and the index pass. Raw
-    // node writes are needed because their concrete Rust types do not exist;
-    // within a batch a node id is claimed by its first occurrence, and nodes
-    // are deduplicated across batches by their Python-compatible identity UUID.
-    let stored_dynamic = store_dynamic_graphs(&input.dynamic_graphs, &input.chunks, config);
-    let mut dynamic_nodes: BTreeMap<Uuid, &DynamicDataPoint> = BTreeMap::new();
-    let mut seen_relationships = HashSet::new();
-    let mut dynamic_edges: Vec<EdgeData> = Vec::new();
-    let now = Utc::now().to_rfc3339();
-    for stored in &stored_dynamic {
-        for node in &stored.nodes {
-            dynamic_nodes.entry(node.base.id).or_insert(node);
-        }
-        for relationship in &stored.relationships {
-            if seen_relationships.insert(relationship) {
-                dynamic_edges.push((
-                    relationship.source.to_string(),
-                    relationship.target.to_string(),
-                    relationship.field_name.clone(),
-                    HashMap::from([(Cow::from("updated_at"), json!(now))]),
-                ));
-            }
-        }
-    }
-
-    // Before the ledger write, so the ownership rows carry the same `edge_text`
-    // the graph edges and their `EdgeType` rows are keyed on.
-    stamp_structural_edge_text(
-        &mut structural_edges,
-        &mut dynamic_edges,
-        input,
-        &dynamic_nodes,
-    );
-
-    let ledger_identity = LedgerIdentity::new(
+    let ledger = LedgerIdentity::new(
         input.tenant_id,
         input.user_id,
         input.dataset_id,
         pipeline_run_id,
     );
-    record_dynamic_graph_ownership(
-        db,
-        ledger_identity,
-        &input.dynamic_graphs,
-        &stored_dynamic,
-        &input.chunks,
-        &structural_edges,
-        &dynamic_edges,
-    )
-    .await?;
-
-    upsert_provenance(
-        db,
-        ledger_identity,
-        &input.chunks,
-        &input.entities,
-        &input.edges,
-        &input.summaries,
-        &input.documents,
-        &structural_edges,
-        &input.producers,
-    )
-    .await?;
-
-    // Store all DataPoint types as graph nodes (matches Python's add_data_points behavior).
-    // Python stores DocumentChunks, TextSummaries, and EntityTypes as graph nodes.
-
-    // Store DocumentChunks as graph nodes
-    if !input.chunks.is_empty() {
-        let chunk_refs: Vec<&DocumentChunk> = input.chunks.iter().collect();
-        graph_db
-            .add_nodes(&chunk_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} document chunks as graph nodes", chunk_refs.len());
-    }
-
-    // Store TextSummaries as graph nodes
-    if !input.summaries.is_empty() {
-        let summary_refs: Vec<&TextSummary> = input.summaries.iter().collect();
-        graph_db
-            .add_nodes(&summary_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!(
-            "Stored {} text summaries as graph nodes",
-            summary_refs.len()
-        );
-    }
-
-    // Store EntityTypes as graph nodes (extract from GraphNodePairs)
-    if !input.entities.is_empty() {
-        let entity_type_refs: Vec<&cognee_models::EntityType> = input
-            .entities
-            .iter()
-            .filter_map(|pair| pair.entity_type.as_ref())
-            .collect();
-        graph_db
-            .add_nodes(&entity_type_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!(
-            "Stored {} entity types as graph nodes",
-            entity_type_refs.len()
-        );
-    }
-
-    // Store Documents as graph nodes. Python reaches Documents by recursively
-    // walking each DocumentChunk's `is_part_of` field (a full Document
-    // DataPoint) in get_graph_from_model(). Rust's `is_part_of` is just a
-    // `Uuid`, so we store Documents explicitly here. The node `id` equals the
-    // source Data item's id (content-addressed, Python-identical) and the node
-    // `type` is the concrete subclass name (TextDocument, PdfDocument, …), so
-    // the `is_part_of` edge target now resolves to a stored Document node.
-    if !input.documents.is_empty() {
-        let doc_refs: Vec<&Document> = input.documents.iter().collect();
-        graph_db
-            .add_nodes(&doc_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} documents as graph nodes", doc_refs.len());
-    }
-
-    if !dynamic_nodes.is_empty() {
-        graph_db
-            .add_nodes_raw(
-                dynamic_nodes
-                    .values()
-                    .map(|node| node.to_graph_value())
-                    .collect(),
-            )
-            .await
-            .map_err(CognifyError::from)?;
-    }
-    if !dynamic_edges.is_empty() {
-        graph_db
-            .add_edges(&dynamic_edges)
-            .await
-            .map_err(CognifyError::from)?;
-    }
-
-    // Build EdgeTypes keyed on each edge's retrieval text
-    // (port of Python's create_edge_type_datapoints + index_graph_edges).
-    //
-    // Parity note: Python's `index_graph_edges` only *vector-indexes* these
-    // EdgeType DataPoints (into `EdgeType_relationship_name`) — it never adds
-    // them to the graph as nodes (see index_graph_edges.py:86-88 →
-    // index_data_points, which touches the vector engine only). We therefore
-    // build + vector-index them below but deliberately do NOT call
-    // `graph_db.add_nodes` on them, so the Rust graph node-set matches Python's
-    // and they don't surface as untyped/uncolored nodes in the visualization.
-    //
-    // Python keys EdgeType IDs and the embedded relationship_name on the
-    // edge's retrieval text — `get_edge_retrieval_text(edge_text,
-    // relationship_name)` (index_graph_edges.py:33-53), i.e. the nonblank
-    // `edge_text` property, falling back to the nonblank relationship_name,
-    // else dropped. `generate_edge_id(edge_id=text)` then derives the ID from
-    // that text. We mirror that here so EdgeType UUIDs and the
-    // EdgeType_relationship_name vector inputs match Python (B2.5).
-    //
-    // Python counts every edge `add_data_points` writes, structural ones
-    // included (`add_data_points.py:346` → `create_edge_type_datapoints`), so
-    // the structural edges' stamped sentences get rows here too — which is
-    // what lets a `"Document chunk mentions …"` edge be query-ranked and
-    // surface as a fact.
-    // Custom field edges count the same way: Python writes them through the
-    // same `add_data_points` walk.
-    let structural_texts =
-        structural_edges
-            .iter()
-            .chain(&dynamic_edges)
-            .map(|(_, _, relationship, props)| {
-                EdgeType::retrieval_text(
-                    props.get("edge_text").and_then(serde_json::Value::as_str),
-                    relationship,
-                )
-            });
-    let mut edge_types = build_edge_types(
-        input
-            .edges
-            .iter()
-            .map(edge_retrieval_text)
-            .chain(structural_texts),
-        input.dataset_id,
-    );
-
-    // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
-    // `source_*` provenance keys are populated before they are vector-indexed
-    // (collection `EdgeType_relationship_name`).
-    // The LLM-derived edge-type names trace back to the entity-extraction task,
-    // so the `source_pipeline` / `source_task` literals match.
-    //
-    // These DataPoints are NOT stored as graph nodes (see parity note above),
-    // so the stamp only affects vector payloads, not the graph/visualization.
-    //
-    // `task_rank: None` — Python's `create_edge_type_datapoints`
-    // (`index_graph_edges.py:50`) builds these objects locally and never
-    // returns them from `add_data_points`, so no stamper ever assigns them a
-    // rank. The vector payload does not carry a rank either way: it is
-    // Python's `IndexSchema` row, whose `topological_rank` is always the `0`
-    // default (`cognee_models::index_schema_payload`).
-    //
-    // DLT-derived edges (`extract_dlt_fk_edges`) construct
-    // `GraphEdgePair` instances rather than DataPoints; they carry no
-    // DataPoint to stamp, so no pre-stamp call is needed there.
-    {
-        let user_label = input.user_id.as_ref().map(|id| id.to_string());
-        let mut local_visited: HashSet<Uuid> = HashSet::new();
-        for et in &mut edge_types {
-            crate::graph_integration::expansion::pre_stamp_extraction(
-                et,
-                user_label.as_deref(),
-                None,
-                &mut local_visited,
-            );
-        }
-    }
-
-    // Persist the structural edges discovered above (port of Python's
-    // get_graph_from_model() relationship discovery).
-    if !structural_edges.is_empty() {
-        graph_db
-            .add_edges(&structural_edges)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} structural edges", structural_edges.len());
-    }
-
-    // One vector per chunk, entity and summary, whether or not they are kept.
-    let dynamic_embedding_count: usize = dynamic_nodes
-        .values()
-        .map(|node| node.index_field_texts().count())
-        .sum();
-    let embedding_count =
-        input.chunks.len() + input.entities.len() + input.summaries.len() + dynamic_embedding_count;
-    // Retained vectors are generated up front and reused by the index pass.
-    // Otherwise the index pass embeds those texts itself, a window at a time,
-    // and no corpus-sized set of vectors is ever held (SDK-711): it already
-    // embeds whatever has no precomputed vector, so the work done is the same.
-    let mut embeddings = if config.retain_embeddings {
-        generate_embeddings(
-            &input.chunks,
-            &input.entities,
-            &input.summaries,
-            embedding_engine.clone(),
-        )
-        .await?
-    } else {
-        Vec::new()
+    // A run with no user records no evidence: Python's buffer skips a context
+    // without a user (`ProvenanceBuffer.capture`, `buffer.py:105`), where the
+    // ownership ledger falls back to the default user. A host that records the
+    // run under its own id (the HTTP server's dispatcher) keys the evidence on
+    // that id, so the lookup's COMPLETED filter sees it; ownership stays on the
+    // executor's run id.
+    let evidence_identity = LedgerIdentity {
+        pipeline_run_id: config.evidence_pipeline_run_id.or(ledger.pipeline_run_id),
+        ..ledger
     };
-
-    let mut indexed_fields = index_data_points(
-        &input.chunks,
-        &input.entities,
-        &input.summaries,
-        &input.documents,
-        &edge_types,
-        input.dataset_id,
-        Arc::clone(&embedding_engine),
-        Arc::clone(&vector_db),
-        &embeddings,
-    )
-    .await?;
-    if !dynamic_nodes.is_empty() {
-        let dynamic_node_values: Vec<&DynamicDataPoint> = dynamic_nodes.values().copied().collect();
-        let dynamic_embeddings = index_dynamic_graph(
-            &dynamic_node_values,
-            input.dataset_id,
-            embedding_engine,
-            vector_db,
-            config,
-            &mut indexed_fields,
-        )
-        .await?;
-        embeddings.extend(dynamic_embeddings);
-    }
-
-    // Only after the graph and vector writes succeeded (Python captures at the
-    // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
-    // never describes an edge the graph does not hold.
-    // A run with no user records no evidence: Python's buffer skips a
-    // context without a user (`ProvenanceBuffer.capture`, `buffer.py:105`),
-    // where the ownership ledger above falls back to the default user.
-    if config.edge_evidence_enabled && input.user_id.is_some() {
-        // Python captures over the batch's `edges` after `custom_edges` were
-        // appended to them (`add_data_points.py:403`), so runtime custom
-        // edges are structural candidates too.
-        // A host that records the run under its own id (the HTTP server's
-        // dispatcher) keys the evidence on that id, so the lookup's COMPLETED
-        // filter sees it; ownership above stays on the executor's run id.
-        let evidence_identity = match config.evidence_pipeline_run_id {
-            Some(run_id) => LedgerIdentity {
-                pipeline_run_id: Some(run_id),
-                ..ledger_identity
-            },
-            None => ledger_identity,
-        };
-        capture_edge_evidence(
-            db,
-            evidence_identity,
-            &input.chunks,
-            structural_edges.iter().chain(dynamic_edges.iter()),
-            &input.producers,
-        )
-        .await?;
-    }
+    let evidence =
+        (config.edge_evidence_enabled && input.user_id.is_some()).then_some(evidence_identity);
+    let context = crate::persist::PersistContext {
+        graph_db: &graph_db,
+        vector_db: &vector_db,
+        embedding_engine: &embedding_engine,
+        db,
+        ledger,
+        evidence,
+        user_id: input.user_id,
+        config,
+    };
+    let group = crate::persist::PersistGroup {
+        chunks: &input.chunks,
+        documents: &input.documents,
+        summaries: &input.summaries,
+        entities: &input.entities,
+        timestamps: &input.timestamps,
+        edges: &input.edges,
+        claimed_existing_edges: &input.claimed_existing_edges,
+        producers: &input.producers,
+        dynamic_graphs: &input.dynamic_graphs,
+        web_pages: &input.handoff.web_pages,
+        entity_graph_stamps: &input.handoff.entity_graph_stamps,
+        dlt: None,
+    };
+    let mut state = crate::persist::PersistState::default();
+    crate::persist::persist_group(group, &mut state, &context).await?;
+    let written = state.into_outputs();
 
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
         entities: input.entities.clone(),
         edges: input.edges.clone(),
         summaries: input.summaries.clone(),
-        edge_types,
-        embeddings,
-        embedding_count,
-        indexed_fields,
+        edge_types: written.edge_types,
+        embeddings: written.embeddings,
+        embedding_count: written.embedding_count,
+        indexed_fields: written.indexed_fields,
         documents_for_dlt: input.documents.clone(),
         already_completed: false,
         prior_pipeline_run_id: None,
@@ -2685,19 +2435,18 @@ pub async fn add_data_points(
     })
 }
 
-/// Record which chunks support which graph edges (`provenance_edge_evidence`).
+/// The edge-evidence rows of one persisted group: which chunks support which
+/// graph edges (`provenance_edge_evidence`).
 ///
 /// Port of Python's `capture_graph_provenance`
 /// (`modules/provenance/edge_evidence/capture.py`); the rows are built by
-/// [`crate::edge_evidence::build_edge_evidence`]. A failed insert fails the
-/// stage, as Python's flush does at data-item completion.
-async fn capture_edge_evidence<'a>(
-    db: &dyn RelationalDb,
+/// [`crate::edge_evidence::build_edge_evidence`].
+pub(crate) fn edge_evidence_rows<'a>(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     structural_edges: impl IntoIterator<Item = &'a EdgeData>,
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> Vec<cognee_database::EdgeEvidence> {
     let scope = crate::edge_evidence::EvidenceScope {
         tenant_id: id.tenant_id,
         user_id: id.user_id,
@@ -2705,21 +2454,14 @@ async fn capture_edge_evidence<'a>(
         pipeline_run_id: id.pipeline_run_id,
         captured_at: Utc::now(),
     };
-    let rows =
-        crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers);
-    if rows.is_empty() {
-        return Ok(());
-    }
-    cognee_database::ProvenanceDb::insert_edge_evidence(db, &rows).await?;
-    info!("Recorded {} edge evidence rows", rows.len());
-    Ok(())
+    crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers)
 }
 
 /// Vector-index runtime custom DataPoints inside a bulk-load scope of their own handled exactly like
-/// [`index_data_points`]': a store that rejects the hint is written without
+/// [`index_data_points_except`]': a store that rejects the hint is written without
 /// it, and the scope is finished on success and failure alike.
 #[allow(clippy::too_many_arguments)]
-async fn index_dynamic_graph(
+pub(crate) async fn index_dynamic_graph(
     nodes: &[&DynamicDataPoint],
     dataset_id: Uuid,
     engine: Arc<dyn EmbeddingEngine>,
@@ -2846,7 +2588,7 @@ fn stamp_extracted_edge_text(
     }
     for pair in &dedup_result.unique_nodes {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        if let Some(entity_type) = &pair.entity_type {
+        for entity_type in pair.entity_types() {
             labels.insert(entity_type.base.id, &entity_type.name);
         }
     }
@@ -2873,10 +2615,10 @@ fn stamp_extracted_edge_text(
 /// rule ([`DynamicDataPoint::label`]), so a chunk's `contains` edge to one and
 /// each custom field edge get the generic sentence too — Python attaches
 /// custom nodes without the `"Document chunk mentions"` text.
-fn stamp_structural_edge_text(
+pub(crate) fn stamp_structural_edge_text(
     structural_edges: &mut [EdgeData],
     dynamic_edges: &mut [EdgeData],
-    input: &SummarizedData,
+    input: &crate::persist::PersistGroup<'_>,
     dynamic_nodes: &BTreeMap<Uuid, &DynamicDataPoint>,
 ) {
     use crate::graph_extraction::{EdgeLabels, chunk_mentions_text, ensure_default_edge_text};
@@ -2885,26 +2627,26 @@ fn stamp_structural_edge_text(
     for (id, node) in dynamic_nodes {
         labels.insert_label(*id, node.label());
     }
-    for chunk in &input.chunks {
+    for chunk in input.chunks {
         labels.insert(chunk.base.id, &chunk.text);
     }
-    for summary in &input.summaries {
+    for summary in input.summaries {
         labels.insert(summary.base.id, &summary.text);
     }
-    for document in &input.documents {
+    for document in input.documents {
         labels.insert(document.base.id, &document.name);
     }
     let mut mentions: HashMap<String, String> = HashMap::new();
-    for pair in &input.entities {
+    for pair in input.entities {
         labels.insert(pair.entity.base.id, &pair.entity.name);
-        if let Some(entity_type) = &pair.entity_type {
+        for entity_type in pair.entity_types() {
             labels.insert(entity_type.base.id, &entity_type.name);
         }
         if let Some(text) = chunk_mentions_text(&pair.entity.name, &pair.entity.description) {
             mentions.insert(pair.entity.base.id.to_string(), text);
         }
     }
-    for node in &input.timestamps {
+    for node in input.timestamps {
         let timestamp = &node.timestamp;
         labels.insert(timestamp.base.id, &timestamp.name);
         if let Some(text) = chunk_mentions_text(&timestamp.name, &node.description) {
@@ -2932,7 +2674,7 @@ fn stamp_structural_edge_text(
     }
 }
 
-fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
+pub(crate) fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
     EdgeType::retrieval_text(
         edge_pair.properties.get("edge_text").map(String::as_str),
         &edge_pair.relationship_name,
@@ -2985,7 +2727,7 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 /// SDKs (no retriever, scorer or search path reads it), so summing costs no
 /// observable parity, while matching Python would put this writer at odds with
 /// `edge_reindex`. See the PR for the full argument.
-fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
+pub(crate) fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
 where
     I: IntoIterator<Item = String>,
 {
@@ -3499,44 +3241,66 @@ pub async fn extract_dlt_fk_edges(
     }
     schema_nodes.extend(column_value_nodes.into_values());
 
-    // I1: claim every schema node and FK edge before a single one of them
-    // reaches the graph.
-    let (prov_nodes, prov_edges) = dlt_provenance_rows(
-        id,
-        &schema_nodes,
-        &all_edges,
-        &row_chunk_docs,
-        &column_value_owners,
-    );
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
-
-    // Persist schema nodes to graph DB (SchemaTable, SchemaRelationship and
-    // DltColumn), then embed them as Python's `index_data_points` does.
-    if !schema_nodes.is_empty() {
-        let node_count = schema_nodes.len();
-        graph_db
-            .add_nodes_raw(schema_nodes.clone())
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Added {} DLT schema nodes to graph", node_count);
-        index_dlt_schema_nodes(&schema_nodes, id, &embedding_engine, &vector_db).await?;
-    }
-
-    // Persist edges to graph DB
     if !all_edges.is_empty() {
-        graph_db
-            .add_edges(&all_edges)
-            .await
-            .map_err(CognifyError::from)?;
         info!(
-            "Added {} DLT FK edges to graph ({} tables, {} FK definitions)",
+            "Built {} DLT FK edges ({} tables, {} FK definitions)",
             all_edges.len(),
             table_node_ids.len(),
             fk_defs_seen.len()
         );
     }
 
-    Ok(())
+    // Everything is written by the persistence layer, as a group of its own:
+    // the schema nodes and FK edges are claimed in the ledger before a single
+    // one of them reaches the graph (I1), then the schema nodes (SchemaTable,
+    // SchemaRelationship and DltColumn) and the edges are written, and the
+    // schema nodes embedded as Python's `index_data_points` does. The state is
+    // fresh: this step runs after the pipeline, and nothing it writes was
+    // written by the run's own group.
+    let artifacts = DltArtifacts {
+        schema_nodes,
+        edges: all_edges,
+        row_chunk_docs,
+        column_value_owners,
+    };
+    let config = CognifyConfig::default();
+    let context = crate::persist::PersistContext {
+        graph_db: &graph_db,
+        vector_db: &vector_db,
+        embedding_engine: &embedding_engine,
+        db,
+        ledger: id,
+        // The DLT step never recorded edge evidence: it stores no chunk.
+        evidence: None,
+        user_id: None,
+        // A DLT group carries no chunk, entity or custom graph, so none of the
+        // settings the layer reads for those applies.
+        config: &config,
+    };
+    let group = crate::persist::PersistGroup {
+        dlt: Some(&artifacts),
+        ..crate::persist::PersistGroup::empty()
+    };
+    crate::persist::persist_group(
+        group,
+        &mut crate::persist::PersistState::default(),
+        &context,
+    )
+    .await
+}
+
+/// What the DLT step writes: its schema nodes and edges, and what attributes
+/// them to data items in the ledger (see [`dlt_provenance_rows`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DltArtifacts {
+    /// SchemaTable, SchemaRelationship and DltColumn nodes, as raw JSON.
+    pub(crate) schema_nodes: Vec<serde_json::Value>,
+    /// `is_row_of`, foreign-key, schema and column-value edges.
+    pub(crate) edges: Vec<EdgeData>,
+    /// `DltRow` chunk id → its document.
+    pub(crate) row_chunk_docs: HashMap<Uuid, Uuid>,
+    /// `DltColumn` node id → every row document referencing it.
+    pub(crate) column_value_owners: BTreeMap<Uuid, BTreeSet<Uuid>>,
 }
 
 /// Ownership rows for the DLT teardown's schema nodes and FK edges.
@@ -3558,7 +3322,7 @@ pub async fn extract_dlt_fk_edges(
 ///
 /// `indexed_fields` names the collections [`index_dlt_schema_nodes`] writes, so
 /// a delete reaches them.
-fn dlt_provenance_rows(
+pub(crate) fn dlt_provenance_rows(
     id: LedgerIdentity,
     schema_nodes: &[serde_json::Value],
     edges: &[cognee_graph::EdgeData],
@@ -3688,7 +3452,7 @@ fn dlt_cell_text(value: &serde_json::Value) -> Option<String> {
 /// and `DltColumn_properties`. The payload is Python's `IndexSchema` row, as
 /// every other collection's (`index_schema_payload`). Each collection's total is announced before its
 /// windows are written, like every other writer.
-async fn index_dlt_schema_nodes(
+pub(crate) async fn index_dlt_schema_nodes(
     nodes: &[serde_json::Value],
     identity: LedgerIdentity,
     engine: &Arc<dyn EmbeddingEngine>,
@@ -3853,6 +3617,35 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
     }
     if rank > 0 && matches!(dp.topological_rank, None | Some(0)) {
         dp.topological_rank = Some(rank);
+    }
+}
+
+/// [`stamp_provenance`] on every entity and every one of its types — an
+/// entity several documents typed carries several EntityTypes, and each is a
+/// node of its own.
+fn stamp_entity_provenance(
+    entities: &mut [GraphNodePair],
+    task: &str,
+    user: Option<&str>,
+    rank: i32,
+) {
+    for pair in entities {
+        stamp_provenance(
+            &mut pair.entity.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            task,
+            user,
+            rank,
+        );
+        for entity_type in pair.entity_types_mut() {
+            stamp_provenance(
+                &mut entity_type.base,
+                COGNIFY_PIPELINE_STAMP_NAME,
+                task,
+                user,
+                rank,
+            );
+        }
     }
 }
 
@@ -5392,6 +5185,36 @@ fn semantic_edge_provenance_rows(
     rows
 }
 
+/// The extracted chunk graphs grouped into Python's units, in input order.
+///
+/// `chunks` is every chunk of the data items being built, DLT rows included,
+/// and a chunk's block is its position among all of them divided by
+/// `chunks_per_batch`. That is how the custom-schema walk
+/// ([`store_dynamic_graphs`]) counts, so both paths cut a data item in the
+/// same places. It only matters for a data item that mixes DLT rows and text
+/// chunks, which Python never builds into one graph: there a DLT manifest
+/// takes its own route (`cognify.py:599`, `get_dlt_tasks`).
+fn graph_units(
+    chunks: &[DocumentChunk],
+    chunks_per_batch: usize,
+    graphs: Vec<(Uuid, KnowledgeGraph)>,
+) -> Vec<Vec<(Uuid, KnowledgeGraph)>> {
+    let document_of: HashMap<Uuid, Uuid> = chunks
+        .iter()
+        .map(|chunk| (chunk.base.id, chunk.document_id))
+        .collect();
+    extraction_units(
+        chunks,
+        chunks_per_batch,
+        graphs.into_iter().map(|(chunk_id, graph)| {
+            // Every graph comes from one of `chunks`; an unknown one would
+            // group under the nil data item, alone.
+            let data_id = document_of.get(&chunk_id).copied().unwrap_or_default();
+            (data_id, chunk_id, (chunk_id, graph))
+        }),
+    )
+}
+
 /// The storage walk of every runtime custom graph, in `graphs` order.
 ///
 /// Python runs the pipeline once per data item and calls `add_data_points`
@@ -5399,35 +5222,19 @@ fn semantic_edge_provenance_rows(
 /// across that call only. The graphs are grouped the same way, by data item
 /// and by their chunk's position within it, and each group is walked with one
 /// shared claim set (see [`store_dynamic_graph_batch`]).
-fn store_dynamic_graphs(
+pub(crate) fn store_dynamic_graphs(
     graphs: &[AttributedDynamicGraph],
     chunks: &[DocumentChunk],
     config: &CognifyConfig,
 ) -> Vec<StoredDynamicGraph> {
-    let chunks_per_batch = config.chunks_per_batch.max(1);
-    let mut positions: HashMap<Uuid, usize> = HashMap::new();
-    let chunk_batch: HashMap<Uuid, usize> = chunks
-        .iter()
-        .map(|chunk| {
-            let position = positions.entry(chunk.document_id).or_default();
-            let batch = *position / chunks_per_batch;
-            *position += 1;
-            (chunk.base.id, batch)
-        })
-        .collect();
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut group_of: HashMap<(Uuid, usize), usize> = HashMap::new();
-    for (index, attributed) in graphs.iter().enumerate() {
-        let key = (
-            attributed.data_id,
-            chunk_batch.get(&attributed.chunk_id).copied().unwrap_or(0),
-        );
-        let group = *group_of.entry(key).or_insert_with(|| {
-            groups.push(Vec::new());
-            groups.len() - 1
-        });
-        groups[group].push(index);
-    }
+    let groups = extraction_units(
+        chunks,
+        config.chunks_per_batch,
+        graphs
+            .iter()
+            .enumerate()
+            .map(|(index, attributed)| (attributed.data_id, attributed.chunk_id, index)),
+    );
     let attachment = config.chunk_attachment.unwrap_or(ChunkAttachment::Direct);
     let mut stored = vec![
         StoredDynamicGraph {
@@ -5448,7 +5255,8 @@ fn store_dynamic_graphs(
     stored
 }
 
-/// Record runtime custom graph ownership before either artifact store sees it.
+/// The ownership rows of the runtime custom graphs, which the persistence layer
+/// writes before either artifact store sees them.
 ///
 /// `stored` is each graph's storage walk, in `graphs` order. Every edge row
 /// carries the edge's properties as `attributes` — above all the `edge_text`
@@ -5456,18 +5264,20 @@ fn store_dynamic_graphs(
 /// and what the delete path and the run sweep re-derive that point's id from
 /// (`cognee_delete::edge_retrieval_text`). The rows otherwise follow Python's
 /// `upsert_edges.py`: a field edge is keyed and labelled on its field name, a
-/// chunk's `contains` row on its `edge_text`, as [`upsert_provenance`] keys
+/// chunk's `contains` row on its `edge_text`, as [`provenance_rows`] keys
 /// the structural one, so both rows for one edge agree on their text.
-async fn record_dynamic_graph_ownership(
-    db: &dyn RelationalDb,
+pub(crate) fn dynamic_graph_ownership_rows(
     id: LedgerIdentity,
     graphs: &[AttributedDynamicGraph],
     stored: &[StoredDynamicGraph],
     chunks: &[DocumentChunk],
     structural_edges: &[EdgeData],
-    // The custom field edges `add_data_points` writes, already stamped.
+    // The custom field edges the persistence layer writes, already stamped.
     dynamic_edges: &[EdgeData],
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     let properties_by_edge =
         |edges: &[EdgeData]| -> HashMap<(String, String, String), serde_json::Value> {
             edges
@@ -5596,27 +5406,25 @@ async fn record_dynamic_graph_ownership(
             }
         }
     }
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &nodes, &edges).await?;
-    Ok(())
+    (nodes, edges)
 }
 
-/// Record ownership of the entities and semantic edges a run is about to write
-/// to the graph, in one transaction, before the graph sees them.
+/// The ownership rows of the extraction artifacts: the entities, the Timestamp
+/// nodes, the semantic edges and the claimed existing edges.
 ///
-/// The rows this writes are a subset of the ones [`upsert_provenance`] writes
-/// two stages later, and they carry the same deterministic ids — the second
-/// write is an idempotent upsert that leaves `pipeline_run_id` alone (it is
-/// deliberately absent from the `ON CONFLICT` update list, so the first run to
-/// claim an artifact keeps it).
+/// The entity and semantic-edge rows are also among the ones
+/// [`provenance_rows`] builds, with the same deterministic ids; the
+/// persistence layer writes each row once. `pipeline_run_id` is deliberately
+/// absent from the `ON CONFLICT` update list, so the first run to claim an
+/// artifact keeps it.
 ///
-/// One exception to "subset": `claimed_existing_edges` is written *only* here.
-/// Those edges never reach `add_data_points`, because re-writing them to the
-/// graph is exactly what the extraction dedup filter exists to prevent — but
-/// their ownership rows are what keeps an earlier file's deletion from taking
-/// a still-referenced edge with it.
+/// The Timestamp and `claimed_existing_edges` rows are built only here. The
+/// claimed edges are never written to the graph, because re-writing them is
+/// exactly what the extraction dedup filter exists to prevent — but their
+/// ownership rows are what keeps an earlier file's deletion from taking a
+/// still-referenced edge with it.
 #[allow(clippy::too_many_arguments)]
-async fn record_extraction_ownership(
-    db: &dyn RelationalDb,
+pub(crate) fn extraction_ownership_rows(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -5627,7 +5435,10 @@ async fn record_extraction_ownership(
     claimed_existing_edges: &[GraphEdgePair],
     timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     let chunk_data_map = chunk_document_map(chunks);
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
@@ -5647,19 +5458,48 @@ async fn record_extraction_ownership(
         &entity_data_map,
         producers,
     ));
+    (prov_nodes, prov_edges)
+}
 
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
+/// Write provenance node and edge records to the relational database: the
+/// rows [`provenance_rows`] builds, in one transaction.
+///
+/// Only the unit tests write a hand-built set this way; the persistence layer
+/// builds the same rows and writes them itself.
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+async fn upsert_provenance(
+    db: &dyn RelationalDb,
+    id: LedgerIdentity,
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    edges: &[GraphEdgePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    structural_edges: &[EdgeData],
+    producers: &ArtifactProducers,
+) -> Result<(), CognifyError> {
+    let (prov_nodes, prov_edges) = provenance_rows(
+        id,
+        chunks,
+        entities,
+        edges,
+        summaries,
+        documents,
+        structural_edges,
+        producers,
+    );
+    // Write the node and edge provenance batches atomically: a failure partway
+    // through rolls the whole group back (see `upsert_provenance_graph`).
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        info!(
-            "Recorded ownership of {} entities and {} semantic edges before writing them",
-            prov_nodes.len(),
-            prov_edges.len()
-        );
+        cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+            .await?;
     }
     Ok(())
 }
 
-/// Write provenance node and edge records to the relational database.
+/// The provenance node and edge records of the chunks, entities, semantic
+/// edges, summaries, entity types, documents and structural edges.
 ///
 /// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
 /// `add_data_points` (guarded by `if user and dataset and data:`).
@@ -5674,8 +5514,7 @@ async fn record_extraction_ownership(
 /// `SummarizedData` themselves get the previous single-`chunk_id` (entities)
 /// and both-endpoints-agree (edges) attribution.
 #[allow(clippy::too_many_arguments)]
-async fn upsert_provenance(
-    db: &dyn RelationalDb,
+pub(crate) fn provenance_rows(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -5684,7 +5523,10 @@ async fn upsert_provenance(
     documents: &[Document],
     structural_edges: &[EdgeData],
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     use cognee_database::{GraphEdge, GraphNode};
 
     let LedgerIdentity {
@@ -5700,9 +5542,9 @@ async fn upsert_provenance(
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
     // ── Provenance nodes ────────────────────────────────────────────────
-    // Entities. Shared with the extraction stage, which wrote the same rows
-    // before it put the entities in the graph; this pass is the idempotent
-    // second write.
+    // Entities. `extraction_ownership_rows` builds the same rows, with the same
+    // ids; both are written, so these rows are upserted twice per group
+    // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, producers);
 
@@ -5759,8 +5601,13 @@ async fn upsert_provenance(
         });
     }
 
-    // EntityTypes
-    for et in entities.iter().filter_map(|pair| pair.entity_type.as_ref()) {
+    // EntityTypes, one row per type id: many entities share a type.
+    let mut seen_types = HashSet::new();
+    for et in entities
+        .iter()
+        .flat_map(|pair| pair.entity_types())
+        .filter(|et| seen_types.insert(et.base.id))
+    {
         // EntityType rows carry a nil `data_id`: one type is shared by every
         // entity of that type, so there is no single producing file. Note this
         // is *not* Python's shape — `upsert_nodes` stamps the ctx `data_id` on
@@ -5829,8 +5676,8 @@ async fn upsert_provenance(
     // transaction, so a mid-way failure cannot leave nodes without their edges.
 
     // ── Provenance edges ────────────────────────────────────────────────
-    // Semantic edges from graph extraction — again the same rows the
-    // extraction stage already wrote before persisting them.
+    // Semantic edges from graph extraction — again the same rows
+    // `extraction_ownership_rows` builds.
     let mut prov_edges: Vec<GraphEdge> =
         semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
 
@@ -5894,21 +5741,7 @@ async fn upsert_provenance(
             created_at: Utc::now(),
         });
     }
-
-    // Write the node and edge provenance batches atomically: a failure partway
-    // through rolls the whole group back (see `upsert_provenance_graph`).
-    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-            .await?;
-        if !prov_nodes.is_empty() {
-            info!("Upserted {} provenance node records", prov_nodes.len());
-        }
-        if !prov_edges.is_empty() {
-            info!("Upserted {} provenance edge records", prov_edges.len());
-        }
-    }
-
-    Ok(())
+    (prov_nodes, prov_edges)
 }
 
 /// An edge's properties as a ledger row's `attributes` (Python's
@@ -5927,7 +5760,7 @@ fn edge_attributes(
 }
 
 /// Generate embeddings for chunks, entities, and summaries.
-async fn generate_embeddings(
+pub(crate) async fn generate_embeddings(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
     summaries: &[TextSummary],
@@ -6062,16 +5895,8 @@ fn dynamic_index_refs(properties: &serde_json::Map<String, serde_json::Value>) -
     }
 }
 
-/// Index data points in vector database.
-///
-/// Every collection is written in windows of
-/// [`cognee_vector::write_window_points`] inside a
-/// bulk-load scope of its own, each preceded by
-/// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
-/// that tunes its index maintenance to the size of a write (pgvector) decides
-/// as it did for the single call per collection this replaces. The scope
-/// nests inside the one `cognify` holds, and stands in for it when the task
-/// runs in a pipeline of the caller's own.
+/// [`index_data_points_except`] with nothing left out.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points(
     chunks: &[DocumentChunk],
@@ -6083,6 +5908,48 @@ async fn index_data_points(
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
+) -> Result<IndexedFieldsStats, CognifyError> {
+    index_data_points_except(
+        chunks,
+        entities,
+        summaries,
+        documents,
+        edge_types,
+        dataset_id,
+        engine,
+        vector_db,
+        precomputed_embeddings,
+        &HashSet::new(),
+    )
+    .await
+}
+
+/// Index data points in vector database, leaving out the entity types in
+/// `embedded_types`: the ones an earlier persistence group of the same run
+/// already embedded. Every other collection is indexed as handed in, so the
+/// caller leaves those points out itself.
+///
+/// Every collection is written in windows of
+/// [`cognee_vector::write_window_points`] inside a
+/// bulk-load scope of its own, each preceded by
+/// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
+/// that tunes its index maintenance to the size of a write (pgvector) decides
+/// as it did for the single call per collection this replaces. The scope
+/// nests inside the one `cognify` holds — on a counting backend an inner
+/// scope's end does no maintenance while an outer one is open — and stands in
+/// for it when the task runs in a pipeline of the caller's own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn index_data_points_except(
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    precomputed_embeddings: &[Embedding],
+    embedded_types: &HashSet<Uuid>,
 ) -> Result<IndexedFieldsStats, CognifyError> {
     // Each collection used to be embedded, built and written in one piece, so
     // all of its vectors and metadata were live at once — a copy that grew
@@ -6099,7 +5966,7 @@ async fn index_data_points(
             None
         }
     };
-    let indexed = index_data_points_windowed(
+    let indexed = index_data_points_windowed_except(
         chunks,
         entities,
         summaries,
@@ -6110,6 +5977,7 @@ async fn index_data_points(
         Arc::clone(&vector_db),
         precomputed_embeddings,
         window,
+        embedded_types,
     )
     .await;
     if let Some(bulk) = bulk
@@ -6121,7 +5989,7 @@ async fn index_data_points(
 }
 
 /// Announce `points` points to `data_type`/`field_name`, the total the
-/// windows that follow add up to (see [`index_data_points`]).
+/// windows that follow add up to (see [`index_data_points_except`]).
 async fn announce_index_write(
     vector_db: &Arc<dyn VectorDB>,
     data_type: &str,
@@ -6136,6 +6004,7 @@ async fn announce_index_write(
 
 /// [`index_data_points`] with an explicit window size, so tests can drive a
 /// multi-window write over a handful of points.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points_windowed(
     chunks: &[DocumentChunk],
@@ -6148,6 +6017,37 @@ async fn index_data_points_windowed(
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
     window: usize,
+) -> Result<IndexedFieldsStats, CognifyError> {
+    index_data_points_windowed_except(
+        chunks,
+        entities,
+        summaries,
+        documents,
+        edge_types,
+        dataset_id,
+        engine,
+        vector_db,
+        precomputed_embeddings,
+        window,
+        &HashSet::new(),
+    )
+    .await
+}
+
+/// [`index_data_points_except`] with an explicit window size.
+#[allow(clippy::too_many_arguments)]
+async fn index_data_points_windowed_except(
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    precomputed_embeddings: &[Embedding],
+    window: usize,
+    embedded_types: &HashSet<Uuid>,
 ) -> Result<IndexedFieldsStats, CognifyError> {
     let mut stats = IndexedFieldsStats::default();
     let dimension = engine.dimension();
@@ -6296,8 +6196,8 @@ async fn index_data_points_windowed(
         let mut seen_ids = std::collections::HashSet::new();
         let unique_entity_types: Vec<&cognee_models::EntityType> = entities
             .iter()
-            .filter_map(|pair| pair.entity_type.as_ref())
-            .filter(|et| seen_ids.insert(et.base.id))
+            .flat_map(|pair| pair.entity_types())
+            .filter(|et| !embedded_types.contains(&et.base.id) && seen_ids.insert(et.base.id))
             .collect();
 
         if !unique_entity_types.is_empty() {
@@ -6855,16 +6755,22 @@ pub fn make_extract_graph_task(
 
 /// [`make_extract_graph_task`] with a caller-chosen `topological_rank`.
 ///
-/// `rank` is threaded all the way into [`extract_graph_from_data`] (and from
-/// there into `expand_with_nodes_and_edges`) rather than only being applied to
-/// the task body's own stamp loop: Entity / EntityType nodes are written to the
-/// graph DB *inside* `extract_graph_from_data`, so a rank applied afterwards
-/// would never reach the persisted rows.
+/// `rank` is threaded all the way into graph building (and from there into
+/// `expand_with_nodes_and_edges`) rather than only being applied to the task
+/// body's own stamp loop, so every Entity / EntityType carries it from
+/// construction.
+///
+/// The stage writes nothing: it builds the graph and, when
+/// [`CognifyConfig::create_web_page_nodes`] is on, the WebPage / WebSite
+/// artifacts, and hands them to the persistence step ([`add_data_points`]).
+/// Its only read of a store is the existing-edge check on `graph_db`. The
+/// relational database argument is unused since that move; it stays so the
+/// signature does not change before the stages are reworked.
 pub fn make_extract_graph_task_with_rank(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<dyn RelationalDb>,
+    _db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
@@ -6873,22 +6779,23 @@ pub fn make_extract_graph_task_with_rank(
         let llm = Arc::clone(&llm);
         let graph_db = Arc::clone(&graph_db);
         let ontology_resolver = Arc::clone(&ontology_resolver);
-        let db = Arc::clone(&db);
-        let config = config.clone();
+        let mut config = config.clone();
+        // Build the graph on the pool the host sized for this run, unless the
+        // caller pinned one.
+        if config.cpu_pool.is_none() {
+            config.cpu_pool = Some(crate::config::CpuPoolHandle(Arc::clone(&ctx.thread_pool)));
+        }
         let user_label = user_label_from_ctx(&ctx);
-        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let mut graph_data = if config.graph_schema.is_some() {
                 let extracted = extract_dynamic_graphs_from_data(&input, llm, &config).await?;
                 attach_dynamic_graphs(&input, extracted, config.chunk_attachment)
             } else {
-                extract_graph_from_data(
+                build_extracted_graph(
                     &input,
                     llm,
-                    Arc::clone(&graph_db),
+                    graph_db,
                     ontology_resolver,
-                    &*db,
-                    pipeline_run_id,
                     &config,
                     user_label.as_deref(),
                     (rank > 0).then_some(rank),
@@ -6896,38 +6803,29 @@ pub fn make_extract_graph_task_with_rank(
                 .await?
             };
             if config.create_web_page_nodes {
-                create_web_page_nodes(
-                    &graph_data.documents,
-                    &graph_data.chunks,
-                    graph_db,
-                    &*db,
-                    LedgerIdentity::new(
-                        input.tenant_id,
-                        input.user_id,
-                        input.dataset_id,
-                        pipeline_run_id,
-                    ),
-                )
-                .await?;
+                graph_data.handoff.web_pages =
+                    web_page_artifacts(&graph_data.documents, &graph_data.chunks);
             }
-            for pair in &mut graph_data.entities {
-                stamp_provenance(
-                    &mut pair.entity.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    EXTRACT_GRAPH_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-                if let Some(entity_type) = pair.entity_type.as_mut() {
-                    stamp_provenance(
-                        &mut entity_type.base,
-                        COGNIFY_PIPELINE_STAMP_NAME,
-                        EXTRACT_GRAPH_TASK_NAME,
-                        user_label.as_deref(),
-                        rank,
-                    );
-                }
-            }
+            // The entities as graph building left them, for the graph write:
+            // see `PersistHandoff::entity_graph_stamps`.
+            let unstamped: Vec<ProvenanceStamp> = graph_data
+                .entities
+                .iter()
+                .map(|pair| ProvenanceStamp::of(&pair.entity.base))
+                .collect();
+            stamp_entity_provenance(
+                &mut graph_data.entities,
+                EXTRACT_GRAPH_TASK_NAME,
+                user_label.as_deref(),
+                rank,
+            );
+            graph_data.handoff.entity_graph_stamps = graph_data
+                .entities
+                .iter()
+                .zip(unstamped)
+                .filter(|(pair, before)| ProvenanceStamp::of(&pair.entity.base) != *before)
+                .map(|(pair, before)| (pair.entity.base.id, before))
+                .collect();
             for attributed in &mut graph_data.dynamic_graphs {
                 for node in &mut attributed.graph.nodes {
                     stamp_provenance(
@@ -7111,6 +7009,8 @@ fn merge_graph_and_summaries(
         entities: graph.entities,
         timestamps: graph.timestamps,
         edges: graph.edges,
+        claimed_existing_edges: graph.claimed_existing_edges,
+        handoff: graph.handoff,
         producers: graph.producers,
         dynamic_graphs: graph.dynamic_graphs,
         summaries,
@@ -7161,8 +7061,7 @@ fn merge_graph_and_summaries(
 /// single task. It matters only to an embedder who composes a custom pipeline
 /// with `RetryPolicy::Limited`, who should know that the granularity here is
 /// the pair: retrying is already expensive at this stage (extraction alone
-/// re-issues every extraction call, and it has written graph nodes, edges and
-/// ownership rows by the time it can fail), and fusing widens that to
+/// re-issues every extraction call), and fusing widens that to
 /// summarization's calls too. A caller who needs independent retry boundaries
 /// wants the two halves as separate stages, which is what the
 /// [`make_extract_graph_task`] / [`make_summarize_text_task`] pair still
@@ -7211,18 +7110,16 @@ pub fn make_extract_graph_and_summarize_task_with_rank(
         rank,
     );
     let summarize = make_summarize_text_task_with_rank(llm, config, rank);
-    // ⚠️ `try_parallel` returns on the first branch error and drops the other,
-    // and the branch that can be dropped here is the one that writes — graph
-    // nodes, edges and ownership rows. That is safe only because the
-    // summarization branch has no reachable error path: `summarize_text`
-    // collects every per-chunk failure into its report and returns `Ok`, so
-    // the extraction branch is never the one cancelled. **Adding a fallible
-    // step to summarization breaks that**, and would tear extraction down
-    // mid-write with its `FailureReport` lost along with the dropped future —
-    // partial graph state that nothing records and nothing sweeps. Anything
-    // that can genuinely fail in summarization belongs in its report, not in
-    // its `Result`; if that ever stops being possible, this call has to await
-    // both branches and reconcile afterwards instead.
+    // ⚠️ `try_parallel` returns on the first branch error and drops the other.
+    // Neither branch writes any more — extraction hands everything to the
+    // persistence step (`add_data_points`) — so a dropped extraction leaves no
+    // partial graph state behind. It would still lose extraction's
+    // `FailureReport` and the LLM work already paid for, which is why the
+    // summarization branch keeps no reachable error path: `summarize_text`
+    // collects every per-chunk failure into its report and returns `Ok`.
+    // Anything that can genuinely fail in summarization belongs in its report,
+    // not in its `Result`; if that ever stops being possible, this call has to
+    // await both branches and reconcile afterwards instead.
     #[allow(
         clippy::expect_used,
         reason = "invariant is upheld by construction — see the message"
@@ -7305,24 +7202,12 @@ pub fn make_add_data_points_task_with_rank(
                     rank,
                 );
             }
-            for pair in &mut result.entities {
-                stamp_provenance(
-                    &mut pair.entity.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-                if let Some(entity_type) = pair.entity_type.as_mut() {
-                    stamp_provenance(
-                        &mut entity_type.base,
-                        COGNIFY_PIPELINE_STAMP_NAME,
-                        ADD_DATA_POINTS_TASK_NAME,
-                        user_label.as_deref(),
-                        rank,
-                    );
-                }
-            }
+            stamp_entity_provenance(
+                &mut result.entities,
+                ADD_DATA_POINTS_TASK_NAME,
+                user_label.as_deref(),
+                rank,
+            );
             for summary in &mut result.summaries {
                 stamp_provenance(
                     &mut summary.base,
@@ -7522,6 +7407,177 @@ mod tests {
     use crate::graph_integration::expand_with_nodes_and_edges;
     use cognee_models::{DataPoint, Entity, EntityType};
     use cognee_storage::MockStorage;
+
+    /// SDK-1694 review: a block boundary is counted over all of a data item's
+    /// chunks, DLT rows included, as Python batches them before extraction
+    /// drops the rows.
+    #[test]
+    fn graph_units_count_blocks_over_every_chunk_of_a_data_item() {
+        let doc = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..4)
+            .map(|index| {
+                let mut chunk = DocumentChunk::new(
+                    Uuid::new_v4(),
+                    format!("chunk {index}"),
+                    1,
+                    index,
+                    "sentence_end".to_string(),
+                    doc,
+                );
+                if index % 2 == 0 {
+                    chunk.base.data_type = cognee_models::DLT_ROW_TYPE.to_string();
+                }
+                chunk
+            })
+            .collect();
+        // Only the text chunks (positions 1 and 3) have graphs.
+        let graphs: Vec<(Uuid, KnowledgeGraph)> = [1, 3]
+            .iter()
+            .map(|&i| {
+                (
+                    chunks[i].base.id,
+                    KnowledgeGraph {
+                        nodes: vec![],
+                        edges: vec![],
+                    },
+                )
+            })
+            .collect();
+
+        let units = graph_units(&chunks, 2, graphs.clone());
+        let ids: Vec<Vec<Uuid>> = units
+            .iter()
+            .map(|unit| unit.iter().map(|(chunk, _)| *chunk).collect())
+            .collect();
+        assert_eq!(ids, [vec![chunks[1].base.id], vec![chunks[3].base.id]]);
+
+        // Counting over the text chunks alone would put both in one block.
+        let text_only: Vec<DocumentChunk> =
+            chunks.iter().filter(|c| !c.is_dlt_row()).cloned().collect();
+        assert_eq!(graph_units(&text_only, 2, graphs).len(), 1);
+    }
+
+    /// SDK-1694: the extraction stage's output order is the same from run to
+    /// run, not hash order.
+    #[tokio::test]
+    async fn extraction_output_order_is_stable_across_runs() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        let names: Vec<String> = (0..40).map(|i| format!("Entity {i}")).collect();
+        let canned = json!({
+            "nodes": names.iter().map(|name| json!({
+                "id": name, "name": name, "type": "Thing", "description": ""
+            })).collect::<Vec<_>>(),
+            "edges": names.windows(2).map(|pair| json!({
+                "source_node_id": pair[0], "target_node_id": pair[1],
+                "relationship_name": "next"
+            })).collect::<Vec<_>>()
+        })
+        .to_string();
+        let dataset_id = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), doc, "Forty things in a row.")],
+            documents: vec![test_document_with_metadata(doc, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let db = ledger_db(dataset_id).await;
+            let result = extract_graph_from_data(
+                &input,
+                Arc::new(MockLlm::new(vec![canned.clone()])),
+                Arc::new(cognee_graph::MockGraphDB::new()),
+                Arc::new(NoOpOntologyResolver::new()),
+                &db,
+                Some(Uuid::new_v4()),
+                &CognifyConfig::default(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let nodes: Vec<Uuid> = result.entities.iter().map(|p| p.entity.base.id).collect();
+            let edges: Vec<(Uuid, Uuid, String)> =
+                result.edges.iter().map(GraphEdgePair::dedup_key).collect();
+            runs.push((nodes, edges));
+        }
+
+        assert_eq!(runs[0], runs[1]);
+        let declared: Vec<Uuid> = names.iter().map(|name| Entity::id_for(name)).collect();
+        assert_eq!(runs[0].0, declared, "entities in declaration order");
+    }
+
+    /// The same through `extract_graph_from_data`: one document whose DLT
+    /// rows and text chunks interleave past `chunks_per_batch`. Its two text
+    /// chunks fall in different blocks, so each block's type for the entity
+    /// is kept; counting blocks over the text chunks alone would merge them
+    /// and keep only the first.
+    #[tokio::test]
+    async fn extraction_counts_blocks_over_dlt_rows_too() {
+        use cognee_ontology::NoOpOntologyResolver;
+        use cognee_test_utils::MockLlm;
+
+        let dataset_id = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let chunks: Vec<DocumentChunk> = (0..4)
+            .map(|index| {
+                let mut chunk = test_chunk(Uuid::new_v4(), doc, &format!("Apple, chunk {index}."));
+                chunk.chunk_index = index;
+                if index % 2 == 0 {
+                    chunk.base.data_type = cognee_models::DLT_ROW_TYPE.to_string();
+                }
+                chunk
+            })
+            .collect();
+        let apple = |kind: &str| {
+            json!({
+                "nodes": [{"id": "apple", "name": "Apple", "type": kind, "description": ""}],
+                "edges": []
+            })
+            .to_string()
+        };
+        let input = ExtractedChunks {
+            chunks,
+            documents: vec![test_document_with_metadata(doc, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let db = ledger_db(dataset_id).await;
+        let config = CognifyConfig::default()
+            .with_chunks_per_batch(2)
+            // One call at a time, so the canned answers go out in chunk order.
+            .with_max_parallel_extractions(1);
+
+        let result = extract_graph_from_data(
+            &input,
+            Arc::new(MockLlm::new(vec![apple("Company"), apple("Fruit")])),
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &config,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let pair = result
+            .entities
+            .iter()
+            .find(|pair| pair.entity.name == "apple")
+            .unwrap();
+        let types: Vec<&str> = pair.entity_types().map(|t| t.name.as_str()).collect();
+        assert_eq!(types, ["company", "fruit"]);
+    }
 
     struct ValidatingDynamicLlm;
 
@@ -8468,10 +8524,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_a.to_string()));
         let entity_id = entity.base.id;
-        let nodes = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let nodes = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_a);
@@ -8505,10 +8558,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_id.to_string()));
         let entity_id = entity.base.id;
-        let nodes = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let nodes = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let links = chunk_entity_links(&nodes, &[], &ArtifactProducers::default());
 
@@ -8571,10 +8621,7 @@ mod tests {
         let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
         let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_a);
@@ -8637,10 +8684,7 @@ mod tests {
         let entity_type = EntityType::from_node_type("Person", Some(dataset_id));
         let entity = Entity::from_node("alice_1", "Alice", "", entity_type.base.id, None);
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         let mut producers = ArtifactProducers::default();
         producers.record_entity(entity_id, chunk_1);
@@ -8689,10 +8733,7 @@ mod tests {
             .base
             .set_metadata("chunk_id", json!(chunk_a.to_string()));
         let entity_id = entity.base.id;
-        let entities = vec![GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }];
+        let entities = vec![GraphNodePair::new(entity, Some(entity_type))];
 
         upsert_provenance(
             &db,
@@ -8753,14 +8794,8 @@ mod tests {
             .set_metadata("chunk_id", json!(chunk_b.to_string()));
         let (alice_id, bob_id) = (alice.base.id, bob.base.id);
         let entities = vec![
-            GraphNodePair {
-                entity: alice,
-                entity_type: Some(entity_type.clone()),
-            },
-            GraphNodePair {
-                entity: bob,
-                entity_type: Some(entity_type),
-            },
+            GraphNodePair::new(alice, Some(entity_type.clone())),
+            GraphNodePair::new(bob, Some(entity_type)),
         ];
 
         let mut edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -8846,14 +8881,8 @@ mod tests {
         let bob = Entity::from_node("bob_1", "Bob", "", entity_type.base.id, None);
         let (alice_id, bob_id) = (alice.base.id, bob.base.id);
         let entities = vec![
-            GraphNodePair {
-                entity: alice,
-                entity_type: Some(entity_type.clone()),
-            },
-            GraphNodePair {
-                entity: bob,
-                entity_type: Some(entity_type),
-            },
+            GraphNodePair::new(alice, Some(entity_type.clone())),
+            GraphNodePair::new(bob, Some(entity_type)),
         ];
 
         let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -8915,14 +8944,8 @@ mod tests {
                 .set_metadata("chunk_id", json!(target_chunk.to_string()));
             let (alice_id, bob_id) = (alice.base.id, bob.base.id);
             let entities = vec![
-                GraphNodePair {
-                    entity: alice,
-                    entity_type: Some(entity_type.clone()),
-                },
-                GraphNodePair {
-                    entity: bob,
-                    entity_type: Some(entity_type),
-                },
+                GraphNodePair::new(alice, Some(entity_type.clone())),
+                GraphNodePair::new(bob, Some(entity_type)),
             ];
 
             let edge = GraphEdgePair::new(alice_id, bob_id, "knows");
@@ -9520,6 +9543,7 @@ mod tests {
             base: entity_base,
             name: name.to_string(),
             is_a: None,
+            extra_types: Vec::new(),
             description: format!("description of {name}"),
         };
 
@@ -9531,10 +9555,7 @@ mod tests {
             description: "Generic type".to_string(),
         };
 
-        GraphNodePair {
-            entity,
-            entity_type: Some(entity_type),
-        }
+        GraphNodePair::new(entity, Some(entity_type))
     }
 
     // index_data_points reuses the vectors produced by generate_embeddings, so
@@ -10438,6 +10459,173 @@ mod tests {
         json!({"_cognee": {"source_uri": source_uri}}).to_string()
     }
 
+    /// SDK-1694: the task wrappers' provenance stamp reaches every type of an
+    /// entity, not only the first.
+    #[test]
+    fn stamp_entity_provenance_stamps_every_type() {
+        let company = EntityType::from_node_type("company", None);
+        let fruit = EntityType::from_node_type("fruit", None);
+        let mut pair = GraphNodePair::new(
+            Entity::new("apple", Some(company.base.id), "", None),
+            Some(company),
+        );
+        pair.extra_entity_types.push(fruit);
+        let mut entities = vec![pair];
+
+        stamp_entity_provenance(&mut entities, ADD_DATA_POINTS_TASK_NAME, Some("user"), 4);
+
+        for entity_type in entities[0].entity_types() {
+            assert_eq!(
+                entity_type.base.source_task.as_deref(),
+                Some(ADD_DATA_POINTS_TASK_NAME),
+                "{}",
+                entity_type.name
+            );
+            assert_eq!(entity_type.base.topological_rank, Some(4));
+        }
+    }
+
+    /// SDK-1694: an extracted edge that ends at an entity's second type is
+    /// labelled with that type's name, like one ending at the first.
+    #[test]
+    fn extracted_edge_text_knows_every_type_name() {
+        let company = EntityType::from_node_type("company", None);
+        let fruit = EntityType::from_node_type("fruit", None);
+        let mut pair = GraphNodePair::new(
+            Entity::new("apple", Some(company.base.id), "", None),
+            Some(company.clone()),
+        );
+        pair.extra_entity_types.push(fruit.clone());
+        let source = Uuid::new_v4();
+        let edge = |target: Uuid| {
+            let mut edge = GraphEdgePair::new(source, target, "subclass_of");
+            edge.add_property("edge_text", "");
+            edge
+        };
+        let mut other = GraphNodePair::new(Entity::new("produce", None, "", None), None);
+        other.entity.base.id = source;
+        let mut dedup = crate::graph_integration::DeduplicationResult {
+            unique_nodes: vec![pair, other],
+            unique_edges: vec![edge(company.base.id), edge(fruit.base.id)],
+        };
+
+        stamp_extracted_edge_text(&mut dedup, &[]);
+
+        for (edge, name) in dedup.unique_edges.iter().zip(["company", "fruit"]) {
+            let text = edge
+                .properties
+                .get("edge_text")
+                .cloned()
+                .unwrap_or_default();
+            assert!(text.contains(name), "{text:?}");
+        }
+    }
+
+    /// SDK-1694: an entity with two types keeps both through
+    /// `add_data_points` — both EntityType nodes and `is_a` edges in the
+    /// graph, both types indexed, both in the ledger, and the second type's
+    /// `is_a` edge labelled like the first's.
+    #[tokio::test]
+    async fn add_data_points_persists_every_type_of_an_entity() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_embedding::MockEmbeddingEngine;
+        use cognee_vector::MockVectorDB;
+
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        let company = EntityType::from_node_type("company", Some(dataset_id));
+        let fruit = EntityType::from_node_type("fruit", Some(dataset_id));
+        let mut apple = Entity::new("apple", Some(company.base.id), "", Some(dataset_id));
+        apple.extra_types.push(fruit.base.id);
+        let apple_id = apple.base.id;
+        let mut pair = GraphNodePair::new(apple, Some(company.clone()));
+        pair.extra_entity_types.push(fruit.clone());
+
+        let mut producers = ArtifactProducers::default();
+        producers.record_entity(apple_id, chunk_id);
+        let mut chunk = test_chunk(chunk_id, document_id, "Apple is a company and a fruit.");
+        chunk.contains = vec![json!(apple_id.to_string())];
+        let input = SummarizedData {
+            chunks: vec![chunk],
+            documents: vec![test_document_with_metadata(document_id, None)],
+            entities: vec![pair],
+            timestamps: vec![],
+            edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
+            producers,
+            dynamic_graphs: vec![],
+            summaries: vec![],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let graph_db = Arc::new(cognee_graph::MockGraphDB::new());
+        let vector_db = Arc::new(MockVectorDB::new());
+        let db = ledger_db(dataset_id).await;
+
+        add_data_points(
+            &input,
+            graph_db.clone(),
+            vector_db.clone(),
+            Arc::new(MockEmbeddingEngine::new(8)),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+        )
+        .await
+        .expect("the entity persists");
+
+        let (_, graph_edges) = graph_db.get_graph_data().await.expect("graph data");
+        for entity_type in [&company, &fruit] {
+            let id = entity_type.base.id;
+            assert!(
+                graph_db.has_node(&id.to_string()).await.expect("lookup"),
+                "{} is a graph node",
+                entity_type.name
+            );
+            let is_a = graph_edges
+                .iter()
+                .find(|edge| {
+                    edge.0 == apple_id.to_string() && edge.1 == id.to_string() && edge.2 == "is_a"
+                })
+                .unwrap_or_else(|| panic!("apple is_a {}", entity_type.name));
+            // The edge-text pass knows the type's name, so the edge reads as
+            // a sentence about it rather than about a bare id.
+            let text = is_a
+                .3
+                .get("edge_text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            assert!(text.contains(&entity_type.name), "{text:?}");
+            assert!(
+                vector_db.get_payload("EntityType", "name", id).is_some(),
+                "{} is indexed",
+                entity_type.name
+            );
+        }
+
+        let ledger_nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("nodes");
+        for entity_type in [&company, &fruit] {
+            assert!(
+                ledger_nodes
+                    .iter()
+                    .any(|row| row.slug == entity_type.base.id),
+                "{} has a ledger row",
+                entity_type.name
+            );
+        }
+        let is_a_rows = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .expect("edges")
+            .into_iter()
+            .filter(|row| row.relationship_name == "is_a")
+            .count();
+        assert_eq!(is_a_rows, 2, "one ledger row per is_a edge");
+    }
+
     #[tokio::test]
     async fn add_data_points_stores_indexes_and_links_dynamic_graphs() {
         use cognee_database::ops::graph_storage::get_edges_by_dataset;
@@ -10489,6 +10677,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -10637,6 +10827,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -10869,6 +11061,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -10969,6 +11163,8 @@ mod tests {
             entities: vec![alice.clone(), bob.clone()],
             timestamps: vec![],
             edges: vec![edge],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers,
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -11130,6 +11326,8 @@ mod tests {
             entities,
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries,
@@ -11485,10 +11683,62 @@ mod tests {
         assert_eq!(graph.edge_count(), 2);
     }
 
+    /// The extraction stage builds the WebPage / WebSite artifacts (and nothing
+    /// when opted out) and writes nothing itself; persisting its output puts
+    /// the two nodes and two edges in the graph. Before O4a the stage wrote
+    /// them directly, which is what this test used to assert.
     #[tokio::test]
     async fn make_extract_graph_task_wires_web_page_nodes_and_respects_opt_out() {
+        use cognee_embedding::MockEmbeddingEngine;
         use cognee_ontology::NoOpOntologyResolver;
         use cognee_test_utils::{MockLlm, test_task_context};
+        use cognee_vector::MockVectorDB;
+
+        async fn persist(
+            graph: &Arc<cognee_graph::MockGraphDB>,
+            out: ExtractedGraphData,
+            db: &Arc<dyn RelationalDb>,
+        ) {
+            let summarized = merge_graph_and_summaries(
+                out,
+                SummarizedChunks {
+                    summaries: vec![],
+                    failures: FailureReport::default(),
+                },
+            );
+            add_data_points(
+                &summarized,
+                graph.clone(),
+                Arc::new(MockVectorDB::new()),
+                Arc::new(MockEmbeddingEngine::new(8)),
+                db.as_ref(),
+                None,
+                &CognifyConfig::default(),
+            )
+            .await
+            .unwrap();
+        }
+        async fn web_node_count(graph: &cognee_graph::MockGraphDB) -> usize {
+            let nodes = graph.get_graph_data().await.unwrap().0;
+            nodes
+                .iter()
+                .filter(|(_, props)| {
+                    matches!(
+                        props.get("type").and_then(serde_json::Value::as_str),
+                        Some("WebPage" | "WebSite")
+                    )
+                })
+                .count()
+        }
+        async fn web_edge_count(graph: &cognee_graph::MockGraphDB) -> usize {
+            let edges = graph.get_graph_data().await.unwrap().1;
+            edges
+                .iter()
+                .filter(|(_, _, relationship, _)| {
+                    relationship == "PART_OF" || relationship == "SOURCED_FROM"
+                })
+                .count()
+        }
 
         let doc_id = Uuid::new_v4();
         let input = ExtractedChunks {
@@ -11516,9 +11766,14 @@ mod tests {
         let TypedTask::Async(run) = task else {
             panic!("extract graph task should be async");
         };
-        run(&input, ctx.clone()).await.unwrap();
-        assert_eq!(graph.node_count(), 2);
-        assert_eq!(graph.edge_count(), 2);
+        let out = run(&input, ctx.clone()).await.unwrap();
+        assert_eq!(graph.node_count(), 0, "the stage writes nothing");
+        assert_eq!(graph.edge_count(), 0, "the stage writes nothing");
+        assert_eq!(out.handoff.web_pages.len(), 1);
+        let db: Arc<dyn RelationalDb> = db.clone();
+        persist(&graph, *out, &db).await;
+        assert_eq!(web_node_count(&graph).await, 2);
+        assert_eq!(web_edge_count(&graph).await, 2);
 
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let task = make_extract_graph_task(
@@ -11531,9 +11786,11 @@ mod tests {
         let TypedTask::Async(run) = task else {
             panic!("extract graph task should be async");
         };
-        run(&input, ctx).await.unwrap();
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.edge_count(), 0);
+        let out = run(&input, ctx).await.unwrap();
+        assert!(out.handoff.web_pages.is_empty());
+        persist(&graph, *out, &db).await;
+        assert_eq!(web_node_count(&graph).await, 0);
+        assert_eq!(web_edge_count(&graph).await, 0);
     }
 
     #[tokio::test]
@@ -11981,6 +12238,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12050,6 +12309,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12104,6 +12365,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12160,6 +12423,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12795,6 +13060,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -12862,6 +13129,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -12961,6 +13230,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -13081,12 +13352,11 @@ mod tests {
         let input = SummarizedData {
             chunks: vec![chunk],
             documents: vec![test_document_with_metadata(doc_id, None)],
-            entities: vec![GraphNodePair {
-                entity,
-                entity_type: Some(entity_type),
-            }],
+            entities: vec![GraphNodePair::new(entity, Some(entity_type))],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13198,6 +13468,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![GraphEdgePair::new(source, target, dirty)],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13296,6 +13568,8 @@ mod tests {
             entities: graph_data.entities,
             timestamps: graph_data.timestamps,
             edges: graph_data.edges,
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: graph_data.producers,
             dynamic_graphs: graph_data.dynamic_graphs,
             summaries: vec![],
@@ -13365,10 +13639,10 @@ mod tests {
         )
     }
 
-    /// One chunk per batch, so the batches run in file order and the abort
-    /// boundary is exactly between files.
-    fn one_chunk_per_batch(config: CognifyConfig) -> CognifyConfig {
-        config.with_chunks_per_batch(1)
+    /// One extraction call in flight at a time, so the calls run in file
+    /// order and a FailFast stop falls exactly between files.
+    fn one_call_at_a_time(config: CognifyConfig) -> CognifyConfig {
+        config.with_max_parallel_extractions(1)
     }
 
     async fn run_extraction_with_config(
@@ -13406,7 +13680,7 @@ mod tests {
         let (input, _a, b, _c) = three_chunk_files(dataset_id);
 
         let config =
-            one_chunk_per_batch(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
+            one_call_at_a_time(CognifyConfig::default().with_failure_stop(FailureStop::RunToEnd));
         let result = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect("RunToEnd collects rather than propagates");
@@ -13434,33 +13708,28 @@ mod tests {
         );
     }
 
-    /// The headline test for the abort-time partition: at the moment of the
-    /// first failure *nothing* has been persisted, so keeping the other files'
-    /// results is not a matter of not-deleting — the stage has to deliberately
-    /// persist the finished work before it stops. Only the complete file's
-    /// artifacts and ownership rows exist afterwards.
     /// `FailFast` must stop *scheduling* work, not merely stop reporting it.
     ///
-    /// The abort partition is computed from an index set before the loop
-    /// breaks, so deleting the `break` changes no other assertion in the
-    /// suite — the axis's whole promise (stop spending) would go unpinned.
-    /// This counts LLM calls instead of outcomes.
+    /// The abort partition reads which chunks were skipped, so a stop flag
+    /// that is never checked changes no other assertion in the suite — the
+    /// axis's whole promise (stop spending) would go unpinned. This counts LLM
+    /// calls instead of outcomes.
     #[tokio::test]
-    async fn failfast_stops_dispatching_after_the_failing_batch() {
+    async fn failfast_stops_dispatching_after_the_failing_call() {
         use cognee_ontology::NoOpOntologyResolver;
         use cognee_test_utils::MockLlm;
 
         let dataset_id = Uuid::new_v4();
         let db = ledger_db(dataset_id).await;
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
-        // Three one-chunk files, one batch each; the SECOND one poisons.
+        // Three one-chunk files, one call at a time; the SECOND one poisons.
         let (input, _a, _b, _c) = three_chunk_files(dataset_id);
 
         let llm = Arc::new(
             MockLlm::new(vec![ownership_canned_graph(); 8])
                 .with_failing_markers(vec!["FAILMARKER".to_string()]),
         );
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
         );
 
@@ -13480,12 +13749,17 @@ mod tests {
         assert_eq!(
             llm.structured_calls(),
             2,
-            "FailFast must dispatch the failing batch and then stop: file C's \
-             chunk should never reach the LLM. Seeing 3 means the loop ran on \
-             and only the bookkeeping stopped."
+            "FailFast must dispatch the failing call and then stop: file C's \
+             chunk should never reach the LLM. Seeing 3 means the stream ran \
+             on and only the bookkeeping stopped."
         );
     }
 
+    /// The headline test for the abort-time partition: at the moment of the
+    /// first failure *nothing* has been persisted, so keeping the other files'
+    /// results is not a matter of not-deleting — the stage has to deliberately
+    /// persist the finished work before it stops. Only the complete file's
+    /// artifacts and ownership rows exist afterwards.
     #[tokio::test]
     async fn extraction_abort_persists_only_complete_files() {
         use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
@@ -13495,7 +13769,7 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems),
         );
         let result = run_extraction_with_config(&input, graph.clone(), &db, &config)
@@ -13559,7 +13833,7 @@ mod tests {
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(CognifyConfig::default());
+        let config = one_call_at_a_time(CognifyConfig::default());
         let err = run_extraction_with_config(&input, graph.clone(), &db, &config)
             .await
             .expect_err("the default scope still aborts the run");
@@ -13581,10 +13855,11 @@ mod tests {
         assert!(nodes.is_empty(), "and no ownership row was written");
     }
 
-    /// A whole batch is dispatched before any result is inspected, so a
-    /// FailFast abort reports every failure in the batch that tripped it.
+    /// A FailFast stop cancels nothing in flight: every call already
+    /// dispatched is collected, so the abort reports every failure among them,
+    /// not only the first to come back.
     #[tokio::test]
-    async fn extraction_reports_every_failure_in_the_batch_that_tripped_it() {
+    async fn extraction_reports_every_failure_already_in_flight() {
         let dataset_id = Uuid::new_v4();
         let db = ledger_db(dataset_id).await;
         let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
@@ -13612,8 +13887,8 @@ mod tests {
             failures: FailureReport::default(),
         };
 
-        // All four chunks in one batch.
-        let config = CognifyConfig::default().with_chunks_per_batch(4);
+        // All four chunks in flight at once (the default cap is far above 4).
+        let config = CognifyConfig::default();
         let err = run_extraction_with_config(&input, graph, &db, &config)
             .await
             .expect_err("default scope aborts");
@@ -13623,9 +13898,471 @@ mod tests {
         assert_eq!(
             report.entries().len(),
             2,
-            "both failing chunks in the batch are reported, not just the first"
+            "both failing chunks in flight are reported, not just the first"
         );
         assert_eq!(report.failed_items().len(), 2);
+    }
+
+    // ── One continuous extraction stream (SDK-1694 O3) ───────────────────
+
+    /// An LLM for the dispatch tests. Its answer, failure and timing are picked
+    /// by markers in the chunk text, so the outcome does not depend on which
+    /// call happens to be served first:
+    ///
+    /// * a call whose text contains `HOLDMARKER` waits until a call containing
+    ///   `RELEASEMARKER` or `FAILMARKER` has returned, then a little longer.
+    ///   It gives up after [`GatedLlm::HOLD_LIMIT`], so a stage that never
+    ///   dispatches the releasing call fails its test instead of hanging;
+    /// * a call containing `FAILMARKER` fails;
+    /// * the answer is the first of `answers` whose marker the text contains,
+    ///   else `default_answer`.
+    ///
+    /// It logs when each call starts and returns, and the peak number of calls
+    /// in flight.
+    struct GatedLlm {
+        answers: Vec<(&'static str, String)>,
+        default_answer: String,
+        released: tokio::sync::Semaphore,
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        events: std::sync::Mutex<Vec<(&'static str, String)>>,
+    }
+
+    impl GatedLlm {
+        const HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        fn new(default_answer: String) -> Self {
+            Self {
+                answers: Vec::new(),
+                default_answer,
+                released: tokio::sync::Semaphore::new(0),
+                in_flight: std::sync::atomic::AtomicUsize::new(0),
+                peak: std::sync::atomic::AtomicUsize::new(0),
+                events: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_answer(mut self, marker: &'static str, answer: String) -> Self {
+            self.answers.push((marker, answer));
+            self
+        }
+
+        /// Where in the log the first `kind` ("start" or "end") event of a
+        /// call whose text contains `marker` sits.
+        fn event(&self, kind: &str, marker: &str) -> Option<usize> {
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .iter()
+                .position(|(k, text)| *k == kind && text.contains(marker))
+        }
+
+        fn started(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .iter()
+                .filter(|(kind, _)| *kind == "start")
+                .map(|(_, text)| text.clone())
+                .collect()
+        }
+
+        fn peak(&self) -> usize {
+            self.peak.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Llm for GatedLlm {
+        async fn generate(
+            &self,
+            _messages: Vec<Message>,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<cognee_llm::GenerationResponse> {
+            unreachable!("graph extraction uses structured output")
+        }
+
+        async fn create_structured_output_with_messages_raw(
+            &self,
+            messages: Vec<Message>,
+            _json_schema: &serde_json::Value,
+            _options: Option<GenerationOptions>,
+        ) -> cognee_llm::LlmResult<serde_json::Value> {
+            use std::sync::atomic::Ordering;
+
+            // The chunk text is the user message; the prompt carries no marker.
+            let text = messages
+                .iter()
+                .rfind(|message| message.role == MessageRole::User)
+                .map(|message| message.content.clone())
+                .unwrap_or_default();
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .push(("start", text.clone()));
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+
+            if text.contains("HOLDMARKER") {
+                if let Ok(Ok(permit)) =
+                    tokio::time::timeout(Self::HOLD_LIMIT, self.released.acquire()).await
+                {
+                    permit.forget();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            } else {
+                // Long enough for the calls dispatched together to overlap.
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+
+            let outcome = if text.contains("FAILMARKER") {
+                Err(cognee_llm::LlmError::ApiError(
+                    "GatedLlm: simulated failure".to_string(),
+                ))
+            } else {
+                let answer = self
+                    .answers
+                    .iter()
+                    .find(|(marker, _)| text.contains(marker))
+                    .map_or(&self.default_answer, |(_, answer)| answer);
+                Ok(serde_json::from_str(answer).expect("canned answers are JSON"))
+            };
+
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            self.events
+                .lock()
+                .expect("lock poison is unrecoverable")
+                .push(("end", text.clone()));
+            if text.contains("RELEASEMARKER") || text.contains("FAILMARKER") {
+                self.released.add_permits(1_000);
+            }
+            outcome
+        }
+
+        fn model(&self) -> &str {
+            "gated-llm"
+        }
+    }
+
+    /// `(document, text)` pairs as one extraction input, chunks in that order.
+    fn gated_input(dataset_id: Uuid, chunks: &[(Uuid, &str)]) -> ExtractedChunks {
+        let mut documents: Vec<Uuid> = Vec::new();
+        for (doc_id, _) in chunks {
+            if !documents.contains(doc_id) {
+                documents.push(*doc_id);
+            }
+        }
+        ExtractedChunks {
+            chunks: chunks
+                .iter()
+                .map(|(doc_id, text)| test_chunk(Uuid::new_v4(), *doc_id, text))
+                .collect(),
+            documents: documents
+                .iter()
+                .map(|doc_id| test_document_with_metadata(*doc_id, None))
+                .collect(),
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        }
+    }
+
+    /// Six chunks of one document, the first one slow and the last one, past
+    /// two `chunks_per_batch` boundaries, the one that lets it return.
+    fn six_chunks_held_by_the_last(dataset_id: Uuid) -> ExtractedChunks {
+        let doc = Uuid::new_v4();
+        gated_input(
+            dataset_id,
+            &[
+                (doc, "Chunk zero HOLDMARKER."),
+                (doc, "Chunk one."),
+                (doc, "Chunk two."),
+                (doc, "Chunk three."),
+                (doc, "Chunk four."),
+                (doc, "Chunk five RELEASEMARKER."),
+            ],
+        )
+    }
+
+    /// Two calls in flight, two chunks per block: the old batch loop could not
+    /// start chunk 5 until chunk 0 had returned.
+    fn no_barrier_config(config: CognifyConfig) -> CognifyConfig {
+        config
+            .with_chunks_per_batch(2)
+            .with_max_parallel_extractions(2)
+    }
+
+    async fn extract_with(
+        input: &ExtractedChunks,
+        llm: Arc<dyn Llm>,
+        db: &dyn RelationalDb,
+        config: &CognifyConfig,
+    ) -> Result<ExtractedGraphData, CognifyError> {
+        use cognee_ontology::NoOpOntologyResolver;
+
+        extract_graph_from_data(
+            input,
+            llm,
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(NoOpOntologyResolver::new()),
+            db,
+            Some(Uuid::new_v4()),
+            config,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Ticket test 8: a chunk past a `chunks_per_batch` boundary is dispatched
+    /// while a slow chunk before the boundary is still in flight, and the
+    /// in-flight cap still holds.
+    #[tokio::test]
+    async fn a_slow_chunk_does_not_hold_back_chunks_past_the_batch_boundary() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = six_chunks_held_by_the_last(dataset_id);
+        let llm = Arc::new(GatedLlm::new(ownership_canned_graph()));
+
+        let result = extract_with(
+            &input,
+            llm.clone(),
+            &db,
+            &no_barrier_config(CognifyConfig::default()),
+        )
+        .await
+        .expect("nothing fails");
+
+        let release_started = llm.event("start", "RELEASEMARKER").expect("chunk 5 ran");
+        let hold_returned = llm.event("end", "HOLDMARKER").expect("chunk 0 ran");
+        assert!(
+            release_started < hold_returned,
+            "chunk 5 must be dispatched before slow chunk 0 returns"
+        );
+        assert_eq!(llm.started().len(), 6);
+        assert_eq!(llm.peak(), 2, "two calls in flight, never more");
+        assert_eq!(result.failures.total(), 0);
+        assert!(!result.entities.is_empty());
+    }
+
+    /// Ticket test 8 on the runtime custom-schema path.
+    #[tokio::test]
+    async fn custom_extraction_does_not_hold_back_chunks_past_the_batch_boundary() {
+        let input = six_chunks_held_by_the_last(Uuid::new_v4());
+        let llm = Arc::new(GatedLlm::new(custom_person_answer()));
+        let config =
+            no_barrier_config(CognifyConfig::default().with_graph_schema(custom_person_schema()));
+
+        let extracted = extract_dynamic_graphs_from_data(&input, llm.clone(), &config)
+            .await
+            .expect("nothing fails");
+
+        let release_started = llm.event("start", "RELEASEMARKER").expect("chunk 5 ran");
+        let hold_returned = llm.event("end", "HOLDMARKER").expect("chunk 0 ran");
+        assert!(
+            release_started < hold_returned,
+            "chunk 5 must be dispatched before slow chunk 0 returns"
+        );
+        assert_eq!(llm.started().len(), 6);
+        assert_eq!(llm.peak(), 2, "two calls in flight, never more");
+        assert_eq!(
+            extracted
+                .graphs
+                .iter()
+                .map(|graph| graph.chunk_id)
+                .collect::<Vec<_>>(),
+            input
+                .chunks
+                .iter()
+                .map(|chunk| chunk.base.id)
+                .collect::<Vec<_>>(),
+            "the graphs come back in chunk order"
+        );
+    }
+
+    /// Five chunks, three calls in flight. C's chunk and A's first chunk are
+    /// slow; B's fails while they are in flight. A's second chunk and D's are
+    /// never dispatched.
+    fn failure_while_others_are_in_flight(dataset_id: Uuid) -> (ExtractedChunks, [Uuid; 4]) {
+        let [a, b, c, d] = [(); 4].map(|()| Uuid::new_v4());
+        let input = gated_input(
+            dataset_id,
+            &[
+                (c, "Carol works at Acme. HOLDMARKER"),
+                (a, "Alice works at Acme. HOLDMARKER"),
+                (b, "Bob FAILMARKER."),
+                (a, "Alice again."),
+                (d, "Dave works at Acme."),
+            ],
+        );
+        (input, [a, b, c, d])
+    }
+
+    /// Fail-fast on the stream: nothing is dispatched after the failure, the
+    /// calls already in flight are collected, the documents of undispatched
+    /// chunks are unreached — A among them, although its first chunk
+    /// succeeded — and under `FailedItems` the complete document is persisted.
+    #[tokio::test]
+    async fn failfast_stops_the_stream_and_keeps_the_complete_documents() {
+        use cognee_database::ops::graph_storage::get_nodes_by_dataset;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let (input, [a, b, c, d]) = failure_while_others_are_in_flight(dataset_id);
+        let llm = Arc::new(GatedLlm::new(ownership_canned_graph()));
+        let config = CognifyConfig::default()
+            .with_max_parallel_extractions(3)
+            .with_rollback_scope(RollbackScope::FailedItems);
+
+        let result = extract_with(&input, llm.clone(), &db, &config)
+            .await
+            .expect("FailedItems keeps the complete documents");
+
+        assert_eq!(
+            llm.started(),
+            [
+                "Carol works at Acme. HOLDMARKER",
+                "Alice works at Acme. HOLDMARKER",
+                "Bob FAILMARKER."
+            ],
+            "nothing is dispatched after the failure"
+        );
+        assert!(
+            llm.event("end", "Carol").is_some() && llm.event("end", "Alice").is_some(),
+            "the calls in flight at the failure finish and are collected"
+        );
+        assert_eq!(
+            result
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            result.failures.unreached_items(),
+            &[a, d].into_iter().collect(),
+            "A's second chunk and D's chunk were never dispatched"
+        );
+        assert_eq!(
+            result
+                .documents
+                .iter()
+                .map(|document| document.base.id)
+                .collect::<Vec<_>>(),
+            [c],
+            "only C is complete"
+        );
+        let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        assert!(!nodes.is_empty(), "C's artifacts were persisted");
+        assert!(
+            nodes.iter().all(|row| row.data_id == c),
+            "nothing of A, B or D was persisted"
+        );
+    }
+
+    /// The same stop on the runtime custom-schema path.
+    #[tokio::test]
+    async fn custom_extraction_failfast_stops_the_stream() {
+        let (input, [a, b, c, d]) = failure_while_others_are_in_flight(Uuid::new_v4());
+        let llm = Arc::new(GatedLlm::new(custom_person_answer()));
+        let config = CognifyConfig::default()
+            .with_graph_schema(custom_person_schema())
+            .with_max_parallel_extractions(3)
+            .with_rollback_scope(RollbackScope::FailedItems);
+
+        let extracted = extract_dynamic_graphs_from_data(&input, llm.clone(), &config)
+            .await
+            .expect("FailedItems keeps the complete documents");
+
+        assert_eq!(
+            llm.started().len(),
+            3,
+            "nothing is dispatched after the failure"
+        );
+        assert!(llm.event("start", "Dave").is_none());
+        assert_eq!(
+            extracted
+                .failures
+                .failed_items()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [b]
+        );
+        assert_eq!(
+            extracted.failures.unreached_items(),
+            &[a, d].into_iter().collect()
+        );
+        assert_eq!(
+            extracted
+                .graphs
+                .iter()
+                .map(|graph| graph.data_id)
+                .collect::<Vec<_>>(),
+            [c],
+            "only the complete document's graph survives"
+        );
+    }
+
+    /// Graph building sees the results in chunk order, not completion order:
+    /// chunk 1 returns before chunk 0, both type `Apple` differently, and the
+    /// block keeps chunk 0's type and description.
+    #[tokio::test]
+    async fn the_first_type_in_chunk_order_wins_whatever_returns_first() {
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let doc = Uuid::new_v4();
+        let input = gated_input(
+            dataset_id,
+            &[
+                (doc, "Apple the company. HOLDMARKER"),
+                (doc, "Apple the fruit. RELEASEMARKER"),
+            ],
+        );
+        let apple = |kind: &str, description: &str| {
+            json!({
+                "nodes": [{"id": "apple", "name": "Apple", "type": kind, "description": description}],
+                "edges": []
+            })
+            .to_string()
+        };
+        let llm = Arc::new(
+            GatedLlm::new(String::new())
+                .with_answer("company", apple("Company", "The company."))
+                .with_answer("fruit", apple("Fruit", "The fruit.")),
+        );
+
+        let result = extract_with(
+            &input,
+            llm.clone(),
+            &db,
+            &CognifyConfig::default().with_max_parallel_extractions(2),
+        )
+        .await
+        .expect("nothing fails");
+
+        assert!(
+            llm.event("end", "RELEASEMARKER") < llm.event("end", "HOLDMARKER"),
+            "chunk 1 returned first"
+        );
+        let [pair] = result.entities.as_slice() else {
+            panic!("one Apple entity, got {}", result.entities.len());
+        };
+        assert_eq!(
+            pair.entity_type
+                .as_ref()
+                .map(|entity_type| entity_type.name.to_lowercase()),
+            Some("company".to_string()),
+            "chunk 0 declared Apple first"
+        );
+        assert!(
+            pair.extra_entity_types.is_empty(),
+            "within one block the later type is dropped"
+        );
+        assert_eq!(pair.entity.description, "The company.");
     }
 
     /// The documented step-pending state: under `RunToEnd` the extraction
@@ -13639,7 +14376,7 @@ mod tests {
         let graph: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
         let (input, _a, b, c) = three_chunk_files(dataset_id);
 
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_failure_stop(FailureStop::RunToEnd)
                 .with_rollback_scope(RollbackScope::FailedItems),
@@ -13693,6 +14430,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13781,7 +14520,7 @@ mod tests {
     #[tokio::test]
     async fn custom_extraction_collects_failures_under_run_to_end() {
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_graph_schema(custom_person_schema())
                 .with_failure_stop(FailureStop::RunToEnd),
@@ -13828,7 +14567,7 @@ mod tests {
     #[tokio::test]
     async fn custom_extraction_abort_drops_failed_and_unreached_files() {
         let (input, a, b, c) = three_chunk_files(Uuid::new_v4());
-        let config = one_chunk_per_batch(
+        let config = one_call_at_a_time(
             CognifyConfig::default()
                 .with_graph_schema(custom_person_schema())
                 .with_rollback_scope(RollbackScope::FailedItems),
@@ -14343,6 +15082,364 @@ mod tests {
         assert_eq!(dlt_cell_text(&json!(false)).as_deref(), Some("False"));
         assert_eq!(dlt_cell_text(&json!(12)).as_deref(), Some("12"));
         assert_eq!(dlt_cell_text(&json!("")), None);
+    }
+
+    // ----- The existing-edge check on resolved ids (SDK-1694 O2) -----
+
+    /// An ontology that canonicalises the individual "Rostov" to
+    /// `nikolai_rostov`, and knows nothing else.
+    struct CanonicalRostov;
+
+    impl cognee_ontology::OntologyResolver for CanonicalRostov {
+        fn find_closest_match(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            if (node_name, node_type) != ("Rostov", "individuals") {
+                return Ok((vec![], vec![], None));
+            }
+            let root = cognee_ontology::AttachedOntologyNode {
+                uri: "http://test.org#nikolai_rostov".to_string(),
+                name: "nikolai_rostov".to_string(),
+                category: cognee_ontology::NodeCategory::Individuals,
+            };
+            Ok((vec![], vec![], Some(root)))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// Run the extraction stage twice against one graph database: first a
+    /// document whose chunk the LLM answers with `first`, then another whose
+    /// chunk it answers with `second`. Returns the second run's result, the
+    /// ledger rows labelled `label` and the two document ids.
+    async fn extract_twice(
+        first: serde_json::Value,
+        second: serde_json::Value,
+        resolver: Arc<dyn OntologyResolver>,
+        label: &str,
+    ) -> (
+        ExtractedGraphData,
+        Vec<cognee_database::GraphEdge>,
+        [Uuid; 2],
+    ) {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_test_utils::MockLlm;
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let graph_db: Arc<dyn GraphDBTrait> = Arc::new(cognee_graph::MockGraphDB::new());
+        let documents = [Uuid::new_v4(), Uuid::new_v4()];
+        let mut second_result = None;
+        for (document, answer) in documents.iter().zip([first, second]) {
+            let input = ExtractedChunks {
+                chunks: vec![test_chunk(Uuid::new_v4(), *document, "Some text.")],
+                documents: vec![test_document_with_metadata(*document, None)],
+                dataset_id,
+                user_id: Some(Uuid::new_v4()),
+                tenant_id: None,
+                failures: FailureReport::default(),
+            };
+            second_result = Some(
+                extract_graph_from_data(
+                    &input,
+                    Arc::new(MockLlm::new(vec![answer.to_string()])),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&resolver),
+                    &db,
+                    Some(Uuid::new_v4()),
+                    &CognifyConfig::default(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let rows = get_edges_by_dataset(&db, dataset_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.relationship_name == label)
+            .collect();
+        (second_result.unwrap(), rows, documents)
+    }
+
+    /// The second run wrote no edge, and both documents own
+    /// the one edge the first run wrote: the second through its claim.
+    fn assert_claimed_not_written(
+        second: &ExtractedGraphData,
+        rows: &[cognee_database::GraphEdge],
+        documents: [Uuid; 2],
+        label: &str,
+        expected: (Uuid, Uuid),
+    ) {
+        assert!(
+            second.edges.is_empty(),
+            "the second run writes the existing {label} edge again: {:?}",
+            second.edges
+        );
+        let owners: BTreeSet<Uuid> = rows.iter().map(|row| row.data_id).collect();
+        assert_eq!(owners, BTreeSet::from(documents), "one claim per document");
+        assert!(
+            rows.iter()
+                .all(|row| { (row.source_node_id, row.destination_node_id) == expected })
+        );
+    }
+
+    fn rostov_lives_in_moscow(id: &str, name: &str, label: &str) -> serde_json::Value {
+        json!({
+            "nodes": [
+                {"id": id, "name": name, "type": "Person", "description": ""},
+                {"id": "moscow", "name": "Moscow", "type": "City", "description": ""}
+            ],
+            "edges": [{"source_node_id": id, "target_node_id": "moscow", "relationship_name": label}]
+        })
+    }
+
+    /// Ticket test 12: node id `Rostov`, name "Nicholas Rostov". The entity's
+    /// id comes from the name, so a check keyed on the node id missed the
+    /// edge and the second run wrote it again.
+    #[tokio::test]
+    async fn the_existing_edge_check_uses_the_name_based_entity_id() {
+        let graph = rostov_lives_in_moscow("Rostov", "Nicholas Rostov", "lives_in");
+        let (second, rows, documents) = extract_twice(
+            graph.clone(),
+            graph,
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "lives_in",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "lives_in",
+            (Entity::id_for("Nicholas Rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// Ticket test 12, an ontology-canonicalised entity: the edge is stored on
+    /// the canonical id, which no node id names.
+    #[tokio::test]
+    async fn the_existing_edge_check_uses_the_ontology_canonical_id() {
+        let graph = rostov_lives_in_moscow("rostov", "Rostov", "lives_in");
+        let (second, rows, documents) =
+            extract_twice(graph.clone(), graph, Arc::new(CanonicalRostov), "lives_in").await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "lives_in",
+            (Entity::id_for("nikolai_rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// Ticket test 12, a timestamp edge, drawn from the timestamp so it is
+    /// also reversed: the edge is stored on the Timestamp's id.
+    #[tokio::test]
+    async fn the_existing_edge_check_finds_a_timestamp_edge() {
+        let graph = json!({
+            "nodes": [
+                {"id": "marie", "name": "Marie Curie", "type": "Person", "description": ""},
+                {"id": "birth", "name": "1867", "type": "Timestamp", "description": ""}
+            ],
+            "edges": [{"source_node_id": "birth", "target_node_id": "marie", "relationship_name": "birth_year_of"}]
+        });
+        let (second, rows, documents) = extract_twice(
+            graph.clone(),
+            graph,
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "birth_year_of",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "birth_year_of",
+            (
+                Entity::id_for("Marie Curie"),
+                cognee_models::Timestamp::id_for("1867"),
+            ),
+        );
+    }
+
+    /// Ticket test 6, the database half: a run that says `Born In` finds the
+    /// `born_in` edge an earlier run wrote.
+    #[tokio::test]
+    async fn the_existing_edge_check_finds_an_edge_under_its_normalised_label() {
+        let (second, rows, documents) = extract_twice(
+            rostov_lives_in_moscow("rostov", "Rostov", "born_in"),
+            rostov_lives_in_moscow("rostov", "Rostov", "Born In"),
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            "born_in",
+        )
+        .await;
+        assert_claimed_not_written(
+            &second,
+            &rows,
+            documents,
+            "born_in",
+            (Entity::id_for("Rostov"), Entity::id_for("Moscow")),
+        );
+    }
+
+    /// An ontology whose class `Person` is an `Agent`: matching the type
+    /// brings the edge `person -is_a-> agent` along.
+    struct PersonIsAnAgent;
+
+    impl cognee_ontology::OntologyResolver for PersonIsAnAgent {
+        fn find_closest_match(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> cognee_ontology::OntologyResult<Option<String>> {
+            Ok(None)
+        }
+
+        fn get_subgraph(
+            &self,
+            node_name: &str,
+            node_type: &str,
+            _directed: bool,
+        ) -> cognee_ontology::OntologyResult<cognee_ontology::traits::OntologySubgraph> {
+            if (node_name, node_type) != ("Person", "classes") {
+                return Ok((vec![], vec![], None));
+            }
+            let class = |name: &str| cognee_ontology::AttachedOntologyNode {
+                uri: format!("http://test.org#{name}"),
+                name: name.to_string(),
+                category: cognee_ontology::NodeCategory::Classes,
+            };
+            Ok((
+                vec![class("agent")],
+                vec![(
+                    "person".to_string(),
+                    "is_a".to_string(),
+                    "agent".to_string(),
+                )],
+                Some(class("person")),
+            ))
+        }
+
+        fn is_loaded(&self) -> bool {
+            true
+        }
+    }
+
+    /// An ontology edge the graph already holds is not written again (on
+    /// `main` its existence check never matched, so every run rewrote it and
+    /// added a ledger row), and the second run records nothing for it, as on
+    /// Python's ledger path.
+    #[tokio::test]
+    async fn an_existing_ontology_edge_is_not_written_again() {
+        let graph = json!({
+            "nodes": [{"id": "ada", "name": "Ada Lovelace", "type": "Person", "description": ""}],
+            "edges": []
+        });
+        let (second, rows, _documents) =
+            extract_twice(graph.clone(), graph, Arc::new(PersonIsAnAgent), "is_a").await;
+
+        assert!(second.edges.is_empty(), "rewritten: {:?}", second.edges);
+        assert_eq!(rows.len(), 1, "only the first run's row: {rows:?}");
+        assert_eq!(
+            (rows[0].source_node_id, rows[0].destination_node_id),
+            (EntityType::id_for("person"), EntityType::id_for("agent"))
+        );
+    }
+
+    /// Extracted labels `Is A` and `Contains` normalise to the structural
+    /// names, as in Python. Between two entities they are still extracted
+    /// edges: owned by their document, and a `contains` row keyed on its
+    /// edge text, as Python's `upsert_edges` keys every `contains` edge.
+    #[tokio::test]
+    async fn extracted_is_a_and_contains_edges_are_ordinary_extracted_edges() {
+        use cognee_database::ops::graph_storage::get_edges_by_dataset;
+        use cognee_test_utils::MockLlm;
+
+        let graph = json!({
+            "nodes": [
+                {"id": "apple", "name": "Apple", "type": "Company", "description": ""},
+                {"id": "beats", "name": "Beats", "type": "Company", "description": ""}
+            ],
+            "edges": [
+                {"source_node_id": "beats", "target_node_id": "apple", "relationship_name": "Is A",
+                 "description": "Beats is an Apple subsidiary."},
+                {"source_node_id": "apple", "target_node_id": "beats", "relationship_name": "Contains"}
+            ]
+        });
+        let dataset_id = Uuid::new_v4();
+        let document = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let input = ExtractedChunks {
+            chunks: vec![test_chunk(Uuid::new_v4(), document, "Apple owns Beats.")],
+            documents: vec![test_document_with_metadata(document, None)],
+            dataset_id,
+            user_id: Some(Uuid::new_v4()),
+            tenant_id: None,
+            failures: FailureReport::default(),
+        };
+        let result = extract_graph_from_data(
+            &input,
+            Arc::new(MockLlm::new(vec![graph.to_string()])),
+            Arc::new(cognee_graph::MockGraphDB::new()),
+            Arc::new(cognee_ontology::NoOpOntologyResolver::new()),
+            &db,
+            Some(Uuid::new_v4()),
+            &CognifyConfig::default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (apple, beats) = (Entity::id_for("Apple"), Entity::id_for("Beats"));
+        let edge = |label: &str| {
+            result
+                .edges
+                .iter()
+                .find(|edge| edge.relationship_name == label)
+                .unwrap_or_else(|| panic!("no {label} edge in {:?}", result.edges))
+        };
+        let is_a = edge("is_a");
+        assert_eq!(
+            (is_a.source_entity_id, is_a.target_entity_id),
+            (beats, apple)
+        );
+        let contains = edge("contains");
+        assert_eq!(
+            (contains.source_entity_id, contains.target_entity_id),
+            (apple, beats)
+        );
+        let contains_text = contains.properties.get("edge_text").unwrap();
+        assert!(!contains_text.is_empty(), "stamped before the ledger write");
+
+        let rows = get_edges_by_dataset(&db, dataset_id).await.unwrap();
+        let row = |source: Uuid, target: Uuid| {
+            rows.iter()
+                .find(|row| (row.source_node_id, row.destination_node_id) == (source, target))
+                .unwrap_or_else(|| panic!("no row {source} -> {target} in {rows:?}"))
+        };
+        let is_a_row = row(beats, apple);
+        assert_eq!(is_a_row.relationship_name, "is_a");
+        assert_eq!(is_a_row.data_id, document);
+        let contains_row = row(apple, beats);
+        assert_eq!(&contains_row.relationship_name, contains_text);
+        assert_eq!(contains_row.label.as_deref(), Some("contains"));
+        assert_eq!(contains_row.data_id, document);
     }
 }
 

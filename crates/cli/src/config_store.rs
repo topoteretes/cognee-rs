@@ -54,7 +54,12 @@ use std::path::{Path, PathBuf};
 /// to the filesystem session store, and the old `./target/models/...` ONNX
 /// defaults, which would keep `cache_root_directory` from placing the model.
 /// `migrate_document` drops those old defaults and canonicalizes the aliases.
-const CURRENT_VERSION: u32 = 6;
+/// Version 7: `code_graph.allow_http_requests` stopped being a section key
+/// and became an alias of the `allow_http_requests` setting (SDK-1701). A
+/// pre-v7 file keeps it in the flattened sections, where every load would
+/// apply it over the setting; `migrate_document` hoists it into the setting
+/// (or drops it, when the setting was written since) and removes it.
+const CURRENT_VERSION: u32 = 7;
 
 /// The pre-v6 default for `cache_backend`, persisted but never read.
 const LEGACY_DEFAULT_CACHE_BACKEND: &str = "fs";
@@ -245,6 +250,38 @@ fn migrate_document(document: &mut ConfigDocument) {
             }
         }
         document.version = 6;
+    }
+    if document.version < 7 {
+        // v6 -> v7: a sections entry that is now a `Settings` key or alias
+        // (`code_graph.allow_http_requests`) moves into its field. The field
+        // is the newer write when it already holds a non-default value (the
+        // same rule as v4's alias canonicalization), so the entry is then
+        // dropped.
+        hoist_setting_aliases(&mut document.settings);
+        document.version = 7;
+    }
+}
+
+/// Move every `sections` entry that names a `Settings` key (or an alias of
+/// one) into its field, unless the field already holds a non-default value,
+/// and remove the entry either way.
+fn hoist_setting_aliases(settings: &mut cognee::config::Settings) {
+    let defaults = cognee::config::Settings::default();
+    let keys: Vec<String> = settings
+        .sections
+        .keys()
+        .filter(|key| key_spec(key).is_some())
+        .cloned()
+        .collect();
+    for key in keys {
+        let Some(value) = settings.sections.remove(&key) else {
+            continue;
+        };
+        if settings.get_key(&key) == defaults.get_key(&key)
+            && let Err(error) = settings.set_key(&key, value)
+        {
+            tracing::warn!(key, %error, "dropping a config value of the wrong type");
+        }
     }
 }
 
@@ -601,6 +638,41 @@ mod tests {
             Some(&serde_json::json!("redis"))
         );
         assert!(!document.settings.sections.contains_key("session.store"));
+    }
+
+    /// SDK-1701: `code_graph.allow_http_requests` became an alias of the
+    /// `allow_http_requests` setting. A v6 file's section entry moves into
+    /// the setting, unless the setting was written since (the newer write),
+    /// and never survives to override it on a later load.
+    #[test]
+    fn migrating_v6_hoists_the_allow_http_requests_section_key() {
+        let migrate = |settings: serde_json::Value| {
+            let mut document: ConfigDocument = serde_json::from_value(serde_json::json!({
+                "version": 6,
+                "settings": settings,
+            }))
+            .expect("v6 document");
+            migrate_document(&mut document);
+            assert_eq!(document.version, CURRENT_VERSION);
+            assert!(
+                !document
+                    .settings
+                    .sections
+                    .contains_key("code_graph.allow_http_requests")
+            );
+            document.settings.allow_http_requests
+        };
+        assert_eq!(
+            migrate(serde_json::json!({ "code_graph.allow_http_requests": "true" })),
+            "true"
+        );
+        assert_eq!(
+            migrate(serde_json::json!({
+                "code_graph.allow_http_requests": "true",
+                "allow_http_requests": "false",
+            })),
+            "false"
+        );
     }
 
     fn legacy_v3_document() -> ConfigDocument {

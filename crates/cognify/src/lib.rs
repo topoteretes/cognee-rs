@@ -1,5 +1,7 @@
 //! Knowledge-graph extraction pipeline (classify → chunk → extract → summarize → index).
 
+/// One bounded stream of per-chunk LLM calls, with a fail-fast stop.
+mod chunk_dispatch;
 pub mod code_cluster;
 /// Configuration module for the cognify pipeline.
 pub mod config;
@@ -30,6 +32,7 @@ pub mod graph_spec;
 /// Improve-stage building blocks (the name is historical, SDK-1039 D3).
 pub mod memify;
 /// Pipeline orchestration module.
+mod persist;
 pub mod pipeline;
 /// Run-orchestration policy: what a finished run sweeps, marks and records.
 pub mod rollback;
@@ -66,9 +69,10 @@ pub use graph_backend::{
 };
 pub use graph_extraction::{GraphExtractable, Relationship, get_graph_from_model};
 pub use graph_integration::{
-    DeduplicationResult, EdgeResolutionStats, Expansion, GraphEdgePair, GraphNodePair,
-    TimestampNode, deduplicate_nodes_and_edges, expand_extracted_graphs,
-    expand_with_nodes_and_edges, expand_with_nodes_and_edges_with_stats,
+    DeduplicationResult, EdgeResolutionStats, EndpointScope, Expansion, GraphEdgePair,
+    GraphNodePair, TimestampNode, deduplicate_nodes_and_edges, expand_extracted_graphs,
+    expand_extracted_graphs_by_unit, expand_with_nodes_and_edges,
+    expand_with_nodes_and_edges_with_stats, extraction_units, merge_expansions,
 };
 pub use graph_spec::{
     Cardinality, EntitySpec, EnumFieldSpec, FieldSpec, GraphSchemaOptions, GraphSchemaSpec,
@@ -96,8 +100,8 @@ pub use summarization::{SummarizeOutcome, SummarizedContent, SummaryExtractor, T
 pub use tasks::{
     AttributedDynamicGraph, CODE_GRAPH_PIPELINE_NAME, ClassifiedDocuments, CodeRepoLoadMode,
     CognifyInput, DEFAULT_LEDGER_USER_ID, DynamicExtractionData, ExtractedChunks,
-    ExtractedGraphData, LedgerIdentity, SummarizedChunks, SummarizedData, add_data_points,
-    build_cognify_pipeline, classify_documents, cognify, create_web_page_nodes,
+    ExtractedGraphData, LedgerIdentity, PersistHandoff, SummarizedChunks, SummarizedData,
+    add_data_points, build_cognify_pipeline, classify_documents, cognify, create_web_page_nodes,
     extract_chunks_from_documents, extract_dlt_fk_edges, extract_dynamic_graphs_from_data,
     extract_graph_from_data, make_add_data_points_task, make_classify_documents_task,
     make_extract_chunks_task, make_extract_graph_and_summarize_task,

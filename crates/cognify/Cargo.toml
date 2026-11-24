@@ -23,6 +23,9 @@ testing = ["cognee-storage/testing", "cognee-graph/testing", "cognee-vector/test
 html-loader = ["cognee-ingestion/html-loader"]
 image-loader = ["cognee-ingestion/image-loader"]
 audio-loader = ["cognee-ingestion/audio-loader"]
+# Builds the Postgres graph adapter, for the `nodes_before_edges_pggraph`
+# regression test only; cognify itself needs no graph backend feature.
+pggraph = ["cognee-graph/postgres", "cognee-database/postgres"]
 
 # The file carries `#![cfg(feature = "testing")]`, which without this entry would
 # still build in a lane that does not enable the feature and report a green
@@ -57,6 +60,7 @@ async-trait.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+indexmap = "2"
 schemars.workspace = true
 futures.workspace = true
 tracing.workspace = true
@@ -92,6 +96,14 @@ required-features = ["testing"]
 name = "memify_persist_sessions"
 path = "tests/memify_persist_sessions.rs"
 required-features = ["testing"]
+
+# Postgres graph regression test (SDK-1694 O4a review): its file carries
+# `#![cfg(feature = "pggraph")]`, and the CI `pggraph-postgres` lane runs it
+# with `PGGRAPH_TEST_URL` set.
+[[test]]
+name = "nodes_before_edges_pggraph"
+path = "tests/nodes_before_edges_pggraph.rs"
+required-features = ["pggraph"]
 
 [dev-dependencies]
 cognee-storage    = { path = "../storage", features = ["testing"] }

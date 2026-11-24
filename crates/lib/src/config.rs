@@ -256,6 +256,22 @@ pub struct Settings {
     /// Record searches in search history (`COGNEE_LOG_SEARCH_HISTORY`).
     pub log_search_history: bool,
 
+    // -- Outbound requests & local paths -----------------------------------------
+    /// Python's `ALLOW_HTTP_REQUESTS`, as written: whether cognee may make
+    /// outbound requests for caller-supplied URLs (web pages `add` fetches,
+    /// remote git repositories). Only `true`, `1`, `yes` or `on` (any case)
+    /// allow them, any other value refuses them. Unset or blank, SDK, CLI and
+    /// binding calls may and HTTP API requests may not
+    /// ([`cognee_ingestion::resolve_repo::HttpRequestsGate`]). The old key
+    /// `code_graph.allow_http_requests` is an alias.
+    pub allow_http_requests: String,
+    /// Python's `COGNEE_ALLOWED_LOCAL_FILE_ROOTS`: the directories a local
+    /// repository path must lie under, separated by the platform's path-list
+    /// separator (`:`, or `;` on Windows). Empty, the default, is no
+    /// restriction. When set, cognee's own storage roots and the clones
+    /// directory are always allowed too.
+    pub allowed_local_file_roots: String,
+
     // -- Logging -----------------------------------------------------------------
     /// Log level filter (an `EnvFilter` directive such as `debug`), lowered
     /// into the logging config by the CLI. `RUST_LOG` wins over it. Empty
@@ -552,6 +568,11 @@ impl Settings {
         if cognify.chunks_per_batch > 0 {
             cfg = cfg.with_chunks_per_batch(cognify.chunks_per_batch as usize);
         }
+        cfg = cfg.with_endpoint_scope(if cognify.cross_chunk_endpoints {
+            cognee_cognify::EndpointScope::Unit
+        } else {
+            cognee_cognify::EndpointScope::Chunk
+        });
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
@@ -769,17 +790,56 @@ impl Settings {
         self.section()
     }
 
-    /// Where an SDK, CLI or binding call clones remote repositories, and
-    /// whether it may (`code_graph.clones_dir`,
-    /// `code_graph.allow_http_requests`: unset allows, as Python's SDK
-    /// does). An HTTP server builds its own with `api_request = true`.
+    /// Where an SDK, CLI or binding call clones remote repositories, whether
+    /// it may (`code_graph.clones_dir`, `allow_http_requests`: unset allows,
+    /// as Python's SDK does), and which local repository paths it may read
+    /// (`allowed_local_file_roots`). An HTTP server uses
+    /// [`Self::api_repo_sources`].
     pub fn repo_sources(&self) -> cognee_ingestion::resolve_repo::RepoSourceSettings {
+        self.repo_sources_with(false)
+    }
+
+    /// [`Self::repo_sources`] for an HTTP API request: unset
+    /// `allow_http_requests` refuses remote repositories, as Python's API
+    /// does, and the API request's stricter clone rules apply
+    /// ([`cognee_ingestion::resolve_repo::resolve_repo_source`]).
+    pub fn api_repo_sources(&self) -> cognee_ingestion::resolve_repo::RepoSourceSettings {
+        self.repo_sources_with(true)
+    }
+
+    fn repo_sources_with(
+        &self,
+        api_request: bool,
+    ) -> cognee_ingestion::resolve_repo::RepoSourceSettings {
         let code_graph = self.code_graph();
-        cognee_ingestion::resolve_repo::RepoSourceSettings::new(
+        let settings = cognee_ingestion::resolve_repo::RepoSourceSettings::new(
             &code_graph.clones_dir,
-            &code_graph.allow_http_requests,
-            false,
-        )
+            &self.allow_http_requests,
+            api_request,
+        );
+        // Python also allows cognee's own storage roots; an API request does
+        // not, as on a server they hold every tenant's databases and files.
+        let storage_roots = if api_request {
+            Vec::new()
+        } else {
+            [
+                &self.data_root_directory,
+                &self.system_root_directory,
+                &self.cache_root_directory,
+                &self.logs_root_directory,
+            ]
+            .into_iter()
+            .filter(|root| !root.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .collect::<Vec<_>>()
+        };
+        settings.with_allowed_local_roots(&self.allowed_local_file_roots, &storage_roots)
+    }
+
+    /// The `ALLOW_HTTP_REQUESTS` gate for an SDK, CLI or binding call
+    /// (`allow_http_requests`).
+    pub fn http_requests_gate(&self) -> cognee_ingestion::resolve_repo::HttpRequestsGate {
+        cognee_ingestion::resolve_repo::HttpRequestsGate::sdk(self.allow_http_requests.clone())
     }
 
     /// The LLM kind section (`llm.*`): provider, model, credentials, retries,
@@ -1261,6 +1321,8 @@ impl Default for Settings {
 
             // Search history
             log_search_history: true,
+            allow_http_requests: String::new(),
+            allowed_local_file_roots: String::new(),
 
             // Logging. Empty: cognee's default filter (info, noisy crates at warn).
             log_level: String::new(),
@@ -3208,9 +3270,13 @@ mod tests {
         )
         .unwrap();
 
+        cm.set("cognify.cross_chunk_endpoints", serde_json::json!(false))
+            .unwrap();
+
         let settings = cm.read();
         let cognify = settings.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 64);
+        assert_eq!(cognify.endpoint_scope, cognee_cognify::EndpointScope::Chunk);
         assert_eq!(
             cognify.custom_extraction_prompt.as_deref(),
             Some("extract a graph, custom edition")
@@ -3237,6 +3303,7 @@ mod tests {
         let s = Settings::default();
         let cognify = s.cognify_config();
         assert_eq!(cognify.chunks_per_batch, 2000);
+        assert_eq!(cognify.endpoint_scope, cognee_cognify::EndpointScope::Unit);
         assert!(cognify.custom_extraction_prompt.is_none());
         assert!(cognify.summary_schema.is_none());
         let tuning = s.search_tuning();
@@ -3619,6 +3686,54 @@ mod tests {
         cm.set("chunk_size", serde_json::json!(2048))
             .expect("set should succeed");
         assert_eq!(cm.read().chunk_size, Some(2048));
+    }
+
+    // SDK-1701: `allow_http_requests` is a cognee-wide setting bound to
+    // `ALLOW_HTTP_REQUESTS`; the old section key is an alias. It and
+    // `allowed_local_file_roots` reach the repository settings.
+    #[test]
+    fn outbound_and_local_path_settings_reach_repo_sources() {
+        let env = cognee_config_core::MapEnv::new()
+            .with("ALLOW_HTTP_REQUESTS", "yes")
+            .with("COGNEE_ALLOWED_LOCAL_FILE_ROOTS", "/srv/code");
+        let mut settings = Settings::default();
+        settings.overlay_from(&env);
+        assert_eq!(settings.allow_http_requests, "yes");
+        assert_eq!(settings.allowed_local_file_roots, "/srv/code");
+        assert!(settings.http_requests_gate().allowed());
+        let sdk = settings.repo_sources();
+        assert!(!sdk.http_requests.api_request);
+        assert!(sdk.http_requests.allowed());
+        let roots = sdk.local_roots().expect("roots are set");
+        // An SDK call also allows cognee's storage roots, as Python does.
+        assert!(roots.len() > 2);
+        assert_eq!(roots[0], std::path::PathBuf::from("/srv/code"));
+        // The clones directory (default `~/.cognee/repos`) is always allowed.
+        assert!(
+            roots
+                .last()
+                .expect("clones root")
+                .ends_with(".cognee/repos")
+        );
+        let api = settings.api_repo_sources();
+        assert!(api.http_requests.api_request);
+        assert!(api.http_requests.allowed());
+        // An API request does not: they hold every tenant's state.
+        assert_eq!(
+            api.allowed_local_roots,
+            Some(vec![std::path::PathBuf::from("/srv/code")])
+        );
+
+        let cm = ConfigManager::new(Settings::default());
+        cm.set("code_graph.allow_http_requests", serde_json::json!("off"))
+            .unwrap();
+        assert_eq!(cm.read().allow_http_requests, "off");
+        assert!(!cm.read().repo_sources().http_requests.allowed());
+        // Unset: SDK calls may, API requests may not.
+        let default = Settings::default();
+        assert!(default.repo_sources().http_requests.allowed());
+        assert!(!default.api_repo_sources().http_requests.allowed());
+        assert_eq!(default.repo_sources().allowed_local_roots, None);
     }
 
     #[test]
