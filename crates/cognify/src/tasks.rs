@@ -7371,8 +7371,12 @@ pub fn build_cognify_pipeline(
         ontology_resolver,
         config.clone(),
     );
-    add_code_routes(&mut pipeline, storage, graph_db, db, &config)
-        .expect("build_standard_cognify_pipeline always names its classify task");
+    // `build_standard_cognify_pipeline` always names its classify task, so
+    // this cannot fail; were it ever to, the plain pipeline is returned (code
+    // items then fail in classify) rather than panicking in a builder.
+    if let Err(error) = add_code_routes(&mut pipeline, storage, graph_db, db, &config) {
+        tracing::error!(%error, "build_cognify_pipeline: the code routes could not be added");
+    }
     pipeline
 }
 

@@ -2167,6 +2167,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with a document to extract; any other extractor that cannot be built
     still fails before the add. Both commands no longer fail keyless over the
     transcriber (`ComponentManager::cognify_transcriber`).
+  - The bindings' `addAndCognify` checks the graph extractor before the add
+    with `graph_backend::check_graph_backend_before_add`, which leaves the
+    keyless `auto` default to the cognify half: a code project is added and
+    cognified without an LLM, and a document is still refused with the
+    keyless remedy.
   - `cli cognify` checks `--extractor` and `graph_extraction.backend` up front
     again (`ComponentManager::check_graph_extractor_selection`), so a kind
     nothing is registered under fails even on a code-only dataset.

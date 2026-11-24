@@ -381,7 +381,10 @@ async fn a_tagged_reload_restores_a_lost_node_set_and_its_edges() {
         .map(|(id, _)| id.clone())
         .expect("the team-a node set");
     // Deleting the node set drops every edge into it too.
-    graph.delete_nodes(&[node_set.clone()]).await.unwrap();
+    graph
+        .delete_nodes(std::slice::from_ref(&node_set))
+        .await
+        .unwrap();
 
     load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
         .await

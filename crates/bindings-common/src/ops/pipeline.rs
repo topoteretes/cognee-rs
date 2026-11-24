@@ -45,7 +45,7 @@ use cognee::cognify::cognify as cognee_cognify;
 use cognee::models::{Data, Dataset};
 
 use crate::graph_backend::{
-    check_graph_backend_registered, graph_backend_from_opts, selected_graph_backend,
+    check_graph_backend_before_add, graph_backend_from_opts, selected_graph_backend,
 };
 use crate::wire::{cognify_result_json, data_records_json, marshal_inputs};
 use crate::{CogneeServices, HandleState, SdkError};
@@ -637,8 +637,9 @@ pub async fn add_and_cognify(
     let tenant_id = opts_tenant(opts)?;
     // Before the add, not after: a caller who named a backend this build cannot
     // serve should not have their documents ingested by a call that was always
-    // going to fail at the cognify half.
-    check_graph_backend_registered(&state.cm, opts)?;
+    // going to fail at the cognify half. The keyless `auto` default is left to
+    // the cognify half, which needs it only for a document to extract.
+    check_graph_backend_before_add(&state.cm, opts)?;
 
     let svc = state.services().await?;
     // Likewise for every other cognify option: a misspelled chunk attachment
