@@ -1587,51 +1587,12 @@ pub struct PersistHandoff {
     /// [`web_page_artifacts`] when [`CognifyConfig::create_web_page_nodes`] is
     /// on.
     pub(crate) web_pages: Vec<WebPage>,
-    /// The provenance stamp each entity carried **before** the extraction
-    /// stage's own stamp, for the entities that stamp changed — the
-    /// ontology-derived ones, which graph building does not pre-stamp.
-    ///
-    /// Before O4a the extraction stage wrote the entity nodes to the graph and
-    /// only then stamped them, so their graph nodes kept these values while
-    /// their ledger rows (whose `attributes` serialize the entity), written
-    /// later, carried the stamp. Vector payloads carry no provenance stamp at
-    /// all (`index_schema_payload`). The persistence layer writes the graph nodes with these values
-    /// to store exactly what it stored then. Making the graph agree with the
-    /// ledger is a change of stored output, left to a later stage.
-    pub(crate) entity_graph_stamps: HashMap<Uuid, ProvenanceStamp>,
 }
 
 impl PersistHandoff {
     /// Whether there is nothing in it.
     pub fn is_empty(&self) -> bool {
-        self.web_pages.is_empty() && self.entity_graph_stamps.is_empty()
-    }
-}
-
-/// The four provenance fields a task's stamp fills in on a `DataPoint`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProvenanceStamp {
-    pub(crate) source_pipeline: Option<String>,
-    pub(crate) source_task: Option<String>,
-    pub(crate) source_user: Option<String>,
-    pub(crate) topological_rank: Option<i32>,
-}
-
-impl ProvenanceStamp {
-    pub(crate) fn of(base: &DataPoint) -> Self {
-        Self {
-            source_pipeline: base.source_pipeline.clone(),
-            source_task: base.source_task.clone(),
-            source_user: base.source_user.clone(),
-            topological_rank: base.topological_rank,
-        }
-    }
-
-    pub(crate) fn apply_to(&self, base: &mut DataPoint) {
-        base.source_pipeline = self.source_pipeline.clone();
-        base.source_task = self.source_task.clone();
-        base.source_user = self.source_user.clone();
-        base.topological_rank = self.topological_rank;
+        self.web_pages.is_empty()
     }
 }
 
@@ -2408,7 +2369,6 @@ pub async fn add_data_points(
         producers: &input.producers,
         dynamic_graphs: &input.dynamic_graphs,
         web_pages: &input.handoff.web_pages,
-        entity_graph_stamps: &input.handoff.entity_graph_stamps,
         dlt: None,
     };
     let mut state = crate::persist::PersistState::default();
@@ -6806,26 +6766,17 @@ pub fn make_extract_graph_task_with_rank(
                 graph_data.handoff.web_pages =
                     web_page_artifacts(&graph_data.documents, &graph_data.chunks);
             }
-            // The entities as graph building left them, for the graph write:
-            // see `PersistHandoff::entity_graph_stamps`.
-            let unstamped: Vec<ProvenanceStamp> = graph_data
-                .entities
-                .iter()
-                .map(|pair| ProvenanceStamp::of(&pair.entity.base))
-                .collect();
+            // Every entity is stamped before anything is written, so its graph
+            // node, ledger row and vector payload all carry the stamp — the
+            // ontology-derived ones too, which graph building does not
+            // pre-stamp (Python stamps every constructed DataPoint,
+            // `extract_graph_from_data.py:213-223`).
             stamp_entity_provenance(
                 &mut graph_data.entities,
                 EXTRACT_GRAPH_TASK_NAME,
                 user_label.as_deref(),
                 rank,
             );
-            graph_data.handoff.entity_graph_stamps = graph_data
-                .entities
-                .iter()
-                .zip(unstamped)
-                .filter(|(pair, before)| ProvenanceStamp::of(&pair.entity.base) != *before)
-                .map(|(pair, before)| (pair.entity.base.id, before))
-                .collect();
             for attributed in &mut graph_data.dynamic_graphs {
                 for node in &mut attributed.graph.nodes {
                     stamp_provenance(

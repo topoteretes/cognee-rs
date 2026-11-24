@@ -84,8 +84,7 @@ use crate::graph_integration::{ArtifactProducers, GraphEdgePair, GraphNodePair, 
 use crate::pipeline::IndexedFieldsStats;
 use crate::summarization::TextSummary;
 use crate::tasks::{
-    AttributedDynamicGraph, DltArtifacts, ExtractedGraphData, LedgerIdentity, ProvenanceStamp,
-    WebPage,
+    AttributedDynamicGraph, DltArtifacts, ExtractedGraphData, LedgerIdentity, WebPage,
 };
 
 /// One batch of artifacts [`persist_group`] writes.
@@ -110,15 +109,10 @@ pub(crate) struct PersistGroup<'a> {
     pub(crate) producers: &'a ArtifactProducers,
     pub(crate) dynamic_graphs: &'a [AttributedDynamicGraph],
     pub(crate) web_pages: &'a [WebPage],
-    /// The provenance stamp the graph node of an entity carries when it
-    /// differs from the entity's own (see
-    /// [`crate::tasks::PersistHandoff`]); every other entity is written as is.
-    pub(crate) entity_graph_stamps: &'a HashMap<Uuid, ProvenanceStamp>,
     pub(crate) dlt: Option<&'a DltArtifacts>,
 }
 
 static NO_PRODUCERS: LazyLock<ArtifactProducers> = LazyLock::new(ArtifactProducers::default);
-static NO_STAMPS: LazyLock<HashMap<Uuid, ProvenanceStamp>> = LazyLock::new(HashMap::new);
 
 impl PersistGroup<'static> {
     /// A group with nothing in it, to fill with struct-update syntax.
@@ -134,7 +128,6 @@ impl PersistGroup<'static> {
             producers: &NO_PRODUCERS,
             dynamic_graphs: &[],
             web_pages: &[],
-            entity_graph_stamps: &NO_STAMPS,
             dlt: None,
         }
     }
@@ -414,14 +407,7 @@ pub(crate) async fn persist_group(
 
     // ── 2. Graph nodes: every node of the group, before any edge ────────────
     let graph_db = context.graph_db.as_ref();
-    write_extraction_nodes(
-        graph_db,
-        &mut tracker,
-        group.entities,
-        group.entity_graph_stamps,
-        group.timestamps,
-    )
-    .await?;
+    write_extraction_nodes(graph_db, &mut tracker, group.entities, group.timestamps).await?;
     let (web_nodes, web_edges) = crate::tasks::web_page_graph(group.web_pages);
     write_raw_nodes(graph_db, &mut tracker, web_nodes.into_iter()).await?;
 
@@ -570,14 +556,7 @@ pub(crate) async fn persist_extraction(
              edges before writing them"
         );
     }
-    write_extraction_nodes(
-        graph_db,
-        &mut tracker,
-        &graph.entities,
-        &graph.handoff.entity_graph_stamps,
-        &graph.timestamps,
-    )
-    .await?;
+    write_extraction_nodes(graph_db, &mut tracker, &graph.entities, &graph.timestamps).await?;
     write_semantic_edges(graph_db, &mut tracker, &graph.edges).await
 }
 
@@ -631,33 +610,13 @@ async fn write_extraction_nodes(
     graph_db: &dyn GraphDBTrait,
     tracker: &mut Tracker<'_>,
     entities: &[GraphNodePair],
-    entity_graph_stamps: &HashMap<Uuid, ProvenanceStamp>,
     timestamps: &[TimestampNode],
 ) -> Result<(), CognifyError> {
-    // An entity whose graph node keeps an earlier stamp is written as a copy
-    // carrying it; every other one is written as is.
-    let restamped: Vec<cognee_models::Entity> = entities
-        .iter()
-        .filter_map(|pair| {
-            let stamp = entity_graph_stamps.get(&pair.entity.base.id)?;
-            let mut entity = pair.entity.clone();
-            stamp.apply_to(&mut entity.base);
-            Some(entity)
-        })
-        .collect();
-    let restamped_by_id: HashMap<Uuid, &cognee_models::Entity> = restamped
-        .iter()
-        .map(|entity| (entity.base.id, entity))
-        .collect();
-    let entity_refs: Vec<&cognee_models::Entity> = entities
-        .iter()
-        .map(|pair| {
-            restamped_by_id
-                .get(&pair.entity.base.id)
-                .copied()
-                .unwrap_or(&pair.entity)
-        })
-        .collect();
+    // Every entity is written as it is, provenance stamp included — the
+    // ontology-derived ones too, as Python stamps every constructed DataPoint
+    // (`extract_graph_from_data.py:213-223`).
+    let entity_refs: Vec<&cognee_models::Entity> =
+        entities.iter().map(|pair| &pair.entity).collect();
     write_typed_nodes(graph_db, tracker, &entity_refs, |e| e.base.id).await?;
     // Timestamp nodes: not embedded, no EntityType; written before the edges
     // that point at them.
@@ -1577,7 +1536,6 @@ mod tests {
             producers: &data.producers,
             dynamic_graphs: &data.dynamic_graphs,
             web_pages: &data.handoff.web_pages,
-            entity_graph_stamps: &data.handoff.entity_graph_stamps,
             dlt: None,
         };
         let one = Stores::new().await;
@@ -1598,7 +1556,6 @@ mod tests {
                 producers: &data.producers,
                 dynamic_graphs: &group.dynamic_graphs,
                 web_pages: &group.web_pages,
-                entity_graph_stamps: &data.handoff.entity_graph_stamps,
                 dlt: None,
             })
             .collect();

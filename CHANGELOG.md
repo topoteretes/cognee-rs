@@ -2118,6 +2118,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ontology-derived entity graph nodes carry their provenance stamp
+  (SDK-1694, stage O4b).** Graph building does not pre-stamp the entities an
+  ontology lookup adds, and cognify used to write their graph nodes without
+  `source_pipeline` / `source_task` / `source_user` / `topological_rank`
+  (O4a kept that on purpose, to store exactly what main stored), while their
+  ledger rows carried the stamp. They are now stamped before anything is
+  written, as Python stamps every constructed DataPoint
+  (`extract_graph_from_data.py:213-223`,
+  `construct_data_points_and_edges_with_ontology.py:382`), so the graph node
+  agrees with the ledger. The internal `PersistHandoff::entity_graph_stamps`
+  that carried the old values is gone. The `persist_equivalence` snapshot
+  changes on exactly those three nodes.
 - **URL documents and ontology class hierarchies store all their edges
   (SDK-1694, O4a review).** Cognify wrote some edges before their endpoint
   nodes: a URL document's `SOURCED_FROM` chunk → WebPage edges before the
