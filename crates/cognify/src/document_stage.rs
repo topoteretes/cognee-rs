@@ -1207,11 +1207,9 @@ async fn write_document(
         let key = edge.dedup_key();
         match written.edge_status.get(&key) {
             Some(EdgeStatus::New) => edges.push(stamped.get(&key).cloned().unwrap_or(edge)),
-            // Claimed by every document that produced it; an ontology edge no
-            // chunk produced is dropped, as on Python's ledger path.
-            Some(EdgeStatus::Existing) if !view.producers.edge_chunks(&key).is_empty() => {
-                claimed.push(edge)
-            }
+            // Claimed by every document that produced it, by extraction or
+            // through its ontology lookup (SDK-1694 O5a).
+            Some(EdgeStatus::Existing) if view.producers.produces_edge(&key) => claimed.push(edge),
             _ => {}
         }
     }
@@ -2241,28 +2239,595 @@ mod tests {
     }
 
     /// An entity only an earlier document's ontology lookup brought in, which
-    /// a later document then extracts: the graph matches one group; the only
-    /// ledger difference is the earlier document's nil-owner row, which the
-    /// first group wrote before the later one knew a producer (as when the
-    /// two documents are cognified in separate runs; O5a replaces nil rows).
+    /// a later document then extracts: per-document groups store exactly what
+    /// one group stores (SDK-1694 O5a; O4b left the split with an extra nil
+    /// row). The entity has a row for the extracting document, one for the
+    /// document whose lookup brought it in, and the nil row an ontology-first
+    /// entity keeps as the delete guard on both paths.
     #[tokio::test]
     async fn an_ontology_only_entity_extracted_later_matches_one_group() {
         let documents = stamped(input(&[
             (0xa, vec![("Alice:Human", None)]),
             (0xb, vec![("Acme:Company", None)]),
         ]));
-        let (_, _, differences) =
+        let (whole, split, differences) =
             whole_vs_split(&documents, ontology(), &CognifyConfig::default()).await;
-        let acme = cognee_models::Entity::id_for("Acme").to_string();
-        for difference in &differences {
-            assert!(
-                difference.starts_with("nodes ONLY-SPLIT")
-                    && difference.contains(&acme.replace('-', ""))
-                    && difference.contains(&format!("\"data_id\":\"{}\"", Uuid::nil().simple())),
-                "unexpected difference: {difference}"
+        assert!(differences.is_empty(), "{differences:#?}");
+        let acme = cognee_models::Entity::id_for("Acme");
+        for stores in [&whole, &split] {
+            assert_eq!(
+                node_owners(stores, acme).await,
+                BTreeSet::from([Uuid::nil(), Uuid::from_u128(0xa), Uuid::from_u128(0xb)])
             );
         }
-        assert!(differences.len() <= 1, "{differences:#?}");
+    }
+
+    /// The `data_id`s of the ledger rows of the node `slug`.
+    async fn node_owners(stores: &Stores, slug: Uuid) -> BTreeSet<Uuid> {
+        cognee_database::ops::graph_storage::get_nodes_by_dataset(&stores.db, DATASET)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.slug == slug)
+            .map(|row| row.data_id)
+            .collect()
+    }
+
+    /// The `data_id`s of the ledger rows of the edge `(source, target,
+    /// relationship)`, `relationship` being the edge's name (a `contains`
+    /// row is keyed on its edge text and labelled `contains`).
+    async fn edge_owners(
+        stores: &Stores,
+        source: Uuid,
+        target: Uuid,
+        relationship: &str,
+    ) -> BTreeSet<Uuid> {
+        cognee_database::ops::graph_storage::get_edges_by_dataset(&stores.db, DATASET)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|row| {
+                row.source_node_id == source
+                    && row.destination_node_id == target
+                    && row.label.as_deref().unwrap_or(&row.relationship_name) == relationship
+            })
+            .map(|row| row.data_id)
+            .collect()
+    }
+
+    // ── Per-document type and structural rows (SDK-1694 O5a) ─────────────
+
+    /// The documents of `three_documents`, by letter.
+    fn doc(letter: char) -> Uuid {
+        Uuid::from_u128(u128::from(letter.to_digit(16).unwrap()))
+    }
+
+    /// `[nil, documents…]`, the owners an O5a row set has: the nil row every
+    /// type and structural edge always had (the delete guard) and one row per
+    /// producing document.
+    fn owners(letters: &str) -> BTreeSet<Uuid> {
+        std::iter::once(Uuid::nil())
+            .chain(letters.chars().map(doc))
+            .collect()
+    }
+
+    /// Ticket item: the ledger snapshot of a multi-document run. Every
+    /// EntityType and `is_a` edge has rows for exactly the documents that
+    /// declared it, a type several documents share has one per document, and
+    /// every `contains` / `is_part_of` / `made_from` edge has a row for its
+    /// chunk's document — each beside the nil row it always had.
+    #[tokio::test]
+    async fn every_type_and_structural_edge_names_the_documents_that_produced_it() {
+        use cognee_models::{Entity, EntityType};
+        let test = Stores::new().await;
+        let input = three_documents();
+        run(
+            &test,
+            Arc::new(TextLlm::default()),
+            &input,
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+
+        // Types: a shared type gets one row per declaring document. Alice is
+        // a Person in doc A (its first declaration in the block wins over
+        // Engineer), so `engineer` is doc C's alone (Bob).
+        for (name, letters) in [
+            ("person", "abc"),
+            ("company", "a"),
+            ("fruit", "b"),
+            ("engineer", "c"),
+        ] {
+            assert_eq!(
+                node_owners(&test, EntityType::id_for(name)).await,
+                owners(letters),
+                "EntityType {name}"
+            );
+        }
+
+        // `is_a`: per (entity, type), the documents that declared that pair.
+        for (entity, kind, letters) in [
+            ("Alice", "person", "a"),
+            ("Acme", "company", "a"),
+            ("Apple", "company", "a"),
+            ("Apple", "fruit", "b"),
+            ("Bob", "person", "b"),
+            ("Bob", "engineer", "c"),
+            ("Carol", "person", "c"),
+            ("Dan", "person", "c"),
+        ] {
+            assert_eq!(
+                edge_owners(
+                    &test,
+                    Entity::id_for(entity),
+                    EntityType::id_for(kind),
+                    "is_a"
+                )
+                .await,
+                owners(letters),
+                "{entity} is_a {kind}"
+            );
+        }
+
+        // Every structural edge of a chunk or summary: its document.
+        let rows = cognee_database::ops::graph_storage::get_edges_by_dataset(&test.db, DATASET)
+            .await
+            .unwrap();
+        let chunk_documents: HashMap<Uuid, Uuid> = input
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.base.id, chunk.document_id))
+            .collect();
+        let summary_documents: HashMap<Uuid, Uuid> = test
+            .graph
+            .get_graph_data()
+            .await
+            .unwrap()
+            .1
+            .into_iter()
+            .filter(|(_, _, relationship, _)| relationship == "made_from")
+            .map(|(summary, chunk, _, _)| {
+                (
+                    Uuid::parse_str(&summary).unwrap(),
+                    chunk_documents[&Uuid::parse_str(&chunk).unwrap()],
+                )
+            })
+            .collect();
+        let mut checked = HashMap::<&str, usize>::new();
+        for relationship in ["contains", "is_part_of", "made_from"] {
+            let edges: BTreeSet<(Uuid, Uuid)> = rows
+                .iter()
+                .filter(|row| {
+                    row.label.as_deref().unwrap_or(&row.relationship_name) == relationship
+                })
+                .map(|row| (row.source_node_id, row.destination_node_id))
+                .collect();
+            for (source, target) in edges {
+                let document = chunk_documents
+                    .get(&source)
+                    .or_else(|| summary_documents.get(&source))
+                    .copied()
+                    .unwrap();
+                assert_eq!(
+                    edge_owners(&test, source, target, relationship).await,
+                    BTreeSet::from([Uuid::nil(), document]),
+                    "{relationship} {source} → {target}"
+                );
+                *checked.entry(relationship).or_default() += 1;
+            }
+        }
+        assert_eq!(checked["is_part_of"], 5, "one per chunk");
+        assert_eq!(checked["made_from"], 5, "one per summary");
+        assert!(checked["contains"] >= 9, "{checked:?}");
+    }
+
+    /// Ticket item 5: an ontology edge the graph already holds, which a later
+    /// run's document brings in through its own lookup, is claimed by that
+    /// document (SDK-1694 O5a). Before, it was dropped and only the first
+    /// run's rows named it.
+    #[tokio::test]
+    async fn an_existing_ontology_edge_is_claimed_by_each_document_that_looks_it_up() {
+        use cognee_models::Entity;
+        let test = Stores::new().await;
+        let stores = StageStores {
+            ontology: ontology(),
+            ..stores_of(&test, Arc::new(TextLlm::default()))
+        };
+        for letter in ['a', 'b'] {
+            let id = u128::from(letter.to_digit(16).unwrap());
+            run_document_stage(
+                &stamped(input(&[(id, vec![("Alice:Human", None)])])),
+                &stores,
+                &CognifyConfig::default(),
+                &stamp(),
+            )
+            .await
+            .unwrap();
+        }
+        let (alice, acme) = (Entity::id_for("Alice"), Entity::id_for("Acme"));
+        let works_for: Vec<String> = test
+            .graph
+            .get_graph_data()
+            .await
+            .unwrap()
+            .1
+            .into_iter()
+            .filter(|(source, target, _, _)| {
+                *source == alice.to_string() && *target == acme.to_string()
+            })
+            .map(|(_, _, relationship, _)| relationship)
+            .collect();
+        assert_eq!(
+            works_for.len(),
+            1,
+            "the ontology edge, written once: {works_for:?}"
+        );
+        let owners = edge_owners(&test, alice, acme, &works_for[0]).await;
+        assert!(
+            owners.contains(&doc('a')),
+            "the first run's row: {owners:?}"
+        );
+        assert!(
+            owners.contains(&doc('b')),
+            "the second run's document claims the existing edge: {owners:?}"
+        );
+    }
+
+    /// A whole-run sweep after a failed run removes every row and artifact the
+    /// run wrote, the per-document type and structural rows (SDK-1694 O5a)
+    /// and the nil rows alike.
+    #[tokio::test]
+    async fn a_whole_run_sweep_after_a_failed_run_leaves_nothing() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_delete::{RunSweeper, SweepScope};
+        let test = Stores::new().await;
+        let input = input(&[
+            (0xa, vec![("Alice:Person Apple:Company", None)]),
+            (0xb, vec![("Apple:Fruit Bob:Person", None)]),
+            (0xc, vec![("Carol:Person FAIL SLOW30", None)]),
+        ]);
+        let config = CognifyConfig::default().with_rollback_scope(RollbackScope::FailedItems);
+        let outcome = run(&test, Arc::new(TextLlm::default()), &input, &config)
+            .await
+            .map(|_| ());
+        // The failed document was never saved; the others were.
+        let nodes = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+        let typed = |letter: char| {
+            nodes
+                .iter()
+                .any(|row| row.node_type == "EntityType" && row.data_id == doc(letter))
+        };
+        assert!(
+            typed('a') && typed('b'),
+            "per-document type rows before the sweep ({outcome:?})"
+        );
+
+        let sweeper = RunSweeper::new(
+            Arc::new(test.db.clone()),
+            test.graph.clone(),
+            test.vector.clone(),
+        );
+        sweeper
+            .sweep(&SweepScope::whole_run(Uuid::from_u128(7), DATASET))
+            .await
+            .unwrap();
+        assert!(
+            get_nodes_by_dataset(&test.db, DATASET)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            get_edges_by_dataset(&test.db, DATASET)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let (graph_nodes, graph_edges) = test.graph.get_graph_data().await.unwrap();
+        assert!(graph_nodes.is_empty(), "{graph_nodes:?}");
+        assert!(graph_edges.is_empty(), "{graph_edges:?}");
+        let points: usize = test.vector.all_points().values().map(Vec::len).sum();
+        assert_eq!(points, 0, "{:?}", test.vector.all_points().keys());
+    }
+
+    /// The item-scoped sweep (`SweepScope::for_data`, O5b's) of one document
+    /// removes that document's rows — its type and structural rows included,
+    /// which it can now select by `data_id` — and leaves every other row.
+    #[tokio::test]
+    async fn an_item_scoped_sweep_removes_only_that_documents_rows() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        use cognee_delete::{RunSweeper, SweepScope};
+        let test = Stores::new().await;
+        run(
+            &test,
+            Arc::new(TextLlm::default()),
+            &three_documents(),
+            &CognifyConfig::default(),
+        )
+        .await
+        .unwrap();
+        let rows = || async {
+            let nodes = get_nodes_by_dataset(&test.db, DATASET).await.unwrap();
+            let edges = get_edges_by_dataset(&test.db, DATASET).await.unwrap();
+            (nodes, edges)
+        };
+        let (nodes, edges) = rows().await;
+        assert!(
+            nodes
+                .iter()
+                .any(|row| row.node_type == "EntityType" && row.data_id == doc('a'))
+                && edges
+                    .iter()
+                    .any(|row| row.relationship_name == "is_a" && row.data_id == doc('a')),
+            "doc A has type and is_a rows to sweep"
+        );
+        let kept = |nodes: &[cognee_database::GraphNode], edges: &[cognee_database::GraphEdge]| {
+            (
+                nodes
+                    .iter()
+                    .filter(|row| row.data_id != doc('a'))
+                    .map(|row| row.id)
+                    .collect::<BTreeSet<_>>(),
+                edges
+                    .iter()
+                    .filter(|row| row.data_id != doc('a'))
+                    .map(|row| row.id)
+                    .collect::<BTreeSet<_>>(),
+            )
+        };
+        let before = kept(&nodes, &edges);
+
+        RunSweeper::new(
+            Arc::new(test.db.clone()),
+            test.graph.clone(),
+            test.vector.clone(),
+        )
+        .sweep(&SweepScope::for_data(
+            Uuid::from_u128(7),
+            DATASET,
+            vec![doc('a')],
+        ))
+        .await
+        .unwrap();
+
+        let (nodes, edges) = rows().await;
+        assert!(nodes.iter().all(|row| row.data_id != doc('a')));
+        assert!(edges.iter().all(|row| row.data_id != doc('a')));
+        assert_eq!(kept(&nodes, &edges), before, "every other row is kept");
+    }
+
+    /// Whether `row` is one O5a added: a per-document EntityType row, or a
+    /// per-document row of a structural edge (keyed, like its nil row, on
+    /// Python's `generate_edge_id` of its text).
+    fn added_by_o5a_node(row: &cognee_database::GraphNode) -> bool {
+        row.node_type == "EntityType" && !row.data_id.is_nil()
+    }
+
+    fn added_by_o5a_edge(row: &cognee_database::GraphEdge) -> bool {
+        let text = row
+            .relationship_name
+            .to_lowercase()
+            .replace(' ', "_")
+            .replace('\'', "");
+        !row.data_id.is_nil() && row.slug == Uuid::new_v5(&Uuid::NAMESPACE_OID, text.as_bytes())
+    }
+
+    /// What every delete and sweep reads from the ledger, as artifact sets:
+    /// for each document and claimant scope the data-scoped delete's unique
+    /// nodes, unique edges, structural edges and surviving `EdgeType` texts;
+    /// the dataset delete's unique nodes and edges; the whole-run and
+    /// item-scoped sweeps' unique nodes, edges and surviving texts.
+    async fn delete_selections(db: &cognee_database::DatabaseConnection) -> Vec<String> {
+        use cognee_database::ClaimantScope;
+        use cognee_database::ops::graph_storage::{self as ledger, RunScope};
+        let edges = ledger::get_edges_by_dataset(db, DATASET).await.unwrap();
+        let candidates: Vec<String> = edges
+            .iter()
+            .map(|row| {
+                row.attributes
+                    .as_ref()
+                    .and_then(|attributes| attributes.get("edge_text"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or(row.relationship_name.trim())
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let slugs = |rows: Vec<cognee_database::GraphNode>| -> BTreeSet<Uuid> {
+            rows.into_iter().map(|row| row.slug).collect()
+        };
+        let triples = |rows: Vec<cognee_database::GraphEdge>| -> BTreeSet<(Uuid, String, Uuid)> {
+            rows.into_iter()
+                .map(|row| {
+                    (
+                        row.source_node_id,
+                        row.relationship_name,
+                        row.destination_node_id,
+                    )
+                })
+                .collect()
+        };
+        let run = Uuid::from_u128(7);
+        let mut out = Vec::new();
+        for letter in ['a', 'b', 'c'] {
+            let data = doc(letter);
+            for scope in [ClaimantScope::SameDataset, ClaimantScope::AnyDataset] {
+                let at = format!("{letter} {scope:?}");
+                out.push(format!(
+                    "{at} unique nodes {:?}",
+                    slugs(
+                        ledger::get_unique_nodes_for_data(db, data, DATASET, scope)
+                            .await
+                            .unwrap()
+                    )
+                ));
+                out.push(format!(
+                    "{at} unique edges {:?}",
+                    triples(
+                        ledger::get_unique_edges_for_data(db, data, DATASET, scope)
+                            .await
+                            .unwrap()
+                    )
+                ));
+                out.push(format!(
+                    "{at} structural edges {:?}",
+                    triples(
+                        ledger::get_structural_edges_for_data(db, data, DATASET, scope)
+                            .await
+                            .unwrap()
+                    )
+                ));
+                out.push(format!(
+                    "{at} texts kept {:?}",
+                    ledger::get_edge_retrieval_texts_claimed_outside_data(
+                        db,
+                        data,
+                        DATASET,
+                        scope,
+                        &candidates
+                    )
+                    .await
+                    .unwrap()
+                ));
+            }
+            let items = [data];
+            let item_scope = RunScope::for_data(run, DATASET, &items);
+            out.push(format!(
+                "{letter} run unique nodes {:?}",
+                slugs(
+                    ledger::get_unique_nodes_for_run(db, &item_scope)
+                        .await
+                        .unwrap()
+                )
+            ));
+            out.push(format!(
+                "{letter} run unique edges {:?}",
+                triples(
+                    ledger::get_unique_edges_for_run(db, &item_scope)
+                        .await
+                        .unwrap()
+                )
+            ));
+            out.push(format!(
+                "{letter} run texts kept {:?}",
+                ledger::get_edge_retrieval_texts_claimed_outside_run(db, &item_scope)
+                    .await
+                    .unwrap()
+            ));
+        }
+        out.push(format!(
+            "dataset unique nodes {:?}",
+            slugs(
+                ledger::get_unique_nodes_for_datasets(db, &[DATASET])
+                    .await
+                    .unwrap()
+            )
+        ));
+        out.push(format!(
+            "dataset unique edges {:?}",
+            triples(
+                ledger::get_unique_edges_for_datasets(db, &[DATASET])
+                    .await
+                    .unwrap()
+            )
+        ));
+        let whole = RunScope::whole_run(run, DATASET);
+        out.push(format!(
+            "run unique nodes {:?}",
+            slugs(ledger::get_unique_nodes_for_run(db, &whole).await.unwrap())
+        ));
+        out.push(format!(
+            "run unique edges {:?}",
+            triples(ledger::get_unique_edges_for_run(db, &whole).await.unwrap())
+        ));
+        out
+    }
+
+    /// Deletion is unchanged by the per-document rows (SDK-1694 O5a): every
+    /// selection a data-scoped delete (both claimant scopes), a dataset
+    /// delete, the whole-run sweep and the item-scoped sweep make reads the
+    /// same artifacts from the ledger with them as with the ledger stripped
+    /// back to what the run wrote before O5a. The nil row each type and
+    /// structural edge keeps claims its slug for every document, so a
+    /// per-document row is never the last claim.
+    #[tokio::test]
+    async fn the_per_document_rows_change_no_delete_selection() {
+        use cognee_database::ops::graph_storage::{get_edges_by_dataset, get_nodes_by_dataset};
+        let with_rows = Stores::new().await;
+        let stripped = Stores::new().await;
+        for stores in [&with_rows, &stripped] {
+            run(
+                stores,
+                Arc::new(TextLlm::default()),
+                &three_documents(),
+                &CognifyConfig::default(),
+            )
+            .await
+            .unwrap();
+        }
+        let nodes = get_nodes_by_dataset(&stripped.db, DATASET).await.unwrap();
+        let edges = get_edges_by_dataset(&stripped.db, DATASET).await.unwrap();
+        let node_ids: Vec<Uuid> = nodes
+            .iter()
+            .filter(|row| added_by_o5a_node(row))
+            .map(|row| row.id)
+            .collect();
+        let edge_ids: Vec<Uuid> = edges
+            .iter()
+            .filter(|row| added_by_o5a_edge(row))
+            .map(|row| row.id)
+            .collect();
+        assert!(
+            node_ids.len() >= 6 && edge_ids.len() >= 20,
+            "the run wrote per-document rows: {} nodes, {} edges",
+            node_ids.len(),
+            edge_ids.len()
+        );
+        for (table, ids) in [("nodes", node_ids), ("edges", edge_ids)] {
+            for id in ids {
+                use sea_orm::ConnectionTrait;
+                stripped
+                    .db
+                    .execute_unprepared(&format!(
+                        "DELETE FROM {table} WHERE id = '{}'",
+                        id.simple()
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+        assert!(
+            get_nodes_by_dataset(&stripped.db, DATASET)
+                .await
+                .unwrap()
+                .iter()
+                .all(|row| !added_by_o5a_node(row)),
+            "stripped"
+        );
+
+        let (want, got) = (
+            delete_selections(&stripped.db).await,
+            delete_selections(&with_rows.db).await,
+        );
+        for (want, got) in want.iter().zip(&got) {
+            assert_eq!(want, got);
+        }
+        assert_eq!(want.len(), got.len());
+        // The selections are not vacuous: deletes do select artifacts.
+        for selection in [
+            "a SameDataset unique nodes {",
+            "a SameDataset structural edges {(",
+        ] {
+            assert!(
+                want.iter()
+                    .any(|line| line.starts_with(selection) && !line.ends_with("{}")),
+                "{selection}: {want:#?}"
+            );
+        }
     }
 
     /// Chunks of two documents without a `Document` record are still built as
