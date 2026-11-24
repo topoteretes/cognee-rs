@@ -4353,8 +4353,10 @@ mod tests {
         );
     }
 
-    /// Text-path no-regression: the stored artifact is byte-identical to the
-    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, the
+    /// Text-path no-regression for LF-only plain text: the stored artifact is
+    /// byte-identical to the input, `raw_content_hash == content_hash`
+    /// (CRLF input differs: see
+    /// `test_crlf_text_stores_lf_text_with_python_hashes`), `extension == "txt"`, the
     /// content hash matches the pinned Python-compatible value, and the new
     /// row's id is a uuid4.
     #[tokio::test]
@@ -4389,16 +4391,16 @@ mod tests {
             "a new row's data_id is a uuid4, as in Python"
         );
 
-        // For plain text the extracted text equals the raw bytes.
+        // For LF-only plain text the extracted text equals the raw bytes.
         assert_eq!(
             processed.raw_content_hash, processed.content_hash,
-            "plain-text raw_content_hash must equal content_hash"
+            "LF-only plain-text raw_content_hash must equal content_hash"
         );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
         assert_eq!(processed.loader_engine, "text_loader");
 
-        // Stored file content is byte-identical to the input.
+        // Stored file content is byte-identical to the (LF-only) input.
         let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
         assert_eq!(stored, HELLO_WORLD.as_bytes());
     }

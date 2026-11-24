@@ -13,7 +13,10 @@
 use async_trait::async_trait;
 use cognee_models::Document;
 
-use super::{DocumentLoader, LoaderError, LoaderOutput, universal_newlines};
+use super::{DocumentLoader, LoaderError, LoaderOutput};
+
+/// Re-exported from its old home; the helper lives in [`super`] now.
+pub use super::universal_newlines;
 
 /// Source-file extensions of the languages enola extracts. Python's
 /// `SUPPORTED_CODE_EXTENSIONS` (`code_loader.py`), lowercase. It leaves out

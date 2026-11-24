@@ -228,11 +228,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `\n`, as Python's text-mode read does (a BOM is still kept). A CRLF text
   file keeps its `content_hash`, which hashes the original bytes, so re-adding
   it reuses its row; its stored `text_<hash>.txt`, its `raw_content_hash` and
-  its chunk text and ids now match Python. Stored text is never overwritten,
-  so text a previous version stored with CRLF stays as it is (with its old
-  `raw_content_hash`) until it is deleted; cognify chunks it with LF anyway.
-  The CSV and HTML loaders are unchanged, as in Python.
-  `loaders::code::universal_newlines` moved to `loaders::universal_newlines`.
+  its chunk text and ids now match Python. Stored text is reused and never
+  overwritten, as in Python (`store_derived_text`, `overwrite=False`), so
+  CRLF text a previous version stored keeps being used, with its old
+  `raw_content_hash`, by every new add of the same bytes in any dataset,
+  until every row that uses it is deleted; cognify chunks it with LF anyway.
+  To bring such data to Python parity, delete those rows and add the files
+  again.
+  The CSV and HTML loaders store the same text as before, but cognify reads
+  that stored text back through the text loader, so a `\r\n` kept in it (a
+  quoted CSV cell, say) is now chunked as `\n`, as in Python; re-cognify
+  changes those chunks and their embeddings. `ExtractTextChunksPipeline`
+  translates the stored text the same way before chunking, so it returns
+  the chunks cognify does. `universal_newlines` now lives in
+  `cognee_utils`, still re-exported from `loaders` and `loaders::code`.
 
 - **Structured output asks for constrained decoding by default (behaviour
   change).** `LLM_STRUCTURED_OUTPUT_MODE=auto`, the default, now sends a strict

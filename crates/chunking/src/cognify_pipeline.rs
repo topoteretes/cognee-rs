@@ -81,6 +81,9 @@ impl ExtractTextChunksPipeline {
 
             let content = String::from_utf8(content_bytes)
                 .map_err(|e| ChunkingError::InvalidUtf8(e.to_string()))?;
+            // Python reads stored text in text mode, so chunks never hold
+            // `\r`; cognify gets the same from its loader rerun.
+            let content = cognee_utils::universal_newlines(&content);
 
             let chunks = chunk_text(document.base.id, &content, max_chunk_size, counter, mode);
             debug!(chunk_count = chunks.len(), document_id = %document.base.id, "document chunked");
@@ -149,6 +152,34 @@ mod tests {
         for chunk in &chunks {
             assert!(!chunk.text.is_empty());
         }
+    }
+
+    /// Store `bytes` as a `.txt` document and return its chunk texts.
+    async fn chunk_texts_of(bytes: &[u8]) -> Vec<String> {
+        let storage = Arc::new(MockStorage::new());
+        let location = storage.store(bytes, "test.txt").await.unwrap();
+        let data = Data::builder(
+            Uuid::new_v4(),
+            "test.txt",
+            location,
+            "text://test",
+            "txt",
+            "text/plain",
+            "hash123",
+            Uuid::new_v4(),
+        )
+        .build();
+        let pipeline = ExtractTextChunksPipeline::new(storage);
+        let chunks = pipeline.extract_chunks(vec![data], 100).await.unwrap();
+        chunks.into_iter().map(|chunk| chunk.text).collect()
+    }
+
+    #[tokio::test]
+    async fn extract_chunks_translates_line_endings_as_python() {
+        let crlf = chunk_texts_of(b"First one.\r\n\r\nSecond\rone.\r\n").await;
+        let lf = chunk_texts_of(b"First one.\n\nSecond\none.\n").await;
+        assert!(!lf.is_empty());
+        assert_eq!(crlf, lf, "stored CRLF text chunks as its LF version");
     }
 
     #[tokio::test]
