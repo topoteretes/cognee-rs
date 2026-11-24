@@ -304,11 +304,11 @@ fn resolve_endpoint(
 /// two unrelated callers with different correct answers:
 ///
 /// - the graph-expansion path below, reached from the extract-graph task,
-///   which passes that task's rank (entities are persisted to the graph DB
-///   inside `extract_graph_from_data`, before the task body's own stamp
-///   runs, so the rank has to be right here);
-/// - [`crate::tasks::add_data_points`], which pre-stamps freshly-counted
-///   `EdgeType` DataPoints and passes `None` — Python's
+///   which passes that task's rank (the standalone `extract_graph_from_data`
+///   persists entities before any task body could stamp them, so the rank has
+///   to be right here);
+/// - the persistence layer (`crate::persist`), which pre-stamps
+///   freshly-counted `EdgeType` DataPoints and passes `None` — Python's
 ///   `index_graph_edges.py:50` builds those `EdgeType` objects without ever
 ///   handing them to a provenance stamper, so their rank stays at the `0`
 ///   sentinel and matching that is the parity-correct outcome.

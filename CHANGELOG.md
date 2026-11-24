@@ -18,6 +18,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- **One persistence layer for every cognify write (SDK-1694, stage O4a).** The
+  graph, vector, ownership-ledger and edge-evidence writes of a run — the
+  extracted entities, Timestamps and semantic edges, the claimed existing
+  edges' ledger rows, the WebPage / WebSite nodes, the chunks, summaries,
+  entity types, documents, custom-schema graphs, structural edges, vectors,
+  edge evidence and the post-run DLT schema nodes and FK edges — now all go
+  through one internal layer that writes the ledger rows first, then the
+  graph (in the order the stages used to), then the vectors, then the
+  evidence. **What a run stores is unchanged**, pinned as sets by
+  `tests/persist_equivalence.rs`. What moved:
+  - The extraction stage (`make_extract_graph_task*`,
+    `make_extract_graph_and_summarize_task*`) **writes nothing any more**; the
+    `add_data_points` stage writes everything. A custom pipeline that runs the
+    extraction task without `make_add_data_points_task` after it no longer
+    stores the extracted graph or the WebPage / WebSite nodes. The factories'
+    `db` argument is unused and kept for their signatures. The standalone
+    `extract_graph_from_data` and `create_web_page_nodes` still store what they
+    always did.
+  - `SummarizedData` gains `claimed_existing_edges: Vec<GraphEdgePair>` (the
+    edges an earlier run already wrote: ledger rows only) and
+    `handoff: PersistHandoff` (opaque: the WebPage / WebSite artifacts and the
+    entities' graph view), so struct literals need both
+    (`claimed_existing_edges: vec![], handoff: PersistHandoff::default()`).
+    `ExtractedGraphData` gains the same two fields; it is `#[non_exhaustive]`,
+    so only readers outside the crate see them.
+  - A run's failure window moved with the writes: an entity or semantic-edge
+    write now fails in the `add_data_points` stage, after summarization,
+    rather than in the extraction stage. Persistence failures stay run-fatal.
+
 - **Repository cloning is hardened for API requests (SDK-1701).** For an HTTP
   API request (`RepoSourceSettings` with `api_request = true`,
   `Settings::api_repo_sources`) a clone's directory name now carries an 8-hex

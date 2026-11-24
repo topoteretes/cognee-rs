@@ -34,7 +34,7 @@ use cognee_core::{
 };
 use cognee_database::{PipelineRunRepository, PipelineRunStatus};
 use cognee_embedding::engine::EmbeddingEngine;
-use cognee_graph::{EdgeData, GraphDBTrait, GraphDBTraitExt};
+use cognee_graph::{EdgeData, GraphDBTrait};
 #[cfg(feature = "audio-loader")]
 use cognee_ingestion::loaders::audio::AudioLoader;
 #[cfg(feature = "image-loader")]
@@ -126,8 +126,13 @@ pub struct ExtractedChunks {
     pub failures: FailureReport,
 }
 
-/// Output of [`extract_graph_from_data`]: chunks plus extracted entities and edges
-/// (already stored in graph DB).
+/// Output of graph extraction: chunks plus extracted entities and edges.
+///
+/// Inside the cognify pipeline nothing in it has been stored yet: the
+/// extraction stage only builds it, and the persistence step
+/// ([`add_data_points`], through [`crate::persist`]) writes all of it. Only the
+/// standalone [`extract_graph_from_data`] stores the extraction artifacts
+/// itself before returning one.
 ///
 /// # Stability
 ///
@@ -146,13 +151,21 @@ pub struct ExtractedGraphData {
     /// Classified documents — carried forward for DLT FK edge extraction.
     pub documents: Vec<Document>,
     pub entities: Vec<GraphNodePair>,
-    /// Timestamp nodes extracted alongside the entities (already stored in the
-    /// graph DB, with their ownership rows). Each producing chunk's
-    /// `contains` already names them.
+    /// Timestamp nodes extracted alongside the entities. Each producing
+    /// chunk's `contains` already names them.
     pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
+    /// Edges this run produced that an earlier run already wrote to the graph
+    /// (see [`Expansion::split_existing_edges`]). They are ownership-only: they
+    /// get ledger rows, and no graph or vector write.
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
+    /// What the persistence step needs besides the above: the WebPage /
+    /// WebSite artifacts of the URL documents, when
+    /// [`CognifyConfig::create_web_page_nodes`] is on, and the entities' graph
+    /// view. Empty when not built by the pipeline's extraction stage.
+    pub handoff: PersistHandoff,
     /// Every chunk that produced each merged entity and edge. Carried through
-    /// to [`upsert_provenance`], which turns it into one ownership row per
+    /// to [`provenance_rows`], which turns it into one ownership row per
     /// (artifact, data item). Not serialized anywhere — see
     /// [`ArtifactProducers`].
     pub producers: ArtifactProducers,
@@ -229,6 +242,11 @@ pub struct SummarizedData {
     /// Forwarded verbatim from [`ExtractedGraphData::timestamps`].
     pub timestamps: Vec<TimestampNode>,
     pub edges: Vec<GraphEdgePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::claimed_existing_edges`]:
+    /// ownership rows only.
+    pub claimed_existing_edges: Vec<GraphEdgePair>,
+    /// Forwarded verbatim from [`ExtractedGraphData::handoff`].
+    pub handoff: PersistHandoff,
     /// Forwarded verbatim from [`ExtractedGraphData::producers`].
     pub producers: ArtifactProducers,
     /// Runtime custom graphs forwarded from extraction.
@@ -293,14 +311,14 @@ pub const DEFAULT_LEDGER_USER_ID: Uuid = Uuid::nil();
 /// [`extract_dlt_fk_edges`].
 #[derive(Debug, Clone, Copy)]
 pub struct LedgerIdentity {
-    tenant_id: Option<Uuid>,
-    user_id: Uuid,
-    dataset_id: Uuid,
+    pub(crate) tenant_id: Option<Uuid>,
+    pub(crate) user_id: Uuid,
+    pub(crate) dataset_id: Uuid,
     /// The run that created the artifacts these rows name. `None` only when the
     /// task is driven outside a pipeline executor — a NULL run id means
     /// "predates ownership tracking, permanently exempt from sweeping", which
     /// is the honest value for an artifact no run created.
-    pipeline_run_id: Option<Uuid>,
+    pub(crate) pipeline_run_id: Option<Uuid>,
 }
 
 impl LedgerIdentity {
@@ -966,16 +984,20 @@ async fn extract_graphs_via_backend(
     Ok(out)
 }
 
-/// Extract knowledge graphs from chunks via LLM, then integrate (Task 3).
+/// Extract knowledge graphs from chunks via LLM, integrate them, and store the
+/// extraction artifacts (Task 3, standalone).
 ///
-/// Calls the LLM once per chunk to extract entities and relationships, every
-/// chunk of the run through one stream bounded by
-/// [`CognifyConfig::max_parallel_extractions`]. Then integrates: expands to
-/// storage-layer types, deduplicates against existing DB entries and
-/// in-memory, and stores nodes/edges in graph DB.
+/// [`build_extracted_graph`] followed by the extraction part of the
+/// persistence layer: the ownership rows of the entities, Timestamps, semantic
+/// edges and claimed existing edges, then the entity and Timestamp nodes and
+/// the semantic edges. Ownership is recorded in `db` *before* anything reaches
+/// the graph.
 ///
-/// Ownership of the entities and semantic edges is recorded in `db` *before*
-/// they reach the graph — see [`record_extraction_ownership`].
+/// This is for a caller driving the stage by hand. The cognify pipeline does
+/// not call it: its extraction stage only builds the graph, and the
+/// persistence step writes it together with everything else
+/// ([`crate::persist`]). Handing the result to [`add_data_points`] writes the
+/// same artifacts a second time, which is an idempotent upsert.
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_graph_from_data(
     input: &ExtractedChunks,
@@ -986,6 +1008,52 @@ pub async fn extract_graph_from_data(
     // The run whose ownership rows these artifacts get. `None` when the stage
     // is driven outside a pipeline executor.
     pipeline_run_id: Option<Uuid>,
+    config: &CognifyConfig,
+    // See `build_extracted_graph`.
+    user_label_override: Option<&str>,
+    // See `build_extracted_graph`.
+    task_rank: Option<i32>,
+) -> Result<ExtractedGraphData, CognifyError> {
+    let graph = build_extracted_graph(
+        input,
+        llm,
+        Arc::clone(&graph_db),
+        ontology_resolver,
+        config,
+        user_label_override,
+        task_rank,
+    )
+    .await?;
+    crate::persist::persist_extraction(
+        db,
+        graph_db.as_ref(),
+        LedgerIdentity::new(
+            input.tenant_id,
+            input.user_id,
+            input.dataset_id,
+            pipeline_run_id,
+        ),
+        &graph,
+    )
+    .await?;
+    Ok(graph)
+}
+
+/// Extract knowledge graphs from chunks via LLM and integrate them, without
+/// writing anything.
+///
+/// Calls the LLM once per chunk to extract entities and relationships, every
+/// chunk of the run through one stream bounded by
+/// [`CognifyConfig::max_parallel_extractions`]. Then integrates: expands to
+/// storage-layer types, splits off the edges the graph already holds (a read
+/// of `graph_db`, the only I/O here besides the LLM), and deduplicates
+/// in-memory. Every write is left to the persistence layer.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn build_extracted_graph(
+    input: &ExtractedChunks,
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
     config: &CognifyConfig,
     // Optional caller-supplied provenance user label. When `Some`, used
     // verbatim for the entity / EntityType / EdgeType pre-stamps inside
@@ -999,11 +1067,10 @@ pub async fn extract_graph_from_data(
     // `docs/telemetry/05-datapoint-provenance.md`).
     user_label_override: Option<&str>,
     // 1-based pipeline position written to `topological_rank` on every
-    // Entity / EntityType created below. Must be supplied here rather than
-    // stamped by the caller afterwards: the nodes are persisted to the graph
-    // DB before this function returns. `None` leaves the rank at its `0`
-    // sentinel. The default pipeline passes
-    // `Some(EXTRACT_GRAPH_TASK_RANK)` via `make_extract_graph_task`.
+    // Entity / EntityType created below, at construction, so every later
+    // write of them carries it. `None` leaves the rank at its `0` sentinel.
+    // The default pipeline passes `Some(EXTRACT_GRAPH_TASK_RANK)` via
+    // `make_extract_graph_task`.
     task_rank: Option<i32>,
 ) -> Result<ExtractedGraphData, CognifyError> {
     if input.chunks.is_empty() {
@@ -1013,6 +1080,8 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -1047,6 +1116,8 @@ pub async fn extract_graph_from_data(
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -1399,11 +1470,11 @@ pub async fn extract_graph_from_data(
 
     // Final deduplication pass (in-memory only after DB filtering)
     let mut dedup_result = deduplicate_nodes_and_edges(nodes, edges);
-    // Python fills a blank `edge_text` in `add_data_points`; Rust writes these
-    // edges here, so it stamps them here — before the ledger and graph writes
-    // below, which must both see the text the `EdgeType` row is keyed on.
-    // Edges an earlier run already wrote (`claimed_existing_edges`) keep the
-    // text they were written with.
+    // Python fills a blank `edge_text` in `add_data_points`; Rust stamps these
+    // edges here, before the persistence layer's ledger and graph writes, which
+    // must both see the text the `EdgeType` row is keyed on. Edges an earlier
+    // run already wrote (`claimed_existing_edges`) keep the text they were
+    // written with.
     stamp_extracted_edge_text(&mut dedup_result, &timestamps);
 
     // Build chunk_id → entity and Timestamp IDs mapping from the deduplicated
@@ -1418,98 +1489,20 @@ pub async fn extract_graph_from_data(
         }
     }
 
-    // I1 — the ledger row must exist before the artifact does. Rust persists
-    // entities and edges here, two stages before `add_data_points`; Python does
-    // not (its `extract_graph_from_data` returns chunks and lets
-    // `add_data_points` do every write), so this ledger write has no Python
-    // counterpart. Without it a run that dies between here and
-    // `add_data_points` leaves entities and edges in the graph that nothing can
-    // find, and the extraction dedup filter then hides them from every retry.
-    record_extraction_ownership(
-        db,
-        LedgerIdentity::new(
-            input.tenant_id,
-            input.user_id,
-            input.dataset_id,
-            pipeline_run_id,
-        ),
-        &updated_chunks,
-        &dedup_result.unique_nodes,
-        &dedup_result.unique_edges,
-        // Edges an earlier run already put in the graph, which this run
-        // produced too. They get ownership rows and nothing else — see the
-        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
-        // row is what makes `get_unique_edges_for_data` stop calling the edge
-        // exclusive to the earlier file, so deleting that file no longer takes
-        // the edge away from this one.
-        &claimed_existing_edges,
-        &timestamps,
-        &producers,
-    )
-    .await?;
-
-    // Store graph data (nodes and edges) in graph database
-    let entity_refs: Vec<&cognee_models::Entity> = dedup_result
-        .unique_nodes
-        .iter()
-        .map(|n| &n.entity)
-        .collect();
-    graph_db
-        .add_nodes(&entity_refs)
-        .await
-        .map_err(CognifyError::from)?;
-    // Timestamp nodes: not embedded, no EntityType; written before the edges
-    // that point at them.
-    if !timestamps.is_empty() {
-        let timestamp_refs: Vec<&cognee_models::Timestamp> =
-            timestamps.iter().map(|node| &node.timestamp).collect();
-        graph_db
-            .add_nodes(&timestamp_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} Timestamp nodes", timestamp_refs.len());
-    }
-
-    let edge_data: Vec<_> = dedup_result
-        .unique_edges
-        .iter()
-        .map(|edge_pair| {
-            let properties: HashMap<std::borrow::Cow<'static, str>, serde_json::Value> = edge_pair
-                .properties
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        std::borrow::Cow::Owned(k.clone()),
-                        serde_json::Value::String(v.clone()),
-                    )
-                })
-                .collect();
-            (
-                edge_pair.source_entity_id.to_string(),
-                edge_pair.target_entity_id.to_string(),
-                edge_pair.relationship_name.clone(),
-                properties,
-            )
-        })
-        .collect();
-
-    graph_db
-        .add_edges(&edge_data)
-        .await
-        .map_err(CognifyError::from)?;
-    if !edge_data.is_empty() {
-        info!(
-            "Upserted {} extracted graph edges (LLM and ontology)",
-            edge_data.len()
-        );
-    }
-
     Ok(ExtractedGraphData {
         chunks: updated_chunks,
         documents: surviving_documents,
         entities: dedup_result.unique_nodes,
         timestamps,
         edges: dedup_result.unique_edges,
+        // Edges an earlier run already put in the graph, which this run
+        // produced too. They get ownership rows and nothing else — see the
+        // `claimed_existing_edges` note on `expand_with_nodes_and_edges`. The
+        // row is what makes `get_unique_edges_for_data` stop calling the edge
+        // exclusive to the earlier file, so deleting that file no longer takes
+        // the edge away from this one.
+        claimed_existing_edges,
+        handoff: PersistHandoff::default(),
         producers,
         dynamic_graphs: vec![],
         backend_summaries,
@@ -1585,17 +1578,220 @@ fn empty_edge_props() -> HashMap<Cow<'static, str>, serde_json::Value> {
     HashMap::new()
 }
 
-/// Create deterministic WebPage/WebSite graph provenance for URL-sourced documents.
+/// What the extraction stage hands the persistence step beyond the graph data
+/// itself, carried on [`ExtractedGraphData::handoff`] and
+/// [`SummarizedData::handoff`]. Opaque outside this crate; empty by default.
+#[derive(Debug, Clone, Default)]
+pub struct PersistHandoff {
+    /// The WebPage / WebSite artifacts of the URL documents, built by
+    /// [`web_page_artifacts`] when [`CognifyConfig::create_web_page_nodes`] is
+    /// on.
+    pub(crate) web_pages: Vec<WebPage>,
+    /// The provenance stamp each entity carried **before** the extraction
+    /// stage's own stamp, for the entities that stamp changed — the
+    /// ontology-derived ones, which graph building does not pre-stamp.
+    ///
+    /// Before O4a the extraction stage wrote the entity nodes to the graph and
+    /// only then stamped them, so their graph nodes kept these values while
+    /// their ledger rows and vector payloads, written later, carried the
+    /// stamp. The persistence layer writes the graph nodes with these values
+    /// to store exactly what it stored then. Making the graph agree with the
+    /// ledger is a change of stored output, left to a later stage.
+    pub(crate) entity_graph_stamps: HashMap<Uuid, ProvenanceStamp>,
+}
+
+impl PersistHandoff {
+    /// Whether there is nothing in it.
+    pub fn is_empty(&self) -> bool {
+        self.web_pages.is_empty() && self.entity_graph_stamps.is_empty()
+    }
+}
+
+/// The four provenance fields a task's stamp fills in on a `DataPoint`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProvenanceStamp {
+    pub(crate) source_pipeline: Option<String>,
+    pub(crate) source_task: Option<String>,
+    pub(crate) source_user: Option<String>,
+    pub(crate) topological_rank: Option<i32>,
+}
+
+impl ProvenanceStamp {
+    pub(crate) fn of(base: &DataPoint) -> Self {
+        Self {
+            source_pipeline: base.source_pipeline.clone(),
+            source_task: base.source_task.clone(),
+            source_user: base.source_user.clone(),
+            topological_rank: base.topological_rank,
+        }
+    }
+
+    pub(crate) fn apply_to(&self, base: &mut DataPoint) {
+        base.source_pipeline = self.source_pipeline.clone();
+        base.source_task = self.source_task.clone();
+        base.source_user = self.source_user.clone();
+        base.topological_rank = self.topological_rank;
+    }
+}
+
+/// One URL document's WebPage, its WebSite, and the chunks sourced from it.
+#[derive(Debug, Clone)]
+pub(crate) struct WebPage {
+    /// The document (data item) the page was fetched for.
+    pub(crate) data_id: Uuid,
+    pub(crate) page_id: Uuid,
+    pub(crate) site_id: Uuid,
+    pub(crate) url: String,
+    pub(crate) domain: String,
+    pub(crate) page_node: serde_json::Value,
+    pub(crate) site_node: serde_json::Value,
+    /// The document's chunks, in chunk order: each is `SOURCED_FROM` the page.
+    pub(crate) chunk_ids: Vec<Uuid>,
+}
+
+/// Build the deterministic WebPage/WebSite artifacts of URL-sourced documents.
 ///
 /// Uses only URL metadata carried on [`Document::external_metadata`], produced
 /// by ingestion for URL inputs. Invalid JSON, non-URL metadata, unparsable URLs,
-/// and non-HTTP(S) URLs are skipped.
+/// and non-HTTP(S) URLs are skipped. Pure: nothing is written.
+pub(crate) fn web_page_artifacts(documents: &[Document], chunks: &[DocumentChunk]) -> Vec<WebPage> {
+    if documents.is_empty() || chunks.is_empty() {
+        return Vec::new();
+    }
+    documents
+        .iter()
+        .filter_map(|document| {
+            let metadata = parse_web_page_metadata(document)?;
+            let page_id = web_page_id(&metadata.url);
+            let site_id = web_site_id(&metadata.domain);
+            let page_node = json!({
+                "id": page_id.to_string(),
+                "type": "WebPage",
+                "url": metadata.url,
+                "content": document_content_preview(document.base.id, chunks),
+            });
+            let site_node = json!({
+                "id": site_id.to_string(),
+                "type": "WebSite",
+                "domain": metadata.domain,
+            });
+            Some(WebPage {
+                data_id: document.base.id,
+                page_id,
+                site_id,
+                url: metadata.url,
+                domain: metadata.domain,
+                page_node,
+                site_node,
+                chunk_ids: chunks
+                    .iter()
+                    .filter(|chunk| chunk.document_id == document.base.id)
+                    .map(|chunk| chunk.base.id)
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// The ownership rows of `pages`' nodes and edges.
 ///
-/// Ownership of the nodes and edges is recorded in `db` before any of them
-/// reaches the graph (I1). These artifacts had no ownership row at all before —
-/// they are `add_nodes_raw` JSON blobs rather than DataPoints, so
-/// [`upsert_provenance`] never saw them — which also made them survive every
-/// delete.
+/// One row per producing document, for the WebSite node as much as for the
+/// WebPage: two URL documents on one domain share a single physical WebSite
+/// node, so a single row would let deleting the first take a node the second
+/// still references — the merged-entity rule applied to a second artifact
+/// class. Every candidate edge is claimed, including the ones the `has_edges`
+/// filter keeps the graph write from re-issuing: an edge an earlier run
+/// already created is still produced by this document, and a surplus claimant
+/// only ever *prevents* a deletion.
+///
+/// These artifacts had no ownership row at all once — they are
+/// `add_nodes_raw` JSON blobs rather than DataPoints, so [`provenance_rows`]
+/// never saw them — which also made them survive every delete.
+pub(crate) fn web_page_ownership_rows(
+    id: LedgerIdentity,
+    pages: &[WebPage],
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    for page in pages {
+        nodes.push(web_page_provenance_row(
+            id,
+            page.data_id,
+            page.page_id,
+            "WebPage",
+            page.url.clone(),
+            &page.page_node,
+        ));
+        nodes.push(web_page_provenance_row(
+            id,
+            page.data_id,
+            page.site_id,
+            "WebSite",
+            page.domain.clone(),
+            &page.site_node,
+        ));
+        edges.push(web_page_provenance_edge_row(
+            id,
+            page.data_id,
+            page.page_id,
+            "PART_OF",
+            page.site_id,
+        ));
+        for chunk_id in &page.chunk_ids {
+            edges.push(web_page_provenance_edge_row(
+                id,
+                page.data_id,
+                *chunk_id,
+                "SOURCED_FROM",
+                page.page_id,
+            ));
+        }
+    }
+    (nodes, edges)
+}
+
+/// The graph nodes and candidate edges of `pages`: one node per id (the last
+/// document's copy wins, as two documents of one URL or one domain share it)
+/// and one edge per `(source, target, relationship)`, first seen first.
+pub(crate) fn web_page_graph(pages: &[WebPage]) -> (Vec<serde_json::Value>, Vec<EdgeData>) {
+    let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut candidate_edges: Vec<EdgeData> = Vec::new();
+    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
+    for page in pages {
+        let page_id = page.page_id.to_string();
+        nodes_by_id.insert(page_id.clone(), page.page_node.clone());
+        nodes_by_id.insert(page.site_id.to_string(), page.site_node.clone());
+        push_unique_edge(
+            &mut candidate_edges,
+            &mut seen_edges,
+            page_id.clone(),
+            page.site_id.to_string(),
+            "PART_OF",
+        );
+        for chunk_id in &page.chunk_ids {
+            push_unique_edge(
+                &mut candidate_edges,
+                &mut seen_edges,
+                chunk_id.to_string(),
+                page_id.clone(),
+                "SOURCED_FROM",
+            );
+        }
+    }
+    (nodes_by_id.into_values().collect(), candidate_edges)
+}
+
+/// Create deterministic WebPage/WebSite graph provenance for URL-sourced
+/// documents (standalone).
+///
+/// [`web_page_artifacts`] followed by the web-page part of the persistence
+/// layer: ownership of the nodes and edges is recorded in `db` before any of
+/// them reaches the graph (I1), and an edge the graph already holds is not
+/// written again. The cognify pipeline does not call this: its extraction
+/// stage carries the artifacts to the persistence step instead.
 pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
@@ -1603,140 +1799,8 @@ pub async fn create_web_page_nodes(
     db: &dyn RelationalDb,
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
-    if documents.is_empty() || chunks.is_empty() {
-        return Ok(());
-    }
-
-    let mut nodes_by_id: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut candidate_edges: Vec<EdgeData> = Vec::new();
-    let mut seen_edges: HashSet<(String, String, String)> = HashSet::new();
-    let mut prov_nodes: Vec<cognee_database::GraphNode> = Vec::new();
-    let mut prov_edges: Vec<cognee_database::GraphEdge> = Vec::new();
-
-    for document in documents {
-        let Some(metadata) = parse_web_page_metadata(document) else {
-            continue;
-        };
-
-        let page_id = web_page_id(&metadata.url);
-        let site_id = web_site_id(&metadata.domain);
-        let page_id_str = page_id.to_string();
-        let site_id_str = site_id.to_string();
-
-        let page_node = json!({
-            "id": page_id_str,
-            "type": "WebPage",
-            "url": metadata.url,
-            "content": document_content_preview(document.base.id, chunks),
-        });
-        let site_node = json!({
-            "id": site_id_str,
-            "type": "WebSite",
-            "domain": metadata.domain,
-        });
-
-        // One row per producing document, for the WebSite node as much as for
-        // the WebPage: two URL documents on one domain share a single physical
-        // WebSite node, so a single row would let deleting the first take a
-        // node the second still references — the merged-entity rule applied to
-        // a second artifact class.
-        prov_nodes.push(web_page_provenance_row(
-            id,
-            document.base.id,
-            page_id,
-            "WebPage",
-            metadata.url.clone(),
-            &page_node,
-        ));
-        prov_nodes.push(web_page_provenance_row(
-            id,
-            document.base.id,
-            site_id,
-            "WebSite",
-            metadata.domain.clone(),
-            &site_node,
-        ));
-
-        nodes_by_id.insert(page_id_str.clone(), page_node);
-        nodes_by_id.insert(site_id_str.clone(), site_node);
-
-        push_unique_edge(
-            &mut candidate_edges,
-            &mut seen_edges,
-            page_id_str.clone(),
-            site_id_str,
-            "PART_OF",
-        );
-        prov_edges.push(web_page_provenance_edge_row(
-            id,
-            document.base.id,
-            page_id,
-            "PART_OF",
-            site_id,
-        ));
-
-        for chunk in chunks
-            .iter()
-            .filter(|chunk| chunk.document_id == document.base.id)
-        {
-            push_unique_edge(
-                &mut candidate_edges,
-                &mut seen_edges,
-                chunk.base.id.to_string(),
-                page_id_str.clone(),
-                "SOURCED_FROM",
-            );
-            prov_edges.push(web_page_provenance_edge_row(
-                id,
-                document.base.id,
-                chunk.base.id,
-                "SOURCED_FROM",
-                page_id,
-            ));
-        }
-    }
-
-    // Every candidate edge is claimed, including the ones the `has_edges`
-    // filter below stops the graph write from re-issuing: an edge an earlier
-    // run already created is still produced by this document, and a surplus
-    // claimant only ever *prevents* a deletion.
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
-
-    if !nodes_by_id.is_empty() {
-        graph_db
-            .add_nodes_raw(nodes_by_id.into_values().collect())
-            .await
-            .map_err(CognifyError::from)?;
-    }
-
-    if candidate_edges.is_empty() {
-        return Ok(());
-    }
-
-    let existing_edges = graph_db
-        .has_edges(&candidate_edges)
-        .await
-        .map_err(CognifyError::from)?;
-    let existing_keys: HashSet<(String, String, String)> = existing_edges
-        .into_iter()
-        .map(|(source, target, relationship, _)| (source, target, relationship))
-        .collect();
-    let missing_edges: Vec<EdgeData> = candidate_edges
-        .into_iter()
-        .filter(|(source, target, relationship, _)| {
-            !existing_keys.contains(&(source.clone(), target.clone(), relationship.clone()))
-        })
-        .collect();
-
-    if !missing_edges.is_empty() {
-        graph_db
-            .add_edges(&missing_edges)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} web page edges", missing_edges.len());
-    }
-
-    Ok(())
+    let artifacts = web_page_artifacts(documents, chunks);
+    crate::persist::persist_web_pages(db, graph_db.as_ref(), id, &artifacts).await
 }
 
 fn push_unique_edge(
@@ -1995,7 +2059,7 @@ pub async fn extract_dynamic_graphs_from_data(
 /// the same all-or-nothing partition the other extraction paths apply, and
 /// point each chunk's `contains` at its graph per `attachment` (omitted is
 /// [`ChunkAttachment::Direct`], as in Python).
-fn attach_dynamic_graphs(
+pub(crate) fn attach_dynamic_graphs(
     input: &ExtractedChunks,
     extracted: DynamicExtractionData,
     attachment: Option<ChunkAttachment>,
@@ -2034,6 +2098,8 @@ fn attach_dynamic_graphs(
         entities: vec![],
         timestamps: vec![],
         edges: vec![],
+        claimed_existing_edges: vec![],
+        handoff: PersistHandoff::default(),
         producers: ArtifactProducers::default(),
         dynamic_graphs: extracted.graphs,
         backend_summaries: vec![],
@@ -2274,15 +2340,18 @@ pub async fn summarize_text(
 // Task 5: add_data_points
 // ---------------------------------------------------------------------------
 
-/// Generate embeddings and index all data points in vector DB (Task 5).
+/// Write everything the run produced: the persistence step (Task 5).
 ///
-/// Generates embeddings for chunks, entities (name + description), summaries,
-/// entity types, edge types and documents, then creates the vector collections
-/// and indexes the points. No triplets: Python stopped embedding them in
-/// SDK-1115, and so did Rust (SDK-1039).
+/// Every graph, vector, ledger and edge-evidence write of the cognify run
+/// happens here, through the persistence layer ([`crate::persist`]): the
+/// extracted entities, Timestamps and semantic edges, the claimed existing
+/// edges' ownership rows, the WebPage / WebSite artifacts, the chunks,
+/// summaries, entity types and documents, the runtime custom graphs, the
+/// structural edges, the vector points (no triplets: Python stopped embedding
+/// them in SDK-1115, and so did Rust, SDK-1039) and the edge evidence.
 ///
-/// Writes the provenance records (nodes/edges) to the relational database
-/// *before* the first graph or vector write, mirroring Python's
+/// The run is persisted as **one group** today. The layer writes the ledger
+/// rows *before* the first graph or vector write, mirroring Python's
 /// `add_data_points.py:138-141` ("the rollback ledger is written BEFORE the
 /// graph/vector writes so a failed write can always be swept"). Python's
 /// `if user and dataset and data:` guard has no Rust counterpart any more: the
@@ -2299,347 +2368,61 @@ pub async fn add_data_points(
     pipeline_run_id: Option<Uuid>,
     config: &CognifyConfig,
 ) -> Result<CognifyResult, CognifyError> {
-    // ── Ownership before artifacts (I1) ─────────────────────────────────────
-    // Discovering the structural edges is pure computation over the input
-    // (`get_graph_from_model`, no I/O), so it can happen up here and let the
-    // ledger name every artifact this stage is about to write before the first
-    // of them exists.
-    let mut extractable_items: Vec<&dyn crate::graph_extraction::GraphExtractable> = Vec::new();
-    for chunk in &input.chunks {
-        extractable_items.push(chunk as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for summary in &input.summaries {
-        extractable_items.push(summary as &dyn crate::graph_extraction::GraphExtractable);
-    }
-    for pair in &input.entities {
-        extractable_items.push(&pair.entity as &dyn crate::graph_extraction::GraphExtractable);
-        for entity_type in pair.entity_types() {
-            extractable_items.push(entity_type as &dyn crate::graph_extraction::GraphExtractable);
-        }
-    }
-
-    let mut structural_edges = crate::graph_extraction::get_graph_from_model(&extractable_items);
-
-    // Runtime custom graphs: one storage walk per Python `add_data_points`
-    // batch, shared by the ledger, the graph writes and the index pass. Raw
-    // node writes are needed because their concrete Rust types do not exist;
-    // within a batch a node id is claimed by its first occurrence, and nodes
-    // are deduplicated across batches by their Python-compatible identity UUID.
-    let stored_dynamic = store_dynamic_graphs(&input.dynamic_graphs, &input.chunks, config);
-    let mut dynamic_nodes: BTreeMap<Uuid, &DynamicDataPoint> = BTreeMap::new();
-    let mut seen_relationships = HashSet::new();
-    let mut dynamic_edges: Vec<EdgeData> = Vec::new();
-    let now = Utc::now().to_rfc3339();
-    for stored in &stored_dynamic {
-        for node in &stored.nodes {
-            dynamic_nodes.entry(node.base.id).or_insert(node);
-        }
-        for relationship in &stored.relationships {
-            if seen_relationships.insert(relationship) {
-                dynamic_edges.push((
-                    relationship.source.to_string(),
-                    relationship.target.to_string(),
-                    relationship.field_name.clone(),
-                    HashMap::from([(Cow::from("updated_at"), json!(now))]),
-                ));
-            }
-        }
-    }
-
-    // Before the ledger write, so the ownership rows carry the same `edge_text`
-    // the graph edges and their `EdgeType` rows are keyed on.
-    stamp_structural_edge_text(
-        &mut structural_edges,
-        &mut dynamic_edges,
-        input,
-        &dynamic_nodes,
-    );
-
-    let ledger_identity = LedgerIdentity::new(
+    let ledger = LedgerIdentity::new(
         input.tenant_id,
         input.user_id,
         input.dataset_id,
         pipeline_run_id,
     );
-    record_dynamic_graph_ownership(
-        db,
-        ledger_identity,
-        &input.dynamic_graphs,
-        &stored_dynamic,
-        &input.chunks,
-        &structural_edges,
-        &dynamic_edges,
-    )
-    .await?;
-
-    upsert_provenance(
-        db,
-        ledger_identity,
-        &input.chunks,
-        &input.entities,
-        &input.edges,
-        &input.summaries,
-        &input.documents,
-        &structural_edges,
-        &input.producers,
-    )
-    .await?;
-
-    // Store all DataPoint types as graph nodes (matches Python's add_data_points behavior).
-    // Python stores DocumentChunks, TextSummaries, and EntityTypes as graph nodes.
-
-    // Store DocumentChunks as graph nodes
-    if !input.chunks.is_empty() {
-        let chunk_refs: Vec<&DocumentChunk> = input.chunks.iter().collect();
-        graph_db
-            .add_nodes(&chunk_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} document chunks as graph nodes", chunk_refs.len());
-    }
-
-    // Store TextSummaries as graph nodes
-    if !input.summaries.is_empty() {
-        let summary_refs: Vec<&TextSummary> = input.summaries.iter().collect();
-        graph_db
-            .add_nodes(&summary_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!(
-            "Stored {} text summaries as graph nodes",
-            summary_refs.len()
-        );
-    }
-
-    // Store EntityTypes as graph nodes (extract from GraphNodePairs)
-    if !input.entities.is_empty() {
-        // One write per type id: many entities share a type.
-        let mut seen_types = HashSet::new();
-        let entity_type_refs: Vec<&cognee_models::EntityType> = input
-            .entities
-            .iter()
-            .flat_map(|pair| pair.entity_types())
-            .filter(|entity_type| seen_types.insert(entity_type.base.id))
-            .collect();
-        graph_db
-            .add_nodes(&entity_type_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!(
-            "Stored {} entity types as graph nodes",
-            entity_type_refs.len()
-        );
-    }
-
-    // Store Documents as graph nodes. Python reaches Documents by recursively
-    // walking each DocumentChunk's `is_part_of` field (a full Document
-    // DataPoint) in get_graph_from_model(). Rust's `is_part_of` is just a
-    // `Uuid`, so we store Documents explicitly here. The node `id` equals the
-    // source Data item's id (content-addressed, Python-identical) and the node
-    // `type` is the concrete subclass name (TextDocument, PdfDocument, …), so
-    // the `is_part_of` edge target now resolves to a stored Document node.
-    if !input.documents.is_empty() {
-        let doc_refs: Vec<&Document> = input.documents.iter().collect();
-        graph_db
-            .add_nodes(&doc_refs)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Stored {} documents as graph nodes", doc_refs.len());
-    }
-
-    if !dynamic_nodes.is_empty() {
-        graph_db
-            .add_nodes_raw(
-                dynamic_nodes
-                    .values()
-                    .map(|node| node.to_graph_value())
-                    .collect(),
-            )
-            .await
-            .map_err(CognifyError::from)?;
-    }
-    if !dynamic_edges.is_empty() {
-        graph_db
-            .add_edges(&dynamic_edges)
-            .await
-            .map_err(CognifyError::from)?;
-    }
-
-    // Build EdgeTypes keyed on each edge's retrieval text
-    // (port of Python's create_edge_type_datapoints + index_graph_edges).
-    //
-    // Parity note: Python's `index_graph_edges` only *vector-indexes* these
-    // EdgeType DataPoints (into `EdgeType_relationship_name`) — it never adds
-    // them to the graph as nodes (see index_graph_edges.py:86-88 →
-    // index_data_points, which touches the vector engine only). We therefore
-    // build + vector-index them below but deliberately do NOT call
-    // `graph_db.add_nodes` on them, so the Rust graph node-set matches Python's
-    // and they don't surface as untyped/uncolored nodes in the visualization.
-    //
-    // Python keys EdgeType IDs and the embedded relationship_name on the
-    // edge's retrieval text — `get_edge_retrieval_text(edge_text,
-    // relationship_name)` (index_graph_edges.py:33-53), i.e. the nonblank
-    // `edge_text` property, falling back to the nonblank relationship_name,
-    // else dropped. `generate_edge_id(edge_id=text)` then derives the ID from
-    // that text. We mirror that here so EdgeType UUIDs and the
-    // EdgeType_relationship_name vector inputs match Python (B2.5).
-    //
-    // Python counts every edge `add_data_points` writes, structural ones
-    // included (`add_data_points.py:346` → `create_edge_type_datapoints`), so
-    // the structural edges' stamped sentences get rows here too — which is
-    // what lets a `"Document chunk mentions …"` edge be query-ranked and
-    // surface as a fact.
-    // Custom field edges count the same way: Python writes them through the
-    // same `add_data_points` walk.
-    let structural_texts =
-        structural_edges
-            .iter()
-            .chain(&dynamic_edges)
-            .map(|(_, _, relationship, props)| {
-                EdgeType::retrieval_text(
-                    props.get("edge_text").and_then(serde_json::Value::as_str),
-                    relationship,
-                )
-            });
-    let mut edge_types = build_edge_types(
-        input
-            .edges
-            .iter()
-            .map(edge_retrieval_text)
-            .chain(structural_texts),
-        input.dataset_id,
-    );
-
-    // Pre-stamp freshly-built EdgeType DataPoints at construction time so the
-    // `source_*` provenance keys are populated before they are vector-indexed
-    // (collection `EdgeType_relationship_name`).
-    // The LLM-derived edge-type names trace back to the entity-extraction task,
-    // so the `source_pipeline` / `source_task` literals match.
-    //
-    // These DataPoints are NOT stored as graph nodes (see parity note above),
-    // so the stamp only affects vector payloads, not the graph/visualization.
-    //
-    // `task_rank: None` — Python's `create_edge_type_datapoints`
-    // (`index_graph_edges.py:50`) builds these objects locally and never
-    // returns them from `add_data_points`, so no stamper ever assigns them a
-    // rank. The vector payload does not carry a rank either way: it is
-    // Python's `IndexSchema` row, whose `topological_rank` is always the `0`
-    // default (`cognee_models::index_schema_payload`).
-    //
-    // DLT-derived edges (`extract_dlt_fk_edges`) construct
-    // `GraphEdgePair` instances rather than DataPoints; they carry no
-    // DataPoint to stamp, so no pre-stamp call is needed there.
-    {
-        let user_label = input.user_id.as_ref().map(|id| id.to_string());
-        let mut local_visited: HashSet<Uuid> = HashSet::new();
-        for et in &mut edge_types {
-            crate::graph_integration::expansion::pre_stamp_extraction(
-                et,
-                user_label.as_deref(),
-                None,
-                &mut local_visited,
-            );
-        }
-    }
-
-    // Persist the structural edges discovered above (port of Python's
-    // get_graph_from_model() relationship discovery).
-    if !structural_edges.is_empty() {
-        graph_db
-            .add_edges(&structural_edges)
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Upserted {} structural edges", structural_edges.len());
-    }
-
-    // One vector per chunk, entity and summary, whether or not they are kept.
-    let dynamic_embedding_count: usize = dynamic_nodes
-        .values()
-        .map(|node| node.index_field_texts().count())
-        .sum();
-    let embedding_count =
-        input.chunks.len() + input.entities.len() + input.summaries.len() + dynamic_embedding_count;
-    // Retained vectors are generated up front and reused by the index pass.
-    // Otherwise the index pass embeds those texts itself, a window at a time,
-    // and no corpus-sized set of vectors is ever held (SDK-711): it already
-    // embeds whatever has no precomputed vector, so the work done is the same.
-    let mut embeddings = if config.retain_embeddings {
-        generate_embeddings(
-            &input.chunks,
-            &input.entities,
-            &input.summaries,
-            embedding_engine.clone(),
-        )
-        .await?
-    } else {
-        Vec::new()
+    // A run with no user records no evidence: Python's buffer skips a context
+    // without a user (`ProvenanceBuffer.capture`, `buffer.py:105`), where the
+    // ownership ledger falls back to the default user. A host that records the
+    // run under its own id (the HTTP server's dispatcher) keys the evidence on
+    // that id, so the lookup's COMPLETED filter sees it; ownership stays on the
+    // executor's run id.
+    let evidence_identity = LedgerIdentity {
+        pipeline_run_id: config.evidence_pipeline_run_id.or(ledger.pipeline_run_id),
+        ..ledger
     };
-
-    let mut indexed_fields = index_data_points(
-        &input.chunks,
-        &input.entities,
-        &input.summaries,
-        &input.documents,
-        &edge_types,
-        input.dataset_id,
-        Arc::clone(&embedding_engine),
-        Arc::clone(&vector_db),
-        &embeddings,
-    )
-    .await?;
-    if !dynamic_nodes.is_empty() {
-        let dynamic_node_values: Vec<&DynamicDataPoint> = dynamic_nodes.values().copied().collect();
-        let dynamic_embeddings = index_dynamic_graph(
-            &dynamic_node_values,
-            input.dataset_id,
-            embedding_engine,
-            vector_db,
-            config,
-            &mut indexed_fields,
-        )
-        .await?;
-        embeddings.extend(dynamic_embeddings);
-    }
-
-    // Only after the graph and vector writes succeeded (Python captures at the
-    // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
-    // never describes an edge the graph does not hold.
-    // A run with no user records no evidence: Python's buffer skips a
-    // context without a user (`ProvenanceBuffer.capture`, `buffer.py:105`),
-    // where the ownership ledger above falls back to the default user.
-    if config.edge_evidence_enabled && input.user_id.is_some() {
-        // Python captures over the batch's `edges` after `custom_edges` were
-        // appended to them (`add_data_points.py:403`), so runtime custom
-        // edges are structural candidates too.
-        // A host that records the run under its own id (the HTTP server's
-        // dispatcher) keys the evidence on that id, so the lookup's COMPLETED
-        // filter sees it; ownership above stays on the executor's run id.
-        let evidence_identity = match config.evidence_pipeline_run_id {
-            Some(run_id) => LedgerIdentity {
-                pipeline_run_id: Some(run_id),
-                ..ledger_identity
-            },
-            None => ledger_identity,
-        };
-        capture_edge_evidence(
-            db,
-            evidence_identity,
-            &input.chunks,
-            structural_edges.iter().chain(dynamic_edges.iter()),
-            &input.producers,
-        )
-        .await?;
-    }
+    let evidence =
+        (config.edge_evidence_enabled && input.user_id.is_some()).then_some(evidence_identity);
+    let context = crate::persist::PersistContext {
+        graph_db: &graph_db,
+        vector_db: &vector_db,
+        embedding_engine: &embedding_engine,
+        db,
+        ledger,
+        evidence,
+        user_id: input.user_id,
+        config,
+    };
+    let group = crate::persist::PersistGroup {
+        chunks: &input.chunks,
+        documents: &input.documents,
+        summaries: &input.summaries,
+        entities: &input.entities,
+        timestamps: &input.timestamps,
+        edges: &input.edges,
+        claimed_existing_edges: &input.claimed_existing_edges,
+        producers: &input.producers,
+        dynamic_graphs: &input.dynamic_graphs,
+        web_pages: &input.handoff.web_pages,
+        entity_graph_stamps: &input.handoff.entity_graph_stamps,
+        dlt: None,
+    };
+    let mut state = crate::persist::PersistState::default();
+    crate::persist::persist_group(group, &mut state, &context).await?;
+    let written = state.into_outputs();
 
     Ok(CognifyResult {
         chunks: input.chunks.clone(),
         entities: input.entities.clone(),
         edges: input.edges.clone(),
         summaries: input.summaries.clone(),
-        edge_types,
-        embeddings,
-        embedding_count,
-        indexed_fields,
+        edge_types: written.edge_types,
+        embeddings: written.embeddings,
+        embedding_count: written.embedding_count,
+        indexed_fields: written.indexed_fields,
         documents_for_dlt: input.documents.clone(),
         already_completed: false,
         prior_pipeline_run_id: None,
@@ -2651,19 +2434,18 @@ pub async fn add_data_points(
     })
 }
 
-/// Record which chunks support which graph edges (`provenance_edge_evidence`).
+/// The edge-evidence rows of one persisted group: which chunks support which
+/// graph edges (`provenance_edge_evidence`).
 ///
 /// Port of Python's `capture_graph_provenance`
 /// (`modules/provenance/edge_evidence/capture.py`); the rows are built by
-/// [`crate::edge_evidence::build_edge_evidence`]. A failed insert fails the
-/// stage, as Python's flush does at data-item completion.
-async fn capture_edge_evidence<'a>(
-    db: &dyn RelationalDb,
+/// [`crate::edge_evidence::build_edge_evidence`].
+pub(crate) fn edge_evidence_rows<'a>(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     structural_edges: impl IntoIterator<Item = &'a EdgeData>,
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> Vec<cognee_database::EdgeEvidence> {
     let scope = crate::edge_evidence::EvidenceScope {
         tenant_id: id.tenant_id,
         user_id: id.user_id,
@@ -2671,21 +2453,14 @@ async fn capture_edge_evidence<'a>(
         pipeline_run_id: id.pipeline_run_id,
         captured_at: Utc::now(),
     };
-    let rows =
-        crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers);
-    if rows.is_empty() {
-        return Ok(());
-    }
-    cognee_database::ProvenanceDb::insert_edge_evidence(db, &rows).await?;
-    info!("Recorded {} edge evidence rows", rows.len());
-    Ok(())
+    crate::edge_evidence::build_edge_evidence(&scope, chunks, structural_edges, producers)
 }
 
 /// Vector-index runtime custom DataPoints inside a bulk-load scope of their own handled exactly like
-/// [`index_data_points`]': a store that rejects the hint is written without
+/// [`index_data_points_except`]': a store that rejects the hint is written without
 /// it, and the scope is finished on success and failure alike.
 #[allow(clippy::too_many_arguments)]
-async fn index_dynamic_graph(
+pub(crate) async fn index_dynamic_graph(
     nodes: &[&DynamicDataPoint],
     dataset_id: Uuid,
     engine: Arc<dyn EmbeddingEngine>,
@@ -2839,10 +2614,10 @@ fn stamp_extracted_edge_text(
 /// rule ([`DynamicDataPoint::label`]), so a chunk's `contains` edge to one and
 /// each custom field edge get the generic sentence too — Python attaches
 /// custom nodes without the `"Document chunk mentions"` text.
-fn stamp_structural_edge_text(
+pub(crate) fn stamp_structural_edge_text(
     structural_edges: &mut [EdgeData],
     dynamic_edges: &mut [EdgeData],
-    input: &SummarizedData,
+    input: &crate::persist::PersistGroup<'_>,
     dynamic_nodes: &BTreeMap<Uuid, &DynamicDataPoint>,
 ) {
     use crate::graph_extraction::{EdgeLabels, chunk_mentions_text, ensure_default_edge_text};
@@ -2851,17 +2626,17 @@ fn stamp_structural_edge_text(
     for (id, node) in dynamic_nodes {
         labels.insert_label(*id, node.label());
     }
-    for chunk in &input.chunks {
+    for chunk in input.chunks {
         labels.insert(chunk.base.id, &chunk.text);
     }
-    for summary in &input.summaries {
+    for summary in input.summaries {
         labels.insert(summary.base.id, &summary.text);
     }
-    for document in &input.documents {
+    for document in input.documents {
         labels.insert(document.base.id, &document.name);
     }
     let mut mentions: HashMap<String, String> = HashMap::new();
-    for pair in &input.entities {
+    for pair in input.entities {
         labels.insert(pair.entity.base.id, &pair.entity.name);
         for entity_type in pair.entity_types() {
             labels.insert(entity_type.base.id, &entity_type.name);
@@ -2870,7 +2645,7 @@ fn stamp_structural_edge_text(
             mentions.insert(pair.entity.base.id.to_string(), text);
         }
     }
-    for node in &input.timestamps {
+    for node in input.timestamps {
         let timestamp = &node.timestamp;
         labels.insert(timestamp.base.id, &timestamp.name);
         if let Some(text) = chunk_mentions_text(&timestamp.name, &node.description) {
@@ -2898,7 +2673,7 @@ fn stamp_structural_edge_text(
     }
 }
 
-fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
+pub(crate) fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
     EdgeType::retrieval_text(
         edge_pair.properties.get("edge_text").map(String::as_str),
         &edge_pair.relationship_name,
@@ -2951,7 +2726,7 @@ fn edge_retrieval_text(edge_pair: &GraphEdgePair) -> String {
 /// SDKs (no retriever, scorer or search path reads it), so summing costs no
 /// observable parity, while matching Python would put this writer at odds with
 /// `edge_reindex`. See the PR for the full argument.
-fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
+pub(crate) fn build_edge_types<I>(texts: I, dataset_id: Uuid) -> Vec<EdgeType>
 where
     I: IntoIterator<Item = String>,
 {
@@ -3465,44 +3240,66 @@ pub async fn extract_dlt_fk_edges(
     }
     schema_nodes.extend(column_value_nodes.into_values());
 
-    // I1: claim every schema node and FK edge before a single one of them
-    // reaches the graph.
-    let (prov_nodes, prov_edges) = dlt_provenance_rows(
-        id,
-        &schema_nodes,
-        &all_edges,
-        &row_chunk_docs,
-        &column_value_owners,
-    );
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
-
-    // Persist schema nodes to graph DB (SchemaTable, SchemaRelationship and
-    // DltColumn), then embed them as Python's `index_data_points` does.
-    if !schema_nodes.is_empty() {
-        let node_count = schema_nodes.len();
-        graph_db
-            .add_nodes_raw(schema_nodes.clone())
-            .await
-            .map_err(CognifyError::from)?;
-        info!("Added {} DLT schema nodes to graph", node_count);
-        index_dlt_schema_nodes(&schema_nodes, id, &embedding_engine, &vector_db).await?;
-    }
-
-    // Persist edges to graph DB
     if !all_edges.is_empty() {
-        graph_db
-            .add_edges(&all_edges)
-            .await
-            .map_err(CognifyError::from)?;
         info!(
-            "Added {} DLT FK edges to graph ({} tables, {} FK definitions)",
+            "Built {} DLT FK edges ({} tables, {} FK definitions)",
             all_edges.len(),
             table_node_ids.len(),
             fk_defs_seen.len()
         );
     }
 
-    Ok(())
+    // Everything is written by the persistence layer, as a group of its own:
+    // the schema nodes and FK edges are claimed in the ledger before a single
+    // one of them reaches the graph (I1), then the schema nodes (SchemaTable,
+    // SchemaRelationship and DltColumn) and the edges are written, and the
+    // schema nodes embedded as Python's `index_data_points` does. The state is
+    // fresh: this step runs after the pipeline, and nothing it writes was
+    // written by the run's own group.
+    let artifacts = DltArtifacts {
+        schema_nodes,
+        edges: all_edges,
+        row_chunk_docs,
+        column_value_owners,
+    };
+    let config = CognifyConfig::default();
+    let context = crate::persist::PersistContext {
+        graph_db: &graph_db,
+        vector_db: &vector_db,
+        embedding_engine: &embedding_engine,
+        db,
+        ledger: id,
+        // The DLT step never recorded edge evidence: it stores no chunk.
+        evidence: None,
+        user_id: None,
+        // A DLT group carries no chunk, entity or custom graph, so none of the
+        // settings the layer reads for those applies.
+        config: &config,
+    };
+    let group = crate::persist::PersistGroup {
+        dlt: Some(&artifacts),
+        ..crate::persist::PersistGroup::empty()
+    };
+    crate::persist::persist_group(
+        group,
+        &mut crate::persist::PersistState::default(),
+        &context,
+    )
+    .await
+}
+
+/// What the DLT step writes: its schema nodes and edges, and what attributes
+/// them to data items in the ledger (see [`dlt_provenance_rows`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DltArtifacts {
+    /// SchemaTable, SchemaRelationship and DltColumn nodes, as raw JSON.
+    pub(crate) schema_nodes: Vec<serde_json::Value>,
+    /// `is_row_of`, foreign-key, schema and column-value edges.
+    pub(crate) edges: Vec<EdgeData>,
+    /// `DltRow` chunk id → its document.
+    pub(crate) row_chunk_docs: HashMap<Uuid, Uuid>,
+    /// `DltColumn` node id → every row document referencing it.
+    pub(crate) column_value_owners: BTreeMap<Uuid, BTreeSet<Uuid>>,
 }
 
 /// Ownership rows for the DLT teardown's schema nodes and FK edges.
@@ -3524,7 +3321,7 @@ pub async fn extract_dlt_fk_edges(
 ///
 /// `indexed_fields` names the collections [`index_dlt_schema_nodes`] writes, so
 /// a delete reaches them.
-fn dlt_provenance_rows(
+pub(crate) fn dlt_provenance_rows(
     id: LedgerIdentity,
     schema_nodes: &[serde_json::Value],
     edges: &[cognee_graph::EdgeData],
@@ -3654,7 +3451,7 @@ fn dlt_cell_text(value: &serde_json::Value) -> Option<String> {
 /// and `DltColumn_properties`. The payload is Python's `IndexSchema` row, as
 /// every other collection's (`index_schema_payload`). Each collection's total is announced before its
 /// windows are written, like every other writer.
-async fn index_dlt_schema_nodes(
+pub(crate) async fn index_dlt_schema_nodes(
     nodes: &[serde_json::Value],
     identity: LedgerIdentity,
     engine: &Arc<dyn EmbeddingEngine>,
@@ -5424,7 +5221,7 @@ fn graph_units(
 /// across that call only. The graphs are grouped the same way, by data item
 /// and by their chunk's position within it, and each group is walked with one
 /// shared claim set (see [`store_dynamic_graph_batch`]).
-fn store_dynamic_graphs(
+pub(crate) fn store_dynamic_graphs(
     graphs: &[AttributedDynamicGraph],
     chunks: &[DocumentChunk],
     config: &CognifyConfig,
@@ -5457,7 +5254,8 @@ fn store_dynamic_graphs(
     stored
 }
 
-/// Record runtime custom graph ownership before either artifact store sees it.
+/// The ownership rows of the runtime custom graphs, which the persistence layer
+/// writes before either artifact store sees them.
 ///
 /// `stored` is each graph's storage walk, in `graphs` order. Every edge row
 /// carries the edge's properties as `attributes` — above all the `edge_text`
@@ -5465,18 +5263,20 @@ fn store_dynamic_graphs(
 /// and what the delete path and the run sweep re-derive that point's id from
 /// (`cognee_delete::edge_retrieval_text`). The rows otherwise follow Python's
 /// `upsert_edges.py`: a field edge is keyed and labelled on its field name, a
-/// chunk's `contains` row on its `edge_text`, as [`upsert_provenance`] keys
+/// chunk's `contains` row on its `edge_text`, as [`provenance_rows`] keys
 /// the structural one, so both rows for one edge agree on their text.
-async fn record_dynamic_graph_ownership(
-    db: &dyn RelationalDb,
+pub(crate) fn dynamic_graph_ownership_rows(
     id: LedgerIdentity,
     graphs: &[AttributedDynamicGraph],
     stored: &[StoredDynamicGraph],
     chunks: &[DocumentChunk],
     structural_edges: &[EdgeData],
-    // The custom field edges `add_data_points` writes, already stamped.
+    // The custom field edges the persistence layer writes, already stamped.
     dynamic_edges: &[EdgeData],
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     let properties_by_edge =
         |edges: &[EdgeData]| -> HashMap<(String, String, String), serde_json::Value> {
             edges
@@ -5605,27 +5405,25 @@ async fn record_dynamic_graph_ownership(
             }
         }
     }
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &nodes, &edges).await?;
-    Ok(())
+    (nodes, edges)
 }
 
-/// Record ownership of the entities and semantic edges a run is about to write
-/// to the graph, in one transaction, before the graph sees them.
+/// The ownership rows of the extraction artifacts: the entities, the Timestamp
+/// nodes, the semantic edges and the claimed existing edges.
 ///
-/// The rows this writes are a subset of the ones [`upsert_provenance`] writes
-/// two stages later, and they carry the same deterministic ids — the second
-/// write is an idempotent upsert that leaves `pipeline_run_id` alone (it is
-/// deliberately absent from the `ON CONFLICT` update list, so the first run to
-/// claim an artifact keeps it).
+/// The entity and semantic-edge rows are also among the ones
+/// [`provenance_rows`] builds, with the same deterministic ids; the
+/// persistence layer writes each row once. `pipeline_run_id` is deliberately
+/// absent from the `ON CONFLICT` update list, so the first run to claim an
+/// artifact keeps it.
 ///
-/// One exception to "subset": `claimed_existing_edges` is written *only* here.
-/// Those edges never reach `add_data_points`, because re-writing them to the
-/// graph is exactly what the extraction dedup filter exists to prevent — but
-/// their ownership rows are what keeps an earlier file's deletion from taking
-/// a still-referenced edge with it.
+/// The Timestamp and `claimed_existing_edges` rows are built only here. The
+/// claimed edges are never written to the graph, because re-writing them is
+/// exactly what the extraction dedup filter exists to prevent — but their
+/// ownership rows are what keeps an earlier file's deletion from taking a
+/// still-referenced edge with it.
 #[allow(clippy::too_many_arguments)]
-async fn record_extraction_ownership(
-    db: &dyn RelationalDb,
+pub(crate) fn extraction_ownership_rows(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -5636,7 +5434,10 @@ async fn record_extraction_ownership(
     claimed_existing_edges: &[GraphEdgePair],
     timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     let chunk_data_map = chunk_document_map(chunks);
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
@@ -5656,19 +5457,48 @@ async fn record_extraction_ownership(
         &entity_data_map,
         producers,
     ));
+    (prov_nodes, prov_edges)
+}
 
-    cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges).await?;
+/// Write provenance node and edge records to the relational database: the
+/// rows [`provenance_rows`] builds, in one transaction.
+///
+/// Only the unit tests write a hand-built set this way; the persistence layer
+/// builds the same rows and writes them itself.
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+async fn upsert_provenance(
+    db: &dyn RelationalDb,
+    id: LedgerIdentity,
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    edges: &[GraphEdgePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    structural_edges: &[EdgeData],
+    producers: &ArtifactProducers,
+) -> Result<(), CognifyError> {
+    let (prov_nodes, prov_edges) = provenance_rows(
+        id,
+        chunks,
+        entities,
+        edges,
+        summaries,
+        documents,
+        structural_edges,
+        producers,
+    );
+    // Write the node and edge provenance batches atomically: a failure partway
+    // through rolls the whole group back (see `upsert_provenance_graph`).
     if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        info!(
-            "Recorded ownership of {} entities and {} semantic edges before writing them",
-            prov_nodes.len(),
-            prov_edges.len()
-        );
+        cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
+            .await?;
     }
     Ok(())
 }
 
-/// Write provenance node and edge records to the relational database.
+/// The provenance node and edge records of the chunks, entities, semantic
+/// edges, summaries, entity types, documents and structural edges.
 ///
 /// Mirrors the Python `upsert_nodes()` / `upsert_edges()` calls in
 /// `add_data_points` (guarded by `if user and dataset and data:`).
@@ -5683,8 +5513,7 @@ async fn record_extraction_ownership(
 /// `SummarizedData` themselves get the previous single-`chunk_id` (entities)
 /// and both-endpoints-agree (edges) attribution.
 #[allow(clippy::too_many_arguments)]
-async fn upsert_provenance(
-    db: &dyn RelationalDb,
+pub(crate) fn provenance_rows(
     id: LedgerIdentity,
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
@@ -5693,7 +5522,10 @@ async fn upsert_provenance(
     documents: &[Document],
     structural_edges: &[EdgeData],
     producers: &ArtifactProducers,
-) -> Result<(), CognifyError> {
+) -> (
+    Vec<cognee_database::GraphNode>,
+    Vec<cognee_database::GraphEdge>,
+) {
     use cognee_database::{GraphEdge, GraphNode};
 
     let LedgerIdentity {
@@ -5709,9 +5541,8 @@ async fn upsert_provenance(
     let entity_data_map = entity_document_map(entities, &chunk_data_map);
 
     // ── Provenance nodes ────────────────────────────────────────────────
-    // Entities. Shared with the extraction stage, which wrote the same rows
-    // before it put the entities in the graph; this pass is the idempotent
-    // second write.
+    // Entities. `extraction_ownership_rows` builds the same rows, with the same
+    // ids; the persistence layer writes each once.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, producers);
 
@@ -5843,8 +5674,8 @@ async fn upsert_provenance(
     // transaction, so a mid-way failure cannot leave nodes without their edges.
 
     // ── Provenance edges ────────────────────────────────────────────────
-    // Semantic edges from graph extraction — again the same rows the
-    // extraction stage already wrote before persisting them.
+    // Semantic edges from graph extraction — again the same rows
+    // `extraction_ownership_rows` builds.
     let mut prov_edges: Vec<GraphEdge> =
         semantic_edge_provenance_rows(id, edges, &chunk_data_map, &entity_data_map, producers);
 
@@ -5908,21 +5739,7 @@ async fn upsert_provenance(
             created_at: Utc::now(),
         });
     }
-
-    // Write the node and edge provenance batches atomically: a failure partway
-    // through rolls the whole group back (see `upsert_provenance_graph`).
-    if !prov_nodes.is_empty() || !prov_edges.is_empty() {
-        cognee_database::ProvenanceDb::upsert_provenance_graph(db, &prov_nodes, &prov_edges)
-            .await?;
-        if !prov_nodes.is_empty() {
-            info!("Upserted {} provenance node records", prov_nodes.len());
-        }
-        if !prov_edges.is_empty() {
-            info!("Upserted {} provenance edge records", prov_edges.len());
-        }
-    }
-
-    Ok(())
+    (prov_nodes, prov_edges)
 }
 
 /// An edge's properties as a ledger row's `attributes` (Python's
@@ -5941,7 +5758,7 @@ fn edge_attributes(
 }
 
 /// Generate embeddings for chunks, entities, and summaries.
-async fn generate_embeddings(
+pub(crate) async fn generate_embeddings(
     chunks: &[DocumentChunk],
     entities: &[GraphNodePair],
     summaries: &[TextSummary],
@@ -6076,16 +5893,8 @@ fn dynamic_index_refs(properties: &serde_json::Map<String, serde_json::Value>) -
     }
 }
 
-/// Index data points in vector database.
-///
-/// Every collection is written in windows of
-/// [`cognee_vector::write_window_points`] inside a
-/// bulk-load scope of its own, each preceded by
-/// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
-/// that tunes its index maintenance to the size of a write (pgvector) decides
-/// as it did for the single call per collection this replaces. The scope
-/// nests inside the one `cognify` holds, and stands in for it when the task
-/// runs in a pipeline of the caller's own.
+/// [`index_data_points_except`] with nothing left out.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points(
     chunks: &[DocumentChunk],
@@ -6097,6 +5906,48 @@ async fn index_data_points(
     engine: Arc<dyn EmbeddingEngine>,
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
+) -> Result<IndexedFieldsStats, CognifyError> {
+    index_data_points_except(
+        chunks,
+        entities,
+        summaries,
+        documents,
+        edge_types,
+        dataset_id,
+        engine,
+        vector_db,
+        precomputed_embeddings,
+        &HashSet::new(),
+    )
+    .await
+}
+
+/// Index data points in vector database, leaving out the entity types in
+/// `embedded_types`: the ones an earlier persistence group of the same run
+/// already embedded. Every other collection is indexed as handed in, so the
+/// caller leaves those points out itself.
+///
+/// Every collection is written in windows of
+/// [`cognee_vector::write_window_points`] inside a
+/// bulk-load scope of its own, each preceded by
+/// [`VectorDB::announce_bulk_write`] with the collection's total, so a backend
+/// that tunes its index maintenance to the size of a write (pgvector) decides
+/// as it did for the single call per collection this replaces. The scope
+/// nests inside the one `cognify` holds — on a counting backend an inner
+/// scope's end does no maintenance while an outer one is open — and stands in
+/// for it when the task runs in a pipeline of the caller's own.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn index_data_points_except(
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    precomputed_embeddings: &[Embedding],
+    embedded_types: &HashSet<Uuid>,
 ) -> Result<IndexedFieldsStats, CognifyError> {
     // Each collection used to be embedded, built and written in one piece, so
     // all of its vectors and metadata were live at once — a copy that grew
@@ -6113,7 +5964,7 @@ async fn index_data_points(
             None
         }
     };
-    let indexed = index_data_points_windowed(
+    let indexed = index_data_points_windowed_except(
         chunks,
         entities,
         summaries,
@@ -6124,6 +5975,7 @@ async fn index_data_points(
         Arc::clone(&vector_db),
         precomputed_embeddings,
         window,
+        embedded_types,
     )
     .await;
     if let Some(bulk) = bulk
@@ -6135,7 +5987,7 @@ async fn index_data_points(
 }
 
 /// Announce `points` points to `data_type`/`field_name`, the total the
-/// windows that follow add up to (see [`index_data_points`]).
+/// windows that follow add up to (see [`index_data_points_except`]).
 async fn announce_index_write(
     vector_db: &Arc<dyn VectorDB>,
     data_type: &str,
@@ -6150,6 +6002,7 @@ async fn announce_index_write(
 
 /// [`index_data_points`] with an explicit window size, so tests can drive a
 /// multi-window write over a handful of points.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 async fn index_data_points_windowed(
     chunks: &[DocumentChunk],
@@ -6162,6 +6015,37 @@ async fn index_data_points_windowed(
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
     window: usize,
+) -> Result<IndexedFieldsStats, CognifyError> {
+    index_data_points_windowed_except(
+        chunks,
+        entities,
+        summaries,
+        documents,
+        edge_types,
+        dataset_id,
+        engine,
+        vector_db,
+        precomputed_embeddings,
+        window,
+        &HashSet::new(),
+    )
+    .await
+}
+
+/// [`index_data_points_except`] with an explicit window size.
+#[allow(clippy::too_many_arguments)]
+async fn index_data_points_windowed_except(
+    chunks: &[DocumentChunk],
+    entities: &[GraphNodePair],
+    summaries: &[TextSummary],
+    documents: &[Document],
+    edge_types: &[EdgeType],
+    dataset_id: Uuid,
+    engine: Arc<dyn EmbeddingEngine>,
+    vector_db: Arc<dyn VectorDB>,
+    precomputed_embeddings: &[Embedding],
+    window: usize,
+    embedded_types: &HashSet<Uuid>,
 ) -> Result<IndexedFieldsStats, CognifyError> {
     let mut stats = IndexedFieldsStats::default();
     let dimension = engine.dimension();
@@ -6311,7 +6195,7 @@ async fn index_data_points_windowed(
         let unique_entity_types: Vec<&cognee_models::EntityType> = entities
             .iter()
             .flat_map(|pair| pair.entity_types())
-            .filter(|et| seen_ids.insert(et.base.id))
+            .filter(|et| !embedded_types.contains(&et.base.id) && seen_ids.insert(et.base.id))
             .collect();
 
         if !unique_entity_types.is_empty() {
@@ -6869,16 +6753,22 @@ pub fn make_extract_graph_task(
 
 /// [`make_extract_graph_task`] with a caller-chosen `topological_rank`.
 ///
-/// `rank` is threaded all the way into [`extract_graph_from_data`] (and from
-/// there into `expand_with_nodes_and_edges`) rather than only being applied to
-/// the task body's own stamp loop: Entity / EntityType nodes are written to the
-/// graph DB *inside* `extract_graph_from_data`, so a rank applied afterwards
-/// would never reach the persisted rows.
+/// `rank` is threaded all the way into graph building (and from there into
+/// `expand_with_nodes_and_edges`) rather than only being applied to the task
+/// body's own stamp loop, so every Entity / EntityType carries it from
+/// construction.
+///
+/// The stage writes nothing: it builds the graph and, when
+/// [`CognifyConfig::create_web_page_nodes`] is on, the WebPage / WebSite
+/// artifacts, and hands them to the persistence step ([`add_data_points`]).
+/// Its only read of a store is the existing-edge check on `graph_db`. The
+/// relational database argument is unused since that move; it stays so the
+/// signature does not change before the stages are reworked.
 pub fn make_extract_graph_task_with_rank(
     llm: Arc<dyn Llm>,
     graph_db: Arc<dyn GraphDBTrait>,
     ontology_resolver: Arc<dyn OntologyResolver>,
-    db: Arc<dyn RelationalDb>,
+    _db: Arc<dyn RelationalDb>,
     config: CognifyConfig,
     rank: i32,
 ) -> TypedTask<ExtractedChunks, ExtractedGraphData> {
@@ -6887,7 +6777,6 @@ pub fn make_extract_graph_task_with_rank(
         let llm = Arc::clone(&llm);
         let graph_db = Arc::clone(&graph_db);
         let ontology_resolver = Arc::clone(&ontology_resolver);
-        let db = Arc::clone(&db);
         let mut config = config.clone();
         // Build the graph on the pool the host sized for this run, unless the
         // caller pinned one.
@@ -6895,19 +6784,16 @@ pub fn make_extract_graph_task_with_rank(
             config.cpu_pool = Some(crate::config::CpuPoolHandle(Arc::clone(&ctx.thread_pool)));
         }
         let user_label = user_label_from_ctx(&ctx);
-        let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
             let mut graph_data = if config.graph_schema.is_some() {
                 let extracted = extract_dynamic_graphs_from_data(&input, llm, &config).await?;
                 attach_dynamic_graphs(&input, extracted, config.chunk_attachment)
             } else {
-                extract_graph_from_data(
+                build_extracted_graph(
                     &input,
                     llm,
-                    Arc::clone(&graph_db),
+                    graph_db,
                     ontology_resolver,
-                    &*db,
-                    pipeline_run_id,
                     &config,
                     user_label.as_deref(),
                     (rank > 0).then_some(rank),
@@ -6915,26 +6801,29 @@ pub fn make_extract_graph_task_with_rank(
                 .await?
             };
             if config.create_web_page_nodes {
-                create_web_page_nodes(
-                    &graph_data.documents,
-                    &graph_data.chunks,
-                    graph_db,
-                    &*db,
-                    LedgerIdentity::new(
-                        input.tenant_id,
-                        input.user_id,
-                        input.dataset_id,
-                        pipeline_run_id,
-                    ),
-                )
-                .await?;
+                graph_data.handoff.web_pages =
+                    web_page_artifacts(&graph_data.documents, &graph_data.chunks);
             }
+            // The entities as graph building left them, for the graph write:
+            // see `PersistHandoff::entity_graph_stamps`.
+            let unstamped: Vec<ProvenanceStamp> = graph_data
+                .entities
+                .iter()
+                .map(|pair| ProvenanceStamp::of(&pair.entity.base))
+                .collect();
             stamp_entity_provenance(
                 &mut graph_data.entities,
                 EXTRACT_GRAPH_TASK_NAME,
                 user_label.as_deref(),
                 rank,
             );
+            graph_data.handoff.entity_graph_stamps = graph_data
+                .entities
+                .iter()
+                .zip(unstamped)
+                .filter(|(pair, before)| ProvenanceStamp::of(&pair.entity.base) != *before)
+                .map(|(pair, before)| (pair.entity.base.id, before))
+                .collect();
             for attributed in &mut graph_data.dynamic_graphs {
                 for node in &mut attributed.graph.nodes {
                     stamp_provenance(
@@ -7118,6 +7007,8 @@ fn merge_graph_and_summaries(
         entities: graph.entities,
         timestamps: graph.timestamps,
         edges: graph.edges,
+        claimed_existing_edges: graph.claimed_existing_edges,
+        handoff: graph.handoff,
         producers: graph.producers,
         dynamic_graphs: graph.dynamic_graphs,
         summaries,
@@ -7168,8 +7059,7 @@ fn merge_graph_and_summaries(
 /// single task. It matters only to an embedder who composes a custom pipeline
 /// with `RetryPolicy::Limited`, who should know that the granularity here is
 /// the pair: retrying is already expensive at this stage (extraction alone
-/// re-issues every extraction call, and it has written graph nodes, edges and
-/// ownership rows by the time it can fail), and fusing widens that to
+/// re-issues every extraction call), and fusing widens that to
 /// summarization's calls too. A caller who needs independent retry boundaries
 /// wants the two halves as separate stages, which is what the
 /// [`make_extract_graph_task`] / [`make_summarize_text_task`] pair still
@@ -7218,18 +7108,16 @@ pub fn make_extract_graph_and_summarize_task_with_rank(
         rank,
     );
     let summarize = make_summarize_text_task_with_rank(llm, config, rank);
-    // ⚠️ `try_parallel` returns on the first branch error and drops the other,
-    // and the branch that can be dropped here is the one that writes — graph
-    // nodes, edges and ownership rows. That is safe only because the
-    // summarization branch has no reachable error path: `summarize_text`
-    // collects every per-chunk failure into its report and returns `Ok`, so
-    // the extraction branch is never the one cancelled. **Adding a fallible
-    // step to summarization breaks that**, and would tear extraction down
-    // mid-write with its `FailureReport` lost along with the dropped future —
-    // partial graph state that nothing records and nothing sweeps. Anything
-    // that can genuinely fail in summarization belongs in its report, not in
-    // its `Result`; if that ever stops being possible, this call has to await
-    // both branches and reconcile afterwards instead.
+    // ⚠️ `try_parallel` returns on the first branch error and drops the other.
+    // Neither branch writes any more — extraction hands everything to the
+    // persistence step (`add_data_points`) — so a dropped extraction leaves no
+    // partial graph state behind. It would still lose extraction's
+    // `FailureReport` and the LLM work already paid for, which is why the
+    // summarization branch keeps no reachable error path: `summarize_text`
+    // collects every per-chunk failure into its report and returns `Ok`.
+    // Anything that can genuinely fail in summarization belongs in its report,
+    // not in its `Result`; if that ever stops being possible, this call has to
+    // await both branches and reconcile afterwards instead.
     #[allow(
         clippy::expect_used,
         reason = "invariant is upheld by construction — see the message"
@@ -10662,6 +10550,8 @@ mod tests {
             entities: vec![pair],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers,
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -10785,6 +10675,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -10933,6 +10825,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -11165,6 +11059,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -11265,6 +11161,8 @@ mod tests {
             entities: vec![alice.clone(), bob.clone()],
             timestamps: vec![],
             edges: vec![edge],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers,
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -11426,6 +11324,8 @@ mod tests {
             entities,
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries,
@@ -11781,10 +11681,62 @@ mod tests {
         assert_eq!(graph.edge_count(), 2);
     }
 
+    /// The extraction stage builds the WebPage / WebSite artifacts (and nothing
+    /// when opted out) and writes nothing itself; persisting its output puts
+    /// the two nodes and two edges in the graph. Before O4a the stage wrote
+    /// them directly, which is what this test used to assert.
     #[tokio::test]
     async fn make_extract_graph_task_wires_web_page_nodes_and_respects_opt_out() {
+        use cognee_embedding::MockEmbeddingEngine;
         use cognee_ontology::NoOpOntologyResolver;
         use cognee_test_utils::{MockLlm, test_task_context};
+        use cognee_vector::MockVectorDB;
+
+        async fn persist(
+            graph: &Arc<cognee_graph::MockGraphDB>,
+            out: ExtractedGraphData,
+            db: &Arc<dyn RelationalDb>,
+        ) {
+            let summarized = merge_graph_and_summaries(
+                out,
+                SummarizedChunks {
+                    summaries: vec![],
+                    failures: FailureReport::default(),
+                },
+            );
+            add_data_points(
+                &summarized,
+                graph.clone(),
+                Arc::new(MockVectorDB::new()),
+                Arc::new(MockEmbeddingEngine::new(8)),
+                db.as_ref(),
+                None,
+                &CognifyConfig::default(),
+            )
+            .await
+            .unwrap();
+        }
+        async fn web_node_count(graph: &cognee_graph::MockGraphDB) -> usize {
+            let nodes = graph.get_graph_data().await.unwrap().0;
+            nodes
+                .iter()
+                .filter(|(_, props)| {
+                    matches!(
+                        props.get("type").and_then(serde_json::Value::as_str),
+                        Some("WebPage" | "WebSite")
+                    )
+                })
+                .count()
+        }
+        async fn web_edge_count(graph: &cognee_graph::MockGraphDB) -> usize {
+            let edges = graph.get_graph_data().await.unwrap().1;
+            edges
+                .iter()
+                .filter(|(_, _, relationship, _)| {
+                    relationship == "PART_OF" || relationship == "SOURCED_FROM"
+                })
+                .count()
+        }
 
         let doc_id = Uuid::new_v4();
         let input = ExtractedChunks {
@@ -11812,9 +11764,14 @@ mod tests {
         let TypedTask::Async(run) = task else {
             panic!("extract graph task should be async");
         };
-        run(&input, ctx.clone()).await.unwrap();
-        assert_eq!(graph.node_count(), 2);
-        assert_eq!(graph.edge_count(), 2);
+        let out = run(&input, ctx.clone()).await.unwrap();
+        assert_eq!(graph.node_count(), 0, "the stage writes nothing");
+        assert_eq!(graph.edge_count(), 0, "the stage writes nothing");
+        assert_eq!(out.handoff.web_pages.len(), 1);
+        let db: Arc<dyn RelationalDb> = db.clone();
+        persist(&graph, *out, &db).await;
+        assert_eq!(web_node_count(&graph).await, 2);
+        assert_eq!(web_edge_count(&graph).await, 2);
 
         let graph = Arc::new(cognee_graph::MockGraphDB::new());
         let task = make_extract_graph_task(
@@ -11827,9 +11784,11 @@ mod tests {
         let TypedTask::Async(run) = task else {
             panic!("extract graph task should be async");
         };
-        run(&input, ctx).await.unwrap();
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.edge_count(), 0);
+        let out = run(&input, ctx).await.unwrap();
+        assert!(out.handoff.web_pages.is_empty());
+        persist(&graph, *out, &db).await;
+        assert_eq!(web_node_count(&graph).await, 0);
+        assert_eq!(web_edge_count(&graph).await, 0);
     }
 
     #[tokio::test]
@@ -12277,6 +12236,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12346,6 +12307,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12400,6 +12363,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -12456,6 +12421,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             backend_summaries: vec![],
@@ -13091,6 +13058,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13158,6 +13127,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13257,6 +13228,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![AttributedDynamicGraph {
                 graph,
@@ -13380,6 +13353,8 @@ mod tests {
             entities: vec![GraphNodePair::new(entity, Some(entity_type))],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13491,6 +13466,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![GraphEdgePair::new(source, target, dirty)],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
@@ -13589,6 +13566,8 @@ mod tests {
             entities: graph_data.entities,
             timestamps: graph_data.timestamps,
             edges: graph_data.edges,
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: graph_data.producers,
             dynamic_graphs: graph_data.dynamic_graphs,
             summaries: vec![],
@@ -14449,6 +14428,8 @@ mod tests {
             entities: vec![],
             timestamps: vec![],
             edges: vec![],
+            claimed_existing_edges: vec![],
+            handoff: PersistHandoff::default(),
             producers: ArtifactProducers::default(),
             dynamic_graphs: vec![],
             summaries: vec![],
