@@ -122,6 +122,13 @@ impl MockGraphDB {
         *slot = Some(msg.into());
     }
 
+    /// Clear an error previously armed by [`MockGraphDB::set_add_edges_error`],
+    /// so a test can assert that re-running a failed write converges.
+    pub fn clear_add_edges_error(&self) {
+        let mut slot = self.add_edges_error.lock().unwrap(); // lock poison is unrecoverable
+        *slot = None;
+    }
+
     /// Inject an error returned from every subsequent `delete_nodes` call as
     /// `GraphDBError::NodeError`, before any node is removed.
     pub fn set_delete_nodes_error(&self, msg: impl Into<String>) {

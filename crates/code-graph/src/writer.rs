@@ -37,10 +37,11 @@
 //! nodes no longer carry (Python's `_detag_stale_code_graph`), and only then
 //! stamps the snapshot identity on the repository nodes, so a load that failed
 //! part way is never skipped past. Python reads the whole graph for both; here
-//! one scoped read is taken instead: the repositories' nodes and their
-//! one-hop neighbourhood (`get_neighborhood`), which holds every code node of
-//! those repositories (each has a `part_of` edge to its repository), the
-//! node sets they belong to, and every edge among them. The detag takes the
+//! one read by type is taken instead (`get_filtered_graph_data`): every code
+//! node, every node set, and every edge among them. It does not depend on a
+//! node's `part_of` edge, so a code node that lost it is still swept. The
+//! repositories' own nodes are picked from it by type and repository, as
+//! Python picks them from the whole graph. The detag takes the
 //! nodes' own tags from the node write's pre-write read instead, as Python
 //! does, since the write replaces the tags of the nodes it rewrites.
 //!
@@ -279,7 +280,12 @@ struct WalkNode {
 
 /// Python's `get_graph_from_model` over `points`: nodes (each once, first
 /// occurrence wins) and structural edges (each triple once).
-fn storage_walk(points: &[&CodeNode]) -> (Vec<WalkNode>, Vec<EdgeData>) {
+///
+/// # Errors
+///
+/// A node set node cannot be serialised
+/// ([`CodeGraphError::Graph`](crate::error::CodeGraphError::Graph)).
+fn storage_walk(points: &[&CodeNode]) -> CodeGraphResult<(Vec<WalkNode>, Vec<EdgeData>)> {
     let mut nodes: Vec<WalkNode> = Vec::new();
     let mut seen_nodes: HashSet<Uuid> = HashSet::new();
     let mut labels: HashMap<Uuid, String> = HashMap::new();
@@ -331,7 +337,7 @@ fn storage_walk(points: &[&CodeNode]) -> (Vec<WalkNode>, Vec<EdgeData>) {
                     base,
                     name: name.to_string(),
                 })
-                .unwrap_or(Value::Null);
+                .map_err(cognee_graph::GraphDBError::from)?;
                 nodes.push(WalkNode {
                     id: set_id,
                     name: name.to_string(),
@@ -356,7 +362,7 @@ fn storage_walk(points: &[&CodeNode]) -> (Vec<WalkNode>, Vec<EdgeData>) {
             structural_edge(source, target, relationship, &labels)
         })
         .collect();
-    (nodes, edges)
+    Ok((nodes, edges))
 }
 
 /// A typed relation as the graph stores it.
@@ -523,7 +529,7 @@ pub(crate) async fn record_snapshot_in_ledger(
     edges: &[CodeGraphEdge],
 ) -> CodeGraphResult<()> {
     let points: Vec<&CodeNode> = data_points.iter().collect();
-    let (nodes, mut structural) = storage_walk(&points);
+    let (nodes, mut structural) = storage_walk(&points)?;
     structural.extend(edges.iter().map(typed_edge));
     record_in_ledger(Some(ledger), &nodes, &structural).await
 }
@@ -617,42 +623,54 @@ pub async fn add_code_graph_data_points(
         unchanged
     );
 
+    // Structural edges (`part_of`, `belongs_to_set`) are checked for the
+    // whole snapshot, not only for the nodes written now: a load whose edge
+    // write failed left its nodes without them, and a retry finds those nodes
+    // unchanged and does not rewrite them, so their edges are restored here.
+    let all: Vec<&CodeNode> = data_points.iter().collect();
+    let (all_nodes, all_edges) = storage_walk(&all)?;
     // The ledger covers the whole snapshot, not only what is written: a node
     // left unchanged still belongs to this owner, and without its row a
     // delete of an earlier owner that wrote it would take it out of the graph.
     if ledger.is_some() {
-        let all: Vec<&CodeNode> = data_points.iter().collect();
-        let (nodes, edges) = storage_walk(&all);
-        record_in_ledger(ledger, &nodes, &edges).await?;
+        record_in_ledger(ledger, &all_nodes, &all_edges).await?;
     }
-    let mut added_edge_keys: HashSet<EdgeKey> = HashSet::new();
+    let missing_edges: Vec<EdgeData> = if all_edges.is_empty() {
+        Vec::new()
+    } else {
+        let present: HashSet<EdgeKey> = graph
+            .has_edges(&all_edges)
+            .await?
+            .into_iter()
+            .map(|(source, target, relationship, _)| (source, target, relationship))
+            .collect();
+        all_edges
+            .into_iter()
+            .filter(|(source, target, relationship, _)| {
+                !present.contains(&(source.clone(), target.clone(), relationship.clone()))
+            })
+            .collect()
+    };
+    let added_edge_keys: HashSet<EdgeKey> = missing_edges
+        .iter()
+        .map(|(source, target, relationship, _)| {
+            (source.clone(), target.clone(), relationship.clone())
+        })
+        .collect();
     if !to_write.is_empty() {
-        let (nodes, edges) = storage_walk(&to_write);
-        if !edges.is_empty() {
-            let present: HashSet<EdgeKey> = graph
-                .has_edges(&edges)
-                .await?
-                .into_iter()
-                .map(|(source, target, relationship, _)| (source, target, relationship))
-                .collect();
-            added_edge_keys = edges
-                .iter()
-                .map(|(source, target, relationship, _)| {
-                    (source.clone(), target.clone(), relationship.clone())
-                })
-                .filter(|key| !present.contains(key))
-                .collect();
-        }
+        let (nodes, edges) = storage_walk(&to_write)?;
         graph
             .add_nodes_raw(nodes.into_iter().map(|node| node.properties).collect())
             .await?;
-        if !edges.is_empty() {
-            graph.add_edges(&edges).await?;
+        if !missing_edges.is_empty() {
+            graph.add_edges(&missing_edges).await?;
         }
         // Graph before vectors: a vector never exists without its graph row.
         if let Some(vectors) = vectors {
             index_code_graph_vectors(vectors, &to_write, &edges).await?;
         }
+    } else if !missing_edges.is_empty() {
+        graph.add_edges(&missing_edges).await?;
     }
 
     Ok(CodeGraphLoadState {
@@ -756,19 +774,22 @@ struct StoredRepositoryGraph {
     edge_keys: HashSet<EdgeKey>,
 }
 
-/// The repositories' nodes, their one-hop neighbourhood and every edge among
-/// them: every code node of the repositories (each has a `part_of` edge to
-/// its repository), the node sets the repositories belong to, and the edges
-/// between all of these.
-async fn read_repository_graph(
-    graph: &dyn GraphDBTrait,
-    repos: &BTreeSet<String>,
-) -> CodeGraphResult<StoredRepositoryGraph> {
-    let repo_ids: Vec<String> = repos
+/// Every code node in the graph, every node set, and every edge among them.
+/// Python's sweep and detag read the whole graph (`get_graph_data()`) and
+/// pick the repositories' code nodes by type and repository
+/// ([`RepositoryScope::is_repo_code_node`]); this reads the same nodes by
+/// type, so a code node that lost its `part_of` edge to its repository, or a
+/// node set only the code nodes (not the repository) are tagged with, is
+/// still found. Nodes of other repositories are read too and left alone by
+/// the scope check, as in Python.
+async fn read_repository_graph(graph: &dyn GraphDBTrait) -> CodeGraphResult<StoredRepositoryGraph> {
+    let types: Vec<Value> = CodeNodeType::ALL
         .iter()
-        .map(|repo| fact_node_id(repo, "repository", repo).to_string())
+        .map(|node_type| Value::from(node_type.class_name()))
+        .chain(std::iter::once(Value::from("NodeSet")))
         .collect();
-    let (nodes, edges) = graph.get_neighborhood(&repo_ids, 1).await?;
+    let filters = HashMap::from([(Cow::Borrowed("type"), types)]);
+    let (nodes, edges) = graph.get_filtered_graph_data(&filters).await?;
     let edge_keys = edges
         .into_iter()
         .map(|(source, target, relationship, _)| (source, target, relationship))
@@ -1305,7 +1326,7 @@ pub(crate) async fn write_code_graph_edges(
     // loads derived that this snapshot no longer does. Runs even with zero
     // edges: a shrunken repository still needs its sweep.
     let scope = RepositoryScope::new(&snapshot.facts, &fallback_repo);
-    let stored = read_repository_graph(graph, &scope.repos).await?;
+    let stored = read_repository_graph(graph).await?;
     let swept = sweep_stale_code_graph(graph, &snapshot.facts, edges, &scope, &stored).await?;
     // Retag: strip node-set names the repository's nodes carried before but
     // not any more. No graph write when nothing is stale, the untagged case
@@ -1450,9 +1471,6 @@ mod tests {
     }
 
     /// Python's `test_sweep_removes_stale_nodes_and_edges_and_stamps_snapshot`.
-    /// The stale symbol has its `part_of` edge, which every code node the
-    /// writer stores has: the scoped read reaches a repository's code nodes
-    /// through it (see the module docs).
     #[tokio::test]
     async fn the_sweep_removes_stale_nodes_and_edges_and_stamps_the_snapshot() {
         let dir = tempfile::tempdir().unwrap();
@@ -1555,6 +1573,57 @@ mod tests {
         let stamped = graph.get_node(&repo_id).await.unwrap().unwrap();
         assert_eq!(stamped["last_snapshot_id"], json!(SNAPSHOT_ID));
         assert_eq!(stamped["last_delta"], Value::Object(delta));
+    }
+
+    /// The sweep reads code nodes by type, as Python reads the whole graph: a
+    /// stale node of the repository that lost its `part_of` edge (nothing
+    /// connects it to the repository any more) is still swept. Another
+    /// repository's detached node is left alone.
+    #[tokio::test]
+    async fn the_sweep_finds_a_stale_node_without_its_part_of_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = write_snapshot(dir.path());
+        let repo_path = format!("/repos/{REPO}");
+        let repo_id = node_id("repository", REPO);
+        let orphan = node_id("symbol", "app/legacy.Orphan");
+        let elsewhere = fact_node_id("other_repo", "symbol", "elsewhere").to_string();
+
+        let graph = MockGraphDB::new();
+        seed_node(
+            &graph,
+            &repo_id,
+            json!({"type": "CodeRepository", "name": REPO}),
+        )
+        .await;
+        seed_node(&graph, &orphan, json!({"type": "CodeSymbol", "repo": REPO})).await;
+        seed_node(
+            &graph,
+            &elsewhere,
+            json!({"type": "CodeSymbol", "repo": "other_repo"}),
+        )
+        .await;
+
+        let state = CodeGraphLoadState {
+            data_points: crate::map_facts_to_data_points(
+                &snapshot.facts,
+                Some(&repo_path),
+                None,
+                None,
+            ),
+            ..CodeGraphLoadState::default()
+        };
+        let delta = add_code_graph_edges(&graph, None, &state, &snapshot, Some(&repo_path), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            !graph.has_node(&orphan).await.unwrap(),
+            "the orphan is swept"
+        );
+        assert!(graph.has_node(&elsewhere).await.unwrap());
+        assert_eq!(delta["nodes_removed"], json!(1));
+        assert_eq!(delta["samples_removed"], json!([orphan]));
     }
 
     /// Python's `test_delta_write_adds_only_missing_edges_and_stamps_delta`.
