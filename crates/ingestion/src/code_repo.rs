@@ -31,6 +31,7 @@
 //! Python does.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -110,32 +111,6 @@ pub const REPO_SKIPPED_MEDIA_EXTENSIONS: &[&str] = &[
 /// Source-file extensions of the languages enola extracts, owned by the code
 /// loader ([`crate::loaders::code`]).
 pub use crate::loaders::code::SUPPORTED_CODE_EXTENSIONS;
-
-/// Every extension a non-code loader claims by name. Python's
-/// `_document_extensions()` evaluated over its default loaders (text, PDF,
-/// image, audio, video, CSV, unstructured, BeautifulSoup) minus
-/// [`SUPPORTED_CODE_EXTENSIONS`]; the same set Rust's add-time loaders name
-/// explicitly ([`crate::get_loader_name`]). Keyed on extension only: a file
-/// whose extension no loader names is junk in a repository, not a document.
-#[rustfmt::skip]
-pub const DOCUMENT_EXTENSIONS: &[&str] = &[
-    // text_loader
-    "txt", "md", "json", "xml", "yaml", "yml", "log",
-    // pypdf_loader
-    "pdf",
-    // image_loader
-    "png", "dwg", "xcf", "jpg", "jpe", "jpeg", "jpx", "apng", "gif", "webp", "cr2", "tif", "tiff",
-    "bmp", "jxr", "psd", "ico", "heic", "avif",
-    // audio_loader
-    "aac", "mid", "mp3", "m4a", "ogg", "flac", "wav", "amr", "aiff",
-    // video_loader
-    "mp4", "m4v", "mov", "webm", "mkv", "avi",
-    // csv_loader
-    "csv",
-    // unstructured_loader
-    "docx", "doc", "odt", "xlsx", "xls", "ods", "pptx", "ppt", "odp", "rtf", "html", "htm", "eml",
-    "msg", "epub",
-];
 
 pub use cognee_models::code_repo::{CODE_REPO_MANIFEST_KIND, SOURCE_CODE_REPO};
 
@@ -276,7 +251,9 @@ pub struct RepoPartition {
     /// Source files and project manifests: represented by the one repo item
     /// and consumed by enola.
     pub covered: Vec<PathBuf>,
-    /// Files whose extension a non-code loader claims: added individually.
+    /// Files whose extension a registered non-code loader names
+    /// ([`LoaderRegistry::document_extensions`](crate::loaders::LoaderRegistry::document_extensions)):
+    /// added individually.
     pub documents: Vec<PathBuf>,
     /// Hidden files, build junk, unclaimed extensions, skipped media,
     /// symlinks, Git LFS pointers and unreadable files: never ingested. A
@@ -294,10 +271,19 @@ pub struct RepoPartition {
 /// unreadable subdirectory or file, or one that vanishes mid-walk, is
 /// skipped with a warning (Python's `rglob` skips what it cannot list).
 ///
+/// `document_extensions` are the extensions the pipeline's registered
+/// non-code loaders name
+/// ([`LoaderRegistry::document_extensions`](crate::loaders::LoaderRegistry::document_extensions)),
+/// as Python asks its loader engine (`_document_extensions`); a file with any
+/// other extension is skipped.
+///
 /// # Errors
 ///
 /// `directory` itself cannot be listed.
-pub fn partition_repo_files(directory: &Path) -> io::Result<RepoPartition> {
+pub fn partition_repo_files(
+    directory: &Path,
+    document_extensions: &HashSet<&'static str>,
+) -> io::Result<RepoPartition> {
     let Walk {
         mut entries,
         pruned,
@@ -336,7 +322,7 @@ pub fn partition_repo_files(directory: &Path) -> io::Result<RepoPartition> {
             partition.covered.push(file_path);
         } else if REPO_SKIPPED_MEDIA_EXTENSIONS.contains(&extension.as_str()) {
             partition.skipped.push(file_path);
-        } else if DOCUMENT_EXTENSIONS.contains(&extension.as_str()) {
+        } else if document_extensions.contains(extension.as_str()) {
             match is_lfs_pointer(&file_path, metadata.len()) {
                 Ok(false) => partition.documents.push(file_path),
                 Ok(true) => partition.skipped.push(file_path),
@@ -518,6 +504,9 @@ pub struct ResolvedCodeRepository {
 /// updates one record. `source_url` (credential-free) records where a cloned
 /// repository came from as `system_metadata["repo_url"]`.
 ///
+/// `document_extensions` decides which files are documents
+/// ([`partition_repo_files`]).
+///
 /// # Errors
 ///
 /// What [`partition_repo_files`] and [`build_repo_manifest`] raise.
@@ -526,12 +515,13 @@ pub fn resolve_code_repository(
     include_documents: bool,
     llm_available: bool,
     source_url: Option<&str>,
+    document_extensions: &HashSet<&'static str>,
 ) -> io::Result<ResolvedCodeRepository> {
     let RepoPartition {
         covered,
         mut documents,
         mut skipped,
-    } = partition_repo_files(directory)?;
+    } = partition_repo_files(directory, document_extensions)?;
 
     if !include_documents {
         documents.clear();
@@ -614,6 +604,7 @@ pub struct ResolveDirectoryError {
 pub fn resolve_data_directories(
     inputs: Vec<DataInput>,
     llm_available: bool,
+    document_extensions: &HashSet<&'static str>,
 ) -> Result<Vec<DataInput>, ResolveDirectoryError> {
     let mut resolved = Vec::with_capacity(inputs.len());
     for input in inputs {
@@ -635,7 +626,8 @@ pub fn resolve_data_directories(
         let directory = fs::canonicalize(local).map_err(error)?;
         if detect_code_project(&directory) {
             let repository =
-                resolve_code_repository(&directory, true, llm_available, None).map_err(error)?;
+                resolve_code_repository(&directory, true, llm_available, None, document_extensions)
+                    .map_err(error)?;
             resolved.push(repository.manifest_item);
             resolved.extend(
                 repository
@@ -663,6 +655,29 @@ pub fn resolve_data_directories(
 )]
 mod tests {
     use super::*;
+    use crate::loaders::LoaderRegistry;
+
+    /// What a registry with a loader for every built-in document type names:
+    /// every document extension Rust can read.
+    fn every_loader() -> HashSet<&'static str> {
+        let mut registry = LoaderRegistry::new();
+        for doc_type in [
+            "text",
+            "pdf",
+            "image",
+            "audio",
+            "csv",
+            "html",
+            "unstructured",
+            "code",
+        ] {
+            registry.register(
+                doc_type,
+                std::sync::Arc::new(crate::loaders::text::TextLoader),
+            );
+        }
+        registry.document_extensions()
+    }
 
     fn write(root: &Path, relative: &str, content: &[u8]) {
         let path = root.join(relative);
@@ -712,7 +727,7 @@ mod tests {
         write(root, "uv.lock", b"lock\n");
         write(root, "bin/tool.exe", b"\x00");
 
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         assert_eq!(
             names(root, &partition.covered),
             vec!["Makefile", "pkg/mod.py", "pkg/sub/x.ts", "pyproject.toml"]
@@ -793,7 +808,7 @@ mod tests {
             return;
         }
 
-        let partition = partition_repo_files(root);
+        let partition = partition_repo_files(root, &every_loader());
         let flattened = flatten_directory(root);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -810,7 +825,7 @@ mod tests {
     #[test]
     fn an_unlistable_root_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(partition_repo_files(&dir.path().join("missing")).is_err());
+        assert!(partition_repo_files(&dir.path().join("missing"), &every_loader()).is_err());
     }
 
     // Python: test_lfs_pointers_of_documents_are_skipped
@@ -839,7 +854,7 @@ mod tests {
             "docs/real.md",
             b"version https://git-lfs.github.com/spec/v1\nbut then prose\n",
         );
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         assert_eq!(names(root, &partition.documents), vec!["docs/real.md"]);
         assert!(names(root, &partition.skipped).contains(&"docs/manual.pdf".to_string()));
         assert!(names(root, &partition.skipped).contains(&"docs/ext.pdf".to_string()));
@@ -857,7 +872,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("credentials"), root.join("creds.py"))
             .unwrap();
         std::os::unix::fs::symlink(outside.path().join("lib"), root.join("lib")).unwrap();
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         assert_eq!(names(root, &partition.covered), vec!["go.mod"]);
         let manifest = build_repo_manifest(root, &partition.covered).unwrap();
         assert!(!manifest.contains("creds.py"));
@@ -871,7 +886,7 @@ mod tests {
         write(root, "a.py", b"");
         write(root, "a/b.py", b"");
         write(root, "a-b.py", b"");
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         assert_eq!(
             names(root, &partition.covered),
             vec!["a/b.py", "a-b.py", "a.py"]
@@ -896,7 +911,7 @@ mod tests {
         let root = dir.path();
         write(root, "go.mod", b"module x\n");
         write(root, "pkg/m\u{e9}.go", b"package pkg\n");
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         let manifest = build_repo_manifest(root, &partition.covered).unwrap();
 
         let mut combined = Sha256::new();
@@ -937,7 +952,7 @@ mod tests {
         write(root, "a/b.py", b"");
         write(root, "a-b.py", b"");
         write(root, "README.md", b"# r\n");
-        let partition = partition_repo_files(root).unwrap();
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
         let manifest = build_repo_manifest(root, &partition.covered).unwrap();
         let tail = "  \"file_count\": 5,\n  \"files\": [\n    \"a/b.py\",\n    \"a-b.py\",\n    \
                     \"a.py\",\n    \"go.mod\",\n    \"pkg/m\\u00e9.go\"\n  ],\n  \"content_hash\": \
@@ -952,7 +967,7 @@ mod tests {
         let root = dir.path();
         write(root, "go.mod", b"module x\n");
         write(root, "main.go", b"package main\n");
-        let covered = partition_repo_files(root).unwrap().covered;
+        let covered = partition_repo_files(root, &every_loader()).unwrap().covered;
         let first = build_repo_manifest(root, &covered).unwrap();
         assert_eq!(first, build_repo_manifest(root, &covered).unwrap());
         write(root, "main.go", b"package main\nfunc main() {}\n");
@@ -1056,6 +1071,7 @@ mod tests {
                 DataInput::Text("plain".into()),
             ],
             true,
+            &every_loader(),
         )
         .unwrap();
         assert_eq!(resolved.len(), 3);
@@ -1098,13 +1114,13 @@ mod tests {
         let root = dir.path();
         write(root, "go.mod", b"module x\n");
         write(root, "README.md", b"# hi\n");
-        let resolved = resolve_code_repository(root, true, false, None).unwrap();
+        let resolved = resolve_code_repository(root, true, false, None, &every_loader()).unwrap();
         assert!(resolved.document_paths.is_empty());
         assert_eq!(resolved.skipped, 1);
-        let with_llm = resolve_code_repository(root, true, true, None).unwrap();
+        let with_llm = resolve_code_repository(root, true, true, None, &every_loader()).unwrap();
         assert_eq!(with_llm.document_paths.len(), 1);
         // Python: test_documents_omitted_for_a_code_graph_only_caller
-        let code_only = resolve_code_repository(root, false, true, None).unwrap();
+        let code_only = resolve_code_repository(root, false, true, None, &every_loader()).unwrap();
         assert!(code_only.document_paths.is_empty());
     }
 
@@ -1115,8 +1131,12 @@ mod tests {
         let root = fs::canonicalize(dir.path()).unwrap();
         write(&root, "notes/a.txt", b"a\n");
         write(&root, "b.md", b"b\n");
-        let resolved =
-            resolve_data_directories(vec![DataInput::FilePath(path_text(&root))], true).unwrap();
+        let resolved = resolve_data_directories(
+            vec![DataInput::FilePath(path_text(&root))],
+            true,
+            &every_loader(),
+        )
+        .unwrap();
         let paths: Vec<String> = resolved
             .iter()
             .map(|input| match input {
@@ -1145,9 +1165,43 @@ mod tests {
                 DataInput::FilePath(missing.clone()),
             ],
             true,
+            &every_loader(),
         )
         .unwrap();
         assert!(matches!(&resolved[0], DataInput::FilePath(path) if *path == file));
         assert!(matches!(&resolved[1], DataInput::FilePath(path) if *path == missing));
+    }
+
+    /// Python's `_document_extensions()` asks the loader engine: a file only
+    /// an unregistered loader would read is skipped, not added and then
+    /// failed. The default registry has no image loader without an LLM.
+    #[test]
+    fn documents_follow_the_registered_loaders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "go.mod", b"module x\n");
+        write(root, "README.md", b"# hi\n");
+        write(root, "logo.png", b"\x89PNG");
+        write(root, "main.go", b"package main\n");
+
+        let mut text_only = LoaderRegistry::new();
+        text_only.register(
+            "text",
+            std::sync::Arc::new(crate::loaders::text::TextLoader),
+        );
+        let partition = partition_repo_files(root, &text_only.document_extensions()).unwrap();
+        assert_eq!(names(root, &partition.documents), vec!["README.md"]);
+        assert!(names(root, &partition.skipped).contains(&"logo.png".to_string()));
+        // Code files stay covered whatever the registry holds.
+        assert_eq!(names(root, &partition.covered), vec!["go.mod", "main.go"]);
+
+        let partition = partition_repo_files(root, &every_loader()).unwrap();
+        assert_eq!(
+            names(root, &partition.documents),
+            vec!["README.md", "logo.png"]
+        );
+
+        assert!(!text_only.document_extensions().contains("py"));
+        assert!(!every_loader().contains("py"));
     }
 }

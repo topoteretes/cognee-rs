@@ -2829,11 +2829,13 @@ impl AddPipeline {
         let directory = repo_path.to_path_buf();
         let source_url = source_url.map(str::to_string);
         let resolved = tokio::task::spawn_blocking(move || {
+            // No documents are resolved, so no loader decides any.
             crate::code_repo::resolve_code_repository(
                 &directory,
                 false,
                 true,
                 source_url.as_deref(),
+                &std::collections::HashSet::new(),
             )
         })
         .await
@@ -2928,8 +2930,13 @@ impl AddPipeline {
             .any(|input| matches!(input, DataInput::FilePath(_)))
         {
             let llm_available = self.llm_available;
+            let document_extensions = self.loaders.document_extensions();
             tokio::task::spawn_blocking(move || {
-                crate::code_repo::resolve_data_directories(inputs, llm_available)
+                crate::code_repo::resolve_data_directories(
+                    inputs,
+                    llm_available,
+                    &document_extensions,
+                )
             })
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)??
@@ -3087,12 +3094,14 @@ impl AddPipeline {
             .await?;
             let source_url = crate::resolve_repo::redact_repo_spec(&clone_url);
             let llm_available = self.llm_available;
+            let document_extensions = self.loaders.document_extensions();
             let repository = tokio::task::spawn_blocking(move || {
                 crate::code_repo::resolve_code_repository(
                     &repo_path,
                     true,
                     llm_available,
                     Some(&source_url),
+                    &document_extensions,
                 )
             })
             .await
@@ -3827,6 +3836,32 @@ mod tests {
         // A document type stays a document, unstamped.
         let processed = process_input_with_loaders(
             &upload("notes.md"),
+            &storage,
+            &loaders,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert_eq!(processed.system_metadata, None);
+    }
+
+    /// Python's `LoaderEngine.get_loader` skips a loader that is not
+    /// registered in its default order too: a registry built without the code
+    /// loader reads a `.py` file with the text loader instead of failing.
+    #[tokio::test]
+    async fn a_registry_without_the_code_loader_reads_a_code_file_as_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = cognee_storage::LocalStorage::new(dir.path().to_path_buf());
+        let mut loaders = LoaderRegistry::new();
+        loaders.register("text", Arc::new(crate::loaders::text::TextLoader));
+        let processed = process_input_with_loaders(
+            &DataInput::Binary {
+                name: "a.py".to_string(),
+                data: b"x = 1\n".to_vec(),
+            },
             &storage,
             &loaders,
             HashAlgorithm::Md5,
