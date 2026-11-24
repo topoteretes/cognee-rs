@@ -337,7 +337,7 @@ struct Admission {
     /// How many documents have been admitted, for the callers waiting.
     admitted_count: tokio::sync::watch::Sender<usize>,
     admitted: Vec<AtomicBool>,
-    permits: Vec<Mutex<Option<OwnedSemaphorePermit>>>,
+    permits: Vec<Mutex<PermitSlot>>,
     stop: StopFlag,
     unsaved: AtomicUsize,
     peak: AtomicUsize,
@@ -350,7 +350,9 @@ impl Admission {
             next: tokio::sync::Mutex::new(0),
             admitted_count: tokio::sync::watch::Sender::new(0),
             admitted: (0..documents).map(|_| AtomicBool::new(false)).collect(),
-            permits: (0..documents).map(|_| Mutex::new(None)).collect(),
+            permits: (0..documents)
+                .map(|_| Mutex::new(PermitSlot::default()))
+                .collect(),
             stop,
             unsaved: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
@@ -388,10 +390,14 @@ impl Admission {
     }
 
     /// Admit `document` (and every document before it) if that needs no
-    /// wait; `false` when a permit is not free right now.
+    /// wait; `false` when a permit is not free right now, or the stage has
+    /// stopped (which admits nothing).
     fn try_admit(&self, document: usize) -> bool {
-        if self.is_admitted(document) || self.stop.is_raised() {
+        if self.is_admitted(document) {
             return true;
+        }
+        if self.stop.is_raised() {
+            return false;
         }
         let Ok(mut next) = self.next.try_lock() else {
             return false;
@@ -412,26 +418,41 @@ impl Admission {
         let mut slot = self.permits[document]
             .lock()
             .expect("lock poison is unrecoverable");
-        *slot = permit;
         self.admitted[document].store(true, Ordering::Release);
+        if slot.released {
+            // Saved or dropped before it was admitted (a document with no
+            // calls, reached by a later document's admission): its permit
+            // goes straight back.
+            return;
+        }
+        slot.permit = permit;
         let unsaved = self.unsaved.fetch_add(1, Ordering::AcqRel) + 1;
         self.peak.fetch_max(unsaved, Ordering::AcqRel);
     }
 
-    /// `document` was saved or dropped: its place in the window is free.
+    /// `document` was saved or dropped: its place in the window is free, and
+    /// stays free — a later admission of it holds no permit.
     fn release(&self, document: usize) {
         if document >= self.permits.len() {
             return;
         }
         #[allow(clippy::expect_used, reason = "lock poison is unrecoverable")]
-        let permit = self.permits[document]
+        let mut slot = self.permits[document]
             .lock()
-            .expect("lock poison is unrecoverable")
-            .take();
-        if permit.is_some() {
+            .expect("lock poison is unrecoverable");
+        slot.released = true;
+        if slot.permit.take().is_some() {
             self.unsaved.fetch_sub(1, Ordering::AcqRel);
         }
     }
+}
+
+/// One document's place in the [`Admission`] window.
+#[derive(Default)]
+struct PermitSlot {
+    permit: Option<OwnedSemaphorePermit>,
+    /// Saved or dropped: a permit handed to it later is returned at once.
+    released: bool,
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────────
@@ -608,16 +629,27 @@ async fn dispatch_backend(
         }
         let mut block: Vec<usize> = Vec::new();
         while next < plan.calls.len() && block.len() < block_size {
+            // A stop raised while this block was being filled (by a summary,
+            // or by the wait for admission) ends dispatch: the loop's head
+            // sends the rest as skipped.
+            if fail_fast && stop.is_raised() {
+                break;
+            }
             let document = plan.call_document[next];
             if !admission.try_admit(document) {
-                if block.is_empty() {
-                    admission.admit(document).await;
-                } else {
+                if !block.is_empty() {
+                    break;
+                }
+                admission.admit(document).await;
+                if fail_fast && stop.is_raised() {
                     break;
                 }
             }
             block.push(next);
             next += 1;
+        }
+        if block.is_empty() {
+            continue;
         }
         let chunks: Vec<&DocumentChunk> = block
             .iter()
@@ -1459,6 +1491,8 @@ mod tests {
         summary_delay_ms: u64,
         /// Reverse the delays: later chunks first.
         reverse: bool,
+        /// Fail the summary of a chunk whose text holds `FAILSUM`.
+        fail_summaries: bool,
     }
 
     fn user_text(messages: &[Message]) -> String {
@@ -1517,6 +1551,9 @@ mod tests {
             let properties = json_schema.get("properties");
             if properties.and_then(|p| p.get("summary")).is_some() {
                 self.summaries_started.fetch_add(1, Ordering::SeqCst);
+                if self.fail_summaries && text.contains("FAILSUM") {
+                    return Err(LlmError::ApiError("the summary fails".to_string()));
+                }
                 tokio::time::sleep(Duration::from_millis(self.summary_delay_ms)).await;
                 return Ok(json!({"summary": format!("About {text}"), "description": "d"}));
             }
@@ -2340,5 +2377,57 @@ mod tests {
                 assert_eq!(retained, vec![&expected], "the retained vector is replaced");
             }
         }
+    }
+
+    // ── Admission and the backend under a stop (review fixes) ────────────
+
+    /// A document released before it was admitted (no calls of its own, saved
+    /// while an earlier one still held the window) holds no permit when a
+    /// later admission reaches it, so the later document is admitted.
+    #[tokio::test]
+    async fn a_document_released_before_admission_holds_no_permit() {
+        let admission = Admission::new(3, 1, StopFlag::new());
+        admission.admit(0).await;
+        let waiting = admission.admit(2);
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        admission.release(0);
+        admission.release(1);
+        tokio::time::timeout(Duration::from_secs(5), &mut waiting)
+            .await
+            .expect("document 2 is admitted");
+        assert_eq!(admission.unsaved.load(Ordering::Acquire), 1);
+        assert!(admission.is_admitted(1) && admission.is_admitted(2));
+    }
+
+    /// Under `FailFast`, a failed summary stops the graph backend too: once
+    /// it is in, no further block is sent to the backend.
+    #[tokio::test]
+    async fn a_stop_ends_the_backend_dispatch() {
+        let test = Stores::new().await;
+        let backend = Arc::new(crate::graph_backend::MockChunkGraphExtractor::new());
+        let mut specs: Vec<DocumentSpec<'_>> = vec![(1, vec![("Alice:Person FAILSUM", None)])];
+        specs.extend((2..=10).map(|id| (id as u128, vec![("Bob:Person", None)])));
+        let mut config = CognifyConfig::default()
+            .with_max_unsaved_documents(1)
+            .with_rollback_scope(RollbackScope::FailedItems);
+        config.graph_backend = Some(crate::config::GraphBackendHandle(backend.clone()));
+        let llm = Arc::new(TextLlm {
+            fail_summaries: true,
+            ..TextLlm::default()
+        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(20),
+            run(&test, llm, &input(&specs), &config),
+        )
+        .await
+        .expect("the stage finishes");
+        let (result, _) = outcome.unwrap();
+        assert!(
+            backend.chunks_seen() < 10,
+            "the backend saw {} chunks after the stop",
+            backend.chunks_seen()
+        );
+        assert!(!result.failures.unreached_items().is_empty());
     }
 }
