@@ -343,15 +343,28 @@ jobs:
           cargo test -p cognee-graph --features postgres,testing \
             --test pg_graph_close -- --nocapture 2>&1 | tee pggraph-close.log
 
+      # Cognify against a Postgres graph (SDK-1694 O4a review): a URL document
+      # and an ontology class hierarchy, whose edges the persistence layer once
+      # wrote before their endpoint nodes, which `graph_edge`'s foreign keys
+      # reject. A cognify-crate target, so this lane must name it or nothing
+      # runs it.
+      - name: Run cognify nodes-before-edges test (Postgres graph)
+        run: |
+          set -o pipefail
+          cargo test -p cognee-cognify --features pggraph \
+            --test nodes_before_edges_pggraph -- --nocapture 2>&1 | tee pggraph-cognify.log
+
       - name: Assert the suite really executed
         run: |
           bash scripts/ci/assert_pg_suite_ran.sh --label PgGraph \
             --log pggraph-integration.log --min-tests 31 \
             --log pggraph-lib.log         --min-tests 1 \
             --log pggraph-close.log --min-tests 3 \
+            --log pggraph-cognify.log --min-tests 1 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
             --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
-            --require-test close_releases_the_pool_while_the_adapter_is_still_held
+            --require-test close_releases_the_pool_while_the_adapter_is_still_held \
+            --require-test every_ledger_edge_reaches_a_postgres_graph
 
   # ── pgvector adapter tests (mirror of ci.yml's `pgvector-postgres`) ──
   # Keyless for the same reason as the graph lane above: a pgvector service

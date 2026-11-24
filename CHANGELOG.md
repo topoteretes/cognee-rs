@@ -24,10 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edges' ledger rows, the WebPage / WebSite nodes, the chunks, summaries,
   entity types, documents, custom-schema graphs, structural edges, vectors,
   edge evidence and the post-run DLT schema nodes and FK edges — now all go
-  through one internal layer that writes the ledger rows first, then the
-  graph (in the order the stages used to), then the vectors, then the
-  evidence. **What a run stores is unchanged**, pinned as sets by
-  `tests/persist_equivalence.rs`. What moved:
+  through one internal layer that writes the ledger rows first, then every
+  graph node, then every graph edge, then the vectors, then the evidence.
+  **What a run stores is unchanged** on the mock stores, pinned as sets by
+  `tests/persist_equivalence.rs`; on Ladybug and the Postgres graph the
+  node-first order also fixes edges that were dropped or failed (see Fixed).
+  What moved:
   - The extraction stage (`make_extract_graph_task*`,
     `make_extract_graph_and_summarize_task*`) **writes nothing any more**; the
     `add_data_points` stage writes everything. A custom pipeline that runs the
@@ -2115,6 +2117,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `make_*_task_with_rank` builders let a custom pipeline supply its own values.
 
 ### Fixed
+
+- **URL documents and ontology class hierarchies store all their edges
+  (SDK-1694, O4a review).** Cognify wrote some edges before their endpoint
+  nodes: a URL document's `SOURCED_FROM` chunk → WebPage edges before the
+  chunks, and an ontology's type → type `is_a` edges (`Algorithm → Technology`)
+  before the EntityType nodes. On Ladybug, whose edge write matches both
+  endpoints first, those edges were silently dropped while their ledger rows
+  were kept; on the Postgres graph, whose `graph_edge` has foreign keys,
+  cognifying such a document failed with `graph_edge_source_id_fkey`. The
+  persistence layer now writes every node of a run before any edge. Regression tests: `nodes_before_edges_ladybug` and, in the Postgres
+  graph CI lane, `nodes_before_edges_pggraph` (new `pggraph` test feature of
+  `cognee-cognify`).
 
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)

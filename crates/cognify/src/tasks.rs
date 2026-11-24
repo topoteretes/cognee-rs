@@ -1593,8 +1593,9 @@ pub struct PersistHandoff {
     ///
     /// Before O4a the extraction stage wrote the entity nodes to the graph and
     /// only then stamped them, so their graph nodes kept these values while
-    /// their ledger rows and vector payloads, written later, carried the
-    /// stamp. The persistence layer writes the graph nodes with these values
+    /// their ledger rows (whose `attributes` serialize the entity), written
+    /// later, carried the stamp. Vector payloads carry no provenance stamp at
+    /// all (`index_schema_payload`). The persistence layer writes the graph nodes with these values
     /// to store exactly what it stored then. Making the graph agree with the
     /// ledger is a change of stored output, left to a later stage.
     pub(crate) entity_graph_stamps: HashMap<Uuid, ProvenanceStamp>,
@@ -5542,7 +5543,8 @@ pub(crate) fn provenance_rows(
 
     // ── Provenance nodes ────────────────────────────────────────────────
     // Entities. `extraction_ownership_rows` builds the same rows, with the same
-    // ids; the persistence layer writes each once.
+    // ids; both are written, so these rows are upserted twice per group
+    // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
         entity_provenance_rows(id, entities, &chunk_data_map, producers);
 

@@ -27,16 +27,37 @@
 //!    web-page rows, the custom-graph rows, the provenance rows (chunks,
 //!    entities, semantic edges, summaries, entity types, documents, structural
 //!    edges), then the DLT rows.
-//! 2. **Graph writes, in the order the stages used to make them**: entity and
-//!    Timestamp nodes, semantic edges; WebPage / WebSite nodes and the edges
-//!    the graph does not hold yet; chunk, summary, entity-type and document
-//!    nodes, custom nodes and edges, structural edges; DLT nodes and edges.
-//!    The order is kept on purpose: a backend that drops an edge whose
-//!    endpoint does not exist yet (Ladybug's `MATCH … MERGE`) stores the same
-//!    edges it did before.
-//! 3. **Vector points**: chunks, entities, entity types, summaries, edge
+//! 2. **Graph nodes, all of them**: entities, Timestamps, WebPage / WebSite,
+//!    chunks, summaries, entity types, documents, custom nodes, DLT schema
+//!    nodes.
+//! 3. **Graph edges, only then**: semantic (extracted and ontology) edges, the
+//!    web edges the graph does not hold yet, custom edges, structural edges,
+//!    DLT edges. Every endpoint a group's edges name is a node of the same
+//!    group (or was written by an earlier group), so it exists by now. This
+//!    matters: Ladybug's `add_edges` is `UNWIND … MATCH … MERGE` and silently
+//!    drops an edge whose endpoint does not exist, and Postgres' `graph_edge`
+//!    has foreign keys to `graph_node`, so the write fails. Before this order,
+//!    the stages wrote the ontology's type→type `is_a` edges before the
+//!    EntityType nodes and a URL document's `SOURCED_FROM` edges before its
+//!    chunks.
+//! 4. **Vector points**: chunks, entities, entity types, summaries, edge
 //!    types, documents, then custom nodes and DLT schema nodes.
-//! 4. **Edge evidence**, only after the graph and vector writes succeeded.
+//! 5. **Edge evidence**, only after the graph and vector writes succeeded.
+//!
+//! # Across groups
+//!
+//! The order holds within a group. An edge whose endpoint only a **later**
+//! group writes would still reach the graph first; a caller that splits a run
+//! into groups must put every endpoint of a group's edges in that group or an
+//! earlier one. Per-document groups do by construction: an entity, type or
+//! Timestamp is in every group whose document produced it, and a node already
+//! written by an earlier group is skipped, not missing.
+//!
+//! # The first group costs no copy
+//!
+//! A group is filtered against what earlier groups wrote. With no earlier
+//! group (the pipeline's single group) there is nothing to filter, so the
+//! borrowed slices go to the stores as they are (SDK-507).
 //!
 //! Any failure is returned at once and fails the run, as every persistence
 //! failure did before.
@@ -155,12 +176,23 @@ struct Written {
     ledger_nodes: HashSet<Uuid>,
     ledger_edges: HashSet<Uuid>,
     graph_nodes: HashSet<String>,
-    graph_edges: HashSet<(String, String, String)>,
+    /// `(source, target, relationship)` as [`edge_key`]: 16 bytes per edge
+    /// instead of three strings.
+    graph_edges: HashSet<Uuid>,
     vectors: HashSet<(&'static str, Uuid)>,
     evidence: HashSet<Uuid>,
 }
 
 impl Written {
+    fn is_empty(&self) -> bool {
+        self.ledger_nodes.is_empty()
+            && self.ledger_edges.is_empty()
+            && self.graph_nodes.is_empty()
+            && self.graph_edges.is_empty()
+            && self.vectors.is_empty()
+            && self.evidence.is_empty()
+    }
+
     fn absorb(&mut self, other: Written) {
         self.ledger_nodes.extend(other.ledger_nodes);
         self.ledger_edges.extend(other.ledger_edges);
@@ -228,12 +260,38 @@ impl<'s> Tracker<'s> {
     }
 
     fn new_edge(&self, edge: &EdgeData) -> bool {
-        !self
-            .earlier
-            .graph_edges
-            .contains(&(edge.0.clone(), edge.1.clone(), edge.2.clone()))
+        !self.earlier.graph_edges.contains(&edge_key(edge))
     }
 
+    /// Whether an earlier group wrote anything. When none did, nothing can be
+    /// filtered out, and the group's slices are written as they are.
+    fn first_group(&self) -> bool {
+        self.earlier.is_empty()
+    }
+}
+
+/// An edge's identity in [`Written::graph_edges`]: a v5 UUID of its exact
+/// `(source, target, relationship)` strings, separated so no two keys meet.
+fn edge_key(edge: &EdgeData) -> Uuid {
+    let key = format!("{}\u{1f}{}\u{1f}{}", edge.0, edge.1, edge.2);
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, key.as_bytes())
+}
+
+/// `items` without the ones `keep` rejects — borrowed as they are when
+/// nothing can be rejected (the first group), so that group copies nothing.
+fn fresh<'a, T: Clone>(
+    items: &'a [T],
+    first_group: bool,
+    keep: impl Fn(&T) -> bool,
+) -> Cow<'a, [T]> {
+    if first_group {
+        Cow::Borrowed(items)
+    } else {
+        Cow::Owned(items.iter().filter(|item| keep(item)).cloned().collect())
+    }
+}
+
+impl Tracker<'_> {
     fn new_point(&self, class: &'static str, id: Uuid) -> bool {
         !self.earlier.vectors.contains(&(class, id))
     }
@@ -354,18 +412,18 @@ pub(crate) async fn persist_group(
         write_ledger(context.db, &mut tracker, nodes, edges).await?;
     }
 
-    // ── 2. Graph, in the order the stages wrote it before O4a ───────────────
+    // ── 2. Graph nodes: every node of the group, before any edge ────────────
     let graph_db = context.graph_db.as_ref();
-    write_extraction_graph(
+    write_extraction_nodes(
         graph_db,
         &mut tracker,
         group.entities,
         group.entity_graph_stamps,
         group.timestamps,
-        group.edges,
     )
     .await?;
-    write_web_page_graph(graph_db, &mut tracker, group.web_pages).await?;
+    let (web_nodes, web_edges) = crate::tasks::web_page_graph(group.web_pages);
+    write_raw_nodes(graph_db, &mut tracker, web_nodes.into_iter()).await?;
 
     // Python stores DocumentChunks, TextSummaries and EntityTypes as graph
     // nodes in `add_data_points`.
@@ -404,6 +462,17 @@ pub(crate) async fn persist_group(
         dynamic_nodes.values().map(|node| node.to_graph_value()),
     )
     .await?;
+    if let Some(dlt) = group.dlt {
+        let written =
+            write_raw_nodes(graph_db, &mut tracker, dlt.schema_nodes.iter().cloned()).await?;
+        if written > 0 {
+            info!("Added {written} DLT schema nodes to graph");
+        }
+    }
+
+    // ── 3. Graph edges, now that every endpoint exists ──────────────────────
+    write_semantic_edges(graph_db, &mut tracker, group.edges).await?;
+    write_missing_edges(graph_db, &mut tracker, web_edges).await?;
     write_edges(graph_db, &mut tracker, &dynamic_edges).await?;
     // The structural edges `get_graph_from_model` discovered above.
     let written = write_edges(graph_db, &mut tracker, &structural_edges).await?;
@@ -411,18 +480,13 @@ pub(crate) async fn persist_group(
         info!("Upserted {written} structural edges");
     }
     if let Some(dlt) = group.dlt {
-        let written =
-            write_raw_nodes(graph_db, &mut tracker, dlt.schema_nodes.iter().cloned()).await?;
-        if written > 0 {
-            info!("Added {written} DLT schema nodes to graph");
-        }
         let written = write_edges(graph_db, &mut tracker, &dlt.edges).await?;
         if written > 0 {
             info!("Added {written} DLT FK edges to graph");
         }
     }
 
-    // ── 3. Vector points ────────────────────────────────────────────────────
+    // ── 4. Vector points ────────────────────────────────────────────────────
     let outputs = write_vectors(
         group,
         context,
@@ -434,7 +498,7 @@ pub(crate) async fn persist_group(
     )
     .await?;
 
-    // ── 4. Edge evidence ────────────────────────────────────────────────────
+    // ── 5. Edge evidence ────────────────────────────────────────────────────
     // Only after the graph and vector writes succeeded (Python captures at the
     // end of `add_data_points`, `add_data_points.py:449`): the sidecar then
     // never describes an edge the graph does not hold. Python captures over
@@ -477,6 +541,11 @@ pub(crate) async fn persist_group(
 /// [`crate::tasks::extract_graph_from_data`] driven outside the pipeline: the
 /// extraction ownership rows, then the entity and Timestamp nodes and the
 /// semantic edges — exactly the steps [`persist_group`] takes for them.
+///
+/// It writes no EntityType node, so an ontology edge between types (or from an
+/// entity to its type) names an endpoint only `add_data_points` writes; on
+/// Ladybug such an edge is dropped and on Postgres it fails, as it always did
+/// on this path. The pipeline does not use it.
 pub(crate) async fn persist_extraction(
     db: &dyn RelationalDb,
     graph_db: &dyn GraphDBTrait,
@@ -501,20 +570,22 @@ pub(crate) async fn persist_extraction(
              edges before writing them"
         );
     }
-    write_extraction_graph(
+    write_extraction_nodes(
         graph_db,
         &mut tracker,
         &graph.entities,
         &graph.handoff.entity_graph_stamps,
         &graph.timestamps,
-        &graph.edges,
     )
-    .await
+    .await?;
+    write_semantic_edges(graph_db, &mut tracker, &graph.edges).await
 }
 
 /// The web-page part of the layer on its own, for
 /// [`crate::tasks::create_web_page_nodes`] driven outside the pipeline: the
 /// ownership rows, then the nodes and the edges the graph does not hold yet.
+/// The `SOURCED_FROM` edges name the chunks, which this path does not write:
+/// the caller must have written them first.
 pub(crate) async fn persist_web_pages(
     db: &dyn RelationalDb,
     graph_db: &dyn GraphDBTrait,
@@ -525,7 +596,9 @@ pub(crate) async fn persist_web_pages(
     let mut tracker = Tracker::new(&earlier);
     let (nodes, edges) = crate::tasks::web_page_ownership_rows(ledger, pages);
     write_ledger(db, &mut tracker, nodes, edges).await?;
-    write_web_page_graph(graph_db, &mut tracker, pages).await
+    let (web_nodes, web_edges) = crate::tasks::web_page_graph(pages);
+    write_raw_nodes(graph_db, &mut tracker, web_nodes.into_iter()).await?;
+    write_missing_edges(graph_db, &mut tracker, web_edges).await
 }
 
 /// Write the ledger rows no earlier group wrote, in one transaction, and
@@ -553,14 +626,13 @@ async fn write_ledger(
     Ok((nodes.len(), edges.len()))
 }
 
-/// The entity and Timestamp nodes, then the semantic edges.
-async fn write_extraction_graph(
+/// The entity and Timestamp nodes.
+async fn write_extraction_nodes(
     graph_db: &dyn GraphDBTrait,
     tracker: &mut Tracker<'_>,
     entities: &[GraphNodePair],
     entity_graph_stamps: &HashMap<Uuid, ProvenanceStamp>,
     timestamps: &[TimestampNode],
-    edges: &[GraphEdgePair],
 ) -> Result<(), CognifyError> {
     // An entity whose graph node keeps an earlier stamp is written as a copy
     // carrying it; every other one is written as is.
@@ -595,6 +667,15 @@ async fn write_extraction_graph(
     if written > 0 {
         info!("Upserted {written} Timestamp nodes");
     }
+    Ok(())
+}
+
+/// The semantic (extracted and ontology) edges.
+async fn write_semantic_edges(
+    graph_db: &dyn GraphDBTrait,
+    tracker: &mut Tracker<'_>,
+    edges: &[GraphEdgePair],
+) -> Result<(), CognifyError> {
     let edge_data: Vec<EdgeData> = edges.iter().map(semantic_edge_data).collect();
     let written = write_edges(graph_db, tracker, &edge_data).await?;
     if written > 0 {
@@ -603,14 +684,12 @@ async fn write_extraction_graph(
     Ok(())
 }
 
-/// The WebPage / WebSite nodes, then the edges the graph does not hold yet.
-async fn write_web_page_graph(
+/// The web-page edges the graph does not hold yet.
+async fn write_missing_edges(
     graph_db: &dyn GraphDBTrait,
     tracker: &mut Tracker<'_>,
-    pages: &[WebPage],
+    candidate_edges: Vec<EdgeData>,
 ) -> Result<(), CognifyError> {
-    let (nodes, candidate_edges) = crate::tasks::web_page_graph(pages);
-    write_raw_nodes(graph_db, tracker, nodes.into_iter()).await?;
     if candidate_edges.is_empty() {
         return Ok(());
     }
@@ -696,11 +775,7 @@ async fn write_edges(
     tracker: &mut Tracker<'_>,
     edges: &[EdgeData],
 ) -> Result<usize, CognifyError> {
-    let fresh: Vec<EdgeData> = edges
-        .iter()
-        .filter(|edge| tracker.new_edge(edge))
-        .cloned()
-        .collect();
+    let fresh = fresh(edges, tracker.first_group(), |edge| tracker.new_edge(edge));
     if fresh.is_empty() {
         return Ok(0);
     }
@@ -708,12 +783,7 @@ async fn write_edges(
         .add_edges(&fresh)
         .await
         .map_err(CognifyError::from)?;
-    tracker
-        .now
-        .graph_edges
-        .extend(fresh.iter().map(|(source, target, relationship, _)| {
-            (source.clone(), target.clone(), relationship.clone())
-        }));
+    tracker.now.graph_edges.extend(fresh.iter().map(edge_key));
     Ok(fresh.len())
 }
 
@@ -808,30 +878,19 @@ async fn write_vectors(
     }
     edge_types.retain(|edge_type| tracker.new_point(EDGE_TYPE_POINT, edge_type.base.id));
 
-    let chunks: Vec<DocumentChunk> = group
-        .chunks
-        .iter()
-        .filter(|chunk| tracker.new_point(CHUNK_POINT, chunk.base.id))
-        .cloned()
-        .collect();
-    let entities: Vec<GraphNodePair> = group
-        .entities
-        .iter()
-        .filter(|pair| tracker.new_point(ENTITY_POINT, pair.entity.base.id))
-        .cloned()
-        .collect();
-    let summaries: Vec<TextSummary> = group
-        .summaries
-        .iter()
-        .filter(|summary| tracker.new_point(SUMMARY_POINT, summary.base.id))
-        .cloned()
-        .collect();
-    let documents: Vec<Document> = group
-        .documents
-        .iter()
-        .filter(|document| tracker.new_point(DOCUMENT_POINT, document.base.id))
-        .cloned()
-        .collect();
+    let first = tracker.first_group();
+    let chunks = fresh(group.chunks, first, |chunk| {
+        tracker.new_point(CHUNK_POINT, chunk.base.id)
+    });
+    let entities = fresh(group.entities, first, |pair| {
+        tracker.new_point(ENTITY_POINT, pair.entity.base.id)
+    });
+    let summaries = fresh(group.summaries, first, |summary| {
+        tracker.new_point(SUMMARY_POINT, summary.base.id)
+    });
+    let documents = fresh(group.documents, first, |document| {
+        tracker.new_point(DOCUMENT_POINT, document.base.id)
+    });
     let embedded_types: HashSet<Uuid> = entity_types
         .iter()
         .map(|entity_type| entity_type.base.id)
@@ -1611,6 +1670,28 @@ mod tests {
         };
         assert_eq!(edge_type_ids(&split_outputs), edge_type_ids(&one_outputs));
         assert_eq!(split_outputs.edge_types.len(), one_outputs.edge_types.len());
+    }
+
+    /// The first (or only) group of a run is written through as borrowed:
+    /// nothing was written before it, so nothing is filtered or copied. A
+    /// later group is filtered against what the earlier ones wrote.
+    #[test]
+    fn the_first_group_writes_its_slices_through_uncopied() {
+        let items = vec![1, 2, 3];
+        let none_earlier = Written::default();
+        let tracker = Tracker::new(&none_earlier);
+        assert!(tracker.first_group());
+        match fresh(&items, tracker.first_group(), |_| false) {
+            Cow::Borrowed(slice) => assert!(std::ptr::eq(slice, items.as_slice())),
+            Cow::Owned(_) => panic!("the first group must not copy its slices"),
+        }
+
+        let mut some_earlier = Written::default();
+        some_earlier.graph_nodes.insert("x".to_string());
+        let tracker = Tracker::new(&some_earlier);
+        assert!(!tracker.first_group());
+        let kept = fresh(&items, tracker.first_group(), |item| *item != 2);
+        assert_eq!(kept.as_ref(), &[1, 3]);
     }
 
     #[tokio::test]
