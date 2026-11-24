@@ -2163,8 +2163,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     instead of being skipped.
   - `cli add-and-cognify` takes the keyless path `cli cognify` has: a code
     project is cognified without an LLM, and a graph extractor that cannot be
-    built (the keyless `auto` default without GLiNER) fails only a run with a
-    document to extract. Both commands no longer fail keyless over the
+    built for the keyless `auto` default (no LLM, no GLiNER) fails only a run
+    with a document to extract; any other extractor that cannot be built
+    still fails before the add. Both commands no longer fail keyless over the
     transcriber (`ComponentManager::cognify_transcriber`).
   - `cli cognify` checks `--extractor` and `graph_extraction.backend` up front
     again (`ComponentManager::check_graph_extractor_selection`), so a kind
@@ -2172,12 +2173,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `AddPipeline::add_code_repository` resolves a relative repository path,
     as a directory `add` does, so the stored `repo_path` does not depend on
     the working directory of a later run.
-  - A code graph load whose edge write fails is not recorded as done (the
-    snapshot stamp is written last), so the next load writes the edges. The
-    node write now also restores the structural edges (`part_of`,
-    `belongs_to_set`) of nodes it finds unchanged: a failed load had already
-    stored its new nodes, so the retry skipped them and never wrote their
-    `part_of` edges.
+  - A code graph load retried after a failed edge write now ends with every
+    edge. The failed load had already stored its new nodes, so the retry
+    found them unchanged, skipped them, and never wrote their `part_of`
+    edges. The node write now restores the missing structural edges
+    (`part_of`, `belongs_to_set`) of the whole snapshot, and the node sets
+    they point to.
 
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)

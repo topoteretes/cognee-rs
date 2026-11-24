@@ -4432,15 +4432,22 @@ async fn cognify_in_scope(
             // Python skips per item inside `run_tasks_data_item_incremental`; Rust
             // skips for the dataset, before the pipeline is built, so a skipped
             // item is never classified, never chunked and never sent to an LLM.
-            // A row routing refuses (a legacy per-row DLT record) is never
-            // dropped as complete: the run's route task refuses it, so an
+            // A row routing refuses (a legacy per-row DLT record, a DLT-source
+            // row) is never dropped as complete: the run's route task refuses it, so an
             // earlier run that completed it cannot turn the refusal into a
             // silent skip. Python resolves the route before its per-item
             // incremental skip.
             let data_items = if effective_config.incremental_loading {
                 let refused: HashSet<Uuid> = data_items
                     .iter()
-                    .filter(|item| crate::routing::cognify_route_for(item).is_err())
+                    .filter(|item| {
+                        !matches!(
+                            crate::routing::cognify_route_for(item),
+                            Ok(crate::routing::CognifyRoute::Standard
+                                | crate::routing::CognifyRoute::Code
+                                | crate::routing::CognifyRoute::CodeRepo)
+                        )
+                    })
                     .map(|item| item.id)
                     .collect();
                 let pending: HashSet<Uuid> =

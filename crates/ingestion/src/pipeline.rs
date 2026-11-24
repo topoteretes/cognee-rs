@@ -3737,11 +3737,14 @@ mod tests {
     #[tokio::test]
     async fn add_code_repository_stores_a_relative_path_resolved() {
         let (pipeline, _db) = make_pipeline().await;
-        // Inside the working directory, so it can be named relatively.
-        let dir = tempfile::tempdir_in(".").unwrap();
+        // Under the workspace `target/` (tests run in the crate directory), so
+        // it can be named relatively without touching the source tree.
+        let target = std::path::Path::new("../../target");
+        std::fs::create_dir_all(target).unwrap();
+        let dir = tempfile::tempdir_in(target).unwrap();
         std::fs::write(dir.path().join("pyproject.toml"), "[project]\n").unwrap();
         std::fs::write(dir.path().join("main.py"), "x = 1\n").unwrap();
-        let relative = std::path::Path::new(".").join(dir.path().file_name().unwrap());
+        let relative = target.join(dir.path().file_name().unwrap());
 
         let row = pipeline
             .add_code_repository(&relative, "code", Uuid::new_v4(), None, None, None)

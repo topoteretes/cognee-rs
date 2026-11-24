@@ -53,12 +53,13 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             .map_err(|error| {
                 CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
             })?;
-        // Built now when it can be, so a backend that cannot serve
-        // `--graph-schema` fails before the add. A build that fails (`auto`
-        // with neither an LLM nor a keyless extractor) is only fatal when an
-        // added item takes the standard route: a code project needs neither
-        // the extractor nor the LLM (Python's `needs_llm` union over the
-        // routes in play), as `cli cognify` decides.
+        // Built now, so a backend that cannot be built or cannot serve
+        // `--graph-schema` fails before the add. Only the keyless `auto`
+        // default that finds nothing to resolve to (no LLM, no keyless
+        // extractor) is deferred: it is fatal only when an added item takes
+        // the standard route, since a code project needs neither the
+        // extractor nor the LLM (Python's `needs_llm` union over the routes
+        // in play), as `cli cognify` decides.
         let mut cognify_config = flag_config;
         let graph_backend_error = match cm
             .graph_extractor(
@@ -73,7 +74,18 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
                 None
             }
             Ok(None) => None,
-            Err(error) => Some(error),
+            Err(error)
+                if cm
+                    .resolve_graph_extractor(args.extractor.as_deref(), &|_| false)
+                    .from_auto =>
+            {
+                Some(error)
+            }
+            Err(error) => {
+                return Err(CliError::Runtime(format!(
+                    "Graph extractor initialization failed: {error}"
+                )));
+            }
         };
 
         let database = cm

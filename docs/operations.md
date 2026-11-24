@@ -414,7 +414,9 @@ points** (six vector collections + provenance to the relational DB) →
 `source: "dlt"`) is one `DltRow` chunk indexed into `DltRow_text`, not
 `DocumentChunk_text`; the last step adds its `SchemaTable`, `SchemaRelationship`
 and `DltColumn` nodes (vector collections `SchemaTable_*`,
-`SchemaRelationship_*`, `DltColumn_properties`) and the row edges.
+`SchemaRelationship_*`, `DltColumn_properties`) and the row edges. Configurable via `CognifyConfig`
+(chunk strategy, custom prompts/schemas). Pipeline:
+[`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
 
 **Shared SQLite with Python.** Python's alembic revision `f2b4c6d8e0a1` moves
 every `external_metadata.source` of `"dlt"` / `"dlt_source"` into
@@ -423,9 +425,7 @@ was moved (`system_metadata.source == "dlt"`) is then refused as a legacy
 record (`CognifyRouteError::LegacyDltRecord`, Python's message), even when an
 earlier run completed it, as Python refuses it. A moved `"dlt_source"`
 manifest is refused too (`UnsupportedRoute`): Rust has no DLT-source route.
-Delete such rows and re-add the data. Configurable via `CognifyConfig`
-(chunk strategy, custom prompts/schemas). Pipeline:
-[`cognee-cognify`](../crates/cognify/) (`cognify()` / `cognify_datasets()`).
+Delete such rows and re-add the data.
 
 Each item first takes its **route** (`cognee_cognify::routing`, Python's
 `cognify_route_for`), read from its `system_metadata`: a code project's repo

@@ -41,7 +41,8 @@
 //! node, every node set, and every edge among them. It does not depend on a
 //! node's `part_of` edge, so a code node that lost it is still swept. The
 //! repositories' own nodes are picked from it by type and repository, as
-//! Python picks them from the whole graph. The detag takes the
+//! Python picks them from the whole graph. Its cost grows with every code
+//! node in the graph, other repositories' included, as Python's does. The detag takes the
 //! nodes' own tags from the node write's pre-write read instead, as Python
 //! does, since the write replaces the tags of the nodes it rewrites.
 //!
@@ -657,20 +658,39 @@ pub async fn add_code_graph_data_points(
             (source.clone(), target.clone(), relationship.clone())
         })
         .collect();
-    if !to_write.is_empty() {
-        let (nodes, edges) = storage_walk(&to_write)?;
-        graph
-            .add_nodes_raw(nodes.into_iter().map(|node| node.properties).collect())
-            .await?;
-        if !missing_edges.is_empty() {
-            graph.add_edges(&missing_edges).await?;
-        }
-        // Graph before vectors: a vector never exists without its graph row.
-        if let Some(vectors) = vectors {
-            index_code_graph_vectors(vectors, &to_write, &edges).await?;
-        }
-    } else if !missing_edges.is_empty() {
+    // The node sets a missing edge points to are written with the nodes (an
+    // upsert of the same properties), so a restored `belongs_to_set` edge
+    // never points at a node set the graph lost: Postgres would refuse it.
+    let missing_targets: HashSet<&str> = missing_edges
+        .iter()
+        .map(|(_, target, _, _)| target.as_str())
+        .collect();
+    let (written, written_edges) = if to_write.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        storage_walk(&to_write)?
+    };
+    let written_ids: HashSet<Uuid> = written.iter().map(|node| node.id).collect();
+    let node_rows: Vec<Value> = written
+        .into_iter()
+        .chain(all_nodes.into_iter().filter(|node| {
+            node.class_name == "NodeSet"
+                && !written_ids.contains(&node.id)
+                && missing_targets.contains(node.id.to_string().as_str())
+        }))
+        .map(|node| node.properties)
+        .collect();
+    if !node_rows.is_empty() {
+        graph.add_nodes_raw(node_rows).await?;
+    }
+    if !missing_edges.is_empty() {
         graph.add_edges(&missing_edges).await?;
+    }
+    // Graph before vectors: a vector never exists without its graph row.
+    if !to_write.is_empty()
+        && let Some(vectors) = vectors
+    {
+        index_code_graph_vectors(vectors, &to_write, &written_edges).await?;
     }
 
     Ok(CodeGraphLoadState {

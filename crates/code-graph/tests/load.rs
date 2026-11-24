@@ -362,6 +362,33 @@ async fn an_unchanged_tagged_reload_writes_no_fact_node_and_no_edge() {
     assert_eq!(graph_shape(&graph).await, shape);
 }
 
+/// A tagged reload restores a node set the graph lost, with its
+/// `belongs_to_set` edges, though every code node is unchanged: the node set
+/// is written before the edges that point to it (a Postgres graph refuses an
+/// edge to a missing node).
+#[tokio::test]
+async fn a_tagged_reload_restores_a_lost_node_set_and_its_edges() {
+    let (_root, repo_path) = repo("snapshot:docs_and_flows");
+    let graph = MockGraphDB::new();
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
+        .await
+        .unwrap();
+    let shape = graph_shape(&graph).await;
+    let (nodes, _) = graph.get_graph_data().await.unwrap();
+    let node_set = nodes
+        .iter()
+        .find(|(_, node)| node["type"] == "NodeSet" && node["name"] == "team-a")
+        .map(|(id, _)| id.clone())
+        .expect("the team-a node set");
+    // Deleting the node set drops every edge into it too.
+    graph.delete_nodes(&[node_set.clone()]).await.unwrap();
+
+    load_code_graph(&graph, None, &config(), &repo_path, Some(&tag()), None)
+        .await
+        .unwrap();
+    assert_eq!(graph_shape(&graph).await, shape);
+}
+
 /// A repository whose node still carries a tag is loaded again even by an
 /// untagged call, which then removes the tag.
 #[tokio::test]
