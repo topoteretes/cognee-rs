@@ -49,22 +49,32 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
         // `graph_extraction.backend`, resolved before the add: an unregistered
         // kind must not get the documents ingested by a call that was always
         // going to fail (nor silently fall back to the LLM extractor).
-        let graph_backend = cm
+        cm.check_graph_extractor_selection(args.extractor.as_deref())
+            .map_err(|error| {
+                CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+            })?;
+        // Built now when it can be, so a backend that cannot serve
+        // `--graph-schema` fails before the add. A build that fails (`auto`
+        // with neither an LLM nor a keyless extractor) is only fatal when an
+        // added item takes the standard route: a code project needs neither
+        // the extractor nor the LLM (Python's `needs_llm` union over the
+        // routes in play), as `cli cognify` decides.
+        let mut cognify_config = flag_config;
+        let graph_backend_error = match cm
             .graph_extractor(
                 args.extractor.as_deref(),
                 &serde_json::Value::String(String::new()),
             )
             .await
-            .map_err(|error| {
-                CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
-            })?;
-        let mut cognify_config = flag_config;
-        if let Some(backend) = graph_backend {
-            cognify_config = cognify_config.with_graph_backend(backend);
-            // A configured backend cannot serve `--graph-schema`; fail before
-            // the add.
-            super::validate_cognify_config(&cognify_config)?;
-        }
+        {
+            Ok(Some(backend)) => {
+                cognify_config = cognify_config.with_graph_backend(backend);
+                super::validate_cognify_config(&cognify_config)?;
+                None
+            }
+            Ok(None) => None,
+            Err(error) => Some(error),
+        };
 
         let database = cm
             .database()
@@ -159,6 +169,26 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
             ))
         })?;
 
+        if let Some(error) = graph_backend_error {
+            let needs_llm = cognee::cognify::rollback::pending_routes_need_llm(
+                &*database,
+                dataset.id,
+                &added_data,
+                cognify_config.incremental_loading,
+            )
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!(
+                    "Failed to read completion markers for dataset '{dataset_name}': {error}"
+                ))
+            })?;
+            if needs_llm {
+                return Err(CliError::Runtime(format!(
+                    "Graph extractor initialization failed: {error}"
+                )));
+            }
+        }
+
         let graph_db = cm
             .graph_db()
             .await
@@ -184,11 +214,8 @@ pub fn run(args: AddAndCognifyArgs, cm: Arc<ComponentManager>) -> Result<(), Cli
                 CliError::Runtime(format!("Ontology initialization failed: {error}"))
             })?;
 
-        if let Some(transcriber) = cm
-            .transcriber()
-            .await
-            .map_err(|e| CliError::Runtime(format!("{e}")))?
-        {
+        // A transcriber that cannot be built fails only an audio document.
+        if let Some(transcriber) = cm.cognify_transcriber().await {
             cognify_config = cognify_config.with_transcriber(transcriber);
         }
 

@@ -614,12 +614,26 @@ async fn process_input_reusing(
             "text".to_string()
         } else {
             let sniffed = crate::file_type::guess_file_type(&collected, &original_extension);
+            // A loader that is not registered is skipped, as Python's
+            // `LoaderEngine.get_loader` does: a registry without the code
+            // loader reads a `.py` file as text. When no registered loader
+            // claims the file, the route an unregistered one would take is
+            // kept, so the add fails naming that loader (or reuses audio
+            // transcribed before) rather than with "no loader found".
             let doc_type = crate::file_type::route_loader_preferring(
                 &original_extension,
                 &sniffed,
                 preferred_loaders,
                 |doc_type| registry.get(doc_type).is_some(),
             )
+            .or_else(|| {
+                crate::file_type::route_loader_preferring(
+                    &original_extension,
+                    &sniffed,
+                    preferred_loaders,
+                    |_| true,
+                )
+            })
             .ok_or_else(|| {
                 Box::new(IngestionError::NoLoaderForFile {
                     extension: sniffed.extension.clone(),
@@ -2812,9 +2826,15 @@ impl AddPipeline {
     /// `dataset_name` for the owner. `source_url` (credential-free) records a
     /// cloned repository's remote as `system_metadata["repo_url"]`.
     ///
+    /// A relative `repo_path` is resolved against the working directory
+    /// (symlinks too, as a directory `add` and Python's `resolve()` do), so the
+    /// stored `repo_path`, and the row id pinned to it, never depend on where
+    /// a later cognify runs.
+    ///
     /// # Errors
     ///
-    /// The manifest cannot be built (an unreadable directory), what
+    /// The path cannot be resolved, the manifest cannot be built (an
+    /// unreadable directory), what
     /// [`add`](Self::add) raises, and [`IngestionError::CodeRepositoryMissing`]
     /// when the add stored no row.
     pub async fn add_code_repository(
@@ -2829,6 +2849,7 @@ impl AddPipeline {
         let directory = repo_path.to_path_buf();
         let source_url = source_url.map(str::to_string);
         let resolved = tokio::task::spawn_blocking(move || {
+            let directory = std::fs::canonicalize(&directory)?;
             // No documents are resolved, so no loader decides any.
             crate::code_repo::resolve_code_repository(
                 &directory,
@@ -3709,6 +3730,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(datasets.len(), 1);
+    }
+
+    /// A relative repository path is stored resolved, so the row (and its
+    /// pinned id) does not depend on the working directory of a later run.
+    #[tokio::test]
+    async fn add_code_repository_stores_a_relative_path_resolved() {
+        let (pipeline, _db) = make_pipeline().await;
+        // Inside the working directory, so it can be named relatively.
+        let dir = tempfile::tempdir_in(".").unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[project]\n").unwrap();
+        std::fs::write(dir.path().join("main.py"), "x = 1\n").unwrap();
+        let relative = std::path::Path::new(".").join(dir.path().file_name().unwrap());
+
+        let row = pipeline
+            .add_code_repository(&relative, "code", Uuid::new_v4(), None, None, None)
+            .await
+            .unwrap();
+        let stamp: serde_json::Value =
+            serde_json::from_str(row.system_metadata.as_deref().unwrap()).unwrap();
+        let stored = stamp["repo_path"].as_str().unwrap();
+        assert_eq!(
+            std::path::Path::new(stored),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
     }
 
     // -- code loader (SDK-1053 O9a) ---------------------------------------------

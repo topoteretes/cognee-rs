@@ -4432,8 +4432,27 @@ async fn cognify_in_scope(
             // Python skips per item inside `run_tasks_data_item_incremental`; Rust
             // skips for the dataset, before the pipeline is built, so a skipped
             // item is never classified, never chunked and never sent to an LLM.
+            // A row routing refuses (a legacy per-row DLT record) is never
+            // dropped as complete: the run's route task refuses it, so an
+            // earlier run that completed it cannot turn the refusal into a
+            // silent skip. Python resolves the route before its per-item
+            // incremental skip.
             let data_items = if effective_config.incremental_loading {
-                rollback::drop_already_complete(&*database, dataset_id, data_items).await?
+                let refused: HashSet<Uuid> = data_items
+                    .iter()
+                    .filter(|item| crate::routing::cognify_route_for(item).is_err())
+                    .map(|item| item.id)
+                    .collect();
+                let pending: HashSet<Uuid> =
+                    rollback::drop_already_complete(&*database, dataset_id, data_items.clone())
+                        .await?
+                        .iter()
+                        .map(|item| item.id)
+                        .collect();
+                data_items
+                    .into_iter()
+                    .filter(|item| pending.contains(&item.id) || refused.contains(&item.id))
+                    .collect()
             } else {
                 data_items
             };
@@ -4490,7 +4509,7 @@ async fn cognify_in_scope(
             // `STARTED` row, so startup recovery can prove a run abandoned. Marked
             // closed once the run reached a terminal status; a process that dies
             // mid-run leaves it behind, with its OS lock released.
-            let mut pipeline = build_cognify_pipeline(
+            let mut pipeline = build_standard_cognify_pipeline(
                 Arc::clone(&storage),
                 Arc::clone(&graph_db),
                 Arc::clone(&vector_db),
@@ -4507,37 +4526,13 @@ async fn cognify_in_scope(
             // every item still shares this one run and its completion
             // markers. A dataset of standard items keeps the plain pipeline.
             if needs_code_routes(&data_items) {
-                // The classify task takes the routed input, which carries
-                // the code routes' report into the standard stages'.
-                let classify = pipeline
-                    .tasks
-                    .iter_mut()
-                    .find(|task| task.name.as_deref() == Some(CLASSIFY_DOCUMENTS_TASK_NAME))
-                    .ok_or_else(|| {
-                        CognifyError::ContextBuild(
-                            "the cognify pipeline has no classify task to route into".to_string(),
-                        )
-                    })?;
-                classify.task = cognee_core::TaskInfo::from(make_classify_routed_documents_task(
-                    CLASSIFY_DOCUMENTS_TASK_RANK,
-                    effective_config.failure_policy(),
-                ))
-                .task;
-                pipeline.tasks.insert(
-                    0,
-                    cognee_core::TaskInfo::from(make_code_routes_task(
-                        Arc::clone(&storage),
-                        Arc::clone(&graph_db),
-                        Arc::clone(&database),
-                        effective_config.code_graph.clone(),
-                        effective_config.failure_policy(),
-                        CodeRepoLoadMode::Dataset,
-                        // cognify builds code graphs graph-only, as Python's
-                        // CODE_REPO route does (`graph_only=True`).
-                        None,
-                    ))
-                    .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
-                );
+                add_code_routes(
+                    &mut pipeline,
+                    Arc::clone(&storage),
+                    Arc::clone(&graph_db),
+                    Arc::clone(&database),
+                    &effective_config,
+                )?;
             }
 
             // The executor re-derives `PipelineRunInfo.pipeline_id` from
@@ -7330,10 +7325,17 @@ impl Chunker for InvalidChunker {
 }
 
 /// Build a complete cognify [`Pipeline`]:
-/// [`CognifyInput`] → classify → chunk → (extract_graph ‖ summarize) →
-/// add_data_points → [`CognifyResult`].
+/// [`CognifyInput`] → route → classify → chunk → (extract_graph ‖ summarize)
+/// → add_data_points → [`CognifyResult`].
 ///
-/// The third stage runs graph extraction and summarization concurrently over
+/// The route task runs every code-routed item (a code repository manifest, a
+/// code file) down its code graph route and hands only the standard items to
+/// classify, as [`cognify`] does for a run that has code items, so a caller
+/// that builds the pipeline itself never sends a manifest down the LLM path.
+/// A legacy per-row DLT record fails the run there
+/// ([`CognifyRouteError::LegacyDltRecord`](crate::routing::CognifyRouteError::LegacyDltRecord)).
+///
+/// The fourth stage runs graph extraction and summarization concurrently over
 /// the same chunks — see [`make_extract_graph_and_summarize_task`].
 ///
 /// The `user_id` and `tenant_id` parameters are threaded through all pipeline
@@ -7343,6 +7345,82 @@ impl Chunker for InvalidChunker {
 /// tracking, etc.), pass the result to [`cognee_core::execute`].
 #[allow(clippy::too_many_arguments)]
 pub fn build_cognify_pipeline(
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    llm: Arc<dyn Llm>,
+    db: Arc<dyn RelationalDb>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    config: CognifyConfig,
+) -> Pipeline {
+    let mut pipeline = build_standard_cognify_pipeline(
+        Arc::clone(&storage),
+        Arc::clone(&graph_db),
+        vector_db,
+        embedding_engine,
+        llm,
+        Arc::clone(&db),
+        ontology_resolver,
+        config.clone(),
+    );
+    add_code_routes(&mut pipeline, storage, graph_db, db, &config)
+        .expect("build_standard_cognify_pipeline always names its classify task");
+    pipeline
+}
+
+/// Put the code routes in front of a standard cognify pipeline: the route
+/// task runs the code-routed items and the classify task takes its routed
+/// input, which carries the code routes' report into the standard stages'.
+///
+/// # Errors
+///
+/// [`CognifyError::ContextBuild`] when `pipeline` has no classify task.
+fn add_code_routes(
+    pipeline: &mut Pipeline,
+    storage: Arc<dyn StorageTrait>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    db: Arc<dyn RelationalDb>,
+    config: &CognifyConfig,
+) -> Result<(), CognifyError> {
+    let classify = pipeline
+        .tasks
+        .iter_mut()
+        .find(|task| task.name.as_deref() == Some(CLASSIFY_DOCUMENTS_TASK_NAME))
+        .ok_or_else(|| {
+            CognifyError::ContextBuild(
+                "the cognify pipeline has no classify task to route into".to_string(),
+            )
+        })?;
+    classify.task = cognee_core::TaskInfo::from(make_classify_routed_documents_task(
+        CLASSIFY_DOCUMENTS_TASK_RANK,
+        config.failure_policy(),
+    ))
+    .task;
+    pipeline.tasks.insert(
+        0,
+        cognee_core::TaskInfo::from(make_code_routes_task(
+            storage,
+            graph_db,
+            db,
+            config.code_graph.clone(),
+            config.failure_policy(),
+            CodeRepoLoadMode::Dataset,
+            // cognify builds code graphs graph-only, as Python's CODE_REPO
+            // route does (`graph_only=True`).
+            None,
+        ))
+        .with_name(EXTRACT_CODE_REPO_GRAPH_TASK_NAME),
+    );
+    Ok(())
+}
+
+/// The standard cognify pipeline, without the code routes:
+/// [`CognifyInput`] → classify → chunk → (extract_graph ‖ summarize) →
+/// add_data_points → [`CognifyResult`]. [`cognify`] runs it as it is for a
+/// run of standard items only.
+#[allow(clippy::too_many_arguments)]
+fn build_standard_cognify_pipeline(
     storage: Arc<dyn StorageTrait>,
     graph_db: Arc<dyn GraphDBTrait>,
     vector_db: Arc<dyn VectorDB>,

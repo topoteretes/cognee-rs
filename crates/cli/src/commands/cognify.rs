@@ -175,6 +175,13 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
         &args.graph_schema,
     )?;
 
+    // `--extractor` is built only for a dataset with a standard item to
+    // extract, so check it now: a typo fails even on a code-only run.
+    cm.check_graph_extractor_selection(args.extractor.as_deref())
+        .map_err(|error| {
+            CliError::Runtime(format!("Graph extractor initialization failed: {error}"))
+        })?;
+
     crate::teardown::run_command(Arc::clone(&cm), async {
         // Resolve datasets first (cheap) — fail early before initializing heavy components
         let database = cm
@@ -215,11 +222,8 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
             })?;
 
         let mut cognify_config = flag_config;
-        if let Some(transcriber) = cm
-            .transcriber()
-            .await
-            .map_err(|e| CliError::Runtime(format!("{e}")))?
-        {
+        // A transcriber that cannot be built fails only an audio document.
+        if let Some(transcriber) = cm.cognify_transcriber().await {
             cognify_config = cognify_config.with_transcriber(transcriber);
         }
         // With the graph extractor, built on the first dataset whose items
@@ -256,7 +260,21 @@ pub fn run(args: CognifyArgs, cm: Arc<ComponentManager>) -> Result<(), CliError>
                 data_items.len()
             );
 
-            let run_config = if cognee::cognify::routing::routes_need_llm(&data_items) {
+            // Only what this run processes counts: items an earlier run
+            // completed are skipped by `cognify()` and need no extractor.
+            let needs_llm = cognee::cognify::rollback::pending_routes_need_llm(
+                &*database,
+                dataset.id,
+                &data_items,
+                cognify_config.incremental_loading,
+            )
+            .await
+            .map_err(|error| {
+                CliError::Runtime(format!(
+                    "Failed to read completion markers for dataset '{dataset_name}': {error}"
+                ))
+            })?;
+            let run_config = if needs_llm {
                 let config = match standard_config.take() {
                     Some(config) => config,
                     // `graph_extraction.backend`: an unregistered kind fails

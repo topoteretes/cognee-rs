@@ -48,7 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A run's failure window moved with the writes: an entity or semantic-edge
     write now fails in the `add_data_points` stage, after summarization,
     rather than in the extraction stage. Persistence failures stay run-fatal.
-
+- **Code-project documents follow the registered loaders (SDK-1702).**
+  `partition_repo_files`, `resolve_code_repository` and
+  `resolve_data_directories` take the set of document extensions, normally
+  `LoaderRegistry::document_extensions()` of the pipeline's registry, as
+  Python's `_document_extensions()` asks its loader engine. The static
+  `code_repo::DOCUMENT_EXTENSIONS` list is removed. A project file only an
+  unregistered loader could read (a PDF in a build without a PDF loader, an
+  image without an LLM) is now skipped instead of added and then failed.
+- **Loader routing skips unregistered loaders in its default order too
+  (SDK-1702).** As in Python's `LoaderEngine.get_loader`, a registry without
+  the code loader reads a `.py` file with the text loader instead of failing
+  with `UnsupportedDocumentType`. A file only an unregistered loader claims
+  (an image without the image loader) still fails naming that loader.
+- **`build_cognify_pipeline` routes code items (SDK-1702).** The public
+  builder now starts with the code route task and a routed classify, as
+  `cognify()` does for a run with code items, so a caller that builds the
+  pipeline itself never sends a code repository manifest down the LLM path.
+  Its task list gains `extract_code_repo_graph` first.
 - **Repository cloning is hardened for API requests (SDK-1701).** For an HTTP
   API request (`RepoSourceSettings` with `api_request = true`,
   `Settings::api_repo_sources`) a clone's directory name now carries an 8-hex
@@ -2129,6 +2146,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistence layer now writes every node of a run before any edge. Regression tests: `nodes_before_edges_ladybug` and, in the Postgres
   graph CI lane, `nodes_before_edges_pggraph` (new `pggraph` test feature of
   `cognee-cognify`).
+- **Code graph correctness (SDK-1702).**
+  - The stale sweep and the node-set detag read every code node and node set
+    by type (`get_filtered_graph_data`), as Python reads the whole graph,
+    instead of the repositories' one-hop neighbourhood: a stale code node that
+    lost its `part_of` edge is now swept.
+  - A timed-out enola run is killed and reaped before the timeout error
+    returns, so it no longer writes `.enola/` afterwards. A working directory
+    that vanishes before enola starts is reported as such, not as "enola not
+    installed".
+  - `cli cognify` and the bindings decide whether a run needs the LLM (and
+    the graph extractor) from the items it will process, after items an
+    earlier run completed are skipped: a dataset whose documents are already
+    cognified cognifies a new code repository without an LLM. A legacy
+    per-row `dlt` record is refused even when an earlier run completed it,
+    instead of being skipped.
+  - `cli add-and-cognify` takes the keyless path `cli cognify` has: a code
+    project is cognified without an LLM, and a graph extractor that cannot be
+    built (the keyless `auto` default without GLiNER) fails only a run with a
+    document to extract. Both commands no longer fail keyless over the
+    transcriber (`ComponentManager::cognify_transcriber`).
+  - `cli cognify` checks `--extractor` and `graph_extraction.backend` up front
+    again (`ComponentManager::check_graph_extractor_selection`), so a kind
+    nothing is registered under fails even on a code-only dataset.
+  - `AddPipeline::add_code_repository` resolves a relative repository path,
+    as a directory `add` does, so the stored `repo_path` does not depend on
+    the working directory of a later run.
+  - A code graph load whose edge write fails is not recorded as done (the
+    snapshot stamp is written last), so the next load writes the edges. The
+    node write now also restores the structural edges (`part_of`,
+    `belongs_to_set`) of nodes it finds unchanged: a failed load had already
+    stored its new nodes, so the retry skipped them and never wrote their
+    `part_of` edges.
 
 - **A labelled text keeps its stored file as its original location
   (SDK-1043).** A `Text` wrapped in a `DataItem` (with a label or metadata)

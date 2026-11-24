@@ -1665,7 +1665,12 @@ Python (`keyless_local_defaults_apply`):
 * the `auto` graph extractor resolves to `gliner`. Nothing in this repository
   registers a `gliner` extractor, so a build without one fails cognify with an
   error naming the remedies: set `LLM_API_KEY`, register a `gliner` extractor,
-  or set `GRAPH_EXTRACTOR` to a registered kind;
+  or set `GRAPH_EXTRACTOR` to a registered kind. Only a run with a document
+  to extract needs the extractor: code repositories and code files take the
+  LLM-free code graph route, and items an earlier run completed are skipped
+  first, so `cognify` and `add-and-cognify` of a code project succeed without
+  one. A selection nothing is registered under (`--extractor` or
+  `GRAPH_EXTRACTOR`) is still refused up front;
 * an embedder with no embedding setting configured (provider and model at the
   stock default, no `EMBEDDING_API_KEY`, no `EMBEDDING_ENDPOINT`) runs on the
   local ONNX model (`onnx`, `BGE-Small-v1.5`, 384 dimensions; Python uses

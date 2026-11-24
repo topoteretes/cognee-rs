@@ -469,7 +469,19 @@ pub async fn run_cognify_on_items(
     // takes a code route nothing needs it, nor the LLM it may need, so it is
     // not resolved: a keyless deployment cognifies a code project (Python's
     // `needs_llm` union over the routes in play).
-    let config = if cognee::cognify::routing::routes_need_llm(&data_items) {
+    // Only what this run processes counts: items an earlier run completed
+    // are skipped by `cognify()` and need no extractor.
+    let incremental_loading =
+        apply_cognify_opts(svc.cognify_config.clone(), opts)?.incremental_loading;
+    let needs_llm = cognee::cognify::rollback::pending_routes_need_llm(
+        &*svc.database,
+        dataset.id,
+        &data_items,
+        incremental_loading,
+    )
+    .await
+    .map_err(|e| SdkError::Runtime(format!("cognify failed: {e}")))?;
+    let config = if needs_llm {
         cognify_config_with_opts(svc, opts).await?
     } else {
         // Nothing is built, but a selection the caller made is still checked
