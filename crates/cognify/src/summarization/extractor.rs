@@ -4,15 +4,13 @@
 //! - cognee/infrastructure/llm/extraction/extract_summary.py
 //! - cognee/tasks/summarization/summarize_text.py
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use cognee_llm::{GenerationOptions, Llm, LlmExt};
 use cognee_models::DocumentChunk;
 
 use super::models::{SummarizedContent, TextSummary};
+use crate::chunk_dispatch::ChunkCall;
 use crate::error::CognifyError;
 
 /// Default summarization options shared by both the typed and dynamic paths.
@@ -99,18 +97,6 @@ impl SummarizeOutcome {
     pub fn is_complete(&self) -> bool {
         self.failures.is_empty() && self.skipped.is_empty()
     }
-}
-
-/// One chunk's fate inside the bounded [`SummaryExtractor::summarize_chunks`]
-/// pipeline. Each variant carries the input index so all three groups can be
-/// put back into input order after `buffer_unordered` has shuffled them.
-enum ChunkOutcome {
-    /// Summarized successfully.
-    Summarized(usize, Box<TextSummary>),
-    /// Attempted and failed.
-    Failed(usize, uuid::Uuid, CognifyError),
-    /// Never dispatched — an earlier chunk had already failed under fail-fast.
-    Skipped(usize, uuid::Uuid),
 }
 
 /// Summary extractor for text chunks.
@@ -253,120 +239,58 @@ impl SummaryExtractor {
             return SummarizeOutcome::default();
         }
 
-        use futures::stream::{self, StreamExt};
+        // The shared dispatch helper (SDK-1694 O4b): at most `max_parallel`
+        // calls in flight, each on its own task, a chunk's text cloned only
+        // when its call starts, and — under `fail_fast` — no call started once
+        // one has failed. Its outcomes come back in input order.
+        let outcomes = crate::chunk_dispatch::dispatch_chunk_calls(
+            chunks.len(),
+            self.max_parallel,
+            self.fail_fast,
+            "summarization",
+            |index| self.summary_call(&chunks[index], custom_prompt.clone()),
+            CognifyError::LlmError,
+        )
+        .await;
 
-        let model_name = self.llm.model().to_string();
-
-        // Pre-extract owned per-chunk inputs (index, text, chunk id) so the
-        // stream yields owned items. Mapping a stream over borrowed `&chunk`
-        // references trips a higher-ranked-lifetime inference bug when the
-        // surrounding future is boxed; owning the items avoids it.
-        #[allow(clippy::type_complexity)]
-        let inputs: Vec<(
-            usize,
-            String,
-            uuid::Uuid,
-            Option<f64>,
-            Option<Vec<serde_json::Value>>,
-        )> = chunks
-            .iter()
-            .enumerate()
-            .map(|(index, chunk)| {
-                (
-                    index,
-                    chunk.text.clone(),
-                    chunk.base.id,
-                    chunk.base.importance_weight,
-                    chunk.base.belongs_to_set.clone(),
-                )
-            })
-            .collect();
-
-        // Set by the first chunk that fails, and only when `fail_fast` is on.
-        // `stream::iter(...).map(...)` builds each future lazily, and
-        // `buffer_unordered` only builds one when it has room for it, so the
-        // check at the top of the future runs at the moment the call would
-        // otherwise be dispatched — the last point at which it can still be
-        // avoided.
-        let aborted = Arc::new(AtomicBool::new(false));
-        let fail_fast = self.fail_fast;
-
-        // Bounded-concurrency pipeline: at most `max_parallel` summarization
-        // calls are in flight at once. This replaces the previous unbounded
-        // per-chunk `tokio::spawn`, which opened one request per chunk on a large
-        // document — a rate-limit and memory risk (issue #19). `buffer_unordered`
-        // keeps the global cap while pipelining across chunks; results arrive out
-        // of order, so each future carries its chunk index and we re-sort to
-        // preserve the input order the callers expect.
-        let results: Vec<ChunkOutcome> = stream::iter(inputs)
-            .map(
-                |(index, text, chunk_id, importance_weight, belongs_to_set)| {
-                    let llm = Arc::clone(&self.llm);
-                    let summary_schema = self.summary_schema.clone();
-                    let model_name = model_name.clone();
-                    let prompt = custom_prompt.clone();
-                    let aborted = Arc::clone(&aborted);
-                    async move {
-                        // Axis 1, `FailureStop::FailFast`: stop *scheduling*. The
-                        // stream itself is still drained to the end — every chunk
-                        // is accounted for, and the calls already in flight are
-                        // left to finish and be collected.
-                        if fail_fast && aborted.load(Ordering::Acquire) {
-                            return ChunkOutcome::Skipped(index, chunk_id);
-                        }
-                        // The per-chunk error is carried in the item rather than
-                        // `?`-ed out of the stream, so `collect` keeps draining.
-                        let summarized =
-                            match summarize_one(&llm, &summary_schema, &text, prompt.as_deref())
-                                .await
-                            {
-                                Ok(summarized) => summarized,
-                                Err(e) => {
-                                    aborted.store(true, Ordering::Release);
-                                    return ChunkOutcome::Failed(index, chunk_id, e);
-                                }
-                            };
-                        let mut summary =
-                            TextSummary::from_summarized_content(chunk_id, summarized, model_name);
-                        // Port of summarize_text.py:81 — carry importance_weight from source chunk.
-                        summary.base.importance_weight = importance_weight;
-                        // Port of summarize_text.py:79 — inherit the source chunk's
-                        // belongs_to_set (NodeSet objects + dataset id) so each
-                        // TextSummary is scoped exactly like its chunk.
-                        summary.base.belongs_to_set = belongs_to_set;
-                        ChunkOutcome::Summarized(index, Box::new(summary))
-                    }
-                },
-            )
-            .buffer_unordered(self.max_parallel)
-            .collect()
-            .await;
-
-        // `buffer_unordered` yields out of order; all three groups are re-sorted
-        // by the carried index so callers see input order on every one of them.
-        let mut indexed: Vec<(usize, TextSummary)> = Vec::new();
-        let mut failures: Vec<(usize, uuid::Uuid, CognifyError)> = Vec::new();
-        let mut skipped: Vec<(usize, uuid::Uuid)> = Vec::new();
-        for result in results {
-            match result {
-                ChunkOutcome::Summarized(index, summary) => indexed.push((index, *summary)),
-                ChunkOutcome::Failed(index, chunk_id, error) => {
-                    failures.push((index, chunk_id, error))
-                }
-                ChunkOutcome::Skipped(index, chunk_id) => skipped.push((index, chunk_id)),
+        let mut outcome = SummarizeOutcome::default();
+        for (chunk, call) in chunks.iter().zip(outcomes) {
+            match call {
+                ChunkCall::Done(Ok(summary)) => outcome.summaries.push(summary),
+                ChunkCall::Done(Err(error)) => outcome.failures.push((chunk.base.id, error)),
+                ChunkCall::Skipped => outcome.skipped.push(chunk.base.id),
             }
         }
-        indexed.sort_by_key(|(index, _)| *index);
-        failures.sort_by_key(|(index, _, _)| *index);
-        skipped.sort_by_key(|(index, _)| *index);
+        outcome
+    }
 
-        SummarizeOutcome {
-            summaries: indexed.into_iter().map(|(_, summary)| summary).collect(),
-            failures: failures
-                .into_iter()
-                .map(|(_, chunk_id, error)| (chunk_id, error))
-                .collect(),
-            skipped: skipped.into_iter().map(|(_, chunk_id)| chunk_id).collect(),
+    /// The summary call for one chunk, owning everything it needs: built when
+    /// the call is about to start, so it clones the chunk's text then and not
+    /// before.
+    ///
+    /// The summary inherits the chunk's `importance_weight` and
+    /// `belongs_to_set` (Python `summarize_text.py:79,81`), so it is scoped
+    /// exactly like its chunk.
+    pub(crate) fn summary_call(
+        &self,
+        chunk: &DocumentChunk,
+        custom_prompt: Option<String>,
+    ) -> impl std::future::Future<Output = Result<TextSummary, CognifyError>> + Send + 'static {
+        let llm = Arc::clone(&self.llm);
+        let summary_schema = self.summary_schema.clone();
+        let model_name = self.llm.model().to_string();
+        let text = chunk.text.clone();
+        let chunk_id = chunk.base.id;
+        let importance_weight = chunk.base.importance_weight;
+        let belongs_to_set = chunk.base.belongs_to_set.clone();
+        async move {
+            let summarized =
+                summarize_one(&llm, &summary_schema, &text, custom_prompt.as_deref()).await?;
+            let mut summary =
+                TextSummary::from_summarized_content(chunk_id, summarized, model_name);
+            summary.base.importance_weight = importance_weight;
+            summary.base.belongs_to_set = belongs_to_set;
+            Ok(summary)
         }
     }
 
