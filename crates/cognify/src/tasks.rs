@@ -702,7 +702,7 @@ pub async fn extract_chunks_from_documents(
 /// Entities with no producer — ontology-derived nodes, and any caller that did
 /// not build a producer set — fall back to the `metadata["chunk_id"]` stamp so
 /// they behave exactly as before.
-fn chunk_entity_links(
+pub(crate) fn chunk_entity_links(
     nodes: &[GraphNodePair],
     timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
@@ -756,7 +756,7 @@ fn chunk_entity_links(
 /// Computed once per document over that document's chunks in `chunk_index`
 /// order ([`crate::temporal_hints::document_temporal_hints`]), so the rolling
 /// base flows forward through the document and never crosses into another.
-fn chunk_temporal_hints<'a>(
+pub(crate) fn chunk_temporal_hints<'a>(
     chunks: impl IntoIterator<Item = &'a DocumentChunk>,
 ) -> HashMap<Uuid, Vec<String>> {
     let mut by_document: HashMap<Uuid, Vec<&DocumentChunk>> = HashMap::new();
@@ -1176,9 +1176,7 @@ pub(crate) async fn build_extracted_graph(
         // hints do not depend on which chunks it is sent alongside (Python
         // `_temporal_hints_for`). A custom prompt receives none, and neither
         // does the cascade, whose stages have their own prompts.
-        let mut temporal_hints = if config.custom_extraction_prompt.is_none()
-            && config.extraction_strategy == ExtractionStrategy::SinglePass
-        {
+        let mut temporal_hints = if sends_temporal_hints(config) {
             chunk_temporal_hints(&chunks_for_extraction)
         } else {
             HashMap::new()
@@ -1199,28 +1197,8 @@ pub(crate) async fn build_extracted_graph(
             "graph extraction",
             |index| {
                 let chunk = &chunks_for_extraction[index];
-                let text = chunk.text.clone();
                 let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
-                let extractor = fact_extractor.clone();
-                let prompt = config.custom_extraction_prompt.clone();
-                let strategy = config.extraction_strategy;
-                async move {
-                    match strategy {
-                        ExtractionStrategy::SinglePass => {
-                            extractor
-                                .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
-                                .await
-                        }
-                        ExtractionStrategy::Cascade { rounds } => {
-                            crate::fact_extraction::cascade::cascade_extract(
-                                extractor.llm(),
-                                &text,
-                                rounds,
-                            )
-                            .await
-                        }
-                    }
-                }
+                graph_extraction_call(&fact_extractor, config, &chunk.text, hints)
             },
             CognifyError::FactExtractionError,
         )
@@ -1513,6 +1491,104 @@ pub(crate) async fn build_extracted_graph(
     })
 }
 
+/// The extraction call for one chunk on the default `KnowledgeGraph` path,
+/// owning everything it needs: built when the call is about to start, so the
+/// chunk's text is cloned then. `hints` are the chunk's date hints (empty for
+/// a custom prompt and for the cascade, whose stages have their own prompts).
+pub(crate) fn graph_extraction_call(
+    extractor: &FactExtractor,
+    config: &CognifyConfig,
+    text: &str,
+    hints: Vec<String>,
+) -> impl std::future::Future<Output = Result<KnowledgeGraph, CognifyError>> + Send + 'static + use<>
+{
+    let text = text.to_string();
+    let extractor = extractor.clone();
+    let prompt = config.custom_extraction_prompt.clone();
+    let strategy = config.extraction_strategy;
+    async move {
+        match strategy {
+            ExtractionStrategy::SinglePass => {
+                extractor
+                    .extract_facts_with_hints(&text, prompt.as_deref(), &hints)
+                    .await
+            }
+            ExtractionStrategy::Cascade { rounds } => {
+                crate::fact_extraction::cascade::cascade_extract(extractor.llm(), &text, rounds)
+                    .await
+            }
+        }
+    }
+}
+
+/// Whether the default path sends date hints: only with the default prompt
+/// and the single-pass strategy.
+pub(crate) fn sends_temporal_hints(config: &CognifyConfig) -> bool {
+    config.custom_extraction_prompt.is_none()
+        && config.extraction_strategy == ExtractionStrategy::SinglePass
+}
+
+/// The extraction call for one chunk on the runtime custom-schema path, built
+/// when the call is about to start (see [`graph_extraction_call`]).
+pub(crate) fn dynamic_graph_call(
+    llm: &Arc<dyn Llm>,
+    schema: &Arc<DynamicGraphSchema>,
+    custom_prompt: Option<&str>,
+    dataset_id: Uuid,
+    text: &str,
+    hints: &[String],
+) -> impl std::future::Future<Output = Result<DynamicGraph, CognifyError>> + Send + 'static + use<>
+{
+    let text = text.to_string();
+    let llm = Arc::clone(llm);
+    let schema = Arc::clone(schema);
+    let prompt = match custom_prompt {
+        Some(prompt) => prompt.to_string(),
+        None => default_graph_prompt_with_hints(hints)
+            .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
+    };
+    async move {
+        let messages = vec![
+            Message {
+                role: MessageRole::System,
+                content: prompt,
+            },
+            Message {
+                role: MessageRole::User,
+                content: text,
+            },
+        ];
+        let validator = |answer: &serde_json::Value| {
+            schema
+                .materialize(answer, dataset_id)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        };
+        let answer = llm
+            .create_structured_output_with_messages_raw_validated(
+                messages,
+                schema.llm_schema(),
+                Some(GenerationOptions {
+                    temperature: None,
+                    max_tokens: None,
+                    ..Default::default()
+                }),
+                &validator,
+            )
+            .await
+            .map_err(CognifyError::from_llm)?;
+        schema
+            .materialize(&answer, dataset_id)
+            .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
+    }
+}
+
+/// The error of a custom-schema extraction task that panicked or was
+/// cancelled.
+pub(crate) fn dynamic_task_error(message: String) -> CognifyError {
+    CognifyError::GraphExtractionError(format!("dynamic graph extraction task failed: {message}"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WebPageMetadata {
     url: String,
@@ -1587,51 +1663,12 @@ pub struct PersistHandoff {
     /// [`web_page_artifacts`] when [`CognifyConfig::create_web_page_nodes`] is
     /// on.
     pub(crate) web_pages: Vec<WebPage>,
-    /// The provenance stamp each entity carried **before** the extraction
-    /// stage's own stamp, for the entities that stamp changed — the
-    /// ontology-derived ones, which graph building does not pre-stamp.
-    ///
-    /// Before O4a the extraction stage wrote the entity nodes to the graph and
-    /// only then stamped them, so their graph nodes kept these values while
-    /// their ledger rows (whose `attributes` serialize the entity), written
-    /// later, carried the stamp. Vector payloads carry no provenance stamp at
-    /// all (`index_schema_payload`). The persistence layer writes the graph nodes with these values
-    /// to store exactly what it stored then. Making the graph agree with the
-    /// ledger is a change of stored output, left to a later stage.
-    pub(crate) entity_graph_stamps: HashMap<Uuid, ProvenanceStamp>,
 }
 
 impl PersistHandoff {
     /// Whether there is nothing in it.
     pub fn is_empty(&self) -> bool {
-        self.web_pages.is_empty() && self.entity_graph_stamps.is_empty()
-    }
-}
-
-/// The four provenance fields a task's stamp fills in on a `DataPoint`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProvenanceStamp {
-    pub(crate) source_pipeline: Option<String>,
-    pub(crate) source_task: Option<String>,
-    pub(crate) source_user: Option<String>,
-    pub(crate) topological_rank: Option<i32>,
-}
-
-impl ProvenanceStamp {
-    pub(crate) fn of(base: &DataPoint) -> Self {
-        Self {
-            source_pipeline: base.source_pipeline.clone(),
-            source_task: base.source_task.clone(),
-            source_user: base.source_user.clone(),
-            topological_rank: base.topological_rank,
-        }
-    }
-
-    pub(crate) fn apply_to(&self, base: &mut DataPoint) {
-        base.source_pipeline = self.source_pipeline.clone();
-        base.source_task = self.source_task.clone();
-        base.source_user = self.source_user.clone();
-        base.topological_rank = self.topological_rank;
+        self.web_pages.is_empty()
     }
 }
 
@@ -1945,58 +1982,20 @@ pub async fn extract_dynamic_graphs_from_data(
         "custom graph extraction",
         |index| {
             let chunk = extractable[index];
-            let text = chunk.text.clone();
             let hints = temporal_hints.remove(&chunk.base.id).unwrap_or_default();
-            let llm = Arc::clone(&llm);
-            let schema = Arc::clone(&schema);
-            let prompt = match &custom_prompt {
-                Some(prompt) => prompt.clone(),
-                None => default_graph_prompt_with_hints(&hints)
-                    .unwrap_or_else(|| FactExtractor::default_graph_prompt().to_string()),
-            };
-            async move {
-                let messages = vec![
-                    Message {
-                        role: MessageRole::System,
-                        content: prompt,
-                    },
-                    Message {
-                        role: MessageRole::User,
-                        content: text,
-                    },
-                ];
-                let validator = |answer: &serde_json::Value| {
-                    schema
-                        .materialize(answer, dataset_id)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
-                };
-                let answer = llm
-                    .create_structured_output_with_messages_raw_validated(
-                        messages,
-                        schema.llm_schema(),
-                        Some(GenerationOptions {
-                            temperature: None,
-                            max_tokens: None,
-                            ..Default::default()
-                        }),
-                        &validator,
-                    )
-                    .await
-                    .map_err(CognifyError::from_llm)?;
-                schema
-                    .materialize(&answer, dataset_id)
-                    .map_err(|error| CognifyError::GraphExtractionError(error.to_string()))
-            }
+            dynamic_graph_call(
+                &llm,
+                &schema,
+                custom_prompt.as_deref(),
+                dataset_id,
+                &chunk.text,
+                &hints,
+            )
         },
         // Each call is spawned like the other extractors': CPU-bound
         // validation spreads across the runtime, and a panicking chunk becomes
         // that chunk's failure under the policy instead of unwinding the stage.
-        |message| {
-            CognifyError::GraphExtractionError(format!(
-                "dynamic graph extraction task failed: {message}"
-            ))
-        },
+        dynamic_task_error,
     )
     .await;
 
@@ -2396,6 +2395,7 @@ pub async fn add_data_points(
         evidence,
         user_id: input.user_id,
         config,
+        run_chunk_documents: None,
     };
     let group = crate::persist::PersistGroup {
         chunks: &input.chunks,
@@ -2408,7 +2408,6 @@ pub async fn add_data_points(
         producers: &input.producers,
         dynamic_graphs: &input.dynamic_graphs,
         web_pages: &input.handoff.web_pages,
-        entity_graph_stamps: &input.handoff.entity_graph_stamps,
         dlt: None,
     };
     let mut state = crate::persist::PersistState::default();
@@ -2802,6 +2801,7 @@ fn dlt_row_name(document: &Document) -> String {
 /// executor — the `pipeline_runs` row is already COMPLETED by the time it runs
 /// — but its artifacts still need to be *reachable* by a sweep, so they are
 /// stamped with the run id like everything else the run wrote.
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_dlt_fk_edges(
     documents: &[Document],
     chunks: &[DocumentChunk],
@@ -2810,6 +2810,10 @@ pub async fn extract_dlt_fk_edges(
     embedding_engine: Arc<dyn EmbeddingEngine>,
     db: &dyn RelationalDb,
     id: LedgerIdentity,
+    // The run's config, for the persistence layer (it reads none of the
+    // settings a DLT group could use today, but a run's own config is what
+    // every other group is written with).
+    config: &CognifyConfig,
 ) -> Result<(), CognifyError> {
     // Collect DLT documents
     let dlt_docs: Vec<&Document> = documents
@@ -3263,7 +3267,6 @@ pub async fn extract_dlt_fk_edges(
         row_chunk_docs,
         column_value_owners,
     };
-    let config = CognifyConfig::default();
     let context = crate::persist::PersistContext {
         graph_db: &graph_db,
         vector_db: &vector_db,
@@ -3273,9 +3276,8 @@ pub async fn extract_dlt_fk_edges(
         // The DLT step never recorded edge evidence: it stores no chunk.
         evidence: None,
         user_id: None,
-        // A DLT group carries no chunk, entity or custom graph, so none of the
-        // settings the layer reads for those applies.
-        config: &config,
+        config,
+        run_chunk_documents: None,
     };
     let group = crate::persist::PersistGroup {
         dlt: Some(&artifacts),
@@ -3605,7 +3607,13 @@ struct DltTableMeta {
 /// `DataPoint.topological_rank` only while that field is still unset — `None`
 /// or the `Some(0)` Python sentinel — matching `run_tasks_base.py:69-75`.
 /// Pass `0` to skip the rank write entirely.
-fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option<&str>, rank: i32) {
+pub(crate) fn stamp_provenance(
+    dp: &mut DataPoint,
+    pipeline: &str,
+    task: &str,
+    user: Option<&str>,
+    rank: i32,
+) {
     if dp.source_pipeline.is_none() {
         dp.source_pipeline = Some(pipeline.to_string());
     }
@@ -3623,7 +3631,7 @@ fn stamp_provenance(dp: &mut DataPoint, pipeline: &str, task: &str, user: Option
 /// [`stamp_provenance`] on every entity and every one of its types — an
 /// entity several documents typed carries several EntityTypes, and each is a
 /// node of its own.
-fn stamp_entity_provenance(
+pub(crate) fn stamp_entity_provenance(
     entities: &mut [GraphNodePair],
     task: &str,
     user: Option<&str>,
@@ -4684,6 +4692,7 @@ async fn cognify_in_scope(
                     Arc::clone(&embedding_engine),
                     &*database,
                     LedgerIdentity::new(tenant_id, user_id, dataset_id, result.pipeline_run_id),
+                    &effective_config,
                 )
                 .await?;
                 Ok::<CognifyResult, CognifyError>(result)
@@ -4949,22 +4958,33 @@ fn chunk_document_map(chunks: &[DocumentChunk]) -> HashMap<Uuid, Uuid> {
     chunks.iter().map(|c| (c.base.id, c.document_id)).collect()
 }
 
+/// The chunk stamped on an entity's metadata (`chunk_id`), if any.
+fn stamped_chunk(entity: &cognee_models::Entity) -> Option<Uuid> {
+    entity
+        .base
+        .get_metadata("chunk_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+}
+
 /// Map each entity to the data item of the chunk stamped on its metadata.
+///
+/// `stamp_documents` is the chunk → data-item map the stamp is looked up in:
+/// the run's when the run is saved one document per group (SDK-1694 O4b), so
+/// an entity an earlier document's ontology lookup brought in resolves to that
+/// document in a later group too, exactly as when the run is saved as one
+/// group.
 ///
 /// Only used as the fallback attribution for edges whose producer set is empty.
 fn entity_document_map(
     entities: &[GraphNodePair],
-    chunk_data_map: &HashMap<Uuid, Uuid>,
+    stamp_documents: &HashMap<Uuid, Uuid>,
 ) -> HashMap<Uuid, Uuid> {
     entities
         .iter()
         .filter_map(|pair| {
-            pair.entity
-                .base
-                .get_metadata("chunk_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok())
-                .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+            stamped_chunk(&pair.entity)
+                .and_then(|chunk_id| stamp_documents.get(&chunk_id).copied())
                 .map(|data_id| (pair.entity.base.id, data_id))
         })
         .collect()
@@ -4984,6 +5004,9 @@ fn entity_provenance_rows(
     id: LedgerIdentity,
     entities: &[GraphNodePair],
     chunk_data_map: &HashMap<Uuid, Uuid>,
+    // Where an entity's `chunk_id` stamp is looked up (see
+    // `entity_document_map`).
+    stamp_documents: &HashMap<Uuid, Uuid>,
     producers: &ArtifactProducers,
 ) -> Vec<cognee_database::GraphNode> {
     let mut rows = Vec::new();
@@ -4996,54 +5019,63 @@ fn entity_provenance_rows(
         if data_ids.is_empty() {
             // Ontology-derived entities, and callers that hand us a
             // `SummarizedData` they built themselves, carry no producer set:
-            // fall back to the single `chunk_id` stamp, then to nil.
+            // fall back to the single `chunk_id` stamp, then to nil. The stamp
+            // is looked up run-wide (`stamp_documents`), so a per-document
+            // group gets the row one group would (SDK-1694 O4b).
             data_ids.push(
-                entity
-                    .base
-                    .get_metadata("chunk_id")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| Uuid::parse_str(s).ok())
-                    .and_then(|chunk_id| chunk_data_map.get(&chunk_id).copied())
+                stamped_chunk(entity)
+                    .and_then(|chunk_id| stamp_documents.get(&chunk_id).copied())
                     .unwrap_or(Uuid::nil()),
             );
         }
 
-        let indexed_fields = entity
-            .base
-            .get_metadata("index_fields")
-            .cloned()
-            .unwrap_or(json!(["name"]));
-
-        let label = if entity.name.is_empty() {
-            entity.base.id.to_string()
-        } else {
-            entity.name.clone()
-        };
-
-        for data_id in data_ids {
-            rows.push(cognee_database::GraphNode {
-                id: provenance_node_id(
-                    id.tenant_id,
-                    id.user_id,
-                    id.dataset_id,
-                    data_id,
-                    entity.base.id,
-                ),
-                slug: entity.base.id,
-                user_id: id.user_id,
-                data_id,
-                dataset_id: id.dataset_id,
-                pipeline_run_id: id.pipeline_run_id,
-                label: Some(label.clone()),
-                node_type: entity.base.data_type.clone(),
-                indexed_fields: indexed_fields.clone(),
-                attributes: serde_json::to_value(entity).ok(),
-                created_at: Utc::now(),
-            });
-        }
+        rows.extend(
+            data_ids
+                .into_iter()
+                .map(|data_id| entity_ledger_row(id, entity, data_id)),
+        );
     }
 
     rows
+}
+
+/// The ownership row of `entity` for the data item `data_id`. Its `attributes`
+/// serialize the entity as it is now: a per-document writer rewrites the rows of
+/// earlier documents through it when a later one changes the entity.
+pub(crate) fn entity_ledger_row(
+    id: LedgerIdentity,
+    entity: &cognee_models::Entity,
+    data_id: Uuid,
+) -> cognee_database::GraphNode {
+    let indexed_fields = entity
+        .base
+        .get_metadata("index_fields")
+        .cloned()
+        .unwrap_or(json!(["name"]));
+    let label = if entity.name.is_empty() {
+        entity.base.id.to_string()
+    } else {
+        entity.name.clone()
+    };
+    cognee_database::GraphNode {
+        id: provenance_node_id(
+            id.tenant_id,
+            id.user_id,
+            id.dataset_id,
+            data_id,
+            entity.base.id,
+        ),
+        slug: entity.base.id,
+        user_id: id.user_id,
+        data_id,
+        dataset_id: id.dataset_id,
+        pipeline_run_id: id.pipeline_run_id,
+        label: Some(label),
+        node_type: entity.base.data_type.clone(),
+        indexed_fields,
+        attributes: serde_json::to_value(entity).ok(),
+        created_at: Utc::now(),
+    }
 }
 
 /// Ownership rows for the Timestamp nodes graph extraction produced: one per
@@ -5435,14 +5467,20 @@ pub(crate) fn extraction_ownership_rows(
     claimed_existing_edges: &[GraphEdgePair],
     timestamps: &[TimestampNode],
     producers: &ArtifactProducers,
+    // The run's chunk → data-item map, when the run is saved one document per
+    // group: where an entity's `chunk_id` stamp is looked up. `None` uses
+    // `chunks`, which then hold the whole run.
+    run_chunk_documents: Option<&HashMap<Uuid, Uuid>>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
 ) {
     let chunk_data_map = chunk_document_map(chunks);
-    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+    let stamp_documents = run_chunk_documents.unwrap_or(&chunk_data_map);
+    let entity_data_map = entity_document_map(entities, stamp_documents);
 
-    let mut prov_nodes = entity_provenance_rows(id, entities, &chunk_data_map, producers);
+    let mut prov_nodes =
+        entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
     prov_nodes.extend(timestamp_provenance_rows(
         id,
         timestamps,
@@ -5488,6 +5526,7 @@ async fn upsert_provenance(
         documents,
         structural_edges,
         producers,
+        None,
     );
     // Write the node and edge provenance batches atomically: a failure partway
     // through rolls the whole group back (see `upsert_provenance_graph`).
@@ -5523,6 +5562,8 @@ pub(crate) fn provenance_rows(
     documents: &[Document],
     structural_edges: &[EdgeData],
     producers: &ArtifactProducers,
+    // See `extraction_ownership_rows`.
+    run_chunk_documents: Option<&HashMap<Uuid, Uuid>>,
 ) -> (
     Vec<cognee_database::GraphNode>,
     Vec<cognee_database::GraphEdge>,
@@ -5539,14 +5580,15 @@ pub(crate) fn provenance_rows(
     // Build chunk_id → document_id map for tracing entity provenance back
     // to the originating Data item.
     let chunk_data_map = chunk_document_map(chunks);
-    let entity_data_map = entity_document_map(entities, &chunk_data_map);
+    let stamp_documents = run_chunk_documents.unwrap_or(&chunk_data_map);
+    let entity_data_map = entity_document_map(entities, stamp_documents);
 
     // ── Provenance nodes ────────────────────────────────────────────────
     // Entities. `extraction_ownership_rows` builds the same rows, with the same
     // ids; both are written, so these rows are upserted twice per group
     // (idempotent), as before O4a.
     let mut prov_nodes: Vec<GraphNode> =
-        entity_provenance_rows(id, entities, &chunk_data_map, producers);
+        entity_provenance_rows(id, entities, &chunk_data_map, stamp_documents, producers);
 
     // DocumentChunks
     for chunk in chunks {
@@ -5920,6 +5962,7 @@ async fn index_data_points(
         vector_db,
         precomputed_embeddings,
         &HashSet::new(),
+        &[],
     )
     .await
 }
@@ -5950,6 +5993,9 @@ pub(crate) async fn index_data_points_except(
     vector_db: Arc<dyn VectorDB>,
     precomputed_embeddings: &[Embedding],
     embedded_types: &HashSet<Uuid>,
+    // EntityTypes to index besides the types of `entities`: the new types of
+    // entities whose own point an earlier group already wrote.
+    extra_types: &[&cognee_models::EntityType],
 ) -> Result<IndexedFieldsStats, CognifyError> {
     // Each collection used to be embedded, built and written in one piece, so
     // all of its vectors and metadata were live at once — a copy that grew
@@ -5978,6 +6024,7 @@ pub(crate) async fn index_data_points_except(
         precomputed_embeddings,
         window,
         embedded_types,
+        extra_types,
     )
     .await;
     if let Some(bulk) = bulk
@@ -6030,6 +6077,7 @@ async fn index_data_points_windowed(
         precomputed_embeddings,
         window,
         &HashSet::new(),
+        &[],
     )
     .await
 }
@@ -6048,6 +6096,7 @@ async fn index_data_points_windowed_except(
     precomputed_embeddings: &[Embedding],
     window: usize,
     embedded_types: &HashSet<Uuid>,
+    extra_types: &[&cognee_models::EntityType],
 ) -> Result<IndexedFieldsStats, CognifyError> {
     let mut stats = IndexedFieldsStats::default();
     let dimension = engine.dimension();
@@ -6197,6 +6246,7 @@ async fn index_data_points_windowed_except(
         let unique_entity_types: Vec<&cognee_models::EntityType> = entities
             .iter()
             .flat_map(|pair| pair.entity_types())
+            .chain(extra_types.iter().copied())
             .filter(|et| !embedded_types.contains(&et.base.id) && seen_ids.insert(et.base.id))
             .collect();
 
@@ -6451,6 +6501,12 @@ pub const EXTRACT_GRAPH_TASK_NAME: &str = "extract_graph_from_data";
 /// keep [`EXTRACT_GRAPH_TASK_NAME`] (stamped inside `extract_graph_from_data`).
 pub const EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME: &str = "extract_graph_and_summarize";
 pub const ADD_DATA_POINTS_TASK_NAME: &str = "add_data_points";
+/// Name of the pipeline stage that extracts, summarizes and saves each
+/// document as soon as it is complete — [`make_cognify_documents_task`]
+/// (SDK-1694 O4b). It is Python's `extract_graph_and_summarize` and
+/// `add_data_points` run per data item; nothing is stamped with this name:
+/// what it produces keeps the stamps of those two tasks.
+pub const COGNIFY_DOCUMENTS_TASK_NAME: &str = "extract_graph_summarize_and_add_data_points";
 
 /// `topological_rank` stamped on every DataPoint emitted by
 /// `classify_documents`.
@@ -6535,7 +6591,7 @@ pub const COGNIFY_PIPELINE_STAMP_NAME: &str = "cognify_pipeline";
 ///
 /// Mirrors [`cognee_core::PipelineContext::user_label`]: prefer
 /// `user_email`, fall back to `user_id.to_string()`, else `None`.
-fn user_label_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<String> {
+pub(crate) fn user_label_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<String> {
     ctx.pipeline_ctx.as_ref().and_then(|p| p.user_label())
 }
 
@@ -6544,7 +6600,7 @@ fn user_label_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<String> {
 /// The executor sets it on the context before any task runs, and it is the same
 /// value it writes to `pipeline_runs.pipeline_run_id`. `None` only when the
 /// task is driven outside a pipeline executor.
-fn pipeline_run_id_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<Uuid> {
+pub(crate) fn pipeline_run_id_from_ctx(ctx: &Arc<cognee_core::TaskContext>) -> Option<Uuid> {
     ctx.pipeline_ctx.as_ref().and_then(|p| p.run_id)
 }
 
@@ -6806,26 +6862,17 @@ pub fn make_extract_graph_task_with_rank(
                 graph_data.handoff.web_pages =
                     web_page_artifacts(&graph_data.documents, &graph_data.chunks);
             }
-            // The entities as graph building left them, for the graph write:
-            // see `PersistHandoff::entity_graph_stamps`.
-            let unstamped: Vec<ProvenanceStamp> = graph_data
-                .entities
-                .iter()
-                .map(|pair| ProvenanceStamp::of(&pair.entity.base))
-                .collect();
+            // Every entity is stamped before anything is written, so its graph
+            // node, ledger row and vector payload all carry the stamp — the
+            // ontology-derived ones too, which graph building does not
+            // pre-stamp (Python stamps every constructed DataPoint,
+            // `extract_graph_from_data.py:213-223`).
             stamp_entity_provenance(
                 &mut graph_data.entities,
                 EXTRACT_GRAPH_TASK_NAME,
                 user_label.as_deref(),
                 rank,
             );
-            graph_data.handoff.entity_graph_stamps = graph_data
-                .entities
-                .iter()
-                .zip(unstamped)
-                .filter(|(pair, before)| ProvenanceStamp::of(&pair.entity.base) != *before)
-                .map(|(pair, before)| (pair.entity.base.id, before))
-                .collect();
             for attributed in &mut graph_data.dynamic_graphs {
                 for node in &mut attributed.graph.nodes {
                     stamp_provenance(
@@ -7183,7 +7230,7 @@ pub fn make_add_data_points_task_with_rank(
         let user_label = user_label_from_ctx(&ctx);
         let pipeline_run_id = pipeline_run_id_from_ctx(&ctx);
         Box::pin(async move {
-            let mut result = add_data_points(
+            let result = add_data_points(
                 &input,
                 graph_db,
                 vector_db,
@@ -7193,65 +7240,172 @@ pub fn make_add_data_points_task_with_rank(
                 &config,
             )
             .await?;
-            for chunk in &mut result.chunks {
-                stamp_provenance(
-                    &mut chunk.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
-            stamp_entity_provenance(
-                &mut result.entities,
-                ADD_DATA_POINTS_TASK_NAME,
-                user_label.as_deref(),
-                rank,
+            finish_persisted_result(result, user_label.as_deref(), rank, &config)
+        })
+    })
+}
+
+/// The `add_data_points` stamp on a saved run's result, then the end-of-run
+/// gate: a run its policy judges fatal fails here.
+///
+/// The gate lives in the task rather than in `cognify()` because the `Err`
+/// has to originate *inside* the executor for the run to be written ERRORED —
+/// a failure the caller only learns about after `execute` returned would leave
+/// a COMPLETED row behind.
+fn finish_persisted_result(
+    mut result: CognifyResult,
+    user_label: Option<&str>,
+    rank: i32,
+    config: &CognifyConfig,
+) -> Result<Box<CognifyResult>, cognee_core::TaskError> {
+    for chunk in &mut result.chunks {
+        stamp_provenance(
+            &mut chunk.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            ADD_DATA_POINTS_TASK_NAME,
+            user_label,
+            rank,
+        );
+    }
+    stamp_entity_provenance(
+        &mut result.entities,
+        ADD_DATA_POINTS_TASK_NAME,
+        user_label,
+        rank,
+    );
+    for summary in &mut result.summaries {
+        stamp_provenance(
+            &mut summary.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            ADD_DATA_POINTS_TASK_NAME,
+            user_label,
+            rank,
+        );
+    }
+    // `rank = 0` skips the `topological_rank` write. Python's
+    // `create_edge_type_datapoints` (`index_graph_edges.py:50`) never routes
+    // these `EdgeType` objects through a provenance stamper, so their rank
+    // stays at the `0` sentinel; `add_data_points` already pre-stamped the
+    // `source_*` keys they need for the `EdgeType_relationship_name` vector
+    // payload (gap-05/08 §4.4).
+    for edge_type in &mut result.edge_types {
+        stamp_provenance(
+            &mut edge_type.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            ADD_DATA_POINTS_TASK_NAME,
+            user_label,
+            0,
+        );
+    }
+    for doc in &mut result.documents_for_dlt {
+        stamp_provenance(
+            &mut doc.base,
+            COGNIFY_PIPELINE_STAMP_NAME,
+            ADD_DATA_POINTS_TASK_NAME,
+            user_label,
+            rank,
+        );
+    }
+    if result.failures.is_fatal(&config.failure_policy()) {
+        return Err(Box::new(CognifyError::RunFailed {
+            report: Box::new(result.failures),
+        }) as cognee_core::TaskError);
+    }
+    Ok(Box::new(result))
+}
+
+/// Build the cognify pipeline's third stage: graph extraction, summarization
+/// and `add_data_points` as **one streaming stage** that saves each document
+/// as soon as all its results are in (SDK-1694 O4b, see
+/// `crate::document_stage`).
+///
+/// Python runs `extract_graph_and_summarize` and `add_data_points` as two
+/// tasks of one pipeline **per data item**, so a data item is saved as soon
+/// as it is done; Rust runs one pipeline for the whole run, so the two are one
+/// stage here, and the per-item save happens inside it. The stamps are those
+/// of the two tasks it replaces, with their own ranks:
+///
+/// - entities, entity types and custom nodes: `source_task =
+///   `[`EXTRACT_GRAPH_TASK_NAME`], rank `extract_rank`;
+/// - summaries: [`EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME`], rank `extract_rank`;
+/// - anything still unstamped on the result: [`ADD_DATA_POINTS_TASK_NAME`],
+///   rank `persist_rank`, and `EdgeType`s with rank 0.
+///
+/// # Retries
+///
+/// One stage is one retry unit: a `RetryPolicy` that re-runs it re-sends every
+/// call and saves every document again, which the stores take as upserts.
+/// [`build_cognify_pipeline`] sets no policy (cognify does not retry tasks).
+///
+/// The run's CPU pool ([`CognifyConfig::cpu_pool`]) is filled from the task
+/// context unless the caller pinned one, as the extraction stage does.
+pub fn make_cognify_documents_task(
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Arc<dyn RelationalDb>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    config: CognifyConfig,
+) -> TypedTask<ExtractedChunks, CognifyResult> {
+    make_cognify_documents_task_with_ranks(
+        llm,
+        graph_db,
+        vector_db,
+        embedding_engine,
+        db,
+        ontology_resolver,
+        config,
+        EXTRACT_GRAPH_TASK_RANK,
+        ADD_DATA_POINTS_TASK_RANK,
+    )
+}
+
+/// [`make_cognify_documents_task`] with caller-chosen ranks: `extract_rank`
+/// for what extraction and summarization stamp, `persist_rank` for the
+/// `add_data_points` stamp. `0` suppresses a rank write.
+#[allow(clippy::too_many_arguments)]
+pub fn make_cognify_documents_task_with_ranks(
+    llm: Arc<dyn Llm>,
+    graph_db: Arc<dyn GraphDBTrait>,
+    vector_db: Arc<dyn VectorDB>,
+    embedding_engine: Arc<dyn EmbeddingEngine>,
+    db: Arc<dyn RelationalDb>,
+    ontology_resolver: Arc<dyn OntologyResolver>,
+    config: CognifyConfig,
+    extract_rank: i32,
+    persist_rank: i32,
+) -> TypedTask<ExtractedChunks, CognifyResult> {
+    TypedTask::async_fn(move |input: &ExtractedChunks, ctx| {
+        let input = input.clone();
+        let stores = crate::document_stage::StageStores {
+            llm: Arc::clone(&llm),
+            graph_db: Arc::clone(&graph_db),
+            vector_db: Arc::clone(&vector_db),
+            embedding_engine: Arc::clone(&embedding_engine),
+            db: Arc::clone(&db),
+            ontology: Arc::clone(&ontology_resolver),
+        };
+        let mut config = config.clone();
+        // Build the graph on the pool the host sized for this run, unless the
+        // caller pinned one.
+        if config.cpu_pool.is_none() {
+            config.cpu_pool = Some(crate::config::CpuPoolHandle(Arc::clone(&ctx.thread_pool)));
+        }
+        let stamp = crate::document_stage::StageStamp {
+            user_label: user_label_from_ctx(&ctx),
+            pipeline_run_id: pipeline_run_id_from_ctx(&ctx),
+            extract_rank,
+        };
+        Box::pin(async move {
+            let (result, stats) =
+                crate::document_stage::run_document_stage(&input, &stores, &config, &stamp).await?;
+            debug!(
+                peak_unsaved = stats.peak_unsaved,
+                cap = config.max_unsaved_documents,
+                "cognify: most documents in progress and not yet saved at once"
             );
-            for summary in &mut result.summaries {
-                stamp_provenance(
-                    &mut summary.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
-            // `rank = 0` skips the `topological_rank` write. Python's
-            // `create_edge_type_datapoints` (`index_graph_edges.py:50`) never
-            // routes these `EdgeType` objects through a provenance stamper, so
-            // their rank stays at the `0` sentinel; `add_data_points` already
-            // pre-stamped the `source_*` keys they need for the
-            // `EdgeType_relationship_name` vector payload (gap-05/08 §4.4).
-            for edge_type in &mut result.edge_types {
-                stamp_provenance(
-                    &mut edge_type.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    0,
-                );
-            }
-            for doc in &mut result.documents_for_dlt {
-                stamp_provenance(
-                    &mut doc.base,
-                    COGNIFY_PIPELINE_STAMP_NAME,
-                    ADD_DATA_POINTS_TASK_NAME,
-                    user_label.as_deref(),
-                    rank,
-                );
-            }
-            // The end-of-run gate. It lives here rather than in `cognify()`
-            // because the `Err` has to originate *inside* the executor for the
-            // run to be written ERRORED — a failure the caller only learns
-            // about after `execute` returned would leave a COMPLETED row
-            // behind.
-            if result.failures.is_fatal(&config.failure_policy()) {
-                return Err(Box::new(CognifyError::RunFailed {
-                    report: Box::new(result.failures),
-                }) as cognee_core::TaskError);
-            }
-            Ok(Box::new(result))
+            finish_persisted_result(result, stamp.user_label.as_deref(), persist_rank, &config)
         })
     })
 }
@@ -7379,18 +7533,16 @@ pub fn build_cognify_pipeline(
         EXTRACT_CHUNKS_TASK_NAME,
     )
     .add_task_named(
-        make_extract_graph_and_summarize_task(
+        make_cognify_documents_task(
             llm,
-            Arc::clone(&graph_db),
+            graph_db,
+            vector_db,
+            embedding_engine,
+            db,
             ontology_resolver,
-            Arc::clone(&db),
-            config.clone(),
+            config,
         ),
-        EXTRACT_GRAPH_AND_SUMMARIZE_TASK_NAME,
-    )
-    .add_task_named(
-        make_add_data_points_task(graph_db, vector_db, embedding_engine, db, config),
-        ADD_DATA_POINTS_TASK_NAME,
+        COGNIFY_DOCUMENTS_TASK_NAME,
     )
     .with_name(COGNIFY_PIPELINE_STAMP_NAME)
     .build()
@@ -14725,7 +14877,8 @@ mod tests {
                 Arc::new(cognee_vector::MockVectorDB::new()),
                 Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
                 &db,
-                id
+                id,
+                &CognifyConfig::default()
             )
             .await
             .is_err()
@@ -14852,6 +15005,7 @@ mod tests {
             Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
             &db,
             id,
+            &CognifyConfig::default(),
         )
         .await
         .expect("teardown");
@@ -14990,6 +15144,7 @@ mod tests {
             Arc::new(cognee_embedding::MockEmbeddingEngine::new(8)),
             &db,
             id,
+            &CognifyConfig::default(),
         )
         .await
         .expect("teardown");

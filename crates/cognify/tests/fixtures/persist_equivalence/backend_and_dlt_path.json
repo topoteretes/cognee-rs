@@ -109,5 +109,61 @@
     "{\"chunk_id\":\"bbc941a21f7951729849d57d8e00baf0\",\"chunk_index\":0,\"confidence\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000000000000000000000000001\",\"dataset_id\":\"0a4a0000000000000000000000000001\",\"destination_node_id\":\"00000000000000000000000000000001\",\"edge_id\":\"13b9cecee5a85d59b209dec4c1ec6f43\",\"evidence_kind\":\"structural\",\"pipeline_run_id\":\"<run 1>\",\"relationship_name\":\"is_part_of\",\"source_node_id\":\"bbc941a21f7951729849d57d8e00baf0\",\"source_task\":\"extract_chunks_from_documents\",\"tenant_id\":null,\"user_id\":\"0a4a0000000000000000000000000002\"}",
     "{\"chunk_id\":\"bbc941a21f7951729849d57d8e00baf0\",\"chunk_index\":0,\"confidence\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000000000000000000000000001\",\"dataset_id\":\"0a4a0000000000000000000000000001\",\"destination_node_id\":\"440b97ced91151d0bfcccc05d9c94459\",\"edge_id\":\"1e6688b52e0b5225864962f1e4548087\",\"evidence_kind\":\"structural\",\"pipeline_run_id\":\"<run 1>\",\"relationship_name\":\"contains\",\"source_node_id\":\"bbc941a21f7951729849d57d8e00baf0\",\"source_task\":\"extract_chunks_from_documents\",\"tenant_id\":null,\"user_id\":\"0a4a0000000000000000000000000002\"}",
     "{\"chunk_id\":\"c0feb2bedc7a50e292d2444a7988b8a4\",\"chunk_index\":0,\"confidence\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000000000000000000000000003\",\"dataset_id\":\"0a4a0000000000000000000000000001\",\"destination_node_id\":\"00000000000000000000000000000003\",\"edge_id\":\"de3c2a0d1c4952b0b8f817b93a52ed9f\",\"evidence_kind\":\"structural\",\"pipeline_run_id\":\"<run 1>\",\"relationship_name\":\"is_part_of\",\"source_node_id\":\"c0feb2bedc7a50e292d2444a7988b8a4\",\"source_task\":\"extract_chunks_from_documents\",\"tenant_id\":null,\"user_id\":\"0a4a0000000000000000000000000002\"}"
+  ],
+  "collections": [
+    "DltColumn_properties",
+    "DltRowDocument_name",
+    "DltRow_text",
+    "DocumentChunk_text",
+    "EdgeType_relationship_name",
+    "EntityType_name",
+    "Entity_name",
+    "SchemaRelationship_description",
+    "SchemaRelationship_name",
+    "SchemaTable_description",
+    "SchemaTable_name",
+    "TextDocument_name"
+  ],
+  "results": [
+    {
+      "chunks": [
+        "{\"belongs_to_set\":null,\"chunk_index\":0,\"chunk_size\":7,\"chunker_id\":\"text_chunker_v1\",\"contains\":[\"440b97ce-d911-51d0-bfcc-cc05d9c94459\"],\"created_at\":\"<time>\",\"cut_type\":\"sentence_end\",\"document_id\":\"00000000-0000-0000-0000-000000000001\",\"feedback_weight\":0.5,\"id\":\"bbc941a2-1f79-5172-9849-d57d8e00baf0\",\"importance_weight\":0.5,\"is_part_of\":\"00000000-0000-0000-0000-000000000001\",\"metadata\":{\"index_fields\":[\"text\"]},\"ontology_valid\":false,\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_chunks_from_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"text\":\"Quarterly planning notes about the garden project.\",\"topological_rank\":2,\"type\":\"DocumentChunk\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":null,\"chunk_index\":0,\"chunk_size\":8,\"contains\":[],\"created_at\":\"<time>\",\"cut_type\":\"dlt_row\",\"document_id\":\"00000000-0000-0000-0000-000000000002\",\"feedback_weight\":0.5,\"id\":\"1ad1b07c-7a93-5af2-9952-cc31cc142d9d\",\"importance_weight\":0.5,\"is_part_of\":\"00000000-0000-0000-0000-000000000002\",\"metadata\":{\"index_fields\":[\"text\"]},\"name\":\"customers:7\",\"ontology_valid\":false,\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_chunks_from_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"text\":\"Table: customers\\nRow Data:\\n  id: 7\\n  name: Acme\",\"topological_rank\":2,\"type\":\"DltRow\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":null,\"chunk_index\":0,\"chunk_size\":8,\"contains\":[],\"created_at\":\"<time>\",\"cut_type\":\"dlt_row\",\"document_id\":\"00000000-0000-0000-0000-000000000003\",\"feedback_weight\":0.5,\"id\":\"c0feb2be-dc7a-50e2-92d2-444a7988b8a4\",\"importance_weight\":0.5,\"is_part_of\":\"00000000-0000-0000-0000-000000000003\",\"metadata\":{\"index_fields\":[\"text\"]},\"name\":\"orders:1\",\"ontology_valid\":false,\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_chunks_from_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"text\":\"Table: orders\\nRow Data:\\n  id: 1\\n  status: shipped\",\"topological_rank\":2,\"type\":\"DltRow\",\"updated_at\":\"<time>\",\"version\":1}"
+      ],
+      "entities": [
+        "{\"entity\":{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"description\":\"Quarterly planning notes about the garden project.\",\"feedback_weight\":0.5,\"id\":\"440b97ce-d911-51d0-bfcc-cc05d9c94459\",\"importance_weight\":0.5,\"is_a\":\"0f913196-178f-5ff6-9e48-8a2ab6424bb1\",\"metadata\":{\"chunk_id\":\"bbc941a2-1f79-5172-9849-d57d8e00baf0\",\"index_fields\":[\"name\"],\"original_node_id\":\"quarterly\"},\"name\":\"quarterly\",\"ontology_valid\":false,\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":3,\"type\":\"Entity\",\"updated_at\":\"<time>\",\"version\":1},\"entity_type\":{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"description\":\"Entity type: mockentity\",\"feedback_weight\":0.5,\"id\":\"0f913196-178f-5ff6-9e48-8a2ab6424bb1\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"name\"]},\"name\":\"mockentity\",\"ontology_valid\":false,\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":3,\"type\":\"EntityType\",\"updated_at\":\"<time>\",\"version\":1}}"
+      ],
+      "edges": [],
+      "summaries": [],
+      "edge_types": [
+        "{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"feedback_weight\":0.5,\"id\":\"26bfbdc4-d7e2-5929-abf1-57f16fd4cfe5\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"relationship_name\"]},\"number_of_edges\":1,\"ontology_valid\":false,\"relationship_name\":\"Quarterly planning notes about the garden project. is part of prose.\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":0,\"type\":\"EdgeType\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"feedback_weight\":0.5,\"id\":\"c9fce427-e3c2-519b-b19d-498d33de83fc\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"relationship_name\"]},\"number_of_edges\":1,\"ontology_valid\":false,\"relationship_name\":\"Table: customers Row Data: id: 7 name: Acme is part of customers.\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":0,\"type\":\"EdgeType\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"feedback_weight\":0.5,\"id\":\"d80d88fb-c506-54e0-967b-27320e233509\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"relationship_name\"]},\"number_of_edges\":1,\"ontology_valid\":false,\"relationship_name\":\"Table: orders Row Data: id: 1 status: shipped is part of orders.\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":0,\"type\":\"EdgeType\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"feedback_weight\":0.5,\"id\":\"e77b7a71-ed44-5b4c-b11b-95a01b6baa6f\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"relationship_name\"]},\"number_of_edges\":1,\"ontology_valid\":false,\"relationship_name\":\"quarterly is a mockentity.\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":0,\"type\":\"EdgeType\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":[\"0a4a0000-0000-0000-0000-000000000001\"],\"created_at\":\"<time>\",\"feedback_weight\":0.5,\"id\":\"ed563d64-c205-501a-94a0-b7b497b81192\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"relationship_name\"]},\"number_of_edges\":1,\"ontology_valid\":false,\"relationship_name\":\"Document chunk mentions quarterly: Quarterly planning notes about the garden project.\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"extract_graph_from_data\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":0,\"type\":\"EdgeType\",\"updated_at\":\"<time>\",\"version\":1}"
+      ],
+      "documents_for_dlt": [
+        "{\"belongs_to_set\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000-0000-0000-0000-000000000001\",\"document_type\":\"text\",\"extension\":\"txt\",\"external_metadata\":{\"<json>\":{}},\"feedback_weight\":0.5,\"id\":\"00000000-0000-0000-0000-000000000001\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"name\"]},\"mime_type\":\"text/plain\",\"name\":\"prose\",\"ontology_valid\":false,\"raw_data_location\":\"mock/1.bin\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"classify_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":1,\"type\":\"TextDocument\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000-0000-0000-0000-000000000002\",\"document_type\":\"dlt_row\",\"extension\":\"txt\",\"external_metadata\":{\"<json>\":{\"column_values\":{\"name\":\"Acme\"},\"dlt_db_name\":\"shop\",\"foreign_keys\":[],\"primary_key_value\":\"7\",\"schema_info\":[{\"name\":\"id\"}],\"source\":\"dlt\",\"table_name\":\"customers\"}},\"feedback_weight\":0.5,\"id\":\"00000000-0000-0000-0000-000000000002\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"name\"]},\"mime_type\":\"text/plain\",\"name\":\"customers\",\"ontology_valid\":false,\"raw_data_location\":\"mock/2.bin\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"classify_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":1,\"type\":\"DltRowDocument\",\"updated_at\":\"<time>\",\"version\":1}",
+        "{\"belongs_to_set\":null,\"created_at\":\"<time>\",\"data_id\":\"00000000-0000-0000-0000-000000000003\",\"document_type\":\"dlt_row\",\"extension\":\"txt\",\"external_metadata\":{\"<json>\":{\"column_values\":{\"status\":\"shipped\"},\"dlt_db_name\":\"shop\",\"fk_references\":[{\"column\":\"customer_id\",\"relationship_name\":\"customer_id_references_customers\",\"target_data_id\":\"00000000-0000-0000-0000-000000000002\",\"target_table\":\"customers\"}],\"foreign_keys\":[{\"column\":\"customer_id\",\"ref_column\":\"id\",\"ref_table\":\"customers\"}],\"primary_key_value\":\"1\",\"schema_info\":[{\"name\":\"id\"}],\"source\":\"dlt\",\"table_name\":\"orders\"}},\"feedback_weight\":0.5,\"id\":\"00000000-0000-0000-0000-000000000003\",\"importance_weight\":0.5,\"metadata\":{\"index_fields\":[\"name\"]},\"mime_type\":\"text/plain\",\"name\":\"orders\",\"ontology_valid\":false,\"raw_data_location\":\"mock/3.bin\",\"source_pipeline\":\"cognify_pipeline\",\"source_task\":\"classify_documents\",\"source_user\":\"0a4a0000-0000-0000-0000-000000000002\",\"topological_rank\":1,\"type\":\"DltRowDocument\",\"updated_at\":\"<time>\",\"version\":1}"
+      ],
+      "embeddings": 0,
+      "embedding_count": 4,
+      "indexed_fields": {
+        "DltRowDocument_name": 2,
+        "DltRow_text": 2,
+        "DocumentChunk_text": 1,
+        "EdgeType_relationship_name": 5,
+        "EntityType_name": 1,
+        "Entity_name": 1,
+        "TextDocument_name": 1
+      },
+      "failures": {
+        "total": 0,
+        "failed_items": [],
+        "unreached_items": []
+      }
+    }
   ]
 }

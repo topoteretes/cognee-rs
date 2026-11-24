@@ -1,32 +1,49 @@
 //! One bounded stream of per-chunk LLM calls, with a fail-fast stop.
 //!
-//! Both LLM graph-extraction paths — the default `KnowledgeGraph` path
-//! ([`crate::tasks::extract_graph_from_data`]) and the runtime custom-schema
-//! path ([`crate::tasks::extract_dynamic_graphs_from_data`]) — send one call
-//! per chunk. They used to send them in sequential `chunks_per_batch` batches,
+//! Every per-chunk LLM call of a cognify run goes through here: the default
+//! `KnowledgeGraph` extraction, the runtime custom-schema extraction and the
+//! summaries. They used to send them in sequential `chunks_per_batch` batches,
 //! each one finishing before the next could start, so one slow chunk held up
-//! every chunk behind the batch boundary. [`dispatch_chunk_calls`] runs every
-//! chunk through one `buffer_unordered(max_parallel)` stream instead: the cap
-//! on in-flight calls is the only limit on dispatch.
+//! every chunk behind the batch boundary. [`dispatch_calls`] runs every chunk
+//! through one `buffer_unordered(max_parallel)` stream instead: the cap on
+//! in-flight calls is the only limit on dispatch.
 //!
-//! Same shape as `SummaryExtractor::summarize_chunks`, which never had a batch
-//! loop, with one difference: the inputs are built lazily, when a call starts,
-//! so the stage holds O(`max_parallel`) copies of chunk text rather than one
-//! per chunk.
+//! The inputs are built lazily, when a call starts, so a stage holds
+//! O(`max_parallel`) copies of chunk text rather than one per chunk.
+//!
+//! # Delivery, stop and cancellation (SDK-1694 O4b)
+//!
+//! - Each outcome is handed to a **sink the moment it returns**, so the
+//!   per-document assembler sees results as they arrive.
+//!   [`dispatch_chunk_calls`] is the collecting form, for callers that want
+//!   every outcome at once, in index order.
+//! - The **stop flag is injected** ([`StopFlag`]), so the extraction stream,
+//!   the summary stream and the writer of one stage share one: a failure in
+//!   any of them stops the others from starting calls.
+//! - A call never started comes back as [`ChunkCall::Skipped`]. A skipped call
+//!   is the **only** "never reached" signal: skips arrive whenever the stream
+//!   reaches them, not in any particular position.
+//! - **Dropping the dispatch future aborts every call in flight**: each
+//!   spawned call is held by an abort-on-drop handle, so a cancelled stage
+//!   (an HTTP client gone, a `timeout`, a sibling's error in a `try_join`)
+//!   stops paying for calls whose results nobody will read.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
 use futures::stream::{self, StreamExt};
+use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::error::CognifyError;
 
-/// How often [`dispatch_chunk_calls`] logs its progress at most.
+/// How often [`dispatch_calls`] logs its progress at most.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
 /// What happened to one chunk's call.
@@ -35,76 +52,149 @@ pub(crate) enum ChunkCall<T> {
     /// The call was dispatched and returned, successfully or not. A panic
     /// inside the call is an `Err` too.
     Done(Result<T, CognifyError>),
-    /// The call was never dispatched: under fail-fast another chunk had
-    /// already failed when this one's turn came.
+    /// The call was never dispatched: the stage's [`StopFlag`] was raised
+    /// when this one's turn came.
     Skipped,
 }
 
-/// Run `make(index)` for every `index` in `0..count`, at most `max_parallel` at
-/// a time, and return every outcome **in index order**, whatever order the
-/// calls finished in.
+/// A stop shared by everything one stage dispatches, and by its writer.
 ///
+/// Raised by a failing call of a stream that stops on failure, or by the
+/// writer when a save fails; read by every stream that stops on failure,
+/// before it starts a call. Cheap to clone: every clone is the same flag.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StopFlag(Arc<AtomicBool>);
+
+impl StopFlag {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn raise(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_raised(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// How one stream dispatches.
+#[derive(Debug, Clone)]
+pub(crate) struct Dispatch {
+    /// At most this many calls in flight (0 counts as 1).
+    pub(crate) max_parallel: usize,
+    /// The stage's stop.
+    pub(crate) stop: StopFlag,
+    /// Start no call once `stop` is raised.
+    pub(crate) honour_stop: bool,
+    /// Raise `stop` when one of this stream's calls fails.
+    pub(crate) raise_on_failure: bool,
+    /// Names the stream in the progress line.
+    pub(crate) what: &'static str,
+}
+
+impl Dispatch {
+    /// A stream with a flag of its own that stops on its own failures when
+    /// `fail_fast` is set, and never otherwise.
+    pub(crate) fn standalone(max_parallel: usize, fail_fast: bool, what: &'static str) -> Self {
+        Self {
+            max_parallel,
+            stop: StopFlag::new(),
+            honour_stop: fail_fast,
+            raise_on_failure: fail_fast,
+            what,
+        }
+    }
+}
+
+/// A spawned call, aborted when dropped before it finished.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        // A no-op for a task that already finished.
+        self.0.abort();
+    }
+}
+
+impl<T> Future for AbortOnDrop<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+/// Run `make(index)` for every `index` in `0..count`, at most
+/// `dispatch.max_parallel` at a time, and hand each outcome to `sink` the
+/// moment it returns.
+///
+/// * `admit(index)` is awaited before a call's stop check and before `make`:
+///   the per-document assembler waits there until the call's document may
+///   start (the cap on unsaved documents). A call waiting to be admitted holds
+///   its slot; calls are admitted in index order.
 /// * `make` is called only when a call is about to start, so it is the place
 ///   to clone a chunk's text: at most `max_parallel` copies exist at once, and
 ///   none is made for a call that never starts. Each future it returns runs on
 ///   its own `tokio::spawn`, so calls use the whole multi-threaded runtime.
-/// * `fail_fast`: once any call has failed, no further call starts. There is
-///   one check and one store, each at the only point where it is not too late:
-///   - the check runs on a call's first poll, the moment it would start, and
-///     before `make` builds its inputs;
-///   - the store runs inside the spawned task, the moment a failing call
-///     returns. Storing it later, when the stream next polls that call's
-///     wrapper, would let a sibling that finished in between open a slot for a
-///     call the failure should have stopped. A panic is caught there too
-///     (`catch_unwind`), so it raises the flag and becomes that chunk's
-///     failure instead of unwinding the stage.
-///
-///   Calls already in flight are not cancelled: they finish and their
-///   outcomes, failures included, are returned. Every call never started comes
-///   back as [`ChunkCall::Skipped`]. Without `fail_fast` every call starts.
+/// * The stop: with `honour_stop`, no call starts once the flag is raised —
+///   the check runs on a call's first poll, after admission and before `make`
+///   builds its inputs. With `raise_on_failure`, a failing call raises the
+///   flag inside its spawned task, the moment it returns: storing it later,
+///   when the stream next polls that call's wrapper, would let a sibling that
+///   finished in between open a slot for a call the failure should have
+///   stopped. A panic is caught there too (`catch_unwind`), so it raises the
+///   flag and becomes that chunk's failure instead of unwinding the stage.
+///   Calls already in flight are not cancelled by a stop: they finish and
+///   their outcomes, failures included, reach the sink.
 /// * `task_error` turns a panic message, or a task that was cancelled, into
 ///   the chunk's error.
-/// * `what` names the stage in the progress line, logged at most every
-///   [`PROGRESS_INTERVAL`].
 ///
-/// Dropping the returned future (the stage itself being cancelled) stops
-/// dispatch but does not abort the spawned calls already in flight: they run
-/// to completion and their results are dropped. Aborting them belongs with the
-/// per-document assembler (SDK-1694 O4b), which owns the stream's lifetime.
+/// Dropping the returned future aborts the calls in flight (see the module
+/// docs). Returns once every index has reached the sink.
 ///
 /// `buffer_unordered`, not `buffered`: the latter's `FuturesOrdered` counts
 /// completed-but-undrained outputs against its limit, so one slow call pins
 /// its slot and every slot filled behind it until it returns — head-of-line
-/// blocking, which is exactly what removing the batch barrier is for. Order is
-/// restored afterwards from the index each call carries; graph building keeps
-/// the first declaration of an entity in chunk order, and failure records must
-/// be deterministic for a given input.
-pub(crate) async fn dispatch_chunk_calls<T, F, Fut>(
+/// blocking, which is exactly what removing the batch barrier is for. A sink
+/// that needs the chunk order back restores it from the index.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_calls<T, A, AFut, F, Fut, S>(
     count: usize,
-    max_parallel: usize,
-    fail_fast: bool,
-    what: &str,
+    dispatch: &Dispatch,
+    admit: A,
     make: F,
     task_error: fn(String) -> CognifyError,
-) -> Vec<ChunkCall<T>>
-where
+    mut sink: S,
+) where
     T: Send + 'static,
+    A: Fn(usize) -> AFut,
+    AFut: Future<Output = ()>,
     F: FnMut(usize) -> Fut + Send,
     Fut: Future<Output = Result<T, CognifyError>> + Send + 'static,
+    S: FnMut(usize, ChunkCall<T>),
 {
-    let stopped = Arc::new(AtomicBool::new(false));
+    let Dispatch {
+        max_parallel,
+        stop,
+        honour_stop,
+        raise_on_failure,
+        what,
+    } = dispatch;
     // Shared by every call's wrapper so that `make` runs inside the wrapper,
     // after its check. The wrappers are polled by this one task, so the lock
     // is never contended; it is held only while `make` builds the inputs.
     let make = Mutex::new(make);
-    let mut outcomes: Vec<(usize, ChunkCall<T>)> = Vec::with_capacity(count);
+    let admit = &admit;
 
     let mut calls = stream::iter(0..count)
         .map(|index| {
-            let stopped = Arc::clone(&stopped);
+            let stop = stop.clone();
             let make = &make;
             async move {
-                if fail_fast && stopped.load(Ordering::Acquire) {
+                admit(index).await;
+                if *honour_stop && stop.is_raised() {
                     return (index, ChunkCall::Skipped);
                 }
                 let call = {
@@ -112,23 +202,24 @@ where
                     let mut make = make.lock().expect("lock poison is unrecoverable");
                     make(index)
                 };
-                let result = tokio::spawn(async move {
+                let raise = *raise_on_failure;
+                let result = AbortOnDrop(tokio::spawn(async move {
                     let result = AssertUnwindSafe(call)
                         .catch_unwind()
                         .await
                         .unwrap_or_else(|panic| Err(task_error(panic_message(panic.as_ref()))));
-                    if result.is_err() {
-                        stopped.store(true, Ordering::Release);
+                    if raise && result.is_err() {
+                        stop.raise();
                     }
                     result
-                })
+                }))
                 .await
                 // Only a cancelled task gets here: a panic was caught above.
                 .unwrap_or_else(|error| Err(task_error(error.to_string())));
                 (index, ChunkCall::Done(result))
             }
         })
-        .buffer_unordered(max_parallel.max(1));
+        .buffer_unordered((*max_parallel).max(1));
 
     let mut returned = 0usize;
     let mut last_log = Instant::now();
@@ -140,10 +231,39 @@ where
                 info!("{what}: {returned} of {count} chunks returned");
             }
         }
-        outcomes.push((index, outcome));
+        sink(index, outcome);
     }
-    drop(calls);
+}
 
+/// [`dispatch_calls`] with a flag of its own and no admission, collecting
+/// every outcome **in index order**, whatever order the calls finished in.
+///
+/// With `fail_fast`, once any call has failed no further call starts; every
+/// call never started comes back as [`ChunkCall::Skipped`]. Without it every
+/// call starts.
+pub(crate) async fn dispatch_chunk_calls<T, F, Fut>(
+    count: usize,
+    max_parallel: usize,
+    fail_fast: bool,
+    what: &'static str,
+    make: F,
+    task_error: fn(String) -> CognifyError,
+) -> Vec<ChunkCall<T>>
+where
+    T: Send + 'static,
+    F: FnMut(usize) -> Fut + Send,
+    Fut: Future<Output = Result<T, CognifyError>> + Send + 'static,
+{
+    let mut outcomes: Vec<(usize, ChunkCall<T>)> = Vec::with_capacity(count);
+    dispatch_calls(
+        count,
+        &Dispatch::standalone(max_parallel, fail_fast, what),
+        |_| std::future::ready(()),
+        make,
+        task_error,
+        |index, outcome| outcomes.push((index, outcome)),
+    )
+    .await;
     outcomes.sort_by_key(|(index, _)| *index);
     outcomes.into_iter().map(|(_, outcome)| outcome).collect()
 }
@@ -368,5 +488,208 @@ mod tests {
                 .iter()
                 .all(|outcome| matches!(outcome, ChunkCall::Done(_)))
         );
+    }
+
+    /// Outcomes reach the sink as they return, not in index order: a fast
+    /// late chunk is delivered before a slow early one.
+    #[tokio::test]
+    async fn outcomes_reach_the_sink_as_they_return() {
+        let mut delivered: Vec<usize> = Vec::new();
+        dispatch_calls(
+            3,
+            &Dispatch::standalone(3, false, "test"),
+            |_| std::future::ready(()),
+            |index| async move {
+                // Chunk 0 is the slowest, chunk 2 the fastest.
+                tokio::time::sleep(Duration::from_millis(20 * (3 - index as u64))).await;
+                Ok(index)
+            },
+            task_error,
+            |index, outcome| {
+                assert!(matches!(outcome, ChunkCall::Done(Ok(value)) if value == index));
+                delivered.push(index);
+            },
+        )
+        .await;
+        assert_eq!(delivered, vec![2, 1, 0]);
+    }
+
+    /// Two streams sharing one flag: a failure in the first stops the second
+    /// from starting any call, whichever raised it.
+    #[tokio::test]
+    async fn a_shared_flag_stops_the_other_stream() {
+        let stop = StopFlag::new();
+        let extraction = Dispatch {
+            max_parallel: 1,
+            stop: stop.clone(),
+            honour_stop: true,
+            raise_on_failure: true,
+            what: "extraction",
+        };
+        let summaries = Dispatch {
+            raise_on_failure: false,
+            what: "summaries",
+            ..extraction.clone()
+        };
+        let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut skipped = 0usize;
+        let failing = dispatch_calls(
+            1,
+            &extraction,
+            |_| std::future::ready(()),
+            |_| async { Err::<(), _>(failure()) },
+            task_error,
+            |_, _| {
+                let _ = gate_tx.send(true);
+            },
+        );
+        let waiting = dispatch_calls(
+            4,
+            &summaries,
+            // Nothing starts until the failure is in.
+            |_| {
+                let mut gate = gate_rx.clone();
+                async move {
+                    let _ = gate.wait_for(|open| *open).await;
+                }
+            },
+            |_| {
+                let started = Arc::clone(&started);
+                async move {
+                    started.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+            task_error,
+            |_, outcome| {
+                if matches!(outcome, ChunkCall::Skipped) {
+                    skipped += 1;
+                }
+            },
+        );
+        futures::join!(failing, waiting);
+        assert!(stop.is_raised());
+        assert_eq!(started.load(Ordering::SeqCst), 0, "no summary call started");
+        assert_eq!(skipped, 4);
+    }
+
+    /// A stream that does not raise the flag on failure leaves it down, so a
+    /// tolerated failure stops nothing.
+    #[tokio::test]
+    async fn a_stream_that_does_not_raise_leaves_the_flag_down() {
+        let dispatch = Dispatch {
+            raise_on_failure: false,
+            ..Dispatch::standalone(1, true, "test")
+        };
+        let mut done = 0usize;
+        dispatch_calls(
+            3,
+            &dispatch,
+            |_| std::future::ready(()),
+            |index| async move {
+                if index == 0 {
+                    Err(failure())
+                } else {
+                    Ok(index)
+                }
+            },
+            task_error,
+            |_, outcome| {
+                if matches!(outcome, ChunkCall::Done(_)) {
+                    done += 1;
+                }
+            },
+        )
+        .await;
+        assert!(!dispatch.stop.is_raised());
+        assert_eq!(done, 3, "every call ran");
+    }
+
+    /// Calls wait in `admit` until they may start, in index order.
+    #[tokio::test]
+    async fn calls_start_only_once_admitted() {
+        let (open_tx, open_rx) = tokio::sync::watch::channel(0usize);
+        let dispatch = Dispatch::standalone(3, false, "test");
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let run = dispatch_calls(
+            3,
+            &dispatch,
+            |index| {
+                let mut open = open_rx.clone();
+                async move {
+                    let _ = open.wait_for(|admitted| *admitted > index).await;
+                }
+            },
+            |index| {
+                let started = Arc::clone(&started);
+                async move {
+                    started.lock().unwrap().push(index);
+                    Ok(index)
+                }
+            },
+            task_error,
+            |_, _| {},
+        );
+        let admit = async {
+            for admitted in 1..=3 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                assert_eq!(started.lock().unwrap().len(), admitted - 1);
+                open_tx.send(admitted).unwrap();
+            }
+        };
+        futures::join!(run, admit);
+        assert_eq!(*started.lock().unwrap(), vec![0, 1, 2]);
+    }
+
+    /// Dropping the dispatch future aborts the calls in flight: they never
+    /// finish.
+    #[tokio::test]
+    async fn dropping_the_dispatch_aborts_calls_in_flight() {
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let finished = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        struct CountDrop(Arc<AtomicUsize>);
+        impl Drop for CountDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let dispatch = Dispatch::standalone(2, false, "test");
+        let run = dispatch_calls(
+            2,
+            &dispatch,
+            |_| std::future::ready(()),
+            |_| {
+                let started = started_tx.clone();
+                let finished = Arc::clone(&finished);
+                let guard = CountDrop(Arc::clone(&dropped));
+                async move {
+                    let _guard = guard;
+                    let _ = started.send(());
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    finished.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+            task_error,
+            |_, _| {},
+        );
+        tokio::select! {
+            () = run => panic!("the calls sleep for a minute"),
+            _ = async {
+                started_rx.recv().await;
+                started_rx.recv().await;
+            } => {}
+        }
+        // The aborted tasks drop their futures on the runtime.
+        for _ in 0..100 {
+            if dropped.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(dropped.load(Ordering::SeqCst), 2, "both calls were aborted");
+        assert_eq!(finished.load(Ordering::SeqCst), 0);
     }
 }

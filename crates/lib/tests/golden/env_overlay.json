@@ -1665,6 +1665,36 @@
   "COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO=\"{\\\"a\\\":1}\"": {},
   "COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
   "COGNEE_COGNIFY_MAX_CHUNK_FAILURE_RATIO=\"{\\\"ssl\\\":true}\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"  \"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"-1\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"0\"": {
+    "cognify.max_unsaved_documents": 0
+  },
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"1\"": {
+    "cognify.max_unsaved_documents": 1
+  },
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"1.5\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"42\"": {
+    "cognify.max_unsaved_documents": 42
+  },
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"5000000000\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"70000\"": {
+    "cognify.max_unsaved_documents": 70000
+  },
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"TRUE\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"[1]\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"abc\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"false\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"no\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"on\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"require\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"true\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"v\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"yes\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"{\\\"a\\\":1}\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"{\\\"ssl\\\":\\\"verify-full\\\"}\"": {},
+  "COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS=\"{\\\"ssl\\\":true}\"": {},
   "COGNEE_COGNIFY_ROLLBACK_SCOPE=\"  \"": {
     "cognify.rollback_scope": "  "
   },

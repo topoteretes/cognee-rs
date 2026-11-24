@@ -3189,6 +3189,69 @@
     "err": "TypeMismatch",
     "key": "cognify.max_chunk_failure_ratio"
   },
+  "cognify.max_unsaved_documents <- \"\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- \"1\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- \"s\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- \"true\"": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- -1": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- 0": {
+    "ok": {
+      "cognify.max_unsaved_documents": 0
+    }
+  },
+  "cognify.max_unsaved_documents <- 1": {
+    "ok": {
+      "cognify.max_unsaved_documents": 1
+    }
+  },
+  "cognify.max_unsaved_documents <- 1.5": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- 5000000000": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- 70000": {
+    "ok": {
+      "cognify.max_unsaved_documents": 70000
+    }
+  },
+  "cognify.max_unsaved_documents <- [1]": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- false": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- null": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- true": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
+  "cognify.max_unsaved_documents <- {\"a\":1}": {
+    "err": "TypeMismatch",
+    "key": "cognify.max_unsaved_documents"
+  },
   "cognify.raise_incremental_loading_errors <- \"\"": {
     "err": "TypeMismatch",
     "key": "cognify.raise_incremental_loading_errors"

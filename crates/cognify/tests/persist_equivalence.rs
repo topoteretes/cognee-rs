@@ -16,7 +16,9 @@
 //! - the graph edges and their properties;
 //! - the vector points of every collection, vectors and payloads included;
 //! - the ownership-ledger node and edge rows;
-//! - the edge-evidence rows.
+//! - the edge-evidence rows;
+//! - the vector collections that exist, empty ones included (SDK-1694 O4b);
+//! - what each run's `CognifyResult` reports (SDK-1694 O4b).
 //!
 //! The snapshots under `tests/fixtures/persist_equivalence/` were recorded by
 //! these same tests running against the code **before** the refactor
@@ -315,7 +317,8 @@ impl Stores {
     }
 
     /// Everything the scenario stored, normalised as the module doc says.
-    async fn snapshot(&self, runs: &[Option<Uuid>]) -> Value {
+    async fn snapshot(&self, results: &[&CognifyResult]) -> Value {
+        let runs: Vec<Option<Uuid>> = results.iter().map(|r| r.pipeline_run_id).collect();
         let labels: BTreeMap<String, String> = runs
             .iter()
             .enumerate()
@@ -407,6 +410,21 @@ impl Stores {
         // The row id hashes the run id, which is random.
         let evidence = rows("provenance_edge_evidence", &["id"]).await;
 
+        // Every collection that exists, so an extra (empty) one shows up:
+        // `all_points` alone cannot tell an empty collection from none.
+        let collections: BTreeSet<String> = self
+            .vector_db
+            .list_collections()
+            .await
+            .expect("list collections")
+            .into_iter()
+            .map(|(data_type, field)| format!("{data_type}_{field}"))
+            .collect();
+        let result_sets: Vec<Value> = results
+            .iter()
+            .map(|result| result_sets(result, &normalise))
+            .collect();
+
         json!({
             "graph_nodes": graph_nodes,
             "graph_edges": graph_edges,
@@ -414,8 +432,42 @@ impl Stores {
             "ledger_nodes": ledger_nodes,
             "ledger_edges": ledger_edges,
             "edge_evidence": evidence,
+            "collections": collections,
+            "results": result_sets,
         })
     }
+}
+
+/// What one run's `CognifyResult` reports, as sets: what it says it stored
+/// (chunks, entities, edges, summaries, edge types, documents) and its counts.
+fn result_sets(result: &CognifyResult, normalise: &dyn Fn(Value) -> Value) -> Value {
+    fn set<T: serde::Serialize>(items: &[T], normalise: &dyn Fn(Value) -> Value) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| normalise(serde_json::to_value(item).expect("serialize")).to_string())
+            .collect::<BTreeSet<String>>()
+            .into_iter()
+            .collect()
+    }
+    let indexed_fields: BTreeMap<&String, &usize> =
+        result.indexed_fields.field_counts.iter().collect();
+    let failures = &result.failures;
+    json!({
+        "chunks": set(&result.chunks, normalise),
+        "entities": set(&result.entities, normalise),
+        "edges": set(&result.edges, normalise),
+        "summaries": set(&result.summaries, normalise),
+        "edge_types": set(&result.edge_types, normalise),
+        "documents_for_dlt": set(&result.documents_for_dlt, normalise),
+        "embeddings": result.embeddings.len(),
+        "embedding_count": result.embedding_count,
+        "indexed_fields": indexed_fields,
+        "failures": {
+            "total": failures.total(),
+            "failed_items": failures.failed_items(),
+            "unreached_items": failures.unreached_items(),
+        },
+    })
 }
 
 /// `value` with every object's keys in sorted order, so two equal values print
@@ -518,6 +570,50 @@ fn assert_matches_snapshot(name: &str, actual: &Value) {
             differences.push(format!("{section}: unexpected {extra}"));
         }
     }
+    let want = as_set(&expected["collections"]);
+    let got = as_set(&actual["collections"]);
+    for missing in want.difference(&got) {
+        differences.push(format!("collections: missing {missing}"));
+    }
+    for extra in got.difference(&want) {
+        differences.push(format!("collections: unexpected {extra}"));
+    }
+    let no_results = Vec::new();
+    let want_results = expected["results"].as_array().unwrap_or(&no_results);
+    let got_results = actual["results"].as_array().unwrap_or(&no_results);
+    if want_results.len() != got_results.len() {
+        differences.push(format!(
+            "results: {} runs expected, {} reported",
+            want_results.len(),
+            got_results.len()
+        ));
+    }
+    for (run, (want, got)) in want_results.iter().zip(got_results).enumerate() {
+        let empty = serde_json::Map::new();
+        let keys: BTreeSet<&String> = want
+            .as_object()
+            .unwrap_or(&empty)
+            .keys()
+            .chain(got.as_object().unwrap_or(&empty).keys())
+            .collect();
+        for key in keys {
+            let (want, got) = (&want[key.as_str()], &got[key.as_str()]);
+            if want.is_array() || got.is_array() {
+                let (want, got) = (as_set(want), as_set(got));
+                for missing in want.difference(&got) {
+                    differences.push(format!("result {} {key}: missing {missing}", run + 1));
+                }
+                for extra in got.difference(&want) {
+                    differences.push(format!("result {} {key}: unexpected {extra}", run + 1));
+                }
+            } else if want != got {
+                differences.push(format!(
+                    "result {} {key}: expected {want}, got {got}",
+                    run + 1
+                ));
+            }
+        }
+    }
     let want_collections: BTreeSet<String> = expected["vectors"]
         .as_object()
         .map(|map| map.keys().cloned().collect())
@@ -603,9 +699,7 @@ async fn the_default_path_stores_the_pinned_sets() {
         .cognify(vec![d], llm, ontology(), &default_config())
         .await;
 
-    let snapshot = stores
-        .snapshot(&[first.pipeline_run_id, second.pipeline_run_id])
-        .await;
+    let snapshot = stores.snapshot(&[&first, &second]).await;
     assert_matches_snapshot("default_path", &snapshot);
 }
 
@@ -660,7 +754,7 @@ async fn the_custom_schema_path_stores_the_pinned_sets() {
         )
         .await;
 
-    let snapshot = stores.snapshot(&[run.pipeline_run_id]).await;
+    let snapshot = stores.snapshot(&[&run]).await;
     assert_matches_snapshot("custom_schema_path", &snapshot);
 }
 
@@ -768,6 +862,6 @@ async fn the_backend_and_dlt_path_stores_the_pinned_sets() {
         )
         .await;
 
-    let snapshot = stores.snapshot(&[run.pipeline_run_id]).await;
+    let snapshot = stores.snapshot(&[&run]).await;
     assert_matches_snapshot("backend_and_dlt_path", &snapshot);
 }

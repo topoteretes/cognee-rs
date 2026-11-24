@@ -37,6 +37,14 @@ use cognee_core::CpuPool;
 /// waits for each block of a document before sending the next one's calls.
 pub const DEFAULT_CHUNKS_PER_BATCH: usize = 2000;
 
+/// Default [`CognifyConfig::max_unsaved_documents`]: how many documents may
+/// be in progress and not yet saved at once.
+pub const DEFAULT_MAX_UNSAVED_DOCUMENTS: usize = 32;
+
+fn default_max_unsaved_documents() -> usize {
+    DEFAULT_MAX_UNSAVED_DOCUMENTS
+}
+
 /// Default ceiling on graph-extraction LLM calls in flight.
 ///
 /// Matches Python's *effective* ceiling, which is not the absent one its
@@ -272,6 +280,21 @@ pub struct CognifyConfig {
     /// `cognify.cross_chunk_endpoints`.
     #[serde(default)]
     pub endpoint_scope: EndpointScope,
+
+    /// How many documents may be in progress and not yet saved at once
+    /// (SDK-1694 O4b). The cognify pipeline saves each document as soon as
+    /// all its extraction and summary results are in; a document's chunks
+    /// are dispatched only while fewer than this many documents are waiting
+    /// to be saved, so it bounds the **LLM results waiting to be saved** (the
+    /// extracted graphs, summaries and built expansions of unsaved
+    /// documents). The run's chunk text, its merged graph, the edge-status map
+    /// and the `CognifyResult` still grow with the run. A slow document holds back the saves behind it
+    /// (they are saved in input order), and, once the window is full, the
+    /// dispatch of new documents too. 0 counts as 1. Set from
+    /// `cognify.max_unsaved_documents` (default
+    /// [`DEFAULT_MAX_UNSAVED_DOCUMENTS`]).
+    #[serde(default = "default_max_unsaved_documents")]
+    pub max_unsaved_documents: usize,
 
     /// Maximum number of graph-extraction LLM calls in flight.
     ///
@@ -703,6 +726,7 @@ impl Default for CognifyConfig {
 
             chunks_per_batch: DEFAULT_CHUNKS_PER_BATCH,
             endpoint_scope: EndpointScope::default(),
+            max_unsaved_documents: DEFAULT_MAX_UNSAVED_DOCUMENTS,
             max_parallel_extractions: DEFAULT_MAX_PARALLEL_EXTRACTIONS,
             custom_extraction_prompt: None,
             extraction_strategy: ExtractionStrategy::default(),
@@ -816,6 +840,13 @@ impl CognifyConfig {
     /// [`Self::endpoint_scope`]).
     pub fn with_endpoint_scope(mut self, scope: EndpointScope) -> Self {
         self.endpoint_scope = scope;
+        self
+    }
+
+    /// Set how many documents may be in progress and not yet saved at once
+    /// (see [`Self::max_unsaved_documents`]).
+    pub fn with_max_unsaved_documents(mut self, limit: usize) -> Self {
+        self.max_unsaved_documents = limit;
         self
     }
 

@@ -573,6 +573,8 @@ impl Settings {
         } else {
             cognee_cognify::EndpointScope::Chunk
         });
+        // 0 counts as 1: a window of none would admit no document.
+        cfg = cfg.with_max_unsaved_documents((cognify.max_unsaved_documents as usize).max(1));
         // Run-ownership markers live under the system root, as Python's
         // `pipeline_run_locks`, so startup recovery can prove a run abandoned.
         cfg = cfg.with_run_ownership_dir(self.run_ownership_dir());
@@ -3241,6 +3243,20 @@ mod tests {
     /// SDK-1070: settings that were accepted but inert reach their consumer
     /// when set through `ConfigManager` (and so through every binding's `set`
     /// and `cognee-cli config set`).
+    /// `cognify.max_unsaved_documents` reaches `CognifyConfig`; 0 counts as
+    /// 1 (a window of none would admit no document) and unset keeps 32.
+    #[test]
+    fn max_unsaved_documents_reaches_cognify() {
+        let cm = ConfigManager::new(Settings::default());
+        assert_eq!(cm.read().cognify_config().max_unsaved_documents, 32);
+        cm.set("cognify.max_unsaved_documents", serde_json::json!(5))
+            .unwrap();
+        assert_eq!(cm.read().cognify_config().max_unsaved_documents, 5);
+        cm.set("cognify.max_unsaved_documents", serde_json::json!(0))
+            .unwrap();
+        assert_eq!(cm.read().cognify_config().max_unsaved_documents, 1);
+    }
+
     #[test]
     fn formerly_inert_settings_reach_cognify_and_search() {
         let dir = tempfile::tempdir().unwrap();
