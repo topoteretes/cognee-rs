@@ -15,6 +15,9 @@ use cognee_models::Document;
 
 use super::{DocumentLoader, LoaderError, LoaderOutput};
 
+/// Re-exported from its old home; the helper lives in [`super`] now.
+pub use super::universal_newlines;
+
 /// Source-file extensions of the languages enola extracts. Python's
 /// `SUPPORTED_CODE_EXTENSIONS` (`code_loader.py`), lowercase. It leaves out
 /// extensions that double as generic config or markup (`yml`, `json`, `md`,
@@ -51,27 +54,6 @@ pub fn code_storage_file_name(content_hash: &str, extension: &str) -> String {
     } else {
         format!("code_{content_hash}.{}", extension.to_lowercase())
     }
-}
-
-/// Translate line endings as Python's text mode does (universal newlines):
-/// `\r\n` and a lone `\r` both become `\n`.
-pub fn universal_newlines(text: &str) -> String {
-    if !text.contains('\r') {
-        return text.to_owned();
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\r' {
-            if chars.peek() == Some(&'\n') {
-                chars.next();
-            }
-            out.push('\n');
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// Loader for source-code files.

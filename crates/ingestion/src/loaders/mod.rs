@@ -101,6 +101,14 @@ pub enum LoaderOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+/// Python's universal newlines, used by `text_loader` and `code_loader`;
+/// it lives in `cognee-utils` so chunking can share it.
+pub use cognee_utils::universal_newlines;
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 

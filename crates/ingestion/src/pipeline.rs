@@ -4374,8 +4374,10 @@ mod tests {
         );
     }
 
-    /// Text-path no-regression: the stored artifact is byte-identical to the
-    /// input, `raw_content_hash == content_hash`, `extension == "txt"`, the
+    /// Text-path no-regression for LF-only plain text: the stored artifact is
+    /// byte-identical to the input, `raw_content_hash == content_hash`
+    /// (CRLF input differs: see
+    /// `test_crlf_text_stores_lf_text_with_python_hashes`), `extension == "txt"`, the
     /// content hash matches the pinned Python-compatible value, and the new
     /// row's id is a uuid4.
     #[tokio::test]
@@ -4410,18 +4412,59 @@ mod tests {
             "a new row's data_id is a uuid4, as in Python"
         );
 
-        // For plain text the extracted text equals the raw bytes.
+        // For LF-only plain text the extracted text equals the raw bytes.
         assert_eq!(
             processed.raw_content_hash, processed.content_hash,
-            "plain-text raw_content_hash must equal content_hash"
+            "LF-only plain-text raw_content_hash must equal content_hash"
         );
         assert_eq!(processed.stored_extension, "txt");
         assert_eq!(processed.stored_mime_type, "text/plain");
         assert_eq!(processed.loader_engine, "text_loader");
 
-        // Stored file content is byte-identical to the input.
+        // Stored file content is byte-identical to the (LF-only) input.
         let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
         assert_eq!(stored, HELLO_WORLD.as_bytes());
+    }
+
+    /// CRLF text (SDK-1379): Python's `ingest_data` hashes the original bytes
+    /// into `content_hash`, and its `text_loader` reads them in text mode, so
+    /// the stored text, and its `raw_content_hash`, have LF line endings.
+    #[tokio::test]
+    async fn test_crlf_text_stores_lf_text_with_python_hashes() {
+        use cognee_storage::LocalStorage;
+
+        const CRLF_TEXT: &str = "a\r\nb\rc";
+        const CRLF_TEXT_MD5: &str = "080ea8afd730ce00f5bd226f8d2b1bae"; // md5(b"a\r\nb\rc")
+        const LF_TEXT_MD5: &str = "c32b2057b9bd62caa835386346177935"; // md5(b"a\nb\nc")
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(temp_dir.path().to_path_buf());
+        let processed = process_input(
+            &DataInput::Text(CRLF_TEXT.to_string()),
+            &storage,
+            HashAlgorithm::Md5,
+            Uuid::new_v4(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            processed.content_hash, CRLF_TEXT_MD5,
+            "hash of the original bytes"
+        );
+        assert_eq!(
+            processed.raw_content_hash, LF_TEXT_MD5,
+            "hash of the stored LF text"
+        );
+        assert_eq!(processed.loader_engine, "text_loader");
+        assert!(
+            processed
+                .storage_location
+                .ends_with(&format!("text_{CRLF_TEXT_MD5}.txt"))
+        );
+        let stored = storage.retrieve(&processed.raw_data_uri).await.unwrap();
+        assert_eq!(stored, b"a\nb\nc");
     }
 
     /// CSV path (feature-gated): the stored artifact is the EXTRACTED text

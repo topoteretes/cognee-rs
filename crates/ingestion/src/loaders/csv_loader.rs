@@ -71,6 +71,24 @@ mod tests {
         }
     }
 
+    /// No newline translation here (SDK-1379): Python's `csv_loader` opens
+    /// with `newline=""` (`csv_loader.py:77`), so CRLF only ends rows and a
+    /// quoted CRLF is kept. Python 3 `csv.DictReader` on these bytes gives
+    /// `{'name': 'Alice', 'note': 'x\r\ny'}` and `{'name': 'Bob', 'note': 'z'}`.
+    #[tokio::test]
+    async fn crlf_ends_rows_and_a_quoted_crlf_is_kept() {
+        let csv_data = b"name,note\r\nAlice,\"x\r\ny\"\r\nBob,z\r\n";
+        match CsvLoader.extract(csv_data, &test_doc()).await.unwrap() {
+            LoaderOutput::Rows(rows) => {
+                assert_eq!(
+                    rows,
+                    vec!["name: Alice, note: x\r\ny", "name: Bob, note: z"]
+                );
+            }
+            other => panic!("expected LoaderOutput::Rows, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn basic_csv() {
         let csv_data = b"name,age,city\nAlice,30,NYC\nBob,25,LA\n";

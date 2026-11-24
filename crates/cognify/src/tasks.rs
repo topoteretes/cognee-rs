@@ -3978,7 +3978,7 @@ async fn load_code_file_item(
             item.id
         )))
     })?;
-    let content = cognee_ingestion::loaders::code::universal_newlines(&text);
+    let content = cognee_ingestion::loaders::universal_newlines(&text);
     let ledger = code_graph_ledger(db, input, item.id, pipeline_run_id);
     cognee_code_graph::extract_code_file_graph(graph_db, Some(&ledger), code_graph, item, &content)
         .await?;

@@ -1,4 +1,5 @@
-//! Text file loader -- strict UTF-8 decode; a BOM is kept, as Python does.
+//! Text file loader -- strict UTF-8 decode with universal newlines; a BOM is
+//! kept, as Python does.
 //!
 //! Handles `document_type = "text"`. Relocates the logic previously
 //! hard-coded at `crates/cognify/src/tasks.rs:166-167`.
@@ -6,23 +7,26 @@
 use async_trait::async_trait;
 use cognee_models::Document;
 
-use super::{DocumentLoader, LoaderError, LoaderOutput};
+use super::{DocumentLoader, LoaderError, LoaderOutput, universal_newlines};
 
 /// Loader for plain-text documents.
 ///
 /// Decodes raw bytes as UTF-8. A BOM (byte-order mark) is kept as a leading
 /// U+FEFF: Python's `text_loader` opens the file with `encoding="utf-8"`, not
-/// `utf-8-sig` (`text_loader.py:82`), which does not drop it. Returns [`LoaderOutput::Text`] for downstream paragraph
+/// `utf-8-sig` (`text_loader.py:82`), which does not drop it. Line endings are
+/// translated as that text-mode read does (universal newlines: `\r\n` and a
+/// lone `\r` become `\n`), so the stored text, `raw_content_hash` and chunks
+/// match Python's. Returns [`LoaderOutput::Text`] for downstream paragraph
 /// chunking.
 pub struct TextLoader;
 
 #[async_trait]
 impl DocumentLoader for TextLoader {
     async fn extract(&self, bytes: &[u8], _doc: &Document) -> Result<LoaderOutput, LoaderError> {
-        let text = String::from_utf8(bytes.to_vec())
-            .map_err(|e| LoaderError::InvalidUtf8(e.to_string()))?;
+        let text =
+            std::str::from_utf8(bytes).map_err(|e| LoaderError::InvalidUtf8(e.to_string()))?;
 
-        Ok(LoaderOutput::Text(text))
+        Ok(LoaderOutput::Text(universal_newlines(text)))
     }
 
     fn engine_name(&self) -> &'static str {
@@ -76,6 +80,30 @@ mod tests {
         let result = loader.extract(&input, &doc).await.unwrap();
         match result {
             LoaderOutput::Text(s) => assert_eq!(s, "\u{feff}hello"),
+            _ => panic!("expected LoaderOutput::Text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn crlf_and_lone_cr_become_lf() {
+        let result = TextLoader
+            .extract(b"a\r\nb\rc\nd\r", &make_test_doc())
+            .await;
+        match result.unwrap() {
+            LoaderOutput::Text(s) => assert_eq!(s, "a\nb\nc\nd\n"),
+            _ => panic!("expected LoaderOutput::Text"),
+        }
+    }
+
+    /// Python 3 `open(path, encoding="utf-8").read()` of these bytes returns
+    /// `'﻿a\nb\nc'`: the BOM stays and the newlines are translated.
+    #[tokio::test]
+    async fn bom_is_kept_while_newlines_are_translated() {
+        let result = TextLoader
+            .extract(b"\xEF\xBB\xBFa\r\nb\rc", &make_test_doc())
+            .await;
+        match result.unwrap() {
+            LoaderOutput::Text(s) => assert_eq!(s, "\u{feff}a\nb\nc"),
             _ => panic!("expected LoaderOutput::Text"),
         }
     }
