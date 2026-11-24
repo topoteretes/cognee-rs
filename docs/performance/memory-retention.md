@@ -187,6 +187,15 @@ is reset at every unit. `cross_chunk` now counts matches to an earlier chunk of
 the same unit — what `cognify.cross_chunk_endpoints=false` (Python's
 chunk-local rule) would drop — and a per-unit flush loses nothing.
 
+**Since SDK-1694 O4b** each document is saved as soon as its results are in,
+and `cognify.max_unsaved_documents` (default 32) bounds the LLM results
+(graphs, summaries, built expansions) waiting to be saved. What still grows
+with the run: the chunk text, the merged run graph and its edge-status map, the
+`CognifyResult`, and — only under `retain_embeddings`, which holds every vector
+anyway — a per-entity vector cache used to rewrite a payload a later document
+changes without embedding the name again. Without retention nothing is cached:
+such a payload is re-embedded by the index pass, a window at a time.
+
 ## Attribution: where the bytes are
 
 Peak RSS cannot say *what* holds the memory, so the measurement above was

@@ -33,9 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules for what several documents share:
   - **Rewrite on change.** An entity a later document changes (a new type, a
     new NodeSet, the first real extraction replacing an ontology placeholder)
-    gets its graph node, its vector payload (with the vector it was embedded
-    with: no text is embedded twice) and the ownership rows of the earlier
-    documents rewritten, so it ends up as when the run was saved at once.
+    gets its graph node, its vector point and the ownership rows of the
+    earlier documents rewritten, so it ends up as when the run was saved at
+    once. With `retain_embeddings` the point keeps the vector it was embedded
+    with while its name is unchanged; otherwise the name is embedded again,
+    once per actual change (the vector store cannot hand a vector back).
     Description, importance weight and metadata stay the first document's
     (first block wins, D5); `contains` edge texts use that description too.
   - **Two documents of one URL** share a WebPage node; the last one in input

@@ -836,8 +836,9 @@ config_section! {
         /// How many documents may be in progress and not yet saved at once.
         /// Each document is saved as soon as all its results are in; a
         /// document's chunks are sent to the LLM only while fewer than this
-        /// many are waiting to be saved, so memory scales with this window,
-        /// not the dataset. 0 counts as 1.
+        /// many are waiting to be saved. Bounds the LLM results waiting to be
+        /// saved; chunk text, the run's merged graph and the result still
+        /// grow with the run. 0 counts as 1.
         pub max_unsaved_documents: u32 = 32 => {
             env: ["COGNEE_COGNIFY_MAX_UNSAVED_DOCUMENTS"], alias: [], secret: false,
         },

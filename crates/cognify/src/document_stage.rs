@@ -19,7 +19,9 @@
 //!   reach the assembler as they arrive. A document's calls start only once
 //!   the document is **admitted**: at most
 //!   [`CognifyConfig::max_unsaved_documents`] documents are admitted and not
-//!   yet saved at once, so what the stage holds scales with that window.
+//!   yet saved at once, which bounds the LLM results waiting to be saved. The
+//!   run's chunk text, its merged graph ([`RunGraph`]), the edge-status map
+//!   and the `CognifyResult` still grow with the run.
 //! - **Stop.** Extraction, summaries and the writer share one [`StopFlag`].
 //!   Under `FailFast` a failed call stops both streams; a failed save stops
 //!   everything and fails the stage, and dropping the stage aborts the calls
@@ -1076,8 +1078,9 @@ async fn write_documents(
     let mut outcome = Ok(());
     while let Some(document) = ready.recv().await {
         let index = document.index;
-        // A stop under a scope that keeps nothing fails the run: saving more
-        // would only add to what the rollback sweeps.
+        // Under any scope but `failed_items` a stop fails the run (`is_fatal`
+        // is fatal for `whole_run` and `nothing` alike): saving more would
+        // only add to what is swept, or kept from a failed run.
         if stop.is_raised() && policy.scope != RollbackScope::FailedItems {
             admission.release(index);
             continue;
@@ -1475,6 +1478,8 @@ mod tests {
                 continue;
             };
             let id = name.to_lowercase();
+            // `+` stands for a space, which the format cannot hold.
+            let name = name.replace('+', " ");
             nodes.push(json!({"id": id, "name": name, "type": kind,
                               "description": format!("{name} as a {kind}.")}));
             if let Some(source) = previous.replace(id.clone()) {
@@ -2242,5 +2247,98 @@ mod tests {
         let types = entity_types(&split).await;
         assert_eq!(types, entity_types(&whole).await);
         assert!(types.contains(&("apple".into(), "fruit".into())));
+    }
+
+    // ── Entity vectors on rewrite (review fixes) ──────────────────────────
+
+    /// Texts embedded for one run of two documents that both declare Alice,
+    /// with the given node sets, and the payload of Alice's point.
+    async fn shared_alice(retain: bool, second_set: &str) -> (usize, String, Stores) {
+        let test = Stores::new().await;
+        let documents = input(&[
+            (0xa, vec![("Alice:Person Acme:Company", Some("team-x"))]),
+            (0xb, vec![("Alice:Engineer Bob:Person", Some(second_set))]),
+        ]);
+        let config = CognifyConfig::default().with_retained_embeddings(retain);
+        run(&test, Arc::new(TextLlm::default()), &documents, &config)
+            .await
+            .unwrap();
+        let alice = cognee_models::Entity::id_for("Alice");
+        let payload = test.vector.all_points()["Entity_name"]
+            .iter()
+            .find(|point| point.id == alice)
+            .map(|point| point.metadata["belongs_to_set"].to_string())
+            .unwrap();
+        (test.engine.embedded_text_count(), payload, test)
+    }
+
+    /// With `retain_embeddings` a changed payload is rewritten with the
+    /// cached vector: nothing is embedded again.
+    #[tokio::test]
+    async fn a_rewritten_payload_reuses_the_retained_vector() {
+        let (unchanged, _, _) = shared_alice(true, "team-x").await;
+        let (changed, payload, _) = shared_alice(true, "team-y").await;
+        assert!(
+            payload.contains("team-x") && payload.contains("team-y"),
+            "{payload}"
+        );
+        assert_eq!(changed, unchanged, "no text embedded again");
+    }
+
+    /// Without `retain_embeddings` nothing is cached: a changed payload is
+    /// embedded once more by the index pass, once per actual change.
+    #[tokio::test]
+    async fn without_retention_a_rewritten_payload_is_embedded_once_more() {
+        let (unchanged, _, _) = shared_alice(false, "team-x").await;
+        let (changed, payload, _) = shared_alice(false, "team-y").await;
+        assert!(
+            payload.contains("team-x") && payload.contains("team-y"),
+            "{payload}"
+        );
+        assert_eq!(changed, unchanged + 1, "Alice's name embedded once more");
+    }
+
+    /// An ontology placeholder (`x_y`, brought in by the first document's
+    /// lookup) that a later document extracts as `x y`: the stored vector is
+    /// the new name's, retained or not, and a retained vector is replaced.
+    #[tokio::test]
+    async fn a_renamed_entity_is_embedded_with_its_new_name() {
+        use cognee_embedding::engine::EmbeddingEngine as _;
+        for retain in [true, false] {
+            let test = Stores::new().await;
+            let documents = stamped(input(&[
+                (0xa, vec![("Alice:Human", None)]),
+                (0xb, vec![("X+Y:Company", None)]),
+            ]));
+            let config = CognifyConfig::default().with_retained_embeddings(retain);
+            let stores = StageStores {
+                ontology: ontology(),
+                ..stores_of(&test, Arc::new(TextLlm::default()))
+            };
+            let (result, _) = run_document_stage(&documents, &stores, &config, &stamp())
+                .await
+                .unwrap();
+            let id = cognee_models::Entity::id_for("X Y");
+            let expected = test.engine.embed(&["x y"]).await.unwrap().remove(0);
+            let point = test.vector.all_points()["Entity_name"]
+                .iter()
+                .find(|point| point.id == id)
+                .cloned()
+                .expect("the entity's point");
+            assert_eq!(point.metadata["text"], json!("x y"), "retain {retain}");
+            assert_eq!(
+                point.vector, expected,
+                "retain {retain}: the vector embeds the new name"
+            );
+            if retain {
+                let retained: Vec<&Vec<f32>> = result
+                    .embeddings
+                    .iter()
+                    .filter(|e| e.data_point_id == id && e.data_type == "Entity")
+                    .map(|e| &e.vector)
+                    .collect();
+                assert_eq!(retained, vec![&expected], "the retained vector is replaced");
+            }
+        }
     }
 }

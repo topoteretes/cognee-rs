@@ -28,11 +28,16 @@
 //!
 //! - an **entity** whose merged form changed — a new type, a new NodeSet
 //!   membership, or the first real extraction replacing an ontology
-//!   placeholder — gets its graph node rewritten, its vector payload rewritten
-//!   when the payload's inputs changed (with the vector it was embedded with:
-//!   the embedded text, its name, does not change, so nothing is embedded
-//!   again), and the ownership rows earlier groups wrote for it rewritten, so
-//!   every row's `attributes` carry the entity as it is now;
+//!   placeholder — gets its graph node rewritten, its vector point rewritten
+//!   when the payload's inputs (name, NodeSets, importance weight) changed, and
+//!   the ownership rows earlier groups wrote for it rewritten, so every row's
+//!   `attributes` carry the entity as it is now. The point is rewritten with
+//!   the vector it was embedded with only under `retain_embeddings`, which
+//!   holds every vector of the run anyway, and only while its name — the
+//!   embedded text — is unchanged; otherwise the index pass embeds the name
+//!   (again), once per actual change. The vector store cannot hand a vector
+//!   back (`VectorDB::retrieve` returns payloads) nor update a payload alone,
+//!   so without the retained vector there is nothing to reuse;
 //! - a **WebPage** two documents of one URL share is rewritten with the later
 //!   document's copy, so the last document in input order wins, as it did
 //!   when the run was saved as one group;
@@ -245,15 +250,17 @@ impl Written {
 struct EntityVersion {
     /// The graph node (and ledger `attributes`): the whole entity.
     graph: u64,
-    /// The vector payload's inputs: name, NodeSets, importance weight.
-    vector: u64,
+    /// The embedded text: the name. A vector is reused only while it holds.
+    name: u64,
+    /// The rest of the vector payload's inputs: NodeSets, importance weight.
+    payload: u64,
 }
 
 impl EntityVersion {
     fn of(entity: &cognee_models::Entity) -> Self {
         let graph = fingerprint(&serde_json::to_vec(entity).unwrap_or_default());
+        let name = fingerprint(entity.name.as_bytes());
         let mut hasher = std::hash::DefaultHasher::new();
-        entity.name.hash(&mut hasher);
         serde_json::to_vec(&entity.base.belongs_to_set)
             .unwrap_or_default()
             .hash(&mut hasher);
@@ -264,8 +271,14 @@ impl EntityVersion {
             .hash(&mut hasher);
         Self {
             graph,
-            vector: hasher.finish(),
+            name,
+            payload: hasher.finish(),
         }
+    }
+
+    /// Whether the vector point (text or payload) differs from `other`'s.
+    fn vector_differs(&self, other: &Self) -> bool {
+        self.name != other.name || self.payload != other.payload
     }
 }
 
@@ -280,7 +293,9 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 struct Versions {
     entities: HashMap<Uuid, EntityVersion>,
     /// The vector each entity was embedded with, reused when only its payload
-    /// is rewritten.
+    /// is rewritten. Kept only with `retain_embeddings`, which holds every
+    /// vector of the run anyway; without it a rewritten point is embedded
+    /// again by the index pass, a window at a time (SDK-711).
     entity_vectors: HashMap<Uuid, Vec<f32>>,
     /// The data items whose ownership row of each entity has been written.
     entity_rows: HashMap<Uuid, Vec<Uuid>>,
@@ -487,7 +502,7 @@ impl EntityPlan {
             }
             if new_point {
                 plan.new_vectors.push(position);
-            } else if earlier.is_none_or(|v| v.vector != now.vector) {
+            } else if earlier.is_none_or(|v| v.vector_differs(&now)) {
                 plan.rewritten_vectors.push(position);
             }
             plan.versions.push(Some(now));
@@ -897,6 +912,14 @@ pub(crate) async fn persist_group(
 
     let Tracker { now, .. } = tracker;
     run_written.absorb(now);
+    for embedding in outputs.replaced {
+        match run_embeddings.iter_mut().find(|earlier| {
+            earlier.data_point_id == embedding.data_point_id && earlier.data_type == "Entity"
+        }) {
+            Some(earlier) => *earlier = embedding,
+            None => run_embeddings.push(embedding),
+        }
+    }
     run_embeddings.extend(outputs.embeddings);
     *run_embedding_count += outputs.embedding_count;
     for (collection, count) in outputs.indexed_fields.field_counts {
@@ -1265,32 +1288,11 @@ async fn write_vectors(
     } else {
         Vec::new()
     };
-    // Per document, the entities' vectors are kept for the run, so a payload a
-    // later document changes is rewritten without embedding the name again.
-    // Only the entities' (the one class a later document changes).
-    let mut entity_vectors: Vec<Embedding> = Vec::new();
-    if versions.is_some() && !entities.is_empty() {
-        entity_vectors = if context.config.retain_embeddings {
-            embeddings
-                .iter()
-                .filter(|embedding| embedding.data_type == "Entity")
-                .cloned()
-                .collect()
-        } else {
-            crate::tasks::generate_embeddings(
-                &[],
-                &entities,
-                &[],
-                Arc::clone(context.embedding_engine),
-            )
-            .await?
-        };
-    }
-    let precomputed: Cow<'_, [Embedding]> = if context.config.retain_embeddings {
-        Cow::Borrowed(&embeddings)
-    } else {
-        Cow::Borrowed(&entity_vectors)
-    };
+    // With `retain_embeddings` every vector the run embedded is kept anyway:
+    // per document, the entities' are also cached by id, so a payload a later
+    // document changes is rewritten with the vector it was embedded with.
+    let retain = context.config.retain_embeddings;
+    let precomputed: &[Embedding] = &embeddings;
 
     let anything = !chunks.is_empty()
         || !entities.is_empty()
@@ -1317,7 +1319,7 @@ async fn write_vectors(
             dataset_id,
             Arc::clone(context.embedding_engine),
             Arc::clone(context.vector_db),
-            &precomputed,
+            precomputed,
             &embedded_types,
             &extra_types,
         )
@@ -1325,25 +1327,45 @@ async fn write_vectors(
     } else {
         IndexedFieldsStats::default()
     };
+    let mut replaced: Vec<Embedding> = Vec::new();
     if let Some(versions) = versions {
-        // The payloads this group changed, with the vectors they were
-        // embedded with. Not counted: one point per entity, as in one group.
-        let rewritten: Vec<GraphNodePair> = plan
-            .rewritten_vectors
-            .iter()
-            .map(|position| group.entities[*position].clone())
-            .collect();
+        // The payloads this group changed. Not counted: one point per entity,
+        // as in one group. A vector is reused only when it is cached (with
+        // `retain_embeddings`) and the name it embeds is unchanged; otherwise
+        // the index pass embeds the name (again).
+        let mut rewritten: Vec<GraphNodePair> = Vec::new();
+        let mut reused: Vec<Embedding> = Vec::new();
+        let mut renamed: Vec<GraphNodePair> = Vec::new();
+        for position in &plan.rewritten_vectors {
+            let pair = &group.entities[*position];
+            let id = pair.entity.base.id;
+            let same_name = match (versions.entities.get(&id), plan.versions[*position]) {
+                (Some(earlier), Some(now)) => earlier.name == now.name,
+                _ => false,
+            };
+            match versions.entity_vectors.get(&id) {
+                Some(vector) if same_name => {
+                    reused.push(Embedding::new(id, "Entity", "name", vector.clone()));
+                }
+                _ if retain => renamed.push(pair.clone()),
+                _ => {}
+            }
+            rewritten.push(pair.clone());
+        }
         if !rewritten.is_empty() {
-            let cached: Vec<Embedding> = rewritten
-                .iter()
-                .filter_map(|pair| {
-                    let id = pair.entity.base.id;
-                    versions
-                        .entity_vectors
-                        .get(&id)
-                        .map(|vector| Embedding::new(id, "Entity", "name", vector.clone()))
-                })
-                .collect();
+            // A renamed entity's retained vector is replaced by its new name's.
+            let fresh = if renamed.is_empty() {
+                Vec::new()
+            } else {
+                crate::tasks::generate_embeddings(
+                    &[],
+                    &renamed,
+                    &[],
+                    Arc::clone(context.embedding_engine),
+                )
+                .await?
+            };
+            reused.extend(fresh.iter().cloned());
             let all_types: HashSet<Uuid> = entity_types.iter().map(|t| t.base.id).collect();
             crate::tasks::index_data_points_except(
                 &[],
@@ -1354,7 +1376,7 @@ async fn write_vectors(
                 dataset_id,
                 Arc::clone(context.embedding_engine),
                 Arc::clone(context.vector_db),
-                &cached,
+                &reused,
                 &all_types,
                 &[],
             )
@@ -1363,18 +1385,28 @@ async fn write_vectors(
                 "Rewrote {} entity vector payloads this document changed",
                 rewritten.len()
             );
+            replaced = fresh;
         }
-        for embedding in entity_vectors {
-            versions
-                .entity_vectors
-                .insert(embedding.data_point_id, embedding.vector);
+        if retain {
+            for embedding in embeddings
+                .iter()
+                .chain(&replaced)
+                .filter(|embedding| embedding.data_type == "Entity")
+            {
+                versions
+                    .entity_vectors
+                    .insert(embedding.data_point_id, embedding.vector.clone());
+            }
         }
         for position in plan.new_vectors.iter().chain(&plan.rewritten_vectors) {
             if let Some(version) = plan.versions[*position] {
                 versions
                     .entities
                     .entry(group.entities[*position].entity.base.id)
-                    .and_modify(|v| v.vector = version.vector)
+                    .and_modify(|v| {
+                        v.name = version.name;
+                        v.payload = version.payload;
+                    })
                     .or_insert(version);
             }
         }
@@ -1403,6 +1435,7 @@ async fn write_vectors(
 
     Ok(GroupOutputs {
         embeddings,
+        replaced,
         embedding_count,
         indexed_fields,
     })
@@ -1411,6 +1444,9 @@ async fn write_vectors(
 /// One group's share of the run-level outputs.
 struct GroupOutputs {
     embeddings: Vec<Embedding>,
+    /// Retained entity vectors this group re-embedded after a rename: they
+    /// replace the run's earlier ones.
+    replaced: Vec<Embedding>,
     embedding_count: usize,
     indexed_fields: IndexedFieldsStats,
 }

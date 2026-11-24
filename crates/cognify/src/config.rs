@@ -285,8 +285,10 @@ pub struct CognifyConfig {
     /// (SDK-1694 O4b). The cognify pipeline saves each document as soon as
     /// all its extraction and summary results are in; a document's chunks
     /// are dispatched only while fewer than this many documents are waiting
-    /// to be saved, so what a run holds in memory scales with this window,
-    /// not with the dataset. A slow document holds back the saves behind it
+    /// to be saved, so it bounds the **LLM results waiting to be saved** (the
+    /// extracted graphs, summaries and built expansions of unsaved
+    /// documents). The run's chunk text, its merged graph, the edge-status map
+    /// and the `CognifyResult` still grow with the run. A slow document holds back the saves behind it
     /// (they are saved in input order), and, once the window is full, the
     /// dispatch of new documents too. 0 counts as 1. Set from
     /// `cognify.max_unsaved_documents` (default
