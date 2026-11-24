@@ -387,6 +387,9 @@ pub(crate) fn pre_stamp_extraction(
 /// storage. The [`ArtifactProducers`] set names every chunk that produced each
 /// merged entity and edge, not just the one that created it — merging keeps
 /// only the first, and one ownership row per producing file needs all of them.
+/// It also names, per `(entity, type)` and per type, the chunks that declared
+/// them, and the chunk whose ontology lookup brought in each ontology-only
+/// entity and ontology edge (SDK-1694 O5a).
 ///
 /// `claimed_existing_edges` holds the edges this run produced that
 /// `existing_edges` says are already in the graph. They must NOT be written

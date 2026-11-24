@@ -408,6 +408,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **cognify records type, structural and ontology ledger rows per document
+  (SDK-1694, stage O5a).** Python's `upsert_nodes` / `upsert_edges` stamp the
+  `data_id` of the document being processed on every node and edge its walk
+  reaches; Rust wrote EntityType nodes and every structural edge with a nil
+  `data_id` only, so nothing said which document produced
+  `apple -is_a-> fruit`. The ledger now also has a row per producing
+  document for: every **EntityType** node (each document that declared an
+  entity with it), every structural **`is_a`** edge (each document that
+  declared that entity with that type), every **`contains`** / **`is_part_of`**
+  / **`made_from`** edge (its chunk's or summary's document), every
+  **ontology-only entity** first seen through an ontology lookup, and every
+  **ontology edge** whose existing row is nil (the document whose lookup
+  brought it in). `ArtifactProducers` gains the producers behind them
+  (`record_entity_type`, `entity_type_chunks`, `type_chunks`,
+  `record_ontology_entity`, `ontology_entity_chunks`, `record_ontology_edge`,
+  `ontology_edge_chunks`, `produces_edge`, `mark_ontology_first`,
+  `is_ontology_first`); `entity_chunks` / `edge_chunks` still name only
+  extracting chunks, so a chunk's `contains` links are unchanged.
+  - **Deletion is unchanged.** Each of those artifacts keeps the nil-`data_id`
+    row it always had, and the per-document rows share its slug, so no
+    data-scoped delete, dataset delete or run sweep selects a different
+    artifact (pinned by `the_per_document_rows_change_no_delete_selection`).
+    Removing types with their last document is per-document delete (O6),
+    which drops the nil rows.
+  - **Existing ontology edges are claimed.** An ontology edge the graph
+    already holds is still not written again, but every document whose
+    ontology lookup produced it now gets an ownership row for it, as an
+    existing extracted edge does (O2 dropped it, as Python's ledger path
+    does; Python's in-graph provenance attaches the document's ref).
+  - An entity only an earlier document's ontology lookup brought in, which a
+    later document extracts, now gets the same rows on both save paths (O4b
+    wrote its nil row on the per-document path only): the extracting
+    document's, the looking-up document's and the nil row.
+  - More rows: a structural edge has two ledger rows instead of one, and an
+    EntityType one per declaring document plus one. Existing databases keep
+    their nil rows; re-cognifying adds the per-document rows beside them.
+
 - **cognify builds the graph per data item, and entities keep several types
   (SDK-1694, stage O1).** Python builds the graph of each data item (or each
   block of `chunks_per_batch` chunks of one) with fresh maps, so within it the

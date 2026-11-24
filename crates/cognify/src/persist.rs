@@ -129,8 +129,12 @@ use crate::tasks::{
 /// Borrowed, so a run saved as one group costs no copy; a caller that builds
 /// one group per document owns that document's artifacts and lends them.
 /// `producers` must name the producing chunks of `entities`, `edges`,
-/// `timestamps` and `claimed_existing_edges`; `chunks` are what attributes
-/// them to data items, so a group carries the chunks its artifacts came from.
+/// `timestamps` and `claimed_existing_edges`, of each entity's types and of
+/// the ontology output (SDK-1694 O5a); `chunks` are what attributes them to
+/// data items, so a group carries the chunks its artifacts came from. A
+/// group's ledger rows name only the documents of its own `chunks`: an
+/// artifact the group carries but another document produced (an earlier
+/// document's type on a shared entity) gets no row from it.
 #[derive(Clone, Copy)]
 pub(crate) struct PersistGroup<'a> {
     pub(crate) chunks: &'a [DocumentChunk],

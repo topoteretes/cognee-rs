@@ -9259,8 +9259,10 @@ mod tests {
         assert_eq!(rows[0].data_id, Uuid::nil());
     }
 
-    /// Structural edges span several DataPoints and keep their nil `data_id`;
-    /// the nil is now folded into the row id like every other edge's.
+    /// Structural edges keep their nil `data_id` row (the delete guard; the
+    /// per-document rows SDK-1694 O5a adds beside it need producers, which a
+    /// hand-built input has none of); the nil is folded into the row id like
+    /// every other edge's.
     #[tokio::test]
     async fn structural_edge_rows_keep_a_nil_data_id() {
         use cognee_database::ops::graph_storage::get_edges_by_dataset;

@@ -398,8 +398,9 @@ impl ArtifactProducers {
         self.ontology_first.contains(&entity_id)
     }
 
-    /// Chunks that produced `entity_id`, or an empty slice when unknown
-    /// (ontology-derived entities have no producing chunk).
+    /// Chunks that extracted `entity_id`, or an empty slice when unknown. An
+    /// entity only an ontology lookup brought in has none here; see
+    /// [`Self::ontology_entity_chunks`].
     pub fn entity_chunks(&self, entity_id: Uuid) -> &[Uuid] {
         self.entities.get(&entity_id).map_or(&[], Vec::as_slice)
     }
