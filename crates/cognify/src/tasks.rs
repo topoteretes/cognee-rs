@@ -988,10 +988,11 @@ async fn extract_graphs_via_backend(
 /// extraction artifacts (Task 3, standalone).
 ///
 /// [`build_extracted_graph`] followed by the extraction part of the
-/// persistence layer: the ownership rows of the entities, Timestamps, semantic
-/// edges and claimed existing edges, then the entity and Timestamp nodes and
-/// the semantic edges. Ownership is recorded in `db` *before* anything reaches
-/// the graph.
+/// persistence layer: the ownership rows of the entities, Timestamps,
+/// EntityTypes, semantic edges and claimed existing edges, then the entity,
+/// Timestamp and EntityType nodes, then the semantic edges — every node before
+/// any edge, so an ontology's `is_a` edges find the EntityType nodes they
+/// name. Ownership is recorded in `db` *before* anything reaches the graph.
 ///
 /// This is for a caller driving the stage by hand. The cognify pipeline does
 /// not call it: its extraction stage only builds the graph, and the
@@ -1827,9 +1828,15 @@ pub(crate) fn web_page_graph(pages: &[WebPage]) -> (Vec<serde_json::Value>, Vec<
 ///
 /// [`web_page_artifacts`] followed by the web-page part of the persistence
 /// layer: ownership of the nodes and edges is recorded in `db` before any of
-/// them reaches the graph (I1), and an edge the graph already holds is not
-/// written again. The cognify pipeline does not call this: its extraction
-/// stage carries the artifacts to the persistence step instead.
+/// them reaches the graph (I1), the WebPage / WebSite nodes and the chunk
+/// nodes the `SOURCED_FROM` edges start at are written before any edge, and an
+/// edge the graph already holds is not written again. The chunks need not be
+/// stored beforehand. A chunk the graph already holds is left as stored, not
+/// overwritten with the copy passed here, which may lack what an earlier write
+/// stored (such as the `contains` list on the chunks
+/// [`extract_graph_from_data`] returns). The cognify pipeline does not call
+/// this: its extraction stage carries the artifacts to the persistence step
+/// instead.
 pub async fn create_web_page_nodes(
     documents: &[Document],
     chunks: &[DocumentChunk],
@@ -1838,7 +1845,7 @@ pub async fn create_web_page_nodes(
     id: LedgerIdentity,
 ) -> Result<(), CognifyError> {
     let artifacts = web_page_artifacts(documents, chunks);
-    crate::persist::persist_web_pages(db, graph_db.as_ref(), id, &artifacts).await
+    crate::persist::persist_web_pages(db, graph_db.as_ref(), id, &artifacts, chunks).await
 }
 
 fn push_unique_edge(
@@ -5092,7 +5099,7 @@ fn triplet_slug(source_id: Uuid, relationship_name: &str, target_id: Uuid) -> Uu
 
 /// Map each chunk to the data item it came from, for tracing an artifact's
 /// provenance back to the originating `Data` record.
-fn chunk_document_map(chunks: &[DocumentChunk]) -> HashMap<Uuid, Uuid> {
+pub(crate) fn chunk_document_map(chunks: &[DocumentChunk]) -> HashMap<Uuid, Uuid> {
     chunks.iter().map(|c| (c.base.id, c.document_id)).collect()
 }
 
@@ -5341,7 +5348,7 @@ fn group_entity_owners(entity_rows: &[cognee_database::GraphNode]) -> HashMap<Uu
 /// this group. The type then goes to the
 /// documents of the group's entities that carry it, so no graph node is left
 /// without a ledger row (before O6 its nil row was that row).
-fn entity_type_owners(
+pub(crate) fn entity_type_owners(
     entities: &[GraphNodePair],
     entity_rows: &[cognee_database::GraphNode],
     producers: &ArtifactProducers,
@@ -5883,6 +5890,92 @@ async fn upsert_provenance(
     Ok(())
 }
 
+/// The ownership rows of `chunks`' DocumentChunk nodes, one per chunk, owned by
+/// the chunk's document.
+pub(crate) fn chunk_provenance_rows<'a>(
+    id: LedgerIdentity,
+    chunks: impl IntoIterator<Item = &'a DocumentChunk>,
+) -> Vec<cognee_database::GraphNode> {
+    let LedgerIdentity {
+        tenant_id,
+        user_id,
+        dataset_id,
+        pipeline_run_id,
+    } = id;
+    chunks
+        .into_iter()
+        .map(|chunk| {
+            let data_id = chunk.document_id;
+            let indexed_fields = chunk
+                .base
+                .get_metadata("index_fields")
+                .cloned()
+                .unwrap_or(json!(["text"]));
+            cognee_database::GraphNode {
+                id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, chunk.base.id),
+                slug: chunk.base.id,
+                user_id,
+                data_id,
+                dataset_id,
+                pipeline_run_id,
+                label: Some(format!("chunk_{}", chunk.chunk_index)),
+                node_type: chunk.base.data_type.clone(),
+                indexed_fields,
+                attributes: serde_json::to_value(chunk).ok(),
+                created_at: Utc::now(),
+            }
+        })
+        .collect()
+}
+
+/// The ownership rows of the EntityType nodes of `entities`: one row per
+/// owning document in `type_owners` ([`entity_type_owners`]), built from the
+/// run's first copy of each type, as the graph write takes it.
+pub(crate) fn entity_type_provenance_rows(
+    id: LedgerIdentity,
+    entities: &[GraphNodePair],
+    type_owners: &[(Uuid, Vec<Uuid>)],
+) -> Vec<cognee_database::GraphNode> {
+    let LedgerIdentity {
+        tenant_id,
+        user_id,
+        dataset_id,
+        pipeline_run_id,
+    } = id;
+    let mut types: HashMap<Uuid, &cognee_models::EntityType> = HashMap::new();
+    for et in entities.iter().flat_map(|pair| pair.entity_types()) {
+        types.entry(et.base.id).or_insert(et);
+    }
+    let mut prov_nodes = Vec::new();
+    for (type_id, data_ids) in type_owners {
+        let Some(et) = types.get(type_id) else {
+            continue;
+        };
+        let indexed_fields = et
+            .base
+            .get_metadata("index_fields")
+            .cloned()
+            .unwrap_or(json!(["name"]));
+        let attributes = serde_json::to_value(et).ok();
+        for data_id in data_ids {
+            prov_nodes.push(cognee_database::GraphNode {
+                id: provenance_node_id(tenant_id, user_id, dataset_id, *data_id, et.base.id),
+                slug: et.base.id,
+                user_id,
+                data_id: *data_id,
+                dataset_id,
+                pipeline_run_id,
+                label: Some(et.name.clone()),
+                node_type: et.base.data_type.clone(),
+                indexed_fields: indexed_fields.clone(),
+                attributes: attributes.clone(),
+                created_at: Utc::now(),
+            });
+        }
+    }
+    prov_nodes
+}
+
 /// The provenance node and edge records of the chunks, entities, semantic
 /// edges, summaries, entity types, documents and structural edges.
 ///
@@ -5952,30 +6045,7 @@ pub(crate) fn provenance_rows(
     let unproduced = unproduced_entity_owners(&prov_nodes, producers);
     let group_owners = group_entity_owners(&prov_nodes);
 
-    // DocumentChunks
-    for chunk in chunks {
-        let data_id = chunk.document_id;
-
-        let indexed_fields = chunk
-            .base
-            .get_metadata("index_fields")
-            .cloned()
-            .unwrap_or(json!(["text"]));
-
-        prov_nodes.push(GraphNode {
-            id: provenance_node_id(tenant_id, user_id, dataset_id, data_id, chunk.base.id),
-            slug: chunk.base.id,
-            user_id,
-            data_id,
-            dataset_id,
-            pipeline_run_id,
-            label: Some(format!("chunk_{}", chunk.chunk_index)),
-            node_type: chunk.base.data_type.clone(),
-            indexed_fields,
-            attributes: serde_json::to_value(chunk).ok(),
-            created_at: Utc::now(),
-        });
-    }
+    prov_nodes.extend(chunk_provenance_rows(id, chunks));
 
     // TextSummaries
     for summary in summaries {
@@ -6012,37 +6082,7 @@ pub(crate) fn provenance_rows(
     // document's delete does, as in Python (`get_data_related_nodes`). A nil
     // row is still a claim, so the types of a database written before then
     // stay until their dataset is deleted.
-    // The run's first copy of each type, as the graph write takes it.
-    let mut types: HashMap<Uuid, &cognee_models::EntityType> = HashMap::new();
-    for et in entities.iter().flat_map(|pair| pair.entity_types()) {
-        types.entry(et.base.id).or_insert(et);
-    }
-    for (type_id, data_ids) in &type_owners {
-        let Some(et) = types.get(type_id) else {
-            continue;
-        };
-        let indexed_fields = et
-            .base
-            .get_metadata("index_fields")
-            .cloned()
-            .unwrap_or(json!(["name"]));
-        let attributes = serde_json::to_value(et).ok();
-        for data_id in data_ids {
-            prov_nodes.push(GraphNode {
-                id: provenance_node_id(tenant_id, user_id, dataset_id, *data_id, et.base.id),
-                slug: et.base.id,
-                user_id,
-                data_id: *data_id,
-                dataset_id,
-                pipeline_run_id,
-                label: Some(et.name.clone()),
-                node_type: et.base.data_type.clone(),
-                indexed_fields: indexed_fields.clone(),
-                attributes: attributes.clone(),
-                created_at: Utc::now(),
-            });
-        }
-    }
+    prov_nodes.extend(entity_type_provenance_rows(id, entities, &type_owners));
 
     // Documents. Python reaches the Document node by recursively walking each
     // DocumentChunk's `is_part_of` (a full Document DataPoint), so the Document
@@ -12379,7 +12419,20 @@ mod tests {
         let page_id = web_page_id("https://example.com/path?q=1").to_string();
         let site_id = web_site_id("example.com").to_string();
         let (nodes, edges) = graph.get_graph_data().await.unwrap();
-        assert_eq!(nodes.len(), 2);
+        assert_eq!(
+            nodes.len(),
+            3,
+            "the WebPage, the WebSite and the sourced chunk"
+        );
+        let chunk = graph
+            .get_node(&chunk_id.to_string())
+            .await
+            .unwrap()
+            .expect("the chunk the SOURCED_FROM edge starts at is written");
+        assert_eq!(
+            chunk.get("type").and_then(|v| v.as_str()),
+            Some("DocumentChunk")
+        );
 
         let page = graph.get_node(&page_id).await.unwrap().unwrap();
         assert_eq!(page.get("type").and_then(|v| v.as_str()), Some("WebPage"));
@@ -12506,8 +12559,49 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.node_count(), 3, "WebPage, WebSite and the chunk");
         assert_eq!(graph.edge_count(), 2);
+    }
+
+    /// A chunk the graph already holds keeps its stored version: a caller that
+    /// passes an older copy (the chunks it handed to `extract_graph_from_data`,
+    /// without the `contains` list the stored ones carry) must not overwrite
+    /// it, because both graph backends replace a node's whole property set on
+    /// conflict. The edge to it is still written.
+    #[tokio::test]
+    async fn create_web_page_nodes_leaves_a_stored_chunk_as_stored() {
+        use cognee_graph::GraphDBTraitExt;
+        let graph = Arc::new(cognee_graph::MockGraphDB::new());
+        let doc_id = Uuid::new_v4();
+        let documents = vec![test_document_with_metadata(
+            doc_id,
+            Some(url_metadata("https://example.com/stored-chunk")),
+        )];
+        let chunk_id = Uuid::new_v4();
+        let entity_id = Uuid::new_v4().to_string();
+        let mut stored = test_chunk(chunk_id, doc_id, "content");
+        stored.contains = vec![json!(entity_id)];
+        graph.add_nodes(&[&stored]).await.unwrap();
+
+        let dataset_id = Uuid::new_v4();
+        let db = ledger_db(dataset_id).await;
+        let id = LedgerIdentity::new(None, None, dataset_id, None);
+        let stale = test_chunk(chunk_id, doc_id, "content");
+        create_web_page_nodes(&documents, &[stale], graph.clone(), &db, id)
+            .await
+            .unwrap();
+
+        let node = graph
+            .get_node(&chunk_id.to_string())
+            .await
+            .unwrap()
+            .expect("the chunk is still stored");
+        assert!(
+            serde_json::to_string(&node).unwrap().contains(&entity_id),
+            "the stored `contains` list survives: {node:?}"
+        );
+        assert_eq!(graph.node_count(), 3, "WebPage, WebSite and the chunk");
+        assert_eq!(graph.edge_count(), 2, "both edges written");
     }
 
     /// The extraction stage builds the WebPage / WebSite artifacts (and nothing
@@ -13771,11 +13865,32 @@ mod tests {
         assert_eq!(graph.node_count(), 0, "no entity reached the graph");
 
         let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
+        let rows_of = |node_type: &str| {
+            nodes
+                .iter()
+                .filter(|row| row.node_type == node_type)
+                .count()
+        };
         assert_eq!(
-            nodes.len(),
+            rows_of("Entity"),
             2,
             "both extracted entities are claimed even though the write failed"
         );
+        // PERSON and ORGANIZATION, each with its document's row and no
+        // nil-`data_id` guard row (SDK-1694 O6), as `persist_group` claims them.
+        assert_eq!(
+            rows_of("EntityType"),
+            2,
+            "both entity types are claimed too"
+        );
+        assert!(
+            nodes
+                .iter()
+                .filter(|row| row.node_type == "EntityType")
+                .all(|row| row.data_id == input.documents[0].base.id),
+            "each type row names the declaring document, none is nil"
+        );
+        assert_eq!(nodes.len(), 4);
         let edges = get_edges_by_dataset(&db, dataset_id).await.expect("query");
         assert_eq!(edges.len(), 1, "the semantic edge is claimed too");
     }
@@ -15086,8 +15201,13 @@ mod tests {
         );
         let nodes = get_nodes_by_dataset(&db, dataset_id).await.expect("query");
         assert!(!nodes.is_empty(), "C's artifacts were persisted");
+        // The EntityType nil-`data_id` row is the delete guard every type
+        // carries (see `entity_type_provenance_rows`), not a document's.
         assert!(
-            nodes.iter().all(|row| row.data_id == c),
+            nodes
+                .iter()
+                .all(|row| row.data_id == c
+                    || (row.data_id.is_nil() && row.node_type == "EntityType")),
             "nothing of A, B or D was persisted"
         );
     }
