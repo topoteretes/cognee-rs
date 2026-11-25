@@ -21,20 +21,31 @@
 //!   --test nodes_before_edges_pggraph -- --nocapture
 //! ```
 //!
-//! The case provisions a throwaway database of its own on that server and
+//! Each case provisions a throwaway database of its own on that server and
 //! drops it again.
+//!
+//! The two `standalone_*` cases drive the public standalone writers
+//! (`extract_graph_from_data` with an ontology, `create_web_page_nodes` on
+//! unstored chunks), which bypass the pipeline's ordered writer.
 
 mod nodes_before_edges;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use cognee_graph::{GraphDBTrait, PgGraphAdapter};
 use cognee_test_utils::create_temp_postgres_db;
 
-#[tokio::test]
-async fn every_ledger_edge_reaches_a_postgres_graph() {
+/// Run `scenario` against a Postgres graph in a throwaway database, or skip
+/// (printing the marker `assert_pg_suite_ran.sh` looks for) without
+/// `PGGRAPH_TEST_URL`.
+async fn on_a_postgres_graph<F, Fut>(name: &str, scenario: F)
+where
+    F: FnOnce(Arc<dyn GraphDBTrait>) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
     let Ok(base_url) = std::env::var("PGGRAPH_TEST_URL") else {
-        eprintln!("PGGRAPH_TEST_URL not set — skipping every_ledger_edge_reaches_a_postgres_graph");
+        eprintln!("PGGRAPH_TEST_URL not set — skipping {name}");
         return;
     };
     let tmp = create_temp_postgres_db(&base_url)
@@ -49,7 +60,7 @@ async fn every_ledger_edge_reaches_a_postgres_graph() {
                 .await
                 .expect("the adapter connects and migrates"),
         );
-        nodes_before_edges::every_ledger_edge_reaches_the_graph(Arc::clone(&graph)).await;
+        scenario(Arc::clone(&graph)).await;
         graph.close().await.ok();
     })
     .await;
@@ -57,4 +68,35 @@ async fn every_ledger_edge_reaches_a_postgres_graph() {
     if let Err(join_err) = outcome {
         std::panic::resume_unwind(join_err.into_panic());
     }
+}
+
+#[tokio::test]
+async fn every_ledger_edge_reaches_a_postgres_graph() {
+    on_a_postgres_graph(
+        "every_ledger_edge_reaches_a_postgres_graph",
+        nodes_before_edges::every_ledger_edge_reaches_the_graph,
+    )
+    .await;
+}
+
+/// The EntityType nodes the ontology's `is_a` edges name are written before
+/// those edges, or `graph_edge_source_id_fkey` fails the call.
+#[tokio::test]
+async fn standalone_extraction_edges_reach_a_postgres_graph() {
+    on_a_postgres_graph(
+        "standalone_extraction_edges_reach_a_postgres_graph",
+        nodes_before_edges::standalone_extraction_edges_reach_the_graph,
+    )
+    .await;
+}
+
+/// The chunk node a `SOURCED_FROM` edge starts at is written before that
+/// edge, or `graph_edge_source_id_fkey` fails the call.
+#[tokio::test]
+async fn standalone_web_page_edges_reach_a_postgres_graph() {
+    on_a_postgres_graph(
+        "standalone_web_page_edges_reach_a_postgres_graph",
+        nodes_before_edges::standalone_web_page_edges_reach_the_graph,
+    )
+    .await;
 }

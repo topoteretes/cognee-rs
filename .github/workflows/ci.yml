@@ -1411,11 +1411,13 @@ jobs:
             --log pggraph-integration.log --min-tests 31 \
             --log pggraph-lib.log         --min-tests 1 \
             --log pggraph-close.log --min-tests 3 \
-            --log pggraph-cognify.log --min-tests 1 \
+            --log pggraph-cognify.log --min-tests 3 \
             --require-test pggraph_coexists_with_relational_migrator_in_shared_db \
             --require-test pggraph_purges_legacy_row_from_default_table_on_upgrade \
             --require-test close_releases_the_pool_while_the_adapter_is_still_held \
-            --require-test every_ledger_edge_reaches_a_postgres_graph
+            --require-test every_ledger_edge_reaches_a_postgres_graph \
+            --require-test standalone_extraction_edges_reach_a_postgres_graph \
+            --require-test standalone_web_page_edges_reach_a_postgres_graph
 
   # ── Redis session store (service container) ──
   # The only tests that prove `session.ttl_seconds` reaches Redis keys need a
