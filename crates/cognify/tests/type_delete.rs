@@ -269,11 +269,13 @@ async fn an_is_a_edge_goes_with_its_last_declaring_document() {
     }
 }
 
-/// Turn the ledger into the shape a database written before SDK-1694 O5a
+/// Turn the ledger into the shape a database written before SDK-1694 O6
 /// has: every EntityType and structural edge (`is_a`, `contains`,
-/// `is_part_of`, `made_from`) owned by one nil-`data_id` row instead of one
-/// row per document.
-async fn make_legacy(harness: &Harness) {
+/// `is_part_of`, `made_from`) owned by one nil-`data_id` row — instead of one
+/// row per document (before O5a), or beside them (`keep_document_rows`: a
+/// database written between O5a and O6, or a pre-O5a one whose documents
+/// were cognified again).
+async fn make_legacy(harness: &Harness, keep_document_rows: bool) {
     let structural = |row: &GraphEdge| {
         ["is_a", "is_part_of", "made_from", "contains"]
             .contains(&row.label.as_deref().unwrap_or(&row.relationship_name))
@@ -300,11 +302,16 @@ async fn make_legacy(harness: &Harness) {
         .filter(structural)
         .collect();
     assert!(!types.is_empty() && !edges.is_empty());
-    for (table, id) in types
-        .iter()
-        .map(|row| ("nodes", row.id))
-        .chain(edges.iter().map(|row| ("edges", row.id)))
-    {
+    let removed: Vec<(&str, Uuid)> = if keep_document_rows {
+        Vec::new()
+    } else {
+        types
+            .iter()
+            .map(|row| ("nodes", row.id))
+            .chain(edges.iter().map(|row| ("edges", row.id)))
+            .collect()
+    };
+    for (table, id) in removed {
         harness
             .db
             .execute_unprepared(&format!("DELETE FROM {table} WHERE id = '{}'", id.simple()))
@@ -347,43 +354,50 @@ async fn make_legacy(harness: &Harness) {
 }
 
 /// A database written before O6 (a legacy-shaped ledger): its nil rows are
-/// still claims. Deleting doc B keeps the fruit type it alone declared — no
-/// document row says who declared it — while B's chunk and its structural
-/// rows, attributed through the chunk, go as before.
+/// still claims. Deleting doc B keeps the fruit type it alone declared —
+/// whether or not B's own row stands beside the nil row — while B's chunk
+/// and its structural rows go as before (through the chunk's ownership).
 #[tokio::test]
 async fn a_legacy_ledger_keeps_its_types_as_claimed() {
-    let (harness, _a, b) = cognified("Apple:Company", "Apple:Fruit").await;
-    let fruit = type_id("fruit");
-    let chunk_b: Vec<Uuid> = harness
-        .ledger_nodes()
-        .await
-        .into_iter()
-        .filter(|row| row.data_id == b && row.node_type == "DocumentChunk")
-        .map(|row| row.slug)
-        .collect();
-    assert_eq!(chunk_b.len(), 1);
-    make_legacy(&harness).await;
-    assert_eq!(
-        node_owners(&harness, fruit).await,
-        BTreeSet::from([Uuid::nil()])
-    );
+    for keep_document_rows in [false, true] {
+        let (harness, _a, b) = cognified("Apple:Company", "Apple:Fruit").await;
+        let fruit = type_id("fruit");
+        let chunk_b: Vec<Uuid> = harness
+            .ledger_nodes()
+            .await
+            .into_iter()
+            .filter(|row| row.data_id == b && row.node_type == "DocumentChunk")
+            .map(|row| row.slug)
+            .collect();
+        assert_eq!(chunk_b.len(), 1);
+        make_legacy(&harness, keep_document_rows).await;
+        let mut before = BTreeSet::from([Uuid::nil()]);
+        if keep_document_rows {
+            before.insert(b);
+        }
+        assert_eq!(node_owners(&harness, fruit).await, before);
 
-    delete(&harness, b, DeleteMode::Soft).await;
+        delete(&harness, b, DeleteMode::Soft).await;
 
-    assert!(has_node(&harness, fruit).await, "the nil row keeps fruit");
-    assert_eq!(
-        node_owners(&harness, fruit).await,
-        BTreeSet::from([Uuid::nil()])
-    );
-    assert!(!has_node(&harness, chunk_b[0]).await);
-    let left: Vec<GraphEdge> = harness
-        .ledger_edges()
-        .await
-        .into_iter()
-        .filter(|row| row.source_node_id == chunk_b[0])
-        .collect();
-    assert!(
-        left.is_empty(),
-        "B's chunk's structural rows went: {left:?}"
-    );
+        assert!(
+            has_node(&harness, fruit).await,
+            "keep_document_rows {keep_document_rows}: the nil row keeps fruit"
+        );
+        assert!(has_point(&harness, "EntityType", "name", fruit));
+        assert_eq!(
+            node_owners(&harness, fruit).await,
+            BTreeSet::from([Uuid::nil()])
+        );
+        assert!(!has_node(&harness, chunk_b[0]).await);
+        let left: Vec<GraphEdge> = harness
+            .ledger_edges()
+            .await
+            .into_iter()
+            .filter(|row| row.source_node_id == chunk_b[0])
+            .collect();
+        assert!(
+            left.is_empty(),
+            "B's chunk's structural rows went: {left:?}"
+        );
+    }
 }
